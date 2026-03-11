@@ -1,0 +1,8 @@
+{
+  "expo": {
+    "plugins": [
+      "@react-native-camera-roll/camera-roll",
+      "expo-location"
+    ]
+  }
+}

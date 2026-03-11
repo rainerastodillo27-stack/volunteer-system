@@ -1,0 +1,922 @@
+import React, { useState, useEffect } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  Alert,
+  Modal,
+  TextInput,
+  FlatList,
+} from 'react-native';
+import { MaterialIcons } from '@expo/vector-icons';
+import { Volunteer, Project, VolunteerProjectMatch } from '../models/types';
+import {
+  getAllVolunteers,
+  getAllProjects,
+  saveVolunteer,
+  saveVolunteerProjectMatch,
+  getVolunteerProjectMatches,
+} from '../models/storage';
+import { useAuth } from '../contexts/AuthContext';
+
+export default function VolunteerManagementScreen({ navigation }: any) {
+  const { user } = useAuth();
+  const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [view, setView] = useState<'list' | 'detail' | 'matching'>('list');
+  const [selectedVolunteer, setSelectedVolunteer] = useState<Volunteer | null>(null);
+  const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
+  const [showAvailabilityModal, setShowAvailabilityModal] = useState(false);
+  const [daysPerWeek, setDaysPerWeek] = useState('3');
+  const [hoursPerWeek, setHoursPerWeek] = useState('12');
+  const [availableDays, setAvailableDays] = useState<string[]>(['Monday', 'Wednesday', 'Saturday']);
+
+  useEffect(() => {
+    loadVolunteers();
+    loadProjects();
+  }, []);
+
+  const loadVolunteers = async () => {
+    try {
+      const allVolunteers = await getAllVolunteers();
+      setVolunteers(allVolunteers);
+    } catch (error) {
+      Alert.alert('Error', 'Failed to load volunteers');
+    }
+  };
+
+  const loadProjects = async () => {
+    try {
+      const allProjects = await getAllProjects();
+      setProjects(allProjects.filter(p => p.status === 'In Progress'));
+    } catch (error) {
+      Alert.alert('Error', 'Failed to load projects');
+    }
+  };
+
+  const handleSelectVolunteer = async (volunteer: Volunteer) => {
+    setSelectedVolunteer(volunteer);
+    const matches = await getVolunteerProjectMatches(volunteer.id);
+    setVolunteerMatches(matches);
+    setView('detail');
+  };
+
+  const handleMatchVolunteer = async (projectId: string) => {
+    if (!selectedVolunteer) return;
+
+    try {
+      const match: VolunteerProjectMatch = {
+        id: `match-${Date.now()}`,
+        volunteerId: selectedVolunteer.id,
+        projectId,
+        status: 'Matched',
+        matchedAt: new Date().toISOString(),
+        hoursContributed: 0,
+      };
+
+      await saveVolunteerProjectMatch(match);
+      Alert.alert('Success', 'Volunteer matched to project');
+
+      const matches = await getVolunteerProjectMatches(selectedVolunteer.id);
+      setVolunteerMatches(matches);
+    } catch (error) {
+      Alert.alert('Error', 'Failed to match volunteer');
+    }
+  };
+
+  const handleUpdateAvailability = async () => {
+    if (!selectedVolunteer) return;
+
+    try {
+      const updated = {
+        ...selectedVolunteer,
+        availability: {
+          daysPerWeek: parseInt(daysPerWeek, 10),
+          hoursPerWeek: parseFloat(hoursPerWeek),
+          availableDays,
+        },
+      };
+
+      await saveVolunteer(updated);
+      Alert.alert('Success', 'Availability updated');
+      setShowAvailabilityModal(false);
+      setSelectedVolunteer(updated);
+      loadVolunteers();
+    } catch (error) {
+      Alert.alert('Error', 'Failed to update availability');
+    }
+  };
+
+  const toggleAvailableDay = (day: string) => {
+    setAvailableDays(prev =>
+      prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day]
+    );
+  };
+
+  const daysOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+  const getMatchedProjects = () => {
+    return projects.filter(p =>
+      volunteerMatches.find(m => m.projectId === p.id && m.status === 'Matched')
+    );
+  };
+
+  const getAvailableProjects = () => {
+    return projects.filter(
+      p => !volunteerMatches.find(m => m.projectId === p.id && m.status === 'Matched')
+    );
+  };
+
+  const calculateMatchScore = (volunteer: Volunteer, project: Project): number => {
+    let score = 0;
+
+    // Check if volunteer has available time
+    if (volunteer.availability.hoursPerWeek >= 5) score += 30;
+
+    // Check if volunteer is available enough days
+    if (volunteer.availability.daysPerWeek >= 2) score += 30;
+
+    // Check if there are vacancies
+    if (volunteer.id && project.volunteers.length < project.volunteersNeeded) {
+      score += 20;
+    }
+
+    // Check if volunteer hasn't reached max projects
+    if (volunteerMatches.length < 3) score += 20;
+
+    return Math.min(100, score);
+  };
+
+  if (view === 'detail' && selectedVolunteer) {
+    const matchedProjects = getMatchedProjects();
+    const availableProjects = getAvailableProjects();
+
+    return (
+      <ScrollView style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => setView('list')}>
+            <MaterialIcons name="arrow-back" size={24} color="#333" />
+          </TouchableOpacity>
+          <Text style={styles.title}>Volunteer Profile</Text>
+          <View style={{ width: 24 }} />
+        </View>
+
+        <View style={styles.card}>
+          <View style={styles.avatarSection}>
+            <View style={styles.avatar}>
+              <Text style={styles.avatarText}>{selectedVolunteer.name.charAt(0)}</Text>
+            </View>
+            <View>
+              <Text style={styles.volunteerName}>{selectedVolunteer.name}</Text>
+              <Text style={styles.volunteerEmail}>{selectedVolunteer.email}</Text>
+            </View>
+          </View>
+
+          <View style={styles.statsGrid}>
+            <View style={styles.stat}>
+              <MaterialIcons name="schedule" size={24} color="#2196F3" />
+              <Text style={styles.statValue}>{selectedVolunteer.totalHoursContributed}</Text>
+              <Text style={styles.statLabel}>Hours</Text>
+            </View>
+            <View style={styles.stat}>
+              <MaterialIcons name="star" size={24} color="#FFA500" />
+              <Text style={styles.statValue}>{selectedVolunteer.rating}</Text>
+              <Text style={styles.statLabel}>Rating</Text>
+            </View>
+            <View style={styles.stat}>
+              <MaterialIcons name="task-alt" size={24} color="#4CAF50" />
+              <Text style={styles.statValue}>{selectedVolunteer.pastProjects.length}</Text>
+              <Text style={styles.statLabel}>Projects</Text>
+            </View>
+          </View>
+        </View>
+
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Availability</Text>
+            <TouchableOpacity
+              style={styles.editButton}
+              onPress={() => {
+                setDaysPerWeek(selectedVolunteer.availability.daysPerWeek.toString());
+                setHoursPerWeek(selectedVolunteer.availability.hoursPerWeek.toString());
+                setAvailableDays([...selectedVolunteer.availability.availableDays]);
+                setShowAvailabilityModal(true);
+              }}
+            >
+              <MaterialIcons name="edit" size={16} color="#4CAF50" />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.availabilityInfo}>
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Days per week:</Text>
+              <Text style={styles.infoValue}>{selectedVolunteer.availability.daysPerWeek}</Text>
+            </View>
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Hours per week:</Text>
+              <Text style={styles.infoValue}>{selectedVolunteer.availability.hoursPerWeek}</Text>
+            </View>
+            <Text style={styles.availableDaysLabel}>Available on:</Text>
+            <View style={styles.daysContainer}>
+              {selectedVolunteer.availability.availableDays.map(day => (
+                <View key={day} style={styles.dayBadge}>
+                  <Text style={styles.dayBadgeText}>{day.substring(0, 3)}</Text>
+                </View>
+              ))}
+            </View>
+          </View>
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Skills</Text>
+          <View style={styles.skillsContainer}>
+            {selectedVolunteer.skills.map(skill => (
+              <View key={skill} style={styles.skillTag}>
+                <Text style={styles.skillTagText}>{skill}</Text>
+              </View>
+            ))}
+          </View>
+        </View>
+
+        {matchedProjects.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Assigned Projects</Text>
+            {matchedProjects.map(project => (
+              <View key={project.id} style={styles.projectItem}>
+                <View style={styles.projectInfo}>
+                  <Text style={styles.projectName}>{project.title}</Text>
+                  <Text style={styles.projectCategory}>{project.category}</Text>
+                </View>
+                <MaterialIcons name="check-circle" size={20} color="#4CAF50" />
+              </View>
+            ))}
+          </View>
+        )}
+
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>
+              Available Projects ({availableProjects.length})
+            </Text>
+          </View>
+
+          {availableProjects.length === 0 ? (
+            <Text style={styles.emptyText}>No available projects</Text>
+          ) : (
+            availableProjects.map(project => {
+              const matchScore = calculateMatchScore(selectedVolunteer, project);
+              return (
+                <View key={project.id} style={styles.matchCard}>
+                  <View style={styles.matchContent}>
+                    <View style={styles.matchHeader}>
+                      <Text style={styles.projectName}>{project.title}</Text>
+                      <View style={[styles.scoreCircle, { backgroundColor: matchScore > 70 ? '#4CAF50' : matchScore > 40 ? '#FFA500' : '#f44336' }]}>
+                        <Text style={styles.scoreText}>{matchScore}%</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.projectCategory}>{project.category}</Text>
+                    <Text style={styles.matchDetails}>
+                      Volunteers: {project.volunteers.length}/{project.volunteersNeeded}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.matchButton}
+                    onPress={() => handleMatchVolunteer(project.id)}
+                  >
+                    <MaterialIcons name="add-circle" size={24} color="#4CAF50" />
+                  </TouchableOpacity>
+                </View>
+              );
+            })
+          )}
+        </View>
+
+        <Modal
+          visible={showAvailabilityModal}
+          animationType="slide"
+          onRequestClose={() => setShowAvailabilityModal(false)}
+        >
+          <View style={styles.modalContainer}>
+            <View style={styles.modalHeader}>
+              <TouchableOpacity onPress={() => setShowAvailabilityModal(false)}>
+                <MaterialIcons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+              <Text style={styles.modalTitle}>Update Availability</Text>
+              <View style={{ width: 24 }} />
+            </View>
+
+            <ScrollView style={styles.modalContent}>
+              <Text style={styles.label}>Days per week</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Number of days"
+                placeholderTextColor="#999"
+                keyboardType="number-pad"
+                value={daysPerWeek}
+                onChangeText={setDaysPerWeek}
+              />
+
+              <Text style={styles.label}>Hours per week</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Total hours"
+                placeholderTextColor="#999"
+                keyboardType="decimal-pad"
+                value={hoursPerWeek}
+                onChangeText={setHoursPerWeek}
+              />
+
+              <Text style={styles.label}>Available days</Text>
+              <View style={styles.daysGrid}>
+                {daysOfWeek.map(day => (
+                  <TouchableOpacity
+                    key={day}
+                    style={[
+                      styles.dayButton,
+                      availableDays.includes(day) && styles.dayButtonSelected,
+                    ]}
+                    onPress={() => toggleAvailableDay(day)}
+                  >
+                    <Text
+                      style={[
+                        styles.dayButtonText,
+                        availableDays.includes(day) && styles.dayButtonTextSelected,
+                      ]}
+                    >
+                      {day.substring(0, 3)}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <TouchableOpacity
+                style={styles.submitButton}
+                onPress={handleUpdateAvailability}
+              >
+                <Text style={styles.submitButtonText}>Update Availability</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </Modal>
+      </ScrollView>
+    );
+  }
+
+  return (
+    <View style={styles.container}>
+      <Text style={styles.title}>Volunteer Management</Text>
+
+      <View style={styles.viewToggle}>
+        <TouchableOpacity
+          style={[styles.toggleButton, view === 'list' && styles.toggleButtonActive]}
+          onPress={() => setView('list')}
+        >
+          <MaterialIcons name="list" size={18} color={view === 'list' ? '#fff' : '#666'} />
+          <Text
+            style={[
+              styles.toggleButtonText,
+              view === 'list' && styles.toggleButtonTextActive,
+            ]}
+          >
+            List
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.toggleButton, view === 'matching' && styles.toggleButtonActive]}
+          onPress={() => setView('matching')}
+        >
+          <MaterialIcons name="auto-awesome" size={18} color={view === 'matching' ? '#fff' : '#666'} />
+          <Text
+            style={[
+              styles.toggleButtonText,
+              view === 'matching' && styles.toggleButtonTextActive,
+            ]}
+          >
+            AI Matching
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {view === 'matching' ? (
+        <ScrollView style={{ flex: 1, paddingHorizontal: 16 }}>
+          <Text style={styles.sectionTitle}>Volunteer-Project Matching</Text>
+          <Text style={styles.subtitle}>
+            AI-powered matching based on availability and skills
+          </Text>
+
+          {projects.map(project => (
+            <View key={project.id} style={styles.matchingCard}>
+              <Text style={styles.matchingProjectTitle}>{project.title}</Text>
+              <Text style={styles.matchingProjectCategory}>{project.category}</Text>
+              <Text style={styles.matchingNeeded}>
+                Need {project.volunteersNeeded - project.volunteers.length} more volunteers
+              </Text>
+
+              <View style={styles.suggestedVolunteers}>
+                {volunteers
+                  .filter(v => !project.volunteers.includes(v.id))
+                  .slice(0, 3)
+                  .map(vol => {
+                    const score = calculateMatchScore(vol, project);
+                    return (
+                      <View
+                        key={vol.id}
+                        style={[
+                          styles.suggestedVolunteer,
+                          { borderLeftColor: score > 70 ? '#4CAF50' : score > 40 ? '#FFA500' : '#f44336', borderLeftWidth: 4 },
+                        ]}
+                      >
+                        <View style={styles.suggestedVolunteerInfo}>
+                          <Text style={styles.suggestedVolunteerName}>{vol.name}</Text>
+                          <Text style={styles.suggestedVolunteerStats}>
+                            {vol.availability.hoursPerWeek}h/week • Match: {score}%
+                          </Text>
+                        </View>
+                        <TouchableOpacity
+                          style={styles.suggestButton}
+                          onPress={() => {
+                            handleSelectVolunteer(vol);
+                            handleMatchVolunteer(project.id);
+                          }}
+                        >
+                          <MaterialIcons name="add" size={18} color="#fff" />
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })}
+              </View>
+            </View>
+          ))}
+        </ScrollView>
+      ) : (
+        <FlatList
+          data={volunteers}
+          keyExtractor={vol => vol.id}
+          renderItem={({ item: volunteer }) => (
+            <TouchableOpacity
+              style={styles.volunteerCard}
+              onPress={() => handleSelectVolunteer(volunteer)}
+            >
+              <View style={styles.volunteerCardAvatar}>
+                <Text style={styles.volunteerCardAvatarText}>
+                  {volunteer.name.charAt(0)}
+                </Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.volunteerCardName}>{volunteer.name}</Text>
+                <View style={styles.volunteerCardMeta}>
+                  <MaterialIcons name="schedule" size={12} color="#666" />
+                  <Text style={styles.volunteerCardMetaText}>
+                    {volunteer.availability.hoursPerWeek}h/week
+                  </Text>
+                  <MaterialIcons name="star" size={12} color="#FFA500" />
+                  <Text style={styles.volunteerCardMetaText}>
+                    {volunteer.rating}
+                  </Text>
+                </View>
+              </View>
+              <MaterialIcons name="arrow-forward" size={20} color="#999" />
+            </TouchableOpacity>
+          )}
+          scrollEnabled={true}
+          contentContainerStyle={{ paddingHorizontal: 16, paddingVertical: 8 }}
+        />
+      )}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#f5f5f5',
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#333',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  viewToggle: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    gap: 8,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  toggleButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#f0f0f0',
+    gap: 6,
+  },
+  toggleButtonActive: {
+    backgroundColor: '#4CAF50',
+  },
+  toggleButtonText: {
+    color: '#666',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  toggleButtonTextActive: {
+    color: '#fff',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  card: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    margin: 16,
+  },
+  avatarSection: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+    marginBottom: 16,
+  },
+  avatar: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#2196F3',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 24,
+  },
+  volunteerName: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  volunteerEmail: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 4,
+  },
+  statsGrid: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  stat: {
+    flex: 1,
+    backgroundColor: '#f9f9f9',
+    borderRadius: 8,
+    padding: 12,
+    alignItems: 'center',
+  },
+  statValue: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333',
+    marginTop: 4,
+  },
+  statLabel: {
+    fontSize: 11,
+    color: '#999',
+    marginTop: 4,
+  },
+  section: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    margin: 16,
+    marginBottom: 8,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  sectionTitle: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  subtitle: {
+    fontSize: 12,
+    color: '#666',
+    textAlign: 'center',
+    marginVertical: 8,
+  },
+  editButton: {
+    padding: 8,
+  },
+  availabilityInfo: {
+    gap: 12,
+  },
+  infoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  infoLabel: {
+    fontSize: 12,
+    color: '#666',
+  },
+  infoValue: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#333',
+  },
+  availableDaysLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#333',
+    marginTop: 8,
+  },
+  daysContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  dayBadge: {
+    backgroundColor: '#e3f2fd',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+  },
+  dayBadgeText: {
+    color: '#1976d2',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  skillsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  skillTag: {
+    backgroundColor: '#f0f0f0',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  skillTagText: {
+    fontSize: 12,
+    color: '#333',
+    fontWeight: '500',
+  },
+  projectItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  projectInfo: {
+    flex: 1,
+  },
+  projectName: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#333',
+  },
+  projectCategory: {
+    fontSize: 11,
+    color: '#666',
+    marginTop: 2,
+  },
+  emptyText: {
+    color: '#999',
+    fontSize: 13,
+    textAlign: 'center',
+    paddingVertical: 20,
+  },
+  matchCard: {
+    backgroundColor: '#f9f9f9',
+    borderRadius: 8,
+    padding: 12,
+    marginVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  matchContent: {
+    flex: 1,
+  },
+  matchHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  scoreCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  scoreText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 11,
+  },
+  matchDetails: {
+    fontSize: 11,
+    color: '#666',
+    marginTop: 4,
+  },
+  matchButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#f0f0f0',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  volunteerCard: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    marginBottom: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  volunteerCardAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#4CAF50',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  volunteerCardAvatarText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 16,
+  },
+  volunteerCardName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+  },
+  volunteerCardMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 4,
+  },
+  volunteerCardMetaText: {
+    fontSize: 11,
+    color: '#666',
+    marginRight: 8,
+  },
+  matchingCard: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    marginVertical: 8,
+  },
+  matchingProjectTitle: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  matchingProjectCategory: {
+    fontSize: 12,
+    color: '#FF9800',
+    marginTop: 4,
+  },
+  matchingNeeded: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 4,
+  },
+  suggestedVolunteers: {
+    marginTop: 12,
+  },
+  suggestedVolunteer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: '#f9f9f9',
+    borderRadius: 8,
+    marginBottom: 8,
+  },
+  suggestedVolunteerInfo: {
+    flex: 1,
+  },
+  suggestedVolunteerName: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#333',
+  },
+  suggestedVolunteerStats: {
+    fontSize: 11,
+    color: '#666',
+    marginTop: 2,
+  },
+  suggestButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#4CAF50',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContainer: {
+    flex: 1,
+    backgroundColor: '#f5f5f5',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  modalContent: {
+    flex: 1,
+    padding: 16,
+  },
+  label: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 8,
+  },
+  input: {
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    fontSize: 14,
+    color: '#333',
+    marginBottom: 20,
+  },
+  daysGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 20,
+  },
+  dayButton: {
+    flex: 0.3,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: '#f0f0f0',
+    alignItems: 'center',
+  },
+  dayButtonSelected: {
+    backgroundColor: '#4CAF50',
+  },
+  dayButtonText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#666',
+  },
+  dayButtonTextSelected: {
+    color: '#fff',
+  },
+  submitButton: {
+    backgroundColor: '#4CAF50',
+    paddingVertical: 14,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  submitButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+});

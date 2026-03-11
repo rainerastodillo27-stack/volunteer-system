@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "volunteer-system",
+    "slug": "volunteer-system",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "sdkVersion": "54.0.0",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTabletMode": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#ffffff"
+      }
+    },
+    "scheme": "volunteersystem"
+  }
+}
