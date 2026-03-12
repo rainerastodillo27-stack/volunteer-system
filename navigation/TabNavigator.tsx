@@ -29,7 +29,9 @@ const Tab = createBottomTabNavigator<TabParamList>();
 
 export default function TabNavigator() {
   const { user, isAdmin } = useAuth();
-  const showPartnersTab = isAdmin || Platform.OS !== 'web';
+  const showPartnersTab = isAdmin || user?.role === 'partner';
+  const showLifecycleTab = isAdmin;
+  const showImpactTab = isAdmin;
   const dashboardTitle =
     user?.role === 'partner'
       ? 'Partner Dashboard'
@@ -109,11 +111,13 @@ export default function TabNavigator() {
         options={{ title: 'Projects' }}
       />
 
-      <Tab.Screen
-        name="Lifecycle"
-        component={ProjectLifecycleScreen}
-        options={{ title: 'Lifecycle' }}
-      />
+      {showLifecycleTab && (
+        <Tab.Screen
+          name="Lifecycle"
+          component={ProjectLifecycleScreen}
+          options={{ title: 'Lifecycle' }}
+        />
+      )}
 
       <Tab.Screen
         name="Map"
@@ -121,11 +125,13 @@ export default function TabNavigator() {
         options={{ title: 'Map' }}
       />
 
-      <Tab.Screen
-        name="Impact"
-        component={ImpactReportsScreen}
-        options={{ title: 'Impact' }}
-      />
+      {showImpactTab && (
+        <Tab.Screen
+          name="Impact"
+          component={ImpactReportsScreen}
+          options={{ title: 'Impact' }}
+        />
+      )}
 
       <Tab.Screen
         name="Messages"

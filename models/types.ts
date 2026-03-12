@@ -34,6 +34,7 @@ export interface Project {
   title: string;
   description: string;
   partnerId: string;
+  isEvent?: boolean;
   status: 'Planning' | 'In Progress' | 'On Hold' | 'Completed' | 'Cancelled';
   category: 'Education' | 'Livelihood' | 'Nutrition' | 'Other';
   startDate: string;
@@ -45,6 +46,7 @@ export interface Project {
   };
   volunteersNeeded: number;
   volunteers: string[]; // Volunteer IDs
+  joinedUserIds?: string[];
   createdAt: string;
   updatedAt: string;
   statusUpdates: StatusUpdate[];
@@ -68,6 +70,7 @@ export interface Volunteer {
   email: string;
   phone: string;
   skills: string[];
+  skillsDescription: string;
   availability: {
     daysPerWeek: number;
     hoursPerWeek: number;
@@ -76,8 +79,18 @@ export interface Volunteer {
   pastProjects: string[]; // Project IDs
   totalHoursContributed: number;
   rating: number; // 1-5
+  engagementStatus: 'Open to Volunteer' | 'Busy';
   background: string;
   createdAt: string;
+}
+
+export interface VolunteerTimeLog {
+  id: string;
+  volunteerId: string;
+  projectId: string;
+  timeIn: string;
+  timeOut?: string;
+  note?: string;
 }
 
 // Communication/Message

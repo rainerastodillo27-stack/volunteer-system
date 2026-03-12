@@ -141,7 +141,7 @@ export default function LoginScreen({ navigation }: any) {
               <Text style={styles.demoPassword}>volunteer123</Text>
             </View>
             <View style={styles.demoItem}>
-              <Text style={styles.demoLabel}>Partner Account (Mobile):</Text>
+              <Text style={styles.demoLabel}>Partner Account - LGU / Partner Org (Mobile):</Text>
               <Text style={styles.demoEmail}>partner@livelihoods.org</Text>
               <Text style={styles.demoPassword}>partner123</Text>
             </View>

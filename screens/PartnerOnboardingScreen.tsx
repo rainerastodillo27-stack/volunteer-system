@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   Alert,
   TextInput,
-  Platform,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Partner } from '../models/types';
@@ -18,7 +17,7 @@ const categories = ['Education', 'Livelihood', 'Nutrition', 'Other'];
 
 export default function PartnerOnboardingScreen({ navigation }: any) {
   const { user, isAdmin } = useAuth();
-  const isMobileUserSubmission = !isAdmin && Platform.OS !== 'web';
+  const isPartnerUser = user?.role === 'partner';
   const [partners, setPartners] = useState<Partner[]>([]);
   const [filter, setFilter] = useState<'All' | 'Pending' | 'Approved' | 'Rejected'>('All');
   const [loading, setLoading] = useState(true);
@@ -30,16 +29,24 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
 
   useEffect(() => {
     loadPartners();
-  }, [filter]);
+  }, [filter, isAdmin, user?.email]);
 
   const loadPartners = async () => {
     try {
       const allPartners = await getAllPartners();
-      if (filter === 'All') {
-        setPartners(allPartners);
-      } else {
-        setPartners(allPartners.filter(p => p.status === filter));
+      if (isAdmin) {
+        if (filter === 'All') {
+          setPartners(allPartners);
+        } else {
+          setPartners(allPartners.filter(p => p.status === filter));
+        }
+        return;
       }
+
+      const ownPartners = allPartners.filter(
+        p => p.contactEmail.toLowerCase() === user?.email?.toLowerCase()
+      );
+      setPartners(ownPartners);
     } catch (error) {
       Alert.alert('Error', 'Failed to load partners');
     } finally {
@@ -184,7 +191,7 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
     <ScrollView style={styles.container}>
       <Text style={styles.title}>Partner Onboarding</Text>
 
-      {isMobileUserSubmission && (
+      {isPartnerUser && (
         <View style={styles.submissionCard}>
           <Text style={styles.submissionTitle}>Submit Partner Organization</Text>
           <TextInput
@@ -251,7 +258,9 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
       {partners.length === 0 ? (
         <View style={styles.emptyState}>
           <MaterialIcons name="business" size={48} color="#ccc" />
-          <Text style={styles.emptyText}>No partners found</Text>
+          <Text style={styles.emptyText}>
+            {isAdmin ? 'No partners found' : 'No partner organizations linked to this account'}
+          </Text>
         </View>
       ) : (
         <View style={styles.list}>

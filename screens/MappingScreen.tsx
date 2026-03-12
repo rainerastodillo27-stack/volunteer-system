@@ -8,17 +8,28 @@ import {
   Modal,
   ActivityIndicator,
   Platform,
-  Linking,
-  ScrollView,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Project } from '../models/types';
-import { getAllProjects } from '../models/storage';
+import { getNegrosProjects, NEGROS_SAMPLE_PROJECTS } from '../models/storage';
+
+const IFrame = 'iframe' as any;
 
 // Negros Occidental coordinates (Philippines)
 const NEGROS_OCCIDENTAL_CENTER = {
-  latitude: 10.4,
-  longitude: 123.3,
+  latitude: 10.55,
+  longitude: 122.95,
+};
+
+const NEGROS_OCCIDENTAL_BOUNDS = {
+  southWest: {
+    latitude: 9.85,
+    longitude: 122.45,
+  },
+  northEast: {
+    latitude: 11.05,
+    longitude: 123.35,
+  },
 };
 
 export default function MappingScreen({ navigation }: any) {
@@ -34,13 +45,39 @@ export default function MappingScreen({ navigation }: any) {
     loadProjects();
   }, []);
 
+  useEffect(() => {
+    if (Platform.OS !== 'web') {
+      return;
+    }
+
+    const handleWindowMessage = (event: MessageEvent) => {
+      if (typeof event.data !== 'string') {
+        return;
+      }
+
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'selectProject') {
+          handleProjectSelection(data.projectId);
+        }
+      } catch (error) {
+        console.error('Error handling web map message:', error);
+      }
+    };
+
+    window.addEventListener('message', handleWindowMessage);
+    return () => window.removeEventListener('message', handleWindowMessage);
+  }, [projects]);
+
   const loadProjects = async () => {
     try {
-      const allProjects = await getAllProjects();
-      setProjects(allProjects);
+      const negrosProjects = await getNegrosProjects();
+      setProjects(negrosProjects.length > 0 ? negrosProjects : NEGROS_SAMPLE_PROJECTS);
       setLoading(false);
     } catch (error) {
-      Alert.alert('Error', 'Failed to load projects');
+      console.error('Error loading projects for map:', error);
+      setProjects(NEGROS_SAMPLE_PROJECTS);
+      Alert.alert('Error', 'Failed to load projects. Showing defaults.');
       setLoading(false);
     }
   };
@@ -62,6 +99,21 @@ export default function MappingScreen({ navigation }: any) {
     }
   };
 
+  const getMarkerColor = (project: Project) => {
+    if (project.isEvent) return '#9C27B0'; // distinct color for events
+    return getStatusColor(project.status);
+  };
+
+  const handleProjectSelection = (projectId: string) => {
+    const project = projects.find((p) => p.id === projectId);
+    if (!project) {
+      return;
+    }
+
+    setSelectedProject(project);
+    setShowDetails(true);
+  };
+
   const generateLeafletHTML = () => {
     const projectMarkers = projects
       .map(
@@ -69,8 +121,8 @@ export default function MappingScreen({ navigation }: any) {
       L.marker([${project.location.latitude}, ${project.location.longitude}], {
         icon: L.icon({
           iconUrl: 'data:image/svg+xml;utf8,${encodeURIComponent(
-            `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle cx="16" cy="16" r="14" fill="${getStatusColor(
-              project.status
+            `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle cx="16" cy="16" r="14" fill="${getMarkerColor(
+              project
             )}" stroke="white" stroke-width="2"/><text x="16" y="20" text-anchor="middle" font-size="12" fill="white" font-weight="bold">${
               index + 1
             }</text></svg>`
@@ -80,8 +132,17 @@ export default function MappingScreen({ navigation }: any) {
           popupAnchor: [0, -32],
         }),
       })
+        .addTo(map)
         .bindPopup(\`<div style="font-family: Arial; width: 200px;">
           <h4 style="margin: 0 0 8px 0; color: #333;">${project.title}</h4>
+          <p style="margin: 4px 0; font-size: 12px; color: #fff;">
+            <span style="background:${project.isEvent ? '#9C27B0' : '#4CAF50'}; padding:4px 8px; border-radius:999px; font-weight:bold;">
+              ${project.isEvent ? 'Event' : 'Program'}
+            </span>
+          </p>
+          <p style="margin: 4px 0; font-size: 12px; color: #666;">
+            <strong>Type:</strong> ${project.isEvent ? 'Event' : 'Program'}
+          </p>
           <p style="margin: 4px 0; font-size: 12px; color: #666;">
             <strong>Status:</strong> <span style="color: ${getStatusColor(
             project.status
@@ -95,19 +156,34 @@ export default function MappingScreen({ navigation }: any) {
           </p>
         </div>\`)
         .on('click', function() {
-          window.ReactNativeWebView.postMessage(JSON.stringify({
+          const message = JSON.stringify({
             type: 'selectProject',
-            projectId: '${project.id}',
-            projectTitle: '${project.title}',
-            projectStatus: '${project.status}',
+            projectId: ${JSON.stringify(project.id)},
+            projectTitle: ${JSON.stringify(project.title)},
+            projectStatus: ${JSON.stringify(project.status)},
             volunteersNeeded: ${project.volunteersNeeded},
             projectLatitude: ${project.location.latitude},
             projectLongitude: ${project.location.longitude},
-          }));
+          });
+
+          if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+            window.ReactNativeWebView.postMessage(message);
+          }
+
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage(message, '*');
+          }
         });
     `
       )
       .join('\n');
+
+    const mapBounds = projects
+      .map(
+        (project) =>
+          `[${project.location.latitude}, ${project.location.longitude}]`
+      )
+      .join(',\n');
 
     return `
       <!DOCTYPE html>
@@ -144,7 +220,16 @@ export default function MappingScreen({ navigation }: any) {
           <div id="map"></div>
           <script>
             // Initialize map centered on Negros Occidental
-            const map = L.map('map').setView([${NEGROS_OCCIDENTAL_CENTER.latitude}, ${NEGROS_OCCIDENTAL_CENTER.longitude}], 10);
+            const negrosBounds = [
+              [${NEGROS_OCCIDENTAL_BOUNDS.southWest.latitude}, ${NEGROS_OCCIDENTAL_BOUNDS.southWest.longitude}],
+              [${NEGROS_OCCIDENTAL_BOUNDS.northEast.latitude}, ${NEGROS_OCCIDENTAL_BOUNDS.northEast.longitude}]
+            ];
+
+            const map = L.map('map', {
+              maxBounds: negrosBounds,
+              maxBoundsViscosity: 1.0,
+              minZoom: 8,
+            }).setView([${NEGROS_OCCIDENTAL_CENTER.latitude}, ${NEGROS_OCCIDENTAL_CENTER.longitude}], 9);
 
             // Add OpenStreetMap tiles
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -160,6 +245,13 @@ export default function MappingScreen({ navigation }: any) {
 
             // Add project markers
             ${projectMarkers}
+
+            map.fitBounds(negrosBounds, { padding: [24, 24] });
+
+            const projectBounds = [${mapBounds}];
+            if (projectBounds.length > 0) {
+              map.fitBounds(projectBounds, { padding: [32, 32], maxZoom: 11 });
+            }
 
             // Handle messages from React Native
             if (window.ReactNativeWebView) {
@@ -177,11 +269,7 @@ export default function MappingScreen({ navigation }: any) {
     try {
       const data = JSON.parse(event.nativeEvent.data);
       if (data.type === 'selectProject') {
-        const project = projects.find((p) => p.id === data.projectId);
-        if (project) {
-          setSelectedProject(project);
-          setShowDetails(true);
-        }
+        handleProjectSelection(data.projectId);
       }
     } catch (error) {
       console.error('Error handling webview message:', error);
@@ -200,34 +288,17 @@ export default function MappingScreen({ navigation }: any) {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Project Locations</Text>
-        <Text style={styles.headerSubtitle}>Negros Occidental, Philippines</Text>
+        <Text style={styles.headerTitle}>Negros Programs and Events</Text>
+        <Text style={styles.headerSubtitle}>Marker map for Negros Occidental, Philippines</Text>
       </View>
 
       {Platform.OS === 'web' ? (
-        <View style={styles.webFallbackContainer}>
-          <Text style={styles.webFallbackTitle}>Map preview is mobile-only.</Text>
-          <Text style={styles.webFallbackSubtitle}>
-            Open project coordinates below in OpenStreetMap.
-          </Text>
-          <ScrollView style={styles.webFallbackList}>
-            {projects.map((project) => (
-              <TouchableOpacity
-                key={project.id}
-                style={styles.webFallbackItem}
-                onPress={() =>
-                  Linking.openURL(
-                    `https://www.openstreetmap.org/?mlat=${project.location.latitude}&mlon=${project.location.longitude}#map=14/${project.location.latitude}/${project.location.longitude}`
-                  )
-                }
-              >
-                <Text style={styles.webFallbackItemTitle}>{project.title}</Text>
-                <Text style={styles.webFallbackItemMeta}>
-                  {project.location.latitude.toFixed(4)}, {project.location.longitude.toFixed(4)}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
+        <View style={styles.webMapContainer}>
+          <IFrame
+            srcDoc={generateLeafletHTML()}
+            style={styles.webMapFrame}
+            title="Program locations map"
+          />
         </View>
       ) : (
         <WebViewComponent
@@ -243,7 +314,7 @@ export default function MappingScreen({ navigation }: any) {
       )}
 
       <View style={styles.projectListContainer}>
-        <Text style={styles.projectListTitle}>Projects ({projects.length})</Text>
+        <Text style={styles.projectListTitle}>Negros markers ({projects.length})</Text>
       </View>
 
       {/* Project Details Modal */}
@@ -349,40 +420,17 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#666',
   },
-  webFallbackContainer: {
-    height: 320,
+  webMapContainer: {
+    height: 420,
     backgroundColor: '#fff',
     borderBottomWidth: 1,
     borderBottomColor: '#e6e6e6',
-    padding: 12,
+    overflow: 'hidden',
   },
-  webFallbackTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#333',
-  },
-  webFallbackSubtitle: {
-    marginTop: 4,
-    color: '#666',
-    fontSize: 13,
-  },
-  webFallbackList: {
-    marginTop: 10,
-  },
-  webFallbackItem: {
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  webFallbackItemTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#1f2937',
-  },
-  webFallbackItemMeta: {
-    marginTop: 4,
-    fontSize: 12,
-    color: '#6b7280',
+  webMapFrame: {
+    width: '100%',
+    height: '100%',
+    borderWidth: 0,
   },
   header: {
     backgroundColor: '#fff',

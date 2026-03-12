@@ -20,7 +20,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { format } from 'date-fns';
 
 export default function ImpactReportsScreen({ navigation }: any) {
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [reports, setReports] = useState<ImpactReport[]>([]);
@@ -59,6 +59,11 @@ export default function ImpactReportsScreen({ navigation }: any) {
   };
 
   const handleAddReport = async () => {
+    if (!isAdmin) {
+      Alert.alert('Access Restricted', 'Only admin accounts can submit impact reports.');
+      return;
+    }
+
     if (
       !beneficiariesReached.trim() ||
       !hoursContributed.trim() ||
@@ -227,16 +232,20 @@ export default function ImpactReportsScreen({ navigation }: any) {
         <View style={styles.reportsSection}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Reports</Text>
-            <TouchableOpacity
-              style={styles.addButton}
-              onPress={() => setShowReportModal(true)}
-            >
-              <MaterialIcons name="add" size={20} color="#fff" />
-            </TouchableOpacity>
+            {isAdmin && (
+              <TouchableOpacity
+                style={styles.addButton}
+                onPress={() => setShowReportModal(true)}
+              >
+                <MaterialIcons name="add" size={20} color="#fff" />
+              </TouchableOpacity>
+            )}
           </View>
 
           {reports.length === 0 ? (
-            <Text style={styles.emptyReportsText}>No impact reports yet. Click + to add one.</Text>
+            <Text style={styles.emptyReportsText}>
+              {isAdmin ? 'No impact reports yet. Click + to add one.' : 'No impact reports yet.'}
+            </Text>
           ) : (
             reports.map(report => (
               <View key={report.id} style={styles.reportItem}>

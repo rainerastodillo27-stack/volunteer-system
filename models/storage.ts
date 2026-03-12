@@ -11,6 +11,7 @@ import {
   PartnerDonation,
   SectorNeed,
   NVCSector,
+  VolunteerTimeLog,
 } from './types';
 
 const STORAGE_KEYS = {
@@ -24,9 +25,85 @@ const STORAGE_KEYS = {
   STATUS_UPDATES: 'statusUpdates',
   VOLUNTEER_MATCHES: 'volunteerMatches',
   DONATIONS: 'donations',
+  VOLUNTEER_TIME_LOGS: 'volunteerTimeLogs',
 };
 
 const WEB_MESSAGE_SYNC_KEY = 'volunteer-system:messages:updatedAt';
+const NEGROS_OCCIDENTAL_BOUNDS = {
+  minLatitude: 9.85,
+  maxLatitude: 11.05,
+  minLongitude: 122.45,
+  maxLongitude: 123.35,
+};
+export const NEGROS_SAMPLE_PROJECTS: Project[] = [
+  {
+    id: 'project-1',
+    title: 'Bacolod Reading Hub Setup',
+    description: 'Setting up a community reading hub for public school learners in Bacolod City.',
+    partnerId: 'partner-1',
+    isEvent: false,
+    status: 'In Progress',
+    category: 'Education',
+    startDate: new Date(2026, 0, 15).toISOString(),
+    endDate: new Date(2026, 5, 15).toISOString(),
+    location: {
+      latitude: 10.6765,
+      longitude: 122.9509,
+      address: 'Bacolod City, Negros Occidental, Philippines',
+    },
+    volunteersNeeded: 10,
+    volunteers: ['volunteer-1'],
+    joinedUserIds: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    statusUpdates: [],
+  },
+  {
+    id: 'project-2',
+    title: 'Kabankalan Livelihood Training',
+    description: 'Hands-on sewing and food processing training for family livelihood groups.',
+    partnerId: 'partner-2',
+    isEvent: false,
+    status: 'Planning',
+    category: 'Livelihood',
+    startDate: new Date(2026, 2, 1).toISOString(),
+    endDate: new Date(2026, 7, 31).toISOString(),
+    location: {
+      latitude: 9.9904,
+      longitude: 122.8144,
+      address: 'Kabankalan City, Negros Occidental, Philippines',
+    },
+    volunteersNeeded: 5,
+    volunteers: [],
+    joinedUserIds: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    statusUpdates: [],
+  },
+  {
+    id: 'project-3',
+    title: 'Sample Event: NVM Coastal Cleanup',
+    description: 'Sample event marker for a coastal cleanup and youth volunteer mobilization drive.',
+    partnerId: 'partner-1',
+    isEvent: true,
+    status: 'Planning',
+    category: 'Other',
+    startDate: new Date(2026, 3, 12).toISOString(),
+    endDate: new Date(2026, 3, 12).toISOString(),
+    location: {
+      latitude: 10.5333,
+      longitude: 122.8333,
+      address: 'Pulupandan, Negros Occidental, Philippines',
+    },
+    volunteersNeeded: 25,
+    volunteers: [],
+    joinedUserIds: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    statusUpdates: [],
+  },
+];
+
 const SECTOR_NEEDS: SectorNeed[] = [
   {
     sector: 'Education',
@@ -150,12 +227,42 @@ export async function saveProject(project: Project): Promise<void> {
 }
 
 export async function getProject(id: string): Promise<Project | null> {
-  const projects = await getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS) || [];
+  const projects = await getAllProjects();
   return projects.find(p => p.id === id) || null;
 }
 
 export async function getAllProjects(): Promise<Project[]> {
-  return (await getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS)) || [];
+  try {
+    const storedProjects = (await getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS)) || [];
+    if (storedProjects.length > 0) {
+      return storedProjects;
+    }
+
+    await setStorageItem(STORAGE_KEYS.PROJECTS, NEGROS_SAMPLE_PROJECTS);
+    return NEGROS_SAMPLE_PROJECTS;
+  } catch (error) {
+    console.error('Error loading projects, falling back to defaults:', error);
+    return NEGROS_SAMPLE_PROJECTS;
+  }
+}
+
+export function isProjectInNegros(project: Project): boolean {
+  const address = project.location.address.toLowerCase();
+  const hasNegrosAddress =
+    address.includes('negros occidental') ||
+    address.includes('negros');
+  const isWithinNegrosBounds =
+    project.location.latitude >= NEGROS_OCCIDENTAL_BOUNDS.minLatitude &&
+    project.location.latitude <= NEGROS_OCCIDENTAL_BOUNDS.maxLatitude &&
+    project.location.longitude >= NEGROS_OCCIDENTAL_BOUNDS.minLongitude &&
+    project.location.longitude <= NEGROS_OCCIDENTAL_BOUNDS.maxLongitude;
+
+  return hasNegrosAddress || isWithinNegrosBounds;
+}
+
+export async function getNegrosProjects(): Promise<Project[]> {
+  const projects = await getAllProjects();
+  return projects.filter(isProjectInNegros);
 }
 
 export async function getProjectsByStatus(status: string): Promise<Project[]> {
@@ -187,6 +294,102 @@ export async function getVolunteer(id: string): Promise<Volunteer | null> {
 
 export async function getAllVolunteers(): Promise<Volunteer[]> {
   return (await getStorageItem<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS)) || [];
+}
+
+export async function getVolunteerByUserId(userId: string): Promise<Volunteer | null> {
+  const volunteers = await getAllVolunteers();
+  return volunteers.find(v => v.userId === userId) || null;
+}
+
+// Volunteer Time Logs
+export async function saveVolunteerTimeLog(log: VolunteerTimeLog): Promise<void> {
+  const logs = await getStorageItem<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS) || [];
+  const existingIndex = logs.findIndex(l => l.id === log.id);
+  if (existingIndex >= 0) {
+    logs[existingIndex] = log;
+  } else {
+    logs.push(log);
+  }
+  await setStorageItem(STORAGE_KEYS.VOLUNTEER_TIME_LOGS, logs);
+}
+
+export async function getVolunteerTimeLogs(volunteerId: string): Promise<VolunteerTimeLog[]> {
+  const logs = await getStorageItem<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS) || [];
+  return logs
+    .filter(l => l.volunteerId === volunteerId)
+    .sort((a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime());
+}
+
+export async function startVolunteerTimeLog(
+  volunteerId: string,
+  projectId: string,
+  note?: string
+): Promise<VolunteerTimeLog> {
+  const existingLogs = await getVolunteerTimeLogs(volunteerId);
+  const activeLog = existingLogs.find(l => l.projectId === projectId && !l.timeOut);
+  if (activeLog) {
+    throw new Error('You already have an active time log for this project.');
+  }
+
+  const newLog: VolunteerTimeLog = {
+    id: `timelog-${Date.now()}`,
+    volunteerId,
+    projectId,
+    timeIn: new Date().toISOString(),
+    note,
+  };
+
+  await saveVolunteerTimeLog(newLog);
+  return newLog;
+}
+
+export async function endVolunteerTimeLog(
+  volunteerId: string,
+  projectId: string
+): Promise<VolunteerTimeLog | null> {
+  const logs = await getStorageItem<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS) || [];
+  const activeIndex = logs.findIndex(
+    l => l.volunteerId === volunteerId && l.projectId === projectId && !l.timeOut
+  );
+
+  if (activeIndex === -1) {
+    return null;
+  }
+
+  const updatedLog: VolunteerTimeLog = {
+    ...logs[activeIndex],
+    timeOut: new Date().toISOString(),
+  };
+
+  logs[activeIndex] = updatedLog;
+  await setStorageItem(STORAGE_KEYS.VOLUNTEER_TIME_LOGS, logs);
+  await addLoggedHoursToVolunteer(volunteerId, updatedLog);
+  return updatedLog;
+}
+
+async function addLoggedHoursToVolunteer(
+  volunteerId: string,
+  log: VolunteerTimeLog
+): Promise<void> {
+  if (!log.timeOut) return;
+
+  const volunteer = await getVolunteer(volunteerId);
+  if (!volunteer) return;
+
+  const durationHours = Math.max(
+    0,
+    (new Date(log.timeOut).getTime() - new Date(log.timeIn).getTime()) / 3_600_000
+  );
+
+  await saveVolunteer({
+    ...volunteer,
+    totalHoursContributed: parseFloat(
+      (volunteer.totalHoursContributed + durationHours).toFixed(1)
+    ),
+    pastProjects: volunteer.pastProjects.includes(log.projectId)
+      ? volunteer.pastProjects
+      : [...volunteer.pastProjects, log.projectId],
+  });
 }
 
 // Message Storage
@@ -271,6 +474,8 @@ export async function saveVolunteerProjectMatch(match: VolunteerProjectMatch): P
     matches.push(match);
   }
   await setStorageItem(STORAGE_KEYS.VOLUNTEER_MATCHES, matches);
+  await attachVolunteerToProject(match.projectId, match.volunteerId);
+  await syncVolunteerEngagementStatus(match.volunteerId);
 }
 
 export async function getVolunteerProjectMatches(volunteerId: string): Promise<VolunteerProjectMatch[]> {
@@ -281,6 +486,35 @@ export async function getVolunteerProjectMatches(volunteerId: string): Promise<V
 export async function getProjectMatches(projectId: string): Promise<VolunteerProjectMatch[]> {
   const matches = await getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES) || [];
   return matches.filter(m => m.projectId === projectId);
+}
+
+export async function joinProjectEvent(projectId: string, userId: string): Promise<void> {
+  const project = await getProject(projectId);
+  if (!project) {
+    throw new Error('Project not found');
+  }
+
+  const volunteer = await getVolunteerByUserId(userId);
+  const volunteerId = volunteer?.id;
+  const joinedUserIds = project.joinedUserIds || [];
+  const updatedJoinedUserIds = joinedUserIds.includes(userId)
+    ? joinedUserIds
+    : [...joinedUserIds, userId];
+  const updatedVolunteerIds =
+    volunteerId && !project.volunteers.includes(volunteerId)
+      ? [...project.volunteers, volunteerId]
+      : project.volunteers;
+
+  await saveProject({
+    ...project,
+    joinedUserIds: updatedJoinedUserIds,
+    volunteers: updatedVolunteerIds,
+    updatedAt: new Date().toISOString(),
+  });
+
+  if (volunteerId) {
+    await syncVolunteerEngagementStatus(volunteerId);
+  }
 }
 
 // Donation Storage
@@ -332,7 +566,11 @@ export async function clearAllStorage(): Promise<void> {
 export async function initializeMockData(): Promise<void> {
   const existingUsers = await getAllUsers();
   if (existingUsers.length > 0) {
+    await ensureAdminProfile();
     await ensurePartnerUser();
+    await ensureVolunteerProfile();
+    await ensureNegrosProjectData();
+    await ensureVolunteerStatuses();
     await ensureAdminVolunteerConversation();
     return; // Data already initialized
   }
@@ -343,8 +581,8 @@ export async function initializeMockData(): Promise<void> {
     email: 'admin@nvc.org',
     password: 'admin123',
     role: 'admin',
-    name: 'Admin User',
-    phone: '+1234567890',
+    name: 'NVC Admin Account',
+    phone: '+63 917 000 0001',
     createdAt: new Date().toISOString(),
   };
 
@@ -353,7 +591,7 @@ export async function initializeMockData(): Promise<void> {
     email: 'volunteer@example.com',
     password: 'volunteer123',
     role: 'volunteer',
-    name: 'John Volunteer',
+    name: 'Volunteer Account',
     phone: '+0987654321',
     createdAt: new Date().toISOString(),
   };
@@ -363,7 +601,7 @@ export async function initializeMockData(): Promise<void> {
     email: 'partner@livelihoods.org',
     password: 'partner123',
     role: 'partner',
-    name: 'Partner Organization User',
+    name: 'Partner Org Account',
     phone: '+919876543211',
     createdAt: new Date().toISOString(),
   };
@@ -376,12 +614,12 @@ export async function initializeMockData(): Promise<void> {
   const partners: Partner[] = [
     {
       id: 'partner-1',
-      name: 'Education India Foundation',
-      description: 'Focused on quality education',
+      name: 'LGU Bacolod Education Office',
+      description: 'Local government unit partner focused on community education support.',
       category: 'Education',
       contactEmail: 'contact@eduindia.org',
       contactPhone: '+919876543210',
-      address: 'Mumbai, India',
+      address: 'Bacolod City, Negros Occidental, Philippines',
       status: 'Approved',
       validatedBy: 'admin-1',
       validatedAt: new Date().toISOString(),
@@ -389,12 +627,12 @@ export async function initializeMockData(): Promise<void> {
     },
     {
       id: 'partner-2',
-      name: 'Livelihood Skills NGO',
-      description: 'Providing vocational training',
+      name: 'LGU Kabankalan Livelihood Office',
+      description: 'LGU-led livelihood partner providing local skills training programs.',
       category: 'Livelihood',
       contactEmail: 'contact@livelihoods.org',
       contactPhone: '+919876543211',
-      address: 'Bangalore, India',
+      address: 'Kabankalan City, Negros Occidental, Philippines',
       status: 'Pending',
       createdAt: new Date().toISOString(),
     },
@@ -405,48 +643,7 @@ export async function initializeMockData(): Promise<void> {
   }
 
   // Mock projects
-  const projects: Project[] = [
-    {
-      id: 'project-1',
-      title: 'Rural School Library Setup',
-      description: 'Setting up modern library infrastructure in rural schools',
-      partnerId: 'partner-1',
-      status: 'In Progress',
-      category: 'Education',
-      startDate: new Date(2026, 0, 15).toISOString(),
-      endDate: new Date(2026, 5, 15).toISOString(),
-      location: {
-        latitude: 19.0760,
-        longitude: 72.8777,
-        address: 'Mumbai Rural Area',
-      },
-      volunteersNeeded: 10,
-      volunteers: ['volunteer-1'],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      statusUpdates: [],
-    },
-    {
-      id: 'project-2',
-      title: 'Vocational Training Program',
-      description: 'Textile and handicraft skill development',
-      partnerId: 'partner-2',
-      status: 'Planning',
-      category: 'Livelihood',
-      startDate: new Date(2026, 2, 1).toISOString(),
-      endDate: new Date(2026, 7, 31).toISOString(),
-      location: {
-        latitude: 12.9716,
-        longitude: 77.5946,
-        address: 'Bangalore, India',
-      },
-      volunteersNeeded: 5,
-      volunteers: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      statusUpdates: [],
-    },
-  ];
+  const projects: Project[] = NEGROS_SAMPLE_PROJECTS;
 
   for (const project of projects) {
     await saveProject(project);
@@ -456,10 +653,12 @@ export async function initializeMockData(): Promise<void> {
   const volunteerProfile: Volunteer = {
     id: 'volunteer-1',
     userId: 'volunteer-1',
-    name: 'John Volunteer',
+    name: 'Volunteer Account',
     email: 'volunteer@example.com',
     phone: '+0987654321',
     skills: ['Teaching', 'Mentoring', 'Community Outreach'],
+    skillsDescription:
+      'I can support reading sessions, mentor students, organize community outreach, and help with event coordination.',
     availability: {
       daysPerWeek: 3,
       hoursPerWeek: 12,
@@ -468,6 +667,7 @@ export async function initializeMockData(): Promise<void> {
     pastProjects: [],
     totalHoursContributed: 24,
     rating: 4.5,
+    engagementStatus: 'Open to Volunteer',
     background: 'Software Engineer with passion for education',
     createdAt: new Date().toISOString(),
   };
@@ -493,20 +693,155 @@ export async function initializeMockData(): Promise<void> {
 
 async function ensurePartnerUser(): Promise<void> {
   const users = await getAllUsers();
-  const hasPartnerUser = users.some(u => u.role === 'partner');
-  if (hasPartnerUser) return;
+  const existingPartnerUser = users.find(u => u.role === 'partner');
+  if (existingPartnerUser) {
+    if (existingPartnerUser.name !== 'Partner Org Account') {
+      await saveUser({
+        ...existingPartnerUser,
+        name: 'Partner Org Account',
+      });
+    }
+    return;
+  }
 
   const partnerUser: User = {
     id: 'partner-user-1',
     email: 'partner@livelihoods.org',
     password: 'partner123',
     role: 'partner',
-    name: 'Partner Organization User',
+    name: 'Partner Org Account',
     phone: '+919876543211',
     createdAt: new Date().toISOString(),
   };
 
   await saveUser(partnerUser);
+}
+
+async function ensureVolunteerProfile(): Promise<void> {
+  const users = await getAllUsers();
+  const volunteerUser = users.find((u) => u.id === 'volunteer-1');
+  if (volunteerUser && volunteerUser.name !== 'Volunteer Account') {
+    await saveUser({
+      ...volunteerUser,
+      name: 'Volunteer Account',
+    });
+  }
+
+  const volunteerProfile = await getVolunteer('volunteer-1');
+  if (volunteerProfile && volunteerProfile.name !== 'Volunteer Account') {
+    await saveVolunteer({
+      ...volunteerProfile,
+      name: 'Volunteer Account',
+    });
+  }
+
+  if (volunteerProfile && !volunteerProfile.skillsDescription) {
+    await saveVolunteer({
+      ...volunteerProfile,
+      skillsDescription: volunteerProfile.background,
+    });
+  }
+}
+
+async function ensureAdminProfile(): Promise<void> {
+  const users = await getAllUsers();
+  const adminUser = users.find((u) => u.id === 'admin-1');
+  if (!adminUser) return;
+
+  if (adminUser.name !== 'NVC Admin Account') {
+    await saveUser({
+      ...adminUser,
+      name: 'NVC Admin Account',
+    });
+  }
+}
+
+async function ensureNegrosProjectData(): Promise<void> {
+  const projects = await getAllProjects();
+
+  for (const sampleProject of NEGROS_SAMPLE_PROJECTS) {
+    const existingProject = projects.find((project) => project.id === sampleProject.id);
+
+    if (!existingProject) {
+      await saveProject(sampleProject);
+      continue;
+    }
+
+    await saveProject({
+      ...existingProject,
+      title: sampleProject.title,
+      description: sampleProject.description,
+      isEvent: sampleProject.isEvent,
+      category: sampleProject.category,
+      startDate: sampleProject.startDate,
+      endDate: sampleProject.endDate,
+      location: sampleProject.location,
+      volunteersNeeded: sampleProject.volunteersNeeded,
+      joinedUserIds: existingProject.joinedUserIds || sampleProject.joinedUserIds || [],
+      updatedAt: new Date().toISOString(),
+    });
+  }
+}
+
+async function ensureVolunteerStatuses(): Promise<void> {
+  const volunteers = await getAllVolunteers();
+
+  for (const volunteer of volunteers) {
+    if (!volunteer.engagementStatus) {
+      await saveVolunteer({
+        ...volunteer,
+        engagementStatus: 'Open to Volunteer',
+      });
+    }
+
+    if (!volunteer.skillsDescription) {
+      await saveVolunteer({
+        ...volunteer,
+        skillsDescription: volunteer.background,
+      });
+    }
+
+    await syncVolunteerEngagementStatus(volunteer.id);
+  }
+}
+
+async function attachVolunteerToProject(projectId: string, volunteerId: string): Promise<void> {
+  const project = await getProject(projectId);
+  if (!project) return;
+
+  if (project.volunteers.includes(volunteerId)) return;
+
+  await saveProject({
+    ...project,
+    volunteers: [...project.volunteers, volunteerId],
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+async function syncVolunteerEngagementStatus(volunteerId: string): Promise<void> {
+  const volunteer = await getVolunteer(volunteerId);
+  if (!volunteer) return;
+
+  const [matches, projects] = await Promise.all([
+    getVolunteerProjectMatches(volunteerId),
+    getAllProjects(),
+  ]);
+
+  const hasActiveMatch = matches.some(
+    match => match.status === 'Matched' || match.status === 'Requested'
+  );
+  const hasJoinedEvent = projects.some(
+    project => project.isEvent && (project.joinedUserIds || []).includes(volunteer.userId)
+  );
+
+  const nextStatus = hasActiveMatch || hasJoinedEvent ? 'Busy' : 'Open to Volunteer';
+
+  if (volunteer.engagementStatus !== nextStatus) {
+    await saveVolunteer({
+      ...volunteer,
+      engagementStatus: nextStatus,
+    });
+  }
 }
 
 async function ensureAdminVolunteerConversation(): Promise<void> {

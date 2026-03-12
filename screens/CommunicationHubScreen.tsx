@@ -25,6 +25,27 @@ import { format } from 'date-fns';
 
 const WEB_MESSAGE_SYNC_KEY = 'volunteer-system:messages:updatedAt';
 
+const formatRoleLabel = (chatUser: User) => {
+  if (chatUser.role === 'admin') {
+    return 'NVC Admin Account';
+  }
+
+  return chatUser.role.charAt(0).toUpperCase() + chatUser.role.slice(1);
+};
+
+const formatMessageTime = (timestamp?: string) => {
+  if (!timestamp) {
+    return '';
+  }
+
+  const parsedDate = new Date(timestamp);
+  if (Number.isNaN(parsedDate.getTime())) {
+    return '';
+  }
+
+  return format(parsedDate, 'HH:mm');
+};
+
 export default function CommunicationHubScreen({ navigation }: any) {
   const { user } = useAuth();
   const [view, setView] = useState<'conversations' | 'detail'>('conversations');
@@ -174,6 +195,17 @@ export default function CommunicationHubScreen({ navigation }: any) {
     setView('detail');
   };
 
+  if (!user) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.emptyState}>
+          <MaterialIcons name="mail-outline" size={48} color="#ccc" />
+          <Text style={styles.emptyStateText}>Loading messages...</Text>
+        </View>
+      </View>
+    );
+  }
+
   if (view === 'detail' && selectedUser) {
     return (
       <KeyboardAvoidingView
@@ -187,7 +219,7 @@ export default function CommunicationHubScreen({ navigation }: any) {
           </TouchableOpacity>
           <View style={{ flex: 1 }}>
             <Text style={styles.detailHeaderTitle}>{selectedUser.name}</Text>
-            <Text style={styles.detailHeaderRole}>{selectedUser.role}</Text>
+            <Text style={styles.detailHeaderRole}>{formatRoleLabel(selectedUser)}</Text>
           </View>
         </View>
 
@@ -214,9 +246,9 @@ export default function CommunicationHubScreen({ navigation }: any) {
                 >
                   {message.content}
                 </Text>
-                <Text style={styles.messageTime}>
-                  {format(new Date(message.timestamp), 'HH:mm')}
-                </Text>
+                {!!formatMessageTime(message.timestamp) && (
+                  <Text style={styles.messageTime}>{formatMessageTime(message.timestamp)}</Text>
+                )}
               </View>
             ))
           )}
@@ -265,7 +297,7 @@ export default function CommunicationHubScreen({ navigation }: any) {
                 </View>
                 <View>
                   <Text style={styles.userName}>{chatUser.name}</Text>
-                  <Text style={styles.userRole}>{chatUser.role}</Text>
+                  <Text style={styles.userRole}>{formatRoleLabel(chatUser)}</Text>
                 </View>
               </View>
               <MaterialIcons name="arrow-forward" size={20} color="#999" />
@@ -301,7 +333,7 @@ export default function CommunicationHubScreen({ navigation }: any) {
               <View style={styles.conversationRight}>
                 {item.lastMessage && (
                   <Text style={styles.conversationTime}>
-                    {format(new Date(item.lastMessage.timestamp), 'HH:mm')}
+                    {formatMessageTime(item.lastMessage.timestamp)}
                   </Text>
                 )}
                 {item.unreadCount > 0 && (

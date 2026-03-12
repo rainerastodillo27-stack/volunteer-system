@@ -45,6 +45,8 @@ export default function PartnerDashboardScreen({ navigation }: any) {
       const partners = await getAllPartners();
       const projects = await getAllProjects();
       const myOrgs = partners.filter(p => p.contactEmail.toLowerCase() === user?.email?.toLowerCase());
+      const myOrgIds = new Set(myOrgs.map((partner) => partner.id));
+      const myProjects = projects.filter((project) => myOrgIds.has(project.partnerId));
 
       setOrgStats({
         total: myOrgs.length,
@@ -54,9 +56,9 @@ export default function PartnerDashboardScreen({ navigation }: any) {
       });
 
       setProjectStats({
-        total: projects.length,
-        active: projects.filter(p => p.status === 'In Progress').length,
-        completed: projects.filter(p => p.status === 'Completed').length,
+        total: myProjects.length,
+        active: myProjects.filter(p => p.status === 'In Progress').length,
+        completed: myProjects.filter(p => p.status === 'Completed').length,
       });
 
       const [needs, totals, donations] = await Promise.all([
@@ -124,7 +126,7 @@ export default function PartnerDashboardScreen({ navigation }: any) {
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.greeting}>Welcome, {user?.name}</Text>
-            <Text style={styles.role}>Partner Organization</Text>
+            <Text style={styles.role}>Partner Org Account</Text>
           </View>
           <TouchableOpacity onPress={handleLogout}>
             <MaterialIcons name="logout" size={24} color="#666" />

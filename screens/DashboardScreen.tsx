@@ -89,17 +89,26 @@ export default function DashboardScreen({ navigation }: any) {
     ]);
   };
 
+  const displayName =
+    Platform.OS === 'web' && user?.role === 'admin' ? 'NVC Admin Account' : user?.name;
+  const roleLabel =
+    user?.role === 'admin'
+      ? Platform.OS === 'web'
+        ? 'NVC Admin Account'
+        : 'Administrator'
+      : 'Volunteer Account';
+
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
       {/* Header with User Info */}
       <View style={styles.header}>
         <View style={styles.userSection}>
           <View style={styles.avatar}>
-            <Text style={styles.avatarText}>{user?.name.charAt(0)}</Text>
+            <Text style={styles.avatarText}>{displayName?.charAt(0) ?? 'N'}</Text>
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.greeting}>Welcome, {user?.name}</Text>
-            <Text style={styles.role}>{user?.role === 'admin' ? 'Administrator' : 'Volunteer'}</Text>
+            <Text style={styles.greeting}>Welcome, {displayName}</Text>
+            <Text style={styles.role}>{roleLabel}</Text>
           </View>
           <TouchableOpacity onPress={handleLogout}>
             <MaterialIcons name="logout" size={24} color="#666" />
@@ -108,35 +117,37 @@ export default function DashboardScreen({ navigation }: any) {
       </View>
 
       {/* Key Metrics */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Key Metrics</Text>
+      {isAdmin && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Key Metrics</Text>
 
-        <View style={styles.metricsGrid}>
-          <View style={styles.metricCard}>
-            <MaterialIcons name="folder" size={32} color="#4CAF50" />
-            <Text style={styles.metricValue}>{projectStats.total}</Text>
-            <Text style={styles.metricLabel}>Projects</Text>
-          </View>
+          <View style={styles.metricsGrid}>
+            <View style={styles.metricCard}>
+              <MaterialIcons name="folder" size={32} color="#4CAF50" />
+              <Text style={styles.metricValue}>{projectStats.total}</Text>
+              <Text style={styles.metricLabel}>Projects</Text>
+            </View>
 
-          <View style={styles.metricCard}>
-            <MaterialIcons name="business" size={32} color="#66BB6A" />
-            <Text style={styles.metricValue}>{partnerStats.total}</Text>
-            <Text style={styles.metricLabel}>Partners</Text>
-          </View>
+            <View style={styles.metricCard}>
+              <MaterialIcons name="business" size={32} color="#66BB6A" />
+              <Text style={styles.metricValue}>{partnerStats.total}</Text>
+              <Text style={styles.metricLabel}>Partners</Text>
+            </View>
 
-          <View style={styles.metricCard}>
-            <MaterialIcons name="group" size={32} color="#4CAF50" />
-            <Text style={styles.metricValue}>{volunteerStats.total}</Text>
-            <Text style={styles.metricLabel}>Volunteers</Text>
-          </View>
+            <View style={styles.metricCard}>
+              <MaterialIcons name="group" size={32} color="#4CAF50" />
+              <Text style={styles.metricValue}>{volunteerStats.total}</Text>
+              <Text style={styles.metricLabel}>Volunteers</Text>
+            </View>
 
-          <View style={styles.metricCard}>
-            <MaterialIcons name="trending-up" size={32} color="#2E7D32" />
-            <Text style={styles.metricValue}>{projectStats.active}</Text>
-            <Text style={styles.metricLabel}>Active</Text>
+            <View style={styles.metricCard}>
+              <MaterialIcons name="trending-up" size={32} color="#2E7D32" />
+              <Text style={styles.metricValue}>{projectStats.active}</Text>
+              <Text style={styles.metricLabel}>Active</Text>
+            </View>
           </View>
         </View>
-      </View>
+      )}
 
       {/* Project Overview */}
       <View style={styles.section}>
@@ -201,7 +212,7 @@ export default function DashboardScreen({ navigation }: any) {
       )}
 
       {/* Recent Updates */}
-      {recentUpdates.length > 0 && (
+      {isAdmin && recentUpdates.length > 0 && (
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Recent Updates</Text>
@@ -249,13 +260,15 @@ export default function DashboardScreen({ navigation }: any) {
             <Text style={styles.actionButtonText}>Map</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={() => navigation.navigate('Impact')}
-          >
-            <MaterialIcons name="assessment" size={24} color="#4CAF50" />
-            <Text style={styles.actionButtonText}>Reports</Text>
-          </TouchableOpacity>
+          {isAdmin && (
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={() => navigation.navigate('Impact')}
+            >
+              <MaterialIcons name="assessment" size={24} color="#4CAF50" />
+              <Text style={styles.actionButtonText}>Reports</Text>
+            </TouchableOpacity>
+          )}
 
           {isAdmin && (
             <TouchableOpacity

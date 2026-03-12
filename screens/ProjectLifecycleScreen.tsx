@@ -23,7 +23,7 @@ import { format } from 'date-fns';
 const statuses = ['Planning', 'In Progress', 'On Hold', 'Completed', 'Cancelled'];
 
 export default function ProjectLifecycleScreen({ navigation }: any) {
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [statusUpdates, setStatusUpdates] = useState<StatusUpdate[]>([]);
@@ -59,6 +59,11 @@ export default function ProjectLifecycleScreen({ navigation }: any) {
   };
 
   const handleAddStatusUpdate = async () => {
+    if (!isAdmin) {
+      Alert.alert('Access Restricted', 'Only admin accounts can add project status updates.');
+      return;
+    }
+
     if (!selectedProject || !updateDescription.trim()) {
       Alert.alert('Error', 'Please enter a description');
       return;
@@ -212,12 +217,14 @@ export default function ProjectLifecycleScreen({ navigation }: any) {
           <View style={styles.detailsSection}>
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Status Updates</Text>
-              <TouchableOpacity
-                style={styles.addButton}
-                onPress={() => setShowStatusModal(true)}
-              >
-                <MaterialIcons name="add" size={20} color="#fff" />
-              </TouchableOpacity>
+              {isAdmin && (
+                <TouchableOpacity
+                  style={styles.addButton}
+                  onPress={() => setShowStatusModal(true)}
+                >
+                  <MaterialIcons name="add" size={20} color="#fff" />
+                </TouchableOpacity>
+              )}
             </View>
 
             {statusUpdates.length === 0 ? (
