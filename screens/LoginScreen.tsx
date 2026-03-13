@@ -128,11 +128,19 @@ export default function LoginScreen({ navigation }: any) {
       <View style={styles.demoSection}>
         <Text style={styles.demoTitle}>Demo Credentials:</Text>
         {isWeb ? (
-          <View style={styles.demoItem}>
-            <Text style={styles.demoLabel}>Admin Account (Web Only):</Text>
-            <Text style={styles.demoEmail}>admin@nvc.org</Text>
-            <Text style={styles.demoPassword}>admin123</Text>
-          </View>
+          <>
+            <View style={styles.demoItem}>
+              <Text style={styles.demoLabel}>Admin Account (Web Only):</Text>
+              <Text style={styles.demoEmail}>admin@nvc.org</Text>
+              <Text style={styles.demoPassword}>admin123</Text>
+            </View>
+            <View style={[styles.demoItem, styles.mobileOnlyCard]}>
+              <Text style={styles.demoLabel}>Partner Organization (Mobile App):</Text>
+              <Text style={styles.demoEmail}>partner@livelihoods.org</Text>
+              <Text style={styles.demoPassword}>partner123</Text>
+              <Text style={styles.mobileOnlyBadge}>Use via the mobile app</Text>
+            </View>
+          </>
         ) : (
           <>
             <View style={styles.demoItem}>
@@ -240,6 +248,18 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#333',
     fontFamily: 'monospace',
+  },
+  mobileOnlyCard: {
+    backgroundColor: '#f8fafc',
+    borderColor: '#e2e8f0',
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 12,
+  },
+  mobileOnlyBadge: {
+    marginTop: 6,
+    fontSize: 12,
+    color: '#64748b',
   },
   signupText: {
     color: '#4CAF50',

@@ -327,47 +327,55 @@ export default function VolunteerManagementScreen({ navigation }: any) {
             </View>
 
             <ScrollView style={styles.modalContent}>
-              <Text style={styles.label}>Days per week</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Number of days"
-                placeholderTextColor="#999"
-                keyboardType="number-pad"
-                value={daysPerWeek}
-                onChangeText={setDaysPerWeek}
-              />
+              <View style={styles.formRow}>
+                <TextInput
+                  style={[styles.input, styles.inputWithLabel]}
+                  placeholder="Number of days"
+                  placeholderTextColor="#999"
+                  keyboardType="number-pad"
+                  value={daysPerWeek}
+                  onChangeText={setDaysPerWeek}
+                />
+                <Text style={[styles.label, styles.labelRight]}>Days per week</Text>
+              </View>
 
-              <Text style={styles.label}>Hours per week</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Total hours"
-                placeholderTextColor="#999"
-                keyboardType="decimal-pad"
-                value={hoursPerWeek}
-                onChangeText={setHoursPerWeek}
-              />
+              <View style={styles.formRow}>
+                <TextInput
+                  style={[styles.input, styles.inputWithLabel]}
+                  placeholder="Total hours"
+                  placeholderTextColor="#999"
+                  keyboardType="decimal-pad"
+                  value={hoursPerWeek}
+                  onChangeText={setHoursPerWeek}
+                />
+                <Text style={[styles.label, styles.labelRight]}>Hours per week</Text>
+              </View>
 
-              <Text style={styles.label}>Available days</Text>
-              <View style={styles.daysGrid}>
-                {daysOfWeek.map(day => (
-                  <TouchableOpacity
-                    key={day}
-                    style={[
-                      styles.dayButton,
-                      availableDays.includes(day) && styles.dayButtonSelected,
-                    ]}
-                    onPress={() => toggleAvailableDay(day)}
-                  >
-                    <Text
+              <View style={[styles.formRow, styles.formRowTop]}>
+                <View style={[styles.daysGrid, styles.daysGridCard]}>
+                  {daysOfWeek.map(day => (
+                    <TouchableOpacity
+                      key={day}
                       style={[
-                        styles.dayButtonText,
-                        availableDays.includes(day) && styles.dayButtonTextSelected,
+                        styles.dayButton,
+                        availableDays.includes(day) && styles.dayButtonSelected,
                       ]}
+                      onPress={() => toggleAvailableDay(day)}
                     >
-                      {day.substring(0, 3)}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+                      <Text
+                        style={[
+                          styles.dayButtonText,
+                          availableDays.includes(day) && styles.dayButtonTextSelected,
+                        ]}
+                      >
+                        {day.substring(0, 3)}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <Text style={[styles.label, styles.labelRight, styles.labelTop]}>
+                  Available days
+                </Text>
               </View>
 
               <TouchableOpacity
@@ -744,6 +752,30 @@ const styles = StyleSheet.create({
     color: '#333',
     marginBottom: 8,
   },
+  labelRight: {
+    marginBottom: 0,
+    minWidth: 140,
+    textAlign: 'right',
+    backgroundColor: '#e8f5e9',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 12,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#14532d',
+  },
+  labelTop: {
+    marginTop: 4,
+  },
+  formRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 18,
+  },
+  formRowTop: {
+    alignItems: 'flex-start',
+  },
   input: {
     backgroundColor: '#fff',
     borderRadius: 8,
@@ -754,11 +786,27 @@ const styles = StyleSheet.create({
     color: '#333',
     marginBottom: 20,
   },
+  inputWithLabel: {
+    flex: 1,
+    marginBottom: 0,
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+  },
   daysGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
-    marginBottom: 20,
+    marginBottom: 0,
+  },
+  daysGridCard: {
+    flex: 1,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
   },
   dayButton: {
     flex: 0.3,

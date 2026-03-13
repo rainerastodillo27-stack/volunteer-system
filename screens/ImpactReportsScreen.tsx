@@ -285,57 +285,71 @@ export default function ImpactReportsScreen({ navigation }: any) {
             </View>
 
             <ScrollView style={styles.modalContent}>
-              <Text style={styles.label}>Beneficiaries Reached</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Number of people impacted"
-                placeholderTextColor="#999"
-                keyboardType="number-pad"
-                value={beneficiariesReached}
-                onChangeText={setBeneficiariesReached}
-              />
+              <View style={styles.formRow}>
+                <TextInput
+                  style={[styles.input, styles.inputWithLabel]}
+                  placeholder="Number of people impacted"
+                  placeholderTextColor="#999"
+                  keyboardType="number-pad"
+                  value={beneficiariesReached}
+                  onChangeText={setBeneficiariesReached}
+                />
+                <Text style={[styles.label, styles.labelRight]}>Beneficiaries Reached</Text>
+              </View>
 
-              <Text style={styles.label}>Volunteer Hours Contributed</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Total hours"
-                placeholderTextColor="#999"
-                keyboardType="decimal-pad"
-                value={hoursContributed}
-                onChangeText={setHoursContributed}
-              />
+              <View style={styles.formRow}>
+                <TextInput
+                  style={[styles.input, styles.inputWithLabel]}
+                  placeholder="Total hours"
+                  placeholderTextColor="#999"
+                  keyboardType="decimal-pad"
+                  value={hoursContributed}
+                  onChangeText={setHoursContributed}
+                />
+                <Text style={[styles.label, styles.labelRight]}>
+                  Volunteer Hours Contributed
+                </Text>
+              </View>
 
-              <Text style={styles.label}>Volunteers Involved</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Number of volunteers"
-                placeholderTextColor="#999"
-                keyboardType="number-pad"
-                value={volunteersInvolved}
-                onChangeText={setVolunteersInvolved}
-              />
+              <View style={styles.formRow}>
+                <TextInput
+                  style={[styles.input, styles.inputWithLabel]}
+                  placeholder="Number of volunteers"
+                  placeholderTextColor="#999"
+                  keyboardType="number-pad"
+                  value={volunteersInvolved}
+                  onChangeText={setVolunteersInvolved}
+                />
+                <Text style={[styles.label, styles.labelRight]}>Volunteers Involved</Text>
+              </View>
 
-              <Text style={styles.label}>Funding Utilized ($)</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Amount spent"
-                placeholderTextColor="#999"
-                keyboardType="decimal-pad"
-                value={fundingUtilized}
-                onChangeText={setFundingUtilized}
-              />
+              <View style={styles.formRow}>
+                <TextInput
+                  style={[styles.input, styles.inputWithLabel]}
+                  placeholder="Amount spent"
+                  placeholderTextColor="#999"
+                  keyboardType="decimal-pad"
+                  value={fundingUtilized}
+                  onChangeText={setFundingUtilized}
+                />
+                <Text style={[styles.label, styles.labelRight]}>Funding Utilized ($)</Text>
+              </View>
 
-              <Text style={styles.label}>Narrative Report</Text>
-              <TextInput
-                style={[styles.input, styles.textArea]}
-                placeholder="Describe the impact and outcomes..."
-                placeholderTextColor="#999"
-                multiline
-                numberOfLines={6}
-                value={narrative}
-                onChangeText={setNarrative}
-                textAlignVertical="top"
-              />
+              <View style={[styles.formRow, styles.formRowTop]}>
+                <TextInput
+                  style={[styles.input, styles.textArea, styles.inputWithLabel]}
+                  placeholder="Describe the impact and outcomes..."
+                  placeholderTextColor="#999"
+                  multiline
+                  numberOfLines={6}
+                  value={narrative}
+                  onChangeText={setNarrative}
+                  textAlignVertical="top"
+                />
+                <Text style={[styles.label, styles.labelRight, styles.labelTop]}>
+                  Narrative Report
+                </Text>
+              </View>
 
               <TouchableOpacity style={styles.submitButton} onPress={handleAddReport}>
                 <Text style={styles.submitButtonText}>Submit Report</Text>
@@ -630,6 +644,30 @@ const styles = StyleSheet.create({
     color: '#333',
     marginBottom: 8,
   },
+  labelRight: {
+    marginBottom: 0,
+    minWidth: 150,
+    textAlign: 'right',
+    backgroundColor: '#eef2ff',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#312e81',
+  },
+  labelTop: {
+    marginTop: 4,
+  },
+  formRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    marginBottom: 18,
+  },
+  formRowTop: {
+    alignItems: 'flex-start',
+  },
   input: {
     backgroundColor: '#fff',
     borderRadius: 8,
@@ -639,6 +677,14 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#333',
     marginBottom: 16,
+  },
+  inputWithLabel: {
+    flex: 1,
+    marginBottom: 0,
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
   },
   textArea: {
     textAlignVertical: 'top',

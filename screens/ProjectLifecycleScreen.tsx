@@ -268,39 +268,43 @@ export default function ProjectLifecycleScreen({ navigation }: any) {
             </View>
 
             <ScrollView style={styles.modalContent}>
-              <Text style={styles.label}>New Status</Text>
-              <View style={styles.statusOptions}>
-                {statuses.map(status => (
-                  <TouchableOpacity
-                    key={status}
-                    style={[
-                      styles.statusOption,
-                      newStatus === status && styles.statusOptionSelected,
-                    ]}
-                    onPress={() => setNewStatus(status as Project['status'])}
-                  >
-                    <Text
+              <View style={[styles.formRow, styles.formRowTop]}>
+                <View style={[styles.statusOptions, styles.statusOptionsCard]}>
+                  {statuses.map(status => (
+                    <TouchableOpacity
+                      key={status}
                       style={[
-                        styles.statusOptionText,
-                        newStatus === status && styles.statusOptionTextSelected,
+                        styles.statusOption,
+                        newStatus === status && styles.statusOptionSelected,
                       ]}
+                      onPress={() => setNewStatus(status as Project['status'])}
                     >
-                      {status}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+                      <Text
+                        style={[
+                          styles.statusOptionText,
+                          newStatus === status && styles.statusOptionTextSelected,
+                        ]}
+                      >
+                        {status}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <Text style={[styles.label, styles.labelRight, styles.labelTop]}>New Status</Text>
               </View>
 
-              <Text style={styles.label}>Description</Text>
-              <TextInput
-                style={styles.textArea}
-                placeholder="Describe the status update..."
-                placeholderTextColor="#999"
-                multiline
-                numberOfLines={4}
-                value={updateDescription}
-                onChangeText={setUpdateDescription}
-              />
+              <View style={[styles.formRow, styles.formRowTop]}>
+                <TextInput
+                  style={[styles.textArea, styles.inputWithLabel]}
+                  placeholder="Describe the status update..."
+                  placeholderTextColor="#999"
+                  multiline
+                  numberOfLines={4}
+                  value={updateDescription}
+                  onChangeText={setUpdateDescription}
+                />
+                <Text style={[styles.label, styles.labelRight, styles.labelTop]}>Description</Text>
+              </View>
 
               <TouchableOpacity
                 style={styles.submitButton}
@@ -565,11 +569,43 @@ const styles = StyleSheet.create({
     color: '#333',
     marginBottom: 8,
   },
+  labelRight: {
+    marginBottom: 0,
+    minWidth: 140,
+    textAlign: 'right',
+    backgroundColor: '#e0f2fe',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  labelTop: {
+    marginTop: 4,
+  },
+  formRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 18,
+  },
+  formRowTop: {
+    alignItems: 'flex-start',
+  },
   statusOptions: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
-    marginBottom: 20,
+    marginBottom: 0,
+  },
+  statusOptionsCard: {
+    flex: 1,
+    backgroundColor: '#fff',
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
   },
   statusOption: {
     paddingHorizontal: 12,
@@ -600,7 +636,15 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#333',
     textAlignVertical: 'top',
-    marginBottom: 20,
+    marginBottom: 0,
+  },
+  inputWithLabel: {
+    flex: 1,
+    marginBottom: 0,
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
   },
   submitButton: {
     backgroundColor: '#4CAF50',
