@@ -197,7 +197,45 @@ export async function getUserByEmail(email: string): Promise<User | null> {
 }
 
 export async function getAllUsers(): Promise<User[]> {
+  await ensureCoreUsers();
   return (await getStorageItem<User[]>(STORAGE_KEYS.USERS)) || [];
+}
+
+export async function deleteUser(userId: string): Promise<void> {
+  const users = await getStorageItem<User[]>(STORAGE_KEYS.USERS) || [];
+  const filteredUsers = users.filter(user => user.id !== userId);
+  await setStorageItem(STORAGE_KEYS.USERS, filteredUsers);
+
+  const volunteers = await getStorageItem<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS) || [];
+  const filteredVolunteers = volunteers.filter(
+    volunteer => volunteer.id !== userId && volunteer.userId !== userId
+  );
+  await setStorageItem(STORAGE_KEYS.VOLUNTEERS, filteredVolunteers);
+
+  const messages = await getStorageItem<Message[]>(STORAGE_KEYS.MESSAGES) || [];
+  const filteredMessages = messages.filter(
+    message => message.senderId !== userId && message.recipientId !== userId
+  );
+  await setStorageItem(STORAGE_KEYS.MESSAGES, filteredMessages);
+
+  const partnerApplications =
+    await getStorageItem<PartnerProjectApplication[]>(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS) || [];
+  const filteredPartnerApplications = partnerApplications.filter(
+    application => application.partnerUserId !== userId
+  );
+  await setStorageItem(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS, filteredPartnerApplications);
+
+  const projects = await getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS) || [];
+  const updatedProjects = projects.map(project => ({
+    ...project,
+    joinedUserIds: (project.joinedUserIds || []).filter(joinedId => joinedId !== userId),
+  }));
+  await setStorageItem(STORAGE_KEYS.PROJECTS, updatedProjects);
+
+  const currentUser = await getCurrentUser();
+  if (currentUser?.id === userId) {
+    await setCurrentUser(null);
+  }
 }
 
 export async function setCurrentUser(user: User | null): Promise<void> {
@@ -860,7 +898,7 @@ export async function initializeMockData(): Promise<void> {
 }
 
 async function ensurePartnerUser(): Promise<void> {
-  const users = await getAllUsers();
+  const users = await getStorageItem<User[]>(STORAGE_KEYS.USERS) || [];
   const primary = users.find(u => u.id === 'partner-user-1');
   if (primary) return;
 
@@ -899,8 +937,10 @@ async function ensurePartnerUsers(): Promise<void> {
     },
   ];
 
+  const existingUsers = await getStorageItem<User[]>(STORAGE_KEYS.USERS) || [];
+
   for (const user of requiredUsers) {
-    const existing = await getUser(user.id);
+    const existing = existingUsers.find(existingUser => existingUser.id === user.id);
     if (!existing) {
       await saveUser(user);
     }
@@ -1115,6 +1155,71 @@ async function ensureCoreProjects(): Promise<void> {
 
   if (changed) {
     await setStorageItem(STORAGE_KEYS.PROJECTS, projects);
+  }
+}
+
+async function ensureCoreUsers(): Promise<void> {
+  const users = (await getStorageItem<User[]>(STORAGE_KEYS.USERS)) || [];
+  const byId = new Map(users.map(user => [user.id, user]));
+
+  const requiredUsers: User[] = [
+    {
+      id: 'admin-1',
+      email: 'admin@nvc.org',
+      password: 'admin123',
+      role: 'admin',
+      name: 'NVC Admin Account',
+      phone: '+63 917 000 0001',
+      createdAt: new Date().toISOString(),
+    },
+    {
+      id: 'volunteer-1',
+      email: 'volunteer@example.com',
+      password: 'volunteer123',
+      role: 'volunteer',
+      name: 'Volunteer Account',
+      phone: '+0987654321',
+      createdAt: new Date().toISOString(),
+    },
+    {
+      id: 'partner-user-1',
+      email: 'partner@livelihoods.org',
+      password: 'partner123',
+      role: 'partner',
+      name: 'Partner Org Account',
+      phone: '+919876543211',
+      createdAt: new Date().toISOString(),
+    },
+    {
+      id: 'partner-user-2',
+      email: 'partnerships@pbsp.org.ph',
+      password: 'partner123',
+      role: 'partner',
+      name: 'PBSP Account',
+      phone: '+63 2 8818 8678',
+      createdAt: new Date().toISOString(),
+    },
+    {
+      id: 'partner-user-3',
+      email: 'partnerships@jollibeefoundation.org',
+      password: 'partner123',
+      role: 'partner',
+      name: 'Jollibee Foundation Account',
+      phone: '+63 2 8634 1111',
+      createdAt: new Date().toISOString(),
+    },
+  ];
+
+  let changed = false;
+  for (const requiredUser of requiredUsers) {
+    if (!byId.has(requiredUser.id)) {
+      users.push(requiredUser);
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    await setStorageItem(STORAGE_KEYS.USERS, users);
   }
 }
 

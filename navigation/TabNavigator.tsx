@@ -7,12 +7,14 @@ import DashboardScreen from '../screens/DashboardScreen';
 import PartnerDashboardScreen from '../screens/PartnerDashboardScreen';
 import ProjectsScreen from '../screens/ProjectsScreen';
 import ProfileScreen from '../screens/ProfileScreen';
+import SystemSettingsScreen from '../screens/SystemSettingsScreen';
 import PartnerOnboardingScreen from '../screens/PartnerOnboardingScreen';
 import ProjectLifecycleScreen from '../screens/ProjectLifecycleScreen';
 import MappingScreen from '../screens/MappingScreen';
 import ImpactReportsScreen from '../screens/ImpactReportsScreen';
 import CommunicationHubScreen from '../screens/CommunicationHubScreen';
 import VolunteerManagementScreen from '../screens/VolunteerManagementScreen';
+import UserManagementScreen from '../screens/UserManagementScreen';
 
 export type TabParamList = {
   Dashboard: undefined;
@@ -23,6 +25,8 @@ export type TabParamList = {
   Impact: undefined;
   Messages: undefined;
   Volunteers: undefined;
+  Users: undefined;
+  Settings: undefined;
   Profile: undefined;
 };
 
@@ -51,6 +55,10 @@ const getIconName = (routeName: keyof TabParamList) => {
       return 'mail';
     case 'Volunteers':
       return 'group';
+    case 'Users':
+      return 'manage-accounts';
+    case 'Settings':
+      return 'settings';
     case 'Profile':
       return 'person';
     default:
@@ -64,8 +72,20 @@ type SidebarProps = BottomTabBarProps & {
 };
 
 function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle }: SidebarProps) {
-  const systemsRoutes = state.routes.filter(route => route.name !== 'Profile');
-  const settingsRoutes = state.routes.filter(route => route.name === 'Profile');
+  const systemsRoutes = state.routes.filter(
+    route =>
+      route.name !== 'Volunteers' &&
+      route.name !== 'Users' &&
+      route.name !== 'Settings' &&
+      route.name !== 'Profile'
+  );
+  const settingsRoutes = state.routes.filter(
+    route =>
+      route.name === 'Volunteers' ||
+      route.name === 'Users' ||
+      route.name === 'Settings' ||
+      route.name === 'Profile'
+  );
 
   const renderItem = (routeName: string) => {
     const route = state.routes.find(r => r.name === routeName);
@@ -138,11 +158,10 @@ function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle }: 
           color="#15803d"
         />
       </TouchableOpacity>
-      {!collapsed && <Text style={styles.sidebarBadge}>Partner Org logins are mobile-only</Text>}
       {!collapsed && <Text style={styles.sidebarHeading}>Systems</Text>}
       {systemsRoutes.map(route => renderItem(route.name))}
       <View style={[styles.sidebarDivider, collapsed && styles.sidebarDividerCollapsed]} />
-      {!collapsed && <Text style={styles.sidebarHeading}>Setting</Text>}
+      {!collapsed && <Text style={styles.sidebarHeading}>System Settings</Text>}
       {settingsRoutes.map(route => renderItem(route.name))}
     </View>
   );
@@ -153,6 +172,7 @@ export default function TabNavigator() {
   const showPartnersTab = isAdmin || user?.role === 'partner'; // available to admins and partner org accounts
   const showLifecycleTab = isAdmin;
   const showImpactTab = isAdmin;
+  const showUsersTab = isAdmin;
   const dashboardTitle =
     user?.role === 'partner'
       ? 'Partner Dashboard'
@@ -243,6 +263,14 @@ export default function TabNavigator() {
         options={{ title: 'Messages' }}
       />
 
+      {showUsersTab && (
+        <Tab.Screen
+          name="Users"
+          component={UserManagementScreen}
+          options={{ title: 'User Management' }}
+        />
+      )}
+
       {isAdmin && (
         <Tab.Screen
           name="Volunteers"
@@ -251,11 +279,27 @@ export default function TabNavigator() {
         />
       )}
 
-      <Tab.Screen
-        name="Profile"
-        component={ProfileScreen}
-        options={{ title: 'Profile' }}
-      />
+      {isAdmin ? (
+        <>
+          <Tab.Screen
+            name="Profile"
+            component={ProfileScreen}
+            options={{ title: 'Admin Profile' }}
+          />
+
+        <Tab.Screen
+          name="Settings"
+          component={SystemSettingsScreen}
+          options={{ title: 'System Settings' }}
+        />
+        </>
+      ) : (
+        <Tab.Screen
+          name="Profile"
+          component={ProfileScreen}
+          options={{ title: 'Profile' }}
+        />
+      )}
     </Tab.Navigator>
   );
 
@@ -376,14 +420,5 @@ const styles = StyleSheet.create({
   sidebarLabelActive: {
     color: '#166534',
     fontWeight: '600',
-  },
-  sidebarBadge: {
-    fontSize: 11,
-    color: '#4d7c0f',
-    backgroundColor: '#ecfccb',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    marginBottom: 12,
   },
 });
