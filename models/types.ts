@@ -133,6 +133,18 @@ export interface VolunteerProjectMatch {
   hoursContributed: number;
 }
 
+export interface PartnerProjectApplication {
+  id: string;
+  projectId: string;
+  partnerUserId: string;
+  partnerName: string;
+  partnerEmail: string;
+  status: 'Pending' | 'Approved' | 'Rejected';
+  requestedAt: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
+}
+
 // Admin Statistics
 export interface AdminStats {
   totalPartners: number;

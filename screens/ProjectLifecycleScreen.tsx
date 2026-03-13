@@ -10,10 +10,12 @@ import {
   TextInput,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { Project, StatusUpdate } from '../models/types';
+import { PartnerProjectApplication, Project, StatusUpdate } from '../models/types';
 import {
   getAllProjects,
+  getPartnerProjectApplications,
   getStatusUpdatesByProject,
+  reviewPartnerProjectApplication,
   saveProject,
   saveStatusUpdate,
 } from '../models/storage';
@@ -27,6 +29,7 @@ export default function ProjectLifecycleScreen({ navigation }: any) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [statusUpdates, setStatusUpdates] = useState<StatusUpdate[]>([]);
+  const [partnerApplications, setPartnerApplications] = useState<PartnerProjectApplication[]>([]);
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [newStatus, setNewStatus] = useState<Project['status']>('Planning');
   const [updateDescription, setUpdateDescription] = useState('');
@@ -53,9 +56,21 @@ export default function ProjectLifecycleScreen({ navigation }: any) {
     }
   };
 
+  const loadPartnerApplicationsForProject = async (projectId: string) => {
+    try {
+      const applications = await getPartnerProjectApplications(projectId);
+      setPartnerApplications(applications);
+    } catch (error) {
+      Alert.alert('Error', 'Failed to load partner applications');
+    }
+  };
+
   const handleSelectProject = async (project: Project) => {
     setSelectedProject(project);
-    await loadStatusUpdates(project.id);
+    await Promise.all([
+      loadStatusUpdates(project.id),
+      loadPartnerApplicationsForProject(project.id),
+    ]);
   };
 
   const handleAddStatusUpdate = async () => {
@@ -97,6 +112,27 @@ export default function ProjectLifecycleScreen({ navigation }: any) {
       loadProjects();
     } catch (error) {
       Alert.alert('Error', 'Failed to add status update');
+    }
+  };
+
+  const handleReviewPartnerApplication = async (
+    applicationId: string,
+    nextStatus: 'Approved' | 'Rejected'
+  ) => {
+    if (!isAdmin || !user?.id || !selectedProject) return;
+
+    try {
+      await reviewPartnerProjectApplication(applicationId, nextStatus, user.id);
+      await Promise.all([
+        loadPartnerApplicationsForProject(selectedProject.id),
+        loadProjects(),
+      ]);
+      const refreshedProject = await getAllProjects();
+      const nextSelectedProject = refreshedProject.find(project => project.id === selectedProject.id) || null;
+      setSelectedProject(nextSelectedProject);
+      Alert.alert('Success', `Partner application ${nextStatus.toLowerCase()}.`);
+    } catch (error) {
+      Alert.alert('Error', 'Failed to review partner application');
     }
   };
 
@@ -212,6 +248,59 @@ export default function ProjectLifecycleScreen({ navigation }: any) {
             >
               <Text style={styles.statusText}>{selectedProject.status}</Text>
             </View>
+          </View>
+
+          <View style={styles.detailsSection}>
+            <Text style={styles.sectionTitle}>Partner Join Requests</Text>
+
+            {partnerApplications.length === 0 ? (
+              <Text style={styles.emptyText}>No partner applications yet</Text>
+            ) : (
+              <View style={styles.updatesList}>
+                {partnerApplications.map(application => (
+                  <View key={application.id} style={styles.applicationCard}>
+                    <View style={styles.applicationHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.applicationName}>{application.partnerName}</Text>
+                        <Text style={styles.applicationMeta}>{application.partnerEmail}</Text>
+                        <Text style={styles.applicationMeta}>
+                          Requested {format(new Date(application.requestedAt), 'PPpp')}
+                        </Text>
+                      </View>
+                      <View
+                        style={[
+                          styles.applicationStatusBadge,
+                          application.status === 'Approved'
+                            ? styles.applicationStatusApproved
+                            : application.status === 'Rejected'
+                            ? styles.applicationStatusRejected
+                            : styles.applicationStatusPending,
+                        ]}
+                      >
+                        <Text style={styles.applicationStatusText}>{application.status}</Text>
+                      </View>
+                    </View>
+
+                    {isAdmin && application.status === 'Pending' && (
+                      <View style={styles.applicationActions}>
+                        <TouchableOpacity
+                          style={[styles.applicationButton, styles.approveButton]}
+                          onPress={() => handleReviewPartnerApplication(application.id, 'Approved')}
+                        >
+                          <Text style={styles.applicationButtonText}>Approve</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.applicationButton, styles.rejectButton]}
+                          onPress={() => handleReviewPartnerApplication(application.id, 'Rejected')}
+                        >
+                          <Text style={styles.applicationButtonText}>Reject</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                  </View>
+                ))}
+              </View>
+            )}
           </View>
 
           <View style={styles.detailsSection}>
@@ -531,6 +620,70 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#999',
     marginTop: 4,
+  },
+  applicationCard: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 12,
+    marginBottom: 12,
+  },
+  applicationHeader: {
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'flex-start',
+  },
+  applicationName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  applicationMeta: {
+    fontSize: 12,
+    color: '#64748b',
+    marginTop: 4,
+  },
+  applicationStatusBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  applicationStatusPending: {
+    backgroundColor: '#fef3c7',
+  },
+  applicationStatusApproved: {
+    backgroundColor: '#dcfce7',
+  },
+  applicationStatusRejected: {
+    backgroundColor: '#fee2e2',
+  },
+  applicationStatusText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  applicationActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 12,
+  },
+  applicationButton: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  applicationButtonText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  approveButton: {
+    backgroundColor: '#16a34a',
+  },
+  rejectButton: {
+    backgroundColor: '#dc2626',
   },
   addButton: {
     backgroundColor: '#4CAF50',

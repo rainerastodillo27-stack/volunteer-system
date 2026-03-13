@@ -150,7 +150,7 @@ function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle }: 
 
 export default function TabNavigator() {
   const { user, isAdmin } = useAuth();
-  const showPartnersTab = isAdmin || user?.role === 'partner';
+  const showPartnersTab = isAdmin || user?.role === 'partner'; // available to admins and partner org accounts
   const showLifecycleTab = isAdmin;
   const showImpactTab = isAdmin;
   const dashboardTitle =

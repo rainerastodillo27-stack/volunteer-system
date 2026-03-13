@@ -28,6 +28,13 @@ Email: admin@nvc.org
 Password: admin123
 ```
 
+### Partner Accounts (Org Access):
+```
+PBSP: partnerships@pbsp.org.ph / partner123
+Jollibee Foundation: partnerships@jollibeefoundation.org / partner123
+Kabankalan LGU: partner@livelihoods.org / partner123
+```
+
 ### Volunteer Account (Limited Access):
 ```
 Email: volunteer@example.com
@@ -147,11 +154,13 @@ Password: volunteer123
 
 ### Pre-loaded Users:
 - 1 Admin user
+- 3 Partner users (PBSP, Jollibee Foundation, Kabankalan LGU)
 - 1 Volunteer user
 
 ### Pre-loaded Partners:
-- "Education India Foundation" (Approved)
-- "Livelihood Skills NGO" (Pending)
+- Philippine Business for Social Progress (Approved)
+- Jollibee Group Foundation (Approved)
+- LGU Kabankalan Livelihood Office (Pending)
 
 ### Pre-loaded Projects:
 - "Rural School Library Setup" (In Progress)

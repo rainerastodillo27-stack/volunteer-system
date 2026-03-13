@@ -13,19 +13,17 @@ import { Partner } from '../models/types';
 import { getAllPartners, savePartner } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
 
-const categories = ['Education', 'Livelihood', 'Nutrition', 'Other'];
-
 export default function PartnerOnboardingScreen({ navigation }: any) {
   const { user, isAdmin } = useAuth();
-  const isPartnerUser = user?.role === 'partner';
   const [partners, setPartners] = useState<Partner[]>([]);
   const [filter, setFilter] = useState<'All' | 'Pending' | 'Approved' | 'Rejected'>('All');
   const [loading, setLoading] = useState(true);
   const [orgName, setOrgName] = useState('');
   const [orgDescription, setOrgDescription] = useState('');
-  const [orgEmail, setOrgEmail] = useState('');
+  const [orgEmail, setOrgEmail] = useState(user?.email ?? '');
   const [orgPhone, setOrgPhone] = useState('');
   const [orgAddress, setOrgAddress] = useState('');
+  const [category, setCategory] = useState<'Education' | 'Livelihood' | 'Nutrition' | 'Other'>('Other');
 
   useEffect(() => {
     loadPartners();
@@ -156,8 +154,14 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
   };
 
   const handleSubmitPartner = async () => {
-    if (!orgName.trim() || !orgDescription.trim() || !orgEmail.trim() || !orgPhone.trim() || !orgAddress.trim()) {
-      Alert.alert('Validation Error', 'Please fill all partner organization fields.');
+    if (
+      !orgName.trim() ||
+      !orgDescription.trim() ||
+      !orgEmail.trim() ||
+      !orgPhone.trim() ||
+      !orgAddress.trim()
+    ) {
+      Alert.alert('Validation Error', 'Please fill all partner program fields.');
       return;
     }
 
@@ -166,7 +170,7 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
         id: `partner-${Date.now()}`,
         name: orgName.trim(),
         description: orgDescription.trim(),
-        category: 'Other',
+        category,
         contactEmail: orgEmail.trim().toLowerCase(),
         contactPhone: orgPhone.trim(),
         address: orgAddress.trim(),
@@ -177,13 +181,14 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
       await savePartner(newPartner);
       setOrgName('');
       setOrgDescription('');
-      setOrgEmail('');
+      setOrgEmail(user?.email ?? '');
       setOrgPhone('');
       setOrgAddress('');
-      Alert.alert('Submitted', 'Partner organization submitted for admin review.');
+      setCategory('Other');
+      Alert.alert('Submitted', 'Program onboarding request sent for admin approval.');
       loadPartners();
     } catch (error) {
-      Alert.alert('Error', 'Failed to submit partner organization.');
+      Alert.alert('Error', 'Failed to submit program.');
     }
   };
 
@@ -191,22 +196,37 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
     <ScrollView style={styles.container}>
       <Text style={styles.title}>Partner Onboarding</Text>
 
-      {isPartnerUser && (
+      {user?.role === 'partner' && (
         <View style={styles.submissionCard}>
-          <Text style={styles.submissionTitle}>Submit Partner Organization</Text>
+          <Text style={styles.submissionTitle}>Submit Program / Organization</Text>
           <TextInput
             style={styles.input}
-            placeholder="Organization Name"
+            placeholder="Program or Organization Name"
             value={orgName}
             onChangeText={setOrgName}
           />
           <TextInput
             style={[styles.input, styles.inputMultiline]}
-            placeholder="Description"
+            placeholder="Description / Focus area"
             value={orgDescription}
             onChangeText={setOrgDescription}
             multiline
           />
+          <View style={styles.chipRow}>
+            {(['Education', 'Livelihood', 'Nutrition', 'Other'] as const).map(option => (
+              <TouchableOpacity
+                key={option}
+                style={[styles.chip, category === option && styles.chipActive]}
+                onPress={() => setCategory(option)}
+              >
+                <Text
+                  style={[styles.chipText, category === option && styles.chipTextActive]}
+                >
+                  {option}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
           <TextInput
             style={styles.input}
             placeholder="Contact Email"
@@ -224,12 +244,12 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
           />
           <TextInput
             style={styles.input}
-            placeholder="Address"
+            placeholder="Address / City"
             value={orgAddress}
             onChangeText={setOrgAddress}
           />
           <TouchableOpacity style={styles.submitButton} onPress={handleSubmitPartner}>
-            <Text style={styles.submitButtonText}>Submit Partner</Text>
+            <Text style={styles.submitButtonText}>Submit for Approval</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -259,7 +279,7 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
         <View style={styles.emptyState}>
           <MaterialIcons name="business" size={48} color="#ccc" />
           <Text style={styles.emptyText}>
-            {isAdmin ? 'No partners found' : 'No partner organizations linked to this account'}
+            {isAdmin ? 'No partners found' : 'Partners are visible to admins only'}
           </Text>
         </View>
       ) : (
@@ -328,6 +348,29 @@ const styles = StyleSheet.create({
   submitButtonText: {
     color: '#fff',
     fontWeight: '700',
+  },
+  chipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 8,
+  },
+  chip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: '#e0e0e0',
+  },
+  chipActive: {
+    backgroundColor: '#4CAF50',
+  },
+  chipText: {
+    fontSize: 12,
+    color: '#666',
+    fontWeight: '600',
+  },
+  chipTextActive: {
+    color: '#fff',
   },
   filterContainer: {
     flexDirection: 'row',

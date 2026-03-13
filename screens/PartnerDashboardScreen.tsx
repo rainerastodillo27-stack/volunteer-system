@@ -7,34 +7,21 @@ import {
   TouchableOpacity,
   Alert,
   Platform,
-  TextInput,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import {
   getAllPartners,
   getAllProjects,
-  getDonationsByPartnerUser,
-  getSectorDonationTotals,
   getSectorNeeds,
-  saveDonation,
 } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
-import { NVCSector, PartnerDonation, SectorNeed } from '../models/types';
+import { SectorNeed } from '../models/types';
 
 export default function PartnerDashboardScreen({ navigation }: any) {
   const { user, logout } = useAuth();
   const [orgStats, setOrgStats] = useState({ total: 0, pending: 0, approved: 0, rejected: 0 });
   const [projectStats, setProjectStats] = useState({ total: 0, active: 0, completed: 0 });
   const [sectorNeeds, setSectorNeeds] = useState<SectorNeed[]>([]);
-  const [sectorTotals, setSectorTotals] = useState<Record<NVCSector, number>>({
-    Education: 0,
-    Livelihood: 0,
-    Nutrition: 0,
-  });
-  const [myDonations, setMyDonations] = useState<PartnerDonation[]>([]);
-  const [selectedSector, setSelectedSector] = useState<NVCSector>('Education');
-  const [donationAmount, setDonationAmount] = useState('');
-  const [donationNote, setDonationNote] = useState('');
 
   useEffect(() => {
     loadDashboardData();
@@ -61,44 +48,10 @@ export default function PartnerDashboardScreen({ navigation }: any) {
         completed: myProjects.filter(p => p.status === 'Completed').length,
       });
 
-      const [needs, totals, donations] = await Promise.all([
-        getSectorNeeds(),
-        getSectorDonationTotals(),
-        getDonationsByPartnerUser(user?.id || ''),
-      ]);
+      const needs = await getSectorNeeds();
       setSectorNeeds(needs);
-      setSectorTotals(totals);
-      setMyDonations(donations);
     } catch (error) {
       Alert.alert('Error', 'Failed to load dashboard data');
-    }
-  };
-
-  const handleDonate = async () => {
-    if (!user) return;
-    const parsedAmount = Number(donationAmount);
-    if (!parsedAmount || parsedAmount <= 0) {
-      Alert.alert('Validation Error', 'Please enter a valid donation amount.');
-      return;
-    }
-
-    try {
-      const donation: PartnerDonation = {
-        id: `donation-${Date.now()}`,
-        partnerUserId: user.id,
-        partnerEmail: user.email,
-        sector: selectedSector,
-        amount: parsedAmount,
-        note: donationNote.trim() || undefined,
-        createdAt: new Date().toISOString(),
-      };
-      await saveDonation(donation);
-      setDonationAmount('');
-      setDonationNote('');
-      await loadDashboardData();
-      Alert.alert('Success', `Donation recorded for ${selectedSector}.`);
-    } catch (error) {
-      Alert.alert('Error', 'Failed to save donation.');
     }
   };
 
@@ -170,85 +123,39 @@ export default function PartnerDashboardScreen({ navigation }: any) {
       </View>
 
       <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Project Management</Text>
+        <View style={styles.card}>
+          <Text style={styles.cardLine}>
+            Align your project requests with priority sector needs. Coordinate with NVC admins for approval.
+          </Text>
+          <View style={styles.actionRow}>
+            <TouchableOpacity
+              style={[styles.smallButton, styles.primaryButton]}
+              onPress={() => navigation.navigate('Projects')}
+            >
+              <Text style={styles.smallButtonText}>View Projects</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.smallButton, styles.secondaryButton]}
+              onPress={() => navigation.navigate('Messages')}
+            >
+              <Text style={styles.smallButtonText}>Message Admin</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+
+      <View style={styles.section}>
         <Text style={styles.sectionTitle}>NVC Sector Needs</Text>
         {sectorNeeds.map((need) => {
-          const donated = sectorTotals[need.sector] || 0;
-          const remaining = Math.max(0, need.goalAmount - donated);
           return (
             <View key={need.sector} style={styles.needCard}>
               <Text style={styles.needTitle}>{need.title}</Text>
               <Text style={styles.needDescription}>{need.description}</Text>
               <Text style={styles.needLine}>Goal: PHP {need.goalAmount.toLocaleString()}</Text>
-              <Text style={styles.needLine}>Donated: PHP {donated.toLocaleString()}</Text>
-              <Text style={styles.needLine}>Remaining: PHP {remaining.toLocaleString()}</Text>
             </View>
           );
         })}
-      </View>
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Donate to Sector Needs</Text>
-        <View style={styles.card}>
-          <View style={styles.sectorRow}>
-            {(['Education', 'Livelihood', 'Nutrition'] as NVCSector[]).map((sector) => (
-              <TouchableOpacity
-                key={sector}
-                style={[
-                  styles.sectorChip,
-                  selectedSector === sector && styles.sectorChipActive,
-                ]}
-                onPress={() => setSelectedSector(sector)}
-              >
-                <Text
-                  style={[
-                    styles.sectorChipText,
-                    selectedSector === sector && styles.sectorChipTextActive,
-                  ]}
-                >
-                  {sector}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          <TextInput
-            style={styles.input}
-            placeholder="Donation amount (PHP)"
-            keyboardType="numeric"
-            value={donationAmount}
-            onChangeText={setDonationAmount}
-          />
-          <TextInput
-            style={[styles.input, styles.noteInput]}
-            placeholder="Note (optional)"
-            value={donationNote}
-            onChangeText={setDonationNote}
-            multiline
-          />
-          <TouchableOpacity style={styles.donateButton} onPress={handleDonate}>
-            <Text style={styles.donateButtonText}>Donate Now</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>My Recent Donations</Text>
-        <View style={styles.card}>
-          {myDonations.length === 0 ? (
-            <Text style={styles.emptyText}>No donations yet.</Text>
-          ) : (
-            myDonations.slice(0, 5).map((donation) => (
-              <View key={donation.id} style={styles.donationRow}>
-                <View>
-                  <Text style={styles.donationSector}>{donation.sector}</Text>
-                  <Text style={styles.donationDate}>
-                    {new Date(donation.createdAt).toLocaleDateString()}
-                  </Text>
-                </View>
-                <Text style={styles.donationAmount}>PHP {donation.amount.toLocaleString()}</Text>
-              </View>
-            ))
-          )}
-        </View>
       </View>
     </ScrollView>
   );
@@ -353,79 +260,27 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginBottom: 2,
   },
-  sectorRow: {
+  actionRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 8,
+    justifyContent: 'space-between',
+    gap: 10,
+    marginTop: 10,
   },
-  sectorChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 16,
-    backgroundColor: '#e0e0e0',
-  },
-  sectorChipActive: {
-    backgroundColor: '#4CAF50',
-  },
-  sectorChipText: {
-    fontSize: 12,
-    color: '#666',
-    fontWeight: '600',
-  },
-  sectorChipTextActive: {
-    color: '#fff',
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 9,
-    color: '#333',
-    backgroundColor: '#fff',
-    marginBottom: 8,
-  },
-  noteInput: {
-    minHeight: 64,
-    textAlignVertical: 'top',
-  },
-  donateButton: {
-    backgroundColor: '#4CAF50',
+  smallButton: {
+    flex: 1,
     borderRadius: 8,
     paddingVertical: 10,
     alignItems: 'center',
   },
-  donateButtonText: {
+  primaryButton: {
+    backgroundColor: '#4CAF50',
+  },
+  secondaryButton: {
+    backgroundColor: '#e0e0e0',
+  },
+  smallButtonText: {
     color: '#fff',
     fontWeight: '700',
-  },
-  emptyText: {
-    color: '#999',
-    fontSize: 13,
-  },
-  donationRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  donationSector: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#333',
-  },
-  donationDate: {
-    marginTop: 2,
-    fontSize: 11,
-    color: '#777',
-  },
-  donationAmount: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#2E7D32',
   },
   cardLine: {
     color: '#333',

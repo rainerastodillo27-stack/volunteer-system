@@ -8,11 +8,13 @@ import {
   getVolunteerByUserId,
   NEGROS_SAMPLE_PROJECTS,
   joinProjectEvent,
+  getPartnerProjectApplicationsByUser,
+  requestPartnerProjectJoin,
   getVolunteerTimeLogs,
   startVolunteerTimeLog,
   endVolunteerTimeLog,
 } from '../models/storage';
-import { Project, Volunteer, VolunteerTimeLog } from '../models/types';
+import { PartnerProjectApplication, Project, Volunteer, VolunteerTimeLog } from '../models/types';
 
 const CATEGORY_KEYWORDS: Record<Project['category'], string[]> = {
   Education: ['teaching', 'mentoring', 'reading', 'library', 'school', 'student', 'tutor'],
@@ -91,6 +93,7 @@ export default function ProjectsScreen() {
   const { user } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
+  const [partnerApplications, setPartnerApplications] = useState<PartnerProjectApplication[]>([]);
   const [timeLogs, setTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const [loadingProjectId, setLoadingProjectId] = useState<string | null>(null);
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
@@ -105,24 +108,43 @@ export default function ProjectsScreen() {
     setTimeLogs(logs);
   };
 
+  const loadPartnerApplications = async (partnerUserId: string) => {
+    const applications = await getPartnerProjectApplicationsByUser(partnerUserId);
+    setPartnerApplications(applications);
+  };
+
   useEffect(() => {
-    const loadVolunteer = async () => {
-      if (user?.role !== 'volunteer' || !user.id) return;
-      const volunteer = await getVolunteerByUserId(user.id);
-      setVolunteerProfile(volunteer);
-      if (volunteer) {
-        await loadTimeLogs(volunteer.id);
+    const loadRoleData = async () => {
+      if (!user?.id) return;
+
+      if (user.role === 'volunteer') {
+        const volunteer = await getVolunteerByUserId(user.id);
+        setVolunteerProfile(volunteer);
+        if (volunteer) {
+          await loadTimeLogs(volunteer.id);
+        }
+      }
+
+      if (user.role === 'partner') {
+        await loadPartnerApplications(user.id);
       }
     };
 
     loadProjects();
-    loadVolunteer();
+    loadRoleData();
   }, [user]);
 
   const handleJoinProject = async (projectId: string) => {
     if (!user?.id) return;
     try {
       setLoadingProjectId(projectId);
+      if (user.role === 'partner') {
+        await requestPartnerProjectJoin(projectId, user);
+        await loadPartnerApplications(user.id);
+        Alert.alert('Submitted', 'Waiting for admin approval.');
+        return;
+      }
+
       await joinProjectEvent(projectId, user.id);
       await loadProjects();
       if (volunteerProfile) {
@@ -177,6 +199,9 @@ export default function ProjectsScreen() {
     );
   };
 
+  const getPartnerApplication = (projectId: string) =>
+    partnerApplications.find(app => app.projectId === projectId);
+
   const getActiveLogForProject = (projectId: string) =>
     timeLogs.find(log => log.projectId === projectId && !log.timeOut);
 
@@ -196,6 +221,8 @@ export default function ProjectsScreen() {
       <Text style={styles.subheading}>
         {user?.role === 'volunteer'
           ? 'Negros-based recommendations are based on your saved skills and skills description.'
+          : user?.role === 'partner'
+          ? 'Partner organizations can express interest and collaborate on any listed program.'
           : 'Current Negros-based program list and participation needs.'}
       </Text>
 
@@ -204,10 +231,11 @@ export default function ProjectsScreen() {
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => {
           const suggestion = getProjectSuggestion(item, volunteerProfile);
-      const joined = isJoined(item);
-      const activeLog = getActiveLogForProject(item.id);
-      const latestLog = getLatestLogForProject(item.id);
-      const isExpanded = expandedProjectId === item.id;
+          const joined = isJoined(item);
+          const activeLog = getActiveLogForProject(item.id);
+          const latestLog = getLatestLogForProject(item.id);
+          const isExpanded = expandedProjectId === item.id;
+          const partnerApplication = getPartnerApplication(item.id);
 
           return (
             <TouchableOpacity
@@ -326,6 +354,52 @@ export default function ProjectsScreen() {
                           : 'No logs yet'}
                       </Text>
                     </View>
+                  )}
+                </View>
+              )}
+
+              {user?.role === 'partner' && (
+                <View style={styles.partnerActions}>
+                  <Text style={styles.matchReason}>
+                    Partner orgs can join any program to coordinate with NVC.
+                  </Text>
+                  <TouchableOpacity
+                    style={[
+                      styles.joinButton,
+                      (joined || partnerApplication) && styles.joinButtonJoined,
+                      loadingProjectId === item.id && styles.joinButtonLoading,
+                    ]}
+                    disabled={joined || !!partnerApplication || loadingProjectId === item.id}
+                    onPress={() => handleJoinProject(item.id)}
+                  >
+                    <MaterialIcons
+                      name={joined ? 'check-circle' : partnerApplication ? 'hourglass-empty' : 'group-add'}
+                      size={18}
+                      color={joined || partnerApplication ? '#155724' : '#fff'}
+                    />
+                    <Text
+                      style={[
+                        styles.joinButtonText,
+                        (joined || partnerApplication) && styles.joinButtonTextJoined,
+                      ]}
+                    >
+                      {joined
+                        ? 'Approved as Partner'
+                        : partnerApplication?.status === 'Pending'
+                        ? 'Waiting for Approval'
+                        : partnerApplication?.status === 'Rejected'
+                        ? 'Request Rejected'
+                        : 'Join as Partner'}
+                    </Text>
+                  </TouchableOpacity>
+                  {(joined || partnerApplication) && (
+                    <Text style={styles.partnerNote}>
+                      {joined
+                        ? 'Your org is approved as a collaborator for this program.'
+                        : partnerApplication?.status === 'Pending'
+                        ? 'Your request is pending admin approval.'
+                        : 'This request was rejected by the admin.'}
+                    </Text>
                   )}
                 </View>
               )}
@@ -467,6 +541,10 @@ const styles = StyleSheet.create({
     marginBottom: 4,
     gap: 8,
   },
+  partnerActions: {
+    marginBottom: 4,
+    gap: 8,
+  },
   joinRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -531,6 +609,10 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#111827',
     fontWeight: '600',
+  },
+  partnerNote: {
+    fontSize: 12,
+    color: '#0f172a',
   },
   footer: {
     flexDirection: 'row',

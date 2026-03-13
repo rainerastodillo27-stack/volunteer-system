@@ -135,8 +135,12 @@ export default function LoginScreen({ navigation }: any) {
               <Text style={styles.demoPassword}>admin123</Text>
             </View>
             <View style={[styles.demoItem, styles.mobileOnlyCard]}>
-              <Text style={styles.demoLabel}>Partner Organization (Mobile App):</Text>
-              <Text style={styles.demoEmail}>partner@livelihoods.org</Text>
+              <Text style={styles.demoLabel}>Partner Accounts (Mobile App Only):</Text>
+              <Text style={styles.demoEmail}>PBSP: partnerships@pbsp.org.ph</Text>
+              <Text style={styles.demoPassword}>partner123</Text>
+              <Text style={styles.demoEmail}>Jollibee Foundation: partnerships@jollibeefoundation.org</Text>
+              <Text style={styles.demoPassword}>partner123</Text>
+              <Text style={styles.demoEmail}>Kabankalan LGU: partner@livelihoods.org</Text>
               <Text style={styles.demoPassword}>partner123</Text>
               <Text style={styles.mobileOnlyBadge}>Use via the mobile app</Text>
             </View>
@@ -149,8 +153,12 @@ export default function LoginScreen({ navigation }: any) {
               <Text style={styles.demoPassword}>volunteer123</Text>
             </View>
             <View style={styles.demoItem}>
-              <Text style={styles.demoLabel}>Partner Account - LGU / Partner Org (Mobile):</Text>
-              <Text style={styles.demoEmail}>partner@livelihoods.org</Text>
+              <Text style={styles.demoLabel}>Partner Accounts (Mobile):</Text>
+              <Text style={styles.demoEmail}>PBSP: partnerships@pbsp.org.ph</Text>
+              <Text style={styles.demoPassword}>partner123</Text>
+              <Text style={styles.demoEmail}>Jollibee Foundation: partnerships@jollibeefoundation.org</Text>
+              <Text style={styles.demoPassword}>partner123</Text>
+              <Text style={styles.demoEmail}>Kabankalan LGU: partner@livelihoods.org</Text>
               <Text style={styles.demoPassword}>partner123</Text>
             </View>
           </>
