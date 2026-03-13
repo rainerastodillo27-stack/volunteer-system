@@ -93,6 +93,7 @@ export default function ProjectsScreen() {
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
   const [timeLogs, setTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const [loadingProjectId, setLoadingProjectId] = useState<string | null>(null);
+  const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
 
   const loadProjects = async () => {
     const negrosProjects = await getNegrosProjects();
@@ -203,20 +204,16 @@ export default function ProjectsScreen() {
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => {
           const suggestion = getProjectSuggestion(item, volunteerProfile);
-          const joined = isJoined(item);
-          const activeLog = getActiveLogForProject(item.id);
-          const latestLog = getLatestLogForProject(item.id);
+      const joined = isJoined(item);
+      const activeLog = getActiveLogForProject(item.id);
+      const latestLog = getLatestLogForProject(item.id);
+      const isExpanded = expandedProjectId === item.id;
 
           return (
             <TouchableOpacity
               style={styles.card}
               onPress={() =>
-                Alert.alert(
-                  item.title,
-                  user?.role === 'volunteer'
-                    ? `${item.description}\n\nSuggestion: ${suggestion.label}\nReason: ${suggestion.reasons.join(', ')}`
-                    : item.description
-                )
+                setExpandedProjectId((current) => (current === item.id ? null : item.id))
               }
             >
               <View style={styles.cardHeader}>
@@ -237,6 +234,30 @@ export default function ProjectsScreen() {
               </View>
 
               <Text style={styles.description}>{item.description}</Text>
+
+              {isExpanded && (
+                <View style={styles.expandedSection}>
+                  <View style={styles.expandedRow}>
+                    <MaterialIcons name="place" size={18} color="#f97316" />
+                    <Text style={styles.expandedText}>{item.location.address}</Text>
+                  </View>
+                  <View style={styles.expandedRow}>
+                    <MaterialIcons name="event" size={18} color="#2563eb" />
+                    <Text style={styles.expandedText}>
+                      {`Schedule: ${format(new Date(item.startDate), 'MMM d, yyyy')} - ${format(
+                        new Date(item.endDate),
+                        'MMM d, yyyy'
+                      )}`}
+                    </Text>
+                  </View>
+                  <View style={styles.expandedRow}>
+                    <MaterialIcons name="info" size={18} color="#16a34a" />
+                    <Text style={styles.expandedText}>
+                      {`Suggested: ${suggestion.label} • ${suggestion.reasons.join(', ')}`}
+                    </Text>
+                  </View>
+                </View>
+              )}
 
               {user?.role === 'volunteer' && (
                 <View style={styles.volunteerActions}>
@@ -415,6 +436,26 @@ const styles = StyleSheet.create({
     color: '#666',
     marginBottom: 10,
     lineHeight: 20,
+  },
+  expandedSection: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 10,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  expandedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  expandedText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#334155',
+    lineHeight: 18,
   },
   matchReason: {
     fontSize: 12,

@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { Alert, Platform } from 'react-native';
 import { User } from '../models/types';
 import { getCurrentUser, setCurrentUser as saveCurrentUser } from '../models/storage';
 
@@ -23,6 +24,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const checkAuth = async () => {
       try {
         const currentUser = await getCurrentUser();
+
+        // Enforce that only admin accounts stay signed in on web
+        if (Platform.OS === 'web' && currentUser && currentUser.role !== 'admin') {
+          await saveCurrentUser(null);
+          setUser(null);
+          if (typeof window !== 'undefined') {
+            Alert.alert(
+              'Access Restricted',
+              'Volunteer and partner accounts can only be opened on mobile. Please sign in with the admin account on web.'
+            );
+          }
+          return;
+        }
+
         if (currentUser) {
           setUser(currentUser);
         }
@@ -38,6 +53,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (userData: User) => {
     try {
+      if (Platform.OS === 'web' && userData.role !== 'admin') {
+        Alert.alert(
+          'Access Restricted',
+          'Only the admin account can be opened on web. Please use the mobile app for volunteer or partner access.'
+        );
+        return;
+      }
+
       // Save to storage first
       await saveCurrentUser(userData);
       // Then update state
