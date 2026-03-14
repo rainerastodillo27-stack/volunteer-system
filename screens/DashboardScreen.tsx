@@ -16,7 +16,6 @@ import {
   getStatusUpdatesByProject,
 } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
-import { Project, Partner, Volunteer } from '../models/types';
 
 export default function DashboardScreen({ navigation }: any) {
   const { user, isAdmin, logout } = useAuth();
@@ -97,6 +96,7 @@ export default function DashboardScreen({ navigation }: any) {
         ? 'NVC Admin Account'
         : 'Administrator'
       : 'Volunteer Account';
+  const navigateTo = (screen: string) => navigation.navigate(screen);
 
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
@@ -122,29 +122,49 @@ export default function DashboardScreen({ navigation }: any) {
           <Text style={styles.sectionTitle}>Key Metrics</Text>
 
           <View style={styles.metricsGrid}>
-            <View style={styles.metricCard}>
+            <TouchableOpacity
+              style={styles.metricCard}
+              onPress={() => navigateTo('Projects')}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+            >
               <MaterialIcons name="folder" size={32} color="#4CAF50" />
               <Text style={styles.metricValue}>{projectStats.total}</Text>
               <Text style={styles.metricLabel}>Projects</Text>
-            </View>
+            </TouchableOpacity>
 
-            <View style={styles.metricCard}>
+            <TouchableOpacity
+              style={styles.metricCard}
+              onPress={() => navigateTo('Partners')}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+            >
               <MaterialIcons name="business" size={32} color="#66BB6A" />
               <Text style={styles.metricValue}>{partnerStats.total}</Text>
               <Text style={styles.metricLabel}>Partners</Text>
-            </View>
+            </TouchableOpacity>
 
-            <View style={styles.metricCard}>
+            <TouchableOpacity
+              style={styles.metricCard}
+              onPress={() => navigateTo('Volunteers')}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+            >
               <MaterialIcons name="group" size={32} color="#4CAF50" />
               <Text style={styles.metricValue}>{volunteerStats.total}</Text>
               <Text style={styles.metricLabel}>Volunteers</Text>
-            </View>
+            </TouchableOpacity>
 
-            <View style={styles.metricCard}>
+            <TouchableOpacity
+              style={styles.metricCard}
+              onPress={() => navigateTo('Projects')}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+            >
               <MaterialIcons name="trending-up" size={32} color="#2E7D32" />
               <Text style={styles.metricValue}>{projectStats.active}</Text>
               <Text style={styles.metricLabel}>Active</Text>
-            </View>
+            </TouchableOpacity>
           </View>
         </View>
       )}
@@ -158,7 +178,12 @@ export default function DashboardScreen({ navigation }: any) {
           </TouchableOpacity>
         </View>
 
-        <View style={styles.card}>
+        <TouchableOpacity
+          style={styles.card}
+          onPress={() => navigateTo('Projects')}
+          activeOpacity={0.85}
+          accessibilityRole="button"
+        >
           <View style={styles.statRow}>
             <View style={styles.statItem}>
               <MaterialIcons name="av-timer" size={20} color="#66BB6A" />
@@ -176,7 +201,7 @@ export default function DashboardScreen({ navigation }: any) {
               </Text>
             </View>
           </View>
-        </View>
+        </TouchableOpacity>
       </View>
 
       {/* Partner Overview (Admin Only) */}
@@ -189,7 +214,12 @@ export default function DashboardScreen({ navigation }: any) {
             </TouchableOpacity>
           </View>
 
-          <View style={styles.card}>
+          <TouchableOpacity
+            style={styles.card}
+            onPress={() => navigateTo('Partners')}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+          >
             <View style={styles.statRow}>
               <View style={styles.statItem}>
                 <MaterialIcons name="check" size={20} color="#4CAF50" />
@@ -207,7 +237,7 @@ export default function DashboardScreen({ navigation }: any) {
                 </Text>
               </View>
             </View>
-          </View>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -222,7 +252,13 @@ export default function DashboardScreen({ navigation }: any) {
           </View>
 
           {recentUpdates.map((update, index) => (
-            <View key={index} style={styles.updateItem}>
+            <TouchableOpacity
+              key={index}
+              style={styles.updateItem}
+              onPress={() => navigateTo('Lifecycle')}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+            >
               <View style={styles.updateTimeline}>
                 <View style={styles.updateDot} />
                 {index < recentUpdates.length - 1 && <View style={styles.updateLine} />}
@@ -234,7 +270,7 @@ export default function DashboardScreen({ navigation }: any) {
                   {update.description}
                 </Text>
               </View>
-            </View>
+            </TouchableOpacity>
           ))}
         </View>
       )}

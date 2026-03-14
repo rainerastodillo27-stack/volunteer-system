@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { View, TextInput, TouchableOpacity, Text, StyleSheet, Alert, ActivityIndicator, Platform } from 'react-native';
+import { View, TextInput, TouchableOpacity, Text, StyleSheet, Alert, ActivityIndicator, Platform, ScrollView } from 'react-native';
 import { getUserByEmail, initializeMockData } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
+import AppLogo from '../components/AppLogo';
 
 export default function LoginScreen({ navigation }: any) {
   const isWeb = Platform.OS === 'web';
@@ -88,100 +89,135 @@ export default function LoginScreen({ navigation }: any) {
   }
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Volunteer System</Text>
-      <Text style={styles.subtitle}>Volunteer Management Platform</Text>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={[styles.contentContainer, isWeb && styles.webContainer]}
+      showsVerticalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
+    >
+      <View style={[styles.contentShell, isWeb && styles.webContentShell, !isWeb && styles.mobileContentShell]}>
+        <View style={styles.brandSection}>
+          <AppLogo width={isWeb ? 126 : 138} />
+          <Text style={styles.title}>Volunteer System</Text>
+          <Text style={styles.subtitle}>Volunteer Management Platform</Text>
+        </View>
 
-      <TextInput
-        style={[styles.input, email && !email.includes('@') ? styles.inputError : null]}
-        placeholder="Email Address"
-        placeholderTextColor="#999"
-        value={email}
-        onChangeText={setEmail}
-        keyboardType="email-address"
-        autoCapitalize="none"
-        editable={!loading}
-      />
+        <TextInput
+          style={[styles.input, email && !email.includes('@') ? styles.inputError : null]}
+          placeholder="Email Address"
+          placeholderTextColor="#999"
+          value={email}
+          onChangeText={setEmail}
+          keyboardType="email-address"
+          autoCapitalize="none"
+          editable={!loading}
+        />
 
-      <TextInput
-        style={styles.input}
-        placeholder="Password"
-        placeholderTextColor="#999"
-        value={password}
-        onChangeText={setPassword}
-        secureTextEntry
-        editable={!loading}
-      />
+        <TextInput
+          style={styles.input}
+          placeholder="Password"
+          placeholderTextColor="#999"
+          value={password}
+          onChangeText={setPassword}
+          secureTextEntry
+          editable={!loading}
+        />
 
-      <TouchableOpacity 
-        style={[styles.button, loading ? styles.buttonDisabled : null]} 
-        onPress={handleLogin} 
-        disabled={loading || !email || !password}
-      >
-        {loading ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <Text style={styles.buttonText}>Sign In</Text>
-        )}
-      </TouchableOpacity>
+        <TouchableOpacity 
+          style={[styles.button, loading ? styles.buttonDisabled : null]} 
+          onPress={handleLogin} 
+          disabled={loading || !email || !password}
+        >
+          {loading ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.buttonText}>Sign In</Text>
+          )}
+        </TouchableOpacity>
 
-      <View style={styles.demoSection}>
-        <Text style={styles.demoTitle}>Demo Credentials:</Text>
-        {isWeb ? (
-          <>
-            <View style={styles.demoItem}>
-              <Text style={styles.demoLabel}>Admin Account (Web Only):</Text>
-              <Text style={styles.demoEmail}>admin@nvc.org</Text>
-              <Text style={styles.demoPassword}>admin123</Text>
-            </View>
-            <View style={[styles.demoItem, styles.mobileOnlyCard]}>
-              <Text style={styles.demoLabel}>Partner Accounts (Mobile App Only):</Text>
-              <Text style={styles.demoEmail}>PBSP: partnerships@pbsp.org.ph</Text>
-              <Text style={styles.demoPassword}>partner123</Text>
-              <Text style={styles.demoEmail}>Jollibee Foundation: partnerships@jollibeefoundation.org</Text>
-              <Text style={styles.demoPassword}>partner123</Text>
-              <Text style={styles.demoEmail}>Kabankalan LGU: partner@livelihoods.org</Text>
-              <Text style={styles.demoPassword}>partner123</Text>
-              <Text style={styles.mobileOnlyBadge}>Use via the mobile app</Text>
-            </View>
-          </>
-        ) : (
-          <>
-            <View style={styles.demoItem}>
-              <Text style={styles.demoLabel}>Volunteer Account (Mobile):</Text>
-              <Text style={styles.demoEmail}>volunteer@example.com</Text>
-              <Text style={styles.demoPassword}>volunteer123</Text>
-            </View>
-            <View style={styles.demoItem}>
-              <Text style={styles.demoLabel}>Partner Accounts (Mobile):</Text>
-              <Text style={styles.demoEmail}>PBSP: partnerships@pbsp.org.ph</Text>
-              <Text style={styles.demoPassword}>partner123</Text>
-              <Text style={styles.demoEmail}>Jollibee Foundation: partnerships@jollibeefoundation.org</Text>
-              <Text style={styles.demoPassword}>partner123</Text>
-              <Text style={styles.demoEmail}>Kabankalan LGU: partner@livelihoods.org</Text>
-              <Text style={styles.demoPassword}>partner123</Text>
-            </View>
-          </>
-        )}
+        <View style={styles.demoSection}>
+          <Text style={styles.demoTitle}>Demo Credentials:</Text>
+          {isWeb ? (
+            <>
+              <View style={styles.demoItem}>
+                <Text style={styles.demoLabel}>Admin Account (Web Only):</Text>
+                <Text style={styles.demoEmail}>admin@nvc.org</Text>
+                <Text style={styles.demoPassword}>admin123</Text>
+              </View>
+              <View style={[styles.demoItem, styles.mobileOnlyCard]}>
+                <Text style={styles.demoLabel}>Partner Accounts (Mobile App Only):</Text>
+                <Text style={styles.demoEmail}>PBSP: partnerships@pbsp.org.ph</Text>
+                <Text style={styles.demoPassword}>partner123</Text>
+                <Text style={styles.demoEmail}>Jollibee Foundation: partnerships@jollibeefoundation.org</Text>
+                <Text style={styles.demoPassword}>partner123</Text>
+                <Text style={styles.demoEmail}>Kabankalan LGU: partner@livelihoods.org</Text>
+                <Text style={styles.demoPassword}>partner123</Text>
+                <Text style={styles.mobileOnlyBadge}>Use via the mobile app</Text>
+              </View>
+            </>
+          ) : (
+            <>
+              <View style={styles.demoItem}>
+                <Text style={styles.demoLabel}>Volunteer Account (Mobile):</Text>
+                <Text style={styles.demoEmail}>volunteer@example.com</Text>
+                <Text style={styles.demoPassword}>volunteer123</Text>
+              </View>
+              <View style={styles.demoItem}>
+                <Text style={styles.demoLabel}>Partner Accounts (Mobile):</Text>
+                <Text style={styles.demoEmail}>PBSP: partnerships@pbsp.org.ph</Text>
+                <Text style={styles.demoPassword}>partner123</Text>
+                <Text style={styles.demoEmail}>Jollibee Foundation: partnerships@jollibeefoundation.org</Text>
+                <Text style={styles.demoPassword}>partner123</Text>
+                <Text style={styles.demoEmail}>Kabankalan LGU: partner@livelihoods.org</Text>
+                <Text style={styles.demoPassword}>partner123</Text>
+              </View>
+            </>
+          )}
+        </View>
+
+        <TouchableOpacity onPress={() => Alert.alert('Sign Up', 'Feature coming soon')}>
+          <Text style={styles.signupText}>Don't have an account? Sign Up</Text>
+        </TouchableOpacity>
       </View>
-
-      <TouchableOpacity onPress={() => Alert.alert('Sign Up', 'Feature coming soon')}>
-        <Text style={styles.signupText}>Don't have an account? Sign Up</Text>
-      </TouchableOpacity>
-    </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    padding: 20,
-    justifyContent: 'center',
     backgroundColor: '#f5f5f5',
+  },
+  contentContainer: {
+    flexGrow: 1,
+    padding: 20,
+    justifyContent: 'flex-start',
+  },
+  webContainer: {
+    justifyContent: 'flex-start',
+  },
+  contentShell: {
+    width: '100%',
+  },
+  mobileContentShell: {
+    paddingTop: 24,
+    paddingBottom: 24,
+  },
+  webContentShell: {
+    width: '100%',
+    maxWidth: 720,
+    alignSelf: 'center',
+    paddingTop: 32,
+    paddingBottom: 32,
+  },
+  brandSection: {
+    alignItems: 'center',
+    marginBottom: 12,
   },
   title: {
     fontSize: 28,
     fontWeight: 'bold',
+    marginTop: 18,
     marginBottom: 8,
     textAlign: 'center',
     color: '#333',
