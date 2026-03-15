@@ -1,13 +1,14 @@
 # Volcre
 
-Expo and React Native app for managing volunteer programs, partner organizations, project coordination, and admin review workflows using local AsyncStorage only.
+Expo and React Native app for managing volunteer programs, partner organizations, project coordination, and admin review workflows. The current app runtime still uses local AsyncStorage, and a Python toolkit is included for creating and seeding a Supabase Postgres database.
 
 ## Current Scope
 
 - Admin web experience with sidebar navigation and project oversight
 - Volunteer mobile experience for browsing projects, joining programs, and logging time
 - Partner mobile experience for onboarding organizations/programs and requesting to join projects
-- Local-only demo data and approvals, with no backend yet
+- Local-only demo data and approvals in the app runtime
+- Optional Python scripts for Supabase Postgres schema setup and demo seeding
 
 ## Tech Stack
 
@@ -18,6 +19,71 @@ Expo and React Native app for managing volunteer programs, partner organizations
 - TypeScript
 - `date-fns`
 - `react-native-maps`
+- Python 3 with `psycopg`
+
+## Supabase Postgres
+
+Yes. Supabase uses PostgreSQL.
+
+The database URL you pasted is a PostgreSQL connection string, so it can be used directly by Python with `psycopg`.
+
+Python setup files:
+
+- [backend/requirements.txt](/c:/Users/ACER/OneDrive/Desktop/volunteer-system/backend/requirements.txt)
+- [backend/.env.example](/c:/Users/ACER/OneDrive/Desktop/volunteer-system/backend/.env.example)
+- [backend/init_supabase.py](/c:/Users/ACER/OneDrive/Desktop/volunteer-system/backend/init_supabase.py)
+- [backend/seed_demo_data.py](/c:/Users/ACER/OneDrive/Desktop/volunteer-system/backend/seed_demo_data.py)
+- [backend/api.py](/c:/Users/ACER/OneDrive/Desktop/volunteer-system/backend/api.py)
+- [app.json](/c:/Users/ACER/OneDrive/Desktop/volunteer-system/app.json)
+
+Run it like this:
+
+```bash
+cd backend
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+copy .env.example .env
+```
+
+Put your real password in `.env`:
+
+```text
+SUPABASE_DB_URL=postgresql://postgres:YOUR_REAL_PASSWORD@db.zargqwmmibyxwwidzucv.supabase.co:5432/postgres
+```
+
+Then create the schema and seed demo records:
+
+```bash
+python init_supabase.py
+python seed_demo_data.py
+```
+
+To connect the app runtime to the database-backed Python API:
+
+```bash
+uvicorn api:app --host 0.0.0.0 --port 8000 --reload
+```
+
+The app now reads and writes through the Python API first, with AsyncStorage kept only as a local fallback cache.
+
+Default API base URL:
+
+```text
+http://127.0.0.1:8000
+```
+
+You can change it in Expo config here:
+
+- [app.json](/c:/Users/ACER/OneDrive/Desktop/volunteer-system/app.json)
+
+If you use a physical phone instead of web or an emulator, replace `127.0.0.1` with your computer's LAN IP or deploy the Python API and use its public URL.
+
+Important:
+
+- Do not commit your real Supabase password.
+- The Expo app must not connect directly to raw Postgres with the database password.
+- The safe path is the included Python API, which now backs the app storage layer.
 
 ## Installation
 
@@ -103,7 +169,6 @@ partner123
 - Review of partner requests to join specific programs
 - Volunteer management screen
 - Messaging hub
-- Impact reports
 - Mapping screen
 
 ### Volunteer

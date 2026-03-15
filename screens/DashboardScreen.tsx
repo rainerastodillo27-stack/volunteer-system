@@ -299,16 +299,6 @@ export default function DashboardScreen({ navigation }: any) {
           {isAdmin && (
             <TouchableOpacity
               style={styles.actionButton}
-              onPress={() => navigation.navigate('Impact')}
-            >
-              <MaterialIcons name="assessment" size={24} color="#4CAF50" />
-              <Text style={styles.actionButtonText}>Reports</Text>
-            </TouchableOpacity>
-          )}
-
-          {isAdmin && (
-            <TouchableOpacity
-              style={styles.actionButton}
               onPress={() => navigation.navigate('Users')}
             >
               <MaterialIcons name="group" size={24} color="#2E7D32" />

@@ -1,16 +1,15 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
+import { Platform } from 'react-native';
 import {
   User,
   Partner,
   Project,
   Volunteer,
   Message,
-  ImpactReport,
   StatusUpdate,
   VolunteerProjectMatch,
-  PartnerDonation,
   SectorNeed,
-  NVCSector,
   VolunteerTimeLog,
   PartnerProjectApplication,
 } from './types';
@@ -22,10 +21,8 @@ const STORAGE_KEYS = {
   PROJECTS: 'projects',
   VOLUNTEERS: 'volunteers',
   MESSAGES: 'messages',
-  IMPACT_REPORTS: 'impactReports',
   STATUS_UPDATES: 'statusUpdates',
   VOLUNTEER_MATCHES: 'volunteerMatches',
-  DONATIONS: 'donations',
   VOLUNTEER_TIME_LOGS: 'volunteerTimeLogs',
   PARTNER_PROJECT_APPLICATIONS: 'partnerProjectApplications',
 };
@@ -309,22 +306,94 @@ function notifyWebMessageUpdate(): void {
   }
 }
 
+function getApiBaseUrl(): string {
+  const configuredBaseUrl = Constants.expoConfig?.extra?.apiBaseUrl as string | undefined;
+  if (configuredBaseUrl && configuredBaseUrl.trim().length > 0) {
+    return configuredBaseUrl.replace(/\/$/, '');
+  }
+
+  if (Platform.OS === 'android') {
+    return 'http://10.0.2.2:8000';
+  }
+
+  return 'http://127.0.0.1:8000';
+}
+
+async function fetchRemoteStorageItem<T>(key: string): Promise<T | null> {
+  const response = await fetch(`${getApiBaseUrl()}/storage/${encodeURIComponent(key)}`);
+  if (!response.ok) {
+    throw new Error(`Remote storage read failed: ${response.status}`);
+  }
+
+  const payload = (await response.json()) as { value: T | null };
+  return payload.value ?? null;
+}
+
+async function saveRemoteStorageItem<T>(key: string, value: T): Promise<void> {
+  const response = await fetch(`${getApiBaseUrl()}/storage/${encodeURIComponent(key)}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ value }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Remote storage write failed: ${response.status}`);
+  }
+}
+
+async function deleteRemoteStorageItem(key: string): Promise<void> {
+  const response = await fetch(`${getApiBaseUrl()}/storage/${encodeURIComponent(key)}`, {
+    method: 'DELETE',
+  });
+
+  if (!response.ok) {
+    throw new Error(`Remote storage delete failed: ${response.status}`);
+  }
+}
+
+async function clearRemoteStorage(): Promise<void> {
+  const response = await fetch(`${getApiBaseUrl()}/storage`, {
+    method: 'DELETE',
+  });
+
+  if (!response.ok) {
+    throw new Error(`Remote storage clear failed: ${response.status}`);
+  }
+}
+
 // Generic storage functions
 export async function getStorageItem<T>(key: string): Promise<T | null> {
   try {
-    const item = await AsyncStorage.getItem(key);
-    return item ? JSON.parse(item) : null;
+    const remoteValue = await fetchRemoteStorageItem<T>(key);
+    if (remoteValue !== null) {
+      await AsyncStorage.setItem(key, JSON.stringify(remoteValue));
+    }
+    return remoteValue;
   } catch (error) {
-    console.error(`Error reading ${key}:`, error);
-    return null;
+    console.error(`Error reading remote ${key}, falling back to local cache:`, error);
+    try {
+      const item = await AsyncStorage.getItem(key);
+      return item ? JSON.parse(item) : null;
+    } catch (fallbackError) {
+      console.error(`Error reading ${key}:`, fallbackError);
+      return null;
+    }
   }
 }
 
 export async function setStorageItem<T>(key: string, value: T): Promise<void> {
   try {
+    await saveRemoteStorageItem(key, value);
     await AsyncStorage.setItem(key, JSON.stringify(value));
   } catch (error) {
-    console.error(`Error saving ${key}:`, error);
+    console.error(`Error saving remote ${key}, caching locally only:`, error);
+    try {
+      await AsyncStorage.setItem(key, JSON.stringify(value));
+    } catch (fallbackError) {
+      console.error(`Error saving ${key}:`, fallbackError);
+    }
   }
 }
 
@@ -396,6 +465,11 @@ export async function setCurrentUser(user: User | null): Promise<void> {
   if (user) {
     await setStorageItem(STORAGE_KEYS.CURRENT_USER, user);
   } else {
+    try {
+      await deleteRemoteStorageItem(STORAGE_KEYS.CURRENT_USER);
+    } catch (error) {
+      console.error('Error clearing current user remotely:', error);
+    }
     await AsyncStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
   }
 }
@@ -647,28 +721,6 @@ export async function markMessageAsRead(messageId: string): Promise<void> {
   }
 }
 
-// Impact Report Storage
-export async function saveImpactReport(report: ImpactReport): Promise<void> {
-  const reports = await getStorageItem<ImpactReport[]>(STORAGE_KEYS.IMPACT_REPORTS) || [];
-  const existingIndex = reports.findIndex(r => r.id === report.id);
-  if (existingIndex >= 0) {
-    reports[existingIndex] = report;
-  } else {
-    reports.push(report);
-  }
-  await setStorageItem(STORAGE_KEYS.IMPACT_REPORTS, reports);
-}
-
-export async function getImpactReport(id: string): Promise<ImpactReport | null> {
-  const reports = await getStorageItem<ImpactReport[]>(STORAGE_KEYS.IMPACT_REPORTS) || [];
-  return reports.find(r => r.id === id) || null;
-}
-
-export async function getImpactReportsByProject(projectId: string): Promise<ImpactReport[]> {
-  const reports = await getStorageItem<ImpactReport[]>(STORAGE_KEYS.IMPACT_REPORTS) || [];
-  return reports.filter(r => r.projectId === projectId);
-}
-
 // Status Update Storage
 export async function saveStatusUpdate(update: StatusUpdate): Promise<void> {
   const updates = await getStorageItem<StatusUpdate[]>(STORAGE_KEYS.STATUS_UPDATES) || [];
@@ -836,45 +888,18 @@ export async function joinProjectEvent(projectId: string, userId: string): Promi
   }
 }
 
-// Donation Storage
 export async function getSectorNeeds(): Promise<SectorNeed[]> {
   return SECTOR_NEEDS;
-}
-
-export async function saveDonation(donation: PartnerDonation): Promise<void> {
-  const donations = await getStorageItem<PartnerDonation[]>(STORAGE_KEYS.DONATIONS) || [];
-  donations.push(donation);
-  await setStorageItem(STORAGE_KEYS.DONATIONS, donations);
-}
-
-export async function getAllDonations(): Promise<PartnerDonation[]> {
-  return (await getStorageItem<PartnerDonation[]>(STORAGE_KEYS.DONATIONS)) || [];
-}
-
-export async function getDonationsByPartnerUser(partnerUserId: string): Promise<PartnerDonation[]> {
-  const donations = await getAllDonations();
-  return donations
-    .filter(d => d.partnerUserId === partnerUserId)
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-}
-
-export async function getSectorDonationTotals(): Promise<Record<NVCSector, number>> {
-  const totals: Record<NVCSector, number> = {
-    Education: 0,
-    Livelihood: 0,
-    Nutrition: 0,
-  };
-
-  const donations = await getAllDonations();
-  for (const donation of donations) {
-    totals[donation.sector] += donation.amount;
-  }
-  return totals;
 }
 
 // Clear all storage (for testing/logout)
 export async function clearAllStorage(): Promise<void> {
   try {
+    try {
+      await clearRemoteStorage();
+    } catch (error) {
+      console.error('Error clearing remote storage:', error);
+    }
     await AsyncStorage.multiRemove(Object.values(STORAGE_KEYS));
   } catch (error) {
     console.error('Error clearing storage:', error);

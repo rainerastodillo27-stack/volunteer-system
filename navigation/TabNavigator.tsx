@@ -13,7 +13,6 @@ import SystemSettingsScreen from '../screens/SystemSettingsScreen';
 import PartnerOnboardingScreen from '../screens/PartnerOnboardingScreen';
 import ProjectLifecycleScreen from '../screens/ProjectLifecycleScreen';
 import MappingScreen from '../screens/MappingScreen';
-import ImpactReportsScreen from '../screens/ImpactReportsScreen';
 import CommunicationHubScreen from '../screens/CommunicationHubScreen';
 import UserManagementScreen from '../screens/UserManagementScreen';
 
@@ -23,7 +22,6 @@ export type TabParamList = {
   Projects: undefined;
   Lifecycle: undefined;
   Map: undefined;
-  Impact: undefined;
   Messages: undefined;
   Users: undefined;
   Settings: undefined;
@@ -49,8 +47,6 @@ const getIconName = (routeName: keyof TabParamList) => {
       return 'timeline';
     case 'Map':
       return 'map';
-    case 'Impact':
-      return 'assessment';
     case 'Messages':
       return 'mail';
     case 'Users':
@@ -178,7 +174,6 @@ export default function TabNavigator() {
   const { user, isAdmin } = useAuth();
   const showPartnersTab = isAdmin || user?.role === 'partner'; // available to admins and partner org accounts
   const showLifecycleTab = isAdmin;
-  const showImpactTab = isAdmin;
   const showUsersTab = isAdmin;
   const dashboardTitle =
     user?.role === 'partner'
@@ -263,14 +258,6 @@ export default function TabNavigator() {
         component={MappingScreen}
         options={{ title: 'Map' }}
       />
-
-      {showImpactTab && (
-        <Tab.Screen
-          name="Impact"
-          component={ImpactReportsScreen}
-          options={{ title: 'Impact' }}
-        />
-      )}
 
       <Tab.Screen
         name="Messages"

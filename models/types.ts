@@ -105,24 +105,6 @@ export interface Message {
   attachments?: string[]; // File URLs
 }
 
-// Impact Report/Scorecard
-export interface ImpactReport {
-  id: string;
-  projectId: string;
-  category: 'Education' | 'Livelihood' | 'Nutrition' | 'Other';
-  metrics: {
-    beneficiariesReached: number;
-    hoursContributed: number;
-    volunteersInvolved: number;
-    fundingUtilized: number;
-  };
-  outcomes: string[];
-  narrative: string;
-  submittedBy: string; // User ID
-  submittedAt: string;
-  status: 'Draft' | 'Submitted' | 'Approved';
-}
-
 // Matching (Volunteer to Project)
 export interface VolunteerProjectMatch {
   id: string;
@@ -154,11 +136,6 @@ export interface AdminStats {
   activeProjects: number;
   totalVolunteers: number;
   totalHoursContributed: number;
-  impactByCategory: {
-    Education: number;
-    Livelihood: number;
-    Nutrition: number;
-  };
 }
 
 export type NVCSector = 'Education' | 'Livelihood' | 'Nutrition';
@@ -168,14 +145,4 @@ export interface SectorNeed {
   title: string;
   description: string;
   goalAmount: number;
-}
-
-export interface PartnerDonation {
-  id: string;
-  partnerUserId: string;
-  partnerEmail: string;
-  sector: NVCSector;
-  amount: number;
-  note?: string;
-  createdAt: string;
 }

@@ -89,22 +89,7 @@ Password: volunteer123
 
 ---
 
-### 4. **Impact Reports & Scorecards**
-1. Go to "Impact" tab
-2. See only completed projects available
-3. Click a project to see impact metrics
-4. Click "+" to add a new impact report
-5. Fill metrics and submit
-
-**What to test:**
-- View aggregate metrics
-- See impact scorecards
-- Submit new reports
-- Metric calculations
-
----
-
-### 5. **Communication Hub**
+### 4. **Communication Hub**
 1. Go to "Messages" tab
 2. See available conversations
 3. Click a conversation to open
@@ -119,7 +104,7 @@ Password: volunteer123
 
 ---
 
-### 6. **Volunteer Management** (Admin Only)
+### 5. **Volunteer Management** (Admin Only)
 1. Login as admin
 2. Go to "Volunteers" tab
 3. Toggle between "List" and "AI Matching" views
