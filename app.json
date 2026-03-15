@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "volunteer-system",
-    "slug": "volunteer-system",
+    "name": "Volcre",
+    "slug": "volcre",
     "version": "1.0.0",
     "orientation": "portrait",
     "sdkVersion": "54.0.0",
@@ -16,6 +16,6 @@
         "backgroundColor": "#ffffff"
       }
     },
-    "scheme": "volunteersystem"
+    "scheme": "volcre"
   }
 }

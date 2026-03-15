@@ -146,7 +146,7 @@ export default function DashboardScreen({ navigation }: any) {
 
             <TouchableOpacity
               style={styles.metricCard}
-              onPress={() => navigateTo('Volunteers')}
+              onPress={() => navigateTo('Users')}
               activeOpacity={0.8}
               accessibilityRole="button"
             >
@@ -309,10 +309,10 @@ export default function DashboardScreen({ navigation }: any) {
           {isAdmin && (
             <TouchableOpacity
               style={styles.actionButton}
-              onPress={() => navigation.navigate('Volunteers')}
+              onPress={() => navigation.navigate('Users')}
             >
               <MaterialIcons name="group" size={24} color="#2E7D32" />
-              <Text style={styles.actionButtonText}>Volunteers</Text>
+              <Text style={styles.actionButtonText}>Users</Text>
             </TouchableOpacity>
           )}
         </View>
@@ -320,7 +320,7 @@ export default function DashboardScreen({ navigation }: any) {
 
       {/* Footer */}
       <View style={styles.footer}>
-        <Text style={styles.footerText}>Volunteer Management System v1.0</Text>
+        <Text style={styles.footerText}>Volcre v1.0</Text>
       </View>
     </ScrollView>
   );

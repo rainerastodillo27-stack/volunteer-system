@@ -1,4 +1,4 @@
-# Volunteer Management System
+# Volcre
 
 Expo and React Native app for managing volunteer programs, partner organizations, project coordination, and admin review workflows using local AsyncStorage only.
 

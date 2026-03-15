@@ -3,6 +3,8 @@ import { createBottomTabNavigator, BottomTabBarProps } from '@react-navigation/b
 import { MaterialIcons } from '@expo/vector-icons';
 import { Platform, StyleSheet, TouchableOpacity, View, Text } from 'react-native';
 import { useAuth } from '../contexts/AuthContext';
+import AppLogo from '../components/AppLogo';
+import ScreenBrandHeader from '../components/ScreenBrandHeader';
 import DashboardScreen from '../screens/DashboardScreen';
 import PartnerDashboardScreen from '../screens/PartnerDashboardScreen';
 import ProjectsScreen from '../screens/ProjectsScreen';
@@ -13,7 +15,6 @@ import ProjectLifecycleScreen from '../screens/ProjectLifecycleScreen';
 import MappingScreen from '../screens/MappingScreen';
 import ImpactReportsScreen from '../screens/ImpactReportsScreen';
 import CommunicationHubScreen from '../screens/CommunicationHubScreen';
-import VolunteerManagementScreen from '../screens/VolunteerManagementScreen';
 import UserManagementScreen from '../screens/UserManagementScreen';
 
 export type TabParamList = {
@@ -24,7 +25,6 @@ export type TabParamList = {
   Map: undefined;
   Impact: undefined;
   Messages: undefined;
-  Volunteers: undefined;
   Users: undefined;
   Settings: undefined;
   Profile: undefined;
@@ -53,8 +53,6 @@ const getIconName = (routeName: keyof TabParamList) => {
       return 'assessment';
     case 'Messages':
       return 'mail';
-    case 'Volunteers':
-      return 'group';
     case 'Users':
       return 'manage-accounts';
     case 'Settings':
@@ -74,14 +72,12 @@ type SidebarProps = BottomTabBarProps & {
 function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle }: SidebarProps) {
   const systemsRoutes = state.routes.filter(
     route =>
-      route.name !== 'Volunteers' &&
       route.name !== 'Users' &&
       route.name !== 'Settings' &&
       route.name !== 'Profile'
   );
   const settingsRoutes = state.routes.filter(
     route =>
-      route.name === 'Volunteers' ||
       route.name === 'Users' ||
       route.name === 'Settings' ||
       route.name === 'Profile'
@@ -151,6 +147,17 @@ function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle }: 
 
   return (
     <View style={[styles.sidebarContainer, collapsed && styles.sidebarContainerCollapsed]}>
+      {!collapsed && (
+        <View style={styles.sidebarBrand}>
+          <View style={styles.sidebarBrandIcon}>
+            <AppLogo width={36} />
+          </View>
+          <View style={styles.sidebarBrandCopy}>
+            <Text style={styles.sidebarBrandName}>Volcre</Text>
+            <Text style={styles.sidebarBrandTag}>Volunteer coordination</Text>
+          </View>
+        </View>
+      )}
       <TouchableOpacity style={styles.toggleButton} onPress={onToggle} accessibilityRole="button">
         <MaterialIcons
           name={collapsed ? 'chevron-right' : 'chevron-left'}
@@ -194,7 +201,15 @@ export default function TabNavigator() {
         return null;
       } : undefined}
       screenOptions={({ route }) => ({
-        headerShown: false,
+        headerShown: true,
+        header: ({ options }) => {
+          const resolvedTitle =
+            typeof options.title === 'string' && options.title.trim().length > 0
+              ? options.title
+              : route.name;
+
+          return <ScreenBrandHeader title={resolvedTitle} />;
+        },
         tabBarIcon: ({ color, size }) => (
           <MaterialIcons name={getIconName(route.name as keyof TabParamList)} size={size} color={color} />
         ),
@@ -268,14 +283,6 @@ export default function TabNavigator() {
           name="Users"
           component={UserManagementScreen}
           options={{ title: 'User Management' }}
-        />
-      )}
-
-      {isAdmin && (
-        <Tab.Screen
-          name="Volunteers"
-          component={VolunteerManagementScreen}
-          options={{ title: 'Volunteers' }}
         />
       )}
 
@@ -368,6 +375,35 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRightWidth: 1,
     borderRightColor: '#bbf7d0',
+  },
+  sidebarBrand: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 18,
+    paddingHorizontal: 6,
+  },
+  sidebarBrandIcon: {
+    width: 72,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sidebarBrandCopy: {
+    flex: 1,
+  },
+  sidebarBrandName: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#166534',
+  },
+  sidebarBrandTag: {
+    marginTop: 2,
+    fontSize: 12,
+    color: '#4d7c0f',
+    fontWeight: '600',
   },
   sidebarContainerCollapsed: {
     width: SIDEBAR_WIDTH_COLLAPSED,

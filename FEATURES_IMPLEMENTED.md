@@ -1,4 +1,4 @@
-# Volunteer Management System - Implementation Guide
+# Volcre - Implementation Guide
 
 ## Overview
 A comprehensive React Native/Expo mobile application for managing volunteer programs, partner organizations, and project tracking with role-based access control.
@@ -169,7 +169,7 @@ A comprehensive React Native/Expo mobile application for managing volunteer prog
 ## 🗂️ Project Structure
 
 ```
-volunteer-system/
+volcre/
 ├── components/
 │   └── ProjectCard.tsx
 ├── contexts/

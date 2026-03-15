@@ -30,7 +30,7 @@ const STORAGE_KEYS = {
   PARTNER_PROJECT_APPLICATIONS: 'partnerProjectApplications',
 };
 
-const WEB_MESSAGE_SYNC_KEY = 'volunteer-system:messages:updatedAt';
+const WEB_MESSAGE_SYNC_KEY = 'volcre:messages:updatedAt';
 const NEGROS_OCCIDENTAL_BOUNDS = {
   minLatitude: 9.85,
   maxLatitude: 11.05,
@@ -1245,7 +1245,7 @@ async function ensureAdminVolunteerConversation(): Promise<void> {
       id: `msg-seed-admin-${now}`,
       senderId: 'admin-1',
       recipientId: 'volunteer-1',
-      content: 'Welcome to the Volunteer System!',
+      content: 'Welcome to Volcre!',
       timestamp: new Date(now - 60_000).toISOString(),
       read: false,
     });

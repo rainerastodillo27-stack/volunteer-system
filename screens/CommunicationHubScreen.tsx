@@ -23,7 +23,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { format } from 'date-fns';
 
-const WEB_MESSAGE_SYNC_KEY = 'volunteer-system:messages:updatedAt';
+const WEB_MESSAGE_SYNC_KEY = 'volcre:messages:updatedAt';
 
 const formatRoleLabel = (chatUser: User) => {
   if (chatUser.role === 'admin') {

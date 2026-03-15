@@ -1,10 +1,10 @@
-# Quick Start Guide - Volunteer Management System
+# Quick Start Guide - Volcre
 
 ## Initial Setup (5 minutes)
 
 ### 1. Install Dependencies
 ```bash
-cd volunteer-system
+cd volcre
 npm install
 ```
 
