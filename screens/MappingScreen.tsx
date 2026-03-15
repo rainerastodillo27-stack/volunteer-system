@@ -11,24 +11,23 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Project } from '../models/types';
-import { getNegrosProjects, NEGROS_SAMPLE_PROJECTS } from '../models/storage';
+import { getAllProjects, NEGROS_SAMPLE_PROJECTS } from '../models/storage';
 
 const IFrame = 'iframe' as any;
 
-// Negros Occidental coordinates (Philippines)
-const NEGROS_OCCIDENTAL_CENTER = {
-  latitude: 10.55,
-  longitude: 122.95,
+const PHILIPPINES_CENTER = {
+  latitude: 12.8797,
+  longitude: 121.774,
 };
 
-const NEGROS_OCCIDENTAL_BOUNDS = {
+const PHILIPPINES_BOUNDS = {
   southWest: {
-    latitude: 9.85,
-    longitude: 122.45,
+    latitude: 4.5,
+    longitude: 116.5,
   },
   northEast: {
-    latitude: 11.05,
-    longitude: 123.35,
+    latitude: 21.5,
+    longitude: 127.5,
   },
 };
 
@@ -71,8 +70,8 @@ export default function MappingScreen({ navigation }: any) {
 
   const loadProjects = async () => {
     try {
-      const negrosProjects = await getNegrosProjects();
-      setProjects(negrosProjects.length > 0 ? negrosProjects : NEGROS_SAMPLE_PROJECTS);
+      const allProjects = await getAllProjects();
+      setProjects(allProjects.length > 0 ? allProjects : NEGROS_SAMPLE_PROJECTS);
       setLoading(false);
     } catch (error) {
       console.error('Error loading projects for map:', error);
@@ -219,17 +218,17 @@ export default function MappingScreen({ navigation }: any) {
         <body>
           <div id="map"></div>
           <script>
-            // Initialize map centered on Negros Occidental
-            const negrosBounds = [
-              [${NEGROS_OCCIDENTAL_BOUNDS.southWest.latitude}, ${NEGROS_OCCIDENTAL_BOUNDS.southWest.longitude}],
-              [${NEGROS_OCCIDENTAL_BOUNDS.northEast.latitude}, ${NEGROS_OCCIDENTAL_BOUNDS.northEast.longitude}]
+            // Initialize map centered on the Philippines
+            const philippinesBounds = [
+              [${PHILIPPINES_BOUNDS.southWest.latitude}, ${PHILIPPINES_BOUNDS.southWest.longitude}],
+              [${PHILIPPINES_BOUNDS.northEast.latitude}, ${PHILIPPINES_BOUNDS.northEast.longitude}]
             ];
 
             const map = L.map('map', {
-              maxBounds: negrosBounds,
+              maxBounds: philippinesBounds,
               maxBoundsViscosity: 1.0,
-              minZoom: 8,
-            }).setView([${NEGROS_OCCIDENTAL_CENTER.latitude}, ${NEGROS_OCCIDENTAL_CENTER.longitude}], 9);
+              minZoom: 5,
+            }).setView([${PHILIPPINES_CENTER.latitude}, ${PHILIPPINES_CENTER.longitude}], 6);
 
             // Add OpenStreetMap tiles
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -246,7 +245,7 @@ export default function MappingScreen({ navigation }: any) {
             // Add project markers
             ${projectMarkers}
 
-            map.fitBounds(negrosBounds, { padding: [24, 24] });
+            map.fitBounds(philippinesBounds, { padding: [24, 24] });
 
             const projectBounds = [${mapBounds}];
             if (projectBounds.length > 0) {

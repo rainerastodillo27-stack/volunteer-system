@@ -40,20 +40,20 @@ const NEGROS_OCCIDENTAL_BOUNDS = {
 export const NEGROS_SAMPLE_PROJECTS: Project[] = [
   {
     id: 'project-1',
-    title: 'Bacolod Reading Hub Setup',
-    description: 'Setting up a community reading hub for public school learners in Bacolod City.',
+    title: 'Mingo for Nutritional Support',
+    description: 'Nutrition program focused on serving Mingo meals to undernourished children and improving child wellness outcomes.',
     partnerId: 'partner-3',
     isEvent: false,
     status: 'In Progress',
-    category: 'Education',
-    startDate: new Date(2026, 0, 15).toISOString(),
-    endDate: new Date(2026, 5, 15).toISOString(),
+    category: 'Nutrition',
+    startDate: new Date(2026, 0, 6).toISOString(),
+    endDate: new Date(2026, 10, 28).toISOString(),
     location: {
       latitude: 10.6765,
       longitude: 122.9509,
       address: 'Bacolod City, Negros Occidental, Philippines',
     },
-    volunteersNeeded: 10,
+    volunteersNeeded: 24,
     volunteers: ['volunteer-1'],
     joinedUserIds: [],
     createdAt: new Date().toISOString(),
@@ -62,20 +62,20 @@ export const NEGROS_SAMPLE_PROJECTS: Project[] = [
   },
   {
     id: 'project-2',
-    title: 'Kabankalan Livelihood Training',
-    description: 'Hands-on sewing and food processing training for family livelihood groups.',
+    title: 'Farm to Fork Program',
+    description: 'Nutrition-linked sourcing initiative that supports local farmers while supplying ingredients and food products for feeding efforts.',
     partnerId: 'partner-2',
     isEvent: false,
-    status: 'Planning',
-    category: 'Livelihood',
-    startDate: new Date(2026, 2, 1).toISOString(),
-    endDate: new Date(2026, 7, 31).toISOString(),
+    status: 'In Progress',
+    category: 'Nutrition',
+    startDate: new Date(2026, 0, 20).toISOString(),
+    endDate: new Date(2026, 9, 30).toISOString(),
     location: {
-      latitude: 9.9904,
-      longitude: 122.8144,
-      address: 'Kabankalan City, Negros Occidental, Philippines',
+      latitude: 10.5333,
+      longitude: 122.8333,
+      address: 'Pulupandan, Negros Occidental, Philippines',
     },
-    volunteersNeeded: 5,
+    volunteersNeeded: 14,
     volunteers: [],
     joinedUserIds: [],
     createdAt: new Date().toISOString(),
@@ -84,20 +84,20 @@ export const NEGROS_SAMPLE_PROJECTS: Project[] = [
   },
   {
     id: 'project-3',
-    title: 'Sample Event: NVM Coastal Cleanup',
-    description: 'Sample event marker for a coastal cleanup and youth volunteer mobilization drive.',
+    title: 'Mingo for Emergency Relief',
+    description: 'Emergency response program using Mingo as a ready nutrition intervention for disaster-affected families.',
     partnerId: 'partner-3',
-    isEvent: true,
+    isEvent: false,
     status: 'Planning',
-    category: 'Other',
-    startDate: new Date(2026, 3, 12).toISOString(),
-    endDate: new Date(2026, 3, 12).toISOString(),
+    category: 'Nutrition',
+    startDate: new Date(2026, 1, 10).toISOString(),
+    endDate: new Date(2026, 11, 15).toISOString(),
     location: {
-      latitude: 10.5333,
-      longitude: 122.8333,
-      address: 'Pulupandan, Negros Occidental, Philippines',
+      latitude: 10.6667,
+      longitude: 122.9667,
+      address: 'Talisay City, Negros Occidental, Philippines',
     },
-    volunteersNeeded: 25,
+    volunteersNeeded: 18,
     volunteers: [],
     joinedUserIds: [],
     createdAt: new Date().toISOString(),
@@ -110,7 +110,7 @@ export const NEGROS_SAMPLE_PROJECTS: Project[] = [
     description: 'PBSP-led maternal nutrition and early childhood support program for pregnant women.',
     partnerId: 'partner-3',
     isEvent: false,
-    status: 'Planning',
+    status: 'In Progress',
     category: 'Nutrition',
     startDate: new Date(2026, 4, 1).toISOString(),
     endDate: new Date(2026, 9, 30).toISOString(),
@@ -118,6 +118,160 @@ export const NEGROS_SAMPLE_PROJECTS: Project[] = [
       latitude: 14.5547,
       longitude: 121.0244,
       address: 'Makati City, Metro Manila, Philippines',
+    },
+    volunteersNeeded: 15,
+    volunteers: [],
+    joinedUserIds: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    statusUpdates: [],
+  },
+  {
+    id: 'project-5',
+    title: 'Mingo Parties!',
+    description: 'Community activation program that turns nutrition sessions into child-friendly outreach events using Mingo meals and learning activities.',
+    partnerId: 'partner-3',
+    isEvent: true,
+    status: 'Planning',
+    category: 'Nutrition',
+    startDate: new Date(2026, 5, 14).toISOString(),
+    endDate: new Date(2026, 5, 14).toISOString(),
+    location: {
+      latitude: 10.6311,
+      longitude: 122.9784,
+      address: 'Silay City, Negros Occidental, Philippines',
+    },
+    volunteersNeeded: 30,
+    volunteers: [],
+    joinedUserIds: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    statusUpdates: [],
+  },
+  {
+    id: 'project-6',
+    title: 'LoveBags',
+    description: 'Education support drive that distributes school bags and learning supplies to students from underserved communities.',
+    partnerId: 'partner-3',
+    isEvent: false,
+    status: 'In Progress',
+    category: 'Education',
+    startDate: new Date(2026, 0, 13).toISOString(),
+    endDate: new Date(2026, 7, 29).toISOString(),
+    location: {
+      latitude: 10.1042,
+      longitude: 122.8682,
+      address: 'Binalbagan, Negros Occidental, Philippines',
+    },
+    volunteersNeeded: 20,
+    volunteers: [],
+    joinedUserIds: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    statusUpdates: [],
+  },
+  {
+    id: 'project-7',
+    title: 'School Support',
+    description: 'Education improvement program covering classroom repairs, school equipment, and student learning support.',
+    partnerId: 'partner-3',
+    isEvent: false,
+    status: 'Planning',
+    category: 'Education',
+    startDate: new Date(2026, 1, 2).toISOString(),
+    endDate: new Date(2026, 10, 20).toISOString(),
+    location: {
+      latitude: 10.1078,
+      longitude: 123.0111,
+      address: 'Victorias City, Negros Occidental, Philippines',
+    },
+    volunteersNeeded: 16,
+    volunteers: [],
+    joinedUserIds: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    statusUpdates: [],
+  },
+  {
+    id: 'project-8',
+    title: 'Artisans of Hope',
+    description: 'Livelihood program that helps community artisans produce and sell handcrafted items for sustainable income.',
+    partnerId: 'partner-3',
+    isEvent: false,
+    status: 'In Progress',
+    category: 'Livelihood',
+    startDate: new Date(2026, 0, 27).toISOString(),
+    endDate: new Date(2026, 8, 25).toISOString(),
+    location: {
+      latitude: 9.9904,
+      longitude: 122.8144,
+      address: 'Kabankalan City, Negros Occidental, Philippines',
+    },
+    volunteersNeeded: 12,
+    volunteers: [],
+    joinedUserIds: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    statusUpdates: [],
+  },
+  {
+    id: 'project-9',
+    title: 'Project Joseph',
+    description: 'Livelihood assistance project that provides tools and starter equipment to skilled workers and breadwinners.',
+    partnerId: 'partner-3',
+    isEvent: false,
+    status: 'Planning',
+    category: 'Livelihood',
+    startDate: new Date(2026, 2, 9).toISOString(),
+    endDate: new Date(2026, 10, 13).toISOString(),
+    location: {
+      latitude: 10.4302,
+      longitude: 122.9212,
+      address: 'La Carlota City, Negros Occidental, Philippines',
+    },
+    volunteersNeeded: 10,
+    volunteers: [],
+    joinedUserIds: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    statusUpdates: [],
+  },
+  {
+    id: 'project-10',
+    title: 'Growing Hope',
+    description: 'Community gardening and food security initiative that helps families grow produce for consumption and income.',
+    partnerId: 'partner-3',
+    isEvent: false,
+    status: 'In Progress',
+    category: 'Livelihood',
+    startDate: new Date(2026, 1, 16).toISOString(),
+    endDate: new Date(2026, 11, 4).toISOString(),
+    location: {
+      latitude: 10.3986,
+      longitude: 122.9861,
+      address: 'Bago City, Negros Occidental, Philippines',
+    },
+    volunteersNeeded: 22,
+    volunteers: [],
+    joinedUserIds: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    statusUpdates: [],
+  },
+  {
+    id: 'project-11',
+    title: 'Peter Project',
+    description: 'Livelihood support for fisherfolk through boat assistance and market access for their catch.',
+    partnerId: 'partner-3',
+    isEvent: false,
+    status: 'Planning',
+    category: 'Livelihood',
+    startDate: new Date(2026, 2, 23).toISOString(),
+    endDate: new Date(2026, 11, 11).toISOString(),
+    location: {
+      latitude: 10.4989,
+      longitude: 122.8167,
+      address: 'Valladolid, Negros Occidental, Philippines',
     },
     volunteersNeeded: 15,
     volunteers: [],
@@ -1001,7 +1155,9 @@ async function ensureNegrosProjectData(): Promise<void> {
       ...existingProject,
       title: sampleProject.title,
       description: sampleProject.description,
+      partnerId: sampleProject.partnerId,
       isEvent: sampleProject.isEvent,
+      status: sampleProject.status,
       category: sampleProject.category,
       startDate: sampleProject.startDate,
       endDate: sampleProject.endDate,
@@ -1143,18 +1299,38 @@ async function ensureCorePartners(): Promise<void> {
 
 async function ensureCoreProjects(): Promise<void> {
   const projects = (await getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS)) || [];
-  const byId = new Map(projects.map(p => [p.id, p]));
-
-  let changed = false;
-  for (const project of NEGROS_SAMPLE_PROJECTS) {
-    if (!byId.has(project.id)) {
-      projects.push(project);
-      changed = true;
+  const mergedProjects = NEGROS_SAMPLE_PROJECTS.map((project) => {
+    const existingProject = projects.find((storedProject) => storedProject.id === project.id);
+    if (!existingProject) {
+      return project;
     }
+
+    return {
+      ...existingProject,
+      title: project.title,
+      description: project.description,
+      partnerId: project.partnerId,
+      isEvent: project.isEvent,
+      status: project.status,
+      category: project.category,
+      startDate: project.startDate,
+      endDate: project.endDate,
+      location: project.location,
+      volunteersNeeded: project.volunteersNeeded,
+      updatedAt: new Date().toISOString(),
+    };
+  });
+
+  const nextProjects = mergedProjects;
+
+  if (projects.length !== nextProjects.length || projects.some((project, index) => project.id !== nextProjects[index]?.id)) {
+    await setStorageItem(STORAGE_KEYS.PROJECTS, nextProjects);
+    return;
   }
 
-  if (changed) {
-    await setStorageItem(STORAGE_KEYS.PROJECTS, projects);
+  const hasCanonicalDiff = nextProjects.some((project, index) => JSON.stringify(project) !== JSON.stringify(projects[index]));
+  if (hasCanonicalDiff) {
+    await setStorageItem(STORAGE_KEYS.PROJECTS, nextProjects);
   }
 }
 

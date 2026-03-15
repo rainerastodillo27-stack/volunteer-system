@@ -4,7 +4,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
 import { useAuth } from '../contexts/AuthContext';
 import {
-  getNegrosProjects,
+  getAllProjects,
   getVolunteerByUserId,
   NEGROS_SAMPLE_PROJECTS,
   joinProjectEvent,
@@ -41,7 +41,7 @@ function getProjectSuggestion(project: Project, volunteer: Volunteer | null): Re
   if (!volunteer) {
     return {
       label: 'Open Program',
-      reasons: [project.category, 'Negros location'],
+      reasons: [project.category, 'Volunteer-ready'],
     };
   }
 
@@ -99,8 +99,8 @@ export default function ProjectsScreen() {
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
 
   const loadProjects = async () => {
-    const negrosProjects = await getNegrosProjects();
-    setProjects(negrosProjects.length > 0 ? negrosProjects : NEGROS_SAMPLE_PROJECTS);
+    const allProjects = await getAllProjects();
+    setProjects(allProjects.length > 0 ? allProjects : NEGROS_SAMPLE_PROJECTS);
   };
 
   const loadTimeLogs = async (volunteerId: string) => {
@@ -220,10 +220,10 @@ export default function ProjectsScreen() {
       <Text style={styles.heading}>Programs and Projects</Text>
       <Text style={styles.subheading}>
         {user?.role === 'volunteer'
-          ? 'Negros-based recommendations are based on your saved skills and skills description.'
+          ? 'Program recommendations are based on your saved skills and skills description.'
           : user?.role === 'partner'
           ? 'Partner organizations can express interest and collaborate on any listed program.'
-          : 'Current Negros-based program list and participation needs.'}
+          : 'Current program list and participation needs.'}
       </Text>
 
       <FlatList
