@@ -33,6 +33,8 @@ const WEB_MESSAGE_SYNC_KEY = 'volcre:messages:updatedAt';
 const memoryStorageCache = new Map<string, unknown>();
 let mockDataInitializationPromise: Promise<void> | null = null;
 const REMOTE_STORAGE_TIMEOUT_MS = 2500;
+const API_READY_RETRY_MS = 800;
+const API_READY_MAX_ATTEMPTS = 6;
 const NEGROS_OCCIDENTAL_BOUNDS = {
   minLatitude: 9.85,
   maxLatitude: 11.05,
@@ -364,6 +366,32 @@ function getApiBaseUrl(): string {
   }
 
   return 'http://127.0.0.1:8000';
+}
+
+function getMessagesWebSocketUrl(userId: string): string {
+  const wsBaseUrl = getApiBaseUrl().replace(/^http/i, 'ws');
+  return `${wsBaseUrl}/ws/messages/${encodeURIComponent(userId)}`;
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function waitForApiReady(): Promise<void> {
+  for (let attempt = 0; attempt < API_READY_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetch(`${getApiBaseUrl()}/health`);
+      if (response.ok) {
+        return;
+      }
+    } catch {
+      // Backend may still be starting.
+    }
+
+    if (attempt < API_READY_MAX_ATTEMPTS - 1) {
+      await delay(API_READY_RETRY_MS);
+    }
+  }
 }
 
 async function fetchRemoteStorageItem<T>(key: string): Promise<T | null> {
@@ -879,38 +907,163 @@ async function addLoggedHoursToVolunteer(
 
 // Message Storage
 export async function saveMessage(message: Message): Promise<void> {
-  const messages = await getStorageItem<Message[]>(STORAGE_KEYS.MESSAGES) || [];
-  messages.push(message);
-  await setStorageItem(STORAGE_KEYS.MESSAGES, messages);
-  notifyWebMessageUpdate();
+  try {
+    await waitForApiReady();
+    const response = await fetch(`${getApiBaseUrl()}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(message),
+    });
+    if (!response.ok) {
+      throw new Error(`Message send failed: ${response.status}`);
+    }
+    notifyWebMessageUpdate();
+  } catch (error) {
+    if (!isExpectedRemoteStorageError(error)) {
+      console.error('Error saving message:', error);
+    }
+    throw error;
+  }
 }
 
 export async function getMessagesForUser(userId: string): Promise<Message[]> {
-  const messages = await getStorageItem<Message[]>(STORAGE_KEYS.MESSAGES) || [];
-  return messages.filter(
-    m => m.recipientId === userId || m.senderId === userId
-  ).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  try {
+    await waitForApiReady();
+    const response = await fetch(`${getApiBaseUrl()}/messages?user_id=${encodeURIComponent(userId)}`);
+    if (!response.ok) {
+      throw new Error(`Message fetch failed: ${response.status}`);
+    }
+    const payload = (await response.json()) as { messages: Message[] };
+    return payload.messages;
+  } catch (error) {
+    if (!isExpectedRemoteStorageError(error)) {
+      console.error('Error loading messages for user:', error);
+    }
+    const messages = await getStorageItem<Message[]>(STORAGE_KEYS.MESSAGES) || [];
+    return messages.filter(
+      m => m.recipientId === userId || m.senderId === userId
+    ).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  }
 }
 
 export async function getConversation(userId1: string, userId2: string): Promise<Message[]> {
-  const messages = await getStorageItem<Message[]>(STORAGE_KEYS.MESSAGES) || [];
-  return messages
-    .filter(
-      m =>
-        (m.senderId === userId1 && m.recipientId === userId2) ||
-        (m.senderId === userId2 && m.recipientId === userId1)
-    )
-    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  try {
+    await waitForApiReady();
+    const response = await fetch(
+      `${getApiBaseUrl()}/messages/conversation?user1=${encodeURIComponent(userId1)}&user2=${encodeURIComponent(userId2)}`
+    );
+    if (!response.ok) {
+      throw new Error(`Conversation fetch failed: ${response.status}`);
+    }
+    const payload = (await response.json()) as { messages: Message[] };
+    return payload.messages;
+  } catch (error) {
+    if (!isExpectedRemoteStorageError(error)) {
+      console.error('Error loading conversation:', error);
+    }
+    const messages = await getStorageItem<Message[]>(STORAGE_KEYS.MESSAGES) || [];
+    return messages
+      .filter(
+        m =>
+          (m.senderId === userId1 && m.recipientId === userId2) ||
+          (m.senderId === userId2 && m.recipientId === userId1)
+      )
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  }
 }
 
 export async function markMessageAsRead(messageId: string): Promise<void> {
-  const messages = await getStorageItem<Message[]>(STORAGE_KEYS.MESSAGES) || [];
-  const message = messages.find(m => m.id === messageId);
-  if (message) {
-    message.read = true;
-    await setStorageItem(STORAGE_KEYS.MESSAGES, messages);
+  try {
+    await waitForApiReady();
+    const response = await fetch(`${getApiBaseUrl()}/messages/${encodeURIComponent(messageId)}/read`, {
+      method: 'PATCH',
+    });
+    if (!response.ok) {
+      throw new Error(`Mark read failed: ${response.status}`);
+    }
     notifyWebMessageUpdate();
+  } catch (error) {
+    if (!isExpectedRemoteStorageError(error)) {
+      console.error('Error marking message as read:', error);
+    }
+    const messages = await getStorageItem<Message[]>(STORAGE_KEYS.MESSAGES) || [];
+    const message = messages.find(m => m.id === messageId);
+    if (message) {
+      message.read = true;
+      await setStorageItem(STORAGE_KEYS.MESSAGES, messages);
+      notifyWebMessageUpdate();
+    }
   }
+}
+
+export function subscribeToMessages(
+  userId: string,
+  onChange: (event: { type: string; message: Message }) => void
+): () => void {
+  let socket: WebSocket | null = null;
+  let heartbeat: ReturnType<typeof setInterval> | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let closed = false;
+
+  const cleanupSocket = () => {
+    if (heartbeat) {
+      clearInterval(heartbeat);
+      heartbeat = null;
+    }
+    if (socket) {
+      socket.onopen = null;
+      socket.onmessage = null;
+      socket.onerror = null;
+      socket.onclose = null;
+      socket.close();
+      socket = null;
+    }
+  };
+
+  const connect = () => {
+    cleanupSocket();
+    socket = new WebSocket(getMessagesWebSocketUrl(userId));
+
+    socket.onopen = () => {
+      heartbeat = setInterval(() => {
+        if (socket?.readyState === WebSocket.OPEN) {
+          socket.send('ping');
+        }
+      }, 25000);
+    };
+
+    socket.onmessage = event => {
+      try {
+        const payload = JSON.parse(event.data) as { type: string; message: Message };
+        onChange(payload);
+      } catch (error) {
+        console.error('Error parsing message event:', error);
+      }
+    };
+
+    socket.onclose = () => {
+      cleanupSocket();
+      if (!closed) {
+        reconnectTimer = setTimeout(connect, 1500);
+      }
+    };
+
+    socket.onerror = () => {
+      socket?.close();
+    };
+  };
+
+  connect();
+
+  return () => {
+    closed = true;
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+    }
+    cleanupSocket();
+  };
 }
 
 // Status Update Storage

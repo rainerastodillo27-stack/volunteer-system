@@ -64,12 +64,6 @@ export default function LoginScreen({ navigation }: any) {
         return;
       }
 
-      if (!isWeb && user.role !== 'volunteer' && user.role !== 'partner') {
-        Alert.alert('Access Restricted', 'Admin accounts can only log in on web. Use volunteer or partner on mobile.');
-        setLoading(false);
-        return;
-      }
-
       // Update auth context - this triggers state change and navigation
       await login(user);
       setIdentifier('');

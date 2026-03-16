@@ -1,4 +1,5 @@
 const os = require('os');
+const { execFileSync, spawn } = require('child_process');
 
 function getLanIp() {
   const interfaces = os.networkInterfaces();
@@ -16,7 +17,54 @@ function getLanIp() {
   return '127.0.0.1';
 }
 
+function isBackendRunning() {
+  try {
+    const result = execFileSync(
+      'powershell',
+      [
+        '-NoProfile',
+        '-Command',
+        "if (Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue) { 'running' }",
+      ],
+      {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }
+    );
+
+    return result.includes('running');
+  } catch {
+    return false;
+  }
+}
+
+function ensureBackendStarted() {
+  if (process.env.VOLCRE_AUTO_START_BACKEND === 'false') {
+    return;
+  }
+
+  if (isBackendRunning()) {
+    return;
+  }
+
+  const appDir = __dirname;
+  const isWindows = process.platform === 'win32';
+  const command = isWindows ? 'py' : 'python3';
+  const args = ['-m', 'uvicorn', 'backend.api:app', '--host', '0.0.0.0', '--port', '8000'];
+
+  const child = spawn(command, args, {
+    cwd: appDir,
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+
+  child.unref();
+}
+
 module.exports = () => {
+  ensureBackendStarted();
+
   const apiBaseUrl =
     process.env.VOLCRE_API_BASE_URL || `http://${getLanIp()}:8000`;
 

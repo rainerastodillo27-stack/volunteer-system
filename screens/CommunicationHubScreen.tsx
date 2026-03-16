@@ -20,6 +20,7 @@ import {
   saveMessage,
   getAllUsers,
   markMessageAsRead,
+  subscribeToMessages,
 } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
 import { format } from 'date-fns';
@@ -82,18 +83,18 @@ export default function CommunicationHubScreen({ navigation }: any) {
   }, [view, allUsers]);
 
   useEffect(() => {
-    if (view !== 'conversations') return;
-    const interval = setInterval(loadConversations, 2000);
-    return () => clearInterval(interval);
-  }, [view, allUsers, user?.id]);
-
-  useEffect(() => {
-    if (selectedUser && view === 'detail') {
-      loadMessages();
-      const interval = setInterval(loadMessages, 2000); // Poll for new messages
-      return () => clearInterval(interval);
+    if (!user?.id) {
+      return;
     }
-  }, [selectedUser, view]);
+
+    return subscribeToMessages(user.id, async () => {
+      if (view === 'detail' && selectedUser) {
+        await loadMessages();
+      } else {
+        await loadConversations();
+      }
+    });
+  }, [user?.id, view, selectedUser?.id, allUsers.length]);
 
   useEffect(() => {
     if (Platform.OS !== 'web') return;
@@ -114,13 +115,7 @@ export default function CommunicationHubScreen({ navigation }: any) {
   const loadUsers = async () => {
     try {
       const users = await getAllUsers();
-      let otherUsers = users.filter(u => u.id !== user?.id);
-
-      if (user?.role === 'volunteer') {
-        otherUsers = otherUsers.filter(u => u.role === 'admin');
-      } else if (user?.role === 'partner') {
-        otherUsers = otherUsers.filter(u => u.role === 'admin');
-      }
+      const otherUsers = users.filter(u => u.id !== user?.id);
 
       otherUsers.sort((a, b) => {
         if (a.role === 'admin' && b.role !== 'admin') return -1;
@@ -301,11 +296,7 @@ export default function CommunicationHubScreen({ navigation }: any) {
       <Text style={styles.title}>Communication Hub</Text>
 
       <Text style={styles.subtitle}>
-        {user.role === 'volunteer'
-          ? 'Message the NVC admin directly'
-          : user.role === 'partner'
-          ? 'Message the NVC admin directly'
-          : 'Connect with team members'}
+        Connect with other users and the admin
       </Text>
 
       {conversations.length === 0 && allUsers.length === 0 ? (

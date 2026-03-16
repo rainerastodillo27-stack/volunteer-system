@@ -458,7 +458,8 @@ def main() -> None:
                   engagement_status, background, created_at
                 )
                 values (%s, %s, %s, %s, %s, %s::jsonb, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s)
-                on conflict (id) do update set
+                on conflict (user_id) do update set
+                  id = excluded.id,
                   user_id = excluded.user_id,
                   name = excluded.name,
                   email = excluded.email,
