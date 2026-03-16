@@ -8,7 +8,14 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from .db import ensure_sqlite_storage, get_db_mode, get_postgres_connection, get_sqlite_connection
+from .db import (
+    ensure_sqlite_storage,
+    get_configured_db_mode,
+    get_db_mode,
+    get_postgres_connection,
+    get_postgres_status,
+    get_sqlite_connection,
+)
 
 
 load_dotenv()
@@ -147,6 +154,53 @@ def startup() -> None:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
+
+
+@app.get("/")
+def root() -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "message": "Volcre backend is running.",
+        "docs": "/docs",
+        "health": "/health",
+        "db_health": "/db-health",
+    }
+
+
+@app.get("/db-health")
+def db_health() -> dict[str, Any]:
+    configured_mode = get_configured_db_mode()
+    mode = get_db_mode()
+    result: dict[str, Any] = {
+        "status": "ok",
+        "configured_mode": configured_mode,
+        "mode": mode,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+    try:
+        postgres_available, postgres_error = get_postgres_status(force_refresh=True)
+        result["postgres_available"] = postgres_available
+        if postgres_error:
+            result["postgres_error"] = postgres_error
+
+        if mode == "postgres":
+            with get_postgres_connection() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute("select current_database(), current_user")
+                    database, user = cursor.fetchone()
+            result["database"] = database
+            result["user"] = user
+        else:
+            ensure_sqlite_storage()
+            with get_sqlite_connection() as connection:
+                connection.execute("select 1").fetchone()
+            result["database"] = "sqlite"
+    except Exception as exc:
+        result["status"] = "error"
+        result["error"] = str(exc)
+
+    return result
 
 
 @app.get("/messages")

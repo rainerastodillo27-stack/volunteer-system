@@ -1243,13 +1243,13 @@ export async function clearAllStorage(): Promise<void> {
     try {
       await clearRemoteStorage();
     } catch (error) {
-      console.error('Error clearing remote storage:', error);
+        console.error('Error clearing remote storage:', error);
+      }
+      memoryStorageCache.clear();
+      await AsyncStorage.multiRemove(Object.values(STORAGE_KEYS));
+    } catch (error) {
+      console.error('Error clearing storage:', error);
     }
-    memoryStorageCache.clear();
-    await AsyncStorage.multiRemove(Object.values(STORAGE_KEYS));
-  } catch (error) {
-    console.error('Error clearing storage:', error);
-  }
 }
 
 // Initialize with mock data
