@@ -9,6 +9,7 @@ import {
   Platform,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   getAllPartners,
   getAllProjects,
@@ -26,6 +27,12 @@ export default function PartnerDashboardScreen({ navigation }: any) {
   useEffect(() => {
     loadDashboardData();
   }, []);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      loadDashboardData();
+    }, [user?.email])
+  );
 
   const loadDashboardData = async () => {
     try {

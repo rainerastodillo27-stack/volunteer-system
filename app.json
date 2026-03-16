@@ -4,12 +4,11 @@
     "slug": "volcre",
     "version": "1.0.0",
     "orientation": "portrait",
-    "sdkVersion": "54.0.0",
     "assetBundlePatterns": [
       "**/*"
     ],
     "ios": {
-      "supportsTabletMode": true
+      "supportsTablet": true
     },
     "android": {
       "adaptiveIcon": {
@@ -18,7 +17,10 @@
     },
     "scheme": "volcre",
     "extra": {
-      "apiBaseUrl": "http://127.0.0.1:8000"
-    }
+      "apiBaseUrl": ""
+    },
+    "plugins": [
+      "expo-font"
+    ]
   }
 }

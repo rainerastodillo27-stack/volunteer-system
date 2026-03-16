@@ -12,6 +12,7 @@ import {
   Platform,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import { Message, User } from '../models/types';
 import {
   getMessagesForUser,
@@ -63,6 +64,17 @@ export default function CommunicationHubScreen({ navigation }: any) {
     loadUsers();
   }, []);
 
+  useFocusEffect(
+    React.useCallback(() => {
+      loadUsers();
+      if (view === 'detail' && selectedUser) {
+        loadMessages();
+      } else {
+        loadConversations();
+      }
+    }, [view, selectedUser, user?.id])
+  );
+
   useEffect(() => {
     if (view === 'conversations') {
       loadConversations();
@@ -102,7 +114,20 @@ export default function CommunicationHubScreen({ navigation }: any) {
   const loadUsers = async () => {
     try {
       const users = await getAllUsers();
-      const otherUsers = users.filter(u => u.id !== user?.id);
+      let otherUsers = users.filter(u => u.id !== user?.id);
+
+      if (user?.role === 'volunteer') {
+        otherUsers = otherUsers.filter(u => u.role === 'admin');
+      } else if (user?.role === 'partner') {
+        otherUsers = otherUsers.filter(u => u.role === 'admin');
+      }
+
+      otherUsers.sort((a, b) => {
+        if (a.role === 'admin' && b.role !== 'admin') return -1;
+        if (a.role !== 'admin' && b.role === 'admin') return 1;
+        return a.name.localeCompare(b.name);
+      });
+
       setAllUsers(otherUsers);
     } catch (error) {
       console.error('Error loading users:', error);
@@ -275,7 +300,13 @@ export default function CommunicationHubScreen({ navigation }: any) {
     <View style={styles.container}>
       <Text style={styles.title}>Communication Hub</Text>
 
-      <Text style={styles.subtitle}>Connect with team members</Text>
+      <Text style={styles.subtitle}>
+        {user.role === 'volunteer'
+          ? 'Message the NVC admin directly'
+          : user.role === 'partner'
+          ? 'Message the NVC admin directly'
+          : 'Connect with team members'}
+      </Text>
 
       {conversations.length === 0 && allUsers.length === 0 ? (
         <View style={styles.emptyState}>

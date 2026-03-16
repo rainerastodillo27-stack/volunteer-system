@@ -1,51 +1,53 @@
 import React, { useEffect, useState } from 'react';
-import { View, TextInput, TouchableOpacity, Text, StyleSheet, Alert, ActivityIndicator, Platform, ScrollView } from 'react-native';
-import { getUserByEmail, initializeMockData } from '../models/storage';
+import { View, TextInput, TouchableOpacity, Text, StyleSheet, Alert, ActivityIndicator, Platform, ScrollView, Modal } from 'react-native';
+import { createUserAccount, getUserByEmailOrPhone, initializeMockData } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
 import AppLogo from '../components/AppLogo';
+import { NVCSector, UserRole, UserType } from '../models/types';
 
 export default function LoginScreen({ navigation }: any) {
   const isWeb = Platform.OS === 'web';
-  const [email, setEmail] = useState('');
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(true);
   const [initialized, setInitialized] = useState(false);
+  const [showSignupModal, setShowSignupModal] = useState(false);
+  const [signupLoading, setSignupLoading] = useState(false);
+  const [signupName, setSignupName] = useState('');
+  const [signupEmail, setSignupEmail] = useState('');
+  const [signupAccountPhone, setSignupAccountPhone] = useState('');
+  const [signupPassword, setSignupPassword] = useState('');
+  const [signupUserType, setSignupUserType] = useState<UserType>('Student');
+  const [signupPillars, setSignupPillars] = useState<NVCSector[]>([]);
+  const [signupRole, setSignupRole] = useState<Exclude<UserRole, 'admin'>>('volunteer');
   const { login } = useAuth();
 
   useEffect(() => {
-    // Initialize mock data on first load
-    const initApp = async () => {
-      try {
-        await initializeMockData();
-        setInitialized(true);
-      } catch (error) {
-        console.error('Error initializing mock data:', error);
-        Alert.alert('Error', 'Failed to initialize app. Please restart.');
-      } finally {
-        setLoading(false);
-      }
-    };
+    setInitialized(true);
+    setLoading(false);
 
-    initApp();
+    void initializeMockData().catch((error) => {
+      console.error('Error initializing mock data:', error);
+    });
   }, []);
 
   const handleLogin = async () => {
-    if (!email.trim() || !password.trim()) {
-      Alert.alert('Validation Error', 'Please enter both email and password');
-      return;
-    }
-
-    if (!email.includes('@')) {
-      Alert.alert('Validation Error', 'Please enter a valid email address');
+    if (!identifier.trim() || !password.trim()) {
+      Alert.alert('Validation Error', 'Please enter email or phone and password');
       return;
     }
 
     try {
       setLoading(true);
-      const user = await getUserByEmail(email.toLowerCase().trim());
+      let user = await getUserByEmailOrPhone(identifier.trim());
 
       if (!user) {
-        Alert.alert('Authentication Failed', 'Email not found. Please check your credentials.');
+        await initializeMockData();
+        user = await getUserByEmailOrPhone(identifier.trim());
+      }
+
+      if (!user) {
+        Alert.alert('Authentication Failed', 'Account not found. Please check your email/phone and password.');
         setLoading(false);
         return;
       }
@@ -70,12 +72,70 @@ export default function LoginScreen({ navigation }: any) {
 
       // Update auth context - this triggers state change and navigation
       await login(user);
-      setEmail('');
+      setIdentifier('');
       setPassword('');
     } catch (error) {
       console.error('Login error:', error);
       Alert.alert('Login Error', 'An error occurred during login. Please try again.');
       setLoading(false);
+    }
+  };
+
+  const resetSignupForm = () => {
+    setSignupName('');
+    setSignupEmail('');
+    setSignupAccountPhone('');
+    setSignupPassword('');
+    setSignupUserType('Student');
+    setSignupPillars([]);
+    setSignupRole('volunteer');
+  };
+
+  const handleSignup = async () => {
+    if (!signupName.trim() || !signupPassword.trim()) {
+      Alert.alert('Validation Error', 'Name and password are required.');
+      return;
+    }
+
+    if (!signupEmail.trim() && !signupAccountPhone.trim()) {
+      Alert.alert('Validation Error', 'Please provide an email or phone number.');
+      return;
+    }
+
+    if (signupEmail.trim() && !signupEmail.includes('@')) {
+      Alert.alert('Validation Error', 'Please enter a valid email address.');
+      return;
+    }
+
+    if (signupPillars.length === 0) {
+      Alert.alert('Validation Error', 'Select at least one pillar of interest.');
+      return;
+    }
+
+    try {
+      setSignupLoading(true);
+      const createdUser = await createUserAccount({
+        name: signupName,
+        email: signupEmail,
+        password: signupPassword,
+        phone: signupAccountPhone,
+        role: signupRole,
+        userType: signupUserType,
+        pillarsOfInterest: signupPillars,
+      });
+
+      setIdentifier(createdUser.email || createdUser.phone || '');
+      setPassword(createdUser.password);
+      setShowSignupModal(false);
+      resetSignupForm();
+      Alert.alert(
+        'Account Created',
+        'Your account has been registered and will appear in admin user management.'
+      );
+    } catch (error: any) {
+      Alert.alert('Sign Up Error', error?.message || 'Failed to create account.');
+    } finally {
+      setSignupLoading(false);
     }
   };
 
@@ -103,13 +163,11 @@ export default function LoginScreen({ navigation }: any) {
         </View>
 
         <TextInput
-          style={[styles.input, email && !email.includes('@') ? styles.inputError : null]}
-          placeholder="Email Address"
+          style={styles.input}
+          placeholder="Email or Phone"
           placeholderTextColor="#999"
-          value={email}
-          onChangeText={setEmail}
-          keyboardType="email-address"
-          autoCapitalize="none"
+          value={identifier}
+          onChangeText={setIdentifier}
           editable={!loading}
         />
 
@@ -126,7 +184,7 @@ export default function LoginScreen({ navigation }: any) {
         <TouchableOpacity 
           style={[styles.button, loading ? styles.buttonDisabled : null]} 
           onPress={handleLogin} 
-          disabled={loading || !email || !password}
+          disabled={loading || !identifier || !password}
         >
           {loading ? (
             <ActivityIndicator color="#fff" />
@@ -175,10 +233,141 @@ export default function LoginScreen({ navigation }: any) {
           )}
         </View>
 
-        <TouchableOpacity onPress={() => Alert.alert('Sign Up', 'Feature coming soon')}>
+        <TouchableOpacity onPress={() => setShowSignupModal(true)}>
           <Text style={styles.signupText}>Don't have an account? Sign Up</Text>
         </TouchableOpacity>
       </View>
+
+      <Modal
+        visible={showSignupModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowSignupModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Create Account</Text>
+            <Text style={styles.modalSubtitle}>Register with email or phone, choose a profile type, and pick your pillar interests.</Text>
+
+            <TextInput
+              style={styles.input}
+              placeholder="Full Name"
+              placeholderTextColor="#999"
+              value={signupName}
+              onChangeText={setSignupName}
+              editable={!signupLoading}
+            />
+            <TextInput
+              style={styles.input}
+              placeholder="Email Address"
+              placeholderTextColor="#999"
+              value={signupEmail}
+              onChangeText={setSignupEmail}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              editable={!signupLoading}
+            />
+            <TextInput
+              style={styles.input}
+              placeholder="Phone Number"
+              placeholderTextColor="#999"
+              value={signupAccountPhone}
+              onChangeText={setSignupAccountPhone}
+              keyboardType="phone-pad"
+              editable={!signupLoading}
+            />
+            <TextInput
+              style={styles.input}
+              placeholder="Password"
+              placeholderTextColor="#999"
+              value={signupPassword}
+              onChangeText={setSignupPassword}
+              secureTextEntry
+              editable={!signupLoading}
+            />
+
+            <View style={styles.roleSelector}>
+              {(['volunteer', 'partner'] as const).map(role => (
+                <TouchableOpacity
+                  key={role}
+                  style={[styles.roleChip, signupRole === role && styles.roleChipActive]}
+                  onPress={() => setSignupRole(role)}
+                  disabled={signupLoading}
+                >
+                  <Text style={[styles.roleChipText, signupRole === role && styles.roleChipTextActive]}>
+                    {role === 'volunteer' ? 'Volunteer' : 'Partner'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Text style={styles.modalSectionLabel}>Profile Creation</Text>
+            <View style={styles.roleSelector}>
+              {(['Student', 'Adult', 'Senior'] as const).map(userType => (
+                <TouchableOpacity
+                  key={userType}
+                  style={[styles.roleChip, signupUserType === userType && styles.roleChipActive]}
+                  onPress={() => setSignupUserType(userType)}
+                  disabled={signupLoading}
+                >
+                  <Text style={[styles.roleChipText, signupUserType === userType && styles.roleChipTextActive]}>
+                    {userType}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Text style={styles.modalSectionLabel}>Preferences</Text>
+            <View style={styles.pillarGrid}>
+              {(['Nutrition', 'Education', 'Livelihood'] as const).map(pillar => {
+                const selected = signupPillars.includes(pillar);
+                return (
+                  <TouchableOpacity
+                    key={pillar}
+                    style={[styles.pillarChip, selected && styles.pillarChipActive]}
+                    onPress={() =>
+                      setSignupPillars(current =>
+                        current.includes(pillar)
+                          ? current.filter(item => item !== pillar)
+                          : [...current, pillar]
+                      )
+                    }
+                    disabled={signupLoading}
+                  >
+                    <Text style={[styles.pillarChipText, selected && styles.pillarChipTextActive]}>
+                      {pillar}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={styles.modalSecondaryButton}
+                onPress={() => {
+                  setShowSignupModal(false);
+                  resetSignupForm();
+                }}
+                disabled={signupLoading}
+              >
+                <Text style={styles.modalSecondaryText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalPrimaryButton, signupLoading && styles.buttonDisabled]}
+                onPress={handleSignup}
+                disabled={signupLoading}
+              >
+                {signupLoading ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.modalPrimaryText}>Create</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -309,6 +498,108 @@ const styles = StyleSheet.create({
     color: '#4CAF50',
     textAlign: 'center',
     fontSize: 16,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  modalCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 18,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  modalSubtitle: {
+    fontSize: 13,
+    color: '#64748b',
+    marginTop: 6,
+    marginBottom: 14,
+  },
+  modalSectionLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#334155',
+    marginBottom: 8,
+  },
+  roleSelector: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 4,
+    marginBottom: 16,
+  },
+  pillarGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginBottom: 16,
+  },
+  pillarChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: '#e2e8f0',
+  },
+  pillarChipActive: {
+    backgroundColor: '#166534',
+  },
+  pillarChipText: {
+    color: '#475569',
+    fontWeight: '700',
+  },
+  pillarChipTextActive: {
+    color: '#fff',
+  },
+  roleChip: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: '#e2e8f0',
+    alignItems: 'center',
+  },
+  roleChipActive: {
+    backgroundColor: '#4CAF50',
+  },
+  roleChipText: {
+    color: '#475569',
+    fontWeight: '700',
+  },
+  roleChipTextActive: {
+    color: '#fff',
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  modalSecondaryButton: {
+    flex: 1,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+  },
+  modalSecondaryText: {
+    color: '#475569',
+    fontWeight: '700',
+  },
+  modalPrimaryButton: {
+    flex: 1,
+    borderRadius: 10,
+    backgroundColor: '#4CAF50',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+  },
+  modalPrimaryText: {
+    color: '#fff',
+    fontWeight: '700',
   },
   loadingText: {
     fontSize: 16,

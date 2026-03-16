@@ -61,10 +61,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      // Save to storage first
-      await saveCurrentUser(userData);
-      // Then update state
       setUser(userData);
+      await saveCurrentUser(userData);
     } catch (error) {
       console.error('Error during login:', error);
       throw error;
@@ -72,12 +70,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = async () => {
+    const previousUser = user;
     try {
-      // Clear storage first
-      await saveCurrentUser(null);
-      // Then update state
       setUser(null);
+      await saveCurrentUser(null);
     } catch (error) {
+      setUser(previousUser);
       console.error('Error during logout:', error);
       throw error;
     }

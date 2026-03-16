@@ -1,8 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
-import { Platform } from 'react-native';
+import { NativeModules, Platform } from 'react-native';
 import {
   User,
+  UserType,
   Partner,
   Project,
   Volunteer,
@@ -13,6 +14,7 @@ import {
   VolunteerTimeLog,
   PartnerProjectApplication,
 } from './types';
+import { NVCSector, UserRole } from './types';
 
 const STORAGE_KEYS = {
   USERS: 'users',
@@ -28,6 +30,9 @@ const STORAGE_KEYS = {
 };
 
 const WEB_MESSAGE_SYNC_KEY = 'volcre:messages:updatedAt';
+const memoryStorageCache = new Map<string, unknown>();
+let mockDataInitializationPromise: Promise<void> | null = null;
+const REMOTE_STORAGE_TIMEOUT_MS = 2500;
 const NEGROS_OCCIDENTAL_BOUNDS = {
   minLatitude: 9.85,
   maxLatitude: 11.05,
@@ -306,10 +311,52 @@ function notifyWebMessageUpdate(): void {
   }
 }
 
+function getBundlerHost(): string | null {
+  const scriptUrl = NativeModules?.SourceCode?.scriptURL as string | undefined;
+  if (!scriptUrl) {
+    return null;
+  }
+
+  try {
+    const parsedUrl = new URL(scriptUrl);
+    return parsedUrl.hostname || null;
+  } catch {
+    const match = scriptUrl.match(/https?:\/\/([^/:]+)/i);
+    return match?.[1] ?? null;
+  }
+}
+
+function resolveConfiguredApiBaseUrl(configuredBaseUrl: string): string {
+  const trimmedBaseUrl = configuredBaseUrl.trim().replace(/\/$/, '');
+  const bundlerHost = getBundlerHost();
+
+  try {
+    const parsedUrl = new URL(trimmedBaseUrl);
+    const isLoopbackHost =
+      parsedUrl.hostname === '127.0.0.1' ||
+      parsedUrl.hostname === 'localhost' ||
+      parsedUrl.hostname === '10.0.2.2';
+
+    if (bundlerHost && isLoopbackHost && Platform.OS !== 'web') {
+      parsedUrl.hostname = bundlerHost;
+      return parsedUrl.toString().replace(/\/$/, '');
+    }
+  } catch {
+    return trimmedBaseUrl;
+  }
+
+  return trimmedBaseUrl;
+}
+
 function getApiBaseUrl(): string {
   const configuredBaseUrl = Constants.expoConfig?.extra?.apiBaseUrl as string | undefined;
   if (configuredBaseUrl && configuredBaseUrl.trim().length > 0) {
-    return configuredBaseUrl.replace(/\/$/, '');
+    return resolveConfiguredApiBaseUrl(configuredBaseUrl);
+  }
+
+  const bundlerHost = getBundlerHost();
+  if (bundlerHost && Platform.OS !== 'web') {
+    return `http://${bundlerHost}:8000`;
   }
 
   if (Platform.OS === 'android') {
@@ -320,7 +367,11 @@ function getApiBaseUrl(): string {
 }
 
 async function fetchRemoteStorageItem<T>(key: string): Promise<T | null> {
-  const response = await fetch(`${getApiBaseUrl()}/storage/${encodeURIComponent(key)}`);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REMOTE_STORAGE_TIMEOUT_MS);
+  const response = await fetch(`${getApiBaseUrl()}/storage/${encodeURIComponent(key)}`, {
+    signal: controller.signal,
+  }).finally(() => clearTimeout(timeout));
   if (!response.ok) {
     throw new Error(`Remote storage read failed: ${response.status}`);
   }
@@ -329,14 +380,37 @@ async function fetchRemoteStorageItem<T>(key: string): Promise<T | null> {
   return payload.value ?? null;
 }
 
+async function getLocalStorageItem<T>(key: string): Promise<T | null> {
+  if (memoryStorageCache.has(key)) {
+    return (memoryStorageCache.get(key) as T) ?? null;
+  }
+
+  const item = await AsyncStorage.getItem(key);
+  if (!item) {
+    return null;
+  }
+
+  const parsedItem = JSON.parse(item) as T;
+  memoryStorageCache.set(key, parsedItem);
+  return parsedItem;
+}
+
+async function setLocalStorageItem<T>(key: string, value: T): Promise<void> {
+  memoryStorageCache.set(key, value);
+  await AsyncStorage.setItem(key, JSON.stringify(value));
+}
+
 async function saveRemoteStorageItem<T>(key: string, value: T): Promise<void> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REMOTE_STORAGE_TIMEOUT_MS);
   const response = await fetch(`${getApiBaseUrl()}/storage/${encodeURIComponent(key)}`, {
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ value }),
-  });
+    signal: controller.signal,
+  }).finally(() => clearTimeout(timeout));
 
   if (!response.ok) {
     throw new Error(`Remote storage write failed: ${response.status}`);
@@ -344,9 +418,12 @@ async function saveRemoteStorageItem<T>(key: string, value: T): Promise<void> {
 }
 
 async function deleteRemoteStorageItem(key: string): Promise<void> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REMOTE_STORAGE_TIMEOUT_MS);
   const response = await fetch(`${getApiBaseUrl()}/storage/${encodeURIComponent(key)}`, {
     method: 'DELETE',
-  });
+    signal: controller.signal,
+  }).finally(() => clearTimeout(timeout));
 
   if (!response.ok) {
     throw new Error(`Remote storage delete failed: ${response.status}`);
@@ -354,45 +431,64 @@ async function deleteRemoteStorageItem(key: string): Promise<void> {
 }
 
 async function clearRemoteStorage(): Promise<void> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REMOTE_STORAGE_TIMEOUT_MS);
   const response = await fetch(`${getApiBaseUrl()}/storage`, {
     method: 'DELETE',
-  });
+    signal: controller.signal,
+  }).finally(() => clearTimeout(timeout));
 
   if (!response.ok) {
     throw new Error(`Remote storage clear failed: ${response.status}`);
   }
 }
 
+function isExpectedRemoteStorageError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  const maybeError = error as { name?: string; message?: string };
+  const message = maybeError.message?.toLowerCase() || '';
+
+  return (
+    maybeError.name === 'AbortError' ||
+    message.includes('network request failed') ||
+    message.includes('aborted') ||
+    message.includes('timed out')
+  );
+}
+
 // Generic storage functions
 export async function getStorageItem<T>(key: string): Promise<T | null> {
   try {
-    const remoteValue = await fetchRemoteStorageItem<T>(key);
-    if (remoteValue !== null) {
-      await AsyncStorage.setItem(key, JSON.stringify(remoteValue));
-    }
-    return remoteValue;
-  } catch (error) {
-    console.error(`Error reading remote ${key}, falling back to local cache:`, error);
     try {
-      const item = await AsyncStorage.getItem(key);
-      return item ? JSON.parse(item) : null;
-    } catch (fallbackError) {
-      console.error(`Error reading ${key}:`, fallbackError);
-      return null;
+      const remoteValue = await fetchRemoteStorageItem<T>(key);
+      if (remoteValue !== null) {
+        await setLocalStorageItem(key, remoteValue);
+      } else {
+        memoryStorageCache.delete(key);
+        await AsyncStorage.removeItem(key);
+      }
+      return remoteValue;
+    } catch {
+      return await getLocalStorageItem<T>(key);
     }
+  } catch (error) {
+    if (!isExpectedRemoteStorageError(error)) {
+      console.error(`Error reading ${key}:`, error);
+    }
+    return null;
   }
 }
 
 export async function setStorageItem<T>(key: string, value: T): Promise<void> {
   try {
+    await setLocalStorageItem(key, value);
     await saveRemoteStorageItem(key, value);
-    await AsyncStorage.setItem(key, JSON.stringify(value));
   } catch (error) {
-    console.error(`Error saving remote ${key}, caching locally only:`, error);
-    try {
-      await AsyncStorage.setItem(key, JSON.stringify(value));
-    } catch (fallbackError) {
-      console.error(`Error saving ${key}:`, fallbackError);
+    if (!isExpectedRemoteStorageError(error)) {
+      console.error(`Error saving ${key}:`, error);
     }
   }
 }
@@ -409,6 +505,89 @@ export async function saveUser(user: User): Promise<void> {
   await setStorageItem(STORAGE_KEYS.USERS, users);
 }
 
+export async function createUserAccount(input: {
+  name: string;
+  email?: string;
+  password: string;
+  phone?: string;
+  role: Exclude<UserRole, 'admin'>;
+  userType: UserType;
+  pillarsOfInterest: NVCSector[];
+}): Promise<User> {
+  const normalizedEmail = input.email?.trim().toLowerCase();
+  const normalizedName = input.name.trim();
+  const normalizedPassword = input.password.trim();
+  const normalizedPhone = input.phone?.trim();
+
+  if (!normalizedName || !normalizedPassword) {
+    throw new Error('Name and password are required.');
+  }
+
+  if (!normalizedEmail && !normalizedPhone) {
+    throw new Error('Email or phone is required.');
+  }
+
+  const users = await getStorageItem<User[]>(STORAGE_KEYS.USERS) || [];
+  const existingEmailUser = normalizedEmail
+    ? users.find(user => user.email?.trim().toLowerCase() === normalizedEmail)
+    : null;
+  if (existingEmailUser) {
+    throw new Error('An account with this email already exists.');
+  }
+
+  const existingPhoneUser = normalizedPhone
+    ? users.find(user => user.phone?.trim() === normalizedPhone)
+    : null;
+  if (existingPhoneUser) {
+    throw new Error('An account with this phone number already exists.');
+  }
+
+  const createdAt = new Date().toISOString();
+  const createdUser: User = {
+    id: `user-${Date.now()}`,
+    name: normalizedName,
+    email: normalizedEmail,
+    password: normalizedPassword,
+    phone: normalizedPhone || undefined,
+    role: input.role,
+    userType: input.userType,
+    pillarsOfInterest: input.pillarsOfInterest,
+    createdAt,
+  };
+
+  await saveUser(createdUser);
+
+  if (input.role === 'volunteer') {
+    await saveVolunteer({
+      id: `volunteer-${createdUser.id}`,
+      userId: createdUser.id,
+      name: createdUser.name,
+      email: createdUser.email || '',
+      phone: createdUser.phone || '',
+      skills: [],
+      skillsDescription: input.pillarsOfInterest.join(', '),
+      availability: {
+        daysPerWeek: 0,
+        hoursPerWeek: 0,
+        availableDays: [],
+      },
+      pastProjects: [],
+      totalHoursContributed: 0,
+      rating: 0,
+      engagementStatus: 'Open to Volunteer',
+      background: '',
+      createdAt,
+    });
+  }
+
+  const savedUser = await getUser(createdUser.id);
+  if (!savedUser) {
+    throw new Error('Account creation did not sync correctly. Please try again.');
+  }
+
+  return createdUser;
+}
+
 export async function getUser(id: string): Promise<User | null> {
   const users = await getStorageItem<User[]>(STORAGE_KEYS.USERS) || [];
   return users.find(u => u.id === id) || null;
@@ -416,7 +595,17 @@ export async function getUser(id: string): Promise<User | null> {
 
 export async function getUserByEmail(email: string): Promise<User | null> {
   const users = await getStorageItem<User[]>(STORAGE_KEYS.USERS) || [];
-  return users.find(u => u.email === email) || null;
+  return users.find(u => u.email?.trim().toLowerCase() === email.trim().toLowerCase()) || null;
+}
+
+export async function getUserByEmailOrPhone(identifier: string): Promise<User | null> {
+  const normalizedIdentifier = identifier.trim().toLowerCase();
+  const users = await getStorageItem<User[]>(STORAGE_KEYS.USERS) || [];
+  return users.find(
+    u =>
+      u.email?.trim().toLowerCase() === normalizedIdentifier ||
+      u.phone?.trim() === identifier.trim()
+  ) || null;
 }
 
 export async function getAllUsers(): Promise<User[]> {
@@ -468,8 +657,11 @@ export async function setCurrentUser(user: User | null): Promise<void> {
     try {
       await deleteRemoteStorageItem(STORAGE_KEYS.CURRENT_USER);
     } catch (error) {
-      console.error('Error clearing current user remotely:', error);
+      if (!isExpectedRemoteStorageError(error)) {
+        console.error('Error clearing current user remotely:', error);
+      }
     }
+    memoryStorageCache.delete(STORAGE_KEYS.CURRENT_USER);
     await AsyncStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
   }
 }
@@ -813,7 +1005,7 @@ export async function requestPartnerProjectJoin(
     projectId,
     partnerUserId: partnerUser.id,
     partnerName: partnerUser.name,
-    partnerEmail: partnerUser.email,
+    partnerEmail: partnerUser.email || '',
     status: 'Pending',
     requestedAt: new Date().toISOString(),
   };
@@ -900,6 +1092,7 @@ export async function clearAllStorage(): Promise<void> {
     } catch (error) {
       console.error('Error clearing remote storage:', error);
     }
+    memoryStorageCache.clear();
     await AsyncStorage.multiRemove(Object.values(STORAGE_KEYS));
   } catch (error) {
     console.error('Error clearing storage:', error);
@@ -908,6 +1101,19 @@ export async function clearAllStorage(): Promise<void> {
 
 // Initialize with mock data
 export async function initializeMockData(): Promise<void> {
+  if (mockDataInitializationPromise) {
+    return mockDataInitializationPromise;
+  }
+
+  mockDataInitializationPromise = initializeMockDataInternal();
+  try {
+    await mockDataInitializationPromise;
+  } finally {
+    mockDataInitializationPromise = null;
+  }
+}
+
+async function initializeMockDataInternal(): Promise<void> {
   const existingUsers = await getAllUsers();
   if (existingUsers.length > 0) {
     await ensureAdminProfile();
@@ -920,7 +1126,7 @@ export async function initializeMockData(): Promise<void> {
     await ensureNegrosProjectData();
     await ensureVolunteerStatuses();
     await ensureAdminVolunteerConversation();
-    return; // Data already initialized
+    return;
   }
 
   // Create mock admin and volunteer users
@@ -931,6 +1137,8 @@ export async function initializeMockData(): Promise<void> {
     role: 'admin',
     name: 'NVC Admin Account',
     phone: '+63 917 000 0001',
+    userType: 'Adult',
+    pillarsOfInterest: ['Education', 'Livelihood', 'Nutrition'],
     createdAt: new Date().toISOString(),
   };
 
@@ -941,6 +1149,8 @@ export async function initializeMockData(): Promise<void> {
     role: 'volunteer',
     name: 'Volunteer Account',
     phone: '+0987654321',
+    userType: 'Student',
+    pillarsOfInterest: ['Education', 'Nutrition'],
     createdAt: new Date().toISOString(),
   };
 
@@ -951,6 +1161,8 @@ export async function initializeMockData(): Promise<void> {
     role: 'partner',
     name: 'Partner Org Account',
     phone: '+919876543211',
+    userType: 'Adult',
+    pillarsOfInterest: ['Livelihood'],
     createdAt: new Date().toISOString(),
   };
 
@@ -961,6 +1173,8 @@ export async function initializeMockData(): Promise<void> {
     role: 'partner',
     name: 'PBSP Account',
     phone: '+63 2 8818 8678',
+    userType: 'Adult',
+    pillarsOfInterest: ['Education', 'Livelihood', 'Nutrition'],
     createdAt: new Date().toISOString(),
   };
 
@@ -971,6 +1185,8 @@ export async function initializeMockData(): Promise<void> {
     role: 'partner',
     name: 'Jollibee Foundation Account',
     phone: '+63 2 8634 1111',
+    userType: 'Adult',
+    pillarsOfInterest: ['Nutrition', 'Livelihood'],
     createdAt: new Date().toISOString(),
   };
 
@@ -1088,6 +1304,8 @@ async function ensurePartnerUser(): Promise<void> {
     role: 'partner',
     name: 'Partner Org Account',
     phone: '+919876543211',
+    userType: 'Adult',
+    pillarsOfInterest: ['Livelihood'],
     createdAt: new Date().toISOString(),
   };
 
@@ -1103,6 +1321,8 @@ async function ensurePartnerUsers(): Promise<void> {
       role: 'partner',
       name: 'PBSP Account',
       phone: '+63 2 8818 8678',
+      userType: 'Adult',
+      pillarsOfInterest: ['Education', 'Livelihood', 'Nutrition'],
       createdAt: new Date().toISOString(),
     },
     {
@@ -1112,6 +1332,8 @@ async function ensurePartnerUsers(): Promise<void> {
       role: 'partner',
       name: 'Jollibee Foundation Account',
       phone: '+63 2 8634 1111',
+      userType: 'Adult',
+      pillarsOfInterest: ['Nutrition', 'Livelihood'],
       createdAt: new Date().toISOString(),
     },
   ];
@@ -1371,6 +1593,8 @@ async function ensureCoreUsers(): Promise<void> {
       role: 'admin',
       name: 'NVC Admin Account',
       phone: '+63 917 000 0001',
+      userType: 'Adult',
+      pillarsOfInterest: ['Education', 'Livelihood', 'Nutrition'],
       createdAt: new Date().toISOString(),
     },
     {
@@ -1380,6 +1604,8 @@ async function ensureCoreUsers(): Promise<void> {
       role: 'volunteer',
       name: 'Volunteer Account',
       phone: '+0987654321',
+      userType: 'Student',
+      pillarsOfInterest: ['Education', 'Nutrition'],
       createdAt: new Date().toISOString(),
     },
     {
@@ -1389,6 +1615,8 @@ async function ensureCoreUsers(): Promise<void> {
       role: 'partner',
       name: 'Partner Org Account',
       phone: '+919876543211',
+      userType: 'Adult',
+      pillarsOfInterest: ['Livelihood'],
       createdAt: new Date().toISOString(),
     },
     {
@@ -1398,6 +1626,8 @@ async function ensureCoreUsers(): Promise<void> {
       role: 'partner',
       name: 'PBSP Account',
       phone: '+63 2 8818 8678',
+      userType: 'Adult',
+      pillarsOfInterest: ['Education', 'Livelihood', 'Nutrition'],
       createdAt: new Date().toISOString(),
     },
     {
@@ -1407,6 +1637,8 @@ async function ensureCoreUsers(): Promise<void> {
       role: 'partner',
       name: 'Jollibee Foundation Account',
       phone: '+63 2 8634 1111',
+      userType: 'Adult',
+      pillarsOfInterest: ['Nutrition', 'Livelihood'],
       createdAt: new Date().toISOString(),
     },
   ];

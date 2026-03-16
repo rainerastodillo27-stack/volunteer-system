@@ -1,14 +1,18 @@
 // User Roles
 export type UserRole = 'admin' | 'volunteer' | 'partner';
+export type UserType = 'Student' | 'Adult' | 'Senior';
+export type NVCSector = 'Education' | 'Livelihood' | 'Nutrition';
 
 // User
 export interface User {
   id: string;
-  email: string;
+  email?: string;
   password: string; // In production, never store plain passwords
   role: UserRole;
   name: string;
   phone?: string;
+  userType?: UserType;
+  pillarsOfInterest?: NVCSector[];
   createdAt: string;
 }
 
@@ -137,8 +141,6 @@ export interface AdminStats {
   totalVolunteers: number;
   totalHoursContributed: number;
 }
-
-export type NVCSector = 'Education' | 'Livelihood' | 'Nutrition';
 
 export interface SectorNeed {
   sector: NVCSector;

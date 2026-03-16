@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
-import { View, FlatList, StyleSheet, Text, TouchableOpacity, Alert } from 'react-native';
+import React, { startTransition, useCallback, useEffect, useMemo, useState } from 'react';
+import { View, FlatList, StyleSheet, Text, TouchableOpacity, Alert, Pressable } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
+import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import {
   getAllProjects,
@@ -98,20 +99,26 @@ export default function ProjectsScreen() {
   const [loadingProjectId, setLoadingProjectId] = useState<string | null>(null);
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
 
-  const loadProjects = async () => {
+  const loadProjects = useCallback(async () => {
     const allProjects = await getAllProjects();
-    setProjects(allProjects.length > 0 ? allProjects : NEGROS_SAMPLE_PROJECTS);
-  };
+    startTransition(() => {
+      setProjects(allProjects.length > 0 ? allProjects : NEGROS_SAMPLE_PROJECTS);
+    });
+  }, []);
 
-  const loadTimeLogs = async (volunteerId: string) => {
+  const loadTimeLogs = useCallback(async (volunteerId: string) => {
     const logs = await getVolunteerTimeLogs(volunteerId);
-    setTimeLogs(logs);
-  };
+    startTransition(() => {
+      setTimeLogs(logs);
+    });
+  }, []);
 
-  const loadPartnerApplications = async (partnerUserId: string) => {
+  const loadPartnerApplications = useCallback(async (partnerUserId: string) => {
     const applications = await getPartnerProjectApplicationsByUser(partnerUserId);
-    setPartnerApplications(applications);
-  };
+    startTransition(() => {
+      setPartnerApplications(applications);
+    });
+  }, []);
 
   useEffect(() => {
     const loadRoleData = async () => {
@@ -133,6 +140,30 @@ export default function ProjectsScreen() {
     loadProjects();
     loadRoleData();
   }, [user]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      const refresh = async () => {
+        await loadProjects();
+
+        if (!user?.id) return;
+
+        if (user.role === 'volunteer') {
+          const volunteer = await getVolunteerByUserId(user.id);
+          setVolunteerProfile(volunteer);
+          if (volunteer) {
+            await loadTimeLogs(volunteer.id);
+          }
+        }
+
+        if (user.role === 'partner') {
+          await loadPartnerApplications(user.id);
+        }
+      };
+
+      void refresh();
+    }, [user])
+  );
 
   const handleJoinProject = async (projectId: string) => {
     if (!user?.id) return;
@@ -190,23 +221,29 @@ export default function ProjectsScreen() {
     }
   };
 
-  const isJoined = (project: Project) => {
+  const partnerApplicationByProjectId = useMemo(
+    () => new Map(partnerApplications.map(app => [app.projectId, app])),
+    [partnerApplications]
+  );
+
+  const activeLogByProjectId = useMemo(
+    () => new Map(timeLogs.filter(log => !log.timeOut).map(log => [log.projectId, log])),
+    [timeLogs]
+  );
+
+  const latestLogByProjectId = useMemo(
+    () => new Map(timeLogs.map(log => [log.projectId, log])),
+    [timeLogs]
+  );
+
+  const isJoined = useCallback((project: Project) => {
     const joinedUsers = project.joinedUserIds || [];
     const volunteerId = volunteerProfile?.id;
     return (
       (user?.id ? joinedUsers.includes(user.id) : false) ||
       (volunteerId ? project.volunteers.includes(volunteerId) : false)
     );
-  };
-
-  const getPartnerApplication = (projectId: string) =>
-    partnerApplications.find(app => app.projectId === projectId);
-
-  const getActiveLogForProject = (projectId: string) =>
-    timeLogs.find(log => log.projectId === projectId && !log.timeOut);
-
-  const getLatestLogForProject = (projectId: string) =>
-    timeLogs.find(log => log.projectId === projectId);
+  }, [user?.id, volunteerProfile?.id]);
 
   const formatTimestamp = (value?: string) => {
     if (!value) return '--';
@@ -215,35 +252,16 @@ export default function ProjectsScreen() {
     return format(parsed, 'MMM d, HH:mm');
   };
 
-  return (
-    <View style={styles.container}>
-      <Text style={styles.heading}>Programs and Projects</Text>
-      <Text style={styles.subheading}>
-        {user?.role === 'volunteer'
-          ? 'Program recommendations are based on your saved skills and skills description.'
-          : user?.role === 'partner'
-          ? 'Partner organizations can express interest and collaborate on any listed program.'
-          : 'Current program list and participation needs.'}
-      </Text>
-
-      <FlatList
-        data={projects}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => {
+  const renderProjectItem = useCallback(({ item }: { item: Project }) => {
           const suggestion = getProjectSuggestion(item, volunteerProfile);
           const joined = isJoined(item);
-          const activeLog = getActiveLogForProject(item.id);
-          const latestLog = getLatestLogForProject(item.id);
+          const activeLog = activeLogByProjectId.get(item.id);
+          const latestLog = latestLogByProjectId.get(item.id);
           const isExpanded = expandedProjectId === item.id;
-          const partnerApplication = getPartnerApplication(item.id);
+          const partnerApplication = partnerApplicationByProjectId.get(item.id);
 
           return (
-            <TouchableOpacity
-              style={styles.card}
-              onPress={() =>
-                setExpandedProjectId((current) => (current === item.id ? null : item.id))
-              }
-            >
+            <View style={styles.card}>
               <View style={styles.cardHeader}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.title}>{item.title}</Text>
@@ -262,6 +280,22 @@ export default function ProjectsScreen() {
               </View>
 
               <Text style={styles.description}>{item.description}</Text>
+
+              <Pressable
+                style={styles.expandToggle}
+                onPress={() =>
+                  setExpandedProjectId((current) => (current === item.id ? null : item.id))
+                }
+              >
+                <Text style={styles.expandToggleText}>
+                  {isExpanded ? 'Hide details' : 'Show details'}
+                </Text>
+                <MaterialIcons
+                  name={isExpanded ? 'expand-less' : 'expand-more'}
+                  size={18}
+                  color="#166534"
+                />
+              </Pressable>
 
               {isExpanded && (
                 <View style={styles.expandedSection}>
@@ -418,9 +452,39 @@ export default function ProjectsScreen() {
                   {item.volunteers.length}/{item.volunteersNeeded} volunteers
                 </Text>
               </View>
-            </TouchableOpacity>
+            </View>
           );
-        }}
+        }, [
+          activeLogByProjectId,
+          expandedProjectId,
+          isJoined,
+          latestLogByProjectId,
+          loadingProjectId,
+          partnerApplicationByProjectId,
+          user,
+          volunteerProfile,
+        ]);
+
+  return (
+    <View style={styles.container}>
+      <Text style={styles.heading}>Programs and Projects</Text>
+      <Text style={styles.subheading}>
+        {user?.role === 'volunteer'
+          ? 'Program recommendations are based on your saved skills and skills description.'
+          : user?.role === 'partner'
+          ? 'Partner organizations can express interest and collaborate on any listed program.'
+          : 'Current program list and participation needs.'}
+      </Text>
+
+      <FlatList
+        data={projects}
+        keyExtractor={(item) => item.id}
+        renderItem={renderProjectItem}
+        initialNumToRender={6}
+        maxToRenderPerBatch={8}
+        windowSize={7}
+        updateCellsBatchingPeriod={50}
+        removeClippedSubviews
       />
     </View>
   );
@@ -510,6 +574,21 @@ const styles = StyleSheet.create({
     color: '#666',
     marginBottom: 10,
     lineHeight: 20,
+  },
+  expandToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#f0fdf4',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 10,
+  },
+  expandToggleText: {
+    color: '#166534',
+    fontSize: 13,
+    fontWeight: '700',
   },
   expandedSection: {
     backgroundColor: '#f8fafc',

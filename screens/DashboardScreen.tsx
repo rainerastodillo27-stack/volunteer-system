@@ -9,6 +9,7 @@ import {
   Platform,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   getAllProjects,
   getAllPartners,
@@ -28,11 +29,19 @@ export default function DashboardScreen({ navigation }: any) {
     loadDashboardData();
   }, []);
 
+  useFocusEffect(
+    React.useCallback(() => {
+      loadDashboardData();
+    }, [])
+  );
+
   const loadDashboardData = async () => {
     try {
-      const projects = await getAllProjects();
-      const partners = await getAllPartners();
-      const volunteers = await getAllVolunteers();
+      const [projects, partners, volunteers] = await Promise.all([
+        getAllProjects(),
+        getAllPartners(),
+        getAllVolunteers(),
+      ]);
 
       setProjectStats({
         total: projects.length,
@@ -52,16 +61,16 @@ export default function DashboardScreen({ navigation }: any) {
       });
 
       // Get recent updates
-      const allUpdates: any[] = [];
-      for (const project of projects) {
-        const updates = await getStatusUpdatesByProject(project.id);
-        allUpdates.push(
-          ...updates.map(u => ({
+      const updateGroups = await Promise.all(
+        projects.map(async (project) => {
+          const updates = await getStatusUpdatesByProject(project.id);
+          return updates.map(u => ({
             ...u,
             projectName: project.title,
-          }))
-        );
-      }
+          }));
+        })
+      );
+      const allUpdates: any[] = updateGroups.flat();
       setRecentUpdates(allUpdates.slice(0, 5));
     } catch (error) {
       Alert.alert('Error', 'Failed to load dashboard data');

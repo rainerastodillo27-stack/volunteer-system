@@ -9,6 +9,7 @@ import {
   TextInput,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import { Partner } from '../models/types';
 import { getAllPartners, savePartner } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
@@ -28,6 +29,12 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
   useEffect(() => {
     loadPartners();
   }, [filter, isAdmin, user?.email]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      loadPartners();
+    }, [filter, isAdmin, user?.email])
+  );
 
   const loadPartners = async () => {
     try {

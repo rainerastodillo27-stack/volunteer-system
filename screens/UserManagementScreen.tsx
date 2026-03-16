@@ -10,9 +10,10 @@ import {
   TextInput,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import { deleteUser, getAllUsers, saveUser } from '../models/storage';
-import { User, UserRole } from '../models/types';
+import { NVCSector, User, UserRole, UserType } from '../models/types';
 
 const roleOptions: UserRole[] = ['admin', 'partner', 'volunteer'];
 
@@ -26,12 +27,22 @@ export default function UserManagementScreen() {
   const [phoneDraft, setPhoneDraft] = useState('');
   const [passwordDraft, setPasswordDraft] = useState('');
   const [roleDraft, setRoleDraft] = useState<UserRole>('volunteer');
+  const [userTypeDraft, setUserTypeDraft] = useState<UserType>('Adult');
+  const [pillarsDraft, setPillarsDraft] = useState<NVCSector[]>([]);
 
   useEffect(() => {
     if (isAdmin) {
       loadUsers();
     }
   }, [isAdmin]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      if (isAdmin) {
+        loadUsers();
+      }
+    }, [isAdmin])
+  );
 
   const loadUsers = async () => {
     try {
@@ -45,10 +56,12 @@ export default function UserManagementScreen() {
   const openEditModal = (targetUser: User) => {
     setSelectedUser(targetUser);
     setNameDraft(targetUser.name);
-    setEmailDraft(targetUser.email);
+    setEmailDraft(targetUser.email || '');
     setPhoneDraft(targetUser.phone || '');
     setPasswordDraft(targetUser.password);
     setRoleDraft(targetUser.role);
+    setUserTypeDraft(targetUser.userType || 'Adult');
+    setPillarsDraft(targetUser.pillarsOfInterest || []);
     setShowEditModal(true);
   };
 
@@ -67,6 +80,8 @@ export default function UserManagementScreen() {
         phone: phoneDraft.trim() || undefined,
         password: passwordDraft.trim(),
         role: roleDraft,
+        userType: userTypeDraft,
+        pillarsOfInterest: pillarsDraft,
       });
       setShowEditModal(false);
       setSelectedUser(null);
@@ -158,6 +173,12 @@ export default function UserManagementScreen() {
                 <Text style={styles.userName}>{item.name}</Text>
                 <Text style={styles.userMeta}>{item.email}</Text>
                 <Text style={styles.userMeta}>{item.phone || 'No phone number'}</Text>
+                <Text style={styles.userMeta}>{item.userType || 'No profile type'}</Text>
+                <Text style={styles.userMeta}>
+                  {(item.pillarsOfInterest || []).length > 0
+                    ? item.pillarsOfInterest?.join(', ')
+                    : 'No pillar preferences'}
+                </Text>
               </View>
               <View style={styles.roleBadge}>
                 <Text style={styles.roleBadgeText}>{item.role}</Text>
@@ -229,6 +250,42 @@ export default function UserManagementScreen() {
                 >
                   <Text style={[styles.roleOptionText, roleDraft === role && styles.roleOptionTextActive]}>
                     {role}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Text style={styles.fieldLabel}>Profile Type</Text>
+            <View style={styles.roleOptions}>
+              {(['Student', 'Adult', 'Senior'] as const).map(userType => (
+                <TouchableOpacity
+                  key={userType}
+                  style={[styles.roleOption, userTypeDraft === userType && styles.roleOptionActive]}
+                  onPress={() => setUserTypeDraft(userType)}
+                >
+                  <Text style={[styles.roleOptionText, userTypeDraft === userType && styles.roleOptionTextActive]}>
+                    {userType}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Text style={styles.fieldLabel}>Pillars of Interest</Text>
+            <View style={styles.roleOptions}>
+              {(['Nutrition', 'Education', 'Livelihood'] as const).map(pillar => (
+                <TouchableOpacity
+                  key={pillar}
+                  style={[styles.roleOption, pillarsDraft.includes(pillar) && styles.roleOptionActive]}
+                  onPress={() =>
+                    setPillarsDraft(current =>
+                      current.includes(pillar)
+                        ? current.filter(item => item !== pillar)
+                        : [...current, pillar]
+                    )
+                  }
+                >
+                  <Text style={[styles.roleOptionText, pillarsDraft.includes(pillar) && styles.roleOptionTextActive]}>
+                    {pillar}
                   </Text>
                 </TouchableOpacity>
               ))}
