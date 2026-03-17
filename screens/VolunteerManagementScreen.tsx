@@ -18,10 +18,11 @@ import {
   saveVolunteer,
   saveVolunteerProjectMatch,
   getVolunteerProjectMatches,
+  subscribeToStorageChanges,
 } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
 
-export default function VolunteerManagementScreen({ navigation }: any) {
+export default function VolunteerManagementScreen({ navigation, route }: any) {
   const { user, isAdmin } = useAuth();
   const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -41,6 +42,38 @@ export default function VolunteerManagementScreen({ navigation }: any) {
     loadVolunteers();
     loadProjects();
   }, [isAdmin]);
+
+  useEffect(() => {
+    const volunteerId = route?.params?.volunteerId;
+    if (!isAdmin || !volunteerId || volunteers.length === 0) {
+      return;
+    }
+
+    const targetVolunteer = volunteers.find(volunteer => volunteer.id === volunteerId);
+    if (!targetVolunteer) {
+      return;
+    }
+
+    void handleSelectVolunteer(targetVolunteer);
+    navigation.setParams({ volunteerId: undefined });
+  }, [isAdmin, navigation, route?.params?.volunteerId, volunteers]);
+
+  useEffect(() => {
+    if (!isAdmin) {
+      return undefined;
+    }
+
+    return subscribeToStorageChanges(
+      ['volunteers', 'projects', 'volunteerMatches', 'volunteerProjectJoins'],
+      () => {
+        void loadVolunteers();
+        void loadProjects();
+        if (selectedVolunteer) {
+          void getVolunteerProjectMatches(selectedVolunteer.id).then(setVolunteerMatches);
+        }
+      }
+    );
+  }, [isAdmin, selectedVolunteer?.id]);
 
   const loadVolunteers = async () => {
     try {

@@ -11,9 +11,8 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import {
-  getAllPartners,
-  getAllProjects,
-  getSectorNeeds,
+  getPartnerDashboardSnapshot,
+  subscribeToStorageChanges,
 } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
 import { SectorNeed } from '../models/types';
@@ -24,20 +23,9 @@ export default function PartnerDashboardScreen({ navigation }: any) {
   const [projectStats, setProjectStats] = useState({ total: 0, active: 0, completed: 0 });
   const [sectorNeeds, setSectorNeeds] = useState<SectorNeed[]>([]);
 
-  useEffect(() => {
-    loadDashboardData();
-  }, []);
-
-  useFocusEffect(
-    React.useCallback(() => {
-      loadDashboardData();
-    }, [user?.email])
-  );
-
-  const loadDashboardData = async () => {
+  const loadDashboardData = React.useCallback(async () => {
     try {
-      const partners = await getAllPartners();
-      const projects = await getAllProjects();
+      const { partners, projects, sectorNeeds: nextSectorNeeds } = await getPartnerDashboardSnapshot();
       const myOrgs = partners.filter(p => p.contactEmail.toLowerCase() === user?.email?.toLowerCase());
       const myOrgIds = new Set(myOrgs.map((partner) => partner.id));
       const myProjects = projects.filter((project) => myOrgIds.has(project.partnerId));
@@ -55,12 +43,27 @@ export default function PartnerDashboardScreen({ navigation }: any) {
         completed: myProjects.filter(p => p.status === 'Completed').length,
       });
 
-      const needs = await getSectorNeeds();
-      setSectorNeeds(needs);
-    } catch (error) {
-      Alert.alert('Error', 'Failed to load dashboard data');
+      setSectorNeeds(nextSectorNeeds);
+    } catch (error: any) {
+      Alert.alert('Error', error?.message || 'Failed to load dashboard data');
     }
-  };
+  }, [user?.email]);
+
+  useEffect(() => {
+    void loadDashboardData();
+  }, [loadDashboardData]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      void loadDashboardData();
+    }, [loadDashboardData])
+  );
+
+  useEffect(() => {
+    return subscribeToStorageChanges(['projects', 'partners'], () => {
+      void loadDashboardData();
+    });
+  }, [loadDashboardData]);
 
   const handleLogout = async () => {
     if (Platform.OS === 'web') {

@@ -5,15 +5,12 @@ import { format } from 'date-fns';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import {
-  getAllProjects,
-  getVolunteerByUserId,
-  NEGROS_SAMPLE_PROJECTS,
+  getProjectsScreenSnapshot,
   joinProjectEvent,
-  getPartnerProjectApplicationsByUser,
   requestPartnerProjectJoin,
-  getVolunteerTimeLogs,
   startVolunteerTimeLog,
   endVolunteerTimeLog,
+  subscribeToStorageChanges,
 } from '../models/storage';
 import { PartnerProjectApplication, Project, Volunteer, VolunteerTimeLog } from '../models/types';
 
@@ -90,7 +87,7 @@ function getStatusColor(status: Project['status']) {
   }
 }
 
-export default function ProjectsScreen() {
+export default function ProjectsScreen({ navigation }: any) {
   const { user } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
@@ -99,91 +96,84 @@ export default function ProjectsScreen() {
   const [loadingProjectId, setLoadingProjectId] = useState<string | null>(null);
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
 
-  const loadProjects = useCallback(async () => {
-    const allProjects = await getAllProjects();
+  const applySnapshot = useCallback((snapshot: {
+    projects: Project[];
+    volunteerProfile: Volunteer | null;
+    timeLogs: VolunteerTimeLog[];
+    partnerApplications: PartnerProjectApplication[];
+  }) => {
     startTransition(() => {
-      setProjects(allProjects.length > 0 ? allProjects : NEGROS_SAMPLE_PROJECTS);
+      setProjects(snapshot.projects);
+      setVolunteerProfile(snapshot.volunteerProfile);
+      setTimeLogs(snapshot.timeLogs);
+      setPartnerApplications(snapshot.partnerApplications);
     });
   }, []);
 
-  const loadTimeLogs = useCallback(async (volunteerId: string) => {
-    const logs = await getVolunteerTimeLogs(volunteerId);
-    startTransition(() => {
-      setTimeLogs(logs);
-    });
-  }, []);
-
-  const loadPartnerApplications = useCallback(async (partnerUserId: string) => {
-    const applications = await getPartnerProjectApplicationsByUser(partnerUserId);
-    startTransition(() => {
-      setPartnerApplications(applications);
-    });
-  }, []);
+  const loadProjectsData = useCallback(async () => {
+    try {
+      const snapshot = await getProjectsScreenSnapshot(user);
+      applySnapshot(snapshot);
+    } catch (error: any) {
+      startTransition(() => {
+        setProjects([]);
+        setVolunteerProfile(null);
+        setTimeLogs([]);
+        setPartnerApplications([]);
+      });
+      Alert.alert('Database Unavailable', error?.message || 'Failed to load projects from Postgres.');
+    }
+  }, [applySnapshot, user]);
 
   useEffect(() => {
-    const loadRoleData = async () => {
-      if (!user?.id) return;
-
-      if (user.role === 'volunteer') {
-        const volunteer = await getVolunteerByUserId(user.id);
-        setVolunteerProfile(volunteer);
-        if (volunteer) {
-          await loadTimeLogs(volunteer.id);
-        }
-      }
-
-      if (user.role === 'partner') {
-        await loadPartnerApplications(user.id);
-      }
-    };
-
-    loadProjects();
-    loadRoleData();
-  }, [user]);
+    void loadProjectsData();
+  }, [loadProjectsData]);
 
   useFocusEffect(
     React.useCallback(() => {
-      const refresh = async () => {
-        await loadProjects();
-
-        if (!user?.id) return;
-
-        if (user.role === 'volunteer') {
-          const volunteer = await getVolunteerByUserId(user.id);
-          setVolunteerProfile(volunteer);
-          if (volunteer) {
-            await loadTimeLogs(volunteer.id);
-          }
-        }
-
-        if (user.role === 'partner') {
-          await loadPartnerApplications(user.id);
-        }
-      };
-
-      void refresh();
-    }, [user])
+      void loadProjectsData();
+    }, [loadProjectsData])
   );
+
+  useEffect(() => {
+    return subscribeToStorageChanges(
+      ['projects', 'volunteers', 'volunteerProjectJoins', 'volunteerTimeLogs', 'partnerProjectApplications'],
+      () => {
+        void loadProjectsData();
+      }
+    );
+  }, [loadProjectsData]);
 
   const handleJoinProject = async (projectId: string) => {
     if (!user?.id) return;
     try {
       setLoadingProjectId(projectId);
       if (user.role === 'partner') {
-        await requestPartnerProjectJoin(projectId, user);
-        await loadPartnerApplications(user.id);
+        const application = await requestPartnerProjectJoin(projectId, user);
+        startTransition(() => {
+          setPartnerApplications(prev => {
+            const withoutCurrent = prev.filter(existing => existing.id !== application.id);
+            return [application, ...withoutCurrent].sort(
+              (a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime()
+            );
+          });
+        });
         Alert.alert('Submitted', 'Waiting for admin approval.');
         return;
       }
 
-      await joinProjectEvent(projectId, user.id);
-      await loadProjects();
-      if (volunteerProfile) {
-        await loadTimeLogs(volunteerProfile.id);
-      }
+      const result = await joinProjectEvent(projectId, user.id);
+      startTransition(() => {
+        setProjects(prev =>
+          prev.map(project => (project.id === result.project.id ? result.project : project))
+        );
+        if (result.volunteerProfile) {
+          setVolunteerProfile(result.volunteerProfile);
+        }
+      });
       Alert.alert('Joined', 'You have joined this program. Thank you!');
-    } catch (error) {
-      Alert.alert('Error', 'Failed to join this program. Please try again.');
+    } catch (error: any) {
+      Alert.alert('Error', error?.message || 'Failed to join this program. Please try again.');
     } finally {
       setLoadingProjectId(null);
     }
@@ -193,8 +183,14 @@ export default function ProjectsScreen() {
     if (!volunteerProfile) return;
     try {
       setLoadingProjectId(projectId);
-      await startVolunteerTimeLog(volunteerProfile.id, projectId);
-      await loadTimeLogs(volunteerProfile.id);
+      const createdLog = await startVolunteerTimeLog(volunteerProfile.id, projectId);
+      startTransition(() => {
+        setTimeLogs(prev =>
+          [createdLog, ...prev.filter(log => log.id !== createdLog.id)].sort(
+            (a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime()
+          )
+        );
+      });
       Alert.alert('Time In recorded', 'Remember to time out when you finish.');
     } catch (error: any) {
       Alert.alert('Unable to time in', error?.message || 'Please try again.');
@@ -207,15 +203,24 @@ export default function ProjectsScreen() {
     if (!volunteerProfile) return;
     try {
       setLoadingProjectId(projectId);
-      const ended = await endVolunteerTimeLog(volunteerProfile.id, projectId);
-      if (!ended) {
+      const result = await endVolunteerTimeLog(volunteerProfile.id, projectId);
+      if (!result.log) {
         Alert.alert('No active log', 'Please tap Time In before timing out.');
         return;
       }
-      await loadTimeLogs(volunteerProfile.id);
+      startTransition(() => {
+        setTimeLogs(prev =>
+          prev
+            .map(log => (log.id === result.log?.id ? result.log : log))
+            .sort((a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime())
+        );
+        if (result.volunteerProfile) {
+          setVolunteerProfile(result.volunteerProfile);
+        }
+      });
       Alert.alert('Time Out recorded', 'Hours added to your profile.');
-    } catch (error) {
-      Alert.alert('Unable to time out', 'Please try again.');
+    } catch (error: any) {
+      Alert.alert('Unable to time out', error?.message || 'Please try again.');
     } finally {
       setLoadingProjectId(null);
     }
@@ -438,6 +443,21 @@ export default function ProjectsScreen() {
                 </View>
               )}
 
+              {user?.role === 'admin' && (
+                <View style={styles.adminActions}>
+                  <Text style={styles.matchReason}>
+                    Open this program to review participants, update status, and manage completion.
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.openProgramButton}
+                    onPress={() => navigation.navigate('Lifecycle', { projectId: item.id })}
+                  >
+                    <MaterialIcons name="folder-open" size={18} color="#fff" />
+                    <Text style={styles.openProgramButtonText}>Open Program</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+
               <View style={styles.footer}>
                 <View style={styles.statusBadge}>
                   <View
@@ -624,6 +644,10 @@ const styles = StyleSheet.create({
     marginBottom: 4,
     gap: 8,
   },
+  adminActions: {
+    marginBottom: 4,
+    gap: 8,
+  },
   joinRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -692,6 +716,21 @@ const styles = StyleSheet.create({
   partnerNote: {
     fontSize: 12,
     color: '#0f172a',
+  },
+  openProgramButton: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#166534',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  openProgramButtonText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
   },
   footer: {
     flexDirection: 'row',

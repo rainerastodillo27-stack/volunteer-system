@@ -9,6 +9,19 @@ from psycopg.types.json import Jsonb
 from db import BACKEND_DIR, get_postgres_connection
 
 
+HOT_STORAGE_TABLES = {
+    "users": "app_users_store",
+    "partners": "app_partners_store",
+    "projects": "app_projects_store",
+    "volunteers": "app_volunteers_store",
+    "statusUpdates": "app_status_updates_store",
+    "volunteerMatches": "app_volunteer_matches_store",
+    "volunteerTimeLogs": "app_volunteer_time_logs_store",
+    "volunteerProjectJoins": "app_volunteer_project_joins_store",
+    "partnerProjectApplications": "app_partner_project_applications_store",
+}
+
+
 DEFAULT_SQLITE_PATH = BACKEND_DIR / "volcre_storage.db"
 
 
@@ -33,6 +46,20 @@ create table if not exists messages (
   attachments jsonb not null default '[]'::jsonb
 )
 """
+
+
+def build_hot_storage_ddls() -> list[str]:
+    return [
+        f"""
+        create table if not exists {table_name} (
+          id text primary key,
+          data jsonb not null,
+          sort_order integer not null default 0,
+          updated_at timestamptz not null default now()
+        )
+        """
+        for table_name in HOT_STORAGE_TABLES.values()
+    ]
 
 
 def parse_args() -> argparse.Namespace:
@@ -115,6 +142,8 @@ def ensure_postgres_schema(connection: Any) -> None:
     with connection.cursor() as cursor:
         cursor.execute(APP_STORAGE_DDL)
         cursor.execute(MESSAGES_DDL)
+        for ddl in build_hot_storage_ddls():
+            cursor.execute(ddl)
     connection.commit()
 
 
@@ -176,6 +205,52 @@ def migrate_messages(connection: Any, messages: list[dict[str, Any]]) -> int:
     return count
 
 
+def migrate_hot_storage_tables(connection: Any, storage_rows: list[sqlite3.Row]) -> int:
+    storage_by_key = {row["key"]: parse_json_value(row["value"]) for row in storage_rows}
+    count = 0
+
+    with connection.cursor() as cursor:
+        for key, table_name in HOT_STORAGE_TABLES.items():
+            payload = storage_by_key.get(key)
+            if not isinstance(payload, list):
+                continue
+
+            ids = []
+            for item in payload:
+                if not isinstance(item, dict) or not item.get("id"):
+                    continue
+                ids.append(item["id"])
+
+            if ids:
+                cursor.execute(f"delete from {table_name} where id <> all(%s)", (ids,))
+            else:
+                cursor.execute(f"delete from {table_name}")
+
+            for sort_order, item in enumerate(payload):
+                if not isinstance(item, dict) or not item.get("id"):
+                    continue
+
+                cursor.execute(
+                    f"""
+                    insert into {table_name} (id, data, sort_order, updated_at)
+                    values (%s, %s, %s, now())
+                    on conflict (id) do update set
+                      data = excluded.data,
+                      sort_order = excluded.sort_order,
+                      updated_at = excluded.updated_at
+                    """,
+                    (
+                        item["id"],
+                        Jsonb(item),
+                        sort_order,
+                    ),
+                )
+                count += 1
+
+    connection.commit()
+    return count
+
+
 def main() -> None:
     args = parse_args()
     sqlite_path = args.sqlite_path.resolve()
@@ -193,10 +268,11 @@ def main() -> None:
     with get_postgres_connection() as connection:
         ensure_postgres_schema(connection)
         storage_count = migrate_app_storage(connection, storage_rows)
+        hot_storage_count = migrate_hot_storage_tables(connection, storage_rows)
         message_count = migrate_messages(connection, messages)
 
     print(
-        f"Migration complete. Upserted {storage_count} app_storage rows and {message_count} messages."
+        f"Migration complete. Upserted {storage_count} app_storage rows, {hot_storage_count} hot-collection rows, and {message_count} messages."
     )
 
 

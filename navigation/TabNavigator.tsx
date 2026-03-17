@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { createBottomTabNavigator, BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Platform, StyleSheet, TouchableOpacity, View, Text } from 'react-native';
@@ -15,12 +15,15 @@ import ProjectLifecycleScreen from '../screens/ProjectLifecycleScreen';
 import MappingScreen from '../screens/MappingScreen';
 import CommunicationHubScreen from '../screens/CommunicationHubScreen';
 import UserManagementScreen from '../screens/UserManagementScreen';
+import VolunteerManagementScreen from '../screens/VolunteerManagementScreen';
+import { getMessagesForUser, subscribeToMessages } from '../models/storage';
 
 export type TabParamList = {
   Dashboard: undefined;
   Partners: undefined;
   Projects: undefined;
-  Lifecycle: undefined;
+  Lifecycle: { projectId?: string } | undefined;
+  Volunteers: { volunteerId?: string } | undefined;
   Map: undefined;
   Messages: undefined;
   Users: undefined;
@@ -45,6 +48,8 @@ const getIconName = (routeName: keyof TabParamList) => {
       return 'folder';
     case 'Lifecycle':
       return 'timeline';
+    case 'Volunteers':
+      return 'groups';
     case 'Map':
       return 'map';
     case 'Messages':
@@ -68,12 +73,14 @@ type SidebarProps = BottomTabBarProps & {
 function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle }: SidebarProps) {
   const systemsRoutes = state.routes.filter(
     route =>
+      route.name !== 'Volunteers' &&
       route.name !== 'Users' &&
       route.name !== 'Settings' &&
       route.name !== 'Profile'
   );
   const settingsRoutes = state.routes.filter(
     route =>
+      route.name === 'Volunteers' ||
       route.name === 'Users' ||
       route.name === 'Settings' ||
       route.name === 'Profile'
@@ -101,6 +108,7 @@ function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle }: 
             children: '',
           })
         : rawLabel;
+    const badgeValue = typeof options.tabBarBadge === 'number' ? options.tabBarBadge : 0;
 
     const onPress = () => {
       const event = navigation.emit({
@@ -133,9 +141,16 @@ function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle }: 
           style={styles.sidebarIcon}
         />
         {!collapsed && (
-          <Text style={[styles.sidebarLabel, focused && styles.sidebarLabelActive]} numberOfLines={1}>
-            {label}
-          </Text>
+          <View style={styles.sidebarLabelRow}>
+            <Text style={[styles.sidebarLabel, focused && styles.sidebarLabelActive]} numberOfLines={1}>
+              {label}
+            </Text>
+            {badgeValue > 0 && (
+              <View style={styles.sidebarBadge}>
+                <Text style={styles.sidebarBadgeText}>{badgeValue > 99 ? '99+' : badgeValue}</Text>
+              </View>
+            )}
+          </View>
         )}
       </TouchableOpacity>
     );
@@ -172,8 +187,10 @@ function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle }: 
 
 export default function TabNavigator() {
   const { user, isAdmin } = useAuth();
+  const [messageUnreadCount, setMessageUnreadCount] = useState(0);
   const showPartnersTab = isAdmin || user?.role === 'partner'; // available to admins and partner org accounts
   const showLifecycleTab = isAdmin;
+  const showVolunteersTab = isAdmin;
   const showUsersTab = isAdmin;
   const dashboardTitle =
     user?.role === 'partner'
@@ -188,6 +205,36 @@ export default function TabNavigator() {
   const [tabBarProps, setTabBarProps] = useState<BottomTabBarProps | null>(null);
   const sidebarWidth = collapsed ? SIDEBAR_WIDTH_COLLAPSED : SIDEBAR_WIDTH;
   const contentGutter = collapsed ? CONTENT_GUTTER_COLLAPSED : CONTENT_GUTTER;
+
+  useEffect(() => {
+    if (!user?.id) {
+      setMessageUnreadCount(0);
+      return;
+    }
+
+    const loadUnreadCount = async () => {
+      try {
+        const messages = await getMessagesForUser(user.id);
+        const unread = messages.filter(message => !message.read && message.recipientId === user.id).length;
+        setMessageUnreadCount(unread);
+      } catch {
+        setMessageUnreadCount(0);
+      }
+    };
+
+    void loadUnreadCount();
+    const unsubscribe = subscribeToMessages(user.id, () => {
+      void loadUnreadCount();
+    });
+    const fallbackTimer = setInterval(() => {
+      void loadUnreadCount();
+    }, 5000);
+
+    return () => {
+      clearInterval(fallbackTimer);
+      unsubscribe();
+    };
+  }, [user?.id]);
 
   const navigator = (
     <Tab.Navigator
@@ -253,6 +300,14 @@ export default function TabNavigator() {
         />
       )}
 
+      {showVolunteersTab && (
+        <Tab.Screen
+          name="Volunteers"
+          component={VolunteerManagementScreen}
+          options={{ title: 'Volunteer Management' }}
+        />
+      )}
+
       <Tab.Screen
         name="Map"
         component={MappingScreen}
@@ -262,7 +317,10 @@ export default function TabNavigator() {
       <Tab.Screen
         name="Messages"
         component={CommunicationHubScreen}
-        options={{ title: 'Messages' }}
+        options={{
+          title: 'Messages',
+          tabBarBadge: messageUnreadCount > 0 ? messageUnreadCount : undefined,
+        }}
       />
 
       {showUsersTab && (
@@ -434,6 +492,13 @@ const styles = StyleSheet.create({
   sidebarIcon: {
     marginRight: 12,
   },
+  sidebarLabelRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
   sidebarLabel: {
     fontSize: 14,
     color: '#4d7c0f',
@@ -443,5 +508,19 @@ const styles = StyleSheet.create({
   sidebarLabelActive: {
     color: '#166534',
     fontWeight: '600',
+  },
+  sidebarBadge: {
+    minWidth: 22,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 999,
+    backgroundColor: '#dc2626',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sidebarBadgeText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '700',
   },
 });

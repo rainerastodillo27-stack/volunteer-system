@@ -11,10 +11,8 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import {
-  getAllProjects,
-  getAllPartners,
-  getAllVolunteers,
-  getStatusUpdatesByProject,
+  getDashboardSnapshot,
+  subscribeToStorageChanges,
 } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -22,27 +20,13 @@ export default function DashboardScreen({ navigation }: any) {
   const { user, isAdmin, logout } = useAuth();
   const [projectStats, setProjectStats] = useState({ total: 0, active: 0, completed: 0 });
   const [partnerStats, setPartnerStats] = useState({ total: 0, approved: 0, pending: 0 });
-  const [volunteerStats, setVolunteerStats] = useState({ total: 0, active: 0 });
+  const [userStats, setUserStats] = useState({ total: 0 });
   const [recentUpdates, setRecentUpdates] = useState<any[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  useEffect(() => {
-    loadDashboardData();
-  }, []);
-
-  useFocusEffect(
-    React.useCallback(() => {
-      loadDashboardData();
-    }, [])
-  );
-
-  const loadDashboardData = async () => {
+  const loadDashboardData = React.useCallback(async () => {
     try {
-      const [projects, partners, volunteers] = await Promise.all([
-        getAllProjects(),
-        getAllPartners(),
-        getAllVolunteers(),
-      ]);
+      const { projects, partners, users, volunteers, statusUpdates } = await getDashboardSnapshot();
 
       setLoadError(null);
 
@@ -58,29 +42,49 @@ export default function DashboardScreen({ navigation }: any) {
         pending: partners.filter(p => p.status === 'Pending').length,
       });
 
-      setVolunteerStats({
-        total: volunteers.length,
-        active: volunteers.filter(v => v.totalHoursContributed > 0).length,
+      setUserStats({
+        total: users.length,
       });
 
       // Get recent updates
-      const updateGroups = await Promise.all(
-        projects.map(async (project) => {
-          const updates = await getStatusUpdatesByProject(project.id);
-          return updates.map(u => ({
-            ...u,
-            projectName: project.title,
-          }));
-        })
-      );
-      const allUpdates: any[] = updateGroups.flat();
+      const projectNamesById = new Map(projects.map(project => [project.id, project.title]));
+      const allUpdates = statusUpdates
+        .map(update => ({
+          ...update,
+          projectName: projectNamesById.get(update.projectId) || 'Unknown Project',
+        }))
+        .sort(
+          (a, b) =>
+            new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+        );
       setRecentUpdates(allUpdates.slice(0, 5));
-    } catch (error) {
-      setLoadError('Backend data is unavailable. Start the backend on port 8000 and refresh.');
+    } catch (error: any) {
+      setLoadError(
+        error?.message || 'Database data is unavailable. Check the backend and Supabase connection.'
+      );
       setRecentUpdates([]);
-      Alert.alert('Error', 'Failed to load dashboard data from the backend.');
+      Alert.alert('Error', error?.message || 'Failed to load dashboard data from Postgres.');
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    void loadDashboardData();
+  }, [loadDashboardData]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      void loadDashboardData();
+    }, [loadDashboardData])
+  );
+
+  useEffect(() => {
+    return subscribeToStorageChanges(
+      ['users', 'projects', 'partners', 'volunteers', 'statusUpdates', 'volunteerProjectJoins'],
+      () => {
+        void loadDashboardData();
+      }
+    );
+  }, [loadDashboardData]);
 
   const handleLogout = async () => {
     if (Platform.OS === 'web') {
@@ -134,7 +138,7 @@ export default function DashboardScreen({ navigation }: any) {
         <View style={styles.errorBanner}>
           <MaterialIcons name="error-outline" size={20} color="#991b1b" />
           <View style={styles.errorBannerContent}>
-            <Text style={styles.errorBannerTitle}>Backend Unavailable</Text>
+            <Text style={styles.errorBannerTitle}>Database Unavailable</Text>
             <Text style={styles.errorBannerText}>{loadError}</Text>
           </View>
           <TouchableOpacity onPress={loadDashboardData}>
@@ -178,8 +182,8 @@ export default function DashboardScreen({ navigation }: any) {
               accessibilityRole="button"
             >
               <MaterialIcons name="group" size={32} color="#4CAF50" />
-              <Text style={styles.metricValue}>{volunteerStats.total}</Text>
-              <Text style={styles.metricLabel}>Volunteers</Text>
+              <Text style={styles.metricValue}>{userStats.total}</Text>
+              <Text style={styles.metricLabel}>Users</Text>
             </TouchableOpacity>
 
             <TouchableOpacity

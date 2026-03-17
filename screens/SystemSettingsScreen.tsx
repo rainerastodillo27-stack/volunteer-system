@@ -7,12 +7,12 @@ import { getApiBaseUrl, initializeMockData } from '../models/storage';
 export default function SystemSettingsScreen() {
   const { user, logout, isAdmin } = useAuth();
 
-  const handleRefreshDemoData = async () => {
+  const handleSeedBackendData = async () => {
     try {
       await initializeMockData();
-      Alert.alert('Updated', 'Local demo data has been synchronized.');
+      Alert.alert('Updated', 'Demo data has been synchronized to the Postgres-backed backend.');
     } catch (error) {
-      Alert.alert('Error', 'Failed to refresh local demo data.');
+      Alert.alert('Error', 'Failed to seed demo data into the backend.');
     }
   };
 
@@ -71,12 +71,12 @@ export default function SystemSettingsScreen() {
       </View>
 
       <View style={styles.card}>
-        <Text style={styles.sectionTitle}>Local Data Controls</Text>
+        <Text style={styles.sectionTitle}>Backend Data Controls</Text>
         <Text style={styles.infoText}>
-          Re-sync seeded users, partners, and projects into backend storage.
+          Re-sync seeded users, partners, and projects into the Postgres-backed backend storage.
         </Text>
-        <TouchableOpacity style={styles.primaryButton} onPress={handleRefreshDemoData}>
-          <Text style={styles.primaryButtonText}>Refresh Demo Data</Text>
+        <TouchableOpacity style={styles.primaryButton} onPress={handleSeedBackendData}>
+          <Text style={styles.primaryButtonText}>Seed Backend Demo Data</Text>
         </TouchableOpacity>
       </View>
 

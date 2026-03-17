@@ -1,0 +1,13 @@
+{
+    "updatedAt":  "2026-03-18T07:33:51.9581347+08:00",
+    "backendPid":  10112,
+    "expoPid":  0,
+    "backendPortPid":  0,
+    "expoPortPid":  0,
+    "backendHealth":  "http://127.0.0.1:8000/health",
+    "expoUrl":  "http://127.0.0.1:8081",
+    "backendLog":  "C:\\Users\\ACER\\OneDrive\\Desktop\\volunteer system2\\volunteer-system\\.run-logs\\backend.out.log",
+    "backendErrorLog":  "C:\\Users\\ACER\\OneDrive\\Desktop\\volunteer system2\\volunteer-system\\.run-logs\\backend.err.log",
+    "expoLog":  "",
+    "expoErrorLog":  ""
+}

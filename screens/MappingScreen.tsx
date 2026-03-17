@@ -12,7 +12,7 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import MapView, { Marker, PROVIDER_DEFAULT } from 'react-native-maps';
 import { Project } from '../models/types';
-import { getAllProjects, NEGROS_SAMPLE_PROJECTS } from '../models/storage';
+import { getAllProjects } from '../models/storage';
 
 const IFrame = 'iframe' as any;
 
@@ -76,12 +76,12 @@ export default function MappingScreen({ navigation }: any) {
   const loadProjects = async () => {
     try {
       const allProjects = await getAllProjects();
-      setProjects(allProjects.length > 0 ? allProjects : NEGROS_SAMPLE_PROJECTS);
+      setProjects(allProjects);
       setLoading(false);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error loading projects for map:', error);
-      setProjects(NEGROS_SAMPLE_PROJECTS);
-      Alert.alert('Error', 'Failed to load projects. Showing defaults.');
+      setProjects([]);
+      Alert.alert('Database Unavailable', error?.message || 'Failed to load projects from Postgres.');
       setLoading(false);
     }
   };

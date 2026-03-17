@@ -39,7 +39,8 @@ let sharedStorageCleanupCompleted = false;
 // Supabase-backed storage reads can exceed 2.5s on some networks.
 // Keep this comfortably above the observed backend round-trip so web/mobile
 // prefer shared storage instead of silently falling back to stale local cache.
-const REMOTE_STORAGE_TIMEOUT_MS = 10000;
+const REMOTE_STORAGE_TIMEOUT_MS = 60000;
+const API_HEALTH_TIMEOUT_MS = 10000;
 const API_READY_RETRY_MS = 800;
 const API_READY_MAX_ATTEMPTS = 6;
 const LOCAL_ONLY_STORAGE_KEYS = new Set([STORAGE_KEYS.CURRENT_USER]);
@@ -297,6 +298,23 @@ export const NEGROS_SAMPLE_PROJECTS: Project[] = [
   },
 ];
 
+type ProjectsScreenSnapshot = {
+  projects: Project[];
+  volunteerProfile: Volunteer | null;
+  timeLogs: VolunteerTimeLog[];
+  partnerApplications: PartnerProjectApplication[];
+};
+
+type JoinProjectResult = {
+  project: Project;
+  volunteerProfile: Volunteer | null;
+};
+
+type VolunteerTimeLogMutationResult = {
+  log: VolunteerTimeLog | null;
+  volunteerProfile: Volunteer | null;
+};
+
 const SECTOR_NEEDS: SectorNeed[] = [
   {
     sector: 'Education',
@@ -414,25 +432,67 @@ function getMessagesWebSocketUrl(userId: string): string {
   return `${wsBaseUrl}/ws/messages/${encodeURIComponent(userId)}`;
 }
 
+function getStorageWebSocketUrl(): string {
+  const wsBaseUrl = getApiBaseUrl().replace(/^http/i, 'ws');
+  return `${wsBaseUrl}/ws/storage`;
+}
+
 async function delay(ms: number): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function waitForApiReady(): Promise<void> {
-  for (let attempt = 0; attempt < API_READY_MAX_ATTEMPTS; attempt += 1) {
-    try {
-      const response = await fetch(`${getApiBaseUrl()}/health`);
-      if (response.ok) {
-        return;
-      }
-    } catch {
-      // Backend may still be starting.
+async function getApiHealthError(): Promise<string | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), API_HEALTH_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${getApiBaseUrl()}/health`, {
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => null) as
+      | { detail?: string; message?: string; status?: string }
+      | null;
+
+    if (response.ok) {
+      return null;
     }
+
+    return (
+      payload?.detail ||
+      payload?.message ||
+      `Backend health check failed with status ${response.status}.`
+    );
+  } catch (error) {
+    if (isExpectedRemoteStorageError(error)) {
+      return `Backend unavailable at ${getApiBaseUrl()}. Check the backend process and Supabase connection.`;
+    }
+
+    if (error instanceof Error && error.message) {
+      return error.message;
+    }
+
+    return `Backend unavailable at ${getApiBaseUrl()}.`;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function waitForApiReady(): Promise<void> {
+  let lastError = `Backend unavailable at ${getApiBaseUrl()}.`;
+
+  for (let attempt = 0; attempt < API_READY_MAX_ATTEMPTS; attempt += 1) {
+    const healthError = await getApiHealthError();
+    if (!healthError) {
+      return;
+    }
+    lastError = healthError;
 
     if (attempt < API_READY_MAX_ATTEMPTS - 1) {
       await delay(API_READY_RETRY_MS);
     }
   }
+
+  throw new Error(lastError);
 }
 
 async function fetchRemoteStorageItem<T>(key: string): Promise<T | null> {
@@ -448,6 +508,69 @@ async function fetchRemoteStorageItem<T>(key: string): Promise<T | null> {
 
   const payload = (await response.json()) as { value: T | null };
   return payload.value ?? null;
+}
+
+async function fetchRemoteStorageItems(
+  keys: string[]
+): Promise<Record<string, unknown | null>> {
+  await waitForApiReady();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REMOTE_STORAGE_TIMEOUT_MS);
+  const response = await fetch(`${getApiBaseUrl()}/storage/batch`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ keys }),
+    signal: controller.signal,
+  }).finally(() => clearTimeout(timeout));
+
+  if (!response.ok) {
+    throw new Error(`Remote storage batch read failed: ${response.status}`);
+  }
+
+  const payload = (await response.json()) as { items?: Record<string, unknown | null> };
+  return payload.items || {};
+}
+
+async function getApiErrorMessage(response: Response, fallback: string): Promise<string> {
+  try {
+    const payload = (await response.json()) as { detail?: string };
+    if (typeof payload.detail === 'string' && payload.detail.trim()) {
+      return payload.detail;
+    }
+  } catch {
+    // Ignore parse errors and fall back to the default message.
+  }
+
+  return fallback;
+}
+
+async function requestApiJson<T>(
+  path: string,
+  init?: RequestInit,
+  timeoutMs = REMOTE_STORAGE_TIMEOUT_MS
+): Promise<T> {
+  await waitForApiReady();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(`${getApiBaseUrl()}${path}`, {
+      ...init,
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        await getApiErrorMessage(response, `API request failed: ${response.status}`)
+      );
+    }
+
+    return (await response.json()) as T;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function getLocalStorageItem<T>(key: string): Promise<T | null> {
@@ -586,6 +709,111 @@ export async function getStorageItem<T>(key: string): Promise<T | null> {
   }
 }
 
+export async function getStorageItems(
+  keys: string[]
+): Promise<Record<string, unknown | null>> {
+  const localKeys = keys.filter(isLocalOnlyStorageKey);
+  const sharedKeys = keys.filter(key => !isLocalOnlyStorageKey(key));
+  const results: Record<string, unknown | null> = {};
+
+  for (const key of localKeys) {
+    try {
+      results[key] = await getLocalStorageItem(key);
+    } catch (error) {
+      console.error(`Error reading local ${key}:`, error);
+      results[key] = null;
+    }
+  }
+
+  if (sharedKeys.length === 0) {
+    return results;
+  }
+
+  await ensureSharedStorageCleanup();
+
+  try {
+    const remoteResults = await fetchRemoteStorageItems(sharedKeys);
+    for (const key of sharedKeys) {
+      results[key] = remoteResults[key] ?? null;
+    }
+    return results;
+  } catch (error) {
+    console.error(`Error reading shared storage batch from backend:`, error);
+    throw error;
+  }
+}
+
+export async function getDashboardSnapshot(): Promise<{
+  projects: Project[];
+  partners: Partner[];
+  users: User[];
+  volunteers: Volunteer[];
+  statusUpdates: StatusUpdate[];
+}> {
+  const items = await getStorageItems([
+    STORAGE_KEYS.USERS,
+    STORAGE_KEYS.PROJECTS,
+    STORAGE_KEYS.PARTNERS,
+    STORAGE_KEYS.VOLUNTEERS,
+    STORAGE_KEYS.STATUS_UPDATES,
+  ]);
+
+  const partners = ((items[STORAGE_KEYS.PARTNERS] as Partner[] | null) || [])
+    .filter(p => !p.contactEmail?.toLowerCase().includes('eduindia.org'));
+
+  return {
+    users: (items[STORAGE_KEYS.USERS] as User[] | null) || [],
+    projects: (items[STORAGE_KEYS.PROJECTS] as Project[] | null) || [],
+    partners,
+    volunteers: (items[STORAGE_KEYS.VOLUNTEERS] as Volunteer[] | null) || [],
+    statusUpdates: (items[STORAGE_KEYS.STATUS_UPDATES] as StatusUpdate[] | null) || [],
+  };
+}
+
+export async function getPartnerDashboardSnapshot(): Promise<{
+  projects: Project[];
+  partners: Partner[];
+  sectorNeeds: SectorNeed[];
+}> {
+  const items = await getStorageItems([
+    STORAGE_KEYS.PROJECTS,
+    STORAGE_KEYS.PARTNERS,
+  ]);
+
+  const partners = ((items[STORAGE_KEYS.PARTNERS] as Partner[] | null) || [])
+    .filter(p => !p.contactEmail?.toLowerCase().includes('eduindia.org'));
+
+  return {
+    projects: (items[STORAGE_KEYS.PROJECTS] as Project[] | null) || [],
+    partners,
+    sectorNeeds: SECTOR_NEEDS,
+  };
+}
+
+export async function getProjectsScreenSnapshot(
+  user?: Pick<User, 'id' | 'role'> | null
+): Promise<ProjectsScreenSnapshot> {
+  const params = new URLSearchParams();
+  if (user?.id) {
+    params.set('user_id', user.id);
+  }
+  if (user?.role) {
+    params.set('role', user.role);
+  }
+
+  const query = params.toString();
+  const payload = await requestApiJson<Partial<ProjectsScreenSnapshot>>(
+    `/projects/snapshot${query ? `?${query}` : ''}`
+  );
+
+  return {
+    projects: payload.projects || [],
+    volunteerProfile: payload.volunteerProfile || null,
+    timeLogs: payload.timeLogs || [],
+    partnerApplications: payload.partnerApplications || [],
+  };
+}
+
 export async function setStorageItem<T>(key: string, value: T): Promise<void> {
   if (isLocalOnlyStorageKey(key)) {
     await setLocalStorageItem(key, value);
@@ -703,22 +931,41 @@ export async function getUser(id: string): Promise<User | null> {
 }
 
 export async function getUserByEmail(email: string): Promise<User | null> {
-  const users = await getStorageItem<User[]>(STORAGE_KEYS.USERS) || [];
-  return users.find(u => u.email?.trim().toLowerCase() === email.trim().toLowerCase()) || null;
+  return getUserByEmailOrPhone(email);
 }
 
 export async function getUserByEmailOrPhone(identifier: string): Promise<User | null> {
-  const normalizedIdentifier = identifier.trim().toLowerCase();
-  const users = await getStorageItem<User[]>(STORAGE_KEYS.USERS) || [];
-  return users.find(
-    u =>
-      u.email?.trim().toLowerCase() === normalizedIdentifier ||
-      u.phone?.trim() === identifier.trim()
-  ) || null;
+  const payload = await requestApiJson<{ user?: User | null }>(
+    `/users/lookup?identifier=${encodeURIComponent(identifier.trim())}`
+  );
+  return payload.user || null;
+}
+
+export async function loginWithCredentials(
+  identifier: string,
+  password: string
+): Promise<User | null> {
+  try {
+    const payload = await requestApiJson<{ user?: User | null }>('/auth/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        identifier: identifier.trim(),
+        password: password.trim(),
+      }),
+    });
+    return payload.user || null;
+  } catch (error: any) {
+    if (error?.message === 'Invalid email/phone or password.') {
+      return null;
+    }
+    throw error;
+  }
 }
 
 export async function getAllUsers(): Promise<User[]> {
-  await ensureCoreUsers();
   return (await getStorageItem<User[]>(STORAGE_KEYS.USERS)) || [];
 }
 
@@ -804,7 +1051,6 @@ export async function getPartner(id: string): Promise<Partner | null> {
 }
 
 export async function getAllPartners(): Promise<Partner[]> {
-  await ensureCorePartners();
   const partners = (await getStorageItem<Partner[]>(STORAGE_KEYS.PARTNERS)) || [];
   return partners.filter(p => !p.contactEmail?.toLowerCase().includes('eduindia.org'));
 }
@@ -826,25 +1072,47 @@ export async function saveProject(project: Project): Promise<void> {
   await setStorageItem(STORAGE_KEYS.PROJECTS, projects);
 }
 
+export async function deleteProject(projectId: string): Promise<void> {
+  const [projects, statusUpdates, partnerApplications, volunteerJoinRecords, volunteerTimeLogs] =
+    await Promise.all([
+      getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS),
+      getStorageItem<StatusUpdate[]>(STORAGE_KEYS.STATUS_UPDATES),
+      getStorageItem<PartnerProjectApplication[]>(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS),
+      getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS),
+      getStorageItem<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS),
+    ]);
+
+  await Promise.all([
+    setStorageItem(
+      STORAGE_KEYS.PROJECTS,
+      (projects || []).filter(project => project.id !== projectId)
+    ),
+    setStorageItem(
+      STORAGE_KEYS.STATUS_UPDATES,
+      (statusUpdates || []).filter(update => update.projectId !== projectId)
+    ),
+    setStorageItem(
+      STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
+      (partnerApplications || []).filter(application => application.projectId !== projectId)
+    ),
+    setStorageItem(
+      STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
+      (volunteerJoinRecords || []).filter(record => record.projectId !== projectId)
+    ),
+    setStorageItem(
+      STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
+      (volunteerTimeLogs || []).filter(log => log.projectId !== projectId)
+    ),
+  ]);
+}
+
 export async function getProject(id: string): Promise<Project | null> {
   const projects = await getAllProjects();
   return projects.find(p => p.id === id) || null;
 }
 
 export async function getAllProjects(): Promise<Project[]> {
-  try {
-    await ensureCoreProjects();
-    const storedProjects = (await getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS)) || [];
-    if (storedProjects.length > 0) {
-      return storedProjects;
-    }
-
-    await setStorageItem(STORAGE_KEYS.PROJECTS, NEGROS_SAMPLE_PROJECTS);
-    return NEGROS_SAMPLE_PROJECTS;
-  } catch (error) {
-    console.error('Error loading projects, falling back to defaults:', error);
-    return NEGROS_SAMPLE_PROJECTS;
-  }
+  return (await getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS)) || [];
 }
 
 export function isProjectInNegros(project: Project): boolean {
@@ -898,8 +1166,10 @@ export async function getAllVolunteers(): Promise<Volunteer[]> {
 }
 
 export async function getVolunteerByUserId(userId: string): Promise<Volunteer | null> {
-  const volunteers = await getAllVolunteers();
-  return volunteers.find(v => v.userId === userId) || null;
+  const payload = await requestApiJson<{ volunteer?: Volunteer | null }>(
+    `/volunteers/by-user/${encodeURIComponent(userId)}`
+  );
+  return payload.volunteer || null;
 }
 
 // Volunteer Time Logs
@@ -915,10 +1185,10 @@ export async function saveVolunteerTimeLog(log: VolunteerTimeLog): Promise<void>
 }
 
 export async function getVolunteerTimeLogs(volunteerId: string): Promise<VolunteerTimeLog[]> {
-  const logs = await getStorageItem<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS) || [];
-  return logs
-    .filter(l => l.volunteerId === volunteerId)
-    .sort((a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime());
+  const payload = await requestApiJson<{ logs?: VolunteerTimeLog[] }>(
+    `/volunteers/${encodeURIComponent(volunteerId)}/time-logs`
+  );
+  return payload.logs || [];
 }
 
 export async function startVolunteerTimeLog(
@@ -926,46 +1196,46 @@ export async function startVolunteerTimeLog(
   projectId: string,
   note?: string
 ): Promise<VolunteerTimeLog> {
-  const existingLogs = await getVolunteerTimeLogs(volunteerId);
-  const activeLog = existingLogs.find(l => l.projectId === projectId && !l.timeOut);
-  if (activeLog) {
-    throw new Error('You already have an active time log for this project.');
+  const payload = await requestApiJson<{ log?: VolunteerTimeLog | null }>(
+    `/volunteers/${encodeURIComponent(volunteerId)}/time-logs/start`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        projectId,
+        note,
+      }),
+    }
+  );
+
+  if (!payload.log) {
+    throw new Error('Time in did not complete.');
   }
 
-  const newLog: VolunteerTimeLog = {
-    id: `timelog-${Date.now()}`,
-    volunteerId,
-    projectId,
-    timeIn: new Date().toISOString(),
-    note,
-  };
-
-  await saveVolunteerTimeLog(newLog);
-  return newLog;
+  return payload.log;
 }
 
 export async function endVolunteerTimeLog(
   volunteerId: string,
   projectId: string
-): Promise<VolunteerTimeLog | null> {
-  const logs = await getStorageItem<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS) || [];
-  const activeIndex = logs.findIndex(
-    l => l.volunteerId === volunteerId && l.projectId === projectId && !l.timeOut
+): Promise<VolunteerTimeLogMutationResult> {
+  const payload = await requestApiJson<Partial<VolunteerTimeLogMutationResult>>(
+    `/volunteers/${encodeURIComponent(volunteerId)}/time-logs/end`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ projectId }),
+    }
   );
 
-  if (activeIndex === -1) {
-    return null;
-  }
-
-  const updatedLog: VolunteerTimeLog = {
-    ...logs[activeIndex],
-    timeOut: new Date().toISOString(),
+  return {
+    log: payload.log || null,
+    volunteerProfile: payload.volunteerProfile || null,
   };
-
-  logs[activeIndex] = updatedLog;
-  await setStorageItem(STORAGE_KEYS.VOLUNTEER_TIME_LOGS, logs);
-  await addLoggedHoursToVolunteer(volunteerId, updatedLog);
-  return updatedLog;
 }
 
 async function addLoggedHoursToVolunteer(
@@ -1154,6 +1424,91 @@ export function subscribeToMessages(
   };
 }
 
+export function subscribeToStorageChanges(
+  keys: string[],
+  onChange: (event: { type: string; keys: string[] }) => void,
+  pollIntervalMs = 3000
+): () => void {
+  let socket: WebSocket | null = null;
+  let heartbeat: ReturnType<typeof setInterval> | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let closed = false;
+  const watchedKeys = new Set(keys);
+
+  const cleanupSocket = () => {
+    if (heartbeat) {
+      clearInterval(heartbeat);
+      heartbeat = null;
+    }
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+    if (socket) {
+      socket.onopen = null;
+      socket.onmessage = null;
+      socket.onerror = null;
+      socket.onclose = null;
+      socket.close();
+      socket = null;
+    }
+  };
+
+  const connect = () => {
+    cleanupSocket();
+    socket = new WebSocket(getStorageWebSocketUrl());
+
+    socket.onopen = () => {
+      heartbeat = setInterval(() => {
+        if (socket?.readyState === WebSocket.OPEN) {
+          socket.send('ping');
+        }
+      }, 25000);
+    };
+
+    socket.onmessage = event => {
+      try {
+        const payload = JSON.parse(event.data) as { type: string; keys?: string[] };
+        const changedKeys = payload.keys || [];
+        if (payload.type !== 'storage.changed') {
+          return;
+        }
+        if (changedKeys.some(key => watchedKeys.has(key))) {
+          onChange({ type: payload.type, keys: changedKeys });
+        }
+      } catch (error) {
+        console.error('Error parsing storage event:', error);
+      }
+    };
+
+    socket.onclose = () => {
+      cleanupSocket();
+      if (!closed) {
+        reconnectTimer = setTimeout(connect, 1500);
+      }
+    };
+
+    socket.onerror = () => {
+      socket?.close();
+    };
+
+    pollTimer = setInterval(() => {
+      onChange({ type: 'storage.poll', keys: Array.from(watchedKeys) });
+    }, pollIntervalMs);
+  };
+
+  connect();
+
+  return () => {
+    closed = true;
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+    }
+    cleanupSocket();
+  };
+}
+
 // Status Update Storage
 export async function saveStatusUpdate(update: StatusUpdate): Promise<void> {
   const updates = await getStorageItem<StatusUpdate[]>(STORAGE_KEYS.STATUS_UPDATES) || [];
@@ -1286,40 +1641,37 @@ export async function getPartnerProjectApplications(
 export async function getPartnerProjectApplicationsByUser(
   partnerUserId: string
 ): Promise<PartnerProjectApplication[]> {
-  const applications =
-    await getStorageItem<PartnerProjectApplication[]>(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS) || [];
-  return applications
-    .filter(app => app.partnerUserId === partnerUserId)
-    .sort((a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime());
+  const payload = await requestApiJson<{ applications?: PartnerProjectApplication[] }>(
+    `/partner-project-applications/by-user/${encodeURIComponent(partnerUserId)}`
+  );
+  return payload.applications || [];
 }
 
 export async function requestPartnerProjectJoin(
   projectId: string,
   partnerUser: User
 ): Promise<PartnerProjectApplication> {
-  const project = await getProject(projectId);
-  if (!project) {
-    throw new Error('Project not found');
+  const payload = await requestApiJson<{ application?: PartnerProjectApplication | null }>(
+    '/partner-project-applications/request',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        projectId,
+        partnerUserId: partnerUser.id,
+        partnerName: partnerUser.name,
+        partnerEmail: partnerUser.email || '',
+      }),
+    }
+  );
+
+  if (!payload.application) {
+    throw new Error('Partner join request did not complete.');
   }
 
-  const existingApplications = await getPartnerProjectApplicationsByUser(partnerUser.id);
-  const existingForProject = existingApplications.find(app => app.projectId === projectId);
-  if (existingForProject) {
-    return existingForProject;
-  }
-
-  const application: PartnerProjectApplication = {
-    id: `partner-application-${Date.now()}`,
-    projectId,
-    partnerUserId: partnerUser.id,
-    partnerName: partnerUser.name,
-    partnerEmail: partnerUser.email || '',
-    status: 'Pending',
-    requestedAt: new Date().toISOString(),
-  };
-
-  await savePartnerProjectApplication(application);
-  return application;
+  return payload.application;
 }
 
 export async function reviewPartnerProjectApplication(
@@ -1359,34 +1711,29 @@ export async function reviewPartnerProjectApplication(
   }
 }
 
-export async function joinProjectEvent(projectId: string, userId: string): Promise<void> {
-  const project = await getProject(projectId);
-  if (!project) {
-    throw new Error('Project not found');
+export async function joinProjectEvent(
+  projectId: string,
+  userId: string
+): Promise<JoinProjectResult> {
+  const payload = await requestApiJson<Partial<JoinProjectResult>>(
+    `/projects/${encodeURIComponent(projectId)}/join`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ userId }),
+    }
+  );
+
+  if (!payload.project) {
+    throw new Error('Project join did not complete.');
   }
 
-  const volunteer = await getVolunteerByUserId(userId);
-  const volunteerId = volunteer?.id;
-  const joinedUserIds = project.joinedUserIds || [];
-  const updatedJoinedUserIds = joinedUserIds.includes(userId)
-    ? joinedUserIds
-    : [...joinedUserIds, userId];
-  const updatedVolunteerIds =
-    volunteerId && !project.volunteers.includes(volunteerId)
-      ? [...project.volunteers, volunteerId]
-      : project.volunteers;
-
-  await saveProject({
-    ...project,
-    joinedUserIds: updatedJoinedUserIds,
-    volunteers: updatedVolunteerIds,
-    updatedAt: new Date().toISOString(),
-  });
-
-  if (volunteerId) {
-    await ensureVolunteerProjectJoinRecord(projectId, volunteerId, 'VolunteerJoin');
-    await syncVolunteerEngagementStatus(volunteerId);
-  }
+  return {
+    project: payload.project,
+    volunteerProfile: payload.volunteerProfile || null,
+  };
 }
 
 export async function getSectorNeeds(): Promise<SectorNeed[]> {

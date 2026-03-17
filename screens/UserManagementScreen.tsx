@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -13,7 +13,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { format } from 'date-fns';
 import { useAuth } from '../contexts/AuthContext';
-import { deleteUser, getAllUsers, saveUser } from '../models/storage';
+import { deleteUser, getAllUsers, saveUser, subscribeToStorageChanges } from '../models/storage';
 import { NVCSector, User, UserRole, UserType } from '../models/types';
 
 const roleOptions: UserRole[] = ['admin', 'partner', 'volunteer'];
@@ -34,28 +34,7 @@ export default function UserManagementScreen() {
   const [pillarsDraft, setPillarsDraft] = useState<NVCSector[]>([]);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (isAdmin) {
-      loadUsers();
-    }
-  }, [isAdmin]);
-
-  useFocusEffect(
-    React.useCallback(() => {
-      if (!isAdmin) {
-        return undefined;
-      }
-
-      void loadUsers();
-      const refreshTimer = setInterval(() => {
-        void loadUsers();
-      }, USER_REFRESH_INTERVAL_MS);
-
-      return () => clearInterval(refreshTimer);
-    }, [isAdmin])
-  );
-
-  const loadUsers = async () => {
+  const loadUsers = useCallback(async () => {
     try {
       const allUsers = await getAllUsers();
       const sortedUsers = [...allUsers].sort((a, b) => {
@@ -71,7 +50,38 @@ export default function UserManagementScreen() {
     } catch (error) {
       Alert.alert('Error', 'Failed to load users.');
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (isAdmin) {
+      void loadUsers();
+    }
+  }, [isAdmin, loadUsers]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      if (!isAdmin) {
+        return undefined;
+      }
+
+      void loadUsers();
+      const refreshTimer = setInterval(() => {
+        void loadUsers();
+      }, USER_REFRESH_INTERVAL_MS);
+
+      return () => clearInterval(refreshTimer);
+    }, [isAdmin, loadUsers])
+  );
+
+  useEffect(() => {
+    if (!isAdmin) {
+      return undefined;
+    }
+
+    return subscribeToStorageChanges(['users'], () => {
+      void loadUsers();
+    });
+  }, [isAdmin, loadUsers]);
 
   const isNewAccount = (createdAt: string) => {
     const createdTime = new Date(createdAt).getTime();

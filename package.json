@@ -4,6 +4,9 @@
   "main": "node_modules/expo/AppEntry.js",
   "scripts": {
     "all": "powershell -NoProfile -ExecutionPolicy Bypass -File ..\\scripts\\start-all.ps1",
+    "all:bg": "powershell -NoProfile -ExecutionPolicy Bypass -File ..\\scripts\\supervise-dev.ps1",
+    "all:stop": "powershell -NoProfile -ExecutionPolicy Bypass -File ..\\scripts\\stop-all.ps1",
+    "all:status": "powershell -NoProfile -ExecutionPolicy Bypass -File ..\\scripts\\status-all.ps1",
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",

@@ -1,9 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { View, TextInput, TouchableOpacity, Text, StyleSheet, Alert, ActivityIndicator, Platform, ScrollView, Modal } from 'react-native';
-import { createUserAccount, getApiBaseUrl, getUserByEmailOrPhone, initializeMockData } from '../models/storage';
+import {
+  createUserAccount,
+  getAllUsers,
+  getApiBaseUrl,
+  loginWithCredentials,
+  subscribeToStorageChanges,
+} from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
 import AppLogo from '../components/AppLogo';
-import { NVCSector, UserRole, UserType } from '../models/types';
+import { NVCSector, User, UserRole, UserType } from '../models/types';
 
 export default function LoginScreen({ navigation }: any) {
   const isWeb = Platform.OS === 'web';
@@ -22,6 +28,7 @@ export default function LoginScreen({ navigation }: any) {
   const [signupRole, setSignupRole] = useState<Exclude<UserRole, 'admin'>>('volunteer');
   const [backendStatus, setBackendStatus] = useState<'checking' | 'online' | 'offline'>('checking');
   const [backendMessage, setBackendMessage] = useState('Checking backend connection...');
+  const [savedAccounts, setSavedAccounts] = useState<User[]>([]);
   const { login } = useAuth();
   const mountedRef = useRef(true);
 
@@ -39,28 +46,35 @@ export default function LoginScreen({ navigation }: any) {
 
     const checkBackend = async () => {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 4000);
+      const timeout = setTimeout(() => controller.abort(), 10000);
 
       try {
         setBackendStatus(current => (current === 'online' ? current : 'checking'));
-        setBackendMessage('Checking backend connection...');
+        setBackendMessage('Checking backend and Supabase connection...');
         const response = await fetch(`${getApiBaseUrl()}/health`, {
           signal: controller.signal,
         });
+        const payload = await response.json().catch(() => null) as
+          | { status?: string; mode?: string; detail?: string }
+          | null;
 
-        if (!response.ok) {
-          throw new Error(`Backend returned ${response.status}`);
+        if (!response.ok || payload?.status !== 'ok' || payload?.mode !== 'postgres') {
+          throw new Error(
+            payload?.detail ||
+            `Database backend is unavailable at ${getApiBaseUrl()}.`
+          );
         }
 
         if (!cancelled && mountedRef.current) {
           setBackendStatus('online');
-          setBackendMessage(`Backend connected: ${getApiBaseUrl()}`);
+          setBackendMessage(`Backend connected to Postgres: ${getApiBaseUrl()}`);
         }
       } catch (error: any) {
         if (!cancelled && mountedRef.current) {
           setBackendStatus('offline');
           setBackendMessage(
-            `Backend unavailable at ${getApiBaseUrl()}. Start npm run backend first.`
+            error?.message ||
+            `Database backend unavailable at ${getApiBaseUrl()}. Check the backend process and Supabase connection.`
           );
         }
       } finally {
@@ -79,6 +93,36 @@ export default function LoginScreen({ navigation }: any) {
     };
   }, []);
 
+  useEffect(() => {
+    if (backendStatus !== 'online') {
+      setSavedAccounts([]);
+      return undefined;
+    }
+
+    const loadSavedAccounts = async () => {
+      try {
+        const users = await getAllUsers();
+        const visibleUsers = users
+          .filter(user => (isWeb ? user.role === 'admin' : user.role !== 'admin'))
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        if (mountedRef.current) {
+          setSavedAccounts(visibleUsers);
+        }
+      } catch (error) {
+        if (mountedRef.current) {
+          setSavedAccounts([]);
+        }
+      }
+    };
+
+    void loadSavedAccounts();
+    const unsubscribe = subscribeToStorageChanges(['users'], () => {
+      void loadSavedAccounts();
+    });
+
+    return unsubscribe;
+  }, [backendStatus, isWeb]);
+
   const handleLogin = async () => {
     if (!identifier.trim() || !password.trim()) {
       Alert.alert('Validation Error', 'Please enter email or phone and password');
@@ -86,27 +130,16 @@ export default function LoginScreen({ navigation }: any) {
     }
 
     if (backendStatus !== 'online') {
-      Alert.alert('Backend Unavailable', backendMessage);
+      Alert.alert('Database Unavailable', backendMessage);
       return;
     }
 
     try {
       setLoading(true);
-      let user = await getUserByEmailOrPhone(identifier.trim());
+      const user = await loginWithCredentials(identifier.trim(), password.trim());
 
       if (!user) {
-        await initializeMockData();
-        user = await getUserByEmailOrPhone(identifier.trim());
-      }
-
-      if (!user) {
-        Alert.alert('Authentication Failed', 'Account not found. Please check your email/phone and password.');
-        setLoading(false);
-        return;
-      }
-
-      if (user.password !== password) {
-        Alert.alert('Authentication Failed', 'Incorrect password. Please try again.');
+        Alert.alert('Authentication Failed', 'Incorrect email/phone or password.');
         setLoading(false);
         return;
       }
@@ -189,6 +222,11 @@ export default function LoginScreen({ navigation }: any) {
     }
   };
 
+  const handleUseSavedAccount = (account: User) => {
+    setIdentifier(account.email || account.phone || '');
+    setPassword(account.password);
+  };
+
   if (loading && !initialized) {
     return (
       <View style={styles.container}>
@@ -235,10 +273,10 @@ export default function LoginScreen({ navigation }: any) {
             />
             <Text style={styles.backendStatusTitle}>
               {backendStatus === 'online'
-                ? 'Backend Connected'
+                ? 'Database Connected'
                 : backendStatus === 'offline'
-                ? 'Backend Unavailable'
-                : 'Checking Backend'}
+                ? 'Database Unavailable'
+                : 'Checking Database'}
             </Text>
           </View>
           <Text style={styles.backendStatusText}>{backendMessage}</Text>
@@ -314,6 +352,32 @@ export default function LoginScreen({ navigation }: any) {
             </>
           )}
         </View>
+
+        {savedAccounts.length > 0 && (
+          <View style={styles.demoSection}>
+            <Text style={styles.demoTitle}>
+              {isWeb ? 'Saved Admin Accounts:' : 'Saved Mobile Accounts:'}
+            </Text>
+            {savedAccounts.map(account => (
+              <TouchableOpacity
+                key={account.id}
+                style={styles.savedAccountCard}
+                onPress={() => handleUseSavedAccount(account)}
+                activeOpacity={0.85}
+              >
+                <View style={styles.savedAccountHeader}>
+                  <Text style={styles.savedAccountName}>{account.name}</Text>
+                  <Text style={styles.savedAccountRole}>{account.role}</Text>
+                </View>
+                <Text style={styles.savedAccountCredential}>
+                  {account.email || account.phone || 'No login identifier'}
+                </Text>
+                <Text style={styles.savedAccountPassword}>{account.password}</Text>
+                <Text style={styles.savedAccountHint}>Tap to use these credentials</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
 
         <TouchableOpacity onPress={() => setShowSignupModal(true)}>
           <Text style={styles.signupText}>Don't have an account? Sign Up</Text>
@@ -620,6 +684,49 @@ const styles = StyleSheet.create({
     padding: 12,
   },
   mobileOnlyBadge: {
+    marginTop: 6,
+    fontSize: 12,
+    color: '#64748b',
+  },
+  savedAccountCard: {
+    backgroundColor: '#f8fafc',
+    borderColor: '#e2e8f0',
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 10,
+  },
+  savedAccountHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 6,
+  },
+  savedAccountName: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  savedAccountRole: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#166534',
+    textTransform: 'uppercase',
+  },
+  savedAccountCredential: {
+    fontSize: 13,
+    color: '#334155',
+    fontFamily: 'monospace',
+    marginBottom: 2,
+  },
+  savedAccountPassword: {
+    fontSize: 13,
+    color: '#334155',
+    fontFamily: 'monospace',
+  },
+  savedAccountHint: {
     marginTop: 6,
     fontSize: 12,
     color: '#64748b',

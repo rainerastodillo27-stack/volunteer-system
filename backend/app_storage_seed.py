@@ -5,6 +5,20 @@ from typing import Any
 from .db import get_db_mode, get_postgres_connection, get_sqlite_connection
 
 
+HOT_STORAGE_TABLES = {
+    "users": "app_users_store",
+    "partners": "app_partners_store",
+    "projects": "app_projects_store",
+    "volunteers": "app_volunteers_store",
+    "statusUpdates": "app_status_updates_store",
+    "volunteerMatches": "app_volunteer_matches_store",
+    "volunteerTimeLogs": "app_volunteer_time_logs_store",
+    "volunteerProjectJoins": "app_volunteer_project_joins_store",
+    "partnerProjectApplications": "app_partner_project_applications_store",
+}
+EXPECTED_HOT_STORAGE_COLUMNS = {"id", "data", "sort_order", "updated_at"}
+
+
 def _iso(year: int, month: int, day: int) -> str:
     return datetime(year, month, day, tzinfo=timezone.utc).isoformat()
 
@@ -440,6 +454,184 @@ def ensure_app_storage_table() -> None:
         connection.commit()
 
 
+def is_hot_storage_key(key: str) -> bool:
+    return key in HOT_STORAGE_TABLES
+
+
+def ensure_postgres_hot_storage_tables(connection: Any) -> None:
+    with connection.cursor() as cursor:
+        for table_name in HOT_STORAGE_TABLES.values():
+            cursor.execute(
+                """
+                select column_name
+                from information_schema.columns
+                where table_schema = 'public' and table_name = %s
+                """,
+                (table_name,),
+            )
+            existing_columns = {row[0] for row in cursor.fetchall()}
+            if existing_columns and existing_columns != EXPECTED_HOT_STORAGE_COLUMNS:
+                cursor.execute(f"drop table if exists {table_name}")
+
+            cursor.execute(
+                f"""
+                create table if not exists {table_name} (
+                  id text primary key,
+                  data jsonb not null,
+                  sort_order integer not null default 0,
+                  updated_at timestamptz not null default now()
+                )
+                """
+            )
+            cursor.execute(
+                f"""
+                alter table {table_name}
+                add column if not exists data jsonb default '{{}}'::jsonb
+                """
+            )
+            cursor.execute(
+                f"""
+                alter table {table_name}
+                add column if not exists sort_order integer not null default 0
+                """
+            )
+            cursor.execute(
+                f"""
+                alter table {table_name}
+                add column if not exists updated_at timestamptz not null default now()
+                """
+            )
+
+        cursor.execute(
+            """
+            create index if not exists app_users_store_email_idx
+            on app_users_store (lower(coalesce(data->>'email', '')))
+            """
+        )
+        cursor.execute(
+            """
+            create index if not exists app_users_store_phone_idx
+            on app_users_store ((coalesce(data->>'phone', '')))
+            """
+        )
+
+
+def get_postgres_hot_storage_collection(connection: Any, key: str) -> list[Any]:
+    table_name = HOT_STORAGE_TABLES[key]
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"""
+            select data
+            from {table_name}
+            order by sort_order asc, updated_at asc, id asc
+            """
+        )
+        rows = cursor.fetchall()
+
+    return [row[0] for row in rows]
+
+
+def replace_postgres_hot_storage_collection(
+    connection: Any,
+    key: str,
+    items: list[Any],
+) -> None:
+    if not isinstance(items, list):
+        raise ValueError(f"Hot storage key '{key}' expects a list payload.")
+
+    normalized_items: list[dict[str, Any]] = []
+    item_ids: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError(f"Hot storage key '{key}' expects object items.")
+        item_id = item.get("id")
+        if not isinstance(item_id, str) or not item_id:
+            raise ValueError(f"Hot storage key '{key}' contains an item without a valid id.")
+        normalized_items.append(item)
+        item_ids.append(item_id)
+
+    table_name = HOT_STORAGE_TABLES[key]
+    with connection.cursor() as cursor:
+        if item_ids:
+            cursor.execute(f"delete from {table_name} where id <> all(%s)", (item_ids,))
+        else:
+            cursor.execute(f"delete from {table_name}")
+
+        for sort_order, item in enumerate(normalized_items):
+            cursor.execute(
+                f"""
+                insert into {table_name} (id, data, sort_order, updated_at)
+                values (%s, %s::jsonb, %s, now())
+                on conflict (id) do update set
+                  data = excluded.data,
+                  sort_order = excluded.sort_order,
+                  updated_at = excluded.updated_at
+                """,
+                (item["id"], json.dumps(item), sort_order),
+            )
+
+
+def clear_postgres_hot_storage_collection(connection: Any, key: str) -> None:
+    table_name = HOT_STORAGE_TABLES[key]
+    with connection.cursor() as cursor:
+        cursor.execute(f"delete from {table_name}")
+
+
+def clear_all_postgres_hot_storage(connection: Any) -> None:
+    with connection.cursor() as cursor:
+        for table_name in HOT_STORAGE_TABLES.values():
+            cursor.execute(f"delete from {table_name}")
+
+
+def _get_postgres_app_storage_items(connection: Any, keys: list[str]) -> dict[str, Any]:
+    if not keys:
+        return {}
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "select key, value from app_storage where key = any(%s)",
+            (keys,),
+        )
+        rows = cursor.fetchall()
+
+    return {row[0]: row[1] for row in rows}
+
+
+def _postgres_hot_storage_needs_backfill(connection: Any, key: str) -> bool:
+    table_name = HOT_STORAGE_TABLES[key]
+    with connection.cursor() as cursor:
+        cursor.execute(f"select count(*) from {table_name}")
+        count_row = cursor.fetchone()
+
+        cursor.execute(
+            f"""
+            select exists (
+              select 1
+              from {table_name}
+              where coalesce(data->>'id', '') = ''
+            )
+            """
+        )
+        invalid_row = cursor.fetchone()
+
+    row_count = int(count_row[0]) if count_row else 0
+    has_invalid_rows = bool(invalid_row[0]) if invalid_row else False
+    return row_count == 0 or has_invalid_rows
+
+
+def ensure_postgres_hot_storage_seeded(connection: Any, demo_storage: dict[str, Any]) -> None:
+    ensure_postgres_hot_storage_tables(connection)
+    existing_storage = _get_postgres_app_storage_items(connection, list(HOT_STORAGE_TABLES.keys()))
+
+    for key in HOT_STORAGE_TABLES:
+        if not _postgres_hot_storage_needs_backfill(connection, key):
+            continue
+
+        source_items = existing_storage.get(key, demo_storage.get(key, []))
+        if isinstance(source_items, list):
+            replace_postgres_hot_storage_collection(connection, key, source_items)
+
+
 def ensure_app_storage_seeded() -> None:
     ensure_app_storage_table()
     demo_storage = build_demo_app_storage()
@@ -456,6 +648,7 @@ def ensure_app_storage_seeded() -> None:
                         """,
                         (key, json.dumps(value)),
                     )
+            ensure_postgres_hot_storage_seeded(connection, demo_storage)
             connection.commit()
         return
 

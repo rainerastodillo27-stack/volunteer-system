@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -48,18 +48,86 @@ const formatMessageTime = (timestamp?: string) => {
   return format(parsedDate, 'HH:mm');
 };
 
+type ConversationItem = {
+  user: User;
+  lastMessage?: Message;
+  unreadCount: number;
+};
+
+function sortConversations(items: ConversationItem[]): ConversationItem[] {
+  return [...items].sort((left, right) => {
+    const leftTime = left.lastMessage ? new Date(left.lastMessage.timestamp).getTime() : 0;
+    const rightTime = right.lastMessage ? new Date(right.lastMessage.timestamp).getTime() : 0;
+    return rightTime - leftTime;
+  });
+}
+
+function upsertMessage(currentMessages: Message[], nextMessage: Message): Message[] {
+  const existingIndex = currentMessages.findIndex(message => message.id === nextMessage.id);
+  if (existingIndex >= 0) {
+    const updated = [...currentMessages];
+    updated[existingIndex] = nextMessage;
+    return updated.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  }
+
+  return [...currentMessages, nextMessage].sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+  );
+}
+
+function upsertConversationItem(
+  currentConversations: ConversationItem[],
+  currentUserId: string,
+  otherUser: User,
+  nextMessage: Message,
+  isDetailOpen: boolean
+): ConversationItem[] {
+  const existingConversation = currentConversations.find(
+    conversation => conversation.user.id === otherUser.id
+  );
+  const existingUnreadCount = existingConversation?.unreadCount || 0;
+  const nextUnreadCount =
+    nextMessage.recipientId === currentUserId && !nextMessage.read && !isDetailOpen
+      ? existingUnreadCount + 1
+      : existingConversation?.lastMessage?.id === nextMessage.id && nextMessage.read
+      ? 0
+      : existingUnreadCount;
+
+  const nextConversation: ConversationItem = {
+    user: otherUser,
+    lastMessage: nextMessage,
+    unreadCount: nextUnreadCount,
+  };
+
+  const withoutCurrent = currentConversations.filter(
+    conversation => conversation.user.id !== otherUser.id
+  );
+  return sortConversations([nextConversation, ...withoutCurrent]);
+}
+
 export default function CommunicationHubScreen({ navigation }: any) {
   const { user } = useAuth();
   const [view, setView] = useState<'conversations' | 'detail'>('conversations');
-  const [conversations, setConversations] = useState<{
-    user: User;
-    lastMessage?: Message;
-    unreadCount: number;
-  }[]>([]);
+  const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [messageText, setMessageText] = useState('');
   const [allUsers, setAllUsers] = useState<User[]>([]);
+  const selectedUserRef = useRef<User | null>(null);
+  const viewRef = useRef<'conversations' | 'detail'>('conversations');
+  const allUsersRef = useRef<User[]>([]);
+
+  useEffect(() => {
+    selectedUserRef.current = selectedUser;
+  }, [selectedUser]);
+
+  useEffect(() => {
+    viewRef.current = view;
+  }, [view]);
+
+  useEffect(() => {
+    allUsersRef.current = allUsers;
+  }, [allUsers]);
 
   useEffect(() => {
     loadUsers();
@@ -87,14 +155,67 @@ export default function CommunicationHubScreen({ navigation }: any) {
       return;
     }
 
-    return subscribeToMessages(user.id, async () => {
-      if (view === 'detail' && selectedUser) {
-        await loadMessages();
-      } else {
+    const unsubscribe = subscribeToMessages(user.id, async event => {
+      if (event.type !== 'message.changed') {
+        return;
+      }
+
+      const incomingMessage = event.message;
+      const otherUserId =
+        incomingMessage.senderId === user.id ? incomingMessage.recipientId : incomingMessage.senderId;
+      const otherUser = allUsersRef.current.find(chatUser => chatUser.id === otherUserId);
+      const isSelectedConversation = selectedUserRef.current?.id === otherUserId;
+      const isDetailOpen = viewRef.current === 'detail' && isSelectedConversation;
+
+      if (!otherUser) {
+        await loadUsers();
+        await loadConversations();
+        if (isDetailOpen) {
+          await loadMessages();
+        }
+        return;
+      }
+
+      setConversations(current =>
+        upsertConversationItem(current, user.id, otherUser, incomingMessage, isDetailOpen)
+      );
+
+      if (isSelectedConversation) {
+        setMessages(current => upsertMessage(current, incomingMessage));
+      }
+
+      if (incomingMessage.recipientId === user.id && !incomingMessage.read) {
+        if (isSelectedConversation) {
+          await markMessageAsRead(incomingMessage.id);
+          const readMessage = { ...incomingMessage, read: true };
+          setMessages(current => upsertMessage(current, readMessage));
+          setConversations(current =>
+            upsertConversationItem(current, user.id, otherUser, readMessage, true).map(conversation =>
+              conversation.user.id === otherUser.id
+                ? { ...conversation, unreadCount: 0 }
+                : conversation
+            )
+          );
+          return;
+        }
+
         await loadConversations();
       }
     });
-  }, [user?.id, view, selectedUser?.id, allUsers.length]);
+
+    const fallbackRefresh = setInterval(() => {
+      if (viewRef.current === 'detail' && selectedUserRef.current) {
+        void loadMessages();
+        return;
+      }
+      void loadConversations();
+    }, 10000);
+
+    return () => {
+      clearInterval(fallbackRefresh);
+      unsubscribe();
+    };
+  }, [user?.id]);
 
   useEffect(() => {
     if (Platform.OS !== 'web') return;
@@ -161,7 +282,7 @@ export default function CommunicationHubScreen({ navigation }: any) {
         }
       }
 
-      setConversations(Array.from(conversationMap.values()));
+      setConversations(sortConversations(Array.from(conversationMap.values())));
     } catch (error) {
       Alert.alert('Error', 'Failed to load conversations');
     }
@@ -175,10 +296,23 @@ export default function CommunicationHubScreen({ navigation }: any) {
       setMessages(userMessages);
 
       // Mark unread messages as read
-      for (const message of userMessages) {
-        if (!message.read && message.recipientId === user.id) {
-          await markMessageAsRead(message.id);
-        }
+      const unreadMessages = userMessages.filter(message => !message.read && message.recipientId === user.id);
+      if (unreadMessages.length > 0) {
+        await Promise.all(unreadMessages.map(message => markMessageAsRead(message.id)));
+        setMessages(currentMessages =>
+          currentMessages.map(message =>
+            unreadMessages.some(unreadMessage => unreadMessage.id === message.id)
+              ? { ...message, read: true }
+              : message
+          )
+        );
+        setConversations(currentConversations =>
+          currentConversations.map(conversation =>
+            conversation.user.id === selectedUser.id
+              ? { ...conversation, unreadCount: 0 }
+              : conversation
+          )
+        );
       }
     } catch (error) {
       console.error('Error loading messages:', error);
@@ -201,12 +335,20 @@ export default function CommunicationHubScreen({ navigation }: any) {
         read: false,
       };
 
+      setMessages(current => upsertMessage(current, newMessage));
+      setConversations(current =>
+        upsertConversationItem(current, user.id, selectedUser, newMessage, true).map(conversation =>
+          conversation.user.id === selectedUser.id
+            ? { ...conversation, unreadCount: 0 }
+            : conversation
+        )
+      );
       await saveMessage(newMessage);
       setMessageText('');
-      await loadMessages();
-      await loadConversations();
     } catch (error) {
       Alert.alert('Error', 'Failed to send message');
+      await loadMessages();
+      await loadConversations();
     }
   };
 

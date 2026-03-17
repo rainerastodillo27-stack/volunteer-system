@@ -8,6 +8,7 @@ interface AuthContextType {
   loading: boolean;
   login: (user: User) => Promise<void>;
   logout: () => Promise<void>;
+  updateUserProfile: (user: User) => Promise<void>;
   isAdmin: boolean;
   isVolunteer: boolean;
   isPartner: boolean;
@@ -83,11 +84,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const updateUserProfile = async (userData: User) => {
+    const previousUser = user;
+    try {
+      setUser(userData);
+      await saveCurrentUser(userData);
+    } catch (error) {
+      setUser(previousUser);
+      console.error('Error updating current user profile:', error);
+      throw error;
+    }
+  };
+
   const value: AuthContextType = {
     user,
     loading,
     login,
     logout,
+    updateUserProfile,
     isAdmin: user?.role === 'admin',
     isVolunteer: user?.role === 'volunteer',
     isPartner: user?.role === 'partner',
