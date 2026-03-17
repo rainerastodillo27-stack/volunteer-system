@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, TextInput, TouchableOpacity, Text, StyleSheet, Alert, ActivityIndicator, Platform, ScrollView, Modal } from 'react-native';
-import { createUserAccount, getUserByEmailOrPhone, initializeMockData } from '../models/storage';
+import { createUserAccount, getApiBaseUrl, getUserByEmailOrPhone, initializeMockData } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
 import AppLogo from '../components/AppLogo';
 import { NVCSector, UserRole, UserType } from '../models/types';
@@ -20,7 +20,10 @@ export default function LoginScreen({ navigation }: any) {
   const [signupUserType, setSignupUserType] = useState<UserType>('Student');
   const [signupPillars, setSignupPillars] = useState<NVCSector[]>([]);
   const [signupRole, setSignupRole] = useState<Exclude<UserRole, 'admin'>>('volunteer');
+  const [backendStatus, setBackendStatus] = useState<'checking' | 'online' | 'offline'>('checking');
+  const [backendMessage, setBackendMessage] = useState('Checking backend connection...');
   const { login } = useAuth();
+  const mountedRef = useRef(true);
 
   useEffect(() => {
     setInitialized(true);
@@ -29,11 +32,65 @@ export default function LoginScreen({ navigation }: any) {
     void initializeMockData().catch((error) => {
       console.error('Error initializing mock data:', error);
     });
+
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const checkBackend = async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 4000);
+
+      try {
+        setBackendStatus(current => (current === 'online' ? current : 'checking'));
+        setBackendMessage('Checking backend connection...');
+        const response = await fetch(`${getApiBaseUrl()}/health`, {
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          throw new Error(`Backend returned ${response.status}`);
+        }
+
+        if (!cancelled && mountedRef.current) {
+          setBackendStatus('online');
+          setBackendMessage(`Backend connected: ${getApiBaseUrl()}`);
+        }
+      } catch (error: any) {
+        if (!cancelled && mountedRef.current) {
+          setBackendStatus('offline');
+          setBackendMessage(
+            `Backend unavailable at ${getApiBaseUrl()}. Start npm run backend first.`
+          );
+        }
+      } finally {
+        clearTimeout(timeout);
+      }
+    };
+
+    void checkBackend();
+    const intervalId = setInterval(() => {
+      void checkBackend();
+    }, 5000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
   }, []);
 
   const handleLogin = async () => {
     if (!identifier.trim() || !password.trim()) {
       Alert.alert('Validation Error', 'Please enter email or phone and password');
+      return;
+    }
+
+    if (backendStatus !== 'online') {
+      Alert.alert('Backend Unavailable', backendMessage);
       return;
     }
 
@@ -71,7 +128,10 @@ export default function LoginScreen({ navigation }: any) {
     } catch (error) {
       console.error('Login error:', error);
       Alert.alert('Login Error', 'An error occurred during login. Please try again.');
-      setLoading(false);
+    } finally {
+      if (mountedRef.current) {
+        setLoading(false);
+      }
     }
   };
 
@@ -156,6 +216,38 @@ export default function LoginScreen({ navigation }: any) {
           <Text style={styles.subtitle}>Volunteer coordination platform</Text>
         </View>
 
+        <View
+          style={[
+            styles.backendStatusCard,
+            backendStatus === 'online'
+              ? styles.backendStatusOnline
+              : backendStatus === 'offline'
+              ? styles.backendStatusOffline
+              : styles.backendStatusChecking,
+          ]}
+        >
+          <View style={styles.backendStatusRow}>
+            <View
+              style={[
+                styles.backendStatusDot,
+                backendStatus === 'online'
+                  ? styles.backendStatusDotOnline
+                  : backendStatus === 'offline'
+                  ? styles.backendStatusDotOffline
+                  : styles.backendStatusDotChecking,
+              ]}
+            />
+            <Text style={styles.backendStatusTitle}>
+              {backendStatus === 'online'
+                ? 'Backend Connected'
+                : backendStatus === 'offline'
+                ? 'Backend Unavailable'
+                : 'Checking Backend'}
+            </Text>
+          </View>
+          <Text style={styles.backendStatusText}>{backendMessage}</Text>
+        </View>
+
         <TextInput
           style={styles.input}
           placeholder="Email or Phone"
@@ -178,7 +270,7 @@ export default function LoginScreen({ navigation }: any) {
         <TouchableOpacity 
           style={[styles.button, loading ? styles.buttonDisabled : null]} 
           onPress={handleLogin} 
-          disabled={loading || !identifier || !password}
+          disabled={loading || !identifier || !password || backendStatus !== 'online'}
         >
           {loading ? (
             <ActivityIndicator color="#fff" />
@@ -410,6 +502,54 @@ const styles = StyleSheet.create({
     color: '#666',
     textAlign: 'center',
     marginBottom: 30,
+  },
+  backendStatusCard: {
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 16,
+    borderWidth: 1,
+  },
+  backendStatusChecking: {
+    backgroundColor: '#eff6ff',
+    borderColor: '#bfdbfe',
+  },
+  backendStatusOnline: {
+    backgroundColor: '#ecfdf5',
+    borderColor: '#bbf7d0',
+  },
+  backendStatusOffline: {
+    backgroundColor: '#fef2f2',
+    borderColor: '#fecaca',
+  },
+  backendStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  backendStatusDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  backendStatusDotChecking: {
+    backgroundColor: '#2563eb',
+  },
+  backendStatusDotOnline: {
+    backgroundColor: '#16a34a',
+  },
+  backendStatusDotOffline: {
+    backgroundColor: '#dc2626',
+  },
+  backendStatusTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  backendStatusText: {
+    marginTop: 8,
+    fontSize: 12,
+    color: '#475569',
+    lineHeight: 18,
   },
   input: {
     backgroundColor: '#fff',

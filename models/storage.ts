@@ -13,6 +13,7 @@ import {
   SectorNeed,
   VolunteerTimeLog,
   PartnerProjectApplication,
+  VolunteerProjectJoinRecord,
 } from './types';
 import { NVCSector, UserRole } from './types';
 
@@ -26,15 +27,25 @@ const STORAGE_KEYS = {
   STATUS_UPDATES: 'statusUpdates',
   VOLUNTEER_MATCHES: 'volunteerMatches',
   VOLUNTEER_TIME_LOGS: 'volunteerTimeLogs',
+  VOLUNTEER_PROJECT_JOINS: 'volunteerProjectJoins',
   PARTNER_PROJECT_APPLICATIONS: 'partnerProjectApplications',
 };
 
 const WEB_MESSAGE_SYNC_KEY = 'volcre:messages:updatedAt';
 const memoryStorageCache = new Map<string, unknown>();
 let mockDataInitializationPromise: Promise<void> | null = null;
-const REMOTE_STORAGE_TIMEOUT_MS = 2500;
+let sharedStorageCleanupPromise: Promise<void> | null = null;
+let sharedStorageCleanupCompleted = false;
+// Supabase-backed storage reads can exceed 2.5s on some networks.
+// Keep this comfortably above the observed backend round-trip so web/mobile
+// prefer shared storage instead of silently falling back to stale local cache.
+const REMOTE_STORAGE_TIMEOUT_MS = 10000;
 const API_READY_RETRY_MS = 800;
 const API_READY_MAX_ATTEMPTS = 6;
+const LOCAL_ONLY_STORAGE_KEYS = new Set([STORAGE_KEYS.CURRENT_USER]);
+const SHARED_STORAGE_KEYS = Object.values(STORAGE_KEYS).filter(
+  key => !LOCAL_ONLY_STORAGE_KEYS.has(key)
+);
 const NEGROS_OCCIDENTAL_BOUNDS = {
   minLatitude: 9.85,
   maxLatitude: 11.05,
@@ -350,10 +361,19 @@ function resolveConfiguredApiBaseUrl(configuredBaseUrl: string): string {
   return trimmedBaseUrl;
 }
 
-function getApiBaseUrl(): string {
-  const configuredBaseUrl = Constants.expoConfig?.extra?.apiBaseUrl as string | undefined;
-  if (configuredBaseUrl && configuredBaseUrl.trim().length > 0) {
-    return resolveConfiguredApiBaseUrl(configuredBaseUrl);
+export function getApiBaseUrl(): string {
+  const configuredWebBaseUrl = Constants.expoConfig?.extra?.webApiBaseUrl as string | undefined;
+  if (typeof document !== 'undefined') {
+    if (configuredWebBaseUrl && configuredWebBaseUrl.trim().length > 0) {
+      return configuredWebBaseUrl.trim().replace(/\/$/, '');
+    }
+
+    return 'http://127.0.0.1:8000';
+  }
+
+  const configuredNativeBaseUrl = Constants.expoConfig?.extra?.apiBaseUrl as string | undefined;
+  if (configuredNativeBaseUrl && configuredNativeBaseUrl.trim().length > 0) {
+    return resolveConfiguredApiBaseUrl(configuredNativeBaseUrl);
   }
 
   const bundlerHost = getBundlerHost();
@@ -395,6 +415,7 @@ async function waitForApiReady(): Promise<void> {
 }
 
 async function fetchRemoteStorageItem<T>(key: string): Promise<T | null> {
+  await waitForApiReady();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REMOTE_STORAGE_TIMEOUT_MS);
   const response = await fetch(`${getApiBaseUrl()}/storage/${encodeURIComponent(key)}`, {
@@ -428,7 +449,41 @@ async function setLocalStorageItem<T>(key: string, value: T): Promise<void> {
   await AsyncStorage.setItem(key, JSON.stringify(value));
 }
 
+async function deleteLocalStorageItem(key: string): Promise<void> {
+  memoryStorageCache.delete(key);
+  await AsyncStorage.removeItem(key);
+}
+
+function isLocalOnlyStorageKey(key: string): boolean {
+  return LOCAL_ONLY_STORAGE_KEYS.has(key);
+}
+
+async function ensureSharedStorageCleanup(): Promise<void> {
+  if (sharedStorageCleanupCompleted) {
+    return;
+  }
+
+  if (sharedStorageCleanupPromise) {
+    return sharedStorageCleanupPromise;
+  }
+
+  sharedStorageCleanupPromise = (async () => {
+    for (const key of SHARED_STORAGE_KEYS) {
+      memoryStorageCache.delete(key);
+    }
+    await AsyncStorage.multiRemove(SHARED_STORAGE_KEYS);
+  })();
+
+  try {
+    await sharedStorageCleanupPromise;
+    sharedStorageCleanupCompleted = true;
+  } finally {
+    sharedStorageCleanupPromise = null;
+  }
+}
+
 async function saveRemoteStorageItem<T>(key: string, value: T): Promise<void> {
+  await waitForApiReady();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REMOTE_STORAGE_TIMEOUT_MS);
   const response = await fetch(`${getApiBaseUrl()}/storage/${encodeURIComponent(key)}`, {
@@ -446,6 +501,7 @@ async function saveRemoteStorageItem<T>(key: string, value: T): Promise<void> {
 }
 
 async function deleteRemoteStorageItem(key: string): Promise<void> {
+  await waitForApiReady();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REMOTE_STORAGE_TIMEOUT_MS);
   const response = await fetch(`${getApiBaseUrl()}/storage/${encodeURIComponent(key)}`, {
@@ -459,6 +515,7 @@ async function deleteRemoteStorageItem(key: string): Promise<void> {
 }
 
 async function clearRemoteStorage(): Promise<void> {
+  await waitForApiReady();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REMOTE_STORAGE_TIMEOUT_MS);
   const response = await fetch(`${getApiBaseUrl()}/storage`, {
@@ -489,35 +546,38 @@ function isExpectedRemoteStorageError(error: unknown): boolean {
 
 // Generic storage functions
 export async function getStorageItem<T>(key: string): Promise<T | null> {
-  try {
+  if (isLocalOnlyStorageKey(key)) {
     try {
-      const remoteValue = await fetchRemoteStorageItem<T>(key);
-      if (remoteValue !== null) {
-        await setLocalStorageItem(key, remoteValue);
-      } else {
-        memoryStorageCache.delete(key);
-        await AsyncStorage.removeItem(key);
-      }
-      return remoteValue;
-    } catch {
       return await getLocalStorageItem<T>(key);
+    } catch (error) {
+      console.error(`Error reading local ${key}:`, error);
+      return null;
     }
+  }
+
+  await ensureSharedStorageCleanup();
+
+  try {
+    return await fetchRemoteStorageItem<T>(key);
   } catch (error) {
-    if (!isExpectedRemoteStorageError(error)) {
-      console.error(`Error reading ${key}:`, error);
-    }
-    return null;
+    console.error(`Error reading shared ${key} from backend:`, error);
+    throw error;
   }
 }
 
 export async function setStorageItem<T>(key: string, value: T): Promise<void> {
-  try {
+  if (isLocalOnlyStorageKey(key)) {
     await setLocalStorageItem(key, value);
+    return;
+  }
+
+  await ensureSharedStorageCleanup();
+
+  try {
     await saveRemoteStorageItem(key, value);
   } catch (error) {
-    if (!isExpectedRemoteStorageError(error)) {
-      console.error(`Error saving ${key}:`, error);
-    }
+    console.error(`Error saving shared ${key} to backend:`, error);
+    throw error;
   }
 }
 
@@ -647,6 +707,9 @@ export async function deleteUser(userId: string): Promise<void> {
   await setStorageItem(STORAGE_KEYS.USERS, filteredUsers);
 
   const volunteers = await getStorageItem<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS) || [];
+  const removedVolunteerIds = volunteers
+    .filter(volunteer => volunteer.id === userId || volunteer.userId === userId)
+    .map(volunteer => volunteer.id);
   const filteredVolunteers = volunteers.filter(
     volunteer => volunteer.id !== userId && volunteer.userId !== userId
   );
@@ -665,10 +728,22 @@ export async function deleteUser(userId: string): Promise<void> {
   );
   await setStorageItem(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS, filteredPartnerApplications);
 
+  const volunteerJoinRecords =
+    await getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS) || [];
+  const filteredVolunteerJoinRecords = volunteerJoinRecords.filter(
+    record =>
+      record.volunteerUserId !== userId &&
+      !removedVolunteerIds.includes(record.volunteerId)
+  );
+  await setStorageItem(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS, filteredVolunteerJoinRecords);
+
   const projects = await getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS) || [];
   const updatedProjects = projects.map(project => ({
     ...project,
     joinedUserIds: (project.joinedUserIds || []).filter(joinedId => joinedId !== userId),
+    volunteers: project.volunteers.filter(
+      volunteerId => !removedVolunteerIds.includes(volunteerId)
+    ),
   }));
   await setStorageItem(STORAGE_KEYS.PROJECTS, updatedProjects);
 
@@ -680,22 +755,14 @@ export async function deleteUser(userId: string): Promise<void> {
 
 export async function setCurrentUser(user: User | null): Promise<void> {
   if (user) {
-    await setStorageItem(STORAGE_KEYS.CURRENT_USER, user);
+    await setLocalStorageItem(STORAGE_KEYS.CURRENT_USER, user);
   } else {
-    try {
-      await deleteRemoteStorageItem(STORAGE_KEYS.CURRENT_USER);
-    } catch (error) {
-      if (!isExpectedRemoteStorageError(error)) {
-        console.error('Error clearing current user remotely:', error);
-      }
-    }
-    memoryStorageCache.delete(STORAGE_KEYS.CURRENT_USER);
-    await AsyncStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
+    await deleteLocalStorageItem(STORAGE_KEYS.CURRENT_USER);
   }
 }
 
 export async function getCurrentUser(): Promise<User | null> {
-  return (await getStorageItem<User>(STORAGE_KEYS.CURRENT_USER)) || null;
+  return (await getLocalStorageItem<User>(STORAGE_KEYS.CURRENT_USER)) || null;
 }
 
 // Partner Storage
@@ -1091,6 +1158,9 @@ export async function saveVolunteerProjectMatch(match: VolunteerProjectMatch): P
   }
   await setStorageItem(STORAGE_KEYS.VOLUNTEER_MATCHES, matches);
   await attachVolunteerToProject(match.projectId, match.volunteerId);
+  if (match.status === 'Matched') {
+    await ensureVolunteerProjectJoinRecord(match.projectId, match.volunteerId, 'AdminMatch');
+  }
   await syncVolunteerEngagementStatus(match.volunteerId);
 }
 
@@ -1102,6 +1172,70 @@ export async function getVolunteerProjectMatches(volunteerId: string): Promise<V
 export async function getProjectMatches(projectId: string): Promise<VolunteerProjectMatch[]> {
   const matches = await getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES) || [];
   return matches.filter(m => m.projectId === projectId);
+}
+
+export async function saveVolunteerProjectJoinRecord(
+  record: VolunteerProjectJoinRecord
+): Promise<void> {
+  const records =
+    await getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS) || [];
+  const normalizedRecord: VolunteerProjectJoinRecord = {
+    ...record,
+    participationStatus: record.participationStatus || 'Active',
+  };
+  const existingIndex = records.findIndex(existingRecord => existingRecord.id === record.id);
+  if (existingIndex >= 0) {
+    records[existingIndex] = normalizedRecord;
+  } else {
+    records.push(normalizedRecord);
+  }
+  await setStorageItem(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS, records);
+}
+
+export async function getVolunteerProjectJoinRecords(
+  projectId: string
+): Promise<VolunteerProjectJoinRecord[]> {
+  const records =
+    await getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS) || [];
+  return records
+    .filter(record => record.projectId === projectId)
+    .map(record => ({
+      ...record,
+      participationStatus: record.participationStatus || 'Active',
+    }))
+    .sort((a, b) => new Date(b.joinedAt).getTime() - new Date(a.joinedAt).getTime());
+}
+
+export async function completeVolunteerProjectParticipation(
+  projectId: string,
+  volunteerId: string,
+  completedBy: string
+): Promise<VolunteerProjectJoinRecord> {
+  await ensureVolunteerProjectJoinRecord(projectId, volunteerId, 'AdminMatch');
+
+  const records =
+    await getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS) || [];
+  const recordIndex = records.findIndex(
+    record => record.projectId === projectId && record.volunteerId === volunteerId
+  );
+
+  if (recordIndex === -1) {
+    throw new Error('Volunteer participation record not found.');
+  }
+
+  const updatedRecord: VolunteerProjectJoinRecord = {
+    ...records[recordIndex],
+    participationStatus: 'Completed',
+    completedAt: new Date().toISOString(),
+    completedBy,
+  };
+
+  records[recordIndex] = updatedRecord;
+  await setStorageItem(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS, records);
+  await markVolunteerMatchCompleted(projectId, volunteerId);
+  await addProjectToVolunteerHistory(volunteerId, projectId);
+  await syncVolunteerEngagementStatus(volunteerId);
+  return updatedRecord;
 }
 
 export async function savePartnerProjectApplication(
@@ -1229,6 +1363,7 @@ export async function joinProjectEvent(projectId: string, userId: string): Promi
   });
 
   if (volunteerId) {
+    await ensureVolunteerProjectJoinRecord(projectId, volunteerId, 'VolunteerJoin');
     await syncVolunteerEngagementStatus(volunteerId);
   }
 }
@@ -1604,23 +1739,101 @@ async function attachVolunteerToProject(projectId: string, volunteerId: string):
   });
 }
 
+async function ensureVolunteerProjectJoinRecord(
+  projectId: string,
+  volunteerId: string,
+  source: VolunteerProjectJoinRecord['source']
+): Promise<void> {
+  const records =
+    await getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS) || [];
+  const existingRecord = records.find(
+    record => record.projectId === projectId && record.volunteerId === volunteerId
+  );
+  if (existingRecord) {
+    return;
+  }
+
+  const volunteer = await getVolunteer(volunteerId);
+  if (!volunteer) {
+    return;
+  }
+
+  const record: VolunteerProjectJoinRecord = {
+    id: `volunteer-join-${projectId}-${volunteerId}`,
+    projectId,
+    volunteerId,
+    volunteerUserId: volunteer.userId,
+    volunteerName: volunteer.name,
+    volunteerEmail: volunteer.email,
+    joinedAt: new Date().toISOString(),
+    source,
+    participationStatus: 'Active',
+  };
+
+  await saveVolunteerProjectJoinRecord(record);
+}
+
+async function markVolunteerMatchCompleted(
+  projectId: string,
+  volunteerId: string
+): Promise<void> {
+  const matches = await getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES) || [];
+  let updated = false;
+
+  const nextMatches = matches.map(match => {
+    if (
+      match.projectId === projectId &&
+      match.volunteerId === volunteerId &&
+      (match.status === 'Matched' || match.status === 'Requested')
+    ) {
+      updated = true;
+      return {
+        ...match,
+        status: 'Completed' as const,
+      };
+    }
+    return match;
+  });
+
+  if (updated) {
+    await setStorageItem(STORAGE_KEYS.VOLUNTEER_MATCHES, nextMatches);
+  }
+}
+
+async function addProjectToVolunteerHistory(
+  volunteerId: string,
+  projectId: string
+): Promise<void> {
+  const volunteer = await getVolunteer(volunteerId);
+  if (!volunteer || volunteer.pastProjects.includes(projectId)) {
+    return;
+  }
+
+  await saveVolunteer({
+    ...volunteer,
+    pastProjects: [...volunteer.pastProjects, projectId],
+  });
+}
+
 async function syncVolunteerEngagementStatus(volunteerId: string): Promise<void> {
   const volunteer = await getVolunteer(volunteerId);
   if (!volunteer) return;
 
-  const [matches, projects] = await Promise.all([
+  const [matches, joinRecords] = await Promise.all([
     getVolunteerProjectMatches(volunteerId),
-    getAllProjects(),
+    getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS),
   ]);
 
   const hasActiveMatch = matches.some(
     match => match.status === 'Matched' || match.status === 'Requested'
   );
-  const hasJoinedEvent = projects.some(
-    project => project.isEvent && (project.joinedUserIds || []).includes(volunteer.userId)
+  const hasActiveParticipation = (joinRecords || []).some(
+    record =>
+      record.volunteerId === volunteerId &&
+      (record.participationStatus || 'Active') === 'Active'
   );
 
-  const nextStatus = hasActiveMatch || hasJoinedEvent ? 'Busy' : 'Open to Volunteer';
+  const nextStatus = hasActiveMatch || hasActiveParticipation ? 'Busy' : 'Open to Volunteer';
 
   if (volunteer.engagementStatus !== nextStatus) {
     await saveVolunteer({

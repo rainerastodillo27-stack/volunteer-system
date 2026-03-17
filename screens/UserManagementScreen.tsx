@@ -11,11 +11,14 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
+import { format } from 'date-fns';
 import { useAuth } from '../contexts/AuthContext';
 import { deleteUser, getAllUsers, saveUser } from '../models/storage';
 import { NVCSector, User, UserRole, UserType } from '../models/types';
 
 const roleOptions: UserRole[] = ['admin', 'partner', 'volunteer'];
+const NEW_ACCOUNT_WINDOW_MS = 1000 * 60 * 60 * 24 * 3;
+const USER_REFRESH_INTERVAL_MS = 5000;
 
 export default function UserManagementScreen() {
   const { user, isAdmin } = useAuth();
@@ -29,6 +32,7 @@ export default function UserManagementScreen() {
   const [roleDraft, setRoleDraft] = useState<UserRole>('volunteer');
   const [userTypeDraft, setUserTypeDraft] = useState<UserType>('Adult');
   const [pillarsDraft, setPillarsDraft] = useState<NVCSector[]>([]);
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
 
   useEffect(() => {
     if (isAdmin) {
@@ -38,19 +42,43 @@ export default function UserManagementScreen() {
 
   useFocusEffect(
     React.useCallback(() => {
-      if (isAdmin) {
-        loadUsers();
+      if (!isAdmin) {
+        return undefined;
       }
+
+      void loadUsers();
+      const refreshTimer = setInterval(() => {
+        void loadUsers();
+      }, USER_REFRESH_INTERVAL_MS);
+
+      return () => clearInterval(refreshTimer);
     }, [isAdmin])
   );
 
   const loadUsers = async () => {
     try {
       const allUsers = await getAllUsers();
-      setUsers(allUsers.sort((a, b) => a.name.localeCompare(b.name)));
+      const sortedUsers = [...allUsers].sort((a, b) => {
+        const createdAtDiff =
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        if (!Number.isNaN(createdAtDiff) && createdAtDiff !== 0) {
+          return createdAtDiff;
+        }
+        return a.name.localeCompare(b.name);
+      });
+      setUsers(sortedUsers);
+      setLastSyncedAt(new Date().toISOString());
     } catch (error) {
       Alert.alert('Error', 'Failed to load users.');
     }
+  };
+
+  const isNewAccount = (createdAt: string) => {
+    const createdTime = new Date(createdAt).getTime();
+    if (Number.isNaN(createdTime)) {
+      return false;
+    }
+    return Date.now() - createdTime <= NEW_ACCOUNT_WINDOW_MS;
   };
 
   const openEditModal = (targetUser: User) => {
@@ -140,6 +168,18 @@ export default function UserManagementScreen() {
     <View style={styles.container}>
       <Text style={styles.title}>User Management</Text>
 
+      <View style={styles.toolbar}>
+        <Text style={styles.syncText}>
+          {lastSyncedAt
+            ? `Last synced ${format(new Date(lastSyncedAt), 'MMM dd, yyyy hh:mm a')}`
+            : 'Syncing users...'}
+        </Text>
+        <TouchableOpacity style={styles.refreshButton} onPress={() => void loadUsers()}>
+          <MaterialIcons name="refresh" size={16} color="#166534" />
+          <Text style={styles.refreshButtonText}>Refresh</Text>
+        </TouchableOpacity>
+      </View>
+
       <View style={styles.summaryRow}>
         <View style={styles.summaryCard}>
           <Text style={styles.summaryValue}>{users.length}</Text>
@@ -170,10 +210,20 @@ export default function UserManagementScreen() {
                 <Text style={styles.avatarText}>{item.name.charAt(0).toUpperCase()}</Text>
               </View>
               <View style={styles.userInfo}>
-                <Text style={styles.userName}>{item.name}</Text>
+                <View style={styles.nameRow}>
+                  <Text style={styles.userName}>{item.name}</Text>
+                  {isNewAccount(item.createdAt) && (
+                    <View style={styles.newBadge}>
+                      <Text style={styles.newBadgeText}>New</Text>
+                    </View>
+                  )}
+                </View>
                 <Text style={styles.userMeta}>{item.email}</Text>
                 <Text style={styles.userMeta}>{item.phone || 'No phone number'}</Text>
                 <Text style={styles.userMeta}>{item.userType || 'No profile type'}</Text>
+                <Text style={styles.userMeta}>
+                  Created {format(new Date(item.createdAt), 'MMM dd, yyyy hh:mm a')}
+                </Text>
                 <Text style={styles.userMeta}>
                   {(item.pillarsOfInterest || []).length > 0
                     ? item.pillarsOfInterest?.join(', ')
@@ -312,6 +362,34 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#eee',
   },
+  toolbar: {
+    backgroundColor: '#fff',
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  syncText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#64748b',
+  },
+  refreshButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#dcfce7',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  refreshButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#166534',
+  },
   summaryRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -366,10 +444,28 @@ const styles = StyleSheet.create({
   userInfo: {
     flex: 1,
   },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
   userName: {
     fontSize: 15,
     fontWeight: '700',
     color: '#111827',
+  },
+  newBadge: {
+    backgroundColor: '#fef3c7',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  newBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#92400e',
+    textTransform: 'uppercase',
   },
   userMeta: {
     marginTop: 3,

@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Platform } from 'react-native';
 import Constants from 'expo-constants';
 import { useAuth } from '../contexts/AuthContext';
-import { initializeMockData } from '../models/storage';
+import { getApiBaseUrl, initializeMockData } from '../models/storage';
 
 export default function SystemSettingsScreen() {
   const { user, logout, isAdmin } = useAuth();
@@ -58,7 +58,9 @@ export default function SystemSettingsScreen() {
         <Text style={styles.infoLabel}>Version</Text>
         <Text style={styles.infoText}>{Constants.expoConfig?.version || '1.0.0'}</Text>
         <Text style={styles.infoLabel}>Environment</Text>
-        <Text style={styles.infoText}>Local AsyncStorage demo mode</Text>
+        <Text style={styles.infoText}>Backend-only shared storage with local session only</Text>
+        <Text style={styles.infoLabel}>Backend URL</Text>
+        <Text style={styles.infoText}>{getApiBaseUrl()}</Text>
       </View>
 
       <View style={styles.card}>
@@ -71,7 +73,7 @@ export default function SystemSettingsScreen() {
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>Local Data Controls</Text>
         <Text style={styles.infoText}>
-          Re-sync seeded users, partners, and projects without connecting to a backend.
+          Re-sync seeded users, partners, and projects into backend storage.
         </Text>
         <TouchableOpacity style={styles.primaryButton} onPress={handleRefreshDemoData}>
           <Text style={styles.primaryButtonText}>Refresh Demo Data</Text>

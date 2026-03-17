@@ -65,8 +65,8 @@ function ensureBackendStarted() {
 module.exports = () => {
   ensureBackendStarted();
 
-  const apiBaseUrl =
-    process.env.VOLCRE_API_BASE_URL || `http://${getLanIp()}:8000`;
+  const lanApiBaseUrl = process.env.VOLCRE_API_BASE_URL || `http://${getLanIp()}:8000`;
+  const webApiBaseUrl = process.env.VOLCRE_WEB_API_BASE_URL || 'http://127.0.0.1:8000';
 
   return {
     expo: {
@@ -85,7 +85,8 @@ module.exports = () => {
       },
       scheme: 'volcre',
       extra: {
-        apiBaseUrl,
+        apiBaseUrl: lanApiBaseUrl,
+        webApiBaseUrl,
       },
       plugins: ['expo-font'],
     },

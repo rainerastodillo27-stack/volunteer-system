@@ -10,19 +10,36 @@ import {
   TextInput,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import { PartnerProjectApplication, Project, StatusUpdate } from '../models/types';
 import {
+  completeVolunteerProjectParticipation,
   getAllProjects,
+  getAllVolunteers,
   getPartnerProjectApplications,
   getStatusUpdatesByProject,
+  getVolunteerProjectJoinRecords,
   reviewPartnerProjectApplication,
   saveProject,
   saveStatusUpdate,
 } from '../models/storage';
+import { Volunteer, VolunteerProjectJoinRecord } from '../models/types';
 import { useAuth } from '../contexts/AuthContext';
 import { format } from 'date-fns';
 
 const statuses = ['Planning', 'In Progress', 'On Hold', 'Completed', 'Cancelled'];
+const PROJECT_REFRESH_INTERVAL_MS = 5000;
+
+type ProjectVolunteerEntry = {
+  id: string;
+  name: string;
+  email: string;
+  joinedAt: string | undefined;
+  source: VolunteerProjectJoinRecord['source'] | undefined;
+  participationStatus: VolunteerProjectJoinRecord['participationStatus'];
+  completedAt: string | undefined;
+  status: Volunteer['engagementStatus'] | undefined;
+};
 
 export default function ProjectLifecycleScreen({ navigation }: any) {
   const { user, isAdmin } = useAuth();
@@ -30,13 +47,51 @@ export default function ProjectLifecycleScreen({ navigation }: any) {
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [statusUpdates, setStatusUpdates] = useState<StatusUpdate[]>([]);
   const [partnerApplications, setPartnerApplications] = useState<PartnerProjectApplication[]>([]);
+  const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
+  const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [newStatus, setNewStatus] = useState<Project['status']>('Planning');
   const [updateDescription, setUpdateDescription] = useState('');
 
   useEffect(() => {
     loadProjects();
+    loadVolunteers();
   }, []);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      let active = true;
+
+      const refresh = async () => {
+        await Promise.all([loadProjects(), loadVolunteers()]);
+        if (selectedProject?.id) {
+          await Promise.all([
+            loadStatusUpdates(selectedProject.id),
+            loadPartnerApplicationsForProject(selectedProject.id),
+            loadVolunteerJoinsForProject(selectedProject.id),
+          ]);
+
+          const refreshedProjects = await getAllProjects();
+          if (!active) {
+            return;
+          }
+          const refreshedSelectedProject =
+            refreshedProjects.find(project => project.id === selectedProject.id) || null;
+          setSelectedProject(refreshedSelectedProject);
+        }
+      };
+
+      void refresh();
+      const refreshTimer = setInterval(() => {
+        void refresh();
+      }, PROJECT_REFRESH_INTERVAL_MS);
+
+      return () => {
+        active = false;
+        clearInterval(refreshTimer);
+      };
+    }, [selectedProject?.id])
+  );
 
   const loadProjects = async () => {
     try {
@@ -44,6 +99,15 @@ export default function ProjectLifecycleScreen({ navigation }: any) {
       setProjects(allProjects);
     } catch (error) {
       Alert.alert('Error', 'Failed to load projects');
+    }
+  };
+
+  const loadVolunteers = async () => {
+    try {
+      const allVolunteers = await getAllVolunteers();
+      setVolunteers(allVolunteers);
+    } catch (error) {
+      Alert.alert('Error', 'Failed to load volunteers');
     }
   };
 
@@ -65,11 +129,21 @@ export default function ProjectLifecycleScreen({ navigation }: any) {
     }
   };
 
+  const loadVolunteerJoinsForProject = async (projectId: string) => {
+    try {
+      const records = await getVolunteerProjectJoinRecords(projectId);
+      setVolunteerJoinRecords(records);
+    } catch (error) {
+      Alert.alert('Error', 'Failed to load joined volunteers');
+    }
+  };
+
   const handleSelectProject = async (project: Project) => {
     setSelectedProject(project);
     await Promise.all([
       loadStatusUpdates(project.id),
       loadPartnerApplicationsForProject(project.id),
+      loadVolunteerJoinsForProject(project.id),
     ]);
   };
 
@@ -153,6 +227,62 @@ export default function ProjectLifecycleScreen({ navigation }: any) {
     }
   };
 
+  const handleCompleteVolunteerParticipation = async (volunteerId: string) => {
+    if (!isAdmin || !user?.id || !selectedProject) {
+      return;
+    }
+
+    try {
+      await completeVolunteerProjectParticipation(selectedProject.id, volunteerId, user.id);
+      await Promise.all([
+        loadVolunteerJoinsForProject(selectedProject.id),
+        loadVolunteers(),
+      ]);
+      Alert.alert('Success', 'Volunteer marked as completed for this program.');
+    } catch (error) {
+      Alert.alert('Error', 'Failed to complete volunteer participation.');
+    }
+  };
+
+  const getProjectVolunteerEntries = (project: Project) => {
+    const volunteerById = new Map(volunteers.map(volunteer => [volunteer.id, volunteer]));
+    const joinRecordByVolunteerId = new Map(
+      volunteerJoinRecords.map(record => [record.volunteerId, record])
+    );
+    const volunteerIds = Array.from(
+      new Set([
+        ...project.volunteers,
+        ...volunteerJoinRecords.map(record => record.volunteerId),
+      ])
+    );
+
+    return volunteerIds
+      .map<ProjectVolunteerEntry | null>(volunteerId => {
+        const volunteer = volunteerById.get(volunteerId);
+        const joinRecord = joinRecordByVolunteerId.get(volunteerId);
+        if (!volunteer && !joinRecord) {
+          return null;
+        }
+
+        return {
+          id: volunteerId,
+          name: joinRecord?.volunteerName || volunteer?.name || 'Volunteer',
+          email: joinRecord?.volunteerEmail || volunteer?.email || 'No email provided',
+          joinedAt: joinRecord?.joinedAt,
+          source: joinRecord?.source,
+          participationStatus: joinRecord?.participationStatus || 'Active',
+          completedAt: joinRecord?.completedAt,
+          status: volunteer?.engagementStatus,
+        };
+      })
+      .filter((entry): entry is ProjectVolunteerEntry => entry !== null)
+      .sort((a, b) => {
+        const left = a.joinedAt ? new Date(a.joinedAt).getTime() : 0;
+        const right = b.joinedAt ? new Date(b.joinedAt).getTime() : 0;
+        return right - left;
+      });
+  };
+
   const renderProjectCard = (project: Project) => (
     <TouchableOpacity
       key={project.id}
@@ -208,6 +338,8 @@ export default function ProjectLifecycleScreen({ navigation }: any) {
   );
 
   if (selectedProject) {
+    const volunteerEntries = getProjectVolunteerEntries(selectedProject);
+
     return (
       <ScrollView style={styles.container}>
         <View style={styles.header}>
@@ -215,7 +347,9 @@ export default function ProjectLifecycleScreen({ navigation }: any) {
             <MaterialIcons name="arrow-back" size={24} color="#333" />
           </TouchableOpacity>
           <Text style={styles.title}>Project Details</Text>
-          <View style={{ width: 24 }} />
+          <TouchableOpacity onPress={() => handleSelectProject(selectedProject)}>
+            <MaterialIcons name="refresh" size={22} color="#166534" />
+          </TouchableOpacity>
         </View>
 
         <View style={styles.detailsCard}>
@@ -296,6 +430,78 @@ export default function ProjectLifecycleScreen({ navigation }: any) {
                           <Text style={styles.applicationButtonText}>Reject</Text>
                         </TouchableOpacity>
                       </View>
+                    )}
+                  </View>
+                ))}
+              </View>
+            )}
+          </View>
+
+          <View style={styles.detailsSection}>
+            <Text style={styles.sectionTitle}>
+              Volunteer Participants ({volunteerEntries.length})
+            </Text>
+
+            {volunteerEntries.length === 0 ? (
+              <Text style={styles.emptyText}>No volunteers have joined this project yet</Text>
+            ) : (
+              <View style={styles.updatesList}>
+                {volunteerEntries.map(volunteerEntry => (
+                  <View key={volunteerEntry.id} style={styles.volunteerCard}>
+                    <View style={styles.volunteerCardHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.volunteerName}>{volunteerEntry.name}</Text>
+                        <Text style={styles.volunteerMeta}>{volunteerEntry.email}</Text>
+                        <Text style={styles.volunteerMeta}>
+                          {volunteerEntry.joinedAt
+                            ? `Joined ${format(new Date(volunteerEntry.joinedAt), 'PPpp')}`
+                            : 'Joined before tracking was enabled'}
+                        </Text>
+                        <Text style={styles.volunteerMeta}>
+                          {volunteerEntry.participationStatus === 'Completed' && volunteerEntry.completedAt
+                            ? `Completed ${format(new Date(volunteerEntry.completedAt), 'PPpp')}`
+                            : 'Participation active'}
+                        </Text>
+                      </View>
+                      <View style={styles.volunteerBadges}>
+                        {volunteerEntry.source && (
+                          <View style={styles.volunteerSourceBadge}>
+                            <Text style={styles.volunteerSourceBadgeText}>
+                              {volunteerEntry.source === 'VolunteerJoin'
+                                ? 'Volunteer Join'
+                                : 'Admin Match'}
+                            </Text>
+                          </View>
+                        )}
+                        <View
+                          style={[
+                            styles.volunteerParticipationBadge,
+                            volunteerEntry.participationStatus === 'Completed'
+                              ? styles.volunteerParticipationCompletedBadge
+                              : styles.volunteerParticipationActiveBadge,
+                          ]}
+                        >
+                          <Text style={styles.volunteerParticipationBadgeText}>
+                            {volunteerEntry.participationStatus}
+                          </Text>
+                        </View>
+                        {volunteerEntry.status && (
+                          <View style={styles.volunteerStatusBadge}>
+                            <Text style={styles.volunteerStatusBadgeText}>
+                              {volunteerEntry.status}
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+                    </View>
+                    {isAdmin && volunteerEntry.participationStatus !== 'Completed' && (
+                      <TouchableOpacity
+                        style={styles.completeVolunteerButton}
+                        onPress={() => handleCompleteVolunteerParticipation(volunteerEntry.id)}
+                      >
+                        <MaterialIcons name="task-alt" size={16} color="#fff" />
+                        <Text style={styles.completeVolunteerButtonText}>Mark Complete</Text>
+                      </TouchableOpacity>
                     )}
                   </View>
                 ))}
@@ -667,6 +873,87 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
     marginTop: 12,
+  },
+  volunteerCard: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    padding: 12,
+    marginBottom: 12,
+  },
+  volunteerCardHeader: {
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'flex-start',
+  },
+  volunteerName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  volunteerMeta: {
+    fontSize: 12,
+    color: '#64748b',
+    marginTop: 4,
+  },
+  volunteerBadges: {
+    alignItems: 'flex-end',
+    gap: 8,
+  },
+  volunteerParticipationBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  volunteerParticipationActiveBadge: {
+    backgroundColor: '#dbeafe',
+  },
+  volunteerParticipationCompletedBadge: {
+    backgroundColor: '#dcfce7',
+  },
+  volunteerParticipationBadgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  volunteerSourceBadge: {
+    backgroundColor: '#dcfce7',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  volunteerSourceBadgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#166534',
+  },
+  volunteerStatusBadge: {
+    backgroundColor: '#e0f2fe',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  volunteerStatusBadgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  completeVolunteerButton: {
+    marginTop: 12,
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#166534',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  completeVolunteerButtonText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
   },
   applicationButton: {
     flex: 1,

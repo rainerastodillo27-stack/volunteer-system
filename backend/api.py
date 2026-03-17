@@ -8,8 +8,8 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from .app_storage_seed import ensure_app_storage_seeded, ensure_app_storage_table
 from .db import (
-    ensure_sqlite_storage,
     get_configured_db_mode,
     get_db_mode,
     get_postgres_connection,
@@ -148,7 +148,7 @@ def serialize_message_row(row: Any) -> dict[str, Any]:
 
 @app.on_event("startup")
 def startup() -> None:
-    ensure_sqlite_storage()
+    ensure_app_storage_seeded()
 
 
 @app.get("/health")
@@ -192,7 +192,7 @@ def db_health() -> dict[str, Any]:
             result["database"] = database
             result["user"] = user
         else:
-            ensure_sqlite_storage()
+            ensure_app_storage_table()
             with get_sqlite_connection() as connection:
                 connection.execute("select 1").fetchone()
             result["database"] = "sqlite"
@@ -403,7 +403,7 @@ def get_storage_item(key: str) -> dict[str, Any]:
                 row = cursor.fetchone()
         return {"key": key, "value": None if row is None else row["value"]}
 
-    ensure_sqlite_storage()
+    ensure_app_storage_table()
     with get_sqlite_connection() as connection:
         row = connection.execute(
             "select value from app_storage where key = ?",
@@ -433,7 +433,7 @@ def put_storage_item(key: str, payload: StoragePayload) -> dict[str, str]:
             connection.commit()
         return {"status": "ok"}
 
-    ensure_sqlite_storage()
+    ensure_app_storage_table()
     with get_sqlite_connection() as connection:
         connection.execute(
             """
@@ -459,7 +459,7 @@ def delete_storage_item(key: str) -> dict[str, str]:
             connection.commit()
         return {"status": "ok"}
 
-    ensure_sqlite_storage()
+    ensure_app_storage_table()
     with get_sqlite_connection() as connection:
         connection.execute("delete from app_storage where key = ?", (key,))
         connection.commit()
@@ -476,7 +476,7 @@ def clear_storage() -> dict[str, str]:
             connection.commit()
         return {"status": "ok"}
 
-    ensure_sqlite_storage()
+    ensure_app_storage_table()
     with get_sqlite_connection() as connection:
         connection.execute("delete from app_storage")
         connection.commit()
@@ -486,21 +486,5 @@ def clear_storage() -> dict[str, str]:
 
 @app.post("/bootstrap")
 def bootstrap_storage() -> dict[str, str]:
-    if get_db_mode() == "postgres":
-        with get_postgres_connection() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    create table if not exists app_storage (
-                      key text primary key,
-                      value jsonb not null,
-                      updated_at timestamptz not null default now()
-                    )
-                    """
-                )
-            connection.commit()
-        return {"status": "ok"}
-
-    ensure_sqlite_storage()
-
+    ensure_app_storage_seeded()
     return {"status": "ok"}

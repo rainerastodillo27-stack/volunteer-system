@@ -24,6 +24,7 @@ export default function DashboardScreen({ navigation }: any) {
   const [partnerStats, setPartnerStats] = useState({ total: 0, approved: 0, pending: 0 });
   const [volunteerStats, setVolunteerStats] = useState({ total: 0, active: 0 });
   const [recentUpdates, setRecentUpdates] = useState<any[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     loadDashboardData();
@@ -42,6 +43,8 @@ export default function DashboardScreen({ navigation }: any) {
         getAllPartners(),
         getAllVolunteers(),
       ]);
+
+      setLoadError(null);
 
       setProjectStats({
         total: projects.length,
@@ -73,7 +76,9 @@ export default function DashboardScreen({ navigation }: any) {
       const allUpdates: any[] = updateGroups.flat();
       setRecentUpdates(allUpdates.slice(0, 5));
     } catch (error) {
-      Alert.alert('Error', 'Failed to load dashboard data');
+      setLoadError('Backend data is unavailable. Start the backend on port 8000 and refresh.');
+      setRecentUpdates([]);
+      Alert.alert('Error', 'Failed to load dashboard data from the backend.');
     }
   };
 
@@ -124,6 +129,19 @@ export default function DashboardScreen({ navigation }: any) {
           </TouchableOpacity>
         </View>
       </View>
+
+      {loadError && (
+        <View style={styles.errorBanner}>
+          <MaterialIcons name="error-outline" size={20} color="#991b1b" />
+          <View style={styles.errorBannerContent}>
+            <Text style={styles.errorBannerTitle}>Backend Unavailable</Text>
+            <Text style={styles.errorBannerText}>{loadError}</Text>
+          </View>
+          <TouchableOpacity onPress={loadDashboardData}>
+            <Text style={styles.errorBannerAction}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Key Metrics */}
       {isAdmin && (
@@ -335,6 +353,35 @@ const styles = StyleSheet.create({
     padding: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#eee',
+  },
+  errorBanner: {
+    margin: 16,
+    marginBottom: 0,
+    backgroundColor: '#fee2e2',
+    borderRadius: 12,
+    padding: 14,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  errorBannerContent: {
+    flex: 1,
+  },
+  errorBannerTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#991b1b',
+  },
+  errorBannerText: {
+    fontSize: 12,
+    color: '#7f1d1d',
+    marginTop: 4,
+    lineHeight: 18,
+  },
+  errorBannerAction: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#991b1b',
   },
   userSection: {
     flexDirection: 'row',

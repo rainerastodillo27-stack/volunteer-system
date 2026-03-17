@@ -119,6 +119,20 @@ export interface VolunteerProjectMatch {
   hoursContributed: number;
 }
 
+export interface VolunteerProjectJoinRecord {
+  id: string;
+  projectId: string;
+  volunteerId: string;
+  volunteerUserId: string;
+  volunteerName: string;
+  volunteerEmail: string;
+  joinedAt: string;
+  source: 'VolunteerJoin' | 'AdminMatch';
+  participationStatus: 'Active' | 'Completed';
+  completedAt?: string;
+  completedBy?: string;
+}
+
 export interface PartnerProjectApplication {
   id: string;
   projectId: string;

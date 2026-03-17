@@ -62,7 +62,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       setUser(userData);
-      await saveCurrentUser(userData);
+      void saveCurrentUser(userData).catch((error) => {
+        console.error('Error persisting current user:', error);
+      });
     } catch (error) {
       console.error('Error during login:', error);
       throw error;
