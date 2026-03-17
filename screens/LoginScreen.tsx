@@ -29,10 +29,6 @@ export default function LoginScreen({ navigation }: any) {
     setInitialized(true);
     setLoading(false);
 
-    void initializeMockData().catch((error) => {
-      console.error('Error initializing mock data:', error);
-    });
-
     return () => {
       mountedRef.current = false;
     };

@@ -361,6 +361,40 @@ function resolveConfiguredApiBaseUrl(configuredBaseUrl: string): string {
   return trimmedBaseUrl;
 }
 
+function resolveNativeApiBaseUrl(configuredBaseUrl?: string): string {
+  const bundlerHost = getBundlerHost();
+
+  if (configuredBaseUrl && configuredBaseUrl.trim().length > 0) {
+    const trimmedBaseUrl = configuredBaseUrl.trim().replace(/\/$/, '');
+
+    try {
+      const parsedUrl = new URL(trimmedBaseUrl);
+      if (bundlerHost) {
+        parsedUrl.hostname = bundlerHost;
+        return parsedUrl.toString().replace(/\/$/, '');
+      }
+
+      return resolveConfiguredApiBaseUrl(trimmedBaseUrl);
+    } catch {
+      if (bundlerHost) {
+        return `http://${bundlerHost}:8000`;
+      }
+
+      return trimmedBaseUrl;
+    }
+  }
+
+  if (bundlerHost) {
+    return `http://${bundlerHost}:8000`;
+  }
+
+  if (Platform.OS === 'android') {
+    return 'http://10.0.2.2:8000';
+  }
+
+  return 'http://127.0.0.1:8000';
+}
+
 export function getApiBaseUrl(): string {
   const configuredWebBaseUrl = Constants.expoConfig?.extra?.webApiBaseUrl as string | undefined;
   if (typeof document !== 'undefined') {
@@ -372,20 +406,7 @@ export function getApiBaseUrl(): string {
   }
 
   const configuredNativeBaseUrl = Constants.expoConfig?.extra?.apiBaseUrl as string | undefined;
-  if (configuredNativeBaseUrl && configuredNativeBaseUrl.trim().length > 0) {
-    return resolveConfiguredApiBaseUrl(configuredNativeBaseUrl);
-  }
-
-  const bundlerHost = getBundlerHost();
-  if (bundlerHost && Platform.OS !== 'web') {
-    return `http://${bundlerHost}:8000`;
-  }
-
-  if (Platform.OS === 'android') {
-    return 'http://10.0.2.2:8000';
-  }
-
-  return 'http://127.0.0.1:8000';
+  return resolveNativeApiBaseUrl(configuredNativeBaseUrl);
 }
 
 function getMessagesWebSocketUrl(userId: string): string {
