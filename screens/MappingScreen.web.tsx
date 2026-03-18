@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -9,27 +9,119 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import Constants from 'expo-constants';
 import { useAuth } from '../contexts/AuthContext';
 import { Project } from '../models/types';
 import { getAllProjects } from '../models/storage';
 
-const IFrame = 'iframe' as any;
+const MapHost = 'div' as any;
 
 const PHILIPPINES_CENTER = {
-  latitude: 12.8797,
-  longitude: 121.774,
+  lat: 12.8797,
+  lng: 121.774,
 };
 
 const PHILIPPINES_BOUNDS = {
-  southWest: {
-    latitude: 4.5,
-    longitude: 116.5,
-  },
-  northEast: {
-    latitude: 21.5,
-    longitude: 127.5,
-  },
+  south: 4.5,
+  west: 116.5,
+  north: 21.5,
+  east: 127.5,
 };
+
+function getWebGoogleMapsApiKey(): string | undefined {
+  const constantsAny = Constants as typeof Constants & {
+    manifest?: { extra?: Record<string, unknown> };
+    manifest2?: { extra?: { expoClient?: { extra?: Record<string, unknown> } } };
+  };
+
+  const fromExpoConfig = Constants.expoConfig?.extra?.webGoogleMapsApiKey;
+  const fromManifest = constantsAny.manifest?.extra?.webGoogleMapsApiKey;
+  const fromManifest2 = constantsAny.manifest2?.extra?.expoClient?.extra?.webGoogleMapsApiKey;
+  const fromPublicEnv = process.env.EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY;
+
+  const resolvedKey =
+    fromExpoConfig ??
+    fromManifest ??
+    fromManifest2 ??
+    fromPublicEnv;
+
+  return typeof resolvedKey === 'string' && resolvedKey.trim().length > 0
+    ? resolvedKey.trim()
+    : undefined;
+}
+
+function loadGoogleMapsScript(apiKey: string) {
+  const browserWindow = window as Window & {
+    google?: any;
+    __googleMapsScriptPromise?: Promise<void>;
+  };
+
+  if (browserWindow.google?.maps) {
+    return Promise.resolve();
+  }
+
+  if (browserWindow.__googleMapsScriptPromise) {
+    return browserWindow.__googleMapsScriptPromise;
+  }
+
+  browserWindow.__googleMapsScriptPromise = new Promise<void>((resolve, reject) => {
+    const existingScript = document.getElementById('google-maps-js-api') as HTMLScriptElement | null;
+
+    const handleLoad = () => {
+      if (browserWindow.google?.maps) {
+        resolve();
+        return;
+      }
+
+      reject(new Error('Google Maps JavaScript API did not initialize.'));
+    };
+
+    const handleError = () => reject(new Error('Failed to load Google Maps JavaScript API.'));
+
+    if (existingScript) {
+      existingScript.addEventListener('load', handleLoad, { once: true });
+      existingScript.addEventListener('error', handleError, { once: true });
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.id = 'google-maps-js-api';
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}`;
+    script.async = true;
+    script.defer = true;
+    script.addEventListener('load', handleLoad, { once: true });
+    script.addEventListener('error', handleError, { once: true });
+    document.head.appendChild(script);
+  });
+
+  return browserWindow.__googleMapsScriptPromise;
+}
+
+function getStatusColor(status: Project['status']) {
+  switch (status) {
+    case 'Planning':
+      return '#2196F3';
+    case 'In Progress':
+      return '#FFA500';
+    case 'On Hold':
+      return '#FF9800';
+    case 'Completed':
+      return '#4CAF50';
+    case 'Cancelled':
+      return '#f44336';
+    default:
+      return '#999';
+  }
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 export default function MappingScreen({ navigation }: any) {
   const { user } = useAuth();
@@ -37,30 +129,126 @@ export default function MappingScreen({ navigation }: any) {
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [showDetails, setShowDetails] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [mapError, setMapError] = useState<string | null>(null);
+  const googleMapsApiKey = getWebGoogleMapsApiKey();
+  const mapElementRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    loadProjects();
+    void loadProjects();
   }, []);
 
   useEffect(() => {
-    const handleWindowMessage = (event: MessageEvent) => {
-      if (typeof event.data !== 'string') {
-        return;
-      }
+    if (!googleMapsApiKey) {
+      setMapError('Google Maps web key is missing. Add GOOGLE_MAPS_WEB_API_KEY to .env.');
+      return;
+    }
 
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === 'selectProject') {
-          handleProjectSelection(data.projectId);
-        }
-      } catch (error) {
-        console.error('Error handling web map message:', error);
+    if (!mapElementRef.current) {
+      return;
+    }
+
+    let cancelled = false;
+    const browserWindow = window as Window & {
+      google?: any;
+      gm_authFailure?: () => void;
+    };
+
+    browserWindow.gm_authFailure = () => {
+      if (!cancelled) {
+        setMapError('Google Maps rejected the web key. Check Maps JavaScript API and localhost referrer restrictions.');
       }
     };
 
-    window.addEventListener('message', handleWindowMessage);
-    return () => window.removeEventListener('message', handleWindowMessage);
-  }, [projects]);
+    const renderMap = async () => {
+      try {
+        await loadGoogleMapsScript(googleMapsApiKey);
+        if (cancelled || !mapElementRef.current || !browserWindow.google?.maps) {
+          return;
+        }
+
+        setMapError(null);
+
+        const map = new browserWindow.google.maps.Map(mapElementRef.current, {
+          center: PHILIPPINES_CENTER,
+          zoom: 6,
+          minZoom: 5,
+          mapTypeControl: false,
+          streetViewControl: false,
+          fullscreenControl: false,
+          restriction: {
+            latLngBounds: PHILIPPINES_BOUNDS,
+            strictBounds: false,
+          },
+        });
+
+        const bounds = new browserWindow.google.maps.LatLngBounds();
+        const infoWindow = new browserWindow.google.maps.InfoWindow();
+
+        projects.forEach((project, index) => {
+          const marker = new browserWindow.google.maps.Marker({
+            map,
+            position: {
+              lat: project.location.latitude,
+              lng: project.location.longitude,
+            },
+            title: project.title,
+            label: {
+              text: String(index + 1),
+              color: '#ffffff',
+              fontWeight: '700',
+            },
+            icon: {
+              path: browserWindow.google.maps.SymbolPath.CIRCLE,
+              fillColor: project.isEvent ? '#9C27B0' : getStatusColor(project.status),
+              fillOpacity: 1,
+              strokeColor: '#ffffff',
+              strokeOpacity: 1,
+              strokeWeight: 2,
+              scale: 12,
+            },
+          });
+
+          bounds.extend(marker.getPosition());
+
+          marker.addListener('click', () => {
+            infoWindow.setContent(`
+              <div style="width:220px;padding:14px;font-family:Arial,sans-serif;">
+                <div style="margin-bottom:8px;font-size:16px;font-weight:700;color:#111827;">
+                  ${escapeHtml(project.title)}
+                </div>
+                <div style="display:inline-block;margin-bottom:10px;padding:4px 10px;border-radius:999px;color:#fff;font-size:11px;font-weight:700;background:${project.isEvent ? '#9C27B0' : '#4CAF50'};">
+                  ${escapeHtml(project.isEvent ? 'Event' : 'Program')}
+                </div>
+                <div style="margin-bottom:6px;font-size:12px;color:#4b5563;"><strong>Status:</strong> ${escapeHtml(project.status)}</div>
+                <div style="margin-bottom:6px;font-size:12px;color:#4b5563;"><strong>Location:</strong> ${project.location.latitude.toFixed(4)}, ${project.location.longitude.toFixed(4)}</div>
+                <div style="font-size:12px;color:#4b5563;"><strong>Volunteers Needed:</strong> ${project.volunteersNeeded}</div>
+              </div>
+            `);
+            infoWindow.open({ anchor: marker, map });
+            setSelectedProject(project);
+            setShowDetails(true);
+          });
+        });
+
+        if (projects.length > 0) {
+          map.fitBounds(bounds, 48);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setMapError('Google Maps could not load. Check that Maps JavaScript API is enabled for the web key.');
+        }
+      }
+    };
+
+    void renderMap();
+
+    return () => {
+      cancelled = true;
+      if (browserWindow.gm_authFailure) {
+        delete browserWindow.gm_authFailure;
+      }
+    };
+  }, [googleMapsApiKey, projects]);
 
   const loadProjects = async () => {
     try {
@@ -75,38 +263,6 @@ export default function MappingScreen({ navigation }: any) {
     }
   };
 
-  const getStatusColor = (status: Project['status']) => {
-    switch (status) {
-      case 'Planning':
-        return '#2196F3';
-      case 'In Progress':
-        return '#FFA500';
-      case 'On Hold':
-        return '#FF9800';
-      case 'Completed':
-        return '#4CAF50';
-      case 'Cancelled':
-        return '#f44336';
-      default:
-        return '#999';
-    }
-  };
-
-  const getMarkerColor = (project: Project) => {
-    if (project.isEvent) return '#9C27B0';
-    return getStatusColor(project.status);
-  };
-
-  const handleProjectSelection = (projectId: string) => {
-    const project = projects.find(p => p.id === projectId);
-    if (!project) {
-      return;
-    }
-
-    setSelectedProject(project);
-    setShowDetails(true);
-  };
-
   const handleOpenProjectDetails = () => {
     if (!selectedProject) {
       return;
@@ -119,113 +275,6 @@ export default function MappingScreen({ navigation }: any) {
     }
 
     navigation.navigate('Projects', { projectId: selectedProject.id });
-  };
-
-  const generateLeafletHTML = () => {
-    const projectMarkers = projects
-      .map(
-        (project, index) => `
-      L.marker([${project.location.latitude}, ${project.location.longitude}], {
-        icon: L.icon({
-          iconUrl: 'data:image/svg+xml;utf8,${encodeURIComponent(
-            `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle cx="16" cy="16" r="14" fill="${getMarkerColor(
-              project
-            )}" stroke="white" stroke-width="2"/><text x="16" y="20" text-anchor="middle" font-size="12" fill="white" font-weight="bold">${
-              index + 1
-            }</text></svg>`
-          )}',
-          iconSize: [32, 32],
-          iconAnchor: [16, 32],
-          popupAnchor: [0, -32],
-        }),
-      })
-        .addTo(map)
-        .bindPopup(\`<div style="font-family: Arial; width: 200px;">
-          <h4 style="margin: 0 0 8px 0; color: #333;">${project.title}</h4>
-          <p style="margin: 4px 0; font-size: 12px; color: #fff;">
-            <span style="background:${project.isEvent ? '#9C27B0' : '#4CAF50'}; padding:4px 8px; border-radius:999px; font-weight:bold;">
-              ${project.isEvent ? 'Event' : 'Program'}
-            </span>
-          </p>
-          <p style="margin: 4px 0; font-size: 12px; color: #666;">
-            <strong>Type:</strong> ${project.isEvent ? 'Event' : 'Program'}
-          </p>
-          <p style="margin: 4px 0; font-size: 12px; color: #666;">
-            <strong>Status:</strong> <span style="color: ${getStatusColor(project.status)}; font-weight: bold;">${project.status}</span>
-          </p>
-          <p style="margin: 4px 0; font-size: 12px; color: #666;">
-            <strong>Location:</strong> ${project.location.latitude.toFixed(4)}, ${project.location.longitude.toFixed(4)}
-          </p>
-          <p style="margin: 4px 0; font-size: 12px; color: #666;">
-            <strong>Volunteers Needed:</strong> ${project.volunteersNeeded}
-          </p>
-        </div>\`)
-        .on('click', function() {
-          const message = JSON.stringify({
-            type: 'selectProject',
-            projectId: ${JSON.stringify(project.id)}
-          });
-
-          if (window.parent && window.parent !== window) {
-            window.parent.postMessage(message, '*');
-          }
-        });
-    `
-      )
-      .join('\n');
-
-    const mapBounds = projects
-      .map(project => `[${project.location.latitude}, ${project.location.longitude}]`)
-      .join(',\n');
-
-    return `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta charset="utf-8" />
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
-          <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"><\/script>
-          <style>
-            * { margin: 0; padding: 0; box-sizing: border-box; }
-            body { height: 100vh; font-family: Arial, sans-serif; }
-            #map { height: 100%; width: 100%; }
-            .leaflet-popup-content { padding: 0 !important; }
-            .leaflet-popup-content-wrapper { border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.2) !important; }
-          </style>
-        </head>
-        <body>
-          <div id="map"></div>
-          <script>
-            const philippinesBounds = [
-              [${PHILIPPINES_BOUNDS.southWest.latitude}, ${PHILIPPINES_BOUNDS.southWest.longitude}],
-              [${PHILIPPINES_BOUNDS.northEast.latitude}, ${PHILIPPINES_BOUNDS.northEast.longitude}]
-            ];
-
-            const map = L.map('map', {
-              maxBounds: philippinesBounds,
-              maxBoundsViscosity: 1.0,
-              minZoom: 5,
-            }).setView([${PHILIPPINES_CENTER.latitude}, ${PHILIPPINES_CENTER.longitude}], 6);
-
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-              attribution: '&copy; OpenStreetMap contributors',
-              maxZoom: 19,
-            }).addTo(map);
-
-            L.control.scale().addTo(map);
-            map.zoomControl.setPosition('bottomright');
-            ${projectMarkers}
-
-            map.fitBounds(philippinesBounds, { padding: [24, 24] });
-            const projectBounds = [${mapBounds}];
-            if (projectBounds.length > 0) {
-              map.fitBounds(projectBounds, { padding: [32, 32], maxZoom: 11 });
-            }
-          <\/script>
-        </body>
-      </html>
-    `;
   };
 
   if (loading) {
@@ -245,11 +294,15 @@ export default function MappingScreen({ navigation }: any) {
       </View>
 
       <View style={styles.webMapContainer}>
-        <IFrame
-          srcDoc={generateLeafletHTML()}
-          style={styles.webMapFrame}
-          title="Program locations map"
-        />
+        <MapHost ref={mapElementRef} style={styles.webMapFrame} />
+        {mapError ? (
+          <View style={styles.errorOverlay}>
+            <View style={styles.errorCard}>
+              <Text style={styles.errorTitle}>Google Maps is not available.</Text>
+              <Text style={styles.errorText}>{mapError}</Text>
+            </View>
+          </View>
+        ) : null}
       </View>
 
       <View style={styles.projectListContainer}>
@@ -316,6 +369,7 @@ const styles = StyleSheet.create({
     color: '#666',
   },
   webMapContainer: {
+    position: 'relative',
     height: 420,
     backgroundColor: '#fff',
     borderBottomWidth: 1,
@@ -325,7 +379,41 @@ const styles = StyleSheet.create({
   webMapFrame: {
     width: '100%',
     height: '100%',
-    borderWidth: 0,
+  },
+  errorOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(239, 246, 241, 0.92)',
+    paddingHorizontal: 24,
+  },
+  errorCard: {
+    maxWidth: 420,
+    paddingHorizontal: 24,
+    paddingVertical: 28,
+    backgroundColor: '#ffffff',
+    borderRadius: 22,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 24,
+    shadowOffset: {
+      width: 0,
+      height: 12,
+    },
+    elevation: 8,
+  },
+  errorTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#12243d',
+    textAlign: 'center',
+    marginBottom: 12,
+  },
+  errorText: {
+    fontSize: 13,
+    lineHeight: 21,
+    color: '#243b53',
+    textAlign: 'center',
   },
   header: {
     backgroundColor: '#fff',

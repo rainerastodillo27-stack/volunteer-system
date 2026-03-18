@@ -1,5 +1,36 @@
+const fs = require('fs');
 const os = require('os');
+const path = require('path');
 const { execFileSync, spawn } = require('child_process');
+
+function loadLocalEnv() {
+  for (const fileName of ['.env', '.env.local']) {
+    const envPath = path.join(__dirname, fileName);
+    if (!fs.existsSync(envPath)) {
+      continue;
+    }
+
+    const contents = fs.readFileSync(envPath, 'utf8');
+    for (const rawLine of contents.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith('#')) {
+        continue;
+      }
+
+      const separatorIndex = line.indexOf('=');
+      if (separatorIndex === -1) {
+        continue;
+      }
+
+      const key = line.slice(0, separatorIndex).trim();
+      const value = line.slice(separatorIndex + 1).trim();
+
+      if (!process.env[key]) {
+        process.env[key] = value;
+      }
+    }
+  }
+}
 
 function getLanIp() {
   const interfaces = os.networkInterfaces();
@@ -63,10 +94,13 @@ function ensureBackendStarted() {
 }
 
 module.exports = () => {
+  loadLocalEnv();
   ensureBackendStarted();
 
   const lanApiBaseUrl = process.env.VOLCRE_API_BASE_URL || `http://${getLanIp()}:8000`;
   const webApiBaseUrl = process.env.VOLCRE_WEB_API_BASE_URL || 'http://127.0.0.1:8000';
+  const androidGoogleMapsApiKey = process.env.GOOGLE_MAPS_ANDROID_API_KEY || '';
+  const webGoogleMapsApiKey = process.env.GOOGLE_MAPS_WEB_API_KEY || '';
 
   return {
     expo: {
@@ -77,16 +111,30 @@ module.exports = () => {
       assetBundlePatterns: ['**/*'],
       ios: {
         supportsTablet: true,
+        config: androidGoogleMapsApiKey
+          ? {
+              googleMapsApiKey: androidGoogleMapsApiKey,
+            }
+          : undefined,
       },
       android: {
         adaptiveIcon: {
           backgroundColor: '#ffffff',
         },
+        config: androidGoogleMapsApiKey
+          ? {
+              googleMaps: {
+                apiKey: androidGoogleMapsApiKey,
+              },
+            }
+          : undefined,
       },
       scheme: 'volcre',
       extra: {
         apiBaseUrl: lanApiBaseUrl,
         webApiBaseUrl,
+        androidGoogleMapsApiKey,
+        webGoogleMapsApiKey,
       },
       plugins: ['expo-font'],
     },
