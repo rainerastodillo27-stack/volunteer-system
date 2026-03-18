@@ -15,33 +15,8 @@ import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import { useAuth } from '../contexts/AuthContext';
 import { Project } from '../models/types';
 import { getAllProjects } from '../models/storage';
-
-const PHILIPPINES_REGION: Region = {
-  latitude: 12.8797,
-  longitude: 121.774,
-  latitudeDelta: 8.5,
-  longitudeDelta: 8.5,
-};
-
-function getInitialRegion(projects: Project[]): Region {
-  if (projects.length === 0) {
-    return PHILIPPINES_REGION;
-  }
-
-  const latitudes = projects.map(project => project.location.latitude);
-  const longitudes = projects.map(project => project.location.longitude);
-  const minLatitude = Math.min(...latitudes);
-  const maxLatitude = Math.max(...latitudes);
-  const minLongitude = Math.min(...longitudes);
-  const maxLongitude = Math.max(...longitudes);
-
-  return {
-    latitude: (minLatitude + maxLatitude) / 2,
-    longitude: (minLongitude + maxLongitude) / 2,
-    latitudeDelta: Math.max((maxLatitude - minLatitude) * 1.8, 0.35),
-    longitudeDelta: Math.max((maxLongitude - minLongitude) * 1.8, 0.35),
-  };
-}
+import { getInitialProjectRegion, getProjectMarkerColor } from '../utils/projectMap';
+import { getProjectStatusColor } from '../utils/projectStatus';
 
 export default function MappingScreen({ navigation }: any) {
   const { user } = useAuth();
@@ -68,23 +43,6 @@ export default function MappingScreen({ navigation }: any) {
         error?.message || 'Failed to load projects from Postgres.'
       );
       setLoading(false);
-    }
-  };
-
-  const getStatusColor = (status: Project['status']) => {
-    switch (status) {
-      case 'Planning':
-        return '#2196F3';
-      case 'In Progress':
-        return '#FFA500';
-      case 'On Hold':
-        return '#FF9800';
-      case 'Completed':
-        return '#4CAF50';
-      case 'Cancelled':
-        return '#f44336';
-      default:
-        return '#999';
     }
   };
 
@@ -131,7 +89,7 @@ export default function MappingScreen({ navigation }: any) {
       <View style={styles.mapContainer}>
         <MapView
           style={styles.mapView}
-          initialRegion={getInitialRegion(projects)}
+          initialRegion={getInitialProjectRegion(projects) as Region}
           provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
           showsCompass
           showsScale
@@ -144,7 +102,7 @@ export default function MappingScreen({ navigation }: any) {
                 latitude: project.location.latitude,
                 longitude: project.location.longitude,
               }}
-              pinColor={project.isEvent ? '#9C27B0' : getStatusColor(project.status)}
+              pinColor={getProjectMarkerColor(project)}
               title={`${index + 1}. ${project.title}`}
               description={`${project.isEvent ? 'Event' : 'Program'} | ${project.status}`}
               onPress={() => handleProjectSelection(project.id)}
@@ -183,7 +141,7 @@ export default function MappingScreen({ navigation }: any) {
                   <View
                     style={[
                       styles.statusDot,
-                      { backgroundColor: getStatusColor(selectedProject.status) },
+                      { backgroundColor: getProjectStatusColor(selectedProject.status) },
                     ]}
                   />
                   <Text style={styles.statusText}>{selectedProject.status}</Text>

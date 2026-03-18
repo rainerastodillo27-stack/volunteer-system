@@ -29,6 +29,7 @@ import {
 import { Volunteer, VolunteerProjectJoinRecord } from '../models/types';
 import { useAuth } from '../contexts/AuthContext';
 import { format } from 'date-fns';
+import { getProjectStatusColor } from '../utils/projectStatus';
 
 const statuses = ['Planning', 'In Progress', 'On Hold', 'Completed', 'Cancelled'];
 const projectCategories: Project['category'][] = ['Education', 'Livelihood', 'Nutrition', 'Other'];
@@ -429,26 +430,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       const refreshedProject = await getAllProjects();
       const nextSelectedProject = refreshedProject.find(project => project.id === selectedProject.id) || null;
       setSelectedProject(nextSelectedProject);
-      Alert.alert('Success', `Partner application ${nextStatus.toLowerCase()}.`);
+      Alert.alert('Success', `Partner application ${nextStatus.toLowerCase()}. The partner has been notified.`);
     } catch (error) {
       Alert.alert('Error', 'Failed to review partner application');
-    }
-  };
-
-  const getStatusColor = (status: Project['status']) => {
-    switch (status) {
-      case 'Planning':
-        return '#2196F3';
-      case 'In Progress':
-        return '#FFA500';
-      case 'On Hold':
-        return '#FF9800';
-      case 'Completed':
-        return '#4CAF50';
-      case 'Cancelled':
-        return '#f44336';
-      default:
-        return '#999';
     }
   };
 
@@ -519,7 +503,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           <Text style={styles.cardTitle}>{project.title}</Text>
           <Text style={styles.cardSubtitle}>{project.category}</Text>
         </View>
-        <View style={[styles.statusDot, { backgroundColor: getStatusColor(project.status) }]} />
+        <View style={[styles.statusDot, { backgroundColor: getProjectStatusColor(project.status) }]} />
       </View>
 
       <Text style={styles.description}>{project.description}</Text>
@@ -554,7 +538,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       <View
         style={[
           styles.statusBadge,
-          { backgroundColor: getStatusColor(project.status) },
+          { backgroundColor: getProjectStatusColor(project.status) },
         ]}
       >
         <Text style={styles.statusText}>{project.status}</Text>
@@ -643,7 +627,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             <View
               style={[
                 styles.currentStatusBadge,
-                { backgroundColor: getStatusColor(selectedProject.status) },
+                { backgroundColor: getProjectStatusColor(selectedProject.status) },
               ]}
             >
               <Text style={styles.statusText}>{selectedProject.status}</Text>
@@ -804,7 +788,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                     <View
                       style={[
                         styles.updateStatusDot,
-                        { backgroundColor: getStatusColor(update.status) },
+                        { backgroundColor: getProjectStatusColor(update.status) },
                       ]}
                     />
                     <View style={{ flex: 1 }}>

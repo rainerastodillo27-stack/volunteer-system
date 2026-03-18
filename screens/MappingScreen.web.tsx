@@ -13,20 +13,14 @@ import Constants from 'expo-constants';
 import { useAuth } from '../contexts/AuthContext';
 import { Project } from '../models/types';
 import { getAllProjects } from '../models/storage';
+import {
+  PHILIPPINES_BOUNDS,
+  PHILIPPINES_WEB_CENTER,
+  getProjectMarkerColor,
+} from '../utils/projectMap';
+import { getProjectStatusColor } from '../utils/projectStatus';
 
 const MapHost = 'div' as any;
-
-const PHILIPPINES_CENTER = {
-  lat: 12.8797,
-  lng: 121.774,
-};
-
-const PHILIPPINES_BOUNDS = {
-  south: 4.5,
-  west: 116.5,
-  north: 21.5,
-  east: 127.5,
-};
 
 function getWebGoogleMapsApiKey(): string | undefined {
   const constantsAny = Constants as typeof Constants & {
@@ -97,23 +91,6 @@ function loadGoogleMapsScript(apiKey: string) {
   return browserWindow.__googleMapsScriptPromise;
 }
 
-function getStatusColor(status: Project['status']) {
-  switch (status) {
-    case 'Planning':
-      return '#2196F3';
-    case 'In Progress':
-      return '#FFA500';
-    case 'On Hold':
-      return '#FF9800';
-    case 'Completed':
-      return '#4CAF50';
-    case 'Cancelled':
-      return '#f44336';
-    default:
-      return '#999';
-  }
-}
-
 function escapeHtml(value: string) {
   return value
     .replace(/&/g, '&amp;')
@@ -169,7 +146,7 @@ export default function MappingScreen({ navigation }: any) {
         setMapError(null);
 
         const map = new browserWindow.google.maps.Map(mapElementRef.current, {
-          center: PHILIPPINES_CENTER,
+          center: PHILIPPINES_WEB_CENTER,
           zoom: 6,
           minZoom: 5,
           mapTypeControl: false,
@@ -199,7 +176,7 @@ export default function MappingScreen({ navigation }: any) {
             },
             icon: {
               path: browserWindow.google.maps.SymbolPath.CIRCLE,
-              fillColor: project.isEvent ? '#9C27B0' : getStatusColor(project.status),
+              fillColor: getProjectMarkerColor(project),
               fillOpacity: 1,
               strokeColor: '#ffffff',
               strokeOpacity: 1,
@@ -216,7 +193,7 @@ export default function MappingScreen({ navigation }: any) {
                 <div style="margin-bottom:8px;font-size:16px;font-weight:700;color:#111827;">
                   ${escapeHtml(project.title)}
                 </div>
-                <div style="display:inline-block;margin-bottom:10px;padding:4px 10px;border-radius:999px;color:#fff;font-size:11px;font-weight:700;background:${project.isEvent ? '#9C27B0' : '#4CAF50'};">
+                <div style="display:inline-block;margin-bottom:10px;padding:4px 10px;border-radius:999px;color:#fff;font-size:11px;font-weight:700;background:${getProjectMarkerColor(project)};">
                   ${escapeHtml(project.isEvent ? 'Event' : 'Program')}
                 </div>
                 <div style="margin-bottom:6px;font-size:12px;color:#4b5563;"><strong>Status:</strong> ${escapeHtml(project.status)}</div>
@@ -319,7 +296,7 @@ export default function MappingScreen({ navigation }: any) {
             {selectedProject && (
               <View style={styles.modalContent}>
                 <View style={styles.statusBadge}>
-                  <View style={[styles.statusDot, { backgroundColor: getStatusColor(selectedProject.status) }]} />
+                  <View style={[styles.statusDot, { backgroundColor: getProjectStatusColor(selectedProject.status) }]} />
                   <Text style={styles.statusText}>{selectedProject.status}</Text>
                 </View>
 

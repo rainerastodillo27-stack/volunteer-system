@@ -316,6 +316,17 @@ type VolunteerTimeLogMutationResult = {
   volunteerProfile: Volunteer | null;
 };
 
+export type VolunteerRecognitionStatus = {
+  joinedProgramCount: number;
+  isTopVolunteer: boolean;
+};
+
+const CORE_PARTNER_OWNER_IDS: Record<string, string> = {
+  'partner-2': 'partner-user-1',
+  'partner-3': 'partner-user-2',
+  'partner-4': 'partner-user-3',
+};
+
 const SECTOR_NEEDS: SectorNeed[] = [
   {
     sector: 'Education',
@@ -341,6 +352,75 @@ function notifyWebMessageUpdate(): void {
   if (typeof window !== 'undefined' && window.localStorage) {
     window.localStorage.setItem(WEB_MESSAGE_SYNC_KEY, String(Date.now()));
   }
+}
+
+function createGeneratedMessageId(): string {
+  return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+async function getPrimaryAdminUser(): Promise<User | null> {
+  const users = await getAllUsers();
+  return users.find(candidate => candidate.role === 'admin') || null;
+}
+
+async function sendSystemMessage(
+  senderId: string,
+  recipientId: string,
+  content: string
+): Promise<void> {
+  await saveMessage({
+    id: createGeneratedMessageId(),
+    senderId,
+    recipientId,
+    content,
+    timestamp: new Date().toISOString(),
+    read: false,
+  });
+}
+
+async function notifyAdminAboutPartnerProjectJoin(
+  projectId: string,
+  partnerUser: Pick<User, 'id' | 'name' | 'email'>
+): Promise<void> {
+  const [project, adminUser] = await Promise.all([
+    getProject(projectId),
+    getPrimaryAdminUser(),
+  ]);
+
+  if (!project || !adminUser) {
+    return;
+  }
+
+  const partnerEmail = partnerUser.email?.trim()
+    ? ` (${partnerUser.email.trim()})`
+    : '';
+
+  await sendSystemMessage(
+    partnerUser.id,
+    adminUser.id,
+    `${partnerUser.name}${partnerEmail} requested to join "${project.title}". Review it in Program Lifecycle to approve or reject.`
+  );
+}
+
+async function notifyPartnerAboutProjectJoinReview(
+  application: PartnerProjectApplication,
+  reviewedBy: string
+): Promise<void> {
+  const project = await getProject(application.projectId);
+  if (!project) {
+    return;
+  }
+
+  const outcome =
+    application.status === 'Approved'
+      ? `approved your request to join "${project.title}". You can now coordinate with NVC through Messages.`
+      : `rejected your request to join "${project.title}". You may contact NVC admin for clarification.`;
+
+  await sendSystemMessage(
+    reviewedBy,
+    application.partnerUserId,
+    `NVC Admin ${outcome}`
+  );
 }
 
 function getBundlerHost(): string | null {
@@ -776,6 +856,7 @@ export async function getPartnerDashboardSnapshot(): Promise<{
   partners: Partner[];
   sectorNeeds: SectorNeed[];
 }> {
+  await ensurePartnerOwnershipLinks();
   const items = await getStorageItems([
     STORAGE_KEYS.PROJECTS,
     STORAGE_KEYS.PARTNERS,
@@ -1039,10 +1120,26 @@ export async function getCurrentUser(): Promise<User | null> {
 export async function savePartner(partner: Partner): Promise<void> {
   const partners = await getStorageItem<Partner[]>(STORAGE_KEYS.PARTNERS) || [];
   const existingIndex = partners.findIndex(p => p.id === partner.id);
+  const existingPartner = existingIndex >= 0 ? partners[existingIndex] : null;
+
+  let ownerUserId = partner.ownerUserId || existingPartner?.ownerUserId;
+  if (!ownerUserId && partner.contactEmail.trim()) {
+    const users = await getAllUsers();
+    ownerUserId = users.find(user =>
+      user.role === 'partner' &&
+      user.email?.toLowerCase() === partner.contactEmail.trim().toLowerCase()
+    )?.id;
+  }
+
+  const normalizedPartner: Partner = {
+    ...partner,
+    ownerUserId,
+  };
+
   if (existingIndex >= 0) {
-    partners[existingIndex] = partner;
+    partners[existingIndex] = normalizedPartner;
   } else {
-    partners.push(partner);
+    partners.push(normalizedPartner);
   }
   await setStorageItem(STORAGE_KEYS.PARTNERS, partners);
 }
@@ -1053,6 +1150,7 @@ export async function getPartner(id: string): Promise<Partner | null> {
 }
 
 export async function getAllPartners(): Promise<Partner[]> {
+  await ensurePartnerOwnershipLinks();
   const partners = (await getStorageItem<Partner[]>(STORAGE_KEYS.PARTNERS)) || [];
   return partners.filter(p => !p.contactEmail?.toLowerCase().includes('eduindia.org'));
 }
@@ -1172,6 +1270,19 @@ export async function getVolunteerByUserId(userId: string): Promise<Volunteer | 
     `/volunteers/by-user/${encodeURIComponent(userId)}`
   );
   return payload.volunteer || null;
+}
+
+export async function getVolunteerRecognitionStatus(
+  volunteerId: string
+): Promise<VolunteerRecognitionStatus> {
+  const payload = await requestApiJson<{ recognition?: Partial<VolunteerRecognitionStatus> | null }>(
+    `/volunteers/${encodeURIComponent(volunteerId)}/recognition`
+  );
+
+  return {
+    joinedProgramCount: payload.recognition?.joinedProgramCount || 0,
+    isTopVolunteer: Boolean(payload.recognition?.isTopVolunteer),
+  };
 }
 
 // Volunteer Time Logs
@@ -1716,6 +1827,12 @@ export async function requestPartnerProjectJoin(
     throw new Error('Partner join request did not complete.');
   }
 
+  try {
+    await notifyAdminAboutPartnerProjectJoin(projectId, partnerUser);
+  } catch (error) {
+    console.error('Error notifying admin about partner join request:', error);
+  }
+
   return payload.application;
 }
 
@@ -1753,6 +1870,12 @@ export async function reviewPartnerProjectApplication(
         updatedAt: new Date().toISOString(),
       });
     }
+  }
+
+  try {
+    await notifyPartnerAboutProjectJoinReview(updatedApplication, reviewedBy);
+  } catch (error) {
+    console.error('Error notifying partner about application review:', error);
   }
 }
 
@@ -2266,6 +2389,65 @@ async function purgeDeprecatedPartners(): Promise<void> {
   }
 }
 
+function normalizeComparablePhone(value?: string): string {
+  return (value || '').replace(/\D/g, '');
+}
+
+async function ensurePartnerOwnershipLinks(): Promise<void> {
+  const [partners, users] = await Promise.all([
+    getStorageItem<Partner[]>(STORAGE_KEYS.PARTNERS),
+    getStorageItem<User[]>(STORAGE_KEYS.USERS),
+  ]);
+
+  if (!partners?.length || !users?.length) {
+    return;
+  }
+
+  let changed = false;
+  const nextPartners = partners.map(partner => {
+    if (partner.ownerUserId) {
+      return partner;
+    }
+
+    const expectedOwnerId = CORE_PARTNER_OWNER_IDS[partner.id];
+    const partnerEmail = partner.contactEmail.trim().toLowerCase();
+    const partnerPhone = normalizeComparablePhone(partner.contactPhone);
+
+    const matchedUser = users.find(user => {
+      if (user.role !== 'partner') {
+        return false;
+      }
+
+      if (expectedOwnerId && user.id === expectedOwnerId) {
+        return true;
+      }
+
+      if (partnerEmail && user.email?.toLowerCase() === partnerEmail) {
+        return true;
+      }
+
+      return Boolean(
+        partnerPhone &&
+        normalizeComparablePhone(user.phone) === partnerPhone
+      );
+    });
+
+    if (!matchedUser) {
+      return partner;
+    }
+
+    changed = true;
+    return {
+      ...partner,
+      ownerUserId: matchedUser.id,
+    };
+  });
+
+  if (changed) {
+    await setStorageItem(STORAGE_KEYS.PARTNERS, nextPartners);
+  }
+}
+
 async function ensureCorePartners(): Promise<void> {
   const partners = (await getStorageItem<Partner[]>(STORAGE_KEYS.PARTNERS)) || [];
   const byId = new Map(partners.map(p => [p.id, p]));
@@ -2273,6 +2455,7 @@ async function ensureCorePartners(): Promise<void> {
   const requiredPartners: Partner[] = [
     {
       id: 'partner-2',
+      ownerUserId: 'partner-user-1',
       name: 'LGU Kabankalan Livelihood Office',
       description: 'LGU-led livelihood partner providing local skills training programs.',
       category: 'Livelihood',
@@ -2284,6 +2467,7 @@ async function ensureCorePartners(): Promise<void> {
     },
     {
       id: 'partner-3',
+      ownerUserId: 'partner-user-2',
       name: 'Philippine Business for Social Progress',
       description: 'Private-sector led foundation focused on inclusive development and CSR programs.',
       category: 'Other',
@@ -2297,6 +2481,7 @@ async function ensureCorePartners(): Promise<void> {
     },
     {
       id: 'partner-4',
+      ownerUserId: 'partner-user-3',
       name: 'Jollibee Group Foundation',
       description: 'Foundation of Jollibee Group supporting education, agriculture, and food security programs.',
       category: 'Nutrition',
@@ -2321,6 +2506,8 @@ async function ensureCorePartners(): Promise<void> {
   if (changed) {
     await setStorageItem(STORAGE_KEYS.PARTNERS, partners);
   }
+
+  await ensurePartnerOwnershipLinks();
 }
 
 async function ensureCoreProjects(): Promise<void> {

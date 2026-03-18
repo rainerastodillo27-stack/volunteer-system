@@ -30,6 +30,8 @@ from .db import (
 
 load_dotenv()
 
+TOP_VOLUNTEER_THRESHOLD = 5
+
 
 class StoragePayload(BaseModel):
     value: Any
@@ -424,6 +426,51 @@ def _postgres_get_volunteer_by_user_id(connection: Any, user_id: str) -> dict[st
     return volunteers[0] if volunteers else None
 
 
+def _postgres_get_volunteer_recognition_status(
+    connection: Any,
+    volunteer_id: str,
+) -> dict[str, Any]:
+    volunteer = _postgres_get_hot_item_by_id(connection, "volunteers", volunteer_id)
+    if volunteer is None:
+        raise HTTPException(status_code=404, detail="Volunteer not found.")
+
+    join_table = HOT_STORAGE_TABLES["volunteerProjectJoins"]
+    volunteer_table = HOT_STORAGE_TABLES["volunteers"]
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"""
+            with joined_projects as (
+                select distinct data->>'projectId' as project_id
+                from {join_table}
+                where coalesce(data->>'volunteerId', '') = %s
+                  and coalesce(data->>'projectId', '') <> ''
+            ),
+            past_projects as (
+                select distinct jsonb_array_elements_text(
+                    coalesce(data->'pastProjects', '[]'::jsonb)
+                ) as project_id
+                from {volunteer_table}
+                where id = %s
+            )
+            select count(distinct project_id)
+            from (
+                select project_id from joined_projects
+                union
+                select project_id from past_projects
+            ) all_projects
+            """,
+            (volunteer_id, volunteer_id),
+        )
+        row = cursor.fetchone()
+
+    joined_program_count = int(row[0] or 0) if row is not None else 0
+    return {
+        "joinedProgramCount": joined_program_count,
+        "isTopVolunteer": joined_program_count >= TOP_VOLUNTEER_THRESHOLD,
+    }
+
+
 def _postgres_get_partner_project_applications_by_user(
     connection: Any,
     partner_user_id: str,
@@ -634,6 +681,14 @@ def get_volunteer_by_user(user_id: str) -> dict[str, Any]:
     with get_postgres_connection() as connection:
         volunteer = _postgres_get_volunteer_by_user_id(connection, user_id)
     return {"volunteer": volunteer}
+
+
+@app.get("/volunteers/{volunteer_id}/recognition")
+def get_volunteer_recognition_status(volunteer_id: str) -> dict[str, Any]:
+    _require_postgres()
+    with get_postgres_connection() as connection:
+        recognition = _postgres_get_volunteer_recognition_status(connection, volunteer_id)
+    return {"recognition": recognition}
 
 
 @app.get("/volunteers/{volunteer_id}/time-logs")

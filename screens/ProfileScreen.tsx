@@ -11,18 +11,21 @@ import {
   TextInput,
   Switch,
 } from 'react-native';
+import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import {
   getAllProjects,
   getAllUsers,
   getVolunteerCompletedProjectIds,
+  getVolunteerRecognitionStatus,
   getUserByEmailOrPhone,
   getVolunteerByUserId,
   saveUser,
   saveVolunteer,
   subscribeToStorageChanges,
 } from '../models/storage';
+import { VolunteerRecognitionStatus } from '../models/storage';
 import { NVCSector, User, UserType, Volunteer } from '../models/types';
 
 const USER_TYPES: UserType[] = ['Student', 'Adult', 'Senior'];
@@ -34,6 +37,10 @@ export default function ProfileScreen() {
   const { user, logout, updateUserProfile } = useAuth();
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
   const [completedProjectIds, setCompletedProjectIds] = useState<string[]>([]);
+  const [recognitionStatus, setRecognitionStatus] = useState<VolunteerRecognitionStatus>({
+    joinedProgramCount: 0,
+    isTopVolunteer: false,
+  });
   const [projectTitlesById, setProjectTitlesById] = useState<Record<string, string>>({});
   const [showEditModal, setShowEditModal] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
@@ -52,6 +59,10 @@ export default function ProfileScreen() {
     if (user?.role !== 'volunteer' || !user.id) {
       setVolunteerProfile(null);
       setCompletedProjectIds([]);
+      setRecognitionStatus({
+        joinedProgramCount: 0,
+        isTopVolunteer: false,
+      });
       return;
     }
 
@@ -59,10 +70,18 @@ export default function ProfileScreen() {
       const profile = await getVolunteerByUserId(user.id);
       setVolunteerProfile(profile);
       if (profile?.id) {
-        const completedIds = await getVolunteerCompletedProjectIds(profile.id);
+        const [completedIds, recognition] = await Promise.all([
+          getVolunteerCompletedProjectIds(profile.id),
+          getVolunteerRecognitionStatus(profile.id),
+        ]);
         setCompletedProjectIds(completedIds);
+        setRecognitionStatus(recognition);
       } else {
         setCompletedProjectIds([]);
+        setRecognitionStatus({
+          joinedProgramCount: 0,
+          isTopVolunteer: false,
+        });
       }
     } catch (error) {
       console.error('Error loading volunteer profile:', error);
@@ -298,6 +317,8 @@ export default function ProfileScreen() {
     .slice(0, 2)
     .toUpperCase();
   const completedPrograms = completedProjectIds;
+  const joinedProgramCount = recognitionStatus.joinedProgramCount;
+  const isTopVolunteer = recognitionStatus.isTopVolunteer;
 
   return (
     <ScrollView style={styles.container}>
@@ -308,6 +329,20 @@ export default function ProfileScreen() {
 
         <Text style={styles.name}>{user?.name ?? 'User'}</Text>
         <Text style={styles.email}>{user?.email ?? user?.phone ?? 'No contact info'}</Text>
+
+        {user?.role === 'volunteer' && volunteerProfile && isTopVolunteer && (
+          <View style={styles.topVolunteerBadge}>
+            <View style={styles.topVolunteerIconWrap}>
+              <MaterialIcons name="military-tech" size={20} color="#fffbeb" />
+            </View>
+            <View style={styles.topVolunteerTextWrap}>
+              <Text style={styles.topVolunteerTitle}>Top Volunteer</Text>
+              <Text style={styles.topVolunteerSubtitle}>
+                Reached {joinedProgramCount} joined programs
+              </Text>
+            </View>
+          </View>
+        )}
 
         <TouchableOpacity style={styles.editButton} onPress={openEditModal}>
           <Text style={styles.editButtonText}>Edit Profile</Text>
@@ -374,8 +409,12 @@ export default function ProfileScreen() {
                 <Text style={styles.statLabel}>Hours Logged</Text>
               </View>
               <View style={styles.stat}>
+                <Text style={styles.statNumber}>{joinedProgramCount}</Text>
+                <Text style={styles.statLabel}>Joined Programs</Text>
+              </View>
+              <View style={styles.stat}>
                 <Text style={styles.statNumber}>{completedProjectIds.length}</Text>
-                <Text style={styles.statLabel}>Projects</Text>
+                <Text style={styles.statLabel}>Completed</Text>
               </View>
             </View>
 
@@ -611,6 +650,42 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
     marginBottom: 12,
+  },
+  topVolunteerBadge: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#58732f',
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 14,
+  },
+  topVolunteerIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#7da03a',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  topVolunteerTextWrap: {
+    alignItems: 'flex-start',
+  },
+  topVolunteerTitle: {
+    color: '#fffbeb',
+    fontSize: 14,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  topVolunteerSubtitle: {
+    color: '#ecfccb',
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 2,
   },
   editButton: {
     backgroundColor: '#dcfce7',

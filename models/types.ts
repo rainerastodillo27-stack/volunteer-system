@@ -19,6 +19,7 @@ export interface User {
 // Partner/Organization
 export interface Partner {
   id: string;
+  ownerUserId?: string; // Partner account that owns/submitted this org profile
   name: string;
   description: string;
   category: 'Education' | 'Livelihood' | 'Nutrition' | 'Other';

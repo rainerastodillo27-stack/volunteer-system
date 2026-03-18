@@ -15,20 +15,41 @@ import {
   subscribeToStorageChanges,
 } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
-import { SectorNeed } from '../models/types';
+import { Partner, SectorNeed } from '../models/types';
 
 export default function PartnerDashboardScreen({ navigation }: any) {
   const { user, logout } = useAuth();
   const [orgStats, setOrgStats] = useState({ total: 0, pending: 0, approved: 0, rejected: 0 });
   const [projectStats, setProjectStats] = useState({ total: 0, active: 0, completed: 0 });
   const [sectorNeeds, setSectorNeeds] = useState<SectorNeed[]>([]);
+  const [myOrganizations, setMyOrganizations] = useState<Partner[]>([]);
+
+  const isOwnedByCurrentPartner = React.useCallback((partner: {
+    ownerUserId?: string;
+    contactEmail: string;
+  }) => {
+    if (!user) {
+      return false;
+    }
+
+    if (partner.ownerUserId) {
+      return partner.ownerUserId === user.id;
+    }
+
+    return partner.contactEmail.toLowerCase() === user.email?.toLowerCase();
+  }, [user]);
 
   const loadDashboardData = React.useCallback(async () => {
     try {
       const { partners, projects, sectorNeeds: nextSectorNeeds } = await getPartnerDashboardSnapshot();
-      const myOrgs = partners.filter(p => p.contactEmail.toLowerCase() === user?.email?.toLowerCase());
+      const myOrgs = partners.filter(isOwnedByCurrentPartner);
       const myOrgIds = new Set(myOrgs.map((partner) => partner.id));
       const myProjects = projects.filter((project) => myOrgIds.has(project.partnerId));
+      const sortedOrganizations = [...myOrgs].sort((left, right) => {
+        const leftTime = left.validatedAt || left.createdAt;
+        const rightTime = right.validatedAt || right.createdAt;
+        return new Date(rightTime).getTime() - new Date(leftTime).getTime();
+      });
 
       setOrgStats({
         total: myOrgs.length,
@@ -36,6 +57,7 @@ export default function PartnerDashboardScreen({ navigation }: any) {
         approved: myOrgs.filter(p => p.status === 'Approved').length,
         rejected: myOrgs.filter(p => p.status === 'Rejected').length,
       });
+      setMyOrganizations(sortedOrganizations);
 
       setProjectStats({
         total: myProjects.length,
@@ -47,7 +69,19 @@ export default function PartnerDashboardScreen({ navigation }: any) {
     } catch (error: any) {
       Alert.alert('Error', error?.message || 'Failed to load dashboard data');
     }
-  }, [user?.email]);
+  }, [isOwnedByCurrentPartner]);
+
+  const getStatusColor = (status: Partner['status']) => {
+    switch (status) {
+      case 'Approved':
+        return '#16a34a';
+      case 'Rejected':
+        return '#dc2626';
+      case 'Pending':
+      default:
+        return '#f59e0b';
+    }
+  };
 
   useEffect(() => {
     void loadDashboardData();
@@ -121,6 +155,42 @@ export default function PartnerDashboardScreen({ navigation }: any) {
             <Text style={styles.metricLabel}>Rejected</Text>
           </View>
         </View>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>My Organization Status</Text>
+        {myOrganizations.length === 0 ? (
+          <View style={styles.card}>
+            <Text style={styles.cardLine}>No submitted organizations yet.</Text>
+          </View>
+        ) : (
+          myOrganizations.map((organization) => (
+            <View key={organization.id} style={styles.orgCard}>
+              <View style={styles.orgHeader}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.orgName}>{organization.name}</Text>
+                  <Text style={styles.orgMeta}>{organization.category}</Text>
+                </View>
+                <View
+                  style={[
+                    styles.orgStatusBadge,
+                    { backgroundColor: getStatusColor(organization.status) },
+                  ]}
+                >
+                  <Text style={styles.orgStatusText}>{organization.status}</Text>
+                </View>
+              </View>
+              <Text style={styles.orgDescription}>{organization.description}</Text>
+              <Text style={styles.orgMeta}>
+                {organization.status === 'Pending'
+                  ? `Submitted ${new Date(organization.createdAt).toLocaleDateString()}`
+                  : `Updated ${new Date(
+                      organization.validatedAt || organization.createdAt
+                    ).toLocaleDateString()}`}
+              </Text>
+            </View>
+          ))
+        )}
       </View>
 
       <View style={styles.section}>
@@ -247,6 +317,42 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 14,
     gap: 8,
+  },
+  orgCard: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 10,
+    gap: 8,
+  },
+  orgHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  orgName: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  orgDescription: {
+    color: '#475569',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  orgMeta: {
+    color: '#64748b',
+    fontSize: 12,
+  },
+  orgStatusBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  orgStatusText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
   },
   needCard: {
     backgroundColor: '#fff',

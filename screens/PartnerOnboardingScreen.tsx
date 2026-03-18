@@ -11,32 +11,53 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { Partner } from '../models/types';
-import { getAllPartners, savePartner } from '../models/storage';
+import { getAllPartners, savePartner, subscribeToStorageChanges } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
+
+type PartnerFormState = {
+  name: string;
+  description: string;
+  contactEmail: string;
+  contactPhone: string;
+  address: string;
+  category: Partner['category'];
+};
+
+function createEmptyPartnerForm(defaultEmail = ''): PartnerFormState {
+  return {
+    name: '',
+    description: '',
+    contactEmail: defaultEmail,
+    contactPhone: '',
+    address: '',
+    category: 'Other',
+  };
+}
 
 export default function PartnerOnboardingScreen({ navigation }: any) {
   const { user, isAdmin } = useAuth();
   const [partners, setPartners] = useState<Partner[]>([]);
   const [filter, setFilter] = useState<'All' | 'Pending' | 'Approved' | 'Rejected'>('All');
   const [loading, setLoading] = useState(true);
-  const [orgName, setOrgName] = useState('');
-  const [orgDescription, setOrgDescription] = useState('');
-  const [orgEmail, setOrgEmail] = useState(user?.email ?? '');
-  const [orgPhone, setOrgPhone] = useState('');
-  const [orgAddress, setOrgAddress] = useState('');
-  const [category, setCategory] = useState<'Education' | 'Livelihood' | 'Nutrition' | 'Other'>('Other');
-
-  useEffect(() => {
-    loadPartners();
-  }, [filter, isAdmin, user?.email]);
-
-  useFocusEffect(
-    React.useCallback(() => {
-      loadPartners();
-    }, [filter, isAdmin, user?.email])
+  const [partnerForm, setPartnerForm] = useState<PartnerFormState>(
+    createEmptyPartnerForm(user?.email ?? '')
   );
+  const [editingPartnerId, setEditingPartnerId] = useState<string | null>(null);
+  const [showAdminEditor, setShowAdminEditor] = useState(false);
 
-  const loadPartners = async () => {
+  const isOwnedByCurrentPartner = React.useCallback((partner: Partner) => {
+    if (!user) {
+      return false;
+    }
+
+    if (partner.ownerUserId) {
+      return partner.ownerUserId === user.id;
+    }
+
+    return partner.contactEmail.toLowerCase() === user.email?.toLowerCase();
+  }, [user]);
+
+  const loadPartners = React.useCallback(async () => {
     try {
       const allPartners = await getAllPartners();
       if (isAdmin) {
@@ -48,15 +69,42 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
         return;
       }
 
-      const ownPartners = allPartners.filter(
-        p => p.contactEmail.toLowerCase() === user?.email?.toLowerCase()
-      );
+      const ownPartners = allPartners.filter(isOwnedByCurrentPartner);
       setPartners(ownPartners);
     } catch (error) {
       Alert.alert('Error', 'Failed to load partners');
     } finally {
       setLoading(false);
     }
+  }, [filter, isAdmin, isOwnedByCurrentPartner]);
+
+  useEffect(() => {
+    void loadPartners();
+  }, [loadPartners]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      void loadPartners();
+    }, [loadPartners])
+  );
+
+  useEffect(() => {
+    return subscribeToStorageChanges(['partners'], () => {
+      void loadPartners();
+    });
+  }, [loadPartners]);
+
+  const updatePartnerForm = <K extends keyof PartnerFormState>(
+    key: K,
+    value: PartnerFormState[K]
+  ) => {
+    setPartnerForm(current => ({ ...current, [key]: value }));
+  };
+
+  const resetPartnerForm = () => {
+    setPartnerForm(createEmptyPartnerForm(isAdmin ? '' : user?.email ?? ''));
+    setEditingPartnerId(null);
+    setShowAdminEditor(false);
   };
 
   const handleApprove = async (partnerId: string) => {
@@ -64,13 +112,14 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
       const partner = partners.find(p => p.id === partnerId);
       if (!partner) return;
 
-      partner.status = 'Approved';
-      partner.validatedBy = user?.id;
-      partner.validatedAt = new Date().toISOString();
-
-      await savePartner(partner);
+      await savePartner({
+        ...partner,
+        status: 'Approved',
+        validatedBy: user?.id,
+        validatedAt: new Date().toISOString(),
+      });
       Alert.alert('Success', `${partner.name} has been approved`);
-      loadPartners();
+      void loadPartners();
     } catch (error) {
       Alert.alert('Error', 'Failed to approve partner');
     }
@@ -81,17 +130,160 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
       const partner = partners.find(p => p.id === partnerId);
       if (!partner) return;
 
-      partner.status = 'Rejected';
-      partner.validatedBy = user?.id;
-      partner.validatedAt = new Date().toISOString();
-
-      await savePartner(partner);
+      await savePartner({
+        ...partner,
+        status: 'Rejected',
+        validatedBy: user?.id,
+        validatedAt: new Date().toISOString(),
+      });
       Alert.alert('Success', `${partner.name} has been rejected`);
-      loadPartners();
+      void loadPartners();
     } catch (error) {
       Alert.alert('Error', 'Failed to reject partner');
     }
   };
+
+  const handleEditPartner = (partner: Partner) => {
+    setEditingPartnerId(partner.id);
+    setPartnerForm({
+      name: partner.name,
+      description: partner.description,
+      contactEmail: partner.contactEmail,
+      contactPhone: partner.contactPhone,
+      address: partner.address,
+      category: partner.category,
+    });
+    setShowAdminEditor(true);
+  };
+
+  const handleOpenAdminCreate = () => {
+    setEditingPartnerId(null);
+    setPartnerForm(createEmptyPartnerForm());
+    setShowAdminEditor(true);
+  };
+
+  const handleSavePartnerProfile = async () => {
+    if (
+      !partnerForm.name.trim() ||
+      !partnerForm.description.trim() ||
+      !partnerForm.contactEmail.trim() ||
+      !partnerForm.contactPhone.trim() ||
+      !partnerForm.address.trim()
+    ) {
+      Alert.alert('Validation Error', 'Please fill all partner organization fields.');
+      return;
+    }
+
+    try {
+      const existingPartner =
+        editingPartnerId ? partners.find(partner => partner.id === editingPartnerId) || null : null;
+      const now = new Date().toISOString();
+
+      const savedPartner: Partner = {
+        id: existingPartner?.id || `partner-${Date.now()}`,
+        ownerUserId: existingPartner?.ownerUserId,
+        name: partnerForm.name.trim(),
+        description: partnerForm.description.trim(),
+        category: partnerForm.category,
+        contactEmail: partnerForm.contactEmail.trim().toLowerCase(),
+        contactPhone: partnerForm.contactPhone.trim(),
+        address: partnerForm.address.trim(),
+        status: existingPartner?.status || 'Pending',
+        validatedBy: existingPartner?.validatedBy,
+        validatedAt: existingPartner?.validatedAt,
+        createdAt: existingPartner?.createdAt || now,
+        registrationDocuments: existingPartner?.registrationDocuments,
+      };
+
+      await savePartner(savedPartner);
+      resetPartnerForm();
+      Alert.alert(
+        'Saved',
+        existingPartner ? 'Partner organization updated.' : 'Partner organization created.'
+      );
+      void loadPartners();
+    } catch (error) {
+      Alert.alert('Error', 'Failed to save partner organization.');
+    }
+  };
+
+  const renderPartnerFormCard = ({
+    title,
+    submitLabel,
+    onSubmit,
+    onCancel,
+  }: {
+    title: string;
+    submitLabel: string;
+    onSubmit: () => void;
+    onCancel?: () => void;
+  }) => (
+    <View style={styles.submissionCard}>
+      <Text style={styles.submissionTitle}>{title}</Text>
+      <TextInput
+        style={styles.input}
+        placeholder="Program or Organization Name"
+        value={partnerForm.name}
+        onChangeText={value => updatePartnerForm('name', value)}
+      />
+      <TextInput
+        style={[styles.input, styles.inputMultiline]}
+        placeholder="Description / Focus area"
+        value={partnerForm.description}
+        onChangeText={value => updatePartnerForm('description', value)}
+        multiline
+      />
+      <View style={styles.chipRow}>
+        {(['Education', 'Livelihood', 'Nutrition', 'Other'] as const).map(option => (
+          <TouchableOpacity
+            key={option}
+            style={[styles.chip, partnerForm.category === option && styles.chipActive]}
+            onPress={() => updatePartnerForm('category', option)}
+          >
+            <Text
+              style={[
+                styles.chipText,
+                partnerForm.category === option && styles.chipTextActive,
+              ]}
+            >
+              {option}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+      <TextInput
+        style={styles.input}
+        placeholder="Contact Email"
+        value={partnerForm.contactEmail}
+        onChangeText={value => updatePartnerForm('contactEmail', value)}
+        autoCapitalize="none"
+        keyboardType="email-address"
+      />
+      <TextInput
+        style={styles.input}
+        placeholder="Contact Phone"
+        value={partnerForm.contactPhone}
+        onChangeText={value => updatePartnerForm('contactPhone', value)}
+        keyboardType="phone-pad"
+      />
+      <TextInput
+        style={styles.input}
+        placeholder="Address / City"
+        value={partnerForm.address}
+        onChangeText={value => updatePartnerForm('address', value)}
+      />
+      <View style={styles.formActions}>
+        {onCancel ? (
+          <TouchableOpacity style={[styles.formButton, styles.cancelButton]} onPress={onCancel}>
+            <Text style={styles.cancelButtonText}>Cancel</Text>
+          </TouchableOpacity>
+        ) : null}
+        <TouchableOpacity style={[styles.formButton, styles.submitButton]} onPress={onSubmit}>
+          <Text style={styles.submitButtonText}>{submitLabel}</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
 
   const renderPartnerCard = (partner: Partner) => {
     const getStatusColor = (status: string) => {
@@ -138,22 +330,34 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
           </View>
         </View>
 
-        {isAdmin && partner.status === 'Pending' && (
-          <View style={styles.actionButtons}>
+        {isAdmin && (
+          <View style={styles.adminActionStack}>
             <TouchableOpacity
-              style={[styles.button, styles.approveButton]}
-              onPress={() => handleApprove(partner.id)}
+              style={[styles.button, styles.editButton]}
+              onPress={() => handleEditPartner(partner)}
             >
-              <MaterialIcons name="check-circle" size={20} color="#fff" />
-              <Text style={styles.buttonText}>Approve</Text>
+              <MaterialIcons name="edit" size={18} color="#166534" />
+              <Text style={styles.editButtonText}>Edit Profile</Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.button, styles.rejectButton]}
-              onPress={() => handleReject(partner.id)}
-            >
-              <MaterialIcons name="cancel" size={20} color="#fff" />
-              <Text style={styles.buttonText}>Reject</Text>
-            </TouchableOpacity>
+
+            {partner.status === 'Pending' && (
+              <View style={styles.actionButtons}>
+                <TouchableOpacity
+                  style={[styles.button, styles.approveButton]}
+                  onPress={() => handleApprove(partner.id)}
+                >
+                  <MaterialIcons name="check-circle" size={20} color="#fff" />
+                  <Text style={styles.buttonText}>Approve</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.button, styles.rejectButton]}
+                  onPress={() => handleReject(partner.id)}
+                >
+                  <MaterialIcons name="cancel" size={20} color="#fff" />
+                  <Text style={styles.buttonText}>Reject</Text>
+                </TouchableOpacity>
+              </View>
+            )}
           </View>
         )}
       </View>
@@ -162,11 +366,11 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
 
   const handleSubmitPartner = async () => {
     if (
-      !orgName.trim() ||
-      !orgDescription.trim() ||
-      !orgEmail.trim() ||
-      !orgPhone.trim() ||
-      !orgAddress.trim()
+      !partnerForm.name.trim() ||
+      !partnerForm.description.trim() ||
+      !partnerForm.contactEmail.trim() ||
+      !partnerForm.contactPhone.trim() ||
+      !partnerForm.address.trim()
     ) {
       Alert.alert('Validation Error', 'Please fill all partner program fields.');
       return;
@@ -175,25 +379,21 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
     try {
       const newPartner: Partner = {
         id: `partner-${Date.now()}`,
-        name: orgName.trim(),
-        description: orgDescription.trim(),
-        category,
-        contactEmail: orgEmail.trim().toLowerCase(),
-        contactPhone: orgPhone.trim(),
-        address: orgAddress.trim(),
+        ownerUserId: user?.id,
+        name: partnerForm.name.trim(),
+        description: partnerForm.description.trim(),
+        category: partnerForm.category,
+        contactEmail: partnerForm.contactEmail.trim().toLowerCase(),
+        contactPhone: partnerForm.contactPhone.trim(),
+        address: partnerForm.address.trim(),
         status: 'Pending',
         createdAt: new Date().toISOString(),
       };
 
       await savePartner(newPartner);
-      setOrgName('');
-      setOrgDescription('');
-      setOrgEmail(user?.email ?? '');
-      setOrgPhone('');
-      setOrgAddress('');
-      setCategory('Other');
+      setPartnerForm(createEmptyPartnerForm(user?.email ?? ''));
       Alert.alert('Submitted', 'Program onboarding request sent for admin approval.');
-      loadPartners();
+      void loadPartners();
     } catch (error) {
       Alert.alert('Error', 'Failed to submit program.');
     }
@@ -204,61 +404,20 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
       <Text style={styles.title}>Partner Onboarding</Text>
 
       {user?.role === 'partner' && (
-        <View style={styles.submissionCard}>
-          <Text style={styles.submissionTitle}>Submit Program / Organization</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Program or Organization Name"
-            value={orgName}
-            onChangeText={setOrgName}
-          />
-          <TextInput
-            style={[styles.input, styles.inputMultiline]}
-            placeholder="Description / Focus area"
-            value={orgDescription}
-            onChangeText={setOrgDescription}
-            multiline
-          />
-          <View style={styles.chipRow}>
-            {(['Education', 'Livelihood', 'Nutrition', 'Other'] as const).map(option => (
-              <TouchableOpacity
-                key={option}
-                style={[styles.chip, category === option && styles.chipActive]}
-                onPress={() => setCategory(option)}
-              >
-                <Text
-                  style={[styles.chipText, category === option && styles.chipTextActive]}
-                >
-                  {option}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          <TextInput
-            style={styles.input}
-            placeholder="Contact Email"
-            value={orgEmail}
-            onChangeText={setOrgEmail}
-            autoCapitalize="none"
-            keyboardType="email-address"
-          />
-          <TextInput
-            style={styles.input}
-            placeholder="Contact Phone"
-            value={orgPhone}
-            onChangeText={setOrgPhone}
-            keyboardType="phone-pad"
-          />
-          <TextInput
-            style={styles.input}
-            placeholder="Address / City"
-            value={orgAddress}
-            onChangeText={setOrgAddress}
-          />
-          <TouchableOpacity style={styles.submitButton} onPress={handleSubmitPartner}>
-            <Text style={styles.submitButtonText}>Submit for Approval</Text>
-          </TouchableOpacity>
-        </View>
+        renderPartnerFormCard({
+          title: 'Submit Program / Organization',
+          submitLabel: 'Submit for Approval',
+          onSubmit: handleSubmitPartner,
+        })
+      )}
+
+      {isAdmin && showAdminEditor && (
+        renderPartnerFormCard({
+          title: editingPartnerId ? 'Edit Partner Organization' : 'Create Partner Organization',
+          submitLabel: editingPartnerId ? 'Save Changes' : 'Create Partner',
+          onSubmit: handleSavePartnerProfile,
+          onCancel: resetPartnerForm,
+        })
       )}
 
       {isAdmin && (
@@ -298,9 +457,9 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
       {isAdmin && (
         <TouchableOpacity
           style={styles.fab}
-          onPress={() => Alert.alert('Info', 'Use the partner onboarding workflow on this screen.')}
+          onPress={showAdminEditor ? resetPartnerForm : handleOpenAdminCreate}
         >
-          <MaterialIcons name="add" size={28} color="#fff" />
+          <MaterialIcons name={showAdminEditor ? 'close' : 'add'} size={28} color="#fff" />
         </TouchableOpacity>
       )}
     </ScrollView>
@@ -354,6 +513,24 @@ const styles = StyleSheet.create({
   },
   submitButtonText: {
     color: '#fff',
+    fontWeight: '700',
+  },
+  formActions: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 4,
+  },
+  formButton: {
+    flex: 1,
+  },
+  cancelButton: {
+    backgroundColor: '#e5e7eb',
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  cancelButtonText: {
+    color: '#334155',
     fontWeight: '700',
   },
   chipRow: {
@@ -473,6 +650,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 8,
   },
+  adminActionStack: {
+    gap: 8,
+  },
   button: {
     flex: 1,
     flexDirection: 'row',
@@ -487,6 +667,16 @@ const styles = StyleSheet.create({
   },
   rejectButton: {
     backgroundColor: '#f44336',
+  },
+  editButton: {
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#86efac',
+  },
+  editButtonText: {
+    color: '#166534',
+    fontSize: 14,
+    fontWeight: '600',
   },
   buttonText: {
     color: '#fff',

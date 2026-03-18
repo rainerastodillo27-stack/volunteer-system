@@ -13,6 +13,7 @@ import {
   subscribeToStorageChanges,
 } from '../models/storage';
 import { PartnerProjectApplication, Project, Volunteer, VolunteerProjectJoinRecord, VolunteerTimeLog } from '../models/types';
+import { getProjectStatusColor } from '../utils/projectStatus';
 
 const CATEGORY_KEYWORDS: Record<Project['category'], string[]> = {
   Education: ['teaching', 'mentoring', 'reading', 'library', 'school', 'student', 'tutor'],
@@ -68,23 +69,6 @@ function getProjectSuggestion(project: Project, volunteer: Volunteer | null): Re
       matchedTerms.length >= 2 ? 'Good Skill Fit' : reasons.length > 0 ? 'Suggested for You' : 'Open Program',
     reasons: reasons.length > 0 ? reasons : ['Open for volunteers'],
   };
-}
-
-function getStatusColor(status: Project['status']) {
-  switch (status) {
-    case 'In Progress':
-      return '#f59e0b';
-    case 'Completed':
-      return '#16a34a';
-    case 'Planning':
-      return '#2563eb';
-    case 'On Hold':
-      return '#ea580c';
-    case 'Cancelled':
-      return '#dc2626';
-    default:
-      return '#64748b';
-  }
 }
 
 export default function ProjectsScreen({ navigation, route }: any) {
@@ -185,7 +169,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
             );
           });
         });
-        Alert.alert('Submitted', 'Waiting for admin approval.');
+        Alert.alert('Submitted', 'Admin has been notified and your request is waiting for approval.');
         return;
       }
 
@@ -514,7 +498,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                   <View
                     style={[
                       styles.statusDot,
-                      { backgroundColor: getStatusColor(item.status) },
+                      { backgroundColor: getProjectStatusColor(item.status) },
                     ]}
                   />
                   <Text style={styles.status}>{item.status}</Text>
