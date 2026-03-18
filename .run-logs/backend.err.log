@@ -1,2 +1,56 @@
 INFO:     Started server process [1784]
 INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     ('127.0.0.1', 65097) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 59991) - "WebSocket /ws/messages/admin-1" [accepted]
+INFO:     connection open
+INFO:     ('192.168.1.175', 53560) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('192.168.1.175', 53562) - "WebSocket /ws/messages/volunteer-1" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     connection closed
+INFO:     connection closed
+INFO:     connection closed
+INFO:     ('127.0.0.1', 58530) - "WebSocket /ws/messages/admin-1" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 50135) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     connection closed
+INFO:     ('127.0.0.1', 59042) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 61217) - "WebSocket /ws/messages/admin-1" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     connection closed
+INFO:     ('127.0.0.1', 54492) - "WebSocket /ws/messages/admin-1" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 55949) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 63125) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 62850) - "WebSocket /ws/messages/admin-1" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     connection closed
+INFO:     ('192.168.1.175', 42718) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('192.168.1.175', 42726) - "WebSocket /ws/messages/volunteer-1" [accepted]
+INFO:     connection open
+INFO:     ('192.168.1.175', 39264) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('192.168.1.175', 49756) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('192.168.1.175', 49766) - "WebSocket /ws/messages/volunteer-1" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 55536) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 55660) - "WebSocket /ws/messages/admin-1" [accepted]
+INFO:     connection open
+INFO:     ('192.168.1.175', 56848) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 62992) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
