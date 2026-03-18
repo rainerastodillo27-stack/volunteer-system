@@ -50,7 +50,7 @@ function ensureBackendStarted() {
   const appDir = __dirname;
   const isWindows = process.platform === 'win32';
   const command = isWindows ? 'py' : 'python3';
-  const args = ['-m', 'uvicorn', 'backend.api:app', '--host', '0.0.0.0', '--port', '8000'];
+  const args = ['-m', 'uvicorn', 'backend.api:app', '--host', '0.0.0.0', '--port', '8000', '--ws', 'websockets'];
 
   const child = spawn(command, args, {
     cwd: appDir,

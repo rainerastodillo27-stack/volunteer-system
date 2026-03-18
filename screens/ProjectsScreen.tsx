@@ -12,7 +12,7 @@ import {
   endVolunteerTimeLog,
   subscribeToStorageChanges,
 } from '../models/storage';
-import { PartnerProjectApplication, Project, Volunteer, VolunteerTimeLog } from '../models/types';
+import { PartnerProjectApplication, Project, Volunteer, VolunteerProjectJoinRecord, VolunteerTimeLog } from '../models/types';
 
 const CATEGORY_KEYWORDS: Record<Project['category'], string[]> = {
   Education: ['teaching', 'mentoring', 'reading', 'library', 'school', 'student', 'tutor'],
@@ -93,6 +93,7 @@ export default function ProjectsScreen({ navigation }: any) {
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
   const [partnerApplications, setPartnerApplications] = useState<PartnerProjectApplication[]>([]);
   const [timeLogs, setTimeLogs] = useState<VolunteerTimeLog[]>([]);
+  const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const [loadingProjectId, setLoadingProjectId] = useState<string | null>(null);
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
 
@@ -101,12 +102,14 @@ export default function ProjectsScreen({ navigation }: any) {
     volunteerProfile: Volunteer | null;
     timeLogs: VolunteerTimeLog[];
     partnerApplications: PartnerProjectApplication[];
+    volunteerJoinRecords: VolunteerProjectJoinRecord[];
   }) => {
     startTransition(() => {
       setProjects(snapshot.projects);
       setVolunteerProfile(snapshot.volunteerProfile);
       setTimeLogs(snapshot.timeLogs);
       setPartnerApplications(snapshot.partnerApplications);
+      setVolunteerJoinRecords(snapshot.volunteerJoinRecords);
     });
   }, []);
 
@@ -120,6 +123,7 @@ export default function ProjectsScreen({ navigation }: any) {
         setVolunteerProfile(null);
         setTimeLogs([]);
         setPartnerApplications([]);
+        setVolunteerJoinRecords([]);
       });
       Alert.alert('Database Unavailable', error?.message || 'Failed to load projects from Postgres.');
     }
@@ -241,6 +245,11 @@ export default function ProjectsScreen({ navigation }: any) {
     [timeLogs]
   );
 
+  const volunteerJoinRecordByProjectId = useMemo(
+    () => new Map(volunteerJoinRecords.map(record => [record.projectId, record])),
+    [volunteerJoinRecords]
+  );
+
   const isJoined = useCallback((project: Project) => {
     const joinedUsers = project.joinedUserIds || [];
     const volunteerId = volunteerProfile?.id;
@@ -262,6 +271,8 @@ export default function ProjectsScreen({ navigation }: any) {
           const joined = isJoined(item);
           const activeLog = activeLogByProjectId.get(item.id);
           const latestLog = latestLogByProjectId.get(item.id);
+          const joinRecord = volunteerJoinRecordByProjectId.get(item.id);
+          const completedParticipation = joinRecord?.participationStatus === 'Completed';
           const isExpanded = expandedProjectId === item.id;
           const partnerApplication = partnerApplicationByProjectId.get(item.id);
 
@@ -336,28 +347,32 @@ export default function ProjectsScreen({ navigation }: any) {
                     <TouchableOpacity
                       style={[
                         styles.joinButton,
-                        joined && styles.joinButtonJoined,
+                        completedParticipation
+                          ? styles.joinButtonCompleted
+                          : joined && styles.joinButtonJoined,
                         loadingProjectId === item.id && styles.joinButtonLoading,
                       ]}
-                      disabled={joined || loadingProjectId === item.id}
+                      disabled={joined || completedParticipation || loadingProjectId === item.id}
                       onPress={() => handleJoinProject(item.id)}
                     >
                       <MaterialIcons
-                        name={joined ? 'check-circle' : 'add-circle-outline'}
+                        name={completedParticipation ? 'task-alt' : joined ? 'check-circle' : 'add-circle-outline'}
                         size={18}
-                        color={joined ? '#155724' : '#fff'}
+                        color={completedParticipation ? '#166534' : joined ? '#155724' : '#fff'}
                       />
                       <Text
                         style={[
                           styles.joinButtonText,
-                          joined && styles.joinButtonTextJoined,
+                          completedParticipation
+                            ? styles.joinButtonTextCompleted
+                            : joined && styles.joinButtonTextJoined,
                         ]}
                       >
-                        {joined ? 'Joined' : 'Join Program'}
+                        {completedParticipation ? 'Completed' : joined ? 'Joined' : 'Join Program'}
                       </Text>
                     </TouchableOpacity>
 
-                    {joined && (
+                    {joined && !completedParticipation && (
                       <TouchableOpacity
                         style={[
                           styles.timeButton,
@@ -381,18 +396,31 @@ export default function ProjectsScreen({ navigation }: any) {
                   </View>
 
                   {joined && (
-                    <View style={styles.logMeta}>
-                      <Text style={styles.logMetaLabel}>
-                        {activeLog ? 'Active since' : 'Last log'}
-                      </Text>
-                      <Text style={styles.logMetaValue}>
-                        {activeLog
-                          ? formatTimestamp(activeLog.timeIn)
-                          : latestLog
-                          ? `${formatTimestamp(latestLog.timeIn)} -> ${formatTimestamp(latestLog.timeOut)}`
-                          : 'No logs yet'}
-                      </Text>
-                    </View>
+                    <>
+                      <View style={styles.logMeta}>
+                        <Text style={styles.logMetaLabel}>Participation status</Text>
+                        <Text style={styles.logMetaValue}>
+                          {completedParticipation
+                            ? joinRecord?.completedAt
+                              ? `Completed ${formatTimestamp(joinRecord.completedAt)}`
+                              : 'Completed and saved to profile'
+                            : 'Joined'}
+                        </Text>
+                      </View>
+
+                      <View style={styles.logMeta}>
+                        <Text style={styles.logMetaLabel}>
+                          {activeLog ? 'Active since' : 'Last log'}
+                        </Text>
+                        <Text style={styles.logMetaValue}>
+                          {activeLog
+                            ? formatTimestamp(activeLog.timeIn)
+                            : latestLog
+                            ? `${formatTimestamp(latestLog.timeIn)} -> ${formatTimestamp(latestLog.timeOut)}`
+                            : 'No logs yet'}
+                        </Text>
+                      </View>
+                    </>
                   )}
                 </View>
               )}
@@ -482,6 +510,7 @@ export default function ProjectsScreen({ navigation }: any) {
           loadingProjectId,
           partnerApplicationByProjectId,
           user,
+          volunteerJoinRecordByProjectId,
           volunteerProfile,
         ]);
 
@@ -667,6 +696,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#4CAF50',
   },
+  joinButtonCompleted: {
+    backgroundColor: '#dcfce7',
+    borderWidth: 1,
+    borderColor: '#16a34a',
+  },
   joinButtonLoading: {
     opacity: 0.7,
   },
@@ -677,6 +711,9 @@ const styles = StyleSheet.create({
   },
   joinButtonTextJoined: {
     color: '#155724',
+  },
+  joinButtonTextCompleted: {
+    color: '#166534',
   },
   timeButton: {
     flexDirection: 'row',

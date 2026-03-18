@@ -303,6 +303,7 @@ type ProjectsScreenSnapshot = {
   volunteerProfile: Volunteer | null;
   timeLogs: VolunteerTimeLog[];
   partnerApplications: PartnerProjectApplication[];
+  volunteerJoinRecords: VolunteerProjectJoinRecord[];
 };
 
 type JoinProjectResult = {
@@ -811,6 +812,7 @@ export async function getProjectsScreenSnapshot(
     volunteerProfile: payload.volunteerProfile || null,
     timeLogs: payload.timeLogs || [],
     partnerApplications: payload.partnerApplications || [],
+    volunteerJoinRecords: payload.volunteerJoinRecords || [],
   };
 }
 
@@ -1257,9 +1259,6 @@ async function addLoggedHoursToVolunteer(
     totalHoursContributed: parseFloat(
       (volunteer.totalHoursContributed + durationHours).toFixed(1)
     ),
-    pastProjects: volunteer.pastProjects.includes(log.projectId)
-      ? volunteer.pastProjects
-      : [...volunteer.pastProjects, log.projectId],
   });
 }
 
@@ -1275,7 +1274,9 @@ export async function saveMessage(message: Message): Promise<void> {
       body: JSON.stringify(message),
     });
     if (!response.ok) {
-      throw new Error(`Message send failed: ${response.status}`);
+      throw new Error(
+        await getApiErrorMessage(response, `Message send failed: ${response.status}`)
+      );
     }
     notifyWebMessageUpdate();
   } catch (error) {
@@ -1427,7 +1428,7 @@ export function subscribeToMessages(
 export function subscribeToStorageChanges(
   keys: string[],
   onChange: (event: { type: string; keys: string[] }) => void,
-  pollIntervalMs = 3000
+  pollIntervalMs = 1000
 ): () => void {
   let socket: WebSocket | null = null;
   let heartbeat: ReturnType<typeof setInterval> | null = null;
@@ -1435,15 +1436,29 @@ export function subscribeToStorageChanges(
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let closed = false;
   const watchedKeys = new Set(keys);
+  const watchedKeyList = Array.from(watchedKeys);
+
+  const stopPolling = () => {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  };
+
+  const startPolling = () => {
+    if (pollTimer) {
+      return;
+    }
+
+    pollTimer = setInterval(() => {
+      onChange({ type: 'storage.poll', keys: watchedKeyList });
+    }, pollIntervalMs);
+  };
 
   const cleanupSocket = () => {
     if (heartbeat) {
       clearInterval(heartbeat);
       heartbeat = null;
-    }
-    if (pollTimer) {
-      clearInterval(pollTimer);
-      pollTimer = null;
     }
     if (socket) {
       socket.onopen = null;
@@ -1457,14 +1472,17 @@ export function subscribeToStorageChanges(
 
   const connect = () => {
     cleanupSocket();
+    startPolling();
     socket = new WebSocket(getStorageWebSocketUrl());
 
     socket.onopen = () => {
+      stopPolling();
       heartbeat = setInterval(() => {
         if (socket?.readyState === WebSocket.OPEN) {
           socket.send('ping');
         }
       }, 25000);
+      onChange({ type: 'storage.connected', keys: watchedKeyList });
     };
 
     socket.onmessage = event => {
@@ -1484,6 +1502,7 @@ export function subscribeToStorageChanges(
 
     socket.onclose = () => {
       cleanupSocket();
+      startPolling();
       if (!closed) {
         reconnectTimer = setTimeout(connect, 1500);
       }
@@ -1492,10 +1511,6 @@ export function subscribeToStorageChanges(
     socket.onerror = () => {
       socket?.close();
     };
-
-    pollTimer = setInterval(() => {
-      onChange({ type: 'storage.poll', keys: Array.from(watchedKeys) });
-    }, pollIntervalMs);
   };
 
   connect();
@@ -1505,6 +1520,7 @@ export function subscribeToStorageChanges(
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
     }
+    stopPolling();
     cleanupSocket();
   };
 }

@@ -14,6 +14,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import {
+  getAllProjects,
   getAllUsers,
   getUserByEmailOrPhone,
   getVolunteerByUserId,
@@ -30,6 +31,7 @@ const SAVE_SYNC_RETRY_DELAY_MS = 250;
 export default function ProfileScreen() {
   const { user, logout, updateUserProfile } = useAuth();
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
+  const [projectTitlesById, setProjectTitlesById] = useState<Record<string, string>>({});
   const [showEditModal, setShowEditModal] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
@@ -57,14 +59,27 @@ export default function ProfileScreen() {
     }
   }, [user?.id, user?.role]);
 
+  const loadProjectTitles = useCallback(async () => {
+    try {
+      const projects = await getAllProjects();
+      setProjectTitlesById(
+        Object.fromEntries(projects.map(project => [project.id, project.title]))
+      );
+    } catch (error) {
+      console.error('Error loading projects for profile:', error);
+    }
+  }, []);
+
   useEffect(() => {
     void loadVolunteerProfile();
-  }, [loadVolunteerProfile]);
+    void loadProjectTitles();
+  }, [loadProjectTitles, loadVolunteerProfile]);
 
   useFocusEffect(
     useCallback(() => {
       void loadVolunteerProfile();
-    }, [loadVolunteerProfile])
+      void loadProjectTitles();
+    }, [loadProjectTitles, loadVolunteerProfile])
   );
 
   const populateDrafts = useCallback(() => {
@@ -261,6 +276,7 @@ export default function ProfileScreen() {
     .join('')
     .slice(0, 2)
     .toUpperCase();
+  const completedPrograms = volunteerProfile?.pastProjects || [];
 
   return (
     <ScrollView style={styles.container}>
@@ -363,6 +379,21 @@ export default function ProfileScreen() {
 
               <Text style={styles.infoLabel}>Background</Text>
               <Text style={styles.infoValue}>{volunteerProfile.background || 'No background added yet.'}</Text>
+
+              <Text style={styles.infoLabel}>Completed Programs</Text>
+              {completedPrograms.length > 0 ? (
+                <View style={styles.completedProgramsList}>
+                  {completedPrograms.map(projectId => (
+                    <View key={projectId} style={styles.completedProgramCard}>
+                      <Text style={styles.completedProgramTitle}>
+                        {projectTitlesById[projectId] || projectId}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <Text style={styles.infoValue}>No completed programs yet.</Text>
+              )}
             </View>
           </>
         )}
@@ -656,6 +687,23 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
     color: '#334155',
+  },
+  completedProgramsList: {
+    marginTop: 8,
+    gap: 10,
+  },
+  completedProgramCard: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  completedProgramTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0f172a',
   },
   logoutButton: {
     width: '100%',

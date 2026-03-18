@@ -213,6 +213,10 @@ def serialize_message_row(row: Any) -> dict[str, Any]:
 @app.on_event("startup")
 def startup() -> None:
     ensure_app_storage_seeded()
+    if get_db_mode() == "postgres":
+        with get_postgres_connection() as connection:
+            _postgres_sync_all_legacy_app_users(connection)
+            connection.commit()
 
 
 @app.get("/health", response_model=None)
@@ -295,6 +299,73 @@ def _postgres_get_hot_item_by_id(connection: Any, key: str, item_id: str) -> dic
         cursor.execute(f"select data from {table_name} where id = %s", (item_id,))
         row = cursor.fetchone()
     return None if row is None else row[0]
+
+
+def _legacy_app_user_email(user_id: str, user: dict[str, Any]) -> str:
+    email = str(user.get("email") or "").strip().lower()
+    if email:
+        return email
+
+    return f"{user_id}@volcre.local"
+
+
+def _postgres_upsert_legacy_app_user(connection: Any, user_id: str, user: dict[str, Any]) -> None:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            create table if not exists app_users (
+              id text primary key,
+              email text not null unique,
+              password text not null,
+              role text not null,
+              name text not null,
+              phone text,
+              created_at timestamptz not null
+            )
+            """
+        )
+        cursor.execute(
+            "delete from app_users where email = %s and id <> %s",
+            (_legacy_app_user_email(user_id, user), user_id),
+        )
+        cursor.execute(
+            """
+            insert into app_users (id, email, password, role, name, phone, created_at)
+            values (%s, %s, %s, %s, %s, %s, %s)
+            on conflict (id) do update set
+              email = excluded.email,
+              password = excluded.password,
+              role = excluded.role,
+              name = excluded.name,
+              phone = excluded.phone,
+              created_at = excluded.created_at
+            """,
+            (
+                user_id,
+                _legacy_app_user_email(user_id, user),
+                str(user.get("password") or ""),
+                str(user.get("role") or "volunteer"),
+                str(user.get("name") or user_id),
+                str(user.get("phone") or "") or None,
+                str(user.get("createdAt") or datetime.now(timezone.utc).isoformat()),
+            ),
+        )
+
+
+def _postgres_ensure_legacy_app_user(connection: Any, user_id: str) -> None:
+    user = _postgres_get_hot_item_by_id(connection, "users", user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail=f"User '{user_id}' was not found.")
+
+    _postgres_upsert_legacy_app_user(connection, user_id, user)
+
+
+def _postgres_sync_all_legacy_app_users(connection: Any) -> None:
+    users = get_postgres_hot_storage_collection(connection, "users")
+    for user in users:
+        user_id = user.get("id")
+        if isinstance(user_id, str) and user_id:
+            _postgres_upsert_legacy_app_user(connection, user_id, user)
 
 
 def _postgres_get_hot_items_by_field(
@@ -447,14 +518,10 @@ def _postgres_add_logged_hours_to_volunteer(
         0,
         (datetime.fromisoformat(time_out).timestamp() - datetime.fromisoformat(time_in).timestamp()) / 3600,
     )
-    past_projects = list(volunteer.get("pastProjects") or [])
-    if log["projectId"] not in past_projects:
-        past_projects.append(log["projectId"])
 
     updated_volunteer = {
         **volunteer,
         "totalHoursContributed": round(float(volunteer.get("totalHoursContributed") or 0) + duration_hours, 1),
-        "pastProjects": past_projects,
     }
     return _postgres_upsert_hot_item(connection, "volunteers", updated_volunteer)
 
@@ -470,6 +537,7 @@ def _build_projects_snapshot(
         "volunteerProfile": None,
         "timeLogs": [],
         "partnerApplications": [],
+        "volunteerJoinRecords": [],
     }
 
     if not user_id or not role:
@@ -480,6 +548,10 @@ def _build_projects_snapshot(
         snapshot["volunteerProfile"] = volunteer
         if volunteer is not None:
             snapshot["timeLogs"] = _postgres_get_volunteer_time_logs(connection, volunteer["id"])
+            snapshot["volunteerJoinRecords"] = _sort_iso_desc(
+                _postgres_get_hot_items_by_field(connection, "volunteerProjectJoins", "volunteerId", volunteer["id"]),
+                "joinedAt",
+            )
         return snapshot
 
     if role == "partner":
@@ -791,6 +863,8 @@ async def create_message(payload: MessagePayload) -> dict[str, Any]:
         from psycopg.rows import dict_row
 
         with get_postgres_connection() as connection:
+            _postgres_ensure_legacy_app_user(connection, payload.senderId)
+            _postgres_ensure_legacy_app_user(connection, payload.recipientId)
             with connection.cursor(row_factory=dict_row) as cursor:
                 cursor.execute(
                     """
@@ -993,6 +1067,8 @@ async def put_storage_item(key: str, payload: StoragePayload) -> dict[str, str]:
 
         with get_postgres_connection() as connection:
             replace_postgres_hot_storage_collection(connection, key, payload.value)
+            if key == "users":
+                _postgres_sync_all_legacy_app_users(connection)
             connection.commit()
         await connection_manager.broadcast_storage_event([key])
         return {"status": "ok"}

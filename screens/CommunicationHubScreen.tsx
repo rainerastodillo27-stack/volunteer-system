@@ -48,6 +48,9 @@ const formatMessageTime = (timestamp?: string) => {
   return format(parsedDate, 'HH:mm');
 };
 
+const createMessageId = () =>
+  `msg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
 type ConversationItem = {
   user: User;
   lastMessage?: Message;
@@ -335,7 +338,7 @@ export default function CommunicationHubScreen({ navigation }: any) {
 
     try {
       const newMessage: Message = {
-        id: `msg-${Date.now()}`,
+        id: createMessageId(),
         senderId: user.id,
         recipientId: selectedUser.id,
         content: messageText,
@@ -353,8 +356,8 @@ export default function CommunicationHubScreen({ navigation }: any) {
       );
       await saveMessage(newMessage);
       setMessageText('');
-    } catch (error) {
-      Alert.alert('Error', 'Failed to send message');
+    } catch (error: any) {
+      Alert.alert('Error', error?.message || 'Failed to send message');
       await loadMessages();
       await loadConversations();
     }

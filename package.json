@@ -11,7 +11,7 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "backend": "py -m uvicorn backend.api:app --host 0.0.0.0 --port 8000",
+    "backend": "py -m uvicorn backend.api:app --host 0.0.0.0 --port 8000 --ws websockets",
     "backend:seed-storage": "py -m backend.app_storage_seed"
   },
   "dependencies": {

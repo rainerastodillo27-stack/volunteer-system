@@ -1,8 +1,8 @@
 {
-    "updatedAt":  "2026-03-18T09:06:15.1855871+08:00",
-    "backendPid":  10236,
+    "updatedAt":  "2026-03-18T10:03:03.1197202+08:00",
+    "backendPid":  14768,
     "expoPid":  0,
-    "backendPortPid":  0,
+    "backendPortPid":  14768,
     "expoPortPid":  0,
     "backendHealth":  "http://127.0.0.1:8000/health",
     "expoUrl":  "http://127.0.0.1:8081",
