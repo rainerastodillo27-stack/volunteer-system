@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useAuth } from '../contexts/AuthContext';
 import { Project } from '../models/types';
 import { getAllProjects } from '../models/storage';
 
@@ -30,7 +31,8 @@ const PHILIPPINES_BOUNDS = {
   },
 };
 
-export default function MappingScreen() {
+export default function MappingScreen({ navigation }: any) {
+  const { user } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [showDetails, setShowDetails] = useState(false);
@@ -103,6 +105,20 @@ export default function MappingScreen() {
 
     setSelectedProject(project);
     setShowDetails(true);
+  };
+
+  const handleOpenProjectDetails = () => {
+    if (!selectedProject) {
+      return;
+    }
+
+    setShowDetails(false);
+    if (user?.role === 'admin') {
+      navigation.navigate('Lifecycle', { projectId: selectedProject.id });
+      return;
+    }
+
+    navigation.navigate('Projects', { projectId: selectedProject.id });
   };
 
   const generateLeafletHTML = () => {
@@ -267,6 +283,13 @@ export default function MappingScreen() {
                     <Text style={styles.infoValue}>{selectedProject.volunteersNeeded}</Text>
                   </View>
                 </View>
+
+                <TouchableOpacity
+                  style={styles.viewDetailsButton}
+                  onPress={handleOpenProjectDetails}
+                >
+                  <Text style={styles.viewDetailsButtonText}>View Full Details</Text>
+                </TouchableOpacity>
               </View>
             )}
           </View>
@@ -407,5 +430,16 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#333',
     fontWeight: '600',
+  },
+  viewDetailsButton: {
+    backgroundColor: '#4CAF50',
+    borderRadius: 8,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  viewDetailsButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
   },
 });

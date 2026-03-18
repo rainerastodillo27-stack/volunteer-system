@@ -15,6 +15,7 @@ import { Volunteer, Project, VolunteerProjectMatch } from '../models/types';
 import {
   getAllVolunteers,
   getAllProjects,
+  getVolunteerCompletedProjectIds,
   saveVolunteer,
   saveVolunteerProjectMatch,
   getVolunteerProjectMatches,
@@ -28,6 +29,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [view, setView] = useState<'list' | 'detail'>('list');
   const [selectedVolunteer, setSelectedVolunteer] = useState<Volunteer | null>(null);
+  const [selectedVolunteerCompletedProjectIds, setSelectedVolunteerCompletedProjectIds] = useState<string[]>([]);
   const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
   const [showAvailabilityModal, setShowAvailabilityModal] = useState(false);
   const [daysPerWeek, setDaysPerWeek] = useState('3');
@@ -69,7 +71,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
         void loadVolunteers();
         void loadProjects();
         if (selectedVolunteer) {
-          void getVolunteerProjectMatches(selectedVolunteer.id).then(setVolunteerMatches);
+          void loadSelectedVolunteerDetails(selectedVolunteer.id);
         }
       }
     );
@@ -79,6 +81,16 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     try {
       const allVolunteers = await getAllVolunteers();
       setVolunteers(allVolunteers);
+      setSelectedVolunteer(currentSelectedVolunteer => {
+        if (!currentSelectedVolunteer) {
+          return currentSelectedVolunteer;
+        }
+
+        return (
+          allVolunteers.find(volunteer => volunteer.id === currentSelectedVolunteer.id) ||
+          currentSelectedVolunteer
+        );
+      });
     } catch (error) {
       Alert.alert('Error', 'Failed to load volunteers');
     }
@@ -87,10 +99,19 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   const loadProjects = async () => {
     try {
       const allProjects = await getAllProjects();
-      setProjects(allProjects.filter(p => p.status === 'In Progress'));
+      setProjects(allProjects);
     } catch (error) {
       Alert.alert('Error', 'Failed to load projects');
     }
+  };
+
+  const loadSelectedVolunteerDetails = async (volunteerId: string) => {
+    const [matches, completedProjectIds] = await Promise.all([
+      getVolunteerProjectMatches(volunteerId),
+      getVolunteerCompletedProjectIds(volunteerId),
+    ]);
+    setVolunteerMatches(matches);
+    setSelectedVolunteerCompletedProjectIds(completedProjectIds);
   };
 
   const handleSelectVolunteer = async (volunteer: Volunteer) => {
@@ -100,8 +121,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     }
 
     setSelectedVolunteer(volunteer);
-    const matches = await getVolunteerProjectMatches(volunteer.id);
-    setVolunteerMatches(matches);
+    await loadSelectedVolunteerDetails(volunteer.id);
     setView('detail');
   };
 
@@ -183,19 +203,30 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
 
   const getMatchedProjects = () => {
     return projects.filter(p =>
+      p.status === 'In Progress' &&
       volunteerMatches.find(m => m.projectId === p.id && m.status === 'Matched')
     );
   };
 
   const getAvailableProjects = () => {
     return projects.filter(
-      p => !volunteerMatches.find(m => m.projectId === p.id && m.status === 'Matched')
+      p =>
+        p.status === 'In Progress' &&
+        !volunteerMatches.find(m => m.projectId === p.id && m.status === 'Matched')
     );
   };
 
   if (view === 'detail' && selectedVolunteer) {
     const matchedProjects = getMatchedProjects();
     const availableProjects = getAvailableProjects();
+    const completedProjects = selectedVolunteerCompletedProjectIds.map(projectId => {
+      const project = projects.find(projectEntry => projectEntry.id === projectId);
+      return {
+        id: projectId,
+        title: project?.title || projectId,
+        category: project?.category,
+      };
+    });
 
     return (
       <ScrollView style={styles.container}>
@@ -243,7 +274,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
             </View>
             <View style={styles.stat}>
               <MaterialIcons name="task-alt" size={24} color="#4CAF50" />
-              <Text style={styles.statValue}>{selectedVolunteer.pastProjects.length}</Text>
+              <Text style={styles.statValue}>{selectedVolunteerCompletedProjectIds.length}</Text>
               <Text style={styles.statLabel}>Projects</Text>
             </View>
           </View>
@@ -314,6 +345,25 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
             ))}
           </View>
         )}
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Completed Projects</Text>
+          {completedProjects.length === 0 ? (
+            <Text style={styles.emptyText}>No completed projects yet</Text>
+          ) : (
+            completedProjects.map(project => (
+              <View key={project.id} style={styles.projectItem}>
+                <View style={styles.projectInfo}>
+                  <Text style={styles.projectName}>{project.title}</Text>
+                  <Text style={styles.projectCategory}>
+                    {project.category || 'Completed program'}
+                  </Text>
+                </View>
+                <MaterialIcons name="task-alt" size={20} color="#16a34a" />
+              </View>
+            ))
+          )}
+        </View>
 
         <View style={styles.section}>
           <View style={styles.sectionHeader}>

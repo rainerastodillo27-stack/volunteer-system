@@ -21,7 +21,7 @@ import { getMessagesForUser, subscribeToMessages } from '../models/storage';
 export type TabParamList = {
   Dashboard: undefined;
   Partners: undefined;
-  Projects: undefined;
+  Projects: { projectId?: string } | undefined;
   Lifecycle: { projectId?: string } | undefined;
   Volunteers: { volunteerId?: string } | undefined;
   Map: undefined;

@@ -16,10 +16,12 @@ import { useAuth } from '../contexts/AuthContext';
 import {
   getAllProjects,
   getAllUsers,
+  getVolunteerCompletedProjectIds,
   getUserByEmailOrPhone,
   getVolunteerByUserId,
   saveUser,
   saveVolunteer,
+  subscribeToStorageChanges,
 } from '../models/storage';
 import { NVCSector, User, UserType, Volunteer } from '../models/types';
 
@@ -31,6 +33,7 @@ const SAVE_SYNC_RETRY_DELAY_MS = 250;
 export default function ProfileScreen() {
   const { user, logout, updateUserProfile } = useAuth();
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
+  const [completedProjectIds, setCompletedProjectIds] = useState<string[]>([]);
   const [projectTitlesById, setProjectTitlesById] = useState<Record<string, string>>({});
   const [showEditModal, setShowEditModal] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
@@ -48,12 +51,19 @@ export default function ProfileScreen() {
   const loadVolunteerProfile = useCallback(async () => {
     if (user?.role !== 'volunteer' || !user.id) {
       setVolunteerProfile(null);
+      setCompletedProjectIds([]);
       return;
     }
 
     try {
       const profile = await getVolunteerByUserId(user.id);
       setVolunteerProfile(profile);
+      if (profile?.id) {
+        const completedIds = await getVolunteerCompletedProjectIds(profile.id);
+        setCompletedProjectIds(completedIds);
+      } else {
+        setCompletedProjectIds([]);
+      }
     } catch (error) {
       console.error('Error loading volunteer profile:', error);
     }
@@ -73,6 +83,16 @@ export default function ProfileScreen() {
   useEffect(() => {
     void loadVolunteerProfile();
     void loadProjectTitles();
+  }, [loadProjectTitles, loadVolunteerProfile]);
+
+  useEffect(() => {
+    return subscribeToStorageChanges(
+      ['volunteers', 'projects', 'volunteerProjectJoins'],
+      () => {
+        void loadVolunteerProfile();
+        void loadProjectTitles();
+      }
+    );
   }, [loadProjectTitles, loadVolunteerProfile]);
 
   useFocusEffect(
@@ -248,6 +268,7 @@ export default function ProfileScreen() {
 
         await saveVolunteer(updatedVolunteerProfile);
         setVolunteerProfile(updatedVolunteerProfile);
+        setCompletedProjectIds(updatedVolunteerProfile.pastProjects || []);
       }
 
       const loginIdentifier = normalizedEmail || normalizedPhone;
@@ -276,7 +297,7 @@ export default function ProfileScreen() {
     .join('')
     .slice(0, 2)
     .toUpperCase();
-  const completedPrograms = volunteerProfile?.pastProjects || [];
+  const completedPrograms = completedProjectIds;
 
   return (
     <ScrollView style={styles.container}>
@@ -353,7 +374,7 @@ export default function ProfileScreen() {
                 <Text style={styles.statLabel}>Hours Logged</Text>
               </View>
               <View style={styles.stat}>
-                <Text style={styles.statNumber}>{volunteerProfile.pastProjects.length}</Text>
+                <Text style={styles.statNumber}>{completedProjectIds.length}</Text>
                 <Text style={styles.statLabel}>Projects</Text>
               </View>
             </View>

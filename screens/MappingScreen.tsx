@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -7,21 +7,12 @@ import {
   Alert,
   Modal,
   ActivityIndicator,
-  Platform,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import MapView, { Marker, PROVIDER_DEFAULT } from 'react-native-maps';
+import { WebView, WebViewMessageEvent } from 'react-native-webview';
+import { useAuth } from '../contexts/AuthContext';
 import { Project } from '../models/types';
 import { getAllProjects } from '../models/storage';
-
-const IFrame = 'iframe' as any;
-
-type Region = {
-  latitude: number;
-  longitude: number;
-  latitudeDelta: number;
-  longitudeDelta: number;
-};
 
 const PHILIPPINES_CENTER = {
   latitude: 12.8797,
@@ -40,38 +31,15 @@ const PHILIPPINES_BOUNDS = {
 };
 
 export default function MappingScreen({ navigation }: any) {
+  const { user } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [showDetails, setShowDetails] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    loadProjects();
+    void loadProjects();
   }, []);
-
-  useEffect(() => {
-    if (Platform.OS !== 'web') {
-      return;
-    }
-
-    const handleWindowMessage = (event: MessageEvent) => {
-      if (typeof event.data !== 'string') {
-        return;
-      }
-
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === 'selectProject') {
-          handleProjectSelection(data.projectId);
-        }
-      } catch (error) {
-        console.error('Error handling web map message:', error);
-      }
-    };
-
-    window.addEventListener('message', handleWindowMessage);
-    return () => window.removeEventListener('message', handleWindowMessage);
-  }, [projects]);
 
   const loadProjects = async () => {
     try {
@@ -81,7 +49,10 @@ export default function MappingScreen({ navigation }: any) {
     } catch (error: any) {
       console.error('Error loading projects for map:', error);
       setProjects([]);
-      Alert.alert('Database Unavailable', error?.message || 'Failed to load projects from Postgres.');
+      Alert.alert(
+        'Database Unavailable',
+        error?.message || 'Failed to load projects from Postgres.'
+      );
       setLoading(false);
     }
   };
@@ -104,43 +75,47 @@ export default function MappingScreen({ navigation }: any) {
   };
 
   const getMarkerColor = (project: Project) => {
-    if (project.isEvent) return '#9C27B0'; // distinct color for events
+    if (project.isEvent) return '#9C27B0';
     return getStatusColor(project.status);
   };
 
-  const getMobileMapRegion = (): Region => {
-    if (projects.length === 0) {
-      return {
-        latitude: PHILIPPINES_CENTER.latitude,
-        longitude: PHILIPPINES_CENTER.longitude,
-        latitudeDelta: 8,
-        longitudeDelta: 8,
-      };
-    }
-
-    const latitudes = projects.map(project => project.location.latitude);
-    const longitudes = projects.map(project => project.location.longitude);
-    const minLatitude = Math.min(...latitudes);
-    const maxLatitude = Math.max(...latitudes);
-    const minLongitude = Math.min(...longitudes);
-    const maxLongitude = Math.max(...longitudes);
-
-    return {
-      latitude: (minLatitude + maxLatitude) / 2,
-      longitude: (minLongitude + maxLongitude) / 2,
-      latitudeDelta: Math.max((maxLatitude - minLatitude) * 1.8, 0.6),
-      longitudeDelta: Math.max((maxLongitude - minLongitude) * 1.8, 0.6),
-    };
-  };
-
   const handleProjectSelection = (projectId: string) => {
-    const project = projects.find((p) => p.id === projectId);
+    const project = projects.find(projectEntry => projectEntry.id === projectId);
     if (!project) {
       return;
     }
 
     setSelectedProject(project);
     setShowDetails(true);
+  };
+
+  const handleLeafletMessage = (event: WebViewMessageEvent) => {
+    if (!event.nativeEvent.data) {
+      return;
+    }
+
+    try {
+      const data = JSON.parse(event.nativeEvent.data);
+      if (data.type === 'selectProject') {
+        handleProjectSelection(data.projectId);
+      }
+    } catch (error) {
+      console.error('Error handling mobile map message:', error);
+    }
+  };
+
+  const handleOpenProjectDetails = () => {
+    if (!selectedProject) {
+      return;
+    }
+
+    setShowDetails(false);
+    if (user?.role === 'admin') {
+      navigation.navigate('Lifecycle', { projectId: selectedProject.id });
+      return;
+    }
+
+    navigation.navigate('Projects', { projectId: selectedProject.id });
   };
 
   const generateLeafletHTML = () => {
@@ -174,8 +149,8 @@ export default function MappingScreen({ navigation }: any) {
           </p>
           <p style="margin: 4px 0; font-size: 12px; color: #666;">
             <strong>Status:</strong> <span style="color: ${getStatusColor(
-            project.status
-          )}; font-weight: bold;">${project.status}</span>
+              project.status
+            )}; font-weight: bold;">${project.status}</span>
           </p>
           <p style="margin: 4px 0; font-size: 12px; color: #666;">
             <strong>Location:</strong> ${project.location.latitude.toFixed(4)}, ${project.location.longitude.toFixed(4)}
@@ -188,19 +163,10 @@ export default function MappingScreen({ navigation }: any) {
           const message = JSON.stringify({
             type: 'selectProject',
             projectId: ${JSON.stringify(project.id)},
-            projectTitle: ${JSON.stringify(project.title)},
-            projectStatus: ${JSON.stringify(project.status)},
-            volunteersNeeded: ${project.volunteersNeeded},
-            projectLatitude: ${project.location.latitude},
-            projectLongitude: ${project.location.longitude},
           });
 
           if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
             window.ReactNativeWebView.postMessage(message);
-          }
-
-          if (window.parent && window.parent !== window) {
-            window.parent.postMessage(message, '*');
           }
         });
     `
@@ -209,7 +175,7 @@ export default function MappingScreen({ navigation }: any) {
 
     const mapBounds = projects
       .map(
-        (project) =>
+        project =>
           `[${project.location.latitude}, ${project.location.longitude}]`
       )
       .join(',\n');
@@ -248,7 +214,6 @@ export default function MappingScreen({ navigation }: any) {
         <body>
           <div id="map"></div>
           <script>
-            // Initialize map centered on the Philippines
             const philippinesBounds = [
               [${PHILIPPINES_BOUNDS.southWest.latitude}, ${PHILIPPINES_BOUNDS.southWest.longitude}],
               [${PHILIPPINES_BOUNDS.northEast.latitude}, ${PHILIPPINES_BOUNDS.northEast.longitude}]
@@ -260,19 +225,14 @@ export default function MappingScreen({ navigation }: any) {
               minZoom: 5,
             }).setView([${PHILIPPINES_CENTER.latitude}, ${PHILIPPINES_CENTER.longitude}], 6);
 
-            // Add OpenStreetMap tiles
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-              attribution: '© OpenStreetMap contributors',
+              attribution: '&copy; OpenStreetMap contributors',
               maxZoom: 19,
             }).addTo(map);
 
-            // Add scale control
             L.control.scale().addTo(map);
-
-            // Add zoom control with better positioning
             map.zoomControl.setPosition('bottomright');
 
-            // Add project markers
             ${projectMarkers}
 
             map.fitBounds(philippinesBounds, { padding: [24, 24] });
@@ -280,13 +240,6 @@ export default function MappingScreen({ navigation }: any) {
             const projectBounds = [${mapBounds}];
             if (projectBounds.length > 0) {
               map.fitBounds(projectBounds, { padding: [32, 32], maxZoom: 11 });
-            }
-
-            // Handle messages from React Native
-            if (window.ReactNativeWebView) {
-              document.addEventListener('click', function(e) {
-                // This will be handled by marker click events
-              });
             }
           <\/script>
         </body>
@@ -310,46 +263,25 @@ export default function MappingScreen({ navigation }: any) {
         <Text style={styles.headerSubtitle}>Marker map for Negros Occidental, Philippines</Text>
       </View>
 
-      {Platform.OS === 'web' ? (
-        <View style={styles.webMapContainer}>
-          <IFrame
-            srcDoc={generateLeafletHTML()}
-            style={styles.webMapFrame}
-            title="Program locations map"
-          />
-        </View>
-      ) : (
-        <View style={styles.nativeMapContainer}>
-          <MapView
-            provider={PROVIDER_DEFAULT}
-            style={styles.nativeMap}
-            initialRegion={getMobileMapRegion()}
-          >
-            {projects.map((project, index) => (
-              <Marker
-                key={project.id}
-                coordinate={{
-                  latitude: project.location.latitude,
-                  longitude: project.location.longitude,
-                }}
-                title={`${index + 1}. ${project.title}`}
-                description={project.location.address}
-                pinColor={getMarkerColor(project)}
-                onPress={() => handleProjectSelection(project.id)}
-              />
-            ))}
-          </MapView>
-        </View>
-      )}
+      <View style={styles.mapContainer}>
+        <WebView
+          originWhitelist={['*']}
+          source={{ html: generateLeafletHTML() }}
+          style={styles.mapView}
+          onMessage={handleLeafletMessage}
+          javaScriptEnabled
+          domStorageEnabled
+          setSupportMultipleWindows={false}
+        />
+      </View>
 
       <View style={styles.projectListContainer}>
         <Text style={styles.projectListTitle}>Negros markers ({projects.length})</Text>
       </View>
 
-      {/* Project Details Modal */}
       <Modal
         animationType="slide"
-        transparent={true}
+        transparent
         visible={showDetails}
         onRequestClose={() => setShowDetails(false)}
       >
@@ -375,7 +307,6 @@ export default function MappingScreen({ navigation }: any) {
                 </View>
 
                 <Text style={styles.projectTitle}>{selectedProject.title}</Text>
-
                 <Text style={styles.description}>{selectedProject.description}</Text>
 
                 <View style={styles.infoGrid}>
@@ -385,9 +316,7 @@ export default function MappingScreen({ navigation }: any) {
                   </View>
                   <View style={styles.infoItem}>
                     <Text style={styles.infoLabel}>Volunteers Needed</Text>
-                    <Text style={styles.infoValue}>
-                      {selectedProject.volunteersNeeded}
-                    </Text>
+                    <Text style={styles.infoValue}>{selectedProject.volunteersNeeded}</Text>
                   </View>
                 </View>
 
@@ -421,7 +350,10 @@ export default function MappingScreen({ navigation }: any) {
                   </View>
                 </View>
 
-                <TouchableOpacity style={styles.viewDetailsButton}>
+                <TouchableOpacity
+                  style={styles.viewDetailsButton}
+                  onPress={handleOpenProjectDetails}
+                >
                   <Text style={styles.viewDetailsButtonText}>View Full Details</Text>
                 </TouchableOpacity>
               </View>
@@ -449,18 +381,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#666',
   },
-  webMapContainer: {
-    height: 420,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e6e6e6',
-    overflow: 'hidden',
-  },
-  webMapFrame: {
-    width: '100%',
-    height: '100%',
-    borderWidth: 0,
-  },
   header: {
     backgroundColor: '#fff',
     paddingHorizontal: 16,
@@ -478,11 +398,11 @@ const styles = StyleSheet.create({
     color: '#999',
     marginTop: 4,
   },
-  nativeMapContainer: {
+  mapContainer: {
     flex: 1,
     backgroundColor: '#fff',
   },
-  nativeMap: {
+  mapView: {
     flex: 1,
   },
   projectListContainer: {
@@ -503,7 +423,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
   },
   modalView: {
-    backgroundColor: 'white',
+    backgroundColor: '#fff',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     paddingVertical: 20,

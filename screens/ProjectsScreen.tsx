@@ -1,4 +1,4 @@
-import React, { startTransition, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, FlatList, StyleSheet, Text, TouchableOpacity, Alert, Pressable } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
@@ -87,8 +87,9 @@ function getStatusColor(status: Project['status']) {
   }
 }
 
-export default function ProjectsScreen({ navigation }: any) {
+export default function ProjectsScreen({ navigation, route }: any) {
   const { user } = useAuth();
+  const projectListRef = useRef<FlatList<Project> | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
   const [partnerApplications, setPartnerApplications] = useState<PartnerProjectApplication[]>([]);
@@ -147,6 +148,28 @@ export default function ProjectsScreen({ navigation }: any) {
       }
     );
   }, [loadProjectsData]);
+
+  useEffect(() => {
+    const requestedProjectId = route?.params?.projectId;
+    if (!requestedProjectId || projects.length === 0) {
+      return;
+    }
+
+    const targetIndex = projects.findIndex(project => project.id === requestedProjectId);
+    if (targetIndex === -1) {
+      return;
+    }
+
+    setExpandedProjectId(requestedProjectId);
+    requestAnimationFrame(() => {
+      projectListRef.current?.scrollToIndex({
+        index: targetIndex,
+        animated: true,
+        viewPosition: 0.15,
+      });
+    });
+    navigation.setParams({ projectId: undefined });
+  }, [navigation, projects, route?.params?.projectId]);
 
   const handleJoinProject = async (projectId: string) => {
     if (!user?.id) return;
@@ -526,6 +549,7 @@ export default function ProjectsScreen({ navigation }: any) {
       </Text>
 
       <FlatList
+        ref={projectListRef}
         data={projects}
         keyExtractor={(item) => item.id}
         renderItem={renderProjectItem}
@@ -534,6 +558,13 @@ export default function ProjectsScreen({ navigation }: any) {
         windowSize={7}
         updateCellsBatchingPeriod={50}
         removeClippedSubviews
+        onScrollToIndexFailed={({ index }) => {
+          const safeIndex = Math.max(0, Math.min(index, projects.length - 1));
+          projectListRef.current?.scrollToOffset({
+            offset: safeIndex * 280,
+            animated: true,
+          });
+        }}
       />
     </View>
   );

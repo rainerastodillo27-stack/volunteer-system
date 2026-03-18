@@ -1598,6 +1598,35 @@ export async function getVolunteerProjectJoinRecords(
     .sort((a, b) => new Date(b.joinedAt).getTime() - new Date(a.joinedAt).getTime());
 }
 
+export async function getVolunteerCompletedProjectIds(
+  volunteerId: string
+): Promise<string[]> {
+  const [volunteer, records] = await Promise.all([
+    getVolunteer(volunteerId),
+    getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS),
+  ]);
+
+  const completedProjectIdsFromProfile = volunteer?.pastProjects || [];
+  const completedJoinRecords = (records || [])
+    .filter(
+      record =>
+        record.volunteerId === volunteerId &&
+        (record.participationStatus || 'Active') === 'Completed'
+    )
+    .sort((a, b) => {
+      const left = a.completedAt ? new Date(a.completedAt).getTime() : 0;
+      const right = b.completedAt ? new Date(b.completedAt).getTime() : 0;
+      return right - left;
+    });
+
+  return Array.from(
+    new Set([
+      ...completedJoinRecords.map(record => record.projectId),
+      ...completedProjectIdsFromProfile,
+    ])
+  );
+}
+
 export async function completeVolunteerProjectParticipation(
   projectId: string,
   volunteerId: string,
