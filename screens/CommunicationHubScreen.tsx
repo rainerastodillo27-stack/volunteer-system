@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   TextInput,
   Alert,
-  FlatList,
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
@@ -21,6 +20,7 @@ import {
   getAllUsers,
   markMessageAsRead,
   subscribeToMessages,
+  subscribeToStorageChanges,
 } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
 import { format } from 'date-fns';
@@ -131,6 +131,14 @@ export default function CommunicationHubScreen({ navigation }: any) {
 
   useEffect(() => {
     loadUsers();
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = subscribeToStorageChanges(['users'], () => {
+      void loadUsers();
+    });
+
+    return unsubscribe;
   }, []);
 
   useFocusEffect(
@@ -357,6 +365,9 @@ export default function CommunicationHubScreen({ navigation }: any) {
     setView('detail');
   };
 
+  const conversationUserIds = new Set(conversations.map(conversation => conversation.user.id));
+  const suggestedUsers = allUsers.filter(chatUser => !conversationUserIds.has(chatUser.id));
+
   if (!user) {
     return (
       <View style={styles.container}>
@@ -446,70 +457,82 @@ export default function CommunicationHubScreen({ navigation }: any) {
           <MaterialIcons name="mail-outline" size={48} color="#ccc" />
           <Text style={styles.emptyStateText}>No conversations yet</Text>
         </View>
-      ) : conversations.length === 0 ? (
-        <View style={styles.suggestedUsers}>
-          <Text style={styles.sectionTitle}>Start a conversation with:</Text>
-          {allUsers.map(chatUser => (
-            <TouchableOpacity
-              key={chatUser.id}
-              style={styles.userCard}
-              onPress={() => handleSelectUser(chatUser)}
-            >
-              <View style={styles.userInfo}>
-                <View style={styles.userAvatar}>
-                  <Text style={styles.userAvatarText}>{chatUser.name.charAt(0)}</Text>
-                </View>
-                <View>
-                  <Text style={styles.userName}>{chatUser.name}</Text>
-                  <Text style={styles.userRole}>{formatRoleLabel(chatUser)}</Text>
-                </View>
-              </View>
-              <MaterialIcons name="arrow-forward" size={20} color="#999" />
-            </TouchableOpacity>
-          ))}
-        </View>
       ) : (
-        <FlatList
-          data={conversations}
-          keyExtractor={item => item.user.id}
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={styles.conversationItem}
-              onPress={() => handleSelectUser(item.user)}
-            >
-              <View style={styles.conversationAvatar}>
-                <Text style={styles.conversationAvatarText}>{item.user.name.charAt(0)}</Text>
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.conversationName}>{item.user.name}</Text>
-                {item.lastMessage && (
-                  <Text
-                    numberOfLines={1}
-                    style={[
-                      styles.conversationPreview,
-                      item.unreadCount > 0 && styles.conversationPreviewUnread,
-                    ]}
-                  >
-                    {item.lastMessage.content}
-                  </Text>
-                )}
-              </View>
-              <View style={styles.conversationRight}>
-                {item.lastMessage && (
-                  <Text style={styles.conversationTime}>
-                    {formatMessageTime(item.lastMessage.timestamp)}
-                  </Text>
-                )}
-                {item.unreadCount > 0 && (
-                  <View style={styles.unreadBadge}>
-                    <Text style={styles.unreadBadgeText}>{item.unreadCount}</Text>
+        <ScrollView style={styles.listContainer} showsVerticalScrollIndicator={false}>
+          {suggestedUsers.length > 0 && (
+            <View style={styles.suggestedUsers}>
+              <Text style={styles.sectionTitle}>
+                {conversations.length === 0 ? 'Start a conversation with:' : 'New users available to chat:'}
+              </Text>
+              {suggestedUsers.map(chatUser => (
+                <TouchableOpacity
+                  key={chatUser.id}
+                  style={styles.userCard}
+                  onPress={() => handleSelectUser(chatUser)}
+                >
+                  <View style={styles.userInfo}>
+                    <View style={styles.userAvatar}>
+                      <Text style={styles.userAvatarText}>{chatUser.name.charAt(0)}</Text>
+                    </View>
+                    <View>
+                      <Text style={styles.userName}>{chatUser.name}</Text>
+                      <Text style={styles.userRole}>{formatRoleLabel(chatUser)}</Text>
+                    </View>
                   </View>
-                )}
-              </View>
-            </TouchableOpacity>
+                  <MaterialIcons name="arrow-forward" size={20} color="#999" />
+                </TouchableOpacity>
+              ))}
+            </View>
           )}
-          scrollEnabled={true}
-        />
+
+          {conversations.length > 0 ? (
+            <View style={styles.conversationsSection}>
+              <Text style={styles.sectionTitle}>Conversations</Text>
+              {conversations.map(item => (
+                <TouchableOpacity
+                  key={item.user.id}
+                  style={styles.conversationItem}
+                  onPress={() => handleSelectUser(item.user)}
+                >
+                  <View style={styles.conversationAvatar}>
+                    <Text style={styles.conversationAvatarText}>{item.user.name.charAt(0)}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.conversationName}>{item.user.name}</Text>
+                    {item.lastMessage && (
+                      <Text
+                        numberOfLines={1}
+                        style={[
+                          styles.conversationPreview,
+                          item.unreadCount > 0 && styles.conversationPreviewUnread,
+                        ]}
+                      >
+                        {item.lastMessage.content}
+                      </Text>
+                    )}
+                  </View>
+                  <View style={styles.conversationRight}>
+                    {item.lastMessage && (
+                      <Text style={styles.conversationTime}>
+                        {formatMessageTime(item.lastMessage.timestamp)}
+                      </Text>
+                    )}
+                    {item.unreadCount > 0 && (
+                      <View style={styles.unreadBadge}>
+                        <Text style={styles.unreadBadgeText}>{item.unreadCount}</Text>
+                      </View>
+                    )}
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </View>
+          ) : suggestedUsers.length === 0 ? (
+            <View style={styles.emptyState}>
+              <MaterialIcons name="mail-outline" size={48} color="#ccc" />
+              <Text style={styles.emptyStateText}>No conversations yet</Text>
+            </View>
+          ) : null}
+        </ScrollView>
       )}
     </View>
   );
@@ -536,6 +559,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 8,
     backgroundColor: '#fff',
+  },
+  listContainer: {
+    flex: 1,
   },
   detailHeader: {
     flexDirection: 'row',
@@ -639,14 +665,17 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   suggestedUsers: {
-    flex: 1,
     padding: 16,
+  },
+  conversationsSection: {
+    paddingBottom: 16,
   },
   sectionTitle: {
     fontSize: 14,
     fontWeight: '600',
     color: '#333',
     marginBottom: 12,
+    paddingHorizontal: 16,
   },
   userCard: {
     backgroundColor: '#fff',
