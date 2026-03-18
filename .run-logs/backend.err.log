@@ -54,3 +54,17 @@ INFO:     ('192.168.1.175', 56848) - "WebSocket /ws/storage" [accepted]
 INFO:     connection open
 INFO:     ('127.0.0.1', 62992) - "WebSocket /ws/storage" [accepted]
 INFO:     connection open
+INFO:     connection closed
+INFO:     connection closed
+INFO:     connection closed
+INFO:     connection closed
+INFO:     connection closed
+INFO:     connection closed
+INFO:     connection closed
+INFO:     connection closed
+INFO:     connection closed
+INFO:     connection closed
+INFO:     connection closed
+INFO:     ('192.168.1.175', 48052) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     connection closed
