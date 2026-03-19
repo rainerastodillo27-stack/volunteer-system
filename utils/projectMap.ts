@@ -1,4 +1,4 @@
-pimport { Project } from '../models/types';
+import { Project } from '../models/types';
 import { getProjectStatusColor } from './projectStatus';
 
 export const EVENT_MARKER_COLOR = '#9C27B0';
