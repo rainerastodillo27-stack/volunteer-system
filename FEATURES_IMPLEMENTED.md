@@ -114,7 +114,7 @@ A comprehensive React Native/Expo mobile application for managing volunteer prog
 ### 7. **Authentication & Role-Based Access** ✅
 **Location:** `contexts/AuthContext.tsx`
 - Two-tier authentication system: Admin & Volunteer
-- Persistent login using AsyncStorage
+- In-memory login session
 - Role-based screen visibility
 - Admin-only screens (Partners, Volunteers)
 - Secure logout functionality
@@ -142,7 +142,7 @@ A comprehensive React Native/Expo mobile application for managing volunteer prog
 
 ### 9. **Data Persistence** ✅
 **Location:** `models/storage.ts`
-- AsyncStorage integration for offline capability
+- Backend-backed persistence through the FastAPI API
 - Mock data initialization on first launch
 - Complete CRUD operations for:
   - Users
@@ -315,9 +315,9 @@ Tab Navigator (Role-Based Screen Visibility)
     ↓
 Screen Components
     ↓
-Storage Layer (AsyncStorage)
+Storage Layer (API Gateway)
     ↓
-Mock Data / Backend (Future)
+Postgres Backend
 ```
 
 ---

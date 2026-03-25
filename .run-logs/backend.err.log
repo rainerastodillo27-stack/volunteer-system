@@ -1,27 +1,21 @@
-INFO:     Started server process [18012]
+INFO:     Started server process [15732]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-INFO:     ('127.0.0.1', 62904) - "WebSocket /ws/storage" [accepted]
+INFO:     ('127.0.0.1', 64090) - "WebSocket /ws/storage" [accepted]
 INFO:     connection open
-INFO:     ('127.0.0.1', 61275) - "WebSocket /ws/messages/admin-1" [accepted]
+INFO:     ('127.0.0.1', 61165) - "WebSocket /ws/messages/admin-1" [accepted]
 INFO:     connection open
-INFO:     ('127.0.0.1', 57045) - "WebSocket /ws/storage" [accepted]
+INFO:     ('127.0.0.1', 56610) - "WebSocket /ws/storage" [accepted]
 INFO:     connection open
-INFO:     ('127.0.0.1', 61119) - "WebSocket /ws/storage" [accepted]
+INFO:     ('127.0.0.1', 61098) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 50111) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 50727) - "WebSocket /ws/messages/admin-1" [accepted]
 INFO:     connection open
 INFO:     connection closed
 INFO:     connection closed
-INFO:     connection closed
-INFO:     connection closed
-INFO:     ('127.0.0.1', 64140) - "WebSocket /ws/storage" [accepted]
-INFO:     connection open
-INFO:     ('127.0.0.1', 64306) - "WebSocket /ws/messages/admin-1" [accepted]
-INFO:     connection open
-INFO:     ('127.0.0.1', 58161) - "WebSocket /ws/storage" [accepted]
-INFO:     connection open
-INFO:     ('127.0.0.1', 55265) - "WebSocket /ws/storage" [accepted]
-INFO:     connection open
 INFO:     connection closed
 INFO:     connection closed
 INFO:     connection closed

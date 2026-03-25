@@ -1,6 +1,6 @@
 # Volcre
 
-Expo and React Native app for managing volunteer programs, partner organizations, project coordination, and admin review workflows. The current app runtime still uses local AsyncStorage, and a Python toolkit is included for creating and seeding a Supabase Postgres database.
+Expo and React Native app for managing volunteer programs, partner organizations, project coordination, and admin review workflows. The app reads and writes through a Python API backed by Supabase Postgres.
 
 ## Current Scope
 
@@ -15,7 +15,6 @@ Expo and React Native app for managing volunteer programs, partner organizations
 - React Native 0.81
 - Expo SDK 54
 - React Navigation
-- AsyncStorage
 - TypeScript
 - `date-fns`
 - `react-native-maps`
@@ -65,7 +64,7 @@ To connect the app runtime to the database-backed Python API:
 uvicorn api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-The app now reads and writes through the Python API first, with AsyncStorage kept only as a local fallback cache.
+The app reads and writes through the Python API only. Supabase Postgres is required for shared data.
 
 Default API base URL:
 
@@ -98,6 +97,12 @@ Platform shortcuts:
 npm run android
 npm run ios
 npm run web
+```
+
+Backend:
+
+```bash
+npm run backend
 ```
 
 ## Access Rules
@@ -157,9 +162,10 @@ partner123
 
 ### Authentication
 
-- Local credential check against seeded users
+- API-backed credential check against seeded users
 - Platform-based login restrictions by role
 - Demo credentials shown on the login screen
+- Session is in memory only, so refresh/restart requires logging in again
 
 ### Admin
 
@@ -201,7 +207,7 @@ partner123
 
 1. Partner opens `Projects`.
 2. Partner taps `Join as Partner`.
-3. Request is stored locally as `Pending`.
+3. Request is stored in the backend as `Pending`.
 4. Admin opens `Lifecycle`, selects a project, and reviews `Partner Join Requests`.
 5. Approval marks the partner as joined for that project.
 
@@ -219,7 +225,7 @@ types/
 
 Key files:
 
-- `models/storage.ts`: local persistence, seeded demo data, approval flows
+- `models/storage.ts`: client gateway for backend reads/writes, in-memory session, approval flows
 - `models/types.ts`: shared types
 - `screens/LoginScreen.tsx`: authentication UI and demo credentials
 - `screens/ProjectsScreen.tsx`: volunteer and partner project actions
@@ -229,9 +235,10 @@ Key files:
 
 ## Development Notes
 
-- Data persists in AsyncStorage.
-- Clearing app storage resets the demo state.
-- There is no backend, API, or server-side validation yet.
+- Shared data persists in Postgres.
+- `currentUser` is stored in memory only.
+- Refreshing the app or restarting the client signs the current user out.
+- The backend API must be running and connected to Postgres.
 - Partner and volunteer accounts are intentionally blocked on web.
 
 ## Validation

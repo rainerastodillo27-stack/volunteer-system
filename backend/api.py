@@ -14,7 +14,6 @@ from .app_storage_seed import (
     clear_all_postgres_hot_storage,
     clear_postgres_hot_storage_collection,
     ensure_app_storage_seeded,
-    ensure_app_storage_table,
     get_postgres_hot_storage_collection,
     is_hot_storage_key,
     replace_postgres_hot_storage_collection,
@@ -24,7 +23,6 @@ from .db import (
     get_db_mode,
     get_postgres_connection,
     get_postgres_status,
-    get_sqlite_connection,
 )
 
 
@@ -152,41 +150,22 @@ connection_manager = ConnectionManager()
 
 
 def ensure_message_storage() -> None:
-    if get_db_mode() == "postgres":
-        with get_postgres_connection() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    create table if not exists messages (
-                      id text primary key,
-                      sender_id text not null,
-                      recipient_id text not null,
-                      project_id text,
-                      content text not null,
-                      timestamp timestamptz not null,
-                      read boolean not null default false,
-                      attachments jsonb not null default '[]'::jsonb
-                    )
-                    """
+    with get_postgres_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                create table if not exists messages (
+                  id text primary key,
+                  sender_id text not null,
+                  recipient_id text not null,
+                  project_id text,
+                  content text not null,
+                  timestamp timestamptz not null,
+                  read boolean not null default false,
+                  attachments jsonb not null default '[]'::jsonb
                 )
-            connection.commit()
-        return
-
-    with get_sqlite_connection() as connection:
-        connection.execute(
-            """
-            create table if not exists messages (
-              id text primary key,
-              sender_id text not null,
-              recipient_id text not null,
-              project_id text,
-              content text not null,
-              timestamp text not null,
-              read integer not null default 0,
-              attachments text not null default '[]'
+                """
             )
-            """
-        )
         connection.commit()
 
 
@@ -215,10 +194,9 @@ def serialize_message_row(row: Any) -> dict[str, Any]:
 @app.on_event("startup")
 def startup() -> None:
     ensure_app_storage_seeded()
-    if get_db_mode() == "postgres":
-        with get_postgres_connection() as connection:
-            _postgres_sync_all_legacy_app_users(connection)
-            connection.commit()
+    with get_postgres_connection() as connection:
+        _postgres_sync_all_legacy_app_users(connection)
+        connection.commit()
 
 
 @app.get("/health", response_model=None)
@@ -237,6 +215,19 @@ def health():
             },
         )
 
+    postgres_available, postgres_error = get_postgres_status(force_refresh=True)
+    if not postgres_available:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "error",
+                "configured_mode": configured_mode,
+                "mode": "unavailable",
+                "detail": postgres_error or "Supabase Postgres is unavailable.",
+                "timestamp": timestamp,
+            },
+        )
+
     return {
         "status": "ok",
         "configured_mode": configured_mode,
@@ -248,35 +239,22 @@ def health():
 def _get_user_by_identifier(identifier: str) -> dict[str, Any] | None:
     normalized_identifier = identifier.strip().lower()
     raw_identifier = identifier.strip()
-
-    if get_db_mode() == "postgres":
-        with get_postgres_connection() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    select data
-                    from app_users_store
-                    where lower(coalesce(data->>'email', '')) = %s
-                       or coalesce(data->>'phone', '') = %s
-                    order by sort_order asc
-                    limit 1
-                    """,
-                    (normalized_identifier, raw_identifier),
-                )
-                row = cursor.fetchone()
-        return None if row is None else row[0]
-
-    users_payload = get_storage_item("users")
-    users = users_payload.get("value") or []
-    for user in users:
-        if not isinstance(user, dict):
-            continue
-        email = str(user.get("email") or "").strip().lower()
-        phone = str(user.get("phone") or "").strip()
-        if email == normalized_identifier or phone == raw_identifier:
-            return user
-
-    return None
+    _require_postgres()
+    with get_postgres_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                select data
+                from app_users_store
+                where lower(coalesce(data->>'email', '')) = %s
+                   or coalesce(data->>'phone', '') = %s
+                order by sort_order asc
+                limit 1
+                """,
+                (normalized_identifier, raw_identifier),
+            )
+            row = cursor.fetchone()
+    return None if row is None else row[0]
 
 
 def _require_postgres() -> None:
@@ -623,7 +601,7 @@ def db_health() -> dict[str, Any]:
     configured_mode = get_configured_db_mode()
     mode = get_db_mode()
     result: dict[str, Any] = {
-        "status": "ok",
+        "status": "ok" if mode == "postgres" else "error",
         "configured_mode": configured_mode,
         "mode": mode,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -635,18 +613,13 @@ def db_health() -> dict[str, Any]:
         if postgres_error:
             result["postgres_error"] = postgres_error
 
-        if mode == "postgres":
+        if postgres_available:
             with get_postgres_connection() as connection:
                 with connection.cursor() as cursor:
                     cursor.execute("select current_database(), current_user")
                     database, user = cursor.fetchone()
             result["database"] = database
             result["user"] = user
-        else:
-            ensure_app_storage_table()
-            with get_sqlite_connection() as connection:
-                connection.execute("select 1").fetchone()
-            result["database"] = "sqlite"
     except Exception as exc:
         result["status"] = "error"
         result["error"] = str(exc)
@@ -844,68 +817,41 @@ async def join_project(project_id: str, payload: ProjectJoinPayload) -> dict[str
 @app.get("/messages")
 def get_messages(user_id: str) -> dict[str, list[dict[str, Any]]]:
     ensure_message_storage()
-    if get_db_mode() == "postgres":
-        from psycopg.rows import dict_row
+    from psycopg.rows import dict_row
 
-        with get_postgres_connection() as connection:
-            with connection.cursor(row_factory=dict_row) as cursor:
-                cursor.execute(
-                    """
-                    select id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
-                    from messages
-                    where sender_id = %s or recipient_id = %s
-                    order by timestamp desc
-                    """,
-                    (user_id, user_id),
-                )
-                rows = cursor.fetchall()
-        return {"messages": [serialize_message_row(row) for row in rows]}
-
-    with get_sqlite_connection() as connection:
-        rows = connection.execute(
-            """
-            select id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
-            from messages
-            where sender_id = ? or recipient_id = ?
-            order by timestamp desc
-            """,
-            (user_id, user_id),
-        ).fetchall()
+    with get_postgres_connection() as connection:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                select id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                from messages
+                where sender_id = %s or recipient_id = %s
+                order by timestamp desc
+                """,
+                (user_id, user_id),
+            )
+            rows = cursor.fetchall()
     return {"messages": [serialize_message_row(row) for row in rows]}
 
 
 @app.get("/messages/conversation")
 def get_conversation(user1: str, user2: str) -> dict[str, list[dict[str, Any]]]:
     ensure_message_storage()
-    if get_db_mode() == "postgres":
-        from psycopg.rows import dict_row
+    from psycopg.rows import dict_row
 
-        with get_postgres_connection() as connection:
-            with connection.cursor(row_factory=dict_row) as cursor:
-                cursor.execute(
-                    """
-                    select id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
-                    from messages
-                    where (sender_id = %s and recipient_id = %s)
-                       or (sender_id = %s and recipient_id = %s)
-                    order by timestamp asc
-                    """,
-                    (user1, user2, user2, user1),
-                )
-                rows = cursor.fetchall()
-        return {"messages": [serialize_message_row(row) for row in rows]}
-
-    with get_sqlite_connection() as connection:
-        rows = connection.execute(
-            """
-            select id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
-            from messages
-            where (sender_id = ? and recipient_id = ?)
-               or (sender_id = ? and recipient_id = ?)
-            order by timestamp asc
-            """,
-            (user1, user2, user2, user1),
-        ).fetchall()
+    with get_postgres_connection() as connection:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                select id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                from messages
+                where (sender_id = %s and recipient_id = %s)
+                   or (sender_id = %s and recipient_id = %s)
+                order by timestamp asc
+                """,
+                (user1, user2, user2, user1),
+            )
+            rows = cursor.fetchall()
     return {"messages": [serialize_message_row(row) for row in rows]}
 
 
@@ -913,66 +859,32 @@ def get_conversation(user1: str, user2: str) -> dict[str, list[dict[str, Any]]]:
 async def create_message(payload: MessagePayload) -> dict[str, Any]:
     ensure_message_storage()
     attachments = payload.attachments or []
+    from psycopg.rows import dict_row
 
-    if get_db_mode() == "postgres":
-        from psycopg.rows import dict_row
-
-        with get_postgres_connection() as connection:
-            _postgres_ensure_legacy_app_user(connection, payload.senderId)
-            _postgres_ensure_legacy_app_user(connection, payload.recipientId)
-            with connection.cursor(row_factory=dict_row) as cursor:
-                cursor.execute(
-                    """
-                    insert into messages (
-                      id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
-                    )
-                    values (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
-                    returning id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
-                    """,
-                    (
-                        payload.id,
-                        payload.senderId,
-                        payload.recipientId,
-                        payload.projectId,
-                        payload.content,
-                        payload.timestamp,
-                        payload.read,
-                        json.dumps(attachments),
-                    ),
+    with get_postgres_connection() as connection:
+        _postgres_ensure_legacy_app_user(connection, payload.senderId)
+        _postgres_ensure_legacy_app_user(connection, payload.recipientId)
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                insert into messages (
+                  id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                 )
-                row = cursor.fetchone()
-            connection.commit()
-        message = serialize_message_row(row)
-        await connection_manager.broadcast_message_event(message)
-        return message
-
-    with get_sqlite_connection() as connection:
-        connection.execute(
-            """
-            insert into messages (
-              id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                values (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                returning id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                """,
+                (
+                    payload.id,
+                    payload.senderId,
+                    payload.recipientId,
+                    payload.projectId,
+                    payload.content,
+                    payload.timestamp,
+                    payload.read,
+                    json.dumps(attachments),
+                ),
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                payload.id,
-                payload.senderId,
-                payload.recipientId,
-                payload.projectId,
-                payload.content,
-                payload.timestamp,
-                int(payload.read),
-                json.dumps(attachments),
-            ),
-        )
-        row = connection.execute(
-            """
-            select id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
-            from messages
-            where id = ?
-            """,
-            (payload.id,),
-        ).fetchone()
+            row = cursor.fetchone()
         connection.commit()
 
     message = serialize_message_row(row)
@@ -983,36 +895,20 @@ async def create_message(payload: MessagePayload) -> dict[str, Any]:
 @app.patch("/messages/{message_id}/read")
 async def mark_message_read(message_id: str) -> dict[str, Any]:
     ensure_message_storage()
-    if get_db_mode() == "postgres":
-        from psycopg.rows import dict_row
+    from psycopg.rows import dict_row
 
-        with get_postgres_connection() as connection:
-            with connection.cursor(row_factory=dict_row) as cursor:
-                cursor.execute(
-                    """
-                    update messages
-                    set read = true
-                    where id = %s
-                    returning id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
-                    """,
-                    (message_id,),
-                )
-                row = cursor.fetchone()
-            connection.commit()
-        message = serialize_message_row(row)
-        await connection_manager.broadcast_message_event(message)
-        return message
-
-    with get_sqlite_connection() as connection:
-        connection.execute("update messages set read = 1 where id = ?", (message_id,))
-        row = connection.execute(
-            """
-            select id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
-            from messages
-            where id = ?
-            """,
-            (message_id,),
-        ).fetchone()
+    with get_postgres_connection() as connection:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                update messages
+                set read = true
+                where id = %s
+                returning id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                """,
+                (message_id,),
+            )
+            row = cursor.fetchone()
         connection.commit()
 
     message = serialize_message_row(row)
@@ -1046,27 +942,18 @@ async def storage_websocket(websocket: WebSocket) -> None:
 
 @app.get("/storage/{key}")
 def get_storage_item(key: str) -> dict[str, Any]:
-    if get_db_mode() == "postgres" and is_hot_storage_key(key):
+    _require_postgres()
+    if is_hot_storage_key(key):
         with get_postgres_connection() as connection:
             return {"key": key, "value": get_postgres_hot_storage_collection(connection, key)}
 
-    if get_db_mode() == "postgres":
-        from psycopg.rows import dict_row
+    from psycopg.rows import dict_row
 
-        with get_postgres_connection() as connection:
-            with connection.cursor(row_factory=dict_row) as cursor:
-                cursor.execute("select value from app_storage where key = %s", (key,))
-                row = cursor.fetchone()
-        return {"key": key, "value": None if row is None else row["value"]}
-
-    ensure_app_storage_table()
-    with get_sqlite_connection() as connection:
-        row = connection.execute(
-            "select value from app_storage where key = ?",
-            (key,),
-        ).fetchone()
-
-    return {"key": key, "value": None if row is None or row["value"] is None else json.loads(row["value"])}
+    with get_postgres_connection() as connection:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute("select value from app_storage where key = %s", (key,))
+            row = cursor.fetchone()
+    return {"key": key, "value": None if row is None else row["value"]}
 
 
 @app.post("/storage/batch")
@@ -1077,46 +964,34 @@ def get_storage_items_batch(payload: StorageBatchPayload) -> dict[str, dict[str,
     if not keys:
         return {"items": items}
 
-    if get_db_mode() == "postgres":
-        from psycopg.rows import dict_row
+    _require_postgres()
+    from psycopg.rows import dict_row
 
-        with get_postgres_connection() as connection:
-            hot_keys = [key for key in keys if is_hot_storage_key(key)]
-            cold_keys = [key for key in keys if not is_hot_storage_key(key)]
+    with get_postgres_connection() as connection:
+        hot_keys = [key for key in keys if is_hot_storage_key(key)]
+        cold_keys = [key for key in keys if not is_hot_storage_key(key)]
 
-            for key in hot_keys:
-                items[key] = get_postgres_hot_storage_collection(connection, key)
+        for key in hot_keys:
+            items[key] = get_postgres_hot_storage_collection(connection, key)
 
-            if cold_keys:
-                with connection.cursor(row_factory=dict_row) as cursor:
-                    cursor.execute(
-                        "select key, value from app_storage where key = any(%s)",
-                        (cold_keys,),
-                    )
-                    rows = cursor.fetchall()
+        if cold_keys:
+            with connection.cursor(row_factory=dict_row) as cursor:
+                cursor.execute(
+                    "select key, value from app_storage where key = any(%s)",
+                    (cold_keys,),
+                )
+                rows = cursor.fetchall()
 
-                for row in rows:
-                    items[row["key"]] = row["value"]
-
-        return {"items": items}
-
-    ensure_app_storage_table()
-    placeholders = ",".join("?" for _ in keys)
-    with get_sqlite_connection() as connection:
-        rows = connection.execute(
-            f"select key, value from app_storage where key in ({placeholders})",
-            keys,
-        ).fetchall()
-
-    for row in rows:
-        items[row["key"]] = None if row["value"] is None else json.loads(row["value"])
+            for row in rows:
+                items[row["key"]] = row["value"]
 
     return {"items": items}
 
 
 @app.put("/storage/{key}")
 async def put_storage_item(key: str, payload: StoragePayload) -> dict[str, str]:
-    if get_db_mode() == "postgres" and is_hot_storage_key(key):
+    _require_postgres()
+    if is_hot_storage_key(key):
         if not isinstance(payload.value, list):
             raise HTTPException(status_code=400, detail=f"Storage key '{key}' expects a list payload.")
 
@@ -1128,37 +1003,20 @@ async def put_storage_item(key: str, payload: StoragePayload) -> dict[str, str]:
         await connection_manager.broadcast_storage_event([key])
         return {"status": "ok"}
 
-    if get_db_mode() == "postgres":
-        from psycopg.types.json import Jsonb
+    from psycopg.types.json import Jsonb
 
-        with get_postgres_connection() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    insert into app_storage (key, value, updated_at)
-                    values (%s, %s, now())
-                    on conflict (key) do update set
-                      value = excluded.value,
-                      updated_at = excluded.updated_at
-                    """,
-                    (key, Jsonb(payload.value)),
-                )
-            connection.commit()
-        await connection_manager.broadcast_storage_event([key])
-        return {"status": "ok"}
-
-    ensure_app_storage_table()
-    with get_sqlite_connection() as connection:
-        connection.execute(
-            """
-            insert into app_storage (key, value, updated_at)
-            values (?, ?, ?)
-            on conflict(key) do update set
-              value = excluded.value,
-              updated_at = excluded.updated_at
-            """,
-            (key, json.dumps(payload.value), datetime.now(timezone.utc).isoformat()),
-        )
+    with get_postgres_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                insert into app_storage (key, value, updated_at)
+                values (%s, %s, now())
+                on conflict (key) do update set
+                  value = excluded.value,
+                  updated_at = excluded.updated_at
+                """,
+                (key, Jsonb(payload.value)),
+            )
         connection.commit()
 
     await connection_manager.broadcast_storage_event([key])
@@ -1167,24 +1025,17 @@ async def put_storage_item(key: str, payload: StoragePayload) -> dict[str, str]:
 
 @app.delete("/storage/{key}")
 async def delete_storage_item(key: str) -> dict[str, str]:
-    if get_db_mode() == "postgres" and is_hot_storage_key(key):
+    _require_postgres()
+    if is_hot_storage_key(key):
         with get_postgres_connection() as connection:
             clear_postgres_hot_storage_collection(connection, key)
             connection.commit()
         await connection_manager.broadcast_storage_event([key])
         return {"status": "ok"}
 
-    if get_db_mode() == "postgres":
-        with get_postgres_connection() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute("delete from app_storage where key = %s", (key,))
-            connection.commit()
-        await connection_manager.broadcast_storage_event([key])
-        return {"status": "ok"}
-
-    ensure_app_storage_table()
-    with get_sqlite_connection() as connection:
-        connection.execute("delete from app_storage where key = ?", (key,))
+    with get_postgres_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("delete from app_storage where key = %s", (key,))
         connection.commit()
 
     await connection_manager.broadcast_storage_event([key])
@@ -1193,18 +1044,11 @@ async def delete_storage_item(key: str) -> dict[str, str]:
 
 @app.delete("/storage")
 async def clear_storage() -> dict[str, str]:
-    if get_db_mode() == "postgres":
-        with get_postgres_connection() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute("delete from app_storage")
-            clear_all_postgres_hot_storage(connection)
-            connection.commit()
-        await connection_manager.broadcast_storage_event(list(HOT_STORAGE_TABLES.keys()))
-        return {"status": "ok"}
-
-    ensure_app_storage_table()
-    with get_sqlite_connection() as connection:
-        connection.execute("delete from app_storage")
+    _require_postgres()
+    with get_postgres_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("delete from app_storage")
+        clear_all_postgres_hot_storage(connection)
         connection.commit()
 
     await connection_manager.broadcast_storage_event(list(HOT_STORAGE_TABLES.keys()))

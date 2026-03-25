@@ -227,9 +227,9 @@ npm install react-native-maps expo-location date-fns @react-native-async-storage
 
 ## Performance Tips
 
-- App uses local AsyncStorage (instant access)
+- App reads shared data from the backend API
 - Suitable for 100+ data records without issues
-- For production, integrate with backend API
+- Backend and Postgres must be available
 
 ---
 

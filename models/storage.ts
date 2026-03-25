@@ -1,4 +1,3 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { NativeModules, Platform } from 'react-native';
 import {
@@ -34,8 +33,6 @@ const STORAGE_KEYS = {
 const WEB_MESSAGE_SYNC_KEY = 'volcre:messages:updatedAt';
 const memoryStorageCache = new Map<string, unknown>();
 let mockDataInitializationPromise: Promise<void> | null = null;
-let sharedStorageCleanupPromise: Promise<void> | null = null;
-let sharedStorageCleanupCompleted = false;
 // Supabase-backed storage reads can exceed 2.5s on some networks.
 // Keep this comfortably above the observed backend round-trip so web/mobile
 // prefer shared storage instead of silently falling back to stale local cache.
@@ -44,9 +41,6 @@ const API_HEALTH_TIMEOUT_MS = 10000;
 const API_READY_RETRY_MS = 800;
 const API_READY_MAX_ATTEMPTS = 6;
 const LOCAL_ONLY_STORAGE_KEYS = new Set([STORAGE_KEYS.CURRENT_USER]);
-const SHARED_STORAGE_KEYS = Object.values(STORAGE_KEYS).filter(
-  key => !LOCAL_ONLY_STORAGE_KEYS.has(key)
-);
 const NEGROS_OCCIDENTAL_BOUNDS = {
   minLatitude: 9.85,
   maxLatitude: 11.05,
@@ -655,56 +649,19 @@ async function requestApiJson<T>(
 }
 
 async function getLocalStorageItem<T>(key: string): Promise<T | null> {
-  if (memoryStorageCache.has(key)) {
-    return (memoryStorageCache.get(key) as T) ?? null;
-  }
-
-  const item = await AsyncStorage.getItem(key);
-  if (!item) {
-    return null;
-  }
-
-  const parsedItem = JSON.parse(item) as T;
-  memoryStorageCache.set(key, parsedItem);
-  return parsedItem;
+  return (memoryStorageCache.get(key) as T) ?? null;
 }
 
 async function setLocalStorageItem<T>(key: string, value: T): Promise<void> {
   memoryStorageCache.set(key, value);
-  await AsyncStorage.setItem(key, JSON.stringify(value));
 }
 
 async function deleteLocalStorageItem(key: string): Promise<void> {
   memoryStorageCache.delete(key);
-  await AsyncStorage.removeItem(key);
 }
 
 function isLocalOnlyStorageKey(key: string): boolean {
   return LOCAL_ONLY_STORAGE_KEYS.has(key);
-}
-
-async function ensureSharedStorageCleanup(): Promise<void> {
-  if (sharedStorageCleanupCompleted) {
-    return;
-  }
-
-  if (sharedStorageCleanupPromise) {
-    return sharedStorageCleanupPromise;
-  }
-
-  sharedStorageCleanupPromise = (async () => {
-    for (const key of SHARED_STORAGE_KEYS) {
-      memoryStorageCache.delete(key);
-    }
-    await AsyncStorage.multiRemove(SHARED_STORAGE_KEYS);
-  })();
-
-  try {
-    await sharedStorageCleanupPromise;
-    sharedStorageCleanupCompleted = true;
-  } finally {
-    sharedStorageCleanupPromise = null;
-  }
 }
 
 async function saveRemoteStorageItem<T>(key: string, value: T): Promise<void> {
@@ -780,8 +737,6 @@ export async function getStorageItem<T>(key: string): Promise<T | null> {
     }
   }
 
-  await ensureSharedStorageCleanup();
-
   try {
     return await fetchRemoteStorageItem<T>(key);
   } catch (error) {
@@ -809,8 +764,6 @@ export async function getStorageItems(
   if (sharedKeys.length === 0) {
     return results;
   }
-
-  await ensureSharedStorageCleanup();
 
   try {
     const remoteResults = await fetchRemoteStorageItems(sharedKeys);
@@ -902,8 +855,6 @@ export async function setStorageItem<T>(key: string, value: T): Promise<void> {
     await setLocalStorageItem(key, value);
     return;
   }
-
-  await ensureSharedStorageCleanup();
 
   try {
     await saveRemoteStorageItem(key, value);
@@ -1917,7 +1868,6 @@ export async function clearAllStorage(): Promise<void> {
         console.error('Error clearing remote storage:', error);
       }
       memoryStorageCache.clear();
-      await AsyncStorage.multiRemove(Object.values(STORAGE_KEYS));
     } catch (error) {
       console.error('Error clearing storage:', error);
     }

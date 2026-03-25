@@ -58,7 +58,7 @@ export default function SystemSettingsScreen() {
         <Text style={styles.infoLabel}>Version</Text>
         <Text style={styles.infoText}>{Constants.expoConfig?.version || '1.0.0'}</Text>
         <Text style={styles.infoLabel}>Environment</Text>
-        <Text style={styles.infoText}>Backend-only shared storage with local session only</Text>
+        <Text style={styles.infoText}>Backend-only shared storage with in-memory session state</Text>
         <Text style={styles.infoLabel}>Backend URL</Text>
         <Text style={styles.infoText}>{getApiBaseUrl()}</Text>
       </View>

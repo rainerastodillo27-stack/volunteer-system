@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from .db import get_db_mode, get_postgres_connection, get_sqlite_connection
+from .db import get_postgres_connection
 
 
 HOT_STORAGE_TABLES = {
@@ -426,31 +426,17 @@ def build_demo_app_storage() -> dict[str, Any]:
 
 
 def ensure_app_storage_table() -> None:
-    if get_db_mode() == "postgres":
-        with get_postgres_connection() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    create table if not exists app_storage (
-                      key text primary key,
-                      value jsonb not null,
-                      updated_at timestamptz not null default now()
-                    )
-                    """
+    with get_postgres_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                create table if not exists app_storage (
+                  key text primary key,
+                  value jsonb not null,
+                  updated_at timestamptz not null default now()
                 )
-            connection.commit()
-        return
-
-    with get_sqlite_connection() as connection:
-        connection.execute(
-            """
-            create table if not exists app_storage (
-              key text primary key,
-              value text,
-              updated_at text not null default current_timestamp
+                """
             )
-            """
-        )
         connection.commit()
 
 
@@ -636,31 +622,18 @@ def ensure_app_storage_seeded() -> None:
     ensure_app_storage_table()
     demo_storage = build_demo_app_storage()
 
-    if get_db_mode() == "postgres":
-        with get_postgres_connection() as connection:
-            with connection.cursor() as cursor:
-                for key, value in demo_storage.items():
-                    cursor.execute(
-                        """
-                        insert into app_storage (key, value, updated_at)
-                        values (%s, %s::jsonb, now())
-                        on conflict (key) do nothing
-                        """,
-                        (key, json.dumps(value)),
-                    )
-            ensure_postgres_hot_storage_seeded(connection, demo_storage)
-            connection.commit()
-        return
-
-    with get_sqlite_connection() as connection:
-        for key, value in demo_storage.items():
-            connection.execute(
-                """
-                insert or ignore into app_storage (key, value, updated_at)
-                values (?, ?, current_timestamp)
-                """,
-                (key, json.dumps(value)),
-            )
+    with get_postgres_connection() as connection:
+        with connection.cursor() as cursor:
+            for key, value in demo_storage.items():
+                cursor.execute(
+                    """
+                    insert into app_storage (key, value, updated_at)
+                    values (%s, %s::jsonb, now())
+                    on conflict (key) do nothing
+                    """,
+                    (key, json.dumps(value)),
+                )
+        ensure_postgres_hot_storage_seeded(connection, demo_storage)
         connection.commit()
 
 

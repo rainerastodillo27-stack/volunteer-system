@@ -1,8 +1,5 @@
 import os
-import sqlite3
 import time
-from functools import lru_cache
-from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -10,13 +7,10 @@ from dotenv import load_dotenv
 
 try:
     import psycopg
-except ImportError:  # pragma: no cover - optional dependency in local mode
+except ImportError:  # pragma: no cover - dependency is required for runtime
     psycopg = None
 
 
-BACKEND_DIR = Path(__file__).resolve().parent
-APP_DIR = BACKEND_DIR.parent
-LOCAL_DB_PATH = BACKEND_DIR / "volcre_storage.db"
 POSTGRES_PROBE_CACHE_TTL_SECONDS = 10
 _POSTGRES_PROBE_CACHE: dict[str, Any] = {
     "checked_at": 0.0,
@@ -26,8 +20,12 @@ _POSTGRES_PROBE_CACHE: dict[str, Any] = {
 
 
 def load_environment() -> None:
-    load_dotenv(APP_DIR / ".env")
-    load_dotenv(BACKEND_DIR / ".env", override=True)
+    from pathlib import Path
+
+    backend_dir = Path(__file__).resolve().parent
+    app_dir = backend_dir.parent
+    load_dotenv(app_dir / ".env")
+    load_dotenv(backend_dir / ".env", override=True)
 
 
 def _get_connect_timeout() -> int:
@@ -46,20 +44,9 @@ def _get_probe_cache_ttl() -> int:
         return POSTGRES_PROBE_CACHE_TTL_SECONDS
 
 
-def _is_truthy(value: str | None) -> bool:
-    if value is None:
-        return False
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _get_raw_database_url() -> str:
     load_environment()
     return os.getenv("SUPABASE_DB_URL", "").strip()
-
-
-@lru_cache(maxsize=1)
-def _get_sqlite_mode_warning() -> str:
-    return "Postgres is not configured. Falling back to SQLite."
 
 
 def _normalize_database_url(database_url: str) -> str:
@@ -74,7 +61,7 @@ def get_configured_db_mode() -> str:
     database_url = _get_raw_database_url()
     if database_url and psycopg is not None:
         return "postgres"
-    return "sqlite"
+    return "unconfigured"
 
 
 def reset_postgres_probe_cache() -> None:
@@ -85,7 +72,7 @@ def reset_postgres_probe_cache() -> None:
 
 def get_postgres_status(force_refresh: bool = False) -> tuple[bool, str | None]:
     if get_configured_db_mode() != "postgres":
-        return False, _get_sqlite_mode_warning()
+        return False, "Supabase Postgres is not configured for this backend."
 
     ttl_seconds = _get_probe_cache_ttl()
     now = time.monotonic()
@@ -111,15 +98,8 @@ def get_postgres_status(force_refresh: bool = False) -> tuple[bool, str | None]:
 
 
 def get_db_mode() -> str:
-    configured_mode = get_configured_db_mode()
-    if configured_mode != "postgres":
-        return "sqlite"
-
-    strict_postgres = _is_truthy(os.getenv("DB_STRICT_POSTGRES"))
     postgres_available, _ = get_postgres_status()
-    if strict_postgres:
-        return "postgres"
-    return "postgres" if postgres_available else "sqlite"
+    return "postgres" if postgres_available else "unavailable"
 
 
 def get_postgres_connection():
@@ -134,23 +114,3 @@ def get_postgres_connection():
 
 def get_connection():
     return get_postgres_connection()
-
-
-def get_sqlite_connection() -> sqlite3.Connection:
-    connection = sqlite3.connect(LOCAL_DB_PATH)
-    connection.row_factory = sqlite3.Row
-    return connection
-
-
-def ensure_sqlite_storage() -> None:
-    with get_sqlite_connection() as connection:
-        connection.execute(
-            """
-            create table if not exists app_storage (
-              key text primary key,
-              value text,
-              updated_at text not null default current_timestamp
-            )
-            """
-        )
-        connection.commit()
