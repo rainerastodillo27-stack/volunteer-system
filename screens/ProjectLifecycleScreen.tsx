@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -15,6 +15,7 @@ import { Partner, PartnerProjectApplication, Project, StatusUpdate } from '../mo
 import {
   completeVolunteerProjectParticipation,
   deleteProject,
+  getAllVolunteerProjectMatches,
   getAllPartners,
   getAllProjects,
   getAllVolunteers,
@@ -99,6 +100,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
   const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
+  const [allVolunteerMatches, setAllVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
@@ -110,6 +112,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     loadProjects();
     loadPartners();
     loadVolunteers();
+    loadAllVolunteerMatches();
   }, []);
 
   useFocusEffect(
@@ -117,7 +120,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       let active = true;
 
       const refresh = async () => {
-        await Promise.all([loadProjects(), loadPartners(), loadVolunteers()]);
+        await Promise.all([loadProjects(), loadPartners(), loadVolunteers(), loadAllVolunteerMatches()]);
         if (selectedProject?.id) {
           await Promise.all([
             loadStatusUpdates(selectedProject.id),
@@ -152,7 +155,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     return subscribeToStorageChanges(
       ['projects', 'volunteers', 'statusUpdates', 'partnerProjectApplications', 'volunteerProjectJoins', 'volunteerMatches'],
       () => {
-        void Promise.all([loadProjects(), loadPartners(), loadVolunteers()]);
+        void Promise.all([loadProjects(), loadPartners(), loadVolunteers(), loadAllVolunteerMatches()]);
         if (selectedProject?.id) {
           void Promise.all([
             loadStatusUpdates(selectedProject.id),
@@ -237,6 +240,15 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       setVolunteerMatches(matches);
     } catch (error) {
       Alert.alert('Error', 'Failed to load volunteer requests');
+    }
+  };
+
+  const loadAllVolunteerMatches = async () => {
+    try {
+      const matches = await getAllVolunteerProjectMatches();
+      setAllVolunteerMatches(matches);
+    } catch (error) {
+      Alert.alert('Error', 'Failed to load volunteer request notifications');
     }
   };
 
@@ -490,6 +502,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     try {
       await reviewVolunteerProjectMatch(matchId, nextStatus, user.id);
       await Promise.all([
+        loadAllVolunteerMatches(),
         loadVolunteerMatchesForProject(selectedProject.id),
         loadVolunteerJoinsForProject(selectedProject.id),
         loadVolunteers(),
@@ -505,6 +518,46 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       Alert.alert('Error', 'Failed to review volunteer request.');
     }
   };
+
+  const confirmReviewVolunteerRequest = (
+    requestEntry: ProjectVolunteerRequestEntry,
+    nextStatus: 'Matched' | 'Rejected'
+  ) => {
+    const actionLabel = nextStatus === 'Matched' ? 'Approve' : 'Reject';
+    const message =
+      nextStatus === 'Matched'
+        ? `Allow ${requestEntry.volunteerName} to join this program? The volunteer will be notified.`
+        : `Reject ${requestEntry.volunteerName}'s join request? The volunteer will be notified.`;
+
+    Alert.alert(
+      `${actionLabel} Volunteer Request`,
+      message,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: actionLabel,
+          style: nextStatus === 'Rejected' ? 'destructive' : 'default',
+          onPress: () => {
+            void handleReviewVolunteerRequest(requestEntry.id, nextStatus);
+          },
+        },
+      ]
+    );
+  };
+
+  const pendingVolunteerRequestCountByProjectId = useMemo(() => {
+    const counts = new Map<string, number>();
+
+    allVolunteerMatches.forEach(match => {
+      if (match.status !== 'Requested') {
+        return;
+      }
+
+      counts.set(match.projectId, (counts.get(match.projectId) || 0) + 1);
+    });
+
+    return counts;
+  }, [allVolunteerMatches]);
 
   const getProjectVolunteerEntries = (project: Project) => {
     const volunteerById = new Map(volunteers.map(volunteer => [volunteer.id, volunteer]));
@@ -570,59 +623,73 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       .sort((a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime());
   };
 
-  const renderProjectCard = (project: Project) => (
-    <TouchableOpacity
-      key={project.id}
-      style={styles.card}
-      onPress={() => handleSelectProject(project)}
-    >
-      <View style={styles.cardHeader}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.cardTitle}>{project.title}</Text>
-          <Text style={styles.cardSubtitle}>{project.category}</Text>
-        </View>
-        <View style={[styles.statusDot, { backgroundColor: getProjectStatusColor(project.status) }]} />
-      </View>
+  const renderProjectCard = (project: Project) => {
+    const pendingRequestCount = pendingVolunteerRequestCountByProjectId.get(project.id) || 0;
 
-      <Text style={styles.description}>{project.description}</Text>
-
-      <View style={styles.timeline}>
-        <View style={styles.timelineItem}>
-          <MaterialIcons name="calendar-today" size={16} color="#666" />
-          <Text style={styles.timelineText}>
-            {format(new Date(project.startDate), 'MMM dd, yyyy')}
-          </Text>
-        </View>
-        <MaterialIcons name="arrow-forward" size={16} color="#ccc" />
-        <View style={styles.timelineItem}>
-          <MaterialIcons name="calendar-today" size={16} color="#666" />
-          <Text style={styles.timelineText}>
-            {format(new Date(project.endDate), 'MMM dd, yyyy')}
-          </Text>
-        </View>
-      </View>
-
-      <View style={styles.stats}>
-        <View style={styles.stat}>
-          <MaterialIcons name="people" size={16} color="#4CAF50" />
-          <Text style={styles.statText}>{project.volunteers.length}/{project.volunteersNeeded}</Text>
-        </View>
-        <View style={styles.stat}>
-          <MaterialIcons name="location-on" size={16} color="#2196F3" />
-          <Text style={styles.statText}>{project.location.address}</Text>
-        </View>
-      </View>
-
-      <View
-        style={[
-          styles.statusBadge,
-          { backgroundColor: getProjectStatusColor(project.status) },
-        ]}
+    return (
+      <TouchableOpacity
+        key={project.id}
+        style={styles.card}
+        onPress={() => handleSelectProject(project)}
       >
-        <Text style={styles.statusText}>{project.status}</Text>
-      </View>
-    </TouchableOpacity>
-  );
+        <View style={styles.cardHeader}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.cardTitle}>{project.title}</Text>
+            <Text style={styles.cardSubtitle}>{project.category}</Text>
+          </View>
+          <View style={styles.cardHeaderBadges}>
+            {pendingRequestCount > 0 && (
+              <View style={styles.requestNotificationBadge}>
+                <MaterialIcons name="notifications-active" size={14} color="#92400e" />
+                <Text style={styles.requestNotificationBadgeText}>
+                  {pendingRequestCount} request{pendingRequestCount === 1 ? '' : 's'}
+                </Text>
+              </View>
+            )}
+            <View style={[styles.statusDot, { backgroundColor: getProjectStatusColor(project.status) }]} />
+          </View>
+        </View>
+
+        <Text style={styles.description}>{project.description}</Text>
+
+        <View style={styles.timeline}>
+          <View style={styles.timelineItem}>
+            <MaterialIcons name="calendar-today" size={16} color="#666" />
+            <Text style={styles.timelineText}>
+              {format(new Date(project.startDate), 'MMM dd, yyyy')}
+            </Text>
+          </View>
+          <MaterialIcons name="arrow-forward" size={16} color="#ccc" />
+          <View style={styles.timelineItem}>
+            <MaterialIcons name="calendar-today" size={16} color="#666" />
+            <Text style={styles.timelineText}>
+              {format(new Date(project.endDate), 'MMM dd, yyyy')}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.stats}>
+          <View style={styles.stat}>
+            <MaterialIcons name="people" size={16} color="#4CAF50" />
+            <Text style={styles.statText}>{project.volunteers.length}/{project.volunteersNeeded}</Text>
+          </View>
+          <View style={styles.stat}>
+            <MaterialIcons name="location-on" size={16} color="#2196F3" />
+            <Text style={styles.statText}>{project.location.address}</Text>
+          </View>
+        </View>
+
+        <View
+          style={[
+            styles.statusBadge,
+            { backgroundColor: getProjectStatusColor(project.status) },
+          ]}
+        >
+          <Text style={styles.statusText}>{project.status}</Text>
+        </View>
+      </TouchableOpacity>
+    );
+  };
 
   if (selectedProject) {
     const volunteerEntries = getProjectVolunteerEntries(selectedProject);
@@ -664,6 +731,16 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         <View style={styles.detailsCard}>
           <Text style={styles.detailsTitle}>{selectedProject.title}</Text>
           <Text style={styles.detailsSubtitle}>{selectedProject.description}</Text>
+
+          {volunteerRequestEntries.some(entry => entry.status === 'Requested') && (
+            <View style={styles.requestNotificationPanel}>
+              <MaterialIcons name="campaign" size={18} color="#92400e" />
+              <Text style={styles.requestNotificationPanelText}>
+                {volunteerRequestEntries.filter(entry => entry.status === 'Requested').length} volunteer request
+                {volunteerRequestEntries.filter(entry => entry.status === 'Requested').length === 1 ? '' : 's'} waiting for approval.
+              </Text>
+            </View>
+          )}
 
           <View style={styles.detailsSection}>
             <Text style={styles.sectionTitle}>Program Setup</Text>
@@ -801,13 +878,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                       <View style={styles.applicationActions}>
                         <TouchableOpacity
                           style={[styles.applicationButton, styles.approveButton]}
-                          onPress={() => handleReviewVolunteerRequest(requestEntry.id, 'Matched')}
+                          onPress={() => confirmReviewVolunteerRequest(requestEntry, 'Matched')}
                         >
                           <Text style={styles.applicationButtonText}>Approve</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
                           style={[styles.applicationButton, styles.rejectButton]}
-                          onPress={() => handleReviewVolunteerRequest(requestEntry.id, 'Rejected')}
+                          onPress={() => confirmReviewVolunteerRequest(requestEntry, 'Rejected')}
                         >
                           <Text style={styles.applicationButtonText}>Reject</Text>
                         </TouchableOpacity>
@@ -1344,6 +1421,10 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     marginBottom: 12,
   },
+  cardHeaderBadges: {
+    alignItems: 'flex-end',
+    gap: 8,
+  },
   cardTitle: {
     fontSize: 16,
     fontWeight: 'bold',
@@ -1396,6 +1477,22 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#666',
   },
+  requestNotificationBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#fef3c7',
+    borderColor: '#fcd34d',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  requestNotificationBadgeText: {
+    color: '#92400e',
+    fontSize: 11,
+    fontWeight: '700',
+  },
   statusBadge: {
     paddingHorizontal: 12,
     paddingVertical: 6,
@@ -1436,6 +1533,25 @@ const styles = StyleSheet.create({
     color: '#666',
     lineHeight: 20,
     marginBottom: 16,
+  },
+  requestNotificationPanel: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#fef3c7',
+    borderWidth: 1,
+    borderColor: '#fcd34d',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 16,
+  },
+  requestNotificationPanelText: {
+    flex: 1,
+    color: '#78350f',
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 18,
   },
   detailsSection: {
     marginVertical: 16,

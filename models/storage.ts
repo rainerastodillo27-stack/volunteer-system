@@ -1787,6 +1787,11 @@ export async function getVolunteerProjectMatches(volunteerId: string): Promise<V
     .sort((a, b) => new Date(b.matchedAt).getTime() - new Date(a.matchedAt).getTime());
 }
 
+export async function getAllVolunteerProjectMatches(): Promise<VolunteerProjectMatch[]> {
+  const matches = await getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES) || [];
+  return matches.sort((a, b) => new Date(b.matchedAt).getTime() - new Date(a.matchedAt).getTime());
+}
+
 export async function getProjectMatches(projectId: string): Promise<VolunteerProjectMatch[]> {
   const matches = await getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES) || [];
   return matches
