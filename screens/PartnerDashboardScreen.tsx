@@ -203,10 +203,10 @@ export default function PartnerDashboardScreen({ navigation }: any) {
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Project Management</Text>
+        <Text style={styles.sectionTitle}>Project Coordination</Text>
         <View style={styles.card}>
           <Text style={styles.cardLine}>
-            Align your project requests with priority sector needs. Coordinate with NVC admins for approval.
+            Review active programs, join approved collaborations, and coordinate with NVC admins through messages.
           </Text>
           <View style={styles.actionRow}>
             <TouchableOpacity
@@ -232,7 +232,6 @@ export default function PartnerDashboardScreen({ navigation }: any) {
             <View key={need.sector} style={styles.needCard}>
               <Text style={styles.needTitle}>{need.title}</Text>
               <Text style={styles.needDescription}>{need.description}</Text>
-              <Text style={styles.needLine}>Goal: PHP {need.goalAmount.toLocaleString()}</Text>
             </View>
           );
         })}
@@ -370,11 +369,6 @@ const styles = StyleSheet.create({
     color: '#666',
     fontSize: 12,
     marginBottom: 8,
-  },
-  needLine: {
-    color: '#333',
-    fontSize: 13,
-    marginBottom: 2,
   },
   actionRow: {
     flexDirection: 'row',

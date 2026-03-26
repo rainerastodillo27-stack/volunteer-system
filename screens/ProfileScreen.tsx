@@ -14,6 +14,7 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
+import VolunteerImpactMap from '../components/VolunteerImpactMap';
 import {
   getAllProjects,
   getAllUsers,
@@ -26,7 +27,7 @@ import {
   subscribeToStorageChanges,
 } from '../models/storage';
 import { VolunteerRecognitionStatus } from '../models/storage';
-import { NVCSector, User, UserType, Volunteer } from '../models/types';
+import { NVCSector, Project, User, UserType, Volunteer } from '../models/types';
 
 const USER_TYPES: UserType[] = ['Student', 'Adult', 'Senior'];
 const PILLAR_OPTIONS: NVCSector[] = ['Nutrition', 'Education', 'Livelihood'];
@@ -41,7 +42,7 @@ export default function ProfileScreen() {
     joinedProgramCount: 0,
     isTopVolunteer: false,
   });
-  const [projectTitlesById, setProjectTitlesById] = useState<Record<string, string>>({});
+  const [projects, setProjects] = useState<Project[]>([]);
   const [showEditModal, setShowEditModal] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
@@ -90,10 +91,8 @@ export default function ProfileScreen() {
 
   const loadProjectTitles = useCallback(async () => {
     try {
-      const projects = await getAllProjects();
-      setProjectTitlesById(
-        Object.fromEntries(projects.map(project => [project.id, project.title]))
-      );
+      const allProjects = await getAllProjects();
+      setProjects(allProjects);
     } catch (error) {
       console.error('Error loading projects for profile:', error);
     }
@@ -265,6 +264,7 @@ export default function ProfileScreen() {
           .filter(Boolean);
 
         const updatedVolunteerProfile: Volunteer = {
+          ...volunteerProfile,
           id: volunteerProfile?.id || `volunteer-${user.id}`,
           userId: user.id,
           name: normalizedName,
@@ -319,6 +319,12 @@ export default function ProfileScreen() {
   const completedPrograms = completedProjectIds;
   const joinedProgramCount = recognitionStatus.joinedProgramCount;
   const isTopVolunteer = recognitionStatus.isTopVolunteer;
+  const projectById: Record<string, Project> = Object.fromEntries(
+    projects.map(project => [project.id, project])
+  );
+  const completedProjects = completedProjectIds
+    .map(projectId => projectById[projectId] || null)
+    .filter((project): project is Project => project !== null);
 
   return (
     <ScrollView style={styles.container}>
@@ -440,14 +446,23 @@ export default function ProfileScreen() {
               <Text style={styles.infoLabel}>Background</Text>
               <Text style={styles.infoValue}>{volunteerProfile.background || 'No background added yet.'}</Text>
 
+              {completedProjects.length > 0 && (
+                <VolunteerImpactMap projects={completedProjects} />
+              )}
+
               <Text style={styles.infoLabel}>Completed Programs</Text>
               {completedPrograms.length > 0 ? (
                 <View style={styles.completedProgramsList}>
                   {completedPrograms.map(projectId => (
                     <View key={projectId} style={styles.completedProgramCard}>
                       <Text style={styles.completedProgramTitle}>
-                        {projectTitlesById[projectId] || projectId}
+                        {projectById[projectId]?.title || projectId}
                       </Text>
+                      {projectById[projectId]?.location?.address ? (
+                        <Text style={styles.completedProgramMeta}>
+                          {projectById[projectId]?.location.address}
+                        </Text>
+                      ) : null}
                     </View>
                   ))}
                 </View>
@@ -800,6 +815,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#0f172a',
+  },
+  completedProgramMeta: {
+    marginTop: 4,
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#64748b',
   },
   logoutButton: {
     width: '100%',

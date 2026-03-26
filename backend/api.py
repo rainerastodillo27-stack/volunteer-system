@@ -75,6 +75,15 @@ class MessagePayload(BaseModel):
     attachments: list[str] | None = None
 
 
+class ProjectGroupMessagePayload(BaseModel):
+    id: str
+    projectId: str
+    senderId: str
+    content: str
+    timestamp: str
+    attachments: list[str] | None = None
+
+
 app = FastAPI(title="Volcre Storage API")
 
 allowed_origins = [origin.strip() for origin in os.getenv("ALLOWED_ORIGINS", "*").split(",") if origin.strip()]
@@ -128,6 +137,16 @@ class ConnectionManager:
         for user_id in recipients:
             await self.send_user_event(user_id, payload)
 
+    async def broadcast_project_group_message_event(
+        self, project_id: str, message: dict[str, Any]
+    ) -> None:
+        payload = {"type": "project-group-message.changed", "message": message}
+        with get_postgres_connection() as connection:
+            recipients = _get_project_chat_participant_user_ids(connection, project_id)
+        recipients.add(message["senderId"])
+        for user_id in recipients:
+            await self.send_user_event(user_id, payload)
+
     async def broadcast_storage_event(self, keys: list[str]) -> None:
         if not keys:
             return
@@ -169,6 +188,24 @@ def ensure_message_storage() -> None:
         connection.commit()
 
 
+def ensure_project_group_message_storage() -> None:
+    with get_postgres_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                create table if not exists project_group_messages (
+                  id text primary key,
+                  project_id text not null,
+                  sender_id text not null,
+                  content text not null,
+                  timestamp timestamptz not null,
+                  attachments jsonb not null default '[]'::jsonb
+                )
+                """
+            )
+        connection.commit()
+
+
 def serialize_message_row(row: Any) -> dict[str, Any]:
     if row is None:
         raise HTTPException(status_code=404, detail="Message not found.")
@@ -189,6 +226,76 @@ def serialize_message_row(row: Any) -> dict[str, Any]:
         "read": bool(row["read"]),
         "attachments": attachments,
     }
+
+
+def serialize_project_group_message_row(row: Any) -> dict[str, Any]:
+    if row is None:
+        raise HTTPException(status_code=404, detail="Project group message not found.")
+
+    attachments = row["attachments"]
+    if isinstance(attachments, str):
+        attachments = json.loads(attachments)
+    if attachments is None:
+        attachments = []
+
+    return {
+        "id": row["id"],
+        "projectId": row["project_id"],
+        "senderId": row["sender_id"],
+        "content": row["content"],
+        "timestamp": row["timestamp"].isoformat() if hasattr(row["timestamp"], "isoformat") else row["timestamp"],
+        "attachments": attachments,
+    }
+
+
+def _get_project_chat_participant_user_ids(connection: Any, project_id: str) -> set[str]:
+    project = _postgres_get_hot_item_by_id(connection, "projects", project_id)
+    if project is None:
+        return set()
+
+    participant_user_ids = {
+        user_id
+        for user_id in project.get("joinedUserIds") or []
+        if isinstance(user_id, str) and user_id
+    }
+
+    join_records = _postgres_get_hot_items_by_field(connection, "volunteerProjectJoins", "projectId", project_id)
+    for record in join_records:
+        volunteer_user_id = record.get("volunteerUserId")
+        if isinstance(volunteer_user_id, str) and volunteer_user_id:
+            participant_user_ids.add(volunteer_user_id)
+
+    for volunteer_id in project.get("volunteers") or []:
+        if not isinstance(volunteer_id, str) or not volunteer_id:
+            continue
+        volunteer = _postgres_get_hot_item_by_id(connection, "volunteers", volunteer_id)
+        volunteer_user_id = volunteer.get("userId") if volunteer else None
+        if isinstance(volunteer_user_id, str) and volunteer_user_id:
+            participant_user_ids.add(volunteer_user_id)
+
+    return participant_user_ids
+
+
+def _assert_project_group_chat_access(
+    connection: Any, project_id: str, user_id: str
+) -> dict[str, Any]:
+    project = _postgres_get_hot_item_by_id(connection, "projects", project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found.")
+
+    user = _postgres_get_hot_item_by_id(connection, "users", user_id)
+    role = str(user.get("role") or "") if user else ""
+    if role == "admin":
+        return project
+
+    participant_user_ids = _get_project_chat_participant_user_ids(connection, project_id)
+    if role != "volunteer" or user_id not in participant_user_ids:
+        raise HTTPException(
+            status_code=403,
+            detail="Only volunteers who joined this program can open its group chat.",
+        )
+
+    return project
 
 
 @app.on_event("startup")
@@ -855,6 +962,27 @@ def get_conversation(user1: str, user2: str) -> dict[str, list[dict[str, Any]]]:
     return {"messages": [serialize_message_row(row) for row in rows]}
 
 
+@app.get("/projects/{project_id}/group-messages")
+def get_project_group_messages(project_id: str, user_id: str) -> dict[str, list[dict[str, Any]]]:
+    ensure_project_group_message_storage()
+    from psycopg.rows import dict_row
+
+    with get_postgres_connection() as connection:
+        _assert_project_group_chat_access(connection, project_id, user_id)
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                select id, project_id, sender_id, content, timestamp, attachments
+                from project_group_messages
+                where project_id = %s
+                order by timestamp asc
+                """,
+                (project_id,),
+            )
+            rows = cursor.fetchall()
+    return {"messages": [serialize_project_group_message_row(row) for row in rows]}
+
+
 @app.post("/messages")
 async def create_message(payload: MessagePayload) -> dict[str, Any]:
     ensure_message_storage()
@@ -889,6 +1017,46 @@ async def create_message(payload: MessagePayload) -> dict[str, Any]:
 
     message = serialize_message_row(row)
     await connection_manager.broadcast_message_event(message)
+    return message
+
+
+@app.post("/projects/{project_id}/group-messages")
+async def create_project_group_message(
+    project_id: str, payload: ProjectGroupMessagePayload
+) -> dict[str, Any]:
+    ensure_project_group_message_storage()
+    attachments = payload.attachments or []
+    from psycopg.rows import dict_row
+
+    if payload.projectId != project_id:
+        raise HTTPException(status_code=400, detail="Project message payload does not match route.")
+
+    with get_postgres_connection() as connection:
+        _assert_project_group_chat_access(connection, project_id, payload.senderId)
+        _postgres_ensure_legacy_app_user(connection, payload.senderId)
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                insert into project_group_messages (
+                  id, project_id, sender_id, content, timestamp, attachments
+                )
+                values (%s, %s, %s, %s, %s, %s::jsonb)
+                returning id, project_id, sender_id, content, timestamp, attachments
+                """,
+                (
+                    payload.id,
+                    project_id,
+                    payload.senderId,
+                    payload.content,
+                    payload.timestamp,
+                    json.dumps(attachments),
+                ),
+            )
+            row = cursor.fetchone()
+        connection.commit()
+
+    message = serialize_project_group_message_row(row)
+    await connection_manager.broadcast_project_group_message_event(project_id, message)
     return message
 
 

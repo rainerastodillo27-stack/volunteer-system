@@ -7,6 +7,7 @@ import {
   Project,
   Volunteer,
   Message,
+  ProjectGroupMessage,
   StatusUpdate,
   VolunteerProjectMatch,
   SectorNeed,
@@ -23,6 +24,7 @@ const STORAGE_KEYS = {
   PROJECTS: 'projects',
   VOLUNTEERS: 'volunteers',
   MESSAGES: 'messages',
+  PROJECT_GROUP_MESSAGES: 'projectGroupMessages',
   STATUS_UPDATES: 'statusUpdates',
   VOLUNTEER_MATCHES: 'volunteerMatches',
   VOLUNTEER_TIME_LOGS: 'volunteerTimeLogs',
@@ -413,6 +415,56 @@ async function notifyPartnerAboutProjectJoinReview(
   await sendSystemMessage(
     reviewedBy,
     application.partnerUserId,
+    `NVC Admin ${outcome}`
+  );
+}
+
+async function notifyAdminAboutVolunteerProjectJoinRequest(
+  projectId: string,
+  volunteer: Pick<Volunteer, 'userId' | 'name' | 'email'>
+): Promise<void> {
+  const [project, adminUser] = await Promise.all([
+    getProject(projectId),
+    getPrimaryAdminUser(),
+  ]);
+
+  if (!project || !adminUser) {
+    return;
+  }
+
+  const volunteerEmail = volunteer.email.trim()
+    ? ` (${volunteer.email.trim()})`
+    : '';
+
+  await sendSystemMessage(
+    volunteer.userId,
+    adminUser.id,
+    `${volunteer.name}${volunteerEmail} requested to join "${project.title}". Review it in Program Lifecycle to approve or reject.`
+  );
+}
+
+async function notifyVolunteerAboutProjectMatchDecision(
+  projectId: string,
+  volunteerUserId: string,
+  reviewedBy: string,
+  decision: 'Matched' | 'Rejected',
+  reason: 'request' | 'assignment'
+): Promise<void> {
+  const project = await getProject(projectId);
+  if (!project) {
+    return;
+  }
+
+  const outcome =
+    decision === 'Matched'
+      ? reason === 'assignment'
+        ? `assigned you to "${project.title}". You can now join the program and coordinate through Messages.`
+        : `approved your request to join "${project.title}". You can now join the program and coordinate through Messages.`
+      : `rejected your request to join "${project.title}". You may contact NVC admin for clarification.`;
+
+  await sendSystemMessage(
+    reviewedBy,
+    volunteerUserId,
     `NVC Admin ${outcome}`
   );
 }
@@ -884,6 +936,22 @@ export async function createUserAccount(input: {
   role: Exclude<UserRole, 'admin'>;
   userType: UserType;
   pillarsOfInterest: NVCSector[];
+  volunteerMembershipSheet?: {
+    gender: string;
+    dateOfBirth: string;
+    civilStatus: string;
+    homeAddress: string;
+    occupation: string;
+    workplaceOrSchool: string;
+    collegeCourse?: string;
+    certificationsOrTrainings?: string;
+    hobbiesAndInterests?: string;
+    specialSkills?: string;
+    affiliations?: Array<{
+      organization: string;
+      position: string;
+    }>;
+  };
 }): Promise<User> {
   const normalizedEmail = input.email?.trim().toLowerCase();
   const normalizedName = input.name.trim();
@@ -947,6 +1015,18 @@ export async function createUserAccount(input: {
       rating: 0,
       engagementStatus: 'Open to Volunteer',
       background: '',
+      gender: input.volunteerMembershipSheet?.gender || '',
+      dateOfBirth: input.volunteerMembershipSheet?.dateOfBirth || '',
+      civilStatus: input.volunteerMembershipSheet?.civilStatus || '',
+      homeAddress: input.volunteerMembershipSheet?.homeAddress || '',
+      occupation: input.volunteerMembershipSheet?.occupation || '',
+      workplaceOrSchool: input.volunteerMembershipSheet?.workplaceOrSchool || '',
+      collegeCourse: input.volunteerMembershipSheet?.collegeCourse || '',
+      certificationsOrTrainings:
+        input.volunteerMembershipSheet?.certificationsOrTrainings || '',
+      hobbiesAndInterests: input.volunteerMembershipSheet?.hobbiesAndInterests || '',
+      specialSkills: input.volunteerMembershipSheet?.specialSkills || '',
+      affiliations: input.volunteerMembershipSheet?.affiliations || [],
       createdAt,
     });
   }
@@ -1022,6 +1102,13 @@ export async function deleteUser(userId: string): Promise<void> {
     message => message.senderId !== userId && message.recipientId !== userId
   );
   await setStorageItem(STORAGE_KEYS.MESSAGES, filteredMessages);
+
+  const projectGroupMessages =
+    await getStorageItem<ProjectGroupMessage[]>(STORAGE_KEYS.PROJECT_GROUP_MESSAGES) || [];
+  const filteredProjectGroupMessages = projectGroupMessages.filter(
+    message => message.senderId !== userId
+  );
+  await setLocalStorageItem(STORAGE_KEYS.PROJECT_GROUP_MESSAGES, filteredProjectGroupMessages);
 
   const partnerApplications =
     await getStorageItem<PartnerProjectApplication[]>(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS) || [];
@@ -1124,13 +1211,21 @@ export async function saveProject(project: Project): Promise<void> {
 }
 
 export async function deleteProject(projectId: string): Promise<void> {
-  const [projects, statusUpdates, partnerApplications, volunteerJoinRecords, volunteerTimeLogs] =
+  const [
+    projects,
+    statusUpdates,
+    partnerApplications,
+    volunteerJoinRecords,
+    volunteerTimeLogs,
+    projectGroupMessages,
+  ] =
     await Promise.all([
       getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS),
       getStorageItem<StatusUpdate[]>(STORAGE_KEYS.STATUS_UPDATES),
       getStorageItem<PartnerProjectApplication[]>(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS),
       getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS),
       getStorageItem<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS),
+      getStorageItem<ProjectGroupMessage[]>(STORAGE_KEYS.PROJECT_GROUP_MESSAGES),
     ]);
 
   await Promise.all([
@@ -1153,6 +1248,10 @@ export async function deleteProject(projectId: string): Promise<void> {
     setStorageItem(
       STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
       (volunteerTimeLogs || []).filter(log => log.projectId !== projectId)
+    ),
+    setLocalStorageItem(
+      STORAGE_KEYS.PROJECT_GROUP_MESSAGES,
+      (projectGroupMessages || []).filter(message => message.projectId !== projectId)
     ),
   ]);
 }
@@ -1349,6 +1448,33 @@ export async function saveMessage(message: Message): Promise<void> {
   }
 }
 
+export async function saveProjectGroupMessage(message: ProjectGroupMessage): Promise<void> {
+  try {
+    await waitForApiReady();
+    const response = await fetch(
+      `${getApiBaseUrl()}/projects/${encodeURIComponent(message.projectId)}/group-messages`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(message),
+      }
+    );
+    if (!response.ok) {
+      throw new Error(
+        await getApiErrorMessage(response, `Group message send failed: ${response.status}`)
+      );
+    }
+    notifyWebMessageUpdate();
+  } catch (error) {
+    if (!isExpectedRemoteStorageError(error)) {
+      console.error('Error saving project group message:', error);
+    }
+    throw error;
+  }
+}
+
 export async function getMessagesForUser(userId: string): Promise<Message[]> {
   try {
     await waitForApiReady();
@@ -1395,6 +1521,32 @@ export async function getConversation(userId1: string, userId2: string): Promise
   }
 }
 
+export async function getProjectGroupMessages(
+  projectId: string,
+  userId: string
+): Promise<ProjectGroupMessage[]> {
+  try {
+    await waitForApiReady();
+    const response = await fetch(
+      `${getApiBaseUrl()}/projects/${encodeURIComponent(projectId)}/group-messages?user_id=${encodeURIComponent(userId)}`
+    );
+    if (!response.ok) {
+      throw new Error(`Project group message fetch failed: ${response.status}`);
+    }
+    const payload = (await response.json()) as { messages: ProjectGroupMessage[] };
+    return payload.messages;
+  } catch (error) {
+    if (!isExpectedRemoteStorageError(error)) {
+      console.error('Error loading project group messages:', error);
+    }
+    const messages =
+      await getStorageItem<ProjectGroupMessage[]>(STORAGE_KEYS.PROJECT_GROUP_MESSAGES) || [];
+    return messages
+      .filter(message => message.projectId === projectId)
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  }
+}
+
 export async function markMessageAsRead(messageId: string): Promise<void> {
   try {
     await waitForApiReady();
@@ -1419,9 +1571,13 @@ export async function markMessageAsRead(messageId: string): Promise<void> {
   }
 }
 
+export type MessageSubscriptionEvent =
+  | { type: 'message.changed'; message: Message }
+  | { type: 'project-group-message.changed'; message: ProjectGroupMessage };
+
 export function subscribeToMessages(
   userId: string,
-  onChange: (event: { type: string; message: Message }) => void
+  onChange: (event: MessageSubscriptionEvent) => void
 ): () => void {
   let socket: WebSocket | null = null;
   let heartbeat: ReturnType<typeof setInterval> | null = null;
@@ -1457,7 +1613,7 @@ export function subscribeToMessages(
 
     socket.onmessage = event => {
       try {
-        const payload = JSON.parse(event.data) as { type: string; message: Message };
+        const payload = JSON.parse(event.data) as MessageSubscriptionEvent;
         onChange(payload);
       } catch (error) {
         console.error('Error parsing message event:', error);
@@ -1604,28 +1760,188 @@ export async function getStatusUpdatesByProject(projectId: string): Promise<Stat
 // Volunteer Project Match Storage
 export async function saveVolunteerProjectMatch(match: VolunteerProjectMatch): Promise<void> {
   const matches = await getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES) || [];
-  const existingIndex = matches.findIndex(m => m.id === match.id);
+  const existingIndex = matches.findIndex(
+    existingMatch =>
+      existingMatch.id === match.id ||
+      (
+        existingMatch.projectId === match.projectId &&
+        existingMatch.volunteerId === match.volunteerId
+      )
+  );
   if (existingIndex >= 0) {
     matches[existingIndex] = match;
   } else {
     matches.push(match);
   }
   await setStorageItem(STORAGE_KEYS.VOLUNTEER_MATCHES, matches);
-  await attachVolunteerToProject(match.projectId, match.volunteerId);
   if (match.status === 'Matched') {
-    await ensureVolunteerProjectJoinRecord(match.projectId, match.volunteerId, 'AdminMatch');
+    await attachVolunteerToProject(match.projectId, match.volunteerId);
   }
   await syncVolunteerEngagementStatus(match.volunteerId);
 }
 
 export async function getVolunteerProjectMatches(volunteerId: string): Promise<VolunteerProjectMatch[]> {
   const matches = await getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES) || [];
-  return matches.filter(m => m.volunteerId === volunteerId);
+  return matches
+    .filter(m => m.volunteerId === volunteerId)
+    .sort((a, b) => new Date(b.matchedAt).getTime() - new Date(a.matchedAt).getTime());
 }
 
 export async function getProjectMatches(projectId: string): Promise<VolunteerProjectMatch[]> {
   const matches = await getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES) || [];
-  return matches.filter(m => m.projectId === projectId);
+  return matches
+    .filter(m => m.projectId === projectId)
+    .sort((a, b) => new Date(b.matchedAt).getTime() - new Date(a.matchedAt).getTime());
+}
+
+export async function requestVolunteerProjectJoin(
+  projectId: string,
+  userId: string
+): Promise<VolunteerProjectMatch> {
+  const [project, volunteer] = await Promise.all([
+    getProject(projectId),
+    getVolunteerByUserId(userId),
+  ]);
+
+  if (!project) {
+    throw new Error('Project not found.');
+  }
+
+  if (!volunteer) {
+    throw new Error('Volunteer profile not found.');
+  }
+
+  const existingMatches = await getVolunteerProjectMatches(volunteer.id);
+  const existingMatch = existingMatches.find(match => match.projectId === projectId) || null;
+
+  if (existingMatch?.status === 'Matched') {
+    throw new Error('You are already approved for this program.');
+  }
+
+  if (existingMatch?.status === 'Requested') {
+    throw new Error('Your join request is already pending admin approval.');
+  }
+
+  if (existingMatch?.status === 'Completed') {
+    throw new Error('You have already completed this program.');
+  }
+
+  const requestedMatch: VolunteerProjectMatch = {
+    id: existingMatch?.id || `match-${Date.now()}`,
+    volunteerId: volunteer.id,
+    projectId,
+    status: 'Requested',
+    matchedAt: new Date().toISOString(),
+    hoursContributed: existingMatch?.hoursContributed || 0,
+  };
+
+  await saveVolunteerProjectMatch(requestedMatch);
+
+  try {
+    await notifyAdminAboutVolunteerProjectJoinRequest(projectId, volunteer);
+  } catch (error) {
+    console.error('Error notifying admin about volunteer join request:', error);
+  }
+
+  return requestedMatch;
+}
+
+export async function reviewVolunteerProjectMatch(
+  matchId: string,
+  nextStatus: 'Matched' | 'Rejected',
+  reviewedBy: string
+): Promise<VolunteerProjectMatch> {
+  const matches = await getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES) || [];
+  const existingMatch = matches.find(match => match.id === matchId) || null;
+
+  if (!existingMatch) {
+    throw new Error('Volunteer request not found.');
+  }
+
+  const volunteer = await getVolunteer(existingMatch.volunteerId);
+  if (!volunteer) {
+    throw new Error('Volunteer not found.');
+  }
+
+  const updatedMatch: VolunteerProjectMatch = {
+    ...existingMatch,
+    status: nextStatus,
+    matchedAt: new Date().toISOString(),
+  };
+
+  await saveVolunteerProjectMatch(updatedMatch);
+  if (nextStatus === 'Matched') {
+    await ensureVolunteerProjectJoinRecord(updatedMatch.projectId, updatedMatch.volunteerId, 'VolunteerJoin');
+  }
+
+  try {
+    await notifyVolunteerAboutProjectMatchDecision(
+      updatedMatch.projectId,
+      volunteer.userId,
+      reviewedBy,
+      nextStatus,
+      'request'
+    );
+  } catch (error) {
+    console.error('Error notifying volunteer about request review:', error);
+  }
+
+  return updatedMatch;
+}
+
+export async function assignVolunteerToProject(
+  projectId: string,
+  volunteerId: string,
+  assignedBy: string
+): Promise<VolunteerProjectMatch> {
+  const [project, volunteer, existingMatches] = await Promise.all([
+    getProject(projectId),
+    getVolunteer(volunteerId),
+    getVolunteerProjectMatches(volunteerId),
+  ]);
+
+  if (!project) {
+    throw new Error('Project not found.');
+  }
+
+  if (!volunteer) {
+    throw new Error('Volunteer not found.');
+  }
+
+  const existingMatch = existingMatches.find(match => match.projectId === projectId) || null;
+  if (existingMatch?.status === 'Matched') {
+    throw new Error('Volunteer is already assigned to this program.');
+  }
+
+  if (existingMatch?.status === 'Completed') {
+    throw new Error('Volunteer already completed this program.');
+  }
+
+  const assignedMatch: VolunteerProjectMatch = {
+    id: existingMatch?.id || `match-${Date.now()}`,
+    volunteerId,
+    projectId,
+    status: 'Matched',
+    matchedAt: new Date().toISOString(),
+    hoursContributed: existingMatch?.hoursContributed || 0,
+  };
+
+  await saveVolunteerProjectMatch(assignedMatch);
+  await ensureVolunteerProjectJoinRecord(projectId, volunteerId, 'AdminMatch');
+
+  try {
+    await notifyVolunteerAboutProjectMatchDecision(
+      projectId,
+      volunteer.userId,
+      assignedBy,
+      'Matched',
+      'assignment'
+    );
+  } catch (error) {
+    console.error('Error notifying volunteer about assignment:', error);
+  }
+
+  return assignedMatch;
 }
 
 export async function saveVolunteerProjectJoinRecord(
@@ -2270,7 +2586,7 @@ async function markVolunteerMatchCompleted(
     if (
       match.projectId === projectId &&
       match.volunteerId === volunteerId &&
-      (match.status === 'Matched' || match.status === 'Requested')
+      match.status === 'Matched'
     ) {
       updated = true;
       return {
@@ -2311,7 +2627,7 @@ async function syncVolunteerEngagementStatus(volunteerId: string): Promise<void>
   ]);
 
   const hasActiveMatch = matches.some(
-    match => match.status === 'Matched' || match.status === 'Requested'
+    match => match.status === 'Matched'
   );
   const hasActiveParticipation = (joinRecords || []).some(
     record =>

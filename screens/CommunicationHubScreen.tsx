@@ -12,13 +12,17 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import { Message, User } from '../models/types';
+import { Message, Project, ProjectGroupMessage, User, VolunteerProjectJoinRecord } from '../models/types';
 import {
-  getMessagesForUser,
-  getConversation,
-  saveMessage,
   getAllUsers,
+  getConversation,
+  getMessagesForUser,
+  getProjectGroupMessages,
+  getProjectsScreenSnapshot,
   markMessageAsRead,
+  MessageSubscriptionEvent,
+  saveMessage,
+  saveProjectGroupMessage,
   subscribeToMessages,
   subscribeToStorageChanges,
 } from '../models/storage';
@@ -26,6 +30,19 @@ import { useAuth } from '../contexts/AuthContext';
 import { format } from 'date-fns';
 
 const WEB_MESSAGE_SYNC_KEY = 'volcre:messages:updatedAt';
+
+type ConversationItem = {
+  user: User;
+  lastMessage?: Message;
+  unreadCount: number;
+};
+
+type ProjectChatItem = {
+  project: Project;
+  participantCount: number;
+};
+
+type ChatMessage = Message | ProjectGroupMessage;
 
 const formatRoleLabel = (chatUser: User) => {
   if (chatUser.role === 'admin') {
@@ -51,12 +68,6 @@ const formatMessageTime = (timestamp?: string) => {
 const createMessageId = () =>
   `msg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
-type ConversationItem = {
-  user: User;
-  lastMessage?: Message;
-  unreadCount: number;
-};
-
 function sortConversations(items: ConversationItem[]): ConversationItem[] {
   return [...items].sort((left, right) => {
     const leftTime = left.lastMessage ? new Date(left.lastMessage.timestamp).getTime() : 0;
@@ -65,7 +76,7 @@ function sortConversations(items: ConversationItem[]): ConversationItem[] {
   });
 }
 
-function upsertMessage(currentMessages: Message[], nextMessage: Message): Message[] {
+function upsertChatMessage(currentMessages: ChatMessage[], nextMessage: ChatMessage): ChatMessage[] {
   const existingIndex = currentMessages.findIndex(message => message.id === nextMessage.id);
   if (existingIndex >= 0) {
     const updated = [...currentMessages];
@@ -78,51 +89,51 @@ function upsertMessage(currentMessages: Message[], nextMessage: Message): Messag
   );
 }
 
-function upsertConversationItem(
-  currentConversations: ConversationItem[],
-  currentUserId: string,
-  otherUser: User,
-  nextMessage: Message,
-  isDetailOpen: boolean
-): ConversationItem[] {
-  const existingConversation = currentConversations.find(
-    conversation => conversation.user.id === otherUser.id
-  );
-  const existingUnreadCount = existingConversation?.unreadCount || 0;
-  const nextUnreadCount =
-    nextMessage.recipientId === currentUserId && !nextMessage.read && !isDetailOpen
-      ? existingUnreadCount + 1
-      : existingConversation?.lastMessage?.id === nextMessage.id && nextMessage.read
-      ? 0
-      : existingUnreadCount;
+function countProjectParticipants(
+  project: Project,
+  joinRecords: VolunteerProjectJoinRecord[]
+): number {
+  const participants = new Set<string>();
+  let matchedVolunteerCount = 0;
 
-  const nextConversation: ConversationItem = {
-    user: otherUser,
-    lastMessage: nextMessage,
-    unreadCount: nextUnreadCount,
-  };
+  for (const userId of project.joinedUserIds || []) {
+    if (userId) {
+      participants.add(userId);
+    }
+  }
 
-  const withoutCurrent = currentConversations.filter(
-    conversation => conversation.user.id !== otherUser.id
-  );
-  return sortConversations([nextConversation, ...withoutCurrent]);
+  for (const record of joinRecords) {
+    if (record.projectId === project.id && record.volunteerUserId) {
+      participants.add(record.volunteerUserId);
+      matchedVolunteerCount += 1;
+    }
+  }
+
+  return Math.max(participants.size, matchedVolunteerCount, project.volunteers.length);
 }
 
-export default function CommunicationHubScreen({ navigation }: any) {
+export default function CommunicationHubScreen({ navigation, route }: any) {
   const { user } = useAuth();
   const [view, setView] = useState<'conversations' | 'detail'>('conversations');
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
+  const [projectChats, setProjectChats] = useState<ProjectChatItem[]>([]);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [selectedProjectChat, setSelectedProjectChat] = useState<ProjectChatItem | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [messageText, setMessageText] = useState('');
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const selectedUserRef = useRef<User | null>(null);
+  const selectedProjectChatRef = useRef<ProjectChatItem | null>(null);
   const viewRef = useRef<'conversations' | 'detail'>('conversations');
   const allUsersRef = useRef<User[]>([]);
 
   useEffect(() => {
     selectedUserRef.current = selectedUser;
   }, [selectedUser]);
+
+  useEffect(() => {
+    selectedProjectChatRef.current = selectedProjectChat;
+  }, [selectedProjectChat]);
 
   useEffect(() => {
     viewRef.current = view;
@@ -132,94 +143,245 @@ export default function CommunicationHubScreen({ navigation }: any) {
     allUsersRef.current = allUsers;
   }, [allUsers]);
 
-  useEffect(() => {
-    loadUsers();
-  }, []);
+  const loadUsers = async () => {
+    try {
+      const users = await getAllUsers();
+      const otherUsers = users.filter(candidate => candidate.id !== user?.id);
+
+      otherUsers.sort((left, right) => {
+        if (left.role === 'admin' && right.role !== 'admin') return -1;
+        if (left.role !== 'admin' && right.role === 'admin') return 1;
+        return left.name.localeCompare(right.name);
+      });
+
+      setAllUsers(otherUsers);
+    } catch (error) {
+      console.error('Error loading users:', error);
+    }
+  };
+
+  const loadConversations = async () => {
+    try {
+      const allMessages = await getMessagesForUser(user?.id || '');
+      const conversationMap = new Map<string, ConversationItem>();
+
+      for (const message of allMessages) {
+        const otherUserId = message.senderId === user?.id ? message.recipientId : message.senderId;
+        const otherUser = allUsersRef.current.find(chatUser => chatUser.id === otherUserId);
+
+        if (!otherUser) {
+          continue;
+        }
+
+        const existing = conversationMap.get(otherUserId) || {
+          user: otherUser,
+          unreadCount: 0,
+        };
+
+        if (!existing.lastMessage || new Date(message.timestamp) > new Date(existing.lastMessage.timestamp)) {
+          existing.lastMessage = message;
+        }
+
+        if (!message.read && message.recipientId === user?.id) {
+          existing.unreadCount += 1;
+        }
+
+        conversationMap.set(otherUserId, existing);
+      }
+
+      setConversations(sortConversations(Array.from(conversationMap.values())));
+    } catch (error) {
+      Alert.alert('Error', 'Failed to load conversations');
+    }
+  };
+
+  const loadProjectChats = async () => {
+    if (!user?.id || user.role !== 'volunteer') {
+      setProjectChats([]);
+      return;
+    }
+
+    try {
+      const snapshot = await getProjectsScreenSnapshot(user);
+      const joinedProjectIds = new Set<string>(
+        snapshot.volunteerJoinRecords.map(record => record.projectId)
+      );
+
+      for (const project of snapshot.projects) {
+        if ((project.joinedUserIds || []).includes(user.id)) {
+          joinedProjectIds.add(project.id);
+        }
+
+        if (
+          snapshot.volunteerProfile &&
+          project.volunteers.includes(snapshot.volunteerProfile.id)
+        ) {
+          joinedProjectIds.add(project.id);
+        }
+      }
+
+      const nextProjectChats = snapshot.projects
+        .filter(project => joinedProjectIds.has(project.id))
+        .map(project => ({
+          project,
+          participantCount: countProjectParticipants(project, snapshot.volunteerJoinRecords),
+        }))
+        .sort((left, right) => left.project.title.localeCompare(right.project.title));
+
+      setProjectChats(nextProjectChats);
+    } catch (error) {
+      console.error('Error loading project chats:', error);
+    }
+  };
+
+  const loadSelectedMessages = async () => {
+    if (!user) {
+      return;
+    }
+
+    if (selectedUserRef.current) {
+      try {
+        const userMessages = await getConversation(user.id, selectedUserRef.current.id);
+        setMessages(userMessages);
+
+        const unreadMessages = userMessages.filter(
+          message => !message.read && message.recipientId === user.id
+        );
+        if (unreadMessages.length > 0) {
+          await Promise.all(unreadMessages.map(message => markMessageAsRead(message.id)));
+          setMessages(currentMessages =>
+            currentMessages.map(message =>
+              unreadMessages.some(unreadMessage => unreadMessage.id === message.id)
+                ? { ...message, read: true }
+                : message
+            )
+          );
+          setConversations(currentConversations =>
+            currentConversations.map(conversation =>
+              conversation.user.id === selectedUserRef.current?.id
+                ? { ...conversation, unreadCount: 0 }
+                : conversation
+            )
+          );
+        }
+      } catch (error) {
+        console.error('Error loading messages:', error);
+      }
+      return;
+    }
+
+    if (!selectedProjectChatRef.current) {
+      setMessages([]);
+      return;
+    }
+
+    try {
+      const projectMessages = await getProjectGroupMessages(
+        selectedProjectChatRef.current.project.id,
+        user.id
+      );
+      setMessages(projectMessages);
+    } catch (error: any) {
+      Alert.alert(
+        'Group chat unavailable',
+        error?.message || 'Failed to load this project group chat.'
+      );
+    }
+  };
 
   useEffect(() => {
-    const unsubscribe = subscribeToStorageChanges(['users'], () => {
+    void loadUsers();
+    void loadProjectChats();
+  }, [user?.id, user?.role]);
+
+  useEffect(() => {
+    const unsubscribeUsers = subscribeToStorageChanges(['users'], () => {
       void loadUsers();
     });
 
-    return unsubscribe;
-  }, []);
+    const unsubscribeProjectChats = subscribeToStorageChanges(
+      ['projects', 'volunteerProjectJoins'],
+      () => {
+        void loadProjectChats();
+      }
+    );
+
+    return () => {
+      unsubscribeUsers();
+      unsubscribeProjectChats();
+    };
+  }, [user?.id, user?.role]);
 
   useFocusEffect(
     React.useCallback(() => {
-      loadUsers();
-      if (view === 'detail' && selectedUser) {
-        loadMessages();
+      void loadUsers();
+      void loadProjectChats();
+
+      if (view === 'detail' && (selectedUser || selectedProjectChat)) {
+        void loadSelectedMessages();
       } else {
-        loadConversations();
+        void loadConversations();
       }
-    }, [view, selectedUser, user?.id])
+    }, [view, selectedUser, selectedProjectChat, user?.id, user?.role])
   );
 
   useEffect(() => {
     if (view === 'conversations') {
-      loadConversations();
+      void loadConversations();
     }
-  }, [view, allUsers]);
+  }, [view, allUsers, user?.id]);
+
+  useEffect(() => {
+    if (view === 'detail' && (selectedUser || selectedProjectChat)) {
+      void loadSelectedMessages();
+    }
+  }, [view, selectedUser, selectedProjectChat, user?.id]);
 
   useEffect(() => {
     if (!user?.id) {
       return;
     }
 
-    const unsubscribe = subscribeToMessages(user.id, async event => {
-      if (event.type !== 'message.changed') {
-        return;
-      }
+    const unsubscribe = subscribeToMessages(
+      user.id,
+      async (event: MessageSubscriptionEvent) => {
+        if (event.type === 'message.changed') {
+          const incomingMessage = event.message;
+          const selectedDirectUser = selectedUserRef.current;
+          const isSelectedConversation =
+            viewRef.current === 'detail' &&
+            !selectedProjectChatRef.current &&
+            selectedDirectUser &&
+            (incomingMessage.senderId === selectedDirectUser.id ||
+              incomingMessage.recipientId === selectedDirectUser.id);
 
-      const incomingMessage = event.message;
-      const otherUserId =
-        incomingMessage.senderId === user.id ? incomingMessage.recipientId : incomingMessage.senderId;
-      const otherUser = allUsersRef.current.find(chatUser => chatUser.id === otherUserId);
-      const isSelectedConversation = selectedUserRef.current?.id === otherUserId;
-      const isDetailOpen = viewRef.current === 'detail' && isSelectedConversation;
+          if (isSelectedConversation) {
+            await loadSelectedMessages();
+            return;
+          }
 
-      if (!otherUser) {
-        await loadUsers();
-        await loadConversations();
-        if (isDetailOpen) {
-          await loadMessages();
-        }
-        return;
-      }
-
-      setConversations(current =>
-        upsertConversationItem(current, user.id, otherUser, incomingMessage, isDetailOpen)
-      );
-
-      if (isSelectedConversation) {
-        setMessages(current => upsertMessage(current, incomingMessage));
-      }
-
-      if (incomingMessage.recipientId === user.id && !incomingMessage.read) {
-        if (isSelectedConversation) {
-          await markMessageAsRead(incomingMessage.id);
-          const readMessage = { ...incomingMessage, read: true };
-          setMessages(current => upsertMessage(current, readMessage));
-          setConversations(current =>
-            upsertConversationItem(current, user.id, otherUser, readMessage, true).map(conversation =>
-              conversation.user.id === otherUser.id
-                ? { ...conversation, unreadCount: 0 }
-                : conversation
-            )
-          );
+          await loadConversations();
           return;
         }
 
-        await loadConversations();
+        const selectedProjectId = selectedProjectChatRef.current?.project.id;
+        if (
+          viewRef.current === 'detail' &&
+          selectedProjectId &&
+          event.message.projectId === selectedProjectId
+        ) {
+          setMessages(current => upsertChatMessage(current, event.message));
+        }
       }
-    });
+    );
 
     const fallbackRefresh = setInterval(() => {
-      if (viewRef.current === 'detail' && selectedUserRef.current) {
-        void loadMessages();
+      if (viewRef.current === 'detail') {
+        void loadSelectedMessages();
         return;
       }
       void loadConversations();
+      void loadProjectChats();
     }, 10000);
 
     return () => {
@@ -233,143 +395,154 @@ export default function CommunicationHubScreen({ navigation }: any) {
 
     const handleStorageUpdate = (event: StorageEvent) => {
       if (event.key !== WEB_MESSAGE_SYNC_KEY) return;
-      if (view === 'detail' && selectedUser) {
-        loadMessages();
-      } else {
-        loadConversations();
+
+      if (view === 'detail') {
+        void loadSelectedMessages();
+        return;
       }
+
+      void loadConversations();
+      void loadProjectChats();
     };
 
     window.addEventListener('storage', handleStorageUpdate);
     return () => window.removeEventListener('storage', handleStorageUpdate);
-  }, [view, selectedUser, allUsers, user?.id]);
+  }, [view, selectedUser, selectedProjectChat, user?.id]);
 
-  const loadUsers = async () => {
-    try {
-      const users = await getAllUsers();
-      const otherUsers = users.filter(u => u.id !== user?.id);
-
-      otherUsers.sort((a, b) => {
-        if (a.role === 'admin' && b.role !== 'admin') return -1;
-        if (a.role !== 'admin' && b.role === 'admin') return 1;
-        return a.name.localeCompare(b.name);
-      });
-
-      setAllUsers(otherUsers);
-    } catch (error) {
-      console.error('Error loading users:', error);
+  useEffect(() => {
+    const requestedProjectId = route?.params?.projectId;
+    if (!requestedProjectId || projectChats.length === 0) {
+      return;
     }
-  };
 
-  const loadConversations = async () => {
-    try {
-      const allMessages = await getMessagesForUser(user?.id || '');
-
-      // Group messages by user
-      const conversationMap = new Map<
-        string,
-        { user: User; lastMessage?: Message; unreadCount: number }
-      >();
-
-      for (const message of allMessages) {
-        const otherUserId = message.senderId === user?.id ? message.recipientId : message.senderId;
-        const otherUser = allUsers.find(u => u.id === otherUserId);
-
-        if (otherUser) {
-          const existing = conversationMap.get(otherUserId) || {
-            user: otherUser,
-            unreadCount: 0,
-          };
-
-          if (!existing.lastMessage || new Date(message.timestamp) > new Date(existing.lastMessage.timestamp)) {
-            existing.lastMessage = message;
-          }
-
-          if (!message.read && message.recipientId === user?.id) {
-            existing.unreadCount += 1;
-          }
-
-          conversationMap.set(otherUserId, existing);
-        }
-      }
-
-      setConversations(sortConversations(Array.from(conversationMap.values())));
-    } catch (error) {
-      Alert.alert('Error', 'Failed to load conversations');
+    const requestedProjectChat = projectChats.find(
+      projectChat => projectChat.project.id === requestedProjectId
+    );
+    if (!requestedProjectChat) {
+      return;
     }
-  };
 
-  const loadMessages = async () => {
-    if (!selectedUser || !user) return;
+    setSelectedProjectChat(requestedProjectChat);
+    setSelectedUser(null);
+    setMessages([]);
+    setView('detail');
+    navigation.setParams({ projectId: undefined });
+  }, [navigation, projectChats, route?.params?.projectId]);
 
-    try {
-      const userMessages = await getConversation(user.id, selectedUser.id);
-      setMessages(userMessages);
-
-      // Mark unread messages as read
-      const unreadMessages = userMessages.filter(message => !message.read && message.recipientId === user.id);
-      if (unreadMessages.length > 0) {
-        await Promise.all(unreadMessages.map(message => markMessageAsRead(message.id)));
-        setMessages(currentMessages =>
-          currentMessages.map(message =>
-            unreadMessages.some(unreadMessage => unreadMessage.id === message.id)
-              ? { ...message, read: true }
-              : message
-          )
-        );
-        setConversations(currentConversations =>
-          currentConversations.map(conversation =>
-            conversation.user.id === selectedUser.id
-              ? { ...conversation, unreadCount: 0 }
-              : conversation
-          )
-        );
-      }
-    } catch (error) {
-      console.error('Error loading messages:', error);
+  useEffect(() => {
+    if (!selectedProjectChat) {
+      return;
     }
-  };
+
+    const refreshedProjectChat = projectChats.find(
+      projectChat => projectChat.project.id === selectedProjectChat.project.id
+    );
+
+    if (!refreshedProjectChat) {
+      setSelectedProjectChat(null);
+      setMessages([]);
+      setView('conversations');
+      return;
+    }
+
+    if (
+      refreshedProjectChat.participantCount !== selectedProjectChat.participantCount ||
+      refreshedProjectChat.project.title !== selectedProjectChat.project.title
+    ) {
+      setSelectedProjectChat(refreshedProjectChat);
+    }
+  }, [projectChats, selectedProjectChat]);
 
   const handleSendMessage = async () => {
-    if (!messageText.trim() || !selectedUser || !user) {
+    if (!messageText.trim() || !user) {
       Alert.alert('Error', 'Message cannot be empty');
       return;
     }
 
     try {
-      const newMessage: Message = {
+      if (selectedUser) {
+        const newMessage: Message = {
+          id: createMessageId(),
+          senderId: user.id,
+          recipientId: selectedUser.id,
+          content: messageText,
+          timestamp: new Date().toISOString(),
+          read: false,
+        };
+
+        setMessages(current => upsertChatMessage(current, newMessage));
+        setConversations(currentConversations => {
+          const nextConversation: ConversationItem = {
+            user: selectedUser,
+            lastMessage: newMessage,
+            unreadCount: 0,
+          };
+
+          const remainingConversations = currentConversations.filter(
+            conversation => conversation.user.id !== selectedUser.id
+          );
+
+          return sortConversations([nextConversation, ...remainingConversations]);
+        });
+        await saveMessage(newMessage);
+        setMessageText('');
+        return;
+      }
+
+      if (!selectedProjectChat) {
+        return;
+      }
+
+      const newMessage: ProjectGroupMessage = {
         id: createMessageId(),
+        projectId: selectedProjectChat.project.id,
         senderId: user.id,
-        recipientId: selectedUser.id,
         content: messageText,
         timestamp: new Date().toISOString(),
-        read: false,
       };
 
-      setMessages(current => upsertMessage(current, newMessage));
-      setConversations(current =>
-        upsertConversationItem(current, user.id, selectedUser, newMessage, true).map(conversation =>
-          conversation.user.id === selectedUser.id
-            ? { ...conversation, unreadCount: 0 }
-            : conversation
-        )
-      );
-      await saveMessage(newMessage);
+      setMessages(current => upsertChatMessage(current, newMessage));
+      await saveProjectGroupMessage(newMessage);
       setMessageText('');
     } catch (error: any) {
       Alert.alert('Error', error?.message || 'Failed to send message');
-      await loadMessages();
+      await loadSelectedMessages();
       await loadConversations();
     }
   };
 
   const handleSelectUser = (chatUser: User) => {
     setSelectedUser(chatUser);
+    setSelectedProjectChat(null);
+    setMessages([]);
     setView('detail');
+  };
+
+  const handleSelectProjectChat = (projectChat: ProjectChatItem) => {
+    setSelectedProjectChat(projectChat);
+    setSelectedUser(null);
+    setMessages([]);
+    setView('detail');
+  };
+
+  const getSenderLabel = (senderId: string) => {
+    if (senderId === user?.id) {
+      return 'You';
+    }
+
+    return allUsersRef.current.find(chatUser => chatUser.id === senderId)?.name || 'Volunteer';
   };
 
   const conversationUserIds = new Set(conversations.map(conversation => conversation.user.id));
   const suggestedUsers = allUsers.filter(chatUser => !conversationUserIds.has(chatUser.id));
+  const selectedChatTitle = selectedUser?.name || selectedProjectChat?.project.title || '';
+  const selectedChatSubtitle = selectedUser
+    ? formatRoleLabel(selectedUser)
+    : selectedProjectChat
+    ? `${selectedProjectChat.participantCount} volunteer${
+        selectedProjectChat.participantCount === 1 ? '' : 's'
+      } in this ${selectedProjectChat.project.isEvent ? 'event' : 'project'} chat`
+    : '';
 
   if (!user) {
     return (
@@ -382,7 +555,7 @@ export default function CommunicationHubScreen({ navigation }: any) {
     );
   }
 
-  if (view === 'detail' && selectedUser) {
+  if (view === 'detail' && (selectedUser || selectedProjectChat)) {
     return (
       <KeyboardAvoidingView
         style={styles.container}
@@ -390,50 +563,82 @@ export default function CommunicationHubScreen({ navigation }: any) {
         keyboardVerticalOffset={80}
       >
         <View style={styles.detailHeader}>
-          <TouchableOpacity onPress={() => setView('conversations')}>
+          <TouchableOpacity
+            onPress={() => {
+              setView('conversations');
+              setSelectedUser(null);
+              setSelectedProjectChat(null);
+              setMessages([]);
+            }}
+          >
             <MaterialIcons name="arrow-back" size={24} color="#333" />
           </TouchableOpacity>
           <View style={{ flex: 1 }}>
-            <Text style={styles.detailHeaderTitle}>{selectedUser.name}</Text>
-            <Text style={styles.detailHeaderRole}>{formatRoleLabel(selectedUser)}</Text>
+            <Text style={styles.detailHeaderTitle}>{selectedChatTitle}</Text>
+            <Text style={styles.detailHeaderRole}>{selectedChatSubtitle}</Text>
           </View>
         </View>
 
         <ScrollView style={styles.messagesContainer} showsVerticalScrollIndicator={false}>
           {messages.length === 0 ? (
             <View style={styles.emptyMessages}>
-              <MaterialIcons name="mail-outline" size={40} color="#ccc" />
-              <Text style={styles.emptyText}>No messages yet. Start a conversation!</Text>
+              <MaterialIcons
+                name={selectedProjectChat ? 'groups' : 'mail-outline'}
+                size={40}
+                color="#ccc"
+              />
+              <Text style={styles.emptyText}>
+                {selectedProjectChat
+                  ? 'No group messages yet. Start the conversation.'
+                  : 'No messages yet. Start a conversation!'}
+              </Text>
             </View>
           ) : (
-            messages.map(message => (
-              <View
-                key={message.id}
-                style={[
-                  styles.messageBubble,
-                  message.senderId === user?.id && styles.messageBubbleSent,
-                ]}
-              >
-                <Text
+            messages.map(message => {
+              const isOwnMessage = message.senderId === user.id;
+              const senderLabel = getSenderLabel(message.senderId);
+
+              return (
+                <View
+                  key={message.id}
                   style={[
-                    styles.messageText,
-                    message.senderId === user?.id && styles.messageTextSent,
+                    styles.messageBubble,
+                    isOwnMessage && styles.messageBubbleSent,
                   ]}
                 >
-                  {message.content}
-                </Text>
-                {!!formatMessageTime(message.timestamp) && (
-                  <Text style={styles.messageTime}>{formatMessageTime(message.timestamp)}</Text>
-                )}
-              </View>
-            ))
+                  {selectedProjectChat && (
+                    <Text
+                      style={[
+                        styles.messageSender,
+                        isOwnMessage && styles.messageSenderSent,
+                      ]}
+                    >
+                      {senderLabel}
+                    </Text>
+                  )}
+                  <Text
+                    style={[
+                      styles.messageText,
+                      isOwnMessage && styles.messageTextSent,
+                    ]}
+                  >
+                    {message.content}
+                  </Text>
+                  {!!formatMessageTime(message.timestamp) && (
+                    <Text style={styles.messageTime}>{formatMessageTime(message.timestamp)}</Text>
+                  )}
+                </View>
+              );
+            })
           )}
         </ScrollView>
 
         <View style={styles.inputContainer}>
           <TextInput
             style={styles.messageInput}
-            placeholder="Type a message..."
+            placeholder={
+              selectedProjectChat ? 'Message this volunteer group...' : 'Type a message...'
+            }
             placeholderTextColor="#999"
             value={messageText}
             onChangeText={setMessageText}
@@ -447,25 +652,58 @@ export default function CommunicationHubScreen({ navigation }: any) {
     );
   }
 
+  const showEmptyState =
+    projectChats.length === 0 && conversations.length === 0 && suggestedUsers.length === 0;
+
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Communication Hub</Text>
 
       <Text style={styles.subtitle}>
-        Connect with other users and the admin
+        Direct messages plus joined project and event group chats
       </Text>
 
-      {conversations.length === 0 && allUsers.length === 0 ? (
+      {showEmptyState ? (
         <View style={styles.emptyState}>
           <MaterialIcons name="mail-outline" size={48} color="#ccc" />
           <Text style={styles.emptyStateText}>No conversations yet</Text>
         </View>
       ) : (
         <ScrollView style={styles.listContainer} showsVerticalScrollIndicator={false}>
+          {projectChats.length > 0 && (
+            <View style={styles.projectChatsSection}>
+              <Text style={styles.sectionTitle}>Your Project Group Chats</Text>
+              {projectChats.map(projectChat => (
+                <TouchableOpacity
+                  key={projectChat.project.id}
+                  style={styles.projectChatCard}
+                  onPress={() => handleSelectProjectChat(projectChat)}
+                >
+                  <View style={styles.projectChatIcon}>
+                    <MaterialIcons
+                      name={projectChat.project.isEvent ? 'event' : 'groups'}
+                      size={22}
+                      color="#166534"
+                    />
+                  </View>
+                  <View style={styles.projectChatCopy}>
+                    <Text style={styles.projectChatTitle}>{projectChat.project.title}</Text>
+                    <Text style={styles.projectChatMeta}>
+                      {projectChat.project.isEvent ? 'Event group chat' : 'Project group chat'} •{' '}
+                      {projectChat.participantCount} volunteer
+                      {projectChat.participantCount === 1 ? '' : 's'}
+                    </Text>
+                  </View>
+                  <MaterialIcons name="arrow-forward" size={20} color="#999" />
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
           {suggestedUsers.length > 0 && (
             <View style={styles.suggestedUsers}>
               <Text style={styles.sectionTitle}>
-                {conversations.length === 0 ? 'Start a conversation with:' : 'New users available to chat:'}
+                {conversations.length === 0 ? 'Start a direct conversation with:' : 'New users available to chat:'}
               </Text>
               {suggestedUsers.map(chatUser => (
                 <TouchableOpacity
@@ -490,7 +728,7 @@ export default function CommunicationHubScreen({ navigation }: any) {
 
           {conversations.length > 0 ? (
             <View style={styles.conversationsSection}>
-              <Text style={styles.sectionTitle}>Conversations</Text>
+              <Text style={styles.sectionTitle}>Direct Conversations</Text>
               {conversations.map(item => (
                 <TouchableOpacity
                   key={item.user.id}
@@ -528,11 +766,6 @@ export default function CommunicationHubScreen({ navigation }: any) {
                   </View>
                 </TouchableOpacity>
               ))}
-            </View>
-          ) : suggestedUsers.length === 0 ? (
-            <View style={styles.emptyState}>
-              <MaterialIcons name="mail-outline" size={48} color="#ccc" />
-              <Text style={styles.emptyStateText}>No conversations yet</Text>
             </View>
           ) : null}
         </ScrollView>
@@ -608,6 +841,15 @@ const styles = StyleSheet.create({
     backgroundColor: '#4CAF50',
     alignSelf: 'flex-end',
   },
+  messageSender: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#166534',
+    marginBottom: 4,
+  },
+  messageSenderSent: {
+    color: '#e8f5e9',
+  },
   messageText: {
     fontSize: 14,
     color: '#333',
@@ -666,9 +908,50 @@ const styles = StyleSheet.create({
     color: '#999',
     fontSize: 14,
     marginTop: 8,
+    textAlign: 'center',
+  },
+  projectChatsSection: {
+    padding: 16,
+  },
+  projectChatCard: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  projectChatIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#dcfce7',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  projectChatCopy: {
+    flex: 1,
+  },
+  projectChatTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#333',
+  },
+  projectChatMeta: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 3,
   },
   suggestedUsers: {
-    padding: 16,
+    paddingHorizontal: 16,
+    paddingBottom: 8,
   },
   conversationsSection: {
     paddingBottom: 16,

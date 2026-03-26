@@ -19,14 +19,16 @@ import {
   getAllProjects,
   getAllVolunteers,
   getPartnerProjectApplications,
+  getProjectMatches,
   getStatusUpdatesByProject,
   getVolunteerProjectJoinRecords,
   reviewPartnerProjectApplication,
+  reviewVolunteerProjectMatch,
   saveProject,
   saveStatusUpdate,
   subscribeToStorageChanges,
 } from '../models/storage';
-import { Volunteer, VolunteerProjectJoinRecord } from '../models/types';
+import { Volunteer, VolunteerProjectJoinRecord, VolunteerProjectMatch } from '../models/types';
 import { useAuth } from '../contexts/AuthContext';
 import { format } from 'date-fns';
 import { getProjectStatusColor } from '../utils/projectStatus';
@@ -62,6 +64,16 @@ type ProjectVolunteerEntry = {
   status: Volunteer['engagementStatus'] | undefined;
 };
 
+type ProjectVolunteerRequestEntry = {
+  id: string;
+  volunteerId: string;
+  volunteerUserId: string;
+  volunteerName: string;
+  volunteerEmail: string;
+  requestedAt: string;
+  status: VolunteerProjectMatch['status'];
+};
+
 const createEmptyProjectDraft = (partnerId = ''): ProjectDraft => ({
   title: '',
   description: '',
@@ -86,6 +98,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [partnerApplications, setPartnerApplications] = useState<PartnerProjectApplication[]>([]);
   const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
   const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
+  const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
@@ -110,6 +123,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             loadStatusUpdates(selectedProject.id),
             loadPartnerApplicationsForProject(selectedProject.id),
             loadVolunteerJoinsForProject(selectedProject.id),
+            loadVolunteerMatchesForProject(selectedProject.id),
           ]);
 
           const refreshedProjects = await getAllProjects();
@@ -136,7 +150,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   useEffect(() => {
     return subscribeToStorageChanges(
-      ['projects', 'volunteers', 'statusUpdates', 'partnerProjectApplications', 'volunteerProjectJoins'],
+      ['projects', 'volunteers', 'statusUpdates', 'partnerProjectApplications', 'volunteerProjectJoins', 'volunteerMatches'],
       () => {
         void Promise.all([loadProjects(), loadPartners(), loadVolunteers()]);
         if (selectedProject?.id) {
@@ -144,6 +158,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             loadStatusUpdates(selectedProject.id),
             loadPartnerApplicationsForProject(selectedProject.id),
             loadVolunteerJoinsForProject(selectedProject.id),
+            loadVolunteerMatchesForProject(selectedProject.id),
           ]);
         }
       }
@@ -216,12 +231,22 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     }
   };
 
+  const loadVolunteerMatchesForProject = async (projectId: string) => {
+    try {
+      const matches = await getProjectMatches(projectId);
+      setVolunteerMatches(matches);
+    } catch (error) {
+      Alert.alert('Error', 'Failed to load volunteer requests');
+    }
+  };
+
   const handleSelectProject = async (project: Project) => {
     setSelectedProject(project);
     await Promise.all([
       loadStatusUpdates(project.id),
       loadPartnerApplicationsForProject(project.id),
       loadVolunteerJoinsForProject(project.id),
+      loadVolunteerMatchesForProject(project.id),
     ]);
   };
 
@@ -446,10 +471,38 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       await Promise.all([
         loadVolunteerJoinsForProject(selectedProject.id),
         loadVolunteers(),
+        loadVolunteerMatchesForProject(selectedProject.id),
       ]);
       Alert.alert('Success', 'Volunteer marked as completed for this program.');
     } catch (error) {
       Alert.alert('Error', 'Failed to complete volunteer participation.');
+    }
+  };
+
+  const handleReviewVolunteerRequest = async (
+    matchId: string,
+    nextStatus: 'Matched' | 'Rejected'
+  ) => {
+    if (!isAdmin || !user?.id || !selectedProject) {
+      return;
+    }
+
+    try {
+      await reviewVolunteerProjectMatch(matchId, nextStatus, user.id);
+      await Promise.all([
+        loadVolunteerMatchesForProject(selectedProject.id),
+        loadVolunteerJoinsForProject(selectedProject.id),
+        loadVolunteers(),
+        loadProjects(),
+      ]);
+      Alert.alert(
+        'Success',
+        nextStatus === 'Matched'
+          ? 'Volunteer approved and notified.'
+          : 'Volunteer request rejected and volunteer notified.'
+      );
+    } catch (error) {
+      Alert.alert('Error', 'Failed to review volunteer request.');
     }
   };
 
@@ -490,6 +543,31 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         const right = b.joinedAt ? new Date(b.joinedAt).getTime() : 0;
         return right - left;
       });
+  };
+
+  const getProjectVolunteerRequestEntries = () => {
+    const volunteerById = new Map(volunteers.map(volunteer => [volunteer.id, volunteer]));
+
+    return volunteerMatches
+      .filter(match => match.status === 'Requested' || match.status === 'Rejected')
+      .map<ProjectVolunteerRequestEntry | null>(match => {
+        const volunteer = volunteerById.get(match.volunteerId);
+        if (!volunteer) {
+          return null;
+        }
+
+        return {
+          id: match.id,
+          volunteerId: volunteer.id,
+          volunteerUserId: volunteer.userId,
+          volunteerName: volunteer.name,
+          volunteerEmail: volunteer.email,
+          requestedAt: match.matchedAt,
+          status: match.status,
+        };
+      })
+      .filter((entry): entry is ProjectVolunteerRequestEntry => entry !== null)
+      .sort((a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime());
   };
 
   const renderProjectCard = (project: Project) => (
@@ -548,6 +626,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   if (selectedProject) {
     const volunteerEntries = getProjectVolunteerEntries(selectedProject);
+    const volunteerRequestEntries = getProjectVolunteerRequestEntries();
 
     return (
       <ScrollView style={styles.container}>
@@ -681,6 +760,67 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                         </TouchableOpacity>
                       </View>
                     )}
+                  </View>
+                ))}
+              </View>
+            )}
+          </View>
+
+          <View style={styles.detailsSection}>
+            <Text style={styles.sectionTitle}>
+              Volunteer Join Requests ({volunteerRequestEntries.length})
+            </Text>
+
+            {volunteerRequestEntries.length === 0 ? (
+              <Text style={styles.emptyText}>No volunteer join requests yet</Text>
+            ) : (
+              <View style={styles.updatesList}>
+                {volunteerRequestEntries.map(requestEntry => (
+                  <View key={requestEntry.id} style={styles.applicationCard}>
+                    <View style={styles.applicationHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.applicationName}>{requestEntry.volunteerName}</Text>
+                        <Text style={styles.applicationMeta}>{requestEntry.volunteerEmail}</Text>
+                        <Text style={styles.applicationMeta}>
+                          Requested {format(new Date(requestEntry.requestedAt), 'PPpp')}
+                        </Text>
+                      </View>
+                      <View
+                        style={[
+                          styles.applicationStatusBadge,
+                          requestEntry.status === 'Rejected'
+                            ? styles.applicationStatusRejected
+                            : styles.applicationStatusPending,
+                        ]}
+                      >
+                        <Text style={styles.applicationStatusText}>{requestEntry.status}</Text>
+                      </View>
+                    </View>
+
+                    {isAdmin && requestEntry.status === 'Requested' && (
+                      <View style={styles.applicationActions}>
+                        <TouchableOpacity
+                          style={[styles.applicationButton, styles.approveButton]}
+                          onPress={() => handleReviewVolunteerRequest(requestEntry.id, 'Matched')}
+                        >
+                          <Text style={styles.applicationButtonText}>Approve</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.applicationButton, styles.rejectButton]}
+                          onPress={() => handleReviewVolunteerRequest(requestEntry.id, 'Rejected')}
+                        >
+                          <Text style={styles.applicationButtonText}>Reject</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+
+                    <TouchableOpacity
+                      style={styles.viewVolunteerProfileButton}
+                      onPress={() => navigation.navigate('Volunteers', { volunteerId: requestEntry.volunteerId })}
+                    >
+                      <MaterialIcons name="person-search" size={16} color="#2563eb" />
+                      <Text style={styles.viewVolunteerProfileText}>Open Volunteer Profile</Text>
+                    </TouchableOpacity>
                   </View>
                 ))}
               </View>

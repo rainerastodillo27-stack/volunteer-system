@@ -13,11 +13,11 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { Volunteer, Project, VolunteerProjectMatch } from '../models/types';
 import {
+  assignVolunteerToProject,
   getAllVolunteers,
   getAllProjects,
   getVolunteerCompletedProjectIds,
   saveVolunteer,
-  saveVolunteerProjectMatch,
   getVolunteerProjectMatches,
   subscribeToStorageChanges,
 } from '../models/storage';
@@ -134,17 +134,8 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     if (!selectedVolunteer) return;
 
     try {
-      const match: VolunteerProjectMatch = {
-        id: `match-${Date.now()}`,
-        volunteerId: selectedVolunteer.id,
-        projectId,
-        status: 'Matched',
-        matchedAt: new Date().toISOString(),
-        hoursContributed: 0,
-      };
-
-      await saveVolunteerProjectMatch(match);
-      Alert.alert('Success', 'Volunteer matched to project');
+      await assignVolunteerToProject(projectId, selectedVolunteer.id, user?.id || '');
+      Alert.alert('Success', 'Volunteer assigned to project and notified.');
 
       const matches = await getVolunteerProjectMatches(selectedVolunteer.id);
       setVolunteerMatches(matches);
@@ -208,16 +199,28 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     );
   };
 
+  const getPendingProjects = () => {
+    return projects.filter(p =>
+      p.status === 'In Progress' &&
+      volunteerMatches.find(m => m.projectId === p.id && m.status === 'Requested')
+    );
+  };
+
   const getAvailableProjects = () => {
     return projects.filter(
       p =>
         p.status === 'In Progress' &&
-        !volunteerMatches.find(m => m.projectId === p.id && m.status === 'Matched')
+        !volunteerMatches.find(
+          m =>
+            m.projectId === p.id &&
+            (m.status === 'Matched' || m.status === 'Requested' || m.status === 'Completed')
+        )
     );
   };
 
   if (view === 'detail' && selectedVolunteer) {
     const matchedProjects = getMatchedProjects();
+    const pendingProjects = getPendingProjects();
     const availableProjects = getAvailableProjects();
     const completedProjects = selectedVolunteerCompletedProjectIds.map(projectId => {
       const project = projects.find(projectEntry => projectEntry.id === projectId);
@@ -341,6 +344,23 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                   <Text style={styles.projectCategory}>{project.category}</Text>
                 </View>
                 <MaterialIcons name="check-circle" size={20} color="#4CAF50" />
+              </View>
+            ))}
+          </View>
+        )}
+
+        {pendingProjects.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Pending Join Requests</Text>
+            {pendingProjects.map(project => (
+              <View key={project.id} style={styles.projectItem}>
+                <View style={styles.projectInfo}>
+                  <Text style={styles.projectName}>{project.title}</Text>
+                  <Text style={styles.projectCategory}>{project.category}</Text>
+                </View>
+                <View style={styles.pendingRequestBadge}>
+                  <Text style={styles.pendingRequestBadgeText}>Pending</Text>
+                </View>
               </View>
             ))}
           </View>
@@ -718,6 +738,17 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#666',
     marginTop: 2,
+  },
+  pendingRequestBadge: {
+    backgroundColor: '#fef3c7',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  pendingRequestBadgeText: {
+    color: '#92400e',
+    fontSize: 11,
+    fontWeight: '700',
   },
   emptyText: {
     color: '#999',

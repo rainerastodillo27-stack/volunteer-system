@@ -6,13 +6,14 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import {
   getProjectsScreenSnapshot,
-  joinProjectEvent,
+  getVolunteerProjectMatches,
+  requestVolunteerProjectJoin,
   requestPartnerProjectJoin,
   startVolunteerTimeLog,
   endVolunteerTimeLog,
   subscribeToStorageChanges,
 } from '../models/storage';
-import { PartnerProjectApplication, Project, Volunteer, VolunteerProjectJoinRecord, VolunteerTimeLog } from '../models/types';
+import { PartnerProjectApplication, Project, Volunteer, VolunteerProjectJoinRecord, VolunteerProjectMatch, VolunteerTimeLog } from '../models/types';
 import { getProjectStatusColor } from '../utils/projectStatus';
 
 const CATEGORY_KEYWORDS: Record<Project['category'], string[]> = {
@@ -79,6 +80,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
   const [partnerApplications, setPartnerApplications] = useState<PartnerProjectApplication[]>([]);
   const [timeLogs, setTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
+  const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
   const [loadingProjectId, setLoadingProjectId] = useState<string | null>(null);
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
 
@@ -102,6 +104,12 @@ export default function ProjectsScreen({ navigation, route }: any) {
     try {
       const snapshot = await getProjectsScreenSnapshot(user);
       applySnapshot(snapshot);
+      if (snapshot.volunteerProfile?.id) {
+        const matches = await getVolunteerProjectMatches(snapshot.volunteerProfile.id);
+        setVolunteerMatches(matches);
+      } else {
+        setVolunteerMatches([]);
+      }
     } catch (error: any) {
       startTransition(() => {
         setProjects([]);
@@ -109,6 +117,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
         setTimeLogs([]);
         setPartnerApplications([]);
         setVolunteerJoinRecords([]);
+        setVolunteerMatches([]);
       });
       Alert.alert('Database Unavailable', error?.message || 'Failed to load projects from Postgres.');
     }
@@ -126,7 +135,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
 
   useEffect(() => {
     return subscribeToStorageChanges(
-      ['projects', 'volunteers', 'volunteerProjectJoins', 'volunteerTimeLogs', 'partnerProjectApplications'],
+      ['projects', 'volunteers', 'volunteerProjectJoins', 'volunteerTimeLogs', 'partnerProjectApplications', 'volunteerMatches'],
       () => {
         void loadProjectsData();
       }
@@ -173,18 +182,21 @@ export default function ProjectsScreen({ navigation, route }: any) {
         return;
       }
 
-      const result = await joinProjectEvent(projectId, user.id);
+      const requestedMatch = await requestVolunteerProjectJoin(projectId, user.id);
       startTransition(() => {
-        setProjects(prev =>
-          prev.map(project => (project.id === result.project.id ? result.project : project))
-        );
-        if (result.volunteerProfile) {
-          setVolunteerProfile(result.volunteerProfile);
-        }
+        setVolunteerMatches(prev => {
+          const withoutCurrent = prev.filter(match => match.projectId !== requestedMatch.projectId);
+          return [requestedMatch, ...withoutCurrent].sort(
+            (a, b) => new Date(b.matchedAt).getTime() - new Date(a.matchedAt).getTime()
+          );
+        });
       });
-      Alert.alert('Joined', 'You have joined this program. Thank you!');
+      Alert.alert(
+        'Request Sent',
+        'Your join request was sent to the admin. You will be notified once it is approved or rejected.'
+      );
     } catch (error: any) {
-      Alert.alert('Error', error?.message || 'Failed to join this program. Please try again.');
+      Alert.alert('Error', error?.message || 'Failed to request this program. Please try again.');
     } finally {
       setLoadingProjectId(null);
     }
@@ -237,6 +249,10 @@ export default function ProjectsScreen({ navigation, route }: any) {
     }
   };
 
+  const handleOpenGroupChat = (projectId: string) => {
+    navigation.navigate('Messages', { projectId });
+  };
+
   const partnerApplicationByProjectId = useMemo(
     () => new Map(partnerApplications.map(app => [app.projectId, app])),
     [partnerApplications]
@@ -255,6 +271,11 @@ export default function ProjectsScreen({ navigation, route }: any) {
   const volunteerJoinRecordByProjectId = useMemo(
     () => new Map(volunteerJoinRecords.map(record => [record.projectId, record])),
     [volunteerJoinRecords]
+  );
+
+  const volunteerMatchByProjectId = useMemo(
+    () => new Map(volunteerMatches.map(match => [match.projectId, match])),
+    [volunteerMatches]
   );
 
   const isJoined = useCallback((project: Project) => {
@@ -279,9 +300,30 @@ export default function ProjectsScreen({ navigation, route }: any) {
           const activeLog = activeLogByProjectId.get(item.id);
           const latestLog = latestLogByProjectId.get(item.id);
           const joinRecord = volunteerJoinRecordByProjectId.get(item.id);
+          const volunteerMatch = volunteerMatchByProjectId.get(item.id);
           const completedParticipation = joinRecord?.participationStatus === 'Completed';
           const isExpanded = expandedProjectId === item.id;
           const partnerApplication = partnerApplicationByProjectId.get(item.id);
+          const isPendingApproval = volunteerMatch?.status === 'Requested';
+          const wasRejected = volunteerMatch?.status === 'Rejected';
+          const joinButtonLabel = completedParticipation
+            ? 'Completed'
+            : joined
+            ? 'Approved'
+            : isPendingApproval
+            ? 'Pending Approval'
+            : wasRejected
+            ? 'Request Again'
+            : 'Request to Join';
+          const joinButtonIcon = completedParticipation
+            ? 'task-alt'
+            : joined
+            ? 'check-circle'
+            : isPendingApproval
+            ? 'hourglass-empty'
+            : wasRejected
+            ? 'refresh'
+            : 'add-circle-outline';
 
           return (
             <View style={styles.card}>
@@ -356,26 +398,32 @@ export default function ProjectsScreen({ navigation, route }: any) {
                         styles.joinButton,
                         completedParticipation
                           ? styles.joinButtonCompleted
-                          : joined && styles.joinButtonJoined,
+                          : (joined || isPendingApproval) && styles.joinButtonJoined,
                         loadingProjectId === item.id && styles.joinButtonLoading,
                       ]}
-                      disabled={joined || completedParticipation || loadingProjectId === item.id}
+                      disabled={joined || completedParticipation || isPendingApproval || loadingProjectId === item.id}
                       onPress={() => handleJoinProject(item.id)}
                     >
                       <MaterialIcons
-                        name={completedParticipation ? 'task-alt' : joined ? 'check-circle' : 'add-circle-outline'}
+                        name={joinButtonIcon}
                         size={18}
-                        color={completedParticipation ? '#166534' : joined ? '#155724' : '#fff'}
+                        color={
+                          completedParticipation
+                            ? '#166534'
+                            : joined || isPendingApproval
+                            ? '#155724'
+                            : '#fff'
+                        }
                       />
                       <Text
                         style={[
                           styles.joinButtonText,
                           completedParticipation
                             ? styles.joinButtonTextCompleted
-                            : joined && styles.joinButtonTextJoined,
+                            : (joined || isPendingApproval) && styles.joinButtonTextJoined,
                         ]}
                       >
-                        {completedParticipation ? 'Completed' : joined ? 'Joined' : 'Join Program'}
+                        {joinButtonLabel}
                       </Text>
                     </TouchableOpacity>
 
@@ -402,8 +450,27 @@ export default function ProjectsScreen({ navigation, route }: any) {
                     )}
                   </View>
 
+                  {(isPendingApproval || wasRejected) && !joined && (
+                    <View style={styles.logMeta}>
+                      <Text style={styles.logMetaLabel}>Request status</Text>
+                      <Text style={styles.logMetaValue}>
+                        {isPendingApproval
+                          ? 'Waiting for admin approval'
+                          : 'Rejected. You may submit a new request.'}
+                      </Text>
+                    </View>
+                  )}
+
                   {joined && (
                     <>
+                      <TouchableOpacity
+                        style={styles.groupChatButton}
+                        onPress={() => handleOpenGroupChat(item.id)}
+                      >
+                        <MaterialIcons name="groups" size={16} color="#166534" />
+                        <Text style={styles.groupChatButtonText}>Open Group Chat</Text>
+                      </TouchableOpacity>
+
                       <View style={styles.logMeta}>
                         <Text style={styles.logMetaLabel}>Participation status</Text>
                         <Text style={styles.logMetaValue}>
@@ -411,6 +478,10 @@ export default function ProjectsScreen({ navigation, route }: any) {
                             ? joinRecord?.completedAt
                               ? `Completed ${formatTimestamp(joinRecord.completedAt)}`
                               : 'Completed and saved to profile'
+                            : isPendingApproval
+                            ? 'Waiting for admin approval'
+                            : wasRejected
+                            ? 'Request rejected by admin'
                             : 'Joined'}
                         </Text>
                       </View>
@@ -746,6 +817,23 @@ const styles = StyleSheet.create({
   },
   timeButtonText: {
     color: '#fff',
+    fontWeight: '700',
+    fontSize: 12,
+  },
+  groupChatButton: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#dcfce7',
+    borderWidth: 1,
+    borderColor: '#86efac',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+  },
+  groupChatButtonText: {
+    color: '#166534',
     fontWeight: '700',
     fontSize: 12,
   },

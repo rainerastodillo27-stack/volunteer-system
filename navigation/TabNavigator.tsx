@@ -25,7 +25,7 @@ export type TabParamList = {
   Lifecycle: { projectId?: string } | undefined;
   Volunteers: { volunteerId?: string } | undefined;
   Map: undefined;
-  Messages: undefined;
+  Messages: { projectId?: string } | undefined;
   Users: undefined;
   Settings: undefined;
   Profile: undefined;
@@ -188,7 +188,7 @@ function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle }: 
 export default function TabNavigator() {
   const { user, isAdmin } = useAuth();
   const [messageUnreadCount, setMessageUnreadCount] = useState(0);
-  const showPartnersTab = isAdmin || user?.role === 'partner'; // available to admins and partner org accounts
+  const showPartnersTab = isAdmin;
   const showLifecycleTab = isAdmin;
   const showVolunteersTab = isAdmin;
   const showUsersTab = isAdmin;

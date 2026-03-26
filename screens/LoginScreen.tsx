@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { View, TextInput, TouchableOpacity, Text, StyleSheet, Alert, ActivityIndicator, Platform, ScrollView, Modal } from 'react-native';
+import { MaterialIcons } from '@expo/vector-icons';
 import {
   createUserAccount,
   getAllUsers,
@@ -10,6 +11,42 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import AppLogo from '../components/AppLogo';
 import { NVCSector, User, UserRole, UserType } from '../models/types';
+
+type SignupVolunteerSheetState = {
+  gender: string;
+  dateOfBirth: string;
+  civilStatus: string;
+  homeAddress: string;
+  occupation: string;
+  workplaceOrSchool: string;
+  collegeCourse: string;
+  certificationsOrTrainings: string;
+  hobbiesAndInterests: string;
+  specialSkills: string;
+  affiliationOrg1: string;
+  affiliationPos1: string;
+  affiliationOrg2: string;
+  affiliationPos2: string;
+};
+
+function createEmptySignupVolunteerSheet(): SignupVolunteerSheetState {
+  return {
+    gender: '',
+    dateOfBirth: '',
+    civilStatus: '',
+    homeAddress: '',
+    occupation: '',
+    workplaceOrSchool: '',
+    collegeCourse: '',
+    certificationsOrTrainings: '',
+    hobbiesAndInterests: '',
+    specialSkills: '',
+    affiliationOrg1: '',
+    affiliationPos1: '',
+    affiliationOrg2: '',
+    affiliationPos2: '',
+  };
+}
 
 export default function LoginScreen({ navigation }: any) {
   const isWeb = Platform.OS === 'web';
@@ -26,6 +63,10 @@ export default function LoginScreen({ navigation }: any) {
   const [signupUserType, setSignupUserType] = useState<UserType>('Student');
   const [signupPillars, setSignupPillars] = useState<NVCSector[]>([]);
   const [signupRole, setSignupRole] = useState<Exclude<UserRole, 'admin'>>('volunteer');
+  const [signupVolunteerSheet, setSignupVolunteerSheet] = useState<SignupVolunteerSheetState>(
+    createEmptySignupVolunteerSheet()
+  );
+  const [signupAcceptedCommitment, setSignupAcceptedCommitment] = useState(false);
   const [backendStatus, setBackendStatus] = useState<'checking' | 'online' | 'offline'>('checking');
   const [backendMessage, setBackendMessage] = useState('Checking backend connection...');
   const [savedAccounts, setSavedAccounts] = useState<User[]>([]);
@@ -172,6 +213,15 @@ export default function LoginScreen({ navigation }: any) {
     setSignupUserType('Student');
     setSignupPillars([]);
     setSignupRole('volunteer');
+    setSignupVolunteerSheet(createEmptySignupVolunteerSheet());
+    setSignupAcceptedCommitment(false);
+  };
+
+  const updateSignupVolunteerSheet = <K extends keyof SignupVolunteerSheetState>(
+    key: K,
+    value: SignupVolunteerSheetState[K]
+  ) => {
+    setSignupVolunteerSheet(current => ({ ...current, [key]: value }));
   };
 
   const handleSignup = async () => {
@@ -195,6 +245,31 @@ export default function LoginScreen({ navigation }: any) {
       return;
     }
 
+    if (signupRole === 'volunteer') {
+      if (
+        !signupVolunteerSheet.gender.trim() ||
+        !signupVolunteerSheet.dateOfBirth.trim() ||
+        !signupVolunteerSheet.civilStatus.trim() ||
+        !signupVolunteerSheet.homeAddress.trim() ||
+        !signupVolunteerSheet.occupation.trim() ||
+        !signupVolunteerSheet.workplaceOrSchool.trim()
+      ) {
+        Alert.alert(
+          'Validation Error',
+          'Complete the volunteer membership information sheet before creating the account.'
+        );
+        return;
+      }
+
+      if (!signupAcceptedCommitment) {
+        Alert.alert(
+          'Validation Error',
+          'You must accept the NVC volunteer commitment before creating the account.'
+        );
+        return;
+      }
+    }
+
     try {
       setSignupLoading(true);
       const createdUser = await createUserAccount({
@@ -205,6 +280,32 @@ export default function LoginScreen({ navigation }: any) {
         role: signupRole,
         userType: signupUserType,
         pillarsOfInterest: signupPillars,
+        volunteerMembershipSheet:
+          signupRole === 'volunteer'
+            ? {
+                gender: signupVolunteerSheet.gender.trim(),
+                dateOfBirth: signupVolunteerSheet.dateOfBirth.trim(),
+                civilStatus: signupVolunteerSheet.civilStatus.trim(),
+                homeAddress: signupVolunteerSheet.homeAddress.trim(),
+                occupation: signupVolunteerSheet.occupation.trim(),
+                workplaceOrSchool: signupVolunteerSheet.workplaceOrSchool.trim(),
+                collegeCourse: signupVolunteerSheet.collegeCourse.trim(),
+                certificationsOrTrainings:
+                  signupVolunteerSheet.certificationsOrTrainings.trim(),
+                hobbiesAndInterests: signupVolunteerSheet.hobbiesAndInterests.trim(),
+                specialSkills: signupVolunteerSheet.specialSkills.trim(),
+                affiliations: [
+                  {
+                    organization: signupVolunteerSheet.affiliationOrg1.trim(),
+                    position: signupVolunteerSheet.affiliationPos1.trim(),
+                  },
+                  {
+                    organization: signupVolunteerSheet.affiliationOrg2.trim(),
+                    position: signupVolunteerSheet.affiliationPos2.trim(),
+                  },
+                ].filter(affiliation => affiliation.organization || affiliation.position),
+              }
+            : undefined,
       });
 
       setIdentifier(createdUser.email || createdUser.phone || '');
@@ -393,100 +494,280 @@ export default function LoginScreen({ navigation }: any) {
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Create Account</Text>
-            <Text style={styles.modalSubtitle}>Register with email or phone, choose a profile type, and pick your pillar interests.</Text>
+            <Text style={styles.modalSubtitle}>
+              {signupRole === 'volunteer'
+                ? 'Register with email or phone, choose a profile type, and complete the volunteer membership information sheet.'
+                : 'Register with email or phone, choose a profile type, and pick your pillar interests.'}
+            </Text>
 
-            <TextInput
-              style={styles.input}
-              placeholder="Full Name"
-              placeholderTextColor="#999"
-              value={signupName}
-              onChangeText={setSignupName}
-              editable={!signupLoading}
-            />
-            <TextInput
-              style={styles.input}
-              placeholder="Email Address"
-              placeholderTextColor="#999"
-              value={signupEmail}
-              onChangeText={setSignupEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
-              editable={!signupLoading}
-            />
-            <TextInput
-              style={styles.input}
-              placeholder="Phone Number"
-              placeholderTextColor="#999"
-              value={signupAccountPhone}
-              onChangeText={setSignupAccountPhone}
-              keyboardType="phone-pad"
-              editable={!signupLoading}
-            />
-            <TextInput
-              style={styles.input}
-              placeholder="Password"
-              placeholderTextColor="#999"
-              value={signupPassword}
-              onChangeText={setSignupPassword}
-              secureTextEntry
-              editable={!signupLoading}
-            />
+            <ScrollView
+              style={styles.modalForm}
+              contentContainerStyle={styles.modalFormContent}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+            >
+              <TextInput
+                style={styles.input}
+                placeholder="Full Name"
+                placeholderTextColor="#999"
+                value={signupName}
+                onChangeText={setSignupName}
+                editable={!signupLoading}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="Email Address"
+                placeholderTextColor="#999"
+                value={signupEmail}
+                onChangeText={setSignupEmail}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                editable={!signupLoading}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="Phone Number"
+                placeholderTextColor="#999"
+                value={signupAccountPhone}
+                onChangeText={setSignupAccountPhone}
+                keyboardType="phone-pad"
+                editable={!signupLoading}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="Password"
+                placeholderTextColor="#999"
+                value={signupPassword}
+                onChangeText={setSignupPassword}
+                secureTextEntry
+                editable={!signupLoading}
+              />
 
-            <View style={styles.roleSelector}>
-              {(['volunteer', 'partner'] as const).map(role => (
-                <TouchableOpacity
-                  key={role}
-                  style={[styles.roleChip, signupRole === role && styles.roleChipActive]}
-                  onPress={() => setSignupRole(role)}
-                  disabled={signupLoading}
-                >
-                  <Text style={[styles.roleChipText, signupRole === role && styles.roleChipTextActive]}>
-                    {role === 'volunteer' ? 'Volunteer' : 'Partner'}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <Text style={styles.modalSectionLabel}>Profile Creation</Text>
-            <View style={styles.roleSelector}>
-              {(['Student', 'Adult', 'Senior'] as const).map(userType => (
-                <TouchableOpacity
-                  key={userType}
-                  style={[styles.roleChip, signupUserType === userType && styles.roleChipActive]}
-                  onPress={() => setSignupUserType(userType)}
-                  disabled={signupLoading}
-                >
-                  <Text style={[styles.roleChipText, signupUserType === userType && styles.roleChipTextActive]}>
-                    {userType}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <Text style={styles.modalSectionLabel}>Preferences</Text>
-            <View style={styles.pillarGrid}>
-              {(['Nutrition', 'Education', 'Livelihood'] as const).map(pillar => {
-                const selected = signupPillars.includes(pillar);
-                return (
+              <View style={styles.roleSelector}>
+                {(['volunteer', 'partner'] as const).map(role => (
                   <TouchableOpacity
-                    key={pillar}
-                    style={[styles.pillarChip, selected && styles.pillarChipActive]}
-                    onPress={() =>
-                      setSignupPillars(current =>
-                        current.includes(pillar)
-                          ? current.filter(item => item !== pillar)
-                          : [...current, pillar]
-                      )
-                    }
+                    key={role}
+                    style={[styles.roleChip, signupRole === role && styles.roleChipActive]}
+                    onPress={() => setSignupRole(role)}
                     disabled={signupLoading}
                   >
-                    <Text style={[styles.pillarChipText, selected && styles.pillarChipTextActive]}>
-                      {pillar}
+                    <Text style={[styles.roleChipText, signupRole === role && styles.roleChipTextActive]}>
+                      {role === 'volunteer' ? 'Volunteer' : 'Partner'}
                     </Text>
                   </TouchableOpacity>
-                );
-              })}
-            </View>
+                ))}
+              </View>
+
+              <Text style={styles.modalSectionLabel}>Profile Creation</Text>
+              <View style={styles.roleSelector}>
+                {(['Student', 'Adult', 'Senior'] as const).map(userType => (
+                  <TouchableOpacity
+                    key={userType}
+                    style={[styles.roleChip, signupUserType === userType && styles.roleChipActive]}
+                    onPress={() => setSignupUserType(userType)}
+                    disabled={signupLoading}
+                  >
+                    <Text style={[styles.roleChipText, signupUserType === userType && styles.roleChipTextActive]}>
+                      {userType}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <Text style={styles.modalSectionLabel}>Preferences</Text>
+              <View style={styles.pillarGrid}>
+                {(['Nutrition', 'Education', 'Livelihood'] as const).map(pillar => {
+                  const selected = signupPillars.includes(pillar);
+                  return (
+                    <TouchableOpacity
+                      key={pillar}
+                      style={[styles.pillarChip, selected && styles.pillarChipActive]}
+                      onPress={() =>
+                        setSignupPillars(current =>
+                          current.includes(pillar)
+                            ? current.filter(item => item !== pillar)
+                            : [...current, pillar]
+                        )
+                      }
+                      disabled={signupLoading}
+                    >
+                      <Text style={[styles.pillarChipText, selected && styles.pillarChipTextActive]}>
+                        {pillar}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {signupRole === 'volunteer' && (
+                <>
+                  <Text style={styles.modalSectionLabel}>NVC Membership Information Sheet</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Gender"
+                    placeholderTextColor="#999"
+                    value={signupVolunteerSheet.gender}
+                    onChangeText={value => updateSignupVolunteerSheet('gender', value)}
+                    editable={!signupLoading}
+                  />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Date of Birth"
+                    placeholderTextColor="#999"
+                    value={signupVolunteerSheet.dateOfBirth}
+                    onChangeText={value => updateSignupVolunteerSheet('dateOfBirth', value)}
+                    editable={!signupLoading}
+                  />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Civil Status"
+                    placeholderTextColor="#999"
+                    value={signupVolunteerSheet.civilStatus}
+                    onChangeText={value => updateSignupVolunteerSheet('civilStatus', value)}
+                    editable={!signupLoading}
+                  />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Home Address"
+                    placeholderTextColor="#999"
+                    value={signupVolunteerSheet.homeAddress}
+                    onChangeText={value => updateSignupVolunteerSheet('homeAddress', value)}
+                    editable={!signupLoading}
+                  />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Occupation"
+                    placeholderTextColor="#999"
+                    value={signupVolunteerSheet.occupation}
+                    onChangeText={value => updateSignupVolunteerSheet('occupation', value)}
+                    editable={!signupLoading}
+                  />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Workplace or School"
+                    placeholderTextColor="#999"
+                    value={signupVolunteerSheet.workplaceOrSchool}
+                    onChangeText={value => updateSignupVolunteerSheet('workplaceOrSchool', value)}
+                    editable={!signupLoading}
+                  />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="College Course"
+                    placeholderTextColor="#999"
+                    value={signupVolunteerSheet.collegeCourse}
+                    onChangeText={value => updateSignupVolunteerSheet('collegeCourse', value)}
+                    editable={!signupLoading}
+                  />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Certifications or Trainings"
+                    placeholderTextColor="#999"
+                    value={signupVolunteerSheet.certificationsOrTrainings}
+                    onChangeText={value => updateSignupVolunteerSheet('certificationsOrTrainings', value)}
+                    editable={!signupLoading}
+                  />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Hobbies and Interests"
+                    placeholderTextColor="#999"
+                    value={signupVolunteerSheet.hobbiesAndInterests}
+                    onChangeText={value => updateSignupVolunteerSheet('hobbiesAndInterests', value)}
+                    editable={!signupLoading}
+                  />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Special Skills"
+                    placeholderTextColor="#999"
+                    value={signupVolunteerSheet.specialSkills}
+                    onChangeText={value => updateSignupVolunteerSheet('specialSkills', value)}
+                    editable={!signupLoading}
+                  />
+
+                  <Text style={styles.modalSectionSubLabel}>Affiliations (if any)</Text>
+                  <View style={styles.affiliationRow}>
+                    <TextInput
+                      style={[styles.input, styles.affiliationInput]}
+                      placeholder="Organization"
+                      placeholderTextColor="#999"
+                      value={signupVolunteerSheet.affiliationOrg1}
+                      onChangeText={value => updateSignupVolunteerSheet('affiliationOrg1', value)}
+                      editable={!signupLoading}
+                    />
+                    <TextInput
+                      style={[styles.input, styles.affiliationInput]}
+                      placeholder="Position"
+                      placeholderTextColor="#999"
+                      value={signupVolunteerSheet.affiliationPos1}
+                      onChangeText={value => updateSignupVolunteerSheet('affiliationPos1', value)}
+                      editable={!signupLoading}
+                    />
+                  </View>
+                  <View style={styles.affiliationRow}>
+                    <TextInput
+                      style={[styles.input, styles.affiliationInput]}
+                      placeholder="Organization"
+                      placeholderTextColor="#999"
+                      value={signupVolunteerSheet.affiliationOrg2}
+                      onChangeText={value => updateSignupVolunteerSheet('affiliationOrg2', value)}
+                      editable={!signupLoading}
+                    />
+                    <TextInput
+                      style={[styles.input, styles.affiliationInput]}
+                      placeholder="Position"
+                      placeholderTextColor="#999"
+                      value={signupVolunteerSheet.affiliationPos2}
+                      onChangeText={value => updateSignupVolunteerSheet('affiliationPos2', value)}
+                      editable={!signupLoading}
+                    />
+                  </View>
+
+                  <Text style={styles.modalSectionLabel}>Commitment</Text>
+                  <View style={styles.commitmentCard}>
+                    <Text style={styles.commitmentParagraph}>
+                      I {signupName.trim() || '_______________________________'}, voluntarily and
+                      freely commit myself to be a member of the NVC Foundation, Inc. I believe
+                      in the foundation&apos;s ideals, objectives and directions which are aimed to
+                      fight hunger and poverty by providing nutrition, access to quality education
+                      for children and livelihood opportunities for the poor.
+                    </Text>
+                    <Text style={styles.commitmentParagraph}>
+                      As a full pledged member, I have read the NVC&apos;s volunteers manual and I
+                      commit:
+                    </Text>
+                    <Text style={styles.commitmentBullet}>
+                      • To actively participate in the Foundation&apos;s projects and activities.
+                    </Text>
+                    <Text style={styles.commitmentBullet}>
+                      • To willingly work towards positive and peaceful change.
+                    </Text>
+                    <Text style={styles.commitmentBullet}>
+                      • To refrain from using one&apos;s personal participation in NVC, or using
+                      NVC&apos;s collective activities, for partisan politics, whether it be for
+                      personal advantage or endorsement of any politician or political party.
+                    </Text>
+                    <Text style={styles.commitmentBullet}>
+                      • To insure that my personal interests do not conflict with those of NVC&apos;s.
+                    </Text>
+                  </View>
+
+                  <TouchableOpacity
+                    style={styles.commitmentAcceptanceRow}
+                    onPress={() => setSignupAcceptedCommitment(current => !current)}
+                    disabled={signupLoading}
+                    activeOpacity={0.8}
+                  >
+                    <MaterialIcons
+                      name={signupAcceptedCommitment ? 'check-box' : 'check-box-outline-blank'}
+                      size={22}
+                      color={signupAcceptedCommitment ? '#166534' : '#64748b'}
+                    />
+                    <Text style={styles.commitmentAcceptanceText}>
+                      I have read and accept the NVC volunteer commitment.
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              )}
+            </ScrollView>
 
             <View style={styles.modalActions}>
               <TouchableOpacity
@@ -746,6 +1027,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     borderRadius: 16,
     padding: 18,
+    maxHeight: '92%',
   },
   modalTitle: {
     fontSize: 20,
@@ -758,10 +1040,22 @@ const styles = StyleSheet.create({
     marginTop: 6,
     marginBottom: 14,
   },
+  modalForm: {
+    maxHeight: 520,
+  },
+  modalFormContent: {
+    paddingBottom: 8,
+  },
   modalSectionLabel: {
     fontSize: 13,
     fontWeight: '700',
     color: '#334155',
+    marginBottom: 8,
+  },
+  modalSectionSubLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#475569',
     marginBottom: 8,
   },
   roleSelector: {
@@ -791,6 +1085,46 @@ const styles = StyleSheet.create({
   },
   pillarChipTextActive: {
     color: '#fff',
+  },
+  affiliationRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  affiliationInput: {
+    flex: 1,
+  },
+  commitmentCard: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 12,
+  },
+  commitmentParagraph: {
+    fontSize: 13,
+    lineHeight: 21,
+    color: '#334155',
+    marginBottom: 10,
+  },
+  commitmentBullet: {
+    fontSize: 13,
+    lineHeight: 21,
+    color: '#334155',
+    marginBottom: 8,
+  },
+  commitmentAcceptanceRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginBottom: 16,
+  },
+  commitmentAcceptanceText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 20,
+    color: '#334155',
+    fontWeight: '600',
   },
   roleChip: {
     flex: 1,

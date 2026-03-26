@@ -68,6 +68,11 @@ export interface StatusUpdate {
 }
 
 // Volunteer
+export interface VolunteerAffiliation {
+  organization: string;
+  position: string;
+}
+
 export interface Volunteer {
   id: string;
   userId: string; // Reference to User
@@ -86,6 +91,17 @@ export interface Volunteer {
   rating: number; // 1-5
   engagementStatus: 'Open to Volunteer' | 'Busy';
   background: string;
+  gender?: string;
+  dateOfBirth?: string;
+  civilStatus?: string;
+  homeAddress?: string;
+  occupation?: string;
+  workplaceOrSchool?: string;
+  collegeCourse?: string;
+  certificationsOrTrainings?: string;
+  hobbiesAndInterests?: string;
+  specialSkills?: string;
+  affiliations?: VolunteerAffiliation[];
   createdAt: string;
 }
 
@@ -110,12 +126,21 @@ export interface Message {
   attachments?: string[]; // File URLs
 }
 
+export interface ProjectGroupMessage {
+  id: string;
+  projectId: string;
+  senderId: string;
+  content: string;
+  timestamp: string;
+  attachments?: string[]; // File URLs
+}
+
 // Matching (Volunteer to Project)
 export interface VolunteerProjectMatch {
   id: string;
   volunteerId: string;
   projectId: string;
-  status: 'Requested' | 'Matched' | 'Completed' | 'Cancelled';
+  status: 'Requested' | 'Matched' | 'Completed' | 'Cancelled' | 'Rejected';
   matchedAt: string;
   hoursContributed: number;
 }
