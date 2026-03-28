@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from db import get_connection
 
 
+# Builds an ISO date string for seeded demo records.
 def iso(year: int, month: int, day: int) -> str:
     return datetime(year, month, day).isoformat()
 
@@ -326,13 +327,13 @@ VOLUNTEERS = [
         "created_at": NOW,
     }
 ]
-
-
+# Executes the same SQL statement for a sequence of parameter rows.
 def run_many(cursor, statement: str, rows: list[tuple]) -> None:
     for row in rows:
         cursor.execute(statement, row)
 
 
+# Seeds core demo users, partners, projects, and volunteers into Postgres.
 def main() -> None:
     with get_connection() as connection:
         with connection.cursor() as cursor:

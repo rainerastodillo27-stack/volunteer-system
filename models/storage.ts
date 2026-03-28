@@ -17,6 +17,7 @@ import {
 } from './types';
 import { NVCSector, UserRole } from './types';
 
+// Central frontend data layer for backend storage, auth helpers, messaging, and demo data.
 const STORAGE_KEYS = {
   USERS: 'users',
   CURRENT_USER: 'currentUser',
@@ -49,7 +50,8 @@ const NEGROS_OCCIDENTAL_BOUNDS = {
   minLongitude: 122.45,
   maxLongitude: 123.35,
 };
-export const NEGROS_SAMPLE_PROJECTS: Project[] = [
+// Core project seed data used to bootstrap storage and map experiences.
+const NEGROS_SAMPLE_PROJECTS: Project[] = [
   {
     id: 'project-1',
     title: 'Mingo for Nutritional Support',
@@ -344,12 +346,14 @@ const SECTOR_NEEDS: SectorNeed[] = [
   },
 ];
 
+// Broadcasts a local storage timestamp so web tabs refresh message state.
 function notifyWebMessageUpdate(): void {
   if (typeof window !== 'undefined' && window.localStorage) {
     window.localStorage.setItem(WEB_MESSAGE_SYNC_KEY, String(Date.now()));
   }
 }
 
+// Generates a lightweight client-side id for newly created chat messages.
 function createGeneratedMessageId(): string {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -469,6 +473,7 @@ async function notifyVolunteerAboutProjectMatchDecision(
   );
 }
 
+// Extracts the Metro bundler host so native devices can resolve the backend URL.
 function getBundlerHost(): string | null {
   const scriptUrl = NativeModules?.SourceCode?.scriptURL as string | undefined;
   if (!scriptUrl) {
@@ -484,6 +489,7 @@ function getBundlerHost(): string | null {
   }
 }
 
+// Normalizes a configured API base URL for the current platform.
 function resolveConfiguredApiBaseUrl(configuredBaseUrl: string): string {
   const trimmedBaseUrl = configuredBaseUrl.trim().replace(/\/$/, '');
   const bundlerHost = getBundlerHost();
@@ -506,6 +512,7 @@ function resolveConfiguredApiBaseUrl(configuredBaseUrl: string): string {
   return trimmedBaseUrl;
 }
 
+// Resolves the native-device API base URL from Expo config or Metro host info.
 function resolveNativeApiBaseUrl(configuredBaseUrl?: string): string {
   const bundlerHost = getBundlerHost();
 
@@ -540,6 +547,7 @@ function resolveNativeApiBaseUrl(configuredBaseUrl?: string): string {
   return 'http://127.0.0.1:8000';
 }
 
+// Returns the effective HTTP base URL used by the frontend storage layer.
 export function getApiBaseUrl(): string {
   const configuredWebBaseUrl = Constants.expoConfig?.extra?.webApiBaseUrl as string | undefined;
   if (typeof document !== 'undefined') {
@@ -554,11 +562,13 @@ export function getApiBaseUrl(): string {
   return resolveNativeApiBaseUrl(configuredNativeBaseUrl);
 }
 
+// Builds the websocket URL used for user-specific message updates.
 function getMessagesWebSocketUrl(userId: string): string {
   const wsBaseUrl = getApiBaseUrl().replace(/^http/i, 'ws');
   return `${wsBaseUrl}/ws/messages/${encodeURIComponent(userId)}`;
 }
 
+// Builds the websocket URL used for shared storage change notifications.
 function getStorageWebSocketUrl(): string {
   const wsBaseUrl = getApiBaseUrl().replace(/^http/i, 'ws');
   return `${wsBaseUrl}/ws/storage`;
@@ -712,6 +722,7 @@ async function deleteLocalStorageItem(key: string): Promise<void> {
   memoryStorageCache.delete(key);
 }
 
+// Marks keys that should remain local instead of syncing through shared backend storage.
 function isLocalOnlyStorageKey(key: string): boolean {
   return LOCAL_ONLY_STORAGE_KEYS.has(key);
 }
@@ -762,6 +773,7 @@ async function clearRemoteStorage(): Promise<void> {
   }
 }
 
+// Filters expected network and backend errors from real application exceptions.
 function isExpectedRemoteStorageError(error: unknown): boolean {
   if (!error || typeof error !== 'object') {
     return false;
@@ -779,6 +791,7 @@ function isExpectedRemoteStorageError(error: unknown): boolean {
 }
 
 // Generic storage functions
+// Reads one storage value from the backend or local cache.
 export async function getStorageItem<T>(key: string): Promise<T | null> {
   if (isLocalOnlyStorageKey(key)) {
     try {
@@ -797,6 +810,7 @@ export async function getStorageItem<T>(key: string): Promise<T | null> {
   }
 }
 
+// Reads multiple storage values in a single backend request when possible.
 export async function getStorageItems(
   keys: string[]
 ): Promise<Record<string, unknown | null>> {
@@ -829,6 +843,7 @@ export async function getStorageItems(
   }
 }
 
+// Loads the combined data set required by the admin dashboard screen.
 export async function getDashboardSnapshot(): Promise<{
   projects: Project[];
   partners: Partner[];
@@ -856,6 +871,7 @@ export async function getDashboardSnapshot(): Promise<{
   };
 }
 
+// Loads the combined data set required by the partner dashboard screen.
 export async function getPartnerDashboardSnapshot(): Promise<{
   projects: Project[];
   partners: Partner[];
@@ -877,6 +893,7 @@ export async function getPartnerDashboardSnapshot(): Promise<{
   };
 }
 
+// Loads the combined project, volunteer, and application data for the projects screen.
 export async function getProjectsScreenSnapshot(
   user?: Pick<User, 'id' | 'role'> | null
 ): Promise<ProjectsScreenSnapshot> {
@@ -902,6 +919,7 @@ export async function getProjectsScreenSnapshot(
   };
 }
 
+// Writes one storage value to the backend and local cache.
 export async function setStorageItem<T>(key: string, value: T): Promise<void> {
   if (isLocalOnlyStorageKey(key)) {
     await setLocalStorageItem(key, value);
@@ -917,6 +935,7 @@ export async function setStorageItem<T>(key: string, value: T): Promise<void> {
 }
 
 // User Storage
+// Inserts or updates a user record inside shared storage.
 export async function saveUser(user: User): Promise<void> {
   const users = await getStorageItem<User[]>(STORAGE_KEYS.USERS) || [];
   const existingIndex = users.findIndex(u => u.id === user.id);
@@ -928,6 +947,7 @@ export async function saveUser(user: User): Promise<void> {
   await setStorageItem(STORAGE_KEYS.USERS, users);
 }
 
+// Creates a new sign-in account and optional volunteer profile records.
 export async function createUserAccount(input: {
   name: string;
   email?: string;
@@ -1039,15 +1059,18 @@ export async function createUserAccount(input: {
   return createdUser;
 }
 
+// Looks up a single user by id.
 export async function getUser(id: string): Promise<User | null> {
   const users = await getStorageItem<User[]>(STORAGE_KEYS.USERS) || [];
   return users.find(u => u.id === id) || null;
 }
 
+// Looks up a single user by email address.
 export async function getUserByEmail(email: string): Promise<User | null> {
   return getUserByEmailOrPhone(email);
 }
 
+// Looks up a single user by email address or phone number.
 export async function getUserByEmailOrPhone(identifier: string): Promise<User | null> {
   const payload = await requestApiJson<{ user?: User | null }>(
     `/users/lookup?identifier=${encodeURIComponent(identifier.trim())}`
@@ -1055,6 +1078,7 @@ export async function getUserByEmailOrPhone(identifier: string): Promise<User | 
   return payload.user || null;
 }
 
+// Validates login credentials against the shared user list.
 export async function loginWithCredentials(
   identifier: string,
   password: string
@@ -1079,10 +1103,12 @@ export async function loginWithCredentials(
   }
 }
 
+// Returns all user accounts from shared storage.
 export async function getAllUsers(): Promise<User[]> {
   return (await getStorageItem<User[]>(STORAGE_KEYS.USERS)) || [];
 }
 
+// Deletes a user account and related volunteer data when necessary.
 export async function deleteUser(userId: string): Promise<void> {
   const users = await getStorageItem<User[]>(STORAGE_KEYS.USERS) || [];
   const filteredUsers = users.filter(user => user.id !== userId);
@@ -1142,6 +1168,7 @@ export async function deleteUser(userId: string): Promise<void> {
   }
 }
 
+// Persists the currently signed-in user in local-only storage.
 export async function setCurrentUser(user: User | null): Promise<void> {
   if (user) {
     await setLocalStorageItem(STORAGE_KEYS.CURRENT_USER, user);
@@ -1150,11 +1177,13 @@ export async function setCurrentUser(user: User | null): Promise<void> {
   }
 }
 
+// Restores the currently signed-in user from local-only storage.
 export async function getCurrentUser(): Promise<User | null> {
   return (await getLocalStorageItem<User>(STORAGE_KEYS.CURRENT_USER)) || null;
 }
 
 // Partner Storage
+// Inserts or updates a partner organization record.
 export async function savePartner(partner: Partner): Promise<void> {
   const partners = await getStorageItem<Partner[]>(STORAGE_KEYS.PARTNERS) || [];
   const existingIndex = partners.findIndex(p => p.id === partner.id);
@@ -1182,23 +1211,27 @@ export async function savePartner(partner: Partner): Promise<void> {
   await setStorageItem(STORAGE_KEYS.PARTNERS, partners);
 }
 
+// Looks up a single partner organization by id.
 export async function getPartner(id: string): Promise<Partner | null> {
   const partners = await getStorageItem<Partner[]>(STORAGE_KEYS.PARTNERS) || [];
   return partners.find(p => p.id === id) || null;
 }
 
+// Returns all partner organization records.
 export async function getAllPartners(): Promise<Partner[]> {
   await ensurePartnerOwnershipLinks();
   const partners = (await getStorageItem<Partner[]>(STORAGE_KEYS.PARTNERS)) || [];
   return partners.filter(p => !p.contactEmail?.toLowerCase().includes('eduindia.org'));
 }
 
+// Returns partner organization records filtered by approval status.
 export async function getPartnersByStatus(status: string): Promise<Partner[]> {
   const partners = await getAllPartners();
   return partners.filter(p => p.status === status);
 }
 
 // Project Storage
+// Inserts or updates a project or event record.
 export async function saveProject(project: Project): Promise<void> {
   const projects = await getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS) || [];
   const existingIndex = projects.findIndex(p => p.id === project.id);
@@ -1210,6 +1243,7 @@ export async function saveProject(project: Project): Promise<void> {
   await setStorageItem(STORAGE_KEYS.PROJECTS, projects);
 }
 
+// Deletes a project and cleans up dependent records that reference it.
 export async function deleteProject(projectId: string): Promise<void> {
   const [
     projects,
@@ -1256,15 +1290,18 @@ export async function deleteProject(projectId: string): Promise<void> {
   ]);
 }
 
+// Looks up a single project by id.
 export async function getProject(id: string): Promise<Project | null> {
   const projects = await getAllProjects();
   return projects.find(p => p.id === id) || null;
 }
 
+// Returns all projects and events from shared storage.
 export async function getAllProjects(): Promise<Project[]> {
   return (await getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS)) || [];
 }
 
+// Checks whether a project's coordinates fall inside Negros Occidental bounds.
 export function isProjectInNegros(project: Project): boolean {
   const address = project.location.address.toLowerCase();
   const hasNegrosAddress =
@@ -1279,22 +1316,26 @@ export function isProjectInNegros(project: Project): boolean {
   return hasNegrosAddress || isWithinNegrosBounds;
 }
 
+// Returns projects that fall inside the Negros map bounds.
 export async function getNegrosProjects(): Promise<Project[]> {
   const projects = await getAllProjects();
   return projects.filter(isProjectInNegros);
 }
 
+// Returns projects filtered by lifecycle status.
 export async function getProjectsByStatus(status: string): Promise<Project[]> {
   const projects = await getAllProjects();
   return projects.filter(p => p.status === status);
 }
 
+// Returns projects owned by a specific partner organization.
 export async function getProjectsByPartner(partnerId: string): Promise<Project[]> {
   const projects = await getAllProjects();
   return projects.filter(p => p.partnerId === partnerId);
 }
 
 // Volunteer Storage
+// Inserts or updates a volunteer profile record.
 export async function saveVolunteer(volunteer: Volunteer): Promise<void> {
   const volunteers = await getStorageItem<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS) || [];
   const existingIndex = volunteers.findIndex(v => v.id === volunteer.id);
@@ -1306,15 +1347,18 @@ export async function saveVolunteer(volunteer: Volunteer): Promise<void> {
   await setStorageItem(STORAGE_KEYS.VOLUNTEERS, volunteers);
 }
 
+// Looks up a single volunteer profile by id.
 export async function getVolunteer(id: string): Promise<Volunteer | null> {
   const volunteers = await getStorageItem<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS) || [];
   return volunteers.find(v => v.id === id) || null;
 }
 
+// Returns all volunteer profiles from shared storage.
 export async function getAllVolunteers(): Promise<Volunteer[]> {
   return (await getStorageItem<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS)) || [];
 }
 
+// Looks up the volunteer profile linked to a specific user account.
 export async function getVolunteerByUserId(userId: string): Promise<Volunteer | null> {
   const payload = await requestApiJson<{ volunteer?: Volunteer | null }>(
     `/volunteers/by-user/${encodeURIComponent(userId)}`
@@ -1322,6 +1366,7 @@ export async function getVolunteerByUserId(userId: string): Promise<Volunteer | 
   return payload.volunteer || null;
 }
 
+// Computes recognition metrics such as joined programs and top-volunteer status.
 export async function getVolunteerRecognitionStatus(
   volunteerId: string
 ): Promise<VolunteerRecognitionStatus> {
@@ -1336,6 +1381,7 @@ export async function getVolunteerRecognitionStatus(
 }
 
 // Volunteer Time Logs
+// Inserts or updates a volunteer time log entry.
 export async function saveVolunteerTimeLog(log: VolunteerTimeLog): Promise<void> {
   const logs = await getStorageItem<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS) || [];
   const existingIndex = logs.findIndex(l => l.id === log.id);
@@ -1347,6 +1393,7 @@ export async function saveVolunteerTimeLog(log: VolunteerTimeLog): Promise<void>
   await setStorageItem(STORAGE_KEYS.VOLUNTEER_TIME_LOGS, logs);
 }
 
+// Returns all time log entries for one volunteer profile.
 export async function getVolunteerTimeLogs(volunteerId: string): Promise<VolunteerTimeLog[]> {
   const payload = await requestApiJson<{ logs?: VolunteerTimeLog[] }>(
     `/volunteers/${encodeURIComponent(volunteerId)}/time-logs`
@@ -1354,6 +1401,7 @@ export async function getVolunteerTimeLogs(volunteerId: string): Promise<Volunte
   return payload.logs || [];
 }
 
+// Starts a volunteer time log for the selected project.
 export async function startVolunteerTimeLog(
   volunteerId: string,
   projectId: string,
@@ -1380,6 +1428,7 @@ export async function startVolunteerTimeLog(
   return payload.log;
 }
 
+// Ends an active volunteer time log and updates contributed hours.
 export async function endVolunteerTimeLog(
   volunteerId: string,
   projectId: string
@@ -1424,6 +1473,7 @@ async function addLoggedHoursToVolunteer(
 }
 
 // Message Storage
+// Persists a direct user-to-user message and triggers refresh notifications.
 export async function saveMessage(message: Message): Promise<void> {
   try {
     await waitForApiReady();
@@ -1448,6 +1498,7 @@ export async function saveMessage(message: Message): Promise<void> {
   }
 }
 
+// Persists a project group chat message and triggers refresh notifications.
 export async function saveProjectGroupMessage(message: ProjectGroupMessage): Promise<void> {
   try {
     await waitForApiReady();
@@ -1475,6 +1526,7 @@ export async function saveProjectGroupMessage(message: ProjectGroupMessage): Pro
   }
 }
 
+// Returns all direct messages relevant to a specific user.
 export async function getMessagesForUser(userId: string): Promise<Message[]> {
   try {
     await waitForApiReady();
@@ -1495,6 +1547,7 @@ export async function getMessagesForUser(userId: string): Promise<Message[]> {
   }
 }
 
+// Returns the direct-message history between two users.
 export async function getConversation(userId1: string, userId2: string): Promise<Message[]> {
   try {
     await waitForApiReady();
@@ -1521,6 +1574,7 @@ export async function getConversation(userId1: string, userId2: string): Promise
   }
 }
 
+// Returns the project group chat history available to a specific user.
 export async function getProjectGroupMessages(
   projectId: string,
   userId: string
@@ -1547,6 +1601,7 @@ export async function getProjectGroupMessages(
   }
 }
 
+// Marks a direct message as read and updates storage listeners.
 export async function markMessageAsRead(messageId: string): Promise<void> {
   try {
     await waitForApiReady();
@@ -1575,6 +1630,7 @@ export type MessageSubscriptionEvent =
   | { type: 'message.changed'; message: Message }
   | { type: 'project-group-message.changed'; message: ProjectGroupMessage };
 
+// Opens a realtime websocket subscription for direct and project chat updates.
 export function subscribeToMessages(
   userId: string,
   onChange: (event: MessageSubscriptionEvent) => void
@@ -1643,6 +1699,7 @@ export function subscribeToMessages(
   };
 }
 
+// Opens a realtime websocket subscription for shared storage changes.
 export function subscribeToStorageChanges(
   keys: string[],
   onChange: (event: { type: string; keys: string[] }) => void,
@@ -1744,12 +1801,14 @@ export function subscribeToStorageChanges(
 }
 
 // Status Update Storage
+// Persists a lifecycle status update for a project.
 export async function saveStatusUpdate(update: StatusUpdate): Promise<void> {
   const updates = await getStorageItem<StatusUpdate[]>(STORAGE_KEYS.STATUS_UPDATES) || [];
   updates.push(update);
   await setStorageItem(STORAGE_KEYS.STATUS_UPDATES, updates);
 }
 
+// Returns lifecycle status updates for a single project.
 export async function getStatusUpdatesByProject(projectId: string): Promise<StatusUpdate[]> {
   const updates = await getStorageItem<StatusUpdate[]>(STORAGE_KEYS.STATUS_UPDATES) || [];
   return updates
@@ -1758,6 +1817,7 @@ export async function getStatusUpdatesByProject(projectId: string): Promise<Stat
 }
 
 // Volunteer Project Match Storage
+// Persists a volunteer-to-project match or request record.
 export async function saveVolunteerProjectMatch(match: VolunteerProjectMatch): Promise<void> {
   const matches = await getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES) || [];
   const existingIndex = matches.findIndex(
@@ -1780,6 +1840,7 @@ export async function saveVolunteerProjectMatch(match: VolunteerProjectMatch): P
   await syncVolunteerEngagementStatus(match.volunteerId);
 }
 
+// Returns match records for one volunteer profile.
 export async function getVolunteerProjectMatches(volunteerId: string): Promise<VolunteerProjectMatch[]> {
   const matches = await getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES) || [];
   return matches
@@ -1787,11 +1848,13 @@ export async function getVolunteerProjectMatches(volunteerId: string): Promise<V
     .sort((a, b) => new Date(b.matchedAt).getTime() - new Date(a.matchedAt).getTime());
 }
 
+// Returns every volunteer-project match record in storage.
 export async function getAllVolunteerProjectMatches(): Promise<VolunteerProjectMatch[]> {
   const matches = await getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES) || [];
   return matches.sort((a, b) => new Date(b.matchedAt).getTime() - new Date(a.matchedAt).getTime());
 }
 
+// Returns volunteer match records filtered by project id.
 export async function getProjectMatches(projectId: string): Promise<VolunteerProjectMatch[]> {
   const matches = await getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES) || [];
   return matches
@@ -1799,6 +1862,7 @@ export async function getProjectMatches(projectId: string): Promise<VolunteerPro
     .sort((a, b) => new Date(b.matchedAt).getTime() - new Date(a.matchedAt).getTime());
 }
 
+// Creates a volunteer join request that an admin can review later.
 export async function requestVolunteerProjectJoin(
   projectId: string,
   userId: string
@@ -1851,6 +1915,7 @@ export async function requestVolunteerProjectJoin(
   return requestedMatch;
 }
 
+// Approves or rejects a volunteer join request.
 export async function reviewVolunteerProjectMatch(
   matchId: string,
   nextStatus: 'Matched' | 'Rejected',
@@ -1894,6 +1959,7 @@ export async function reviewVolunteerProjectMatch(
   return updatedMatch;
 }
 
+// Immediately assigns a volunteer to a project on behalf of an admin.
 export async function assignVolunteerToProject(
   projectId: string,
   volunteerId: string,
@@ -1949,6 +2015,7 @@ export async function assignVolunteerToProject(
   return assignedMatch;
 }
 
+// Persists the record that tracks a volunteer's actual participation in a project.
 export async function saveVolunteerProjectJoinRecord(
   record: VolunteerProjectJoinRecord
 ): Promise<void> {
@@ -1967,6 +2034,7 @@ export async function saveVolunteerProjectJoinRecord(
   await setStorageItem(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS, records);
 }
 
+// Returns joined-volunteer records for a single project.
 export async function getVolunteerProjectJoinRecords(
   projectId: string
 ): Promise<VolunteerProjectJoinRecord[]> {
@@ -1981,6 +2049,7 @@ export async function getVolunteerProjectJoinRecords(
     .sort((a, b) => new Date(b.joinedAt).getTime() - new Date(a.joinedAt).getTime());
 }
 
+// Returns project ids that a volunteer has already completed.
 export async function getVolunteerCompletedProjectIds(
   volunteerId: string
 ): Promise<string[]> {
@@ -2010,6 +2079,7 @@ export async function getVolunteerCompletedProjectIds(
   );
 }
 
+// Marks a volunteer's project participation as completed and updates derived state.
 export async function completeVolunteerProjectParticipation(
   projectId: string,
   volunteerId: string,
@@ -2042,6 +2112,7 @@ export async function completeVolunteerProjectParticipation(
   return updatedRecord;
 }
 
+// Persists a partner application to join a project or event.
 export async function savePartnerProjectApplication(
   application: PartnerProjectApplication
 ): Promise<void> {
@@ -2056,6 +2127,7 @@ export async function savePartnerProjectApplication(
   await setStorageItem(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS, applications);
 }
 
+// Returns partner applications for a specific project.
 export async function getPartnerProjectApplications(
   projectId: string
 ): Promise<PartnerProjectApplication[]> {
@@ -2066,6 +2138,7 @@ export async function getPartnerProjectApplications(
     .sort((a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime());
 }
 
+// Returns partner applications submitted by a specific partner account.
 export async function getPartnerProjectApplicationsByUser(
   partnerUserId: string
 ): Promise<PartnerProjectApplication[]> {
@@ -2075,6 +2148,7 @@ export async function getPartnerProjectApplicationsByUser(
   return payload.applications || [];
 }
 
+// Creates a partner join request for admin review.
 export async function requestPartnerProjectJoin(
   projectId: string,
   partnerUser: User
@@ -2108,6 +2182,7 @@ export async function requestPartnerProjectJoin(
   return payload.application;
 }
 
+// Approves or rejects a partner join request.
 export async function reviewPartnerProjectApplication(
   applicationId: string,
   status: 'Approved' | 'Rejected',
@@ -2151,6 +2226,7 @@ export async function reviewPartnerProjectApplication(
   }
 }
 
+// Adds a user directly to a project or event once access has been approved.
 export async function joinProjectEvent(
   projectId: string,
   userId: string
@@ -2176,11 +2252,13 @@ export async function joinProjectEvent(
   };
 }
 
+// Returns the static sector-need cards shown in partner dashboards.
 export async function getSectorNeeds(): Promise<SectorNeed[]> {
   return SECTOR_NEEDS;
 }
 
 // Clear all storage (for testing/logout)
+// Clears all shared storage collections and resets local caches.
 export async function clearAllStorage(): Promise<void> {
   try {
     try {
@@ -2195,6 +2273,7 @@ export async function clearAllStorage(): Promise<void> {
 }
 
 // Initialize with mock data
+// Seeds shared storage with the demo dataset used by the application.
 export async function initializeMockData(): Promise<void> {
   if (mockDataInitializationPromise) {
     return mockDataInitializationPromise;
@@ -2218,7 +2297,6 @@ async function initializeMockDataInternal(): Promise<void> {
     await purgeDeprecatedPartners();
     await ensureCorePartners();
     await ensureCoreProjects();
-    await ensureNegrosProjectData();
     await ensureVolunteerStatuses();
     await ensureAdminVolunteerConversation();
     return;
@@ -2482,35 +2560,6 @@ async function ensureAdminProfile(): Promise<void> {
   }
 }
 
-async function ensureNegrosProjectData(): Promise<void> {
-  const projects = await getAllProjects();
-
-  for (const sampleProject of NEGROS_SAMPLE_PROJECTS) {
-    const existingProject = projects.find((project) => project.id === sampleProject.id);
-
-    if (!existingProject) {
-      await saveProject(sampleProject);
-      continue;
-    }
-
-    await saveProject({
-      ...existingProject,
-      title: sampleProject.title,
-      description: sampleProject.description,
-      partnerId: sampleProject.partnerId,
-      isEvent: sampleProject.isEvent,
-      status: sampleProject.status,
-      category: sampleProject.category,
-      startDate: sampleProject.startDate,
-      endDate: sampleProject.endDate,
-      location: sampleProject.location,
-      volunteersNeeded: sampleProject.volunteersNeeded,
-      joinedUserIds: existingProject.joinedUserIds || sampleProject.joinedUserIds || [],
-      updatedAt: new Date().toISOString(),
-    });
-  }
-}
-
 async function ensureVolunteerStatuses(): Promise<void> {
   const volunteers = await getAllVolunteers();
 
@@ -2660,6 +2709,7 @@ async function purgeDeprecatedPartners(): Promise<void> {
   }
 }
 
+// Normalizes phone numbers so credentials can be compared consistently.
 function normalizeComparablePhone(value?: string): string {
   return (value || '').replace(/\D/g, '');
 }

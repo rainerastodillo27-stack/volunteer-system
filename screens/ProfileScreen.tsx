@@ -34,6 +34,7 @@ const PILLAR_OPTIONS: NVCSector[] = ['Nutrition', 'Education', 'Livelihood'];
 const SAVE_SYNC_RETRY_COUNT = 3;
 const SAVE_SYNC_RETRY_DELAY_MS = 250;
 
+// Displays the signed-in user's profile, volunteer recognition, and edit form.
 export default function ProfileScreen() {
   const { user, logout, updateUserProfile } = useAuth();
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
@@ -56,6 +57,7 @@ export default function ProfileScreen() {
   const [backgroundDraft, setBackgroundDraft] = useState('');
   const [isBusyDraft, setIsBusyDraft] = useState(false);
 
+  // Loads the volunteer profile plus recognition details for volunteer accounts.
   const loadVolunteerProfile = useCallback(async () => {
     if (user?.role !== 'volunteer' || !user.id) {
       setVolunteerProfile(null);
@@ -89,6 +91,7 @@ export default function ProfileScreen() {
     }
   }, [user?.id, user?.role]);
 
+  // Loads project titles used to display completed volunteer work.
   const loadProjectTitles = useCallback(async () => {
     try {
       const allProjects = await getAllProjects();
@@ -120,6 +123,7 @@ export default function ProfileScreen() {
     }, [loadProjectTitles, loadVolunteerProfile])
   );
 
+  // Copies the current profile into editable draft fields.
   const populateDrafts = useCallback(() => {
     if (!user) {
       return;
@@ -141,6 +145,7 @@ export default function ProfileScreen() {
     populateDrafts();
   }, [populateDrafts]);
 
+  // Confirms logout before clearing the signed-in session.
   const handleLogout = () => {
     if (Platform.OS === 'web') {
       const confirmed =
@@ -166,11 +171,13 @@ export default function ProfileScreen() {
     ]);
   };
 
+  // Opens the profile editor after refreshing the current draft values.
   const openEditModal = () => {
     populateDrafts();
     setShowEditModal(true);
   };
 
+  // Adds or removes a pillar-of-interest selection from the draft profile.
   const togglePillar = (pillar: NVCSector) => {
     setPillarsDraft(current =>
       current.includes(pillar)
@@ -179,6 +186,7 @@ export default function ProfileScreen() {
     );
   };
 
+  // Waits for updated credentials to be readable from shared storage before closing save flow.
   const waitForCredentialSync = async (identifier: string, password: string, userId: string) => {
     for (let attempt = 0; attempt < SAVE_SYNC_RETRY_COUNT; attempt += 1) {
       const syncedUser = await getUserByEmailOrPhone(identifier);
@@ -194,6 +202,7 @@ export default function ProfileScreen() {
     throw new Error('Your new login details did not sync yet. Please try saving again.');
   };
 
+  // Saves the edited user and volunteer profile data.
   const handleSaveProfile = async () => {
     if (!user) {
       return;

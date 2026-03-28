@@ -22,6 +22,7 @@ import { getProjectStatusColor } from '../utils/projectStatus';
 
 const MapHost = 'div' as any;
 
+// Resolves the Google Maps web API key from Expo config or environment variables.
 function getWebGoogleMapsApiKey(): string | undefined {
   const constantsAny = Constants as typeof Constants & {
     manifest?: { extra?: Record<string, unknown> };
@@ -44,6 +45,7 @@ function getWebGoogleMapsApiKey(): string | undefined {
     : undefined;
 }
 
+// Loads the Google Maps browser script once and reuses the same promise.
 function loadGoogleMapsScript(apiKey: string) {
   const browserWindow = window as Window & {
     google?: any;
@@ -91,6 +93,7 @@ function loadGoogleMapsScript(apiKey: string) {
   return browserWindow.__googleMapsScriptPromise;
 }
 
+// Escapes dynamic strings before they are injected into Google Maps HTML content.
 function escapeHtml(value: string) {
   return value
     .replace(/&/g, '&amp;')
@@ -100,6 +103,7 @@ function escapeHtml(value: string) {
     .replace(/'/g, '&#39;');
 }
 
+// Displays the web version of the project map using Google Maps JavaScript API.
 export default function MappingScreen({ navigation }: any) {
   const { user } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
@@ -227,6 +231,7 @@ export default function MappingScreen({ navigation }: any) {
     };
   }, [googleMapsApiKey, projects]);
 
+  // Loads all projects so they can be rendered as web map markers.
   const loadProjects = async () => {
     try {
       const allProjects = await getAllProjects();
@@ -240,6 +245,7 @@ export default function MappingScreen({ navigation }: any) {
     }
   };
 
+  // Redirects to the correct details screen for the currently selected project.
   const handleOpenProjectDetails = () => {
     if (!selectedProject) {
       return;

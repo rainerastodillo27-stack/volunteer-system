@@ -9,6 +9,7 @@ type VolunteerImpactMapProps = {
   projects: Project[];
 };
 
+// Displays a native map of projects that the volunteer has participated in.
 export default function VolunteerImpactMap({ projects }: VolunteerImpactMapProps) {
   const [selectedProject, setSelectedProject] = useState<Project | null>(projects[0] || null);
 

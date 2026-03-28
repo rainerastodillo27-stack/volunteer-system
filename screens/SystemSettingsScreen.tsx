@@ -4,9 +4,11 @@ import Constants from 'expo-constants';
 import { useAuth } from '../contexts/AuthContext';
 import { getApiBaseUrl, initializeMockData } from '../models/storage';
 
+// Shows environment details, backend controls, and session actions.
 export default function SystemSettingsScreen() {
   const { user, logout, isAdmin } = useAuth();
 
+  // Re-seeds the backend with demo records used by the app.
   const handleSeedBackendData = async () => {
     try {
       await initializeMockData();
@@ -16,6 +18,7 @@ export default function SystemSettingsScreen() {
     }
   };
 
+  // Confirms and clears the current session from the settings screen.
   const handleLogout = async () => {
     if (Platform.OS === 'web') {
       const confirmed = typeof window !== 'undefined' ? window.confirm('Are you sure you want to logout?') : true;

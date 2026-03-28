@@ -18,6 +18,7 @@ import { getAllProjects } from '../models/storage';
 import { getInitialProjectRegion, getProjectMarkerColor } from '../utils/projectMap';
 import { getProjectStatusColor } from '../utils/projectStatus';
 
+// Displays the native project map with a detail sheet for the selected marker.
 export default function MappingScreen({ navigation }: any) {
   const { user } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
@@ -30,6 +31,7 @@ export default function MappingScreen({ navigation }: any) {
     void loadProjects();
   }, []);
 
+  // Loads all projects so they can be plotted on the map.
   const loadProjects = async () => {
     try {
       const allProjects = await getAllProjects();
@@ -46,6 +48,7 @@ export default function MappingScreen({ navigation }: any) {
     }
   };
 
+  // Opens the details modal for the tapped map marker.
   const handleProjectSelection = (projectId: string) => {
     const project = projects.find(projectEntry => projectEntry.id === projectId);
     if (!project) {
@@ -56,6 +59,7 @@ export default function MappingScreen({ navigation }: any) {
     setShowDetails(true);
   };
 
+  // Redirects to the lifecycle screen or projects screen based on the active user role.
   const handleOpenProjectDetails = () => {
     if (!selectedProject) {
       return;

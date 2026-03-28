@@ -20,6 +20,7 @@ const roleOptions: UserRole[] = ['admin', 'partner', 'volunteer'];
 const NEW_ACCOUNT_WINDOW_MS = 1000 * 60 * 60 * 24 * 3;
 const USER_REFRESH_INTERVAL_MS = 5000;
 
+// Lets admins review, edit, and remove application user accounts.
 export default function UserManagementScreen() {
   const { user, isAdmin } = useAuth();
   const [users, setUsers] = useState<User[]>([]);
@@ -34,6 +35,7 @@ export default function UserManagementScreen() {
   const [pillarsDraft, setPillarsDraft] = useState<NVCSector[]>([]);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
 
+  // Loads and sorts all user accounts for the admin management table.
   const loadUsers = useCallback(async () => {
     try {
       const allUsers = await getAllUsers();
@@ -83,6 +85,7 @@ export default function UserManagementScreen() {
     });
   }, [isAdmin, loadUsers]);
 
+  // Flags recently created accounts so they can be visually highlighted.
   const isNewAccount = (createdAt: string) => {
     const createdTime = new Date(createdAt).getTime();
     if (Number.isNaN(createdTime)) {
@@ -91,6 +94,7 @@ export default function UserManagementScreen() {
     return Date.now() - createdTime <= NEW_ACCOUNT_WINDOW_MS;
   };
 
+  // Opens the edit modal with the selected user's current values.
   const openEditModal = (targetUser: User) => {
     setSelectedUser(targetUser);
     setNameDraft(targetUser.name);
@@ -103,6 +107,7 @@ export default function UserManagementScreen() {
     setShowEditModal(true);
   };
 
+  // Saves changes made to the selected user account.
   const handleSaveUser = async () => {
     if (!selectedUser) return;
     if (!nameDraft.trim() || !emailDraft.trim() || !passwordDraft.trim()) {
@@ -130,6 +135,7 @@ export default function UserManagementScreen() {
     }
   };
 
+  // Confirms and deletes a user account that is not the active admin session.
   const handleDeleteUser = (targetUser: User) => {
     if (targetUser.id === user?.id) {
       Alert.alert('Restricted', 'You cannot delete the currently signed-in admin account.');

@@ -3,6 +3,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync, spawn } = require('child_process');
 
+// Loads local environment variables from app-level `.env` files before Expo starts.
 function loadLocalEnv() {
   for (const fileName of ['.env', '.env.local']) {
     const envPath = path.join(__dirname, fileName);
@@ -32,6 +33,7 @@ function loadLocalEnv() {
   }
 }
 
+// Returns the current machine's LAN IPv4 address for mobile device API access.
 function getLanIp() {
   const interfaces = os.networkInterfaces();
 
@@ -48,6 +50,7 @@ function getLanIp() {
   return '127.0.0.1';
 }
 
+// Detects whether the backend is already listening on port 8000.
 function isBackendRunning() {
   try {
     const result = execFileSync(
@@ -69,6 +72,7 @@ function isBackendRunning() {
   }
 }
 
+// Starts the backend in the background when development mode allows it.
 function ensureBackendStarted() {
   if (process.env.VOLCRE_AUTO_START_BACKEND === 'false') {
     return;
@@ -93,6 +97,7 @@ function ensureBackendStarted() {
   child.unref();
 }
 
+// Exposes runtime Expo configuration for API URLs and native map keys.
 module.exports = () => {
   loadLocalEnv();
   ensureBackendStarted();

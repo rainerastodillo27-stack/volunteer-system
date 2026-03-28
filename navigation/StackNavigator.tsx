@@ -11,6 +11,7 @@ export type RootStackParamList = {
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
+// Switches between the login flow and the authenticated tab navigator.
 export default function StackNavigator() {
   const { user, loading } = useAuth();
 

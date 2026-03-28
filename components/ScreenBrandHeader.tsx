@@ -6,6 +6,7 @@ type ScreenBrandHeaderProps = {
   title: string;
 };
 
+// Shows the shared branded header used above most top-level screens.
 export default function ScreenBrandHeader({ title }: ScreenBrandHeaderProps) {
   return (
     <View style={styles.container}>

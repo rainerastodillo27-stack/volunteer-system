@@ -9,6 +9,7 @@ type ProjectCardProps = {
   description: string;
 };
 
+// Displays a compact project summary card used in list-based views.
 export default function ProjectCard({
   id,
   title,
@@ -16,6 +17,7 @@ export default function ProjectCard({
   volunteers,
   description,
 }: ProjectCardProps) {
+  // Chooses the accent color used by the project status badge.
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'Ongoing':

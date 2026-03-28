@@ -5,6 +5,7 @@ type AppLogoProps = {
   width?: number;
 };
 
+// Draws the Volcre logo using layered shapes so it works without image assets.
 export default function AppLogo({ width = 96 }: AppLogoProps) {
   const height = Math.round(width * 0.71);
   const topLeafWidth = Math.round(width * 0.37);

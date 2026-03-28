@@ -16,12 +16,14 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+// Provides authentication state and session actions to the rest of the app.
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     // Check if user is already logged in
+    // Restores the previously signed-in user from storage when the app launches.
     const checkAuth = async () => {
       try {
         const currentUser = await getCurrentUser();
@@ -52,6 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     checkAuth();
   }, []);
 
+  // Saves the active user in memory and persistent storage after login.
   const login = async (userData: User) => {
     try {
       if (Platform.OS === 'web' && userData.role !== 'admin') {
@@ -72,6 +75,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  // Clears the active session and restores the previous user if logout fails.
   const logout = async () => {
     const previousUser = user;
     try {
@@ -84,6 +88,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  // Updates the current user profile in both context state and storage.
   const updateUserProfile = async (userData: User) => {
     const previousUser = user;
     try {
@@ -114,6 +119,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 }
 
+// Gives components access to the shared authentication context.
 export function useAuth() {
   const context = useContext(AuthContext);
   if (context === undefined) {

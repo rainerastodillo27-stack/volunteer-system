@@ -23,6 +23,7 @@ import {
 } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
 
+// Lets admins inspect volunteers, update availability, and assign projects.
 export default function VolunteerManagementScreen({ navigation, route }: any) {
   const { user, isAdmin } = useAuth();
   const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
@@ -77,6 +78,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     );
   }, [isAdmin, selectedVolunteer?.id]);
 
+  // Loads all volunteer profiles and keeps the selected volunteer in sync.
   const loadVolunteers = async () => {
     try {
       const allVolunteers = await getAllVolunteers();
@@ -96,6 +98,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     }
   };
 
+  // Loads available projects for matching and detail display.
   const loadProjects = async () => {
     try {
       const allProjects = await getAllProjects();
@@ -105,6 +108,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     }
   };
 
+  // Loads match history and completed projects for the selected volunteer.
   const loadSelectedVolunteerDetails = async (volunteerId: string) => {
     const [matches, completedProjectIds] = await Promise.all([
       getVolunteerProjectMatches(volunteerId),
@@ -114,6 +118,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     setSelectedVolunteerCompletedProjectIds(completedProjectIds);
   };
 
+  // Opens the detail view for the chosen volunteer.
   const handleSelectVolunteer = async (volunteer: Volunteer) => {
     if (!isAdmin) {
       Alert.alert('Access Restricted', 'Only admin accounts can manage volunteers.');
@@ -125,6 +130,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     setView('detail');
   };
 
+  // Assigns the selected volunteer to an in-progress project.
   const handleMatchVolunteer = async (projectId: string) => {
     if (!isAdmin) {
       Alert.alert('Access Restricted', 'Only admin accounts can match volunteers to projects.');
@@ -144,6 +150,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     }
   };
 
+  // Saves availability changes for the selected volunteer profile.
   const handleUpdateAvailability = async () => {
     if (!isAdmin) {
       Alert.alert('Access Restricted', 'Only admin accounts can update volunteer availability.');
@@ -172,6 +179,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     }
   };
 
+  // Adds or removes one selected day from the volunteer availability draft.
   const toggleAvailableDay = (day: string) => {
     setAvailableDays(prev =>
       prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day]
@@ -192,6 +200,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     );
   }
 
+  // Returns in-progress projects already matched to the selected volunteer.
   const getMatchedProjects = () => {
     return projects.filter(p =>
       p.status === 'In Progress' &&
@@ -199,6 +208,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     );
   };
 
+  // Returns in-progress projects still waiting for match approval.
   const getPendingProjects = () => {
     return projects.filter(p =>
       p.status === 'In Progress' &&
@@ -206,6 +216,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     );
   };
 
+  // Returns in-progress projects that can still accept this volunteer.
   const getAvailableProjects = () => {
     return projects.filter(
       p =>

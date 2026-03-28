@@ -44,6 +44,7 @@ type ProjectChatItem = {
 
 type ChatMessage = Message | ProjectGroupMessage;
 
+// Converts a user role into a label that is easier to read in chat lists.
 const formatRoleLabel = (chatUser: User) => {
   if (chatUser.role === 'admin') {
     return 'NVC Admin Account';
@@ -52,6 +53,7 @@ const formatRoleLabel = (chatUser: User) => {
   return chatUser.role.charAt(0).toUpperCase() + chatUser.role.slice(1);
 };
 
+// Formats message timestamps for the conversation preview and chat bubbles.
 const formatMessageTime = (timestamp?: string) => {
   if (!timestamp) {
     return '';
@@ -65,9 +67,11 @@ const formatMessageTime = (timestamp?: string) => {
   return format(parsedDate, 'HH:mm');
 };
 
+// Generates a lightweight local id before the message is saved.
 const createMessageId = () =>
   `msg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
+// Keeps direct conversations ordered by the newest message first.
 function sortConversations(items: ConversationItem[]): ConversationItem[] {
   return [...items].sort((left, right) => {
     const leftTime = left.lastMessage ? new Date(left.lastMessage.timestamp).getTime() : 0;
@@ -76,6 +80,7 @@ function sortConversations(items: ConversationItem[]): ConversationItem[] {
   });
 }
 
+// Replaces an existing message or appends a new one while keeping chat order stable.
 function upsertChatMessage(currentMessages: ChatMessage[], nextMessage: ChatMessage): ChatMessage[] {
   const existingIndex = currentMessages.findIndex(message => message.id === nextMessage.id);
   if (existingIndex >= 0) {
@@ -89,6 +94,7 @@ function upsertChatMessage(currentMessages: ChatMessage[], nextMessage: ChatMess
   );
 }
 
+// Counts unique volunteers participating in a project chat.
 function countProjectParticipants(
   project: Project,
   joinRecords: VolunteerProjectJoinRecord[]
@@ -112,6 +118,7 @@ function countProjectParticipants(
   return Math.max(participants.size, matchedVolunteerCount, project.volunteers.length);
 }
 
+// Manages direct messages and volunteer project group chats.
 export default function CommunicationHubScreen({ navigation, route }: any) {
   const { user } = useAuth();
   const [view, setView] = useState<'conversations' | 'detail'>('conversations');
@@ -143,6 +150,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     allUsersRef.current = allUsers;
   }, [allUsers]);
 
+  // Loads all chatable users except the currently logged-in account.
   const loadUsers = async () => {
     try {
       const users = await getAllUsers();
@@ -160,6 +168,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     }
   };
 
+  // Builds the conversation list with unread counts and latest messages.
   const loadConversations = async () => {
     try {
       const allMessages = await getMessagesForUser(user?.id || '');
@@ -195,6 +204,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     }
   };
 
+  // Loads joined project or event chats for volunteer accounts.
   const loadProjectChats = async () => {
     if (!user?.id || user.role !== 'volunteer') {
       setProjectChats([]);
@@ -234,6 +244,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     }
   };
 
+  // Loads the messages for the currently selected direct or group chat.
   const loadSelectedMessages = async () => {
     if (!user) {
       return;
@@ -453,6 +464,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     }
   }, [projectChats, selectedProjectChat]);
 
+  // Sends a direct or project group message from the current detail view.
   const handleSendMessage = async () => {
     if (!messageText.trim() || !user) {
       Alert.alert('Error', 'Message cannot be empty');
@@ -511,6 +523,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     }
   };
 
+  // Opens a direct conversation with the selected user.
   const handleSelectUser = (chatUser: User) => {
     setSelectedUser(chatUser);
     setSelectedProjectChat(null);
@@ -518,6 +531,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     setView('detail');
   };
 
+  // Opens the selected project or event group chat.
   const handleSelectProjectChat = (projectChat: ProjectChatItem) => {
     setSelectedProjectChat(projectChat);
     setSelectedUser(null);
@@ -525,6 +539,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     setView('detail');
   };
 
+  // Resolves the sender name shown above each group chat message.
   const getSenderLabel = (senderId: string) => {
     if (senderId === user?.id) {
       return 'You';

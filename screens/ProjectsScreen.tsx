@@ -28,6 +28,7 @@ type Recommendation = {
   reasons: string[];
 };
 
+// Normalizes text into searchable word tokens for project recommendations.
 const normalizeWords = (value?: string) =>
   (value || '')
     .toLowerCase()
@@ -35,8 +36,10 @@ const normalizeWords = (value?: string) =>
     .split(/\s+/)
     .filter((word) => word.length > 2);
 
+// Removes duplicate recommendation terms while preserving display order.
 const unique = (values: string[]) => Array.from(new Set(values));
 
+// Builds a lightweight recommendation label for a volunteer and project pair.
 function getProjectSuggestion(project: Project, volunteer: Volunteer | null): Recommendation {
   if (!volunteer) {
     return {
@@ -72,6 +75,7 @@ function getProjectSuggestion(project: Project, volunteer: Volunteer | null): Re
   };
 }
 
+// Lists projects and actions for volunteers, partners, and admins.
 export default function ProjectsScreen({ navigation, route }: any) {
   const { user } = useAuth();
   const projectListRef = useRef<FlatList<Project> | null>(null);
@@ -84,6 +88,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
   const [loadingProjectId, setLoadingProjectId] = useState<string | null>(null);
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
 
+  // Applies the latest project snapshot to local screen state.
   const applySnapshot = useCallback((snapshot: {
     projects: Project[];
     volunteerProfile: Volunteer | null;
@@ -100,6 +105,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
     });
   }, []);
 
+  // Loads projects plus role-specific volunteer or partner data for this screen.
   const loadProjectsData = useCallback(async () => {
     try {
       const snapshot = await getProjectsScreenSnapshot(user);
@@ -164,6 +170,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
     navigation.setParams({ projectId: undefined });
   }, [navigation, projects, route?.params?.projectId]);
 
+  // Sends a join request for the active project based on the current user role.
   const handleJoinProject = async (projectId: string) => {
     if (!user?.id) return;
     try {
@@ -202,6 +209,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
     }
   };
 
+  // Starts a volunteer time log for the selected project.
   const handleTimeIn = async (projectId: string) => {
     if (!volunteerProfile) return;
     try {
@@ -222,6 +230,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
     }
   };
 
+  // Ends the active volunteer time log for the selected project.
   const handleTimeOut = async (projectId: string) => {
     if (!volunteerProfile) return;
     try {
@@ -249,6 +258,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
     }
   };
 
+  // Opens the group chat tied to the selected project or event.
   const handleOpenGroupChat = (projectId: string) => {
     navigation.navigate('Messages', { projectId });
   };
@@ -278,6 +288,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
     [volunteerMatches]
   );
 
+  // Checks whether the current volunteer is already part of a project.
   const isJoined = useCallback((project: Project) => {
     const joinedUsers = project.joinedUserIds || [];
     const volunteerId = volunteerProfile?.id;
@@ -287,6 +298,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
     );
   }, [user?.id, volunteerProfile?.id]);
 
+  // Formats timestamps shown on time logs and project metadata.
   const formatTimestamp = (value?: string) => {
     if (!value) return '--';
     const parsed = new Date(value);
@@ -294,6 +306,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
     return format(parsed, 'MMM d, HH:mm');
   };
 
+  // Renders a single project card with role-specific actions.
   const renderProjectItem = useCallback(({ item }: { item: Project }) => {
           const suggestion = getProjectSuggestion(item, volunteerProfile);
           const joined = isJoined(item);

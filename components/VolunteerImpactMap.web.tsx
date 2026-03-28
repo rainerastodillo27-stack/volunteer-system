@@ -15,6 +15,7 @@ type VolunteerImpactMapProps = {
   projects: Project[];
 };
 
+// Resolves the Google Maps web API key from Expo config or environment variables.
 function getWebGoogleMapsApiKey(): string | undefined {
   const constantsAny = Constants as typeof Constants & {
     manifest?: { extra?: Record<string, unknown> };
@@ -37,6 +38,7 @@ function getWebGoogleMapsApiKey(): string | undefined {
     : undefined;
 }
 
+// Loads the Google Maps browser script once and reuses the shared promise.
 function loadGoogleMapsScript(apiKey: string) {
   const browserWindow = window as Window & {
     google?: any;
@@ -84,6 +86,7 @@ function loadGoogleMapsScript(apiKey: string) {
   return browserWindow.__googleMapsScriptPromise;
 }
 
+// Displays the volunteer impact map using Google Maps on web.
 export default function VolunteerImpactMap({ projects }: VolunteerImpactMapProps) {
   const [selectedProject, setSelectedProject] = useState<Project | null>(projects[0] || null);
   const [mapError, setMapError] = useState<string | null>(null);

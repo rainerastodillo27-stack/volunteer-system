@@ -1,9 +1,11 @@
-// User Roles
+// Shared TypeScript models used by the frontend storage layer and screens.
+
+// User role and profile enums used throughout the app.
 export type UserRole = 'admin' | 'volunteer' | 'partner';
 export type UserType = 'Student' | 'Adult' | 'Senior';
 export type NVCSector = 'Education' | 'Livelihood' | 'Nutrition';
 
-// User
+// Represents an application account that can sign in to the system.
 export interface User {
   id: string;
   email?: string;
@@ -16,7 +18,7 @@ export interface User {
   createdAt: string;
 }
 
-// Partner/Organization
+// Represents a partner organization profile submitted to the system.
 export interface Partner {
   id: string;
   ownerUserId?: string; // Partner account that owns/submitted this org profile
@@ -33,7 +35,7 @@ export interface Partner {
   registrationDocuments?: string[]; // URLs to documents
 }
 
-// Project
+// Represents a project or event managed inside the volunteer system.
 export interface Project {
   id: string;
   title: string;
@@ -57,7 +59,7 @@ export interface Project {
   statusUpdates: StatusUpdate[];
 }
 
-// Status Update for Project Lifecycle Tracking
+// Represents one lifecycle update attached to a project.
 export interface StatusUpdate {
   id: string;
   projectId: string;
@@ -67,12 +69,13 @@ export interface StatusUpdate {
   updatedAt: string;
 }
 
-// Volunteer
+// Represents a volunteer affiliation entry from the membership sheet.
 export interface VolunteerAffiliation {
   organization: string;
   position: string;
 }
 
+// Represents a volunteer profile and activity metadata.
 export interface Volunteer {
   id: string;
   userId: string; // Reference to User
@@ -105,6 +108,7 @@ export interface Volunteer {
   createdAt: string;
 }
 
+// Represents a volunteer's time-in/time-out record for a project.
 export interface VolunteerTimeLog {
   id: string;
   volunteerId: string;
@@ -114,7 +118,7 @@ export interface VolunteerTimeLog {
   note?: string;
 }
 
-// Communication/Message
+// Represents a direct message between two users.
 export interface Message {
   id: string;
   senderId: string;
@@ -126,6 +130,7 @@ export interface Message {
   attachments?: string[]; // File URLs
 }
 
+// Represents a message posted inside a project group chat.
 export interface ProjectGroupMessage {
   id: string;
   projectId: string;
@@ -135,7 +140,7 @@ export interface ProjectGroupMessage {
   attachments?: string[]; // File URLs
 }
 
-// Matching (Volunteer to Project)
+// Represents a volunteer-to-project matching request or assignment.
 export interface VolunteerProjectMatch {
   id: string;
   volunteerId: string;
@@ -145,6 +150,7 @@ export interface VolunteerProjectMatch {
   hoursContributed: number;
 }
 
+// Represents a volunteer joining a project through either self-join or admin assignment.
 export interface VolunteerProjectJoinRecord {
   id: string;
   projectId: string;
@@ -159,6 +165,7 @@ export interface VolunteerProjectJoinRecord {
   completedBy?: string;
 }
 
+// Represents a partner's request to join a project or event.
 export interface PartnerProjectApplication {
   id: string;
   projectId: string;
@@ -171,7 +178,7 @@ export interface PartnerProjectApplication {
   reviewedBy?: string;
 }
 
-// Admin Statistics
+// Represents top-level admin dashboard statistics.
 export interface AdminStats {
   totalPartners: number;
   approvedPartners: number;
@@ -182,6 +189,7 @@ export interface AdminStats {
   totalHoursContributed: number;
 }
 
+// Represents the organization's sector goals shown on partner dashboards.
 export interface SectorNeed {
   sector: NVCSector;
   title: string;

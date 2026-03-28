@@ -29,6 +29,7 @@ type SignupVolunteerSheetState = {
   affiliationPos2: string;
 };
 
+// Returns a clean volunteer membership form state for the signup modal.
 function createEmptySignupVolunteerSheet(): SignupVolunteerSheetState {
   return {
     gender: '',
@@ -48,7 +49,8 @@ function createEmptySignupVolunteerSheet(): SignupVolunteerSheetState {
   };
 }
 
-export default function LoginScreen({ navigation }: any) {
+// Handles account login and volunteer or partner self-registration.
+export default function LoginScreen() {
   const isWeb = Platform.OS === 'web';
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
@@ -85,6 +87,7 @@ export default function LoginScreen({ navigation }: any) {
   useEffect(() => {
     let cancelled = false;
 
+    // Checks whether the backend is reachable before allowing authentication flows.
     const checkBackend = async () => {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 10000);
@@ -140,6 +143,7 @@ export default function LoginScreen({ navigation }: any) {
       return undefined;
     }
 
+    // Loads stored accounts so users can quickly reuse credentials from this device.
     const loadSavedAccounts = async () => {
       try {
         const users = await getAllUsers();
@@ -164,6 +168,7 @@ export default function LoginScreen({ navigation }: any) {
     return unsubscribe;
   }, [backendStatus, isWeb]);
 
+  // Authenticates the user with an email or phone identifier and password.
   const handleLogin = async () => {
     if (!identifier.trim() || !password.trim()) {
       Alert.alert('Validation Error', 'Please enter email or phone and password');
@@ -205,6 +210,7 @@ export default function LoginScreen({ navigation }: any) {
     }
   };
 
+  // Clears all signup fields after registration or when the modal is closed.
   const resetSignupForm = () => {
     setSignupName('');
     setSignupEmail('');
@@ -217,6 +223,7 @@ export default function LoginScreen({ navigation }: any) {
     setSignupAcceptedCommitment(false);
   };
 
+  // Updates one field in the volunteer membership form without replacing the whole object.
   const updateSignupVolunteerSheet = <K extends keyof SignupVolunteerSheetState>(
     key: K,
     value: SignupVolunteerSheetState[K]
@@ -224,6 +231,7 @@ export default function LoginScreen({ navigation }: any) {
     setSignupVolunteerSheet(current => ({ ...current, [key]: value }));
   };
 
+  // Validates and creates a new volunteer or partner account.
   const handleSignup = async () => {
     if (!signupName.trim() || !signupPassword.trim()) {
       Alert.alert('Validation Error', 'Name and password are required.');
@@ -323,6 +331,7 @@ export default function LoginScreen({ navigation }: any) {
     }
   };
 
+  // Prefills the login form with a saved account for faster access.
   const handleUseSavedAccount = (account: User) => {
     setIdentifier(account.email || account.phone || '');
     setPassword(account.password);
@@ -900,9 +909,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#ddd',
     fontSize: 16,
-  },
-  inputError: {
-    borderColor: '#ff6b6b',
   },
   button: {
     backgroundColor: '#4CAF50',

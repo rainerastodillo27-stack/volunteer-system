@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -16,6 +16,7 @@ import {
 } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
 
+// Shows the latest dashboard metrics and shortcuts for the logged-in user.
 export default function DashboardScreen({ navigation }: any) {
   const { user, isAdmin, logout } = useAuth();
   const [projectStats, setProjectStats] = useState({ total: 0, active: 0, completed: 0 });
@@ -24,9 +25,10 @@ export default function DashboardScreen({ navigation }: any) {
   const [recentUpdates, setRecentUpdates] = useState<any[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
 
+  // Loads dashboard totals and recent status updates from storage.
   const loadDashboardData = React.useCallback(async () => {
     try {
-      const { projects, partners, users, volunteers, statusUpdates } = await getDashboardSnapshot();
+      const { projects, partners, users, statusUpdates } = await getDashboardSnapshot();
 
       setLoadError(null);
 
@@ -86,6 +88,7 @@ export default function DashboardScreen({ navigation }: any) {
     );
   }, [loadDashboardData]);
 
+  // Confirms logout before clearing the current authenticated session.
   const handleLogout = async () => {
     if (Platform.OS === 'web') {
       const confirmed = typeof window !== 'undefined' ? window.confirm('Are you sure you want to logout?') : true;
@@ -114,7 +117,6 @@ export default function DashboardScreen({ navigation }: any) {
         ? 'NVC Admin Account'
         : 'Administrator'
       : 'Volunteer Account';
-  const navigateTo = (screen: string) => navigation.navigate(screen);
 
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
@@ -155,7 +157,7 @@ export default function DashboardScreen({ navigation }: any) {
           <View style={styles.metricsGrid}>
             <TouchableOpacity
               style={styles.metricCard}
-              onPress={() => navigateTo('Projects')}
+              onPress={() => navigation.navigate('Projects')}
               activeOpacity={0.8}
               accessibilityRole="button"
             >
@@ -166,7 +168,7 @@ export default function DashboardScreen({ navigation }: any) {
 
             <TouchableOpacity
               style={styles.metricCard}
-              onPress={() => navigateTo('Partners')}
+              onPress={() => navigation.navigate('Partners')}
               activeOpacity={0.8}
               accessibilityRole="button"
             >
@@ -177,7 +179,7 @@ export default function DashboardScreen({ navigation }: any) {
 
             <TouchableOpacity
               style={styles.metricCard}
-              onPress={() => navigateTo('Users')}
+              onPress={() => navigation.navigate('Users')}
               activeOpacity={0.8}
               accessibilityRole="button"
             >
@@ -188,7 +190,7 @@ export default function DashboardScreen({ navigation }: any) {
 
             <TouchableOpacity
               style={styles.metricCard}
-              onPress={() => navigateTo('Projects')}
+              onPress={() => navigation.navigate('Projects')}
               activeOpacity={0.8}
               accessibilityRole="button"
             >
@@ -211,7 +213,7 @@ export default function DashboardScreen({ navigation }: any) {
 
         <TouchableOpacity
           style={styles.card}
-          onPress={() => navigateTo('Projects')}
+          onPress={() => navigation.navigate('Projects')}
           activeOpacity={0.85}
           accessibilityRole="button"
         >
@@ -247,7 +249,7 @@ export default function DashboardScreen({ navigation }: any) {
 
           <TouchableOpacity
             style={styles.card}
-            onPress={() => navigateTo('Partners')}
+            onPress={() => navigation.navigate('Partners')}
             activeOpacity={0.85}
             accessibilityRole="button"
           >
@@ -286,7 +288,7 @@ export default function DashboardScreen({ navigation }: any) {
             <TouchableOpacity
               key={index}
               style={styles.updateItem}
-              onPress={() => navigateTo('Lifecycle')}
+              onPress={() => navigation.navigate('Lifecycle')}
               activeOpacity={0.85}
               accessibilityRole="button"
             >

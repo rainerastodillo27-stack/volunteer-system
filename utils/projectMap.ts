@@ -1,6 +1,7 @@
 import { Project } from '../models/types';
 import { getProjectStatusColor } from './projectStatus';
 
+// Shared map constants and helpers for project and event map screens.
 export const EVENT_MARKER_COLOR = '#9C27B0';
 
 export const PHILIPPINES_REGION = {
@@ -22,10 +23,12 @@ export const PHILIPPINES_BOUNDS = {
   east: 127.5,
 };
 
+// Returns the marker color for a project, with events using a separate accent.
 export function getProjectMarkerColor(project: Pick<Project, 'isEvent' | 'status'>) {
   return project.isEvent ? EVENT_MARKER_COLOR : getProjectStatusColor(project.status);
 }
 
+// Computes an initial map region that keeps all known projects in view.
 export function getInitialProjectRegion(projects: Project[]) {
   if (projects.length === 0) {
     return PHILIPPINES_REGION;

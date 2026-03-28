@@ -23,6 +23,7 @@ type PartnerFormState = {
   category: Partner['category'];
 };
 
+// Returns the default partner form state for create or edit mode.
 function createEmptyPartnerForm(defaultEmail = ''): PartnerFormState {
   return {
     name: '',
@@ -34,6 +35,7 @@ function createEmptyPartnerForm(defaultEmail = ''): PartnerFormState {
   };
 }
 
+// Manages partner organization submission, review, and admin editing flows.
 export default function PartnerOnboardingScreen({ navigation }: any) {
   const { user, isAdmin } = useAuth();
   const [partners, setPartners] = useState<Partner[]>([]);
@@ -45,6 +47,7 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
   const [editingPartnerId, setEditingPartnerId] = useState<string | null>(null);
   const [showAdminEditor, setShowAdminEditor] = useState(false);
 
+  // Checks whether a partner record belongs to the signed-in partner account.
   const isOwnedByCurrentPartner = React.useCallback((partner: Partner) => {
     if (!user) {
       return false;
@@ -57,6 +60,7 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
     return partner.contactEmail.toLowerCase() === user.email?.toLowerCase();
   }, [user]);
 
+  // Loads the partner list for the current role and active filter.
   const loadPartners = React.useCallback(async () => {
     try {
       const allPartners = await getAllPartners();
@@ -94,6 +98,7 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
     });
   }, [loadPartners]);
 
+  // Updates a single field in the partner form state.
   const updatePartnerForm = <K extends keyof PartnerFormState>(
     key: K,
     value: PartnerFormState[K]
@@ -101,12 +106,14 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
     setPartnerForm(current => ({ ...current, [key]: value }));
   };
 
+  // Resets the partner form after save or cancel actions.
   const resetPartnerForm = () => {
     setPartnerForm(createEmptyPartnerForm(isAdmin ? '' : user?.email ?? ''));
     setEditingPartnerId(null);
     setShowAdminEditor(false);
   };
 
+  // Marks a pending partner organization as approved.
   const handleApprove = async (partnerId: string) => {
     try {
       const partner = partners.find(p => p.id === partnerId);
@@ -125,6 +132,7 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
     }
   };
 
+  // Marks a pending partner organization as rejected.
   const handleReject = async (partnerId: string) => {
     try {
       const partner = partners.find(p => p.id === partnerId);
@@ -143,6 +151,7 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
     }
   };
 
+  // Opens the admin edit form using an existing partner record.
   const handleEditPartner = (partner: Partner) => {
     setEditingPartnerId(partner.id);
     setPartnerForm({
@@ -156,12 +165,14 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
     setShowAdminEditor(true);
   };
 
+  // Opens an empty admin form for creating a new partner organization.
   const handleOpenAdminCreate = () => {
     setEditingPartnerId(null);
     setPartnerForm(createEmptyPartnerForm());
     setShowAdminEditor(true);
   };
 
+  // Saves an admin-created or admin-edited partner organization profile.
   const handleSavePartnerProfile = async () => {
     if (
       !partnerForm.name.trim() ||
@@ -207,6 +218,7 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
     }
   };
 
+  // Renders the reusable partner submission form for admin and partner flows.
   const renderPartnerFormCard = ({
     title,
     submitLabel,
@@ -285,7 +297,9 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
     </View>
   );
 
+  // Renders one partner organization card with actions based on the current role.
   const renderPartnerCard = (partner: Partner) => {
+    // Chooses the background color for the partner status badge.
     const getStatusColor = (status: string) => {
       switch (status) {
         case 'Approved':
@@ -364,6 +378,7 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
     );
   };
 
+  // Submits a new partner onboarding request from a partner account.
   const handleSubmitPartner = async () => {
     if (
       !partnerForm.name.trim() ||

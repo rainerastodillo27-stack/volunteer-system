@@ -17,6 +17,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { Partner, SectorNeed } from '../models/types';
 
+// Shows dashboard metrics and shortcuts for partner organization accounts.
 export default function PartnerDashboardScreen({ navigation }: any) {
   const { user, logout } = useAuth();
   const [orgStats, setOrgStats] = useState({ total: 0, pending: 0, approved: 0, rejected: 0 });
@@ -24,6 +25,7 @@ export default function PartnerDashboardScreen({ navigation }: any) {
   const [sectorNeeds, setSectorNeeds] = useState<SectorNeed[]>([]);
   const [myOrganizations, setMyOrganizations] = useState<Partner[]>([]);
 
+  // Checks whether an organization record belongs to the current partner user.
   const isOwnedByCurrentPartner = React.useCallback((partner: {
     ownerUserId?: string;
     contactEmail: string;
@@ -39,6 +41,7 @@ export default function PartnerDashboardScreen({ navigation }: any) {
     return partner.contactEmail.toLowerCase() === user.email?.toLowerCase();
   }, [user]);
 
+  // Loads partner-owned organizations, related projects, and current sector needs.
   const loadDashboardData = React.useCallback(async () => {
     try {
       const { partners, projects, sectorNeeds: nextSectorNeeds } = await getPartnerDashboardSnapshot();
@@ -71,6 +74,7 @@ export default function PartnerDashboardScreen({ navigation }: any) {
     }
   }, [isOwnedByCurrentPartner]);
 
+  // Chooses the color used for each organization approval status.
   const getStatusColor = (status: Partner['status']) => {
     switch (status) {
       case 'Approved':
@@ -99,6 +103,7 @@ export default function PartnerDashboardScreen({ navigation }: any) {
     });
   }, [loadDashboardData]);
 
+  // Confirms and clears the current partner session.
   const handleLogout = async () => {
     if (Platform.OS === 'web') {
       const confirmed = typeof window !== 'undefined' ? window.confirm('Are you sure you want to logout?') : true;

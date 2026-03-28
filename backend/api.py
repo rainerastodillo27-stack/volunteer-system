@@ -31,32 +31,39 @@ load_dotenv()
 TOP_VOLUNTEER_THRESHOLD = 5
 
 
+# Request payload for single-key storage writes.
 class StoragePayload(BaseModel):
     value: Any
 
 
+# Request payload for batch storage reads.
 class StorageBatchPayload(BaseModel):
     keys: list[str]
 
 
+# Request payload for username-or-phone login.
 class AuthLoginPayload(BaseModel):
     identifier: str
     password: str
 
 
+# Request payload for direct project joins.
 class ProjectJoinPayload(BaseModel):
     userId: str
 
 
+# Request payload for starting a volunteer time log.
 class VolunteerTimeLogStartPayload(BaseModel):
     projectId: str
     note: str | None = None
 
 
+# Request payload for ending a volunteer time log.
 class VolunteerTimeLogEndPayload(BaseModel):
     projectId: str
 
 
+# Request payload for partner join requests.
 class PartnerProjectJoinRequestPayload(BaseModel):
     projectId: str
     partnerUserId: str
@@ -64,6 +71,7 @@ class PartnerProjectJoinRequestPayload(BaseModel):
     partnerEmail: str = ""
 
 
+# Request payload for direct chat messages.
 class MessagePayload(BaseModel):
     id: str
     senderId: str
@@ -75,6 +83,7 @@ class MessagePayload(BaseModel):
     attachments: list[str] | None = None
 
 
+# Request payload for project group chat messages.
 class ProjectGroupMessagePayload(BaseModel):
     id: str
     projectId: str
@@ -96,19 +105,24 @@ app.add_middleware(
 )
 
 
+# Tracks active websocket clients for messages and shared storage updates.
 class ConnectionManager:
+    # Initializes the in-memory websocket connection registries.
     def __init__(self) -> None:
         self._connections: dict[str, set[WebSocket]] = {}
         self._storage_connections: set[WebSocket] = set()
 
+    # Registers a websocket for a specific user id.
     async def connect(self, user_id: str, websocket: WebSocket) -> None:
         await websocket.accept()
         self._connections.setdefault(user_id, set()).add(websocket)
 
+    # Registers a websocket that listens for shared storage changes.
     async def connect_storage(self, websocket: WebSocket) -> None:
         await websocket.accept()
         self._storage_connections.add(websocket)
 
+    # Removes a user-specific websocket connection.
     def disconnect(self, user_id: str, websocket: WebSocket) -> None:
         sockets = self._connections.get(user_id)
         if not sockets:
@@ -117,9 +131,11 @@ class ConnectionManager:
         if not sockets:
             self._connections.pop(user_id, None)
 
+    # Removes a shared-storage websocket connection.
     def disconnect_storage(self, websocket: WebSocket) -> None:
         self._storage_connections.discard(websocket)
 
+    # Sends one event payload to all active sockets for a user.
     async def send_user_event(self, user_id: str, payload: dict[str, Any]) -> None:
         sockets = list(self._connections.get(user_id, set()))
         stale: list[WebSocket] = []
@@ -131,12 +147,14 @@ class ConnectionManager:
         for socket in stale:
             self.disconnect(user_id, socket)
 
+    # Broadcasts a direct-message change to both sender and recipient.
     async def broadcast_message_event(self, message: dict[str, Any]) -> None:
         payload = {"type": "message.changed", "message": message}
         recipients = {message["senderId"], message["recipientId"]}
         for user_id in recipients:
             await self.send_user_event(user_id, payload)
 
+    # Broadcasts a project-group message to all eligible project chat participants.
     async def broadcast_project_group_message_event(
         self, project_id: str, message: dict[str, Any]
     ) -> None:
@@ -147,6 +165,7 @@ class ConnectionManager:
         for user_id in recipients:
             await self.send_user_event(user_id, payload)
 
+    # Broadcasts a shared-storage change notification to all listeners.
     async def broadcast_storage_event(self, keys: list[str]) -> None:
         if not keys:
             return
@@ -168,6 +187,7 @@ class ConnectionManager:
 connection_manager = ConnectionManager()
 
 
+# Ensures the direct-message table exists before message APIs are used.
 def ensure_message_storage() -> None:
     with get_postgres_connection() as connection:
         with connection.cursor() as cursor:
@@ -188,6 +208,7 @@ def ensure_message_storage() -> None:
         connection.commit()
 
 
+# Ensures the project group message table exists before group chat APIs are used.
 def ensure_project_group_message_storage() -> None:
     with get_postgres_connection() as connection:
         with connection.cursor() as cursor:
@@ -206,6 +227,7 @@ def ensure_project_group_message_storage() -> None:
         connection.commit()
 
 
+# Converts a database message row into the API shape returned to clients.
 def serialize_message_row(row: Any) -> dict[str, Any]:
     if row is None:
         raise HTTPException(status_code=404, detail="Message not found.")
@@ -228,6 +250,7 @@ def serialize_message_row(row: Any) -> dict[str, Any]:
     }
 
 
+# Converts a database project-group message row into the API response shape.
 def serialize_project_group_message_row(row: Any) -> dict[str, Any]:
     if row is None:
         raise HTTPException(status_code=404, detail="Project group message not found.")
@@ -248,6 +271,7 @@ def serialize_project_group_message_row(row: Any) -> dict[str, Any]:
     }
 
 
+# Returns the user ids that should have access to a project's group chat.
 def _get_project_chat_participant_user_ids(connection: Any, project_id: str) -> set[str]:
     project = _postgres_get_hot_item_by_id(connection, "projects", project_id)
     if project is None:
@@ -276,6 +300,7 @@ def _get_project_chat_participant_user_ids(connection: Any, project_id: str) -> 
     return participant_user_ids
 
 
+# Raises an error if the requesting user cannot access the project group chat.
 def _assert_project_group_chat_access(
     connection: Any, project_id: str, user_id: str
 ) -> dict[str, Any]:
@@ -299,6 +324,7 @@ def _assert_project_group_chat_access(
 
 
 @app.on_event("startup")
+# Prepares storage tables when the FastAPI app starts.
 def startup() -> None:
     ensure_app_storage_seeded()
     with get_postgres_connection() as connection:
@@ -307,6 +333,7 @@ def startup() -> None:
 
 
 @app.get("/health", response_model=None)
+# Returns a lightweight service summary.
 def health():
     configured_mode = get_configured_db_mode()
     timestamp = datetime.now(timezone.utc).isoformat()
@@ -343,6 +370,7 @@ def health():
     }
 
 
+# Finds a user by email or normalized phone identifier.
 def _get_user_by_identifier(identifier: str) -> dict[str, Any] | None:
     normalized_identifier = identifier.strip().lower()
     raw_identifier = identifier.strip()
@@ -364,15 +392,18 @@ def _get_user_by_identifier(identifier: str) -> dict[str, Any] | None:
     return None if row is None else row[0]
 
 
+# Blocks routes when Postgres is not available.
 def _require_postgres() -> None:
     if get_db_mode() != "postgres":
         raise HTTPException(status_code=503, detail="Supabase Postgres backend is unavailable.")
 
 
+# Sorts dictionaries by an ISO timestamp field in descending order.
 def _sort_iso_desc(items: list[dict[str, Any]], field: str) -> list[dict[str, Any]]:
     return sorted(items, key=lambda item: str(item.get(field) or ""), reverse=True)
 
 
+# Maps hot-storage keys to their backing table names.
 def _hot_table_name(key: str) -> str:
     table_name = HOT_STORAGE_TABLES.get(key)
     if not table_name:
@@ -380,6 +411,7 @@ def _hot_table_name(key: str) -> str:
     return table_name
 
 
+# Fetches a single hot-storage row by item id.
 def _postgres_get_hot_item_by_id(connection: Any, key: str, item_id: str) -> dict[str, Any] | None:
     table_name = _hot_table_name(key)
     with connection.cursor() as cursor:
@@ -388,6 +420,7 @@ def _postgres_get_hot_item_by_id(connection: Any, key: str, item_id: str) -> dic
     return None if row is None else row[0]
 
 
+# Builds a fallback email for legacy app-user backfills.
 def _legacy_app_user_email(user_id: str, user: dict[str, Any]) -> str:
     email = str(user.get("email") or "").strip().lower()
     if email:
@@ -396,6 +429,7 @@ def _legacy_app_user_email(user_id: str, user: dict[str, Any]) -> str:
     return f"{user_id}@volcre.local"
 
 
+# Mirrors a legacy user object into the `app_users` table.
 def _postgres_upsert_legacy_app_user(connection: Any, user_id: str, user: dict[str, Any]) -> None:
     with connection.cursor() as cursor:
         cursor.execute(
@@ -439,6 +473,7 @@ def _postgres_upsert_legacy_app_user(connection: Any, user_id: str, user: dict[s
         )
 
 
+# Ensures one legacy app user has a matching `app_users` record.
 def _postgres_ensure_legacy_app_user(connection: Any, user_id: str) -> None:
     user = _postgres_get_hot_item_by_id(connection, "users", user_id)
     if user is None:
@@ -447,6 +482,7 @@ def _postgres_ensure_legacy_app_user(connection: Any, user_id: str) -> None:
     _postgres_upsert_legacy_app_user(connection, user_id, user)
 
 
+# Backfills all legacy app users into the relational user table.
 def _postgres_sync_all_legacy_app_users(connection: Any) -> None:
     users = get_postgres_hot_storage_collection(connection, "users")
     for user in users:
@@ -455,6 +491,7 @@ def _postgres_sync_all_legacy_app_users(connection: Any) -> None:
             _postgres_upsert_legacy_app_user(connection, user_id, user)
 
 
+# Reads hot-storage items filtered by one field value.
 def _postgres_get_hot_items_by_field(
     connection: Any,
     key: str,
@@ -476,6 +513,7 @@ def _postgres_get_hot_items_by_field(
     return [row[0] for row in rows]
 
 
+# Inserts or updates one hot-storage item row.
 def _postgres_upsert_hot_item(connection: Any, key: str, item: dict[str, Any]) -> dict[str, Any]:
     item_id = item.get("id")
     if not isinstance(item_id, str) or not item_id:
@@ -506,11 +544,13 @@ def _postgres_upsert_hot_item(connection: Any, key: str, item: dict[str, Any]) -
     return item
 
 
+# Finds the volunteer profile tied to a specific user id.
 def _postgres_get_volunteer_by_user_id(connection: Any, user_id: str) -> dict[str, Any] | None:
     volunteers = _postgres_get_hot_items_by_field(connection, "volunteers", "userId", user_id)
     return volunteers[0] if volunteers else None
 
 
+# Computes joined-program count and top-volunteer recognition state.
 def _postgres_get_volunteer_recognition_status(
     connection: Any,
     volunteer_id: str,
@@ -556,6 +596,7 @@ def _postgres_get_volunteer_recognition_status(
     }
 
 
+# Returns project applications submitted by one partner user.
 def _postgres_get_partner_project_applications_by_user(
     connection: Any,
     partner_user_id: str,
@@ -569,11 +610,13 @@ def _postgres_get_partner_project_applications_by_user(
     return _sort_iso_desc(applications, "requestedAt")
 
 
+# Returns all saved time logs for one volunteer profile.
 def _postgres_get_volunteer_time_logs(connection: Any, volunteer_id: str) -> list[dict[str, Any]]:
     logs = _postgres_get_hot_items_by_field(connection, "volunteerTimeLogs", "volunteerId", volunteer_id)
     return _sort_iso_desc(logs, "timeIn")
 
 
+# Ensures a volunteer-project join record exists after approval or assignment.
 def _postgres_ensure_volunteer_project_join_record(
     connection: Any,
     project_id: str,
@@ -604,6 +647,7 @@ def _postgres_ensure_volunteer_project_join_record(
     _postgres_upsert_hot_item(connection, "volunteerProjectJoins", record)
 
 
+# Keeps volunteer engagement status aligned with active project work.
 def _postgres_sync_volunteer_engagement_status(
     connection: Any,
     volunteer_id: str,
@@ -632,6 +676,7 @@ def _postgres_sync_volunteer_engagement_status(
     return _postgres_upsert_hot_item(connection, "volunteers", updated_volunteer)
 
 
+# Adds hours from a completed time log into the volunteer profile total.
 def _postgres_add_logged_hours_to_volunteer(
     connection: Any,
     volunteer_id: str,
@@ -658,6 +703,7 @@ def _postgres_add_logged_hours_to_volunteer(
     return _postgres_upsert_hot_item(connection, "volunteers", updated_volunteer)
 
 
+# Builds the project snapshot payload consumed by frontend project screens.
 def _build_projects_snapshot(
     connection: Any,
     user_id: str | None,
@@ -693,6 +739,7 @@ def _build_projects_snapshot(
 
 
 @app.get("/")
+# Root endpoint used as a simple service presence check.
 def root() -> dict[str, Any]:
     return {
         "status": "ok",
@@ -704,6 +751,7 @@ def root() -> dict[str, Any]:
 
 
 @app.get("/db-health")
+# Database health endpoint used by the frontend startup checks.
 def db_health() -> dict[str, Any]:
     configured_mode = get_configured_db_mode()
     mode = get_db_mode()
@@ -735,11 +783,13 @@ def db_health() -> dict[str, Any]:
 
 
 @app.get("/users/lookup")
+# API endpoint that looks up a user by email or phone.
 def lookup_user(identifier: str) -> dict[str, Any]:
     return {"user": _get_user_by_identifier(identifier)}
 
 
 @app.post("/auth/login")
+# API endpoint that validates login credentials.
 def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
     user = _get_user_by_identifier(payload.identifier)
     if user is None or user.get("password") != payload.password:
@@ -749,6 +799,7 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
 
 
 @app.get("/projects/snapshot")
+# API endpoint that returns the projects screen snapshot.
 def get_projects_snapshot(user_id: str | None = None, role: str | None = None) -> dict[str, Any]:
     _require_postgres()
     with get_postgres_connection() as connection:
@@ -756,6 +807,7 @@ def get_projects_snapshot(user_id: str | None = None, role: str | None = None) -
 
 
 @app.get("/volunteers/by-user/{user_id}")
+# API endpoint that returns a volunteer profile by user id.
 def get_volunteer_by_user(user_id: str) -> dict[str, Any]:
     _require_postgres()
     with get_postgres_connection() as connection:
@@ -764,6 +816,7 @@ def get_volunteer_by_user(user_id: str) -> dict[str, Any]:
 
 
 @app.get("/volunteers/{volunteer_id}/recognition")
+# API endpoint that returns volunteer recognition metrics.
 def get_volunteer_recognition_status(volunteer_id: str) -> dict[str, Any]:
     _require_postgres()
     with get_postgres_connection() as connection:
@@ -772,6 +825,7 @@ def get_volunteer_recognition_status(volunteer_id: str) -> dict[str, Any]:
 
 
 @app.get("/volunteers/{volunteer_id}/time-logs")
+# API endpoint that returns a volunteer's time logs.
 def get_volunteer_logs(volunteer_id: str) -> dict[str, Any]:
     _require_postgres()
     with get_postgres_connection() as connection:
@@ -780,6 +834,7 @@ def get_volunteer_logs(volunteer_id: str) -> dict[str, Any]:
 
 
 @app.post("/volunteers/{volunteer_id}/time-logs/start")
+# API endpoint that starts a volunteer time log.
 async def start_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogStartPayload) -> dict[str, Any]:
     _require_postgres()
     with get_postgres_connection() as connection:
@@ -813,6 +868,7 @@ async def start_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogStartP
 
 
 @app.post("/volunteers/{volunteer_id}/time-logs/end")
+# API endpoint that ends a volunteer time log.
 async def end_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogEndPayload) -> dict[str, Any]:
     _require_postgres()
     with get_postgres_connection() as connection:
@@ -840,6 +896,7 @@ async def end_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogEndPaylo
 
 
 @app.get("/partner-project-applications/by-user/{partner_user_id}")
+# API endpoint that returns partner applications by partner user id.
 def get_partner_applications_by_user(partner_user_id: str) -> dict[str, Any]:
     _require_postgres()
     with get_postgres_connection() as connection:
@@ -848,6 +905,7 @@ def get_partner_applications_by_user(partner_user_id: str) -> dict[str, Any]:
 
 
 @app.post("/partner-project-applications/request")
+# API endpoint that creates a partner join request for a project.
 async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload) -> dict[str, Any]:
     _require_postgres()
     with get_postgres_connection() as connection:
@@ -885,6 +943,7 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
 
 
 @app.post("/projects/{project_id}/join")
+# API endpoint that joins a user directly to a project or event.
 async def join_project(project_id: str, payload: ProjectJoinPayload) -> dict[str, Any]:
     _require_postgres()
     with get_postgres_connection() as connection:
@@ -922,6 +981,7 @@ async def join_project(project_id: str, payload: ProjectJoinPayload) -> dict[str
 
 
 @app.get("/messages")
+# API endpoint that returns all direct messages for one user.
 def get_messages(user_id: str) -> dict[str, list[dict[str, Any]]]:
     ensure_message_storage()
     from psycopg.rows import dict_row
@@ -942,6 +1002,7 @@ def get_messages(user_id: str) -> dict[str, list[dict[str, Any]]]:
 
 
 @app.get("/messages/conversation")
+# API endpoint that returns the direct-message history between two users.
 def get_conversation(user1: str, user2: str) -> dict[str, list[dict[str, Any]]]:
     ensure_message_storage()
     from psycopg.rows import dict_row
@@ -963,6 +1024,7 @@ def get_conversation(user1: str, user2: str) -> dict[str, list[dict[str, Any]]]:
 
 
 @app.get("/projects/{project_id}/group-messages")
+# API endpoint that returns project group chat messages for an authorized user.
 def get_project_group_messages(project_id: str, user_id: str) -> dict[str, list[dict[str, Any]]]:
     ensure_project_group_message_storage()
     from psycopg.rows import dict_row
@@ -984,6 +1046,7 @@ def get_project_group_messages(project_id: str, user_id: str) -> dict[str, list[
 
 
 @app.post("/messages")
+# API endpoint that creates a direct message.
 async def create_message(payload: MessagePayload) -> dict[str, Any]:
     ensure_message_storage()
     attachments = payload.attachments or []
@@ -1021,6 +1084,7 @@ async def create_message(payload: MessagePayload) -> dict[str, Any]:
 
 
 @app.post("/projects/{project_id}/group-messages")
+# API endpoint that creates a project group chat message.
 async def create_project_group_message(
     project_id: str, payload: ProjectGroupMessagePayload
 ) -> dict[str, Any]:
@@ -1061,6 +1125,7 @@ async def create_project_group_message(
 
 
 @app.patch("/messages/{message_id}/read")
+# API endpoint that marks one direct message as read.
 async def mark_message_read(message_id: str) -> dict[str, Any]:
     ensure_message_storage()
     from psycopg.rows import dict_row
@@ -1085,6 +1150,7 @@ async def mark_message_read(message_id: str) -> dict[str, Any]:
 
 
 @app.websocket("/ws/messages/{user_id}")
+# Websocket endpoint that streams message events to one user.
 async def messages_websocket(websocket: WebSocket, user_id: str) -> None:
     await connection_manager.connect(user_id, websocket)
     try:
@@ -1097,6 +1163,7 @@ async def messages_websocket(websocket: WebSocket, user_id: str) -> None:
 
 
 @app.websocket("/ws/storage")
+# Websocket endpoint that streams shared storage changes to all listeners.
 async def storage_websocket(websocket: WebSocket) -> None:
     await connection_manager.connect_storage(websocket)
     try:
@@ -1109,6 +1176,7 @@ async def storage_websocket(websocket: WebSocket) -> None:
 
 
 @app.get("/storage/{key}")
+# API endpoint that reads one storage key from app storage or hot storage.
 def get_storage_item(key: str) -> dict[str, Any]:
     _require_postgres()
     if is_hot_storage_key(key):
@@ -1125,6 +1193,7 @@ def get_storage_item(key: str) -> dict[str, Any]:
 
 
 @app.post("/storage/batch")
+# API endpoint that reads multiple storage keys in a single request.
 def get_storage_items_batch(payload: StorageBatchPayload) -> dict[str, dict[str, Any]]:
     keys = [key for key in payload.keys if key]
     items: dict[str, Any] = {key: None for key in keys}
@@ -1157,6 +1226,7 @@ def get_storage_items_batch(payload: StorageBatchPayload) -> dict[str, dict[str,
 
 
 @app.put("/storage/{key}")
+# API endpoint that writes one storage key and broadcasts the change.
 async def put_storage_item(key: str, payload: StoragePayload) -> dict[str, str]:
     _require_postgres()
     if is_hot_storage_key(key):
@@ -1192,6 +1262,7 @@ async def put_storage_item(key: str, payload: StoragePayload) -> dict[str, str]:
 
 
 @app.delete("/storage/{key}")
+# API endpoint that deletes one storage key and any backing hot-storage rows.
 async def delete_storage_item(key: str) -> dict[str, str]:
     _require_postgres()
     if is_hot_storage_key(key):
@@ -1211,6 +1282,7 @@ async def delete_storage_item(key: str) -> dict[str, str]:
 
 
 @app.delete("/storage")
+# API endpoint that clears all app storage and hot-storage collections.
 async def clear_storage() -> dict[str, str]:
     _require_postgres()
     with get_postgres_connection() as connection:
@@ -1224,6 +1296,7 @@ async def clear_storage() -> dict[str, str]:
 
 
 @app.post("/bootstrap")
+# API endpoint that seeds app storage with demo data.
 def bootstrap_storage() -> dict[str, str]:
     ensure_app_storage_seeded()
     return {"status": "ok"}

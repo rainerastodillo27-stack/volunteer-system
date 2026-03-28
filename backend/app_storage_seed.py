@@ -19,10 +19,12 @@ HOT_STORAGE_TABLES = {
 EXPECTED_HOT_STORAGE_COLUMNS = {"id", "data", "sort_order", "updated_at"}
 
 
+# Builds an ISO timestamp for seeded app-storage demo records.
 def _iso(year: int, month: int, day: int) -> str:
     return datetime(year, month, day, tzinfo=timezone.utc).isoformat()
 
 
+# Builds the demo JSON collections used by the app storage layer.
 def build_demo_app_storage() -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat()
@@ -425,6 +427,7 @@ def build_demo_app_storage() -> dict[str, Any]:
     }
 
 
+# Ensures the generic `app_storage` table exists before seeding JSON data.
 def ensure_app_storage_table() -> None:
     with get_postgres_connection() as connection:
         with connection.cursor() as cursor:
@@ -440,10 +443,12 @@ def ensure_app_storage_table() -> None:
         connection.commit()
 
 
+# Checks whether a storage key should use a dedicated hot-storage table.
 def is_hot_storage_key(key: str) -> bool:
     return key in HOT_STORAGE_TABLES
 
 
+# Ensures all hot-storage tables exist with the expected schema.
 def ensure_postgres_hot_storage_tables(connection: Any) -> None:
     with connection.cursor() as cursor:
         for table_name in HOT_STORAGE_TABLES.values():
@@ -502,6 +507,7 @@ def ensure_postgres_hot_storage_tables(connection: Any) -> None:
         )
 
 
+# Reads one hot-storage collection from its dedicated relational table.
 def get_postgres_hot_storage_collection(connection: Any, key: str) -> list[Any]:
     table_name = HOT_STORAGE_TABLES[key]
     with connection.cursor() as cursor:
@@ -517,6 +523,7 @@ def get_postgres_hot_storage_collection(connection: Any, key: str) -> list[Any]:
     return [row[0] for row in rows]
 
 
+# Replaces all rows in a hot-storage collection with a normalized item list.
 def replace_postgres_hot_storage_collection(
     connection: Any,
     key: str,
@@ -557,18 +564,21 @@ def replace_postgres_hot_storage_collection(
             )
 
 
+# Deletes all rows for one hot-storage collection.
 def clear_postgres_hot_storage_collection(connection: Any, key: str) -> None:
     table_name = HOT_STORAGE_TABLES[key]
     with connection.cursor() as cursor:
         cursor.execute(f"delete from {table_name}")
 
 
+# Deletes all rows from every hot-storage collection.
 def clear_all_postgres_hot_storage(connection: Any) -> None:
     with connection.cursor() as cursor:
         for table_name in HOT_STORAGE_TABLES.values():
             cursor.execute(f"delete from {table_name}")
 
 
+# Reads a batch of generic app-storage items from Postgres.
 def _get_postgres_app_storage_items(connection: Any, keys: list[str]) -> dict[str, Any]:
     if not keys:
         return {}
@@ -583,6 +593,7 @@ def _get_postgres_app_storage_items(connection: Any, keys: list[str]) -> dict[st
     return {row[0]: row[1] for row in rows}
 
 
+# Checks whether a hot-storage collection needs to be backfilled from source data.
 def _postgres_hot_storage_needs_backfill(connection: Any, key: str) -> bool:
     table_name = HOT_STORAGE_TABLES[key]
     with connection.cursor() as cursor:
@@ -605,6 +616,7 @@ def _postgres_hot_storage_needs_backfill(connection: Any, key: str) -> bool:
     return row_count == 0 or has_invalid_rows
 
 
+# Ensures each hot-storage table has seed data when it is empty or invalid.
 def ensure_postgres_hot_storage_seeded(connection: Any, demo_storage: dict[str, Any]) -> None:
     ensure_postgres_hot_storage_tables(connection)
     existing_storage = _get_postgres_app_storage_items(connection, list(HOT_STORAGE_TABLES.keys()))
@@ -618,6 +630,7 @@ def ensure_postgres_hot_storage_seeded(connection: Any, demo_storage: dict[str, 
             replace_postgres_hot_storage_collection(connection, key, source_items)
 
 
+# Seeds both app storage and hot-storage tables with demo data.
 def ensure_app_storage_seeded() -> None:
     ensure_app_storage_table()
     demo_storage = build_demo_app_storage()
@@ -637,6 +650,7 @@ def ensure_app_storage_seeded() -> None:
         connection.commit()
 
 
+# CLI entry point for seeding demo app-storage data into Postgres.
 def main() -> None:
     ensure_app_storage_seeded()
     print("App storage demo data ensured.")

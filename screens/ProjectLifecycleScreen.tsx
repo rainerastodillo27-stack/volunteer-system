@@ -75,6 +75,7 @@ type ProjectVolunteerRequestEntry = {
   status: VolunteerProjectMatch['status'];
 };
 
+// Returns the default project form used for create and edit flows.
 const createEmptyProjectDraft = (partnerId = ''): ProjectDraft => ({
   title: '',
   description: '',
@@ -90,6 +91,7 @@ const createEmptyProjectDraft = (partnerId = ''): ProjectDraft => ({
   isEvent: false,
 });
 
+// Gives admins a project lifecycle workspace for projects, updates, and approvals.
 export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const { user, isAdmin } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
@@ -168,6 +170,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     );
   }, [selectedProject?.id]);
 
+  // Loads all projects and refreshes the currently selected project reference.
   const loadProjects = async () => {
     try {
       const allProjects = await getAllProjects();
@@ -186,6 +189,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     }
   };
 
+  // Loads partner organizations for project ownership selection.
   const loadPartners = async () => {
     try {
       const allPartners = await getAllPartners();
@@ -198,6 +202,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     }
   };
 
+  // Loads volunteers shown in project assignment and completion sections.
   const loadVolunteers = async () => {
     try {
       const allVolunteers = await getAllVolunteers();
@@ -207,6 +212,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     }
   };
 
+  // Loads lifecycle updates for the selected project.
   const loadStatusUpdates = async (projectId: string) => {
     try {
       const updates = await getStatusUpdatesByProject(projectId);
@@ -216,6 +222,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     }
   };
 
+  // Loads partner join requests for the selected project.
   const loadPartnerApplicationsForProject = async (projectId: string) => {
     try {
       const applications = await getPartnerProjectApplications(projectId);
@@ -225,6 +232,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     }
   };
 
+  // Loads volunteers who have already joined the selected project.
   const loadVolunteerJoinsForProject = async (projectId: string) => {
     try {
       const records = await getVolunteerProjectJoinRecords(projectId);
@@ -234,6 +242,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     }
   };
 
+  // Loads volunteer join requests tied to the selected project.
   const loadVolunteerMatchesForProject = async (projectId: string) => {
     try {
       const matches = await getProjectMatches(projectId);
@@ -243,6 +252,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     }
   };
 
+  // Loads all volunteer match requests for dashboard-level notifications.
   const loadAllVolunteerMatches = async () => {
     try {
       const matches = await getAllVolunteerProjectMatches();
@@ -252,6 +262,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     }
   };
 
+  // Selects a project and loads all related lifecycle details.
   const handleSelectProject = async (project: Project) => {
     setSelectedProject(project);
     await Promise.all([
@@ -277,12 +288,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     navigation.setParams({ projectId: undefined });
   }, [navigation, projects, route?.params?.projectId]);
 
+  // Opens the project modal in create mode with a blank draft.
   const openCreateProjectModal = () => {
     setEditingProjectId(null);
     setProjectDraft(createEmptyProjectDraft(partners[0]?.id || ''));
     setShowProjectModal(true);
   };
 
+  // Opens the project modal in edit mode using the selected project values.
   const openEditProjectModal = (project: Project) => {
     setEditingProjectId(project.id);
     setProjectDraft({
@@ -303,10 +316,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     setShowProjectModal(true);
   };
 
+  // Updates a single project draft field without replacing the entire object.
   const handleProjectDraftChange = <K extends keyof ProjectDraft>(key: K, value: ProjectDraft[K]) => {
     setProjectDraft(current => ({ ...current, [key]: value }));
   };
 
+  // Creates or updates a project record from the modal form.
   const handleSaveProjectRecord = async () => {
     if (!isAdmin) {
       Alert.alert('Access Restricted', 'Only admin accounts can manage programs.');
@@ -379,6 +394,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     }
   };
 
+  // Confirms and deletes the currently edited project record.
   const handleDeleteProjectRecord = () => {
     if (!selectedProject || !isAdmin) {
       return;
@@ -410,6 +426,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     );
   };
 
+  // Adds a new lifecycle status update to the selected project.
   const handleAddStatusUpdate = async () => {
     if (!isAdmin) {
       Alert.alert('Access Restricted', 'Only admin accounts can add project status updates.');
@@ -473,6 +490,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     }
   };
 
+  // Marks a volunteer's participation in the selected project as completed.
   const handleCompleteVolunteerParticipation = async (volunteerId: string) => {
     if (!isAdmin || !user?.id || !selectedProject) {
       return;
@@ -545,6 +563,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     );
   };
 
+  // Counts pending volunteer requests per project for list badges.
   const pendingVolunteerRequestCountByProjectId = useMemo(() => {
     const counts = new Map<string, number>();
 
@@ -559,6 +578,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     return counts;
   }, [allVolunteerMatches]);
 
+  // Builds the volunteer list displayed for a specific project.
   const getProjectVolunteerEntries = (project: Project) => {
     const volunteerById = new Map(volunteers.map(volunteer => [volunteer.id, volunteer]));
     const joinRecordByVolunteerId = new Map(
@@ -598,6 +618,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       });
   };
 
+  // Builds the pending volunteer-request list for the selected project.
   const getProjectVolunteerRequestEntries = () => {
     const volunteerById = new Map(volunteers.map(volunteer => [volunteer.id, volunteer]));
 
@@ -623,6 +644,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       .sort((a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime());
   };
 
+  // Renders one project card in the lifecycle list.
   const renderProjectCard = (project: Project) => {
     const pendingRequestCount = pendingVolunteerRequestCountByProjectId.get(project.id) || 0;
 

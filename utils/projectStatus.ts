@@ -1,5 +1,6 @@
 import { Project } from '../models/types';
 
+// Maps project lifecycle states to the colors used across the UI.
 export function getProjectStatusColor(status: Project['status']) {
   switch (status) {
     case 'Planning':

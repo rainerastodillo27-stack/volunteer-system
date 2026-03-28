@@ -122,6 +122,7 @@ delete from app_storage where key in ('impactReports', 'donations');
 """
 
 
+# Creates or updates the backend schema used by the volunteer system.
 def main() -> None:
     with get_connection() as connection:
         with connection.cursor() as cursor:

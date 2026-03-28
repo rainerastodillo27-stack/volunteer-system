@@ -38,6 +38,7 @@ const SIDEBAR_WIDTH_COLLAPSED = 60;
 const CONTENT_GUTTER = 32;
 const CONTENT_GUTTER_COLLAPSED = 80;
 
+// Maps each tab route to the icon shown in the bottom tab bar or web sidebar.
 const getIconName = (routeName: keyof TabParamList) => {
   switch (routeName) {
     case 'Dashboard':
@@ -70,6 +71,7 @@ type SidebarProps = BottomTabBarProps & {
   onToggle: () => void;
 };
 
+// Renders the custom admin web sidebar in place of the default tab bar.
 function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle }: SidebarProps) {
   const systemsRoutes = state.routes.filter(
     route =>
@@ -86,6 +88,7 @@ function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle }: 
       route.name === 'Profile'
   );
 
+  // Renders a single clickable route entry inside the admin sidebar.
   const renderItem = (routeName: string) => {
     const route = state.routes.find(r => r.name === routeName);
     if (!route) return null;
@@ -185,6 +188,7 @@ function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle }: 
   );
 }
 
+// Builds the main authenticated tab layout for admin, partner, and volunteer users.
 export default function TabNavigator() {
   const { user, isAdmin } = useAuth();
   const [messageUnreadCount, setMessageUnreadCount] = useState(0);
@@ -212,6 +216,7 @@ export default function TabNavigator() {
       return;
     }
 
+    // Refreshes the unread direct-message badge shown on the Messages tab.
     const loadUnreadCount = async () => {
       try {
         const messages = await getMessagesForUser(user.id);
