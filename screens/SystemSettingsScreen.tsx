@@ -8,13 +8,13 @@ import { getApiBaseUrl, initializeMockData } from '../models/storage';
 export default function SystemSettingsScreen() {
   const { user, logout, isAdmin } = useAuth();
 
-  // Re-seeds the backend with demo records used by the app.
+  // Re-seeds the backend with the demo login accounts used by the app.
   const handleSeedBackendData = async () => {
     try {
       await initializeMockData();
-      Alert.alert('Updated', 'Demo data has been synchronized to the Postgres-backed backend.');
+      Alert.alert('Updated', 'Demo login accounts have been synchronized to the Postgres-backed backend.');
     } catch (error) {
-      Alert.alert('Error', 'Failed to seed demo data into the backend.');
+      Alert.alert('Error', 'Failed to seed demo login accounts into the backend.');
     }
   };
 
@@ -76,10 +76,10 @@ export default function SystemSettingsScreen() {
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>Backend Data Controls</Text>
         <Text style={styles.infoText}>
-          Re-sync seeded users, partners, and projects into the Postgres-backed backend storage.
+          Re-sync the demo login accounts into the Postgres-backed backend storage.
         </Text>
         <TouchableOpacity style={styles.primaryButton} onPress={handleSeedBackendData}>
-          <Text style={styles.primaryButtonText}>Seed Backend Demo Data</Text>
+          <Text style={styles.primaryButtonText}>Seed Demo Login Accounts</Text>
         </TouchableOpacity>
       </View>
 

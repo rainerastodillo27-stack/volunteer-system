@@ -194,9 +194,9 @@ def ensure_message_storage() -> None:
             cursor.execute(
                 """
                 create table if not exists messages (
-                  id text primary key,
-                  sender_id text not null,
-                  recipient_id text not null,
+                  messages_id text primary key,
+                  sender_id text not null references app_users(app_users_id) on delete cascade,
+                  recipient_id text not null references app_users(app_users_id) on delete cascade,
                   project_id text,
                   content text not null,
                   timestamp timestamptz not null,
@@ -215,9 +215,9 @@ def ensure_project_group_message_storage() -> None:
             cursor.execute(
                 """
                 create table if not exists project_group_messages (
-                  id text primary key,
+                  project_group_messages_id text primary key,
                   project_id text not null,
-                  sender_id text not null,
+                  sender_id text not null references app_users(app_users_id) on delete cascade,
                   content text not null,
                   timestamp timestamptz not null,
                   attachments jsonb not null default '[]'::jsonb
@@ -239,7 +239,7 @@ def serialize_message_row(row: Any) -> dict[str, Any]:
         attachments = []
 
     return {
-        "id": row["id"],
+        "id": row["messages_id"],
         "senderId": row["sender_id"],
         "recipientId": row["recipient_id"],
         "projectId": row["project_id"],
@@ -262,7 +262,7 @@ def serialize_project_group_message_row(row: Any) -> dict[str, Any]:
         attachments = []
 
     return {
-        "id": row["id"],
+        "id": row["project_group_messages_id"],
         "projectId": row["project_id"],
         "senderId": row["sender_id"],
         "content": row["content"],
@@ -435,7 +435,7 @@ def _postgres_upsert_legacy_app_user(connection: Any, user_id: str, user: dict[s
         cursor.execute(
             """
             create table if not exists app_users (
-              id text primary key,
+              app_users_id text primary key,
               email text not null unique,
               password text not null,
               role text not null,
@@ -446,14 +446,14 @@ def _postgres_upsert_legacy_app_user(connection: Any, user_id: str, user: dict[s
             """
         )
         cursor.execute(
-            "delete from app_users where email = %s and id <> %s",
+            "delete from app_users where email = %s and app_users_id <> %s",
             (_legacy_app_user_email(user_id, user), user_id),
         )
         cursor.execute(
             """
-            insert into app_users (id, email, password, role, name, phone, created_at)
+            insert into app_users (app_users_id, email, password, role, name, phone, created_at)
             values (%s, %s, %s, %s, %s, %s, %s)
-            on conflict (id) do update set
+            on conflict (app_users_id) do update set
               email = excluded.email,
               password = excluded.password,
               role = excluded.role,
@@ -990,7 +990,7 @@ def get_messages(user_id: str) -> dict[str, list[dict[str, Any]]]:
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 """
-                select id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                select messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                 from messages
                 where sender_id = %s or recipient_id = %s
                 order by timestamp desc
@@ -1011,7 +1011,7 @@ def get_conversation(user1: str, user2: str) -> dict[str, list[dict[str, Any]]]:
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 """
-                select id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                select messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                 from messages
                 where (sender_id = %s and recipient_id = %s)
                    or (sender_id = %s and recipient_id = %s)
@@ -1034,7 +1034,7 @@ def get_project_group_messages(project_id: str, user_id: str) -> dict[str, list[
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 """
-                select id, project_id, sender_id, content, timestamp, attachments
+                select project_group_messages_id, project_id, sender_id, content, timestamp, attachments
                 from project_group_messages
                 where project_id = %s
                 order by timestamp asc
@@ -1059,10 +1059,10 @@ async def create_message(payload: MessagePayload) -> dict[str, Any]:
             cursor.execute(
                 """
                 insert into messages (
-                  id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                  messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                 )
                 values (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
-                returning id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                returning messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                 """,
                 (
                     payload.id,
@@ -1102,10 +1102,10 @@ async def create_project_group_message(
             cursor.execute(
                 """
                 insert into project_group_messages (
-                  id, project_id, sender_id, content, timestamp, attachments
+                  project_group_messages_id, project_id, sender_id, content, timestamp, attachments
                 )
                 values (%s, %s, %s, %s, %s, %s::jsonb)
-                returning id, project_id, sender_id, content, timestamp, attachments
+                returning project_group_messages_id, project_id, sender_id, content, timestamp, attachments
                 """,
                 (
                     payload.id,
@@ -1136,8 +1136,8 @@ async def mark_message_read(message_id: str) -> dict[str, Any]:
                 """
                 update messages
                 set read = true
-                where id = %s
-                returning id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                where messages_id = %s
+                returning messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                 """,
                 (message_id,),
             )

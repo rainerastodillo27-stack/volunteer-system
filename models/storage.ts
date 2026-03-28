@@ -17,7 +17,7 @@ import {
 } from './types';
 import { NVCSector, UserRole } from './types';
 
-// Central frontend data layer for backend storage, auth helpers, messaging, and demo data.
+// Central frontend data layer for backend-backed data access, auth helpers, and messaging.
 const STORAGE_KEYS = {
   USERS: 'users',
   CURRENT_USER: 'currentUser',
@@ -50,251 +50,6 @@ const NEGROS_OCCIDENTAL_BOUNDS = {
   minLongitude: 122.45,
   maxLongitude: 123.35,
 };
-// Core project seed data used to bootstrap storage and map experiences.
-const NEGROS_SAMPLE_PROJECTS: Project[] = [
-  {
-    id: 'project-1',
-    title: 'Mingo for Nutritional Support',
-    description: 'Nutrition program focused on serving Mingo meals to undernourished children and improving child wellness outcomes.',
-    partnerId: 'partner-3',
-    isEvent: false,
-    status: 'In Progress',
-    category: 'Nutrition',
-    startDate: new Date(2026, 0, 6).toISOString(),
-    endDate: new Date(2026, 10, 28).toISOString(),
-    location: {
-      latitude: 10.6765,
-      longitude: 122.9509,
-      address: 'Bacolod City, Negros Occidental, Philippines',
-    },
-    volunteersNeeded: 24,
-    volunteers: ['volunteer-1'],
-    joinedUserIds: [],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    statusUpdates: [],
-  },
-  {
-    id: 'project-2',
-    title: 'Farm to Fork Program',
-    description: 'Nutrition-linked sourcing initiative that supports local farmers while supplying ingredients and food products for feeding efforts.',
-    partnerId: 'partner-2',
-    isEvent: false,
-    status: 'In Progress',
-    category: 'Nutrition',
-    startDate: new Date(2026, 0, 20).toISOString(),
-    endDate: new Date(2026, 9, 30).toISOString(),
-    location: {
-      latitude: 10.5333,
-      longitude: 122.8333,
-      address: 'Pulupandan, Negros Occidental, Philippines',
-    },
-    volunteersNeeded: 14,
-    volunteers: [],
-    joinedUserIds: [],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    statusUpdates: [],
-  },
-  {
-    id: 'project-3',
-    title: 'Mingo for Emergency Relief',
-    description: 'Emergency response program using Mingo as a ready nutrition intervention for disaster-affected families.',
-    partnerId: 'partner-3',
-    isEvent: false,
-    status: 'Planning',
-    category: 'Nutrition',
-    startDate: new Date(2026, 1, 10).toISOString(),
-    endDate: new Date(2026, 11, 15).toISOString(),
-    location: {
-      latitude: 10.6667,
-      longitude: 122.9667,
-      address: 'Talisay City, Negros Occidental, Philippines',
-    },
-    volunteersNeeded: 18,
-    volunteers: [],
-    joinedUserIds: [],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    statusUpdates: [],
-  },
-  {
-    id: 'project-4',
-    title: 'Masiglang Pagbubuntis, Masiglang Kamusmusan',
-    description: 'PBSP-led maternal nutrition and early childhood support program for pregnant women.',
-    partnerId: 'partner-3',
-    isEvent: false,
-    status: 'In Progress',
-    category: 'Nutrition',
-    startDate: new Date(2026, 4, 1).toISOString(),
-    endDate: new Date(2026, 9, 30).toISOString(),
-    location: {
-      latitude: 14.5547,
-      longitude: 121.0244,
-      address: 'Makati City, Metro Manila, Philippines',
-    },
-    volunteersNeeded: 15,
-    volunteers: [],
-    joinedUserIds: [],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    statusUpdates: [],
-  },
-  {
-    id: 'project-5',
-    title: 'Mingo Parties!',
-    description: 'Community activation program that turns nutrition sessions into child-friendly outreach events using Mingo meals and learning activities.',
-    partnerId: 'partner-3',
-    isEvent: true,
-    status: 'Planning',
-    category: 'Nutrition',
-    startDate: new Date(2026, 5, 14).toISOString(),
-    endDate: new Date(2026, 5, 14).toISOString(),
-    location: {
-      latitude: 10.6311,
-      longitude: 122.9784,
-      address: 'Silay City, Negros Occidental, Philippines',
-    },
-    volunteersNeeded: 30,
-    volunteers: [],
-    joinedUserIds: [],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    statusUpdates: [],
-  },
-  {
-    id: 'project-6',
-    title: 'LoveBags',
-    description: 'Education support drive that distributes school bags and learning supplies to students from underserved communities.',
-    partnerId: 'partner-3',
-    isEvent: false,
-    status: 'In Progress',
-    category: 'Education',
-    startDate: new Date(2026, 0, 13).toISOString(),
-    endDate: new Date(2026, 7, 29).toISOString(),
-    location: {
-      latitude: 10.1042,
-      longitude: 122.8682,
-      address: 'Binalbagan, Negros Occidental, Philippines',
-    },
-    volunteersNeeded: 20,
-    volunteers: [],
-    joinedUserIds: [],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    statusUpdates: [],
-  },
-  {
-    id: 'project-7',
-    title: 'School Support',
-    description: 'Education improvement program covering classroom repairs, school equipment, and student learning support.',
-    partnerId: 'partner-3',
-    isEvent: false,
-    status: 'Planning',
-    category: 'Education',
-    startDate: new Date(2026, 1, 2).toISOString(),
-    endDate: new Date(2026, 10, 20).toISOString(),
-    location: {
-      latitude: 10.1078,
-      longitude: 123.0111,
-      address: 'Victorias City, Negros Occidental, Philippines',
-    },
-    volunteersNeeded: 16,
-    volunteers: [],
-    joinedUserIds: [],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    statusUpdates: [],
-  },
-  {
-    id: 'project-8',
-    title: 'Artisans of Hope',
-    description: 'Livelihood program that helps community artisans produce and sell handcrafted items for sustainable income.',
-    partnerId: 'partner-3',
-    isEvent: false,
-    status: 'In Progress',
-    category: 'Livelihood',
-    startDate: new Date(2026, 0, 27).toISOString(),
-    endDate: new Date(2026, 8, 25).toISOString(),
-    location: {
-      latitude: 9.9904,
-      longitude: 122.8144,
-      address: 'Kabankalan City, Negros Occidental, Philippines',
-    },
-    volunteersNeeded: 12,
-    volunteers: [],
-    joinedUserIds: [],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    statusUpdates: [],
-  },
-  {
-    id: 'project-9',
-    title: 'Project Joseph',
-    description: 'Livelihood assistance project that provides tools and starter equipment to skilled workers and breadwinners.',
-    partnerId: 'partner-3',
-    isEvent: false,
-    status: 'Planning',
-    category: 'Livelihood',
-    startDate: new Date(2026, 2, 9).toISOString(),
-    endDate: new Date(2026, 10, 13).toISOString(),
-    location: {
-      latitude: 10.4302,
-      longitude: 122.9212,
-      address: 'La Carlota City, Negros Occidental, Philippines',
-    },
-    volunteersNeeded: 10,
-    volunteers: [],
-    joinedUserIds: [],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    statusUpdates: [],
-  },
-  {
-    id: 'project-10',
-    title: 'Growing Hope',
-    description: 'Community gardening and food security initiative that helps families grow produce for consumption and income.',
-    partnerId: 'partner-3',
-    isEvent: false,
-    status: 'In Progress',
-    category: 'Livelihood',
-    startDate: new Date(2026, 1, 16).toISOString(),
-    endDate: new Date(2026, 11, 4).toISOString(),
-    location: {
-      latitude: 10.3986,
-      longitude: 122.9861,
-      address: 'Bago City, Negros Occidental, Philippines',
-    },
-    volunteersNeeded: 22,
-    volunteers: [],
-    joinedUserIds: [],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    statusUpdates: [],
-  },
-  {
-    id: 'project-11',
-    title: 'Peter Project',
-    description: 'Livelihood support for fisherfolk through boat assistance and market access for their catch.',
-    partnerId: 'partner-3',
-    isEvent: false,
-    status: 'Planning',
-    category: 'Livelihood',
-    startDate: new Date(2026, 2, 23).toISOString(),
-    endDate: new Date(2026, 11, 11).toISOString(),
-    location: {
-      latitude: 10.4989,
-      longitude: 122.8167,
-      address: 'Valladolid, Negros Occidental, Philippines',
-    },
-    volunteersNeeded: 15,
-    volunteers: [],
-    joinedUserIds: [],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    statusUpdates: [],
-  },
-];
 
 type ProjectsScreenSnapshot = {
   projects: Project[];
@@ -318,33 +73,6 @@ export type VolunteerRecognitionStatus = {
   joinedProgramCount: number;
   isTopVolunteer: boolean;
 };
-
-const CORE_PARTNER_OWNER_IDS: Record<string, string> = {
-  'partner-2': 'partner-user-1',
-  'partner-3': 'partner-user-2',
-  'partner-4': 'partner-user-3',
-};
-
-const SECTOR_NEEDS: SectorNeed[] = [
-  {
-    sector: 'Education',
-    title: 'NVC Education Sector',
-    description: 'Learning materials, school equipment, and classroom support.',
-    goalAmount: 500000,
-  },
-  {
-    sector: 'Livelihood',
-    title: 'NVC Livelihood Sector',
-    description: 'Skills training tools, starter kits, and income-generation support.',
-    goalAmount: 400000,
-  },
-  {
-    sector: 'Nutrition',
-    title: 'NVC Nutrition Sector',
-    description: 'Nutrition packs, feeding programs, and health monitoring.',
-    goalAmount: 300000,
-  },
-];
 
 // Broadcasts a local storage timestamp so web tabs refresh message state.
 function notifyWebMessageUpdate(): void {
@@ -889,7 +617,7 @@ export async function getPartnerDashboardSnapshot(): Promise<{
   return {
     projects: (items[STORAGE_KEYS.PROJECTS] as Project[] | null) || [],
     partners,
-    sectorNeeds: SECTOR_NEEDS,
+    sectorNeeds: [],
   };
 }
 
@@ -1134,7 +862,7 @@ export async function deleteUser(userId: string): Promise<void> {
   const filteredProjectGroupMessages = projectGroupMessages.filter(
     message => message.senderId !== userId
   );
-  await setLocalStorageItem(STORAGE_KEYS.PROJECT_GROUP_MESSAGES, filteredProjectGroupMessages);
+  await setStorageItem(STORAGE_KEYS.PROJECT_GROUP_MESSAGES, filteredProjectGroupMessages);
 
   const partnerApplications =
     await getStorageItem<PartnerProjectApplication[]>(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS) || [];
@@ -1283,7 +1011,7 @@ export async function deleteProject(projectId: string): Promise<void> {
       STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
       (volunteerTimeLogs || []).filter(log => log.projectId !== projectId)
     ),
-    setLocalStorageItem(
+    setStorageItem(
       STORAGE_KEYS.PROJECT_GROUP_MESSAGES,
       (projectGroupMessages || []).filter(message => message.projectId !== projectId)
     ),
@@ -1528,50 +1256,18 @@ export async function saveProjectGroupMessage(message: ProjectGroupMessage): Pro
 
 // Returns all direct messages relevant to a specific user.
 export async function getMessagesForUser(userId: string): Promise<Message[]> {
-  try {
-    await waitForApiReady();
-    const response = await fetch(`${getApiBaseUrl()}/messages?user_id=${encodeURIComponent(userId)}`);
-    if (!response.ok) {
-      throw new Error(`Message fetch failed: ${response.status}`);
-    }
-    const payload = (await response.json()) as { messages: Message[] };
-    return payload.messages;
-  } catch (error) {
-    if (!isExpectedRemoteStorageError(error)) {
-      console.error('Error loading messages for user:', error);
-    }
-    const messages = await getStorageItem<Message[]>(STORAGE_KEYS.MESSAGES) || [];
-    return messages.filter(
-      m => m.recipientId === userId || m.senderId === userId
-    ).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-  }
+  const payload = await requestApiJson<{ messages?: Message[] }>(
+    `/messages?user_id=${encodeURIComponent(userId)}`
+  );
+  return payload.messages || [];
 }
 
 // Returns the direct-message history between two users.
 export async function getConversation(userId1: string, userId2: string): Promise<Message[]> {
-  try {
-    await waitForApiReady();
-    const response = await fetch(
-      `${getApiBaseUrl()}/messages/conversation?user1=${encodeURIComponent(userId1)}&user2=${encodeURIComponent(userId2)}`
-    );
-    if (!response.ok) {
-      throw new Error(`Conversation fetch failed: ${response.status}`);
-    }
-    const payload = (await response.json()) as { messages: Message[] };
-    return payload.messages;
-  } catch (error) {
-    if (!isExpectedRemoteStorageError(error)) {
-      console.error('Error loading conversation:', error);
-    }
-    const messages = await getStorageItem<Message[]>(STORAGE_KEYS.MESSAGES) || [];
-    return messages
-      .filter(
-        m =>
-          (m.senderId === userId1 && m.recipientId === userId2) ||
-          (m.senderId === userId2 && m.recipientId === userId1)
-      )
-      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-  }
+  const payload = await requestApiJson<{ messages?: Message[] }>(
+    `/messages/conversation?user1=${encodeURIComponent(userId1)}&user2=${encodeURIComponent(userId2)}`
+  );
+  return payload.messages || [];
 }
 
 // Returns the project group chat history available to a specific user.
@@ -1579,51 +1275,19 @@ export async function getProjectGroupMessages(
   projectId: string,
   userId: string
 ): Promise<ProjectGroupMessage[]> {
-  try {
-    await waitForApiReady();
-    const response = await fetch(
-      `${getApiBaseUrl()}/projects/${encodeURIComponent(projectId)}/group-messages?user_id=${encodeURIComponent(userId)}`
-    );
-    if (!response.ok) {
-      throw new Error(`Project group message fetch failed: ${response.status}`);
-    }
-    const payload = (await response.json()) as { messages: ProjectGroupMessage[] };
-    return payload.messages;
-  } catch (error) {
-    if (!isExpectedRemoteStorageError(error)) {
-      console.error('Error loading project group messages:', error);
-    }
-    const messages =
-      await getStorageItem<ProjectGroupMessage[]>(STORAGE_KEYS.PROJECT_GROUP_MESSAGES) || [];
-    return messages
-      .filter(message => message.projectId === projectId)
-      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-  }
+  const payload = await requestApiJson<{ messages?: ProjectGroupMessage[] }>(
+    `/projects/${encodeURIComponent(projectId)}/group-messages?user_id=${encodeURIComponent(userId)}`
+  );
+  return payload.messages || [];
 }
 
 // Marks a direct message as read and updates storage listeners.
 export async function markMessageAsRead(messageId: string): Promise<void> {
-  try {
-    await waitForApiReady();
-    const response = await fetch(`${getApiBaseUrl()}/messages/${encodeURIComponent(messageId)}/read`, {
-      method: 'PATCH',
-    });
-    if (!response.ok) {
-      throw new Error(`Mark read failed: ${response.status}`);
-    }
-    notifyWebMessageUpdate();
-  } catch (error) {
-    if (!isExpectedRemoteStorageError(error)) {
-      console.error('Error marking message as read:', error);
-    }
-    const messages = await getStorageItem<Message[]>(STORAGE_KEYS.MESSAGES) || [];
-    const message = messages.find(m => m.id === messageId);
-    if (message) {
-      message.read = true;
-      await setStorageItem(STORAGE_KEYS.MESSAGES, messages);
-      notifyWebMessageUpdate();
-    }
-  }
+  await requestApiJson(
+    `/messages/${encodeURIComponent(messageId)}/read`,
+    { method: 'PATCH' }
+  );
+  notifyWebMessageUpdate();
 }
 
 export type MessageSubscriptionEvent =
@@ -2254,7 +1918,7 @@ export async function joinProjectEvent(
 
 // Returns the static sector-need cards shown in partner dashboards.
 export async function getSectorNeeds(): Promise<SectorNeed[]> {
-  return SECTOR_NEEDS;
+  return [];
 }
 
 // Clear all storage (for testing/logout)
@@ -2273,7 +1937,7 @@ export async function clearAllStorage(): Promise<void> {
 }
 
 // Initialize with mock data
-// Seeds shared storage with the demo dataset used by the application.
+// Triggers the backend bootstrap so login demo accounts are seeded from the database layer.
 export async function initializeMockData(): Promise<void> {
   if (mockDataInitializationPromise) {
     return mockDataInitializationPromise;
@@ -2288,298 +1952,9 @@ export async function initializeMockData(): Promise<void> {
 }
 
 async function initializeMockDataInternal(): Promise<void> {
-  const existingUsers = await getAllUsers();
-  if (existingUsers.length > 0) {
-    await ensureAdminProfile();
-    await ensurePartnerUser();
-    await ensurePartnerUsers();
-    await ensureVolunteerProfile();
-    await purgeDeprecatedPartners();
-    await ensureCorePartners();
-    await ensureCoreProjects();
-    await ensureVolunteerStatuses();
-    await ensureAdminVolunteerConversation();
-    return;
-  }
-
-  // Create mock admin and volunteer users
-  const admin: User = {
-    id: 'admin-1',
-    email: 'admin@nvc.org',
-    password: 'admin123',
-    role: 'admin',
-    name: 'NVC Admin Account',
-    phone: '+63 917 000 0001',
-    userType: 'Adult',
-    pillarsOfInterest: ['Education', 'Livelihood', 'Nutrition'],
-    createdAt: new Date().toISOString(),
-  };
-
-  const volunteer: User = {
-    id: 'volunteer-1',
-    email: 'volunteer@example.com',
-    password: 'volunteer123',
-    role: 'volunteer',
-    name: 'Volunteer Account',
-    phone: '+0987654321',
-    userType: 'Student',
-    pillarsOfInterest: ['Education', 'Nutrition'],
-    createdAt: new Date().toISOString(),
-  };
-
-  const partnerUser: User = {
-    id: 'partner-user-1',
-    email: 'partner@livelihoods.org',
-    password: 'partner123',
-    role: 'partner',
-    name: 'Partner Org Account',
-    phone: '+919876543211',
-    userType: 'Adult',
-    pillarsOfInterest: ['Livelihood'],
-    createdAt: new Date().toISOString(),
-  };
-
-  const partnerUserPbsp: User = {
-    id: 'partner-user-2',
-    email: 'partnerships@pbsp.org.ph',
-    password: 'partner123',
-    role: 'partner',
-    name: 'PBSP Account',
-    phone: '+63 2 8818 8678',
-    userType: 'Adult',
-    pillarsOfInterest: ['Education', 'Livelihood', 'Nutrition'],
-    createdAt: new Date().toISOString(),
-  };
-
-  const partnerUserJfc: User = {
-    id: 'partner-user-3',
-    email: 'partnerships@jollibeefoundation.org',
-    password: 'partner123',
-    role: 'partner',
-    name: 'Jollibee Foundation Account',
-    phone: '+63 2 8634 1111',
-    userType: 'Adult',
-    pillarsOfInterest: ['Nutrition', 'Livelihood'],
-    createdAt: new Date().toISOString(),
-  };
-
-  await saveUser(admin);
-  await saveUser(volunteer);
-  await saveUser(partnerUser);
-  await saveUser(partnerUserPbsp);
-  await saveUser(partnerUserJfc);
-
-  // Mock partners
-  const partners: Partner[] = [
-    {
-      id: 'partner-2',
-      name: 'LGU Kabankalan Livelihood Office',
-      description: 'LGU-led livelihood partner providing local skills training programs.',
-      category: 'Livelihood',
-      contactEmail: 'contact@livelihoods.org',
-      contactPhone: '+919876543211',
-      address: 'Kabankalan City, Negros Occidental, Philippines',
-      status: 'Pending',
-      createdAt: new Date().toISOString(),
-    },
-    {
-      id: 'partner-3',
-      name: 'Philippine Business for Social Progress',
-      description: 'Private-sector led foundation focused on inclusive development and CSR programs.',
-      category: 'Other',
-      contactEmail: 'partnerships@pbsp.org.ph',
-      contactPhone: '+63 2 8818 8678',
-      address: 'Makati City, Metro Manila, Philippines',
-      status: 'Approved',
-      validatedBy: 'admin-1',
-      validatedAt: new Date().toISOString(),
-      createdAt: new Date().toISOString(),
-    },
-    {
-      id: 'partner-4',
-      name: 'Jollibee Group Foundation',
-      description: 'Foundation of Jollibee Group supporting education, agriculture, and food security programs.',
-      category: 'Nutrition',
-      contactEmail: 'partnerships@jollibeefoundation.org',
-      contactPhone: '+63 2 8634 1111',
-      address: 'Pasig City, Metro Manila, Philippines',
-      status: 'Approved',
-      validatedBy: 'admin-1',
-      validatedAt: new Date().toISOString(),
-      createdAt: new Date().toISOString(),
-    },
-  ];
-
-  for (const partner of partners) {
-    await savePartner(partner);
-  }
-
-  await purgeDeprecatedPartners();
-
-  // Mock projects
-  const projects: Project[] = NEGROS_SAMPLE_PROJECTS;
-
-  for (const project of projects) {
-    await saveProject(project);
-  }
-
-  // Mock volunteer profile
-  const volunteerProfile: Volunteer = {
-    id: 'volunteer-1',
-    userId: 'volunteer-1',
-    name: 'Volunteer Account',
-    email: 'volunteer@example.com',
-    phone: '+0987654321',
-    skills: ['Teaching', 'Mentoring', 'Community Outreach'],
-    skillsDescription:
-      'I can support reading sessions, mentor students, organize community outreach, and help with event coordination.',
-    availability: {
-      daysPerWeek: 3,
-      hoursPerWeek: 12,
-      availableDays: ['Monday', 'Wednesday', 'Saturday'],
-    },
-    pastProjects: [],
-    totalHoursContributed: 24,
-    rating: 4.5,
-    engagementStatus: 'Open to Volunteer',
-    background: 'Software Engineer with passion for education',
-    createdAt: new Date().toISOString(),
-  };
-
-  await saveVolunteer(volunteerProfile);
-
-  await ensureAdminVolunteerConversation();
-
-  // Mock status updates
-  const statusUpdate: StatusUpdate = {
-    id: 'status-1',
-    projectId: 'project-1',
-    status: 'In Progress',
-    description: 'Construction of library shelves completed',
-    updatedBy: 'admin-1',
-    updatedAt: new Date().toISOString(),
-  };
-
-  await saveStatusUpdate(statusUpdate);
-
-  console.log('Mock data initialized successfully');
-}
-
-async function ensurePartnerUser(): Promise<void> {
-  const users = await getStorageItem<User[]>(STORAGE_KEYS.USERS) || [];
-  const primary = users.find(u => u.id === 'partner-user-1');
-  if (primary) return;
-
-  const partnerUser: User = {
-    id: 'partner-user-1',
-    email: 'partner@livelihoods.org',
-    password: 'partner123',
-    role: 'partner',
-    name: 'Partner Org Account',
-    phone: '+919876543211',
-    userType: 'Adult',
-    pillarsOfInterest: ['Livelihood'],
-    createdAt: new Date().toISOString(),
-  };
-
-  await saveUser(partnerUser);
-}
-
-async function ensurePartnerUsers(): Promise<void> {
-  const requiredUsers: User[] = [
-    {
-      id: 'partner-user-2',
-      email: 'partnerships@pbsp.org.ph',
-      password: 'partner123',
-      role: 'partner',
-      name: 'PBSP Account',
-      phone: '+63 2 8818 8678',
-      userType: 'Adult',
-      pillarsOfInterest: ['Education', 'Livelihood', 'Nutrition'],
-      createdAt: new Date().toISOString(),
-    },
-    {
-      id: 'partner-user-3',
-      email: 'partnerships@jollibeefoundation.org',
-      password: 'partner123',
-      role: 'partner',
-      name: 'Jollibee Foundation Account',
-      phone: '+63 2 8634 1111',
-      userType: 'Adult',
-      pillarsOfInterest: ['Nutrition', 'Livelihood'],
-      createdAt: new Date().toISOString(),
-    },
-  ];
-
-  const existingUsers = await getStorageItem<User[]>(STORAGE_KEYS.USERS) || [];
-
-  for (const user of requiredUsers) {
-    const existing = existingUsers.find(existingUser => existingUser.id === user.id);
-    if (!existing) {
-      await saveUser(user);
-    }
-  }
-}
-
-async function ensureVolunteerProfile(): Promise<void> {
-  const users = await getAllUsers();
-  const volunteerUser = users.find((u) => u.id === 'volunteer-1');
-  if (volunteerUser && volunteerUser.name !== 'Volunteer Account') {
-    await saveUser({
-      ...volunteerUser,
-      name: 'Volunteer Account',
-    });
-  }
-
-  const volunteerProfile = await getVolunteer('volunteer-1');
-  if (volunteerProfile && volunteerProfile.name !== 'Volunteer Account') {
-    await saveVolunteer({
-      ...volunteerProfile,
-      name: 'Volunteer Account',
-    });
-  }
-
-  if (volunteerProfile && !volunteerProfile.skillsDescription) {
-    await saveVolunteer({
-      ...volunteerProfile,
-      skillsDescription: volunteerProfile.background,
-    });
-  }
-}
-
-async function ensureAdminProfile(): Promise<void> {
-  const users = await getAllUsers();
-  const adminUser = users.find((u) => u.id === 'admin-1');
-  if (!adminUser) return;
-
-  if (adminUser.name !== 'NVC Admin Account') {
-    await saveUser({
-      ...adminUser,
-      name: 'NVC Admin Account',
-    });
-  }
-}
-
-async function ensureVolunteerStatuses(): Promise<void> {
-  const volunteers = await getAllVolunteers();
-
-  for (const volunteer of volunteers) {
-    if (!volunteer.engagementStatus) {
-      await saveVolunteer({
-        ...volunteer,
-        engagementStatus: 'Open to Volunteer',
-      });
-    }
-
-    if (!volunteer.skillsDescription) {
-      await saveVolunteer({
-        ...volunteer,
-        skillsDescription: volunteer.background,
-      });
-    }
-
-    await syncVolunteerEngagementStatus(volunteer.id);
-  }
+  await requestApiJson('/bootstrap', {
+    method: 'POST',
+  });
 }
 
 async function attachVolunteerToProject(projectId: string, volunteerId: string): Promise<void> {
@@ -2699,16 +2074,6 @@ async function syncVolunteerEngagementStatus(volunteerId: string): Promise<void>
   }
 }
 
-async function purgeDeprecatedPartners(): Promise<void> {
-  const partners = await getAllPartners();
-  const filtered = partners.filter(
-    p => !p.contactEmail?.toLowerCase().includes('eduindia.org')
-  );
-  if (filtered.length !== partners.length) {
-    await setStorageItem(STORAGE_KEYS.PARTNERS, filtered);
-  }
-}
-
 // Normalizes phone numbers so credentials can be compared consistently.
 function normalizeComparablePhone(value?: string): string {
   return (value || '').replace(/\D/g, '');
@@ -2730,17 +2095,12 @@ async function ensurePartnerOwnershipLinks(): Promise<void> {
       return partner;
     }
 
-    const expectedOwnerId = CORE_PARTNER_OWNER_IDS[partner.id];
     const partnerEmail = partner.contactEmail.trim().toLowerCase();
     const partnerPhone = normalizeComparablePhone(partner.contactPhone);
 
     const matchedUser = users.find(user => {
       if (user.role !== 'partner') {
         return false;
-      }
-
-      if (expectedOwnerId && user.id === expectedOwnerId) {
-        return true;
       }
 
       if (partnerEmail && user.email?.toLowerCase() === partnerEmail) {
@@ -2769,220 +2129,3 @@ async function ensurePartnerOwnershipLinks(): Promise<void> {
   }
 }
 
-async function ensureCorePartners(): Promise<void> {
-  const partners = (await getStorageItem<Partner[]>(STORAGE_KEYS.PARTNERS)) || [];
-  const byId = new Map(partners.map(p => [p.id, p]));
-
-  const requiredPartners: Partner[] = [
-    {
-      id: 'partner-2',
-      ownerUserId: 'partner-user-1',
-      name: 'LGU Kabankalan Livelihood Office',
-      description: 'LGU-led livelihood partner providing local skills training programs.',
-      category: 'Livelihood',
-      contactEmail: 'contact@livelihoods.org',
-      contactPhone: '+919876543211',
-      address: 'Kabankalan City, Negros Occidental, Philippines',
-      status: 'Pending',
-      createdAt: new Date().toISOString(),
-    },
-    {
-      id: 'partner-3',
-      ownerUserId: 'partner-user-2',
-      name: 'Philippine Business for Social Progress',
-      description: 'Private-sector led foundation focused on inclusive development and CSR programs.',
-      category: 'Other',
-      contactEmail: 'partnerships@pbsp.org.ph',
-      contactPhone: '+63 2 8818 8678',
-      address: 'Makati City, Metro Manila, Philippines',
-      status: 'Approved',
-      validatedBy: 'admin-1',
-      validatedAt: new Date().toISOString(),
-      createdAt: new Date().toISOString(),
-    },
-    {
-      id: 'partner-4',
-      ownerUserId: 'partner-user-3',
-      name: 'Jollibee Group Foundation',
-      description: 'Foundation of Jollibee Group supporting education, agriculture, and food security programs.',
-      category: 'Nutrition',
-      contactEmail: 'partnerships@jollibeefoundation.org',
-      contactPhone: '+63 2 8634 1111',
-      address: 'Pasig City, Metro Manila, Philippines',
-      status: 'Approved',
-      validatedBy: 'admin-1',
-      validatedAt: new Date().toISOString(),
-      createdAt: new Date().toISOString(),
-    },
-  ];
-
-  let changed = false;
-  for (const partner of requiredPartners) {
-    if (!byId.has(partner.id)) {
-      partners.push(partner);
-      changed = true;
-    }
-  }
-
-  if (changed) {
-    await setStorageItem(STORAGE_KEYS.PARTNERS, partners);
-  }
-
-  await ensurePartnerOwnershipLinks();
-}
-
-async function ensureCoreProjects(): Promise<void> {
-  const projects = (await getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS)) || [];
-  const mergedProjects = NEGROS_SAMPLE_PROJECTS.map((project) => {
-    const existingProject = projects.find((storedProject) => storedProject.id === project.id);
-    if (!existingProject) {
-      return project;
-    }
-
-    return {
-      ...existingProject,
-      title: project.title,
-      description: project.description,
-      partnerId: project.partnerId,
-      isEvent: project.isEvent,
-      status: project.status,
-      category: project.category,
-      startDate: project.startDate,
-      endDate: project.endDate,
-      location: project.location,
-      volunteersNeeded: project.volunteersNeeded,
-      updatedAt: new Date().toISOString(),
-    };
-  });
-
-  const nextProjects = mergedProjects;
-
-  if (projects.length !== nextProjects.length || projects.some((project, index) => project.id !== nextProjects[index]?.id)) {
-    await setStorageItem(STORAGE_KEYS.PROJECTS, nextProjects);
-    return;
-  }
-
-  const hasCanonicalDiff = nextProjects.some((project, index) => JSON.stringify(project) !== JSON.stringify(projects[index]));
-  if (hasCanonicalDiff) {
-    await setStorageItem(STORAGE_KEYS.PROJECTS, nextProjects);
-  }
-}
-
-async function ensureCoreUsers(): Promise<void> {
-  const users = (await getStorageItem<User[]>(STORAGE_KEYS.USERS)) || [];
-  const byId = new Map(users.map(user => [user.id, user]));
-
-  const requiredUsers: User[] = [
-    {
-      id: 'admin-1',
-      email: 'admin@nvc.org',
-      password: 'admin123',
-      role: 'admin',
-      name: 'NVC Admin Account',
-      phone: '+63 917 000 0001',
-      userType: 'Adult',
-      pillarsOfInterest: ['Education', 'Livelihood', 'Nutrition'],
-      createdAt: new Date().toISOString(),
-    },
-    {
-      id: 'volunteer-1',
-      email: 'volunteer@example.com',
-      password: 'volunteer123',
-      role: 'volunteer',
-      name: 'Volunteer Account',
-      phone: '+0987654321',
-      userType: 'Student',
-      pillarsOfInterest: ['Education', 'Nutrition'],
-      createdAt: new Date().toISOString(),
-    },
-    {
-      id: 'partner-user-1',
-      email: 'partner@livelihoods.org',
-      password: 'partner123',
-      role: 'partner',
-      name: 'Partner Org Account',
-      phone: '+919876543211',
-      userType: 'Adult',
-      pillarsOfInterest: ['Livelihood'],
-      createdAt: new Date().toISOString(),
-    },
-    {
-      id: 'partner-user-2',
-      email: 'partnerships@pbsp.org.ph',
-      password: 'partner123',
-      role: 'partner',
-      name: 'PBSP Account',
-      phone: '+63 2 8818 8678',
-      userType: 'Adult',
-      pillarsOfInterest: ['Education', 'Livelihood', 'Nutrition'],
-      createdAt: new Date().toISOString(),
-    },
-    {
-      id: 'partner-user-3',
-      email: 'partnerships@jollibeefoundation.org',
-      password: 'partner123',
-      role: 'partner',
-      name: 'Jollibee Foundation Account',
-      phone: '+63 2 8634 1111',
-      userType: 'Adult',
-      pillarsOfInterest: ['Nutrition', 'Livelihood'],
-      createdAt: new Date().toISOString(),
-    },
-  ];
-
-  let changed = false;
-  for (const requiredUser of requiredUsers) {
-    if (!byId.has(requiredUser.id)) {
-      users.push(requiredUser);
-      changed = true;
-    }
-  }
-
-  if (changed) {
-    await setStorageItem(STORAGE_KEYS.USERS, users);
-  }
-}
-
-async function ensureAdminVolunteerConversation(): Promise<void> {
-  const users = await getAllUsers();
-  const hasAdmin = users.some(u => u.id === 'admin-1');
-  const hasVolunteer = users.some(u => u.id === 'volunteer-1');
-  if (!hasAdmin || !hasVolunteer) return;
-
-  const messages = await getStorageItem<Message[]>(STORAGE_KEYS.MESSAGES) || [];
-  const hasAdminToVolunteer = messages.some(
-    m => m.senderId === 'admin-1' && m.recipientId === 'volunteer-1'
-  );
-  const hasVolunteerToAdmin = messages.some(
-    m => m.senderId === 'volunteer-1' && m.recipientId === 'admin-1'
-  );
-
-  const now = Date.now();
-  const seeds: Message[] = [];
-
-  if (!hasAdminToVolunteer) {
-    seeds.push({
-      id: `msg-seed-admin-${now}`,
-      senderId: 'admin-1',
-      recipientId: 'volunteer-1',
-      content: 'Welcome to Volcre!',
-      timestamp: new Date(now - 60_000).toISOString(),
-      read: false,
-    });
-  }
-
-  if (!hasVolunteerToAdmin) {
-    seeds.push({
-      id: `msg-seed-volunteer-${now}`,
-      senderId: 'volunteer-1',
-      recipientId: 'admin-1',
-      content: 'Thank you! Glad to be part of the team.',
-      timestamp: new Date(now - 30_000).toISOString(),
-      read: false,
-    });
-  }
-
-  if (seeds.length > 0) {
-    await setStorageItem(STORAGE_KEYS.MESSAGES, [...messages, ...seeds]);
-  }
-}
