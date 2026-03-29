@@ -29,7 +29,7 @@ The database URL you pasted is a PostgreSQL connection string, so it can be used
 Python setup files:
 
 - [backend/requirements.txt](/c:/Users/ACER/OneDrive/Desktop/volunteer-system/backend/requirements.txt)
-- [backend/.env.example](/c:/Users/ACER/OneDrive/Desktop/volunteer-system/backend/.env.example)
+- [.env.example](/c:/Users/ACER/OneDrive/Desktop/volunteer%20system2/volunteer-system/.env.example)
 - [backend/init_supabase.py](/c:/Users/ACER/OneDrive/Desktop/volunteer-system/backend/init_supabase.py)
 - [backend/seed_demo_data.py](/c:/Users/ACER/OneDrive/Desktop/volunteer-system/backend/seed_demo_data.py)
 - [backend/api.py](/c:/Users/ACER/OneDrive/Desktop/volunteer-system/backend/api.py)
@@ -42,6 +42,12 @@ cd backend
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
+```
+
+Create `.env` in the app root from the repo example:
+
+```bash
+cd ..
 copy .env.example .env
 ```
 
