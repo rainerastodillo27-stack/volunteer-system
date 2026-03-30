@@ -13,8 +13,13 @@ import { MaterialIcons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import { useAuth } from '../contexts/AuthContext';
-import { Project } from '../models/types';
-import { getAllProjects } from '../models/storage';
+import { PartnerEventCheckIn, PartnerReport, Project } from '../models/types';
+import {
+  getAllPartnerEventCheckIns,
+  getAllPartnerReports,
+  getAllProjects,
+  subscribeToStorageChanges,
+} from '../models/storage';
 import { getInitialProjectRegion, getProjectMarkerColor } from '../utils/projectMap';
 import { getProjectStatusColor } from '../utils/projectStatus';
 
@@ -22,6 +27,8 @@ import { getProjectStatusColor } from '../utils/projectStatus';
 export default function MappingScreen({ navigation }: any) {
   const { user } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
+  const [partnerCheckIns, setPartnerCheckIns] = useState<PartnerEventCheckIn[]>([]);
+  const [partnerReports, setPartnerReports] = useState<PartnerReport[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [showDetails, setShowDetails] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -31,15 +38,30 @@ export default function MappingScreen({ navigation }: any) {
     void loadProjects();
   }, []);
 
+  useEffect(() => {
+    return subscribeToStorageChanges(
+      ['projects', 'partnerEventCheckIns', 'partnerReports'],
+      () => {
+        void loadProjects();
+      }
+    );
+  }, []);
+
   // Loads all projects so they can be plotted on the map.
   const loadProjects = async () => {
     try {
       const allProjects = await getAllProjects();
+      const allCheckIns = await getAllPartnerEventCheckIns();
+      const allReports = await getAllPartnerReports();
       setProjects(allProjects);
+      setPartnerCheckIns(allCheckIns);
+      setPartnerReports(allReports);
       setLoading(false);
     } catch (error: any) {
       console.error('Error loading projects for map:', error);
       setProjects([]);
+      setPartnerCheckIns([]);
+      setPartnerReports([]);
       Alert.alert(
         'Database Unavailable',
         error?.message || 'Failed to load projects from Postgres.'
@@ -86,8 +108,8 @@ export default function MappingScreen({ navigation }: any) {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Negros Programs and Events</Text>
-        <Text style={styles.headerSubtitle}>Marker map for Negros Occidental, Philippines</Text>
+        <Text style={styles.headerTitle}>Live Command Center</Text>
+        <Text style={styles.headerSubtitle}>Projects, partner GPS check-ins, and field uploads in Negros Occidental</Text>
       </View>
 
       <View style={styles.mapContainer}>
@@ -112,11 +134,23 @@ export default function MappingScreen({ navigation }: any) {
               onPress={() => handleProjectSelection(project.id)}
             />
           ))}
+          {partnerCheckIns.map(checkIn => (
+            <Marker
+              key={checkIn.id}
+              coordinate={{
+                latitude: checkIn.gpsCoordinates.latitude,
+                longitude: checkIn.gpsCoordinates.longitude,
+              }}
+              pinColor="#2563eb"
+              title={`Partner Check-In: ${checkIn.projectId}`}
+              description={new Date(checkIn.checkInTime).toLocaleString()}
+            />
+          ))}
         </MapView>
       </View>
 
       <View style={styles.projectListContainer}>
-        <Text style={styles.projectListTitle}>Negros markers ({projects.length})</Text>
+        <Text style={styles.projectListTitle}>Projects {projects.length} • Check-Ins {partnerCheckIns.length} • Uploaded Impact {partnerReports.reduce((sum, report) => sum + report.impactCount, 0)}</Text>
         {Platform.OS === 'android' && !androidGoogleMapsApiKey ? (
           <Text style={styles.projectListWarning}>
             Android Google Maps key is missing. Add `GOOGLE_MAPS_ANDROID_API_KEY` to `.env`.
@@ -157,7 +191,7 @@ export default function MappingScreen({ navigation }: any) {
                 <View style={styles.infoGrid}>
                   <View style={styles.infoItem}>
                     <Text style={styles.infoLabel}>Category</Text>
-                    <Text style={styles.infoValue}>{selectedProject.category}</Text>
+                    <Text style={styles.infoValue}>{selectedProject.programModule || selectedProject.category}</Text>
                   </View>
                   <View style={styles.infoItem}>
                     <Text style={styles.infoLabel}>Volunteers Needed</Text>
@@ -191,6 +225,23 @@ export default function MappingScreen({ navigation }: any) {
                     <Text style={styles.infoLabel}>End Date</Text>
                     <Text style={styles.infoValue}>
                       {new Date(selectedProject.endDate).toLocaleDateString()}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.infoGrid}>
+                  <View style={styles.infoItem}>
+                    <Text style={styles.infoLabel}>Check-Ins</Text>
+                    <Text style={styles.infoValue}>
+                      {partnerCheckIns.filter(checkIn => checkIn.projectId === selectedProject.id).length}
+                    </Text>
+                  </View>
+                  <View style={styles.infoItem}>
+                    <Text style={styles.infoLabel}>Impact Uploads</Text>
+                    <Text style={styles.infoValue}>
+                      {partnerReports
+                        .filter(report => report.projectId === selectedProject.id)
+                        .reduce((sum, report) => sum + report.impactCount, 0)}
                     </Text>
                   </View>
                 </View>

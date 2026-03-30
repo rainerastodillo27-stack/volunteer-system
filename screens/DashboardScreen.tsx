@@ -11,6 +11,9 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import {
+  getAllPartnerEventCheckIns,
+  getAllPartnerReports,
+  getAllPublishedImpactReports,
   getDashboardSnapshot,
   subscribeToStorageChanges,
 } from '../models/storage';
@@ -22,13 +25,25 @@ export default function DashboardScreen({ navigation }: any) {
   const [projectStats, setProjectStats] = useState({ total: 0, active: 0, completed: 0 });
   const [partnerStats, setPartnerStats] = useState({ total: 0, approved: 0, pending: 0 });
   const [userStats, setUserStats] = useState({ total: 0 });
+  const [workflowStats, setWorkflowStats] = useState({
+    inboundInquiries: 0,
+    liveCheckIns: 0,
+    pendingReports: 0,
+    publishedReports: 0,
+  });
   const [recentUpdates, setRecentUpdates] = useState<any[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   // Loads dashboard totals and recent status updates from storage.
   const loadDashboardData = React.useCallback(async () => {
     try {
-      const { projects, partners, users, statusUpdates } = await getDashboardSnapshot();
+      const [{ projects, partners, users, statusUpdates }, partnerCheckIns, partnerReports, impactReports] =
+        await Promise.all([
+          getDashboardSnapshot(),
+          getAllPartnerEventCheckIns(),
+          getAllPartnerReports(),
+          getAllPublishedImpactReports(),
+        ]);
 
       setLoadError(null);
 
@@ -46,6 +61,13 @@ export default function DashboardScreen({ navigation }: any) {
 
       setUserStats({
         total: users.length,
+      });
+
+      setWorkflowStats({
+        inboundInquiries: partners.filter(p => p.status === 'Pending').length,
+        liveCheckIns: partnerCheckIns.length,
+        pendingReports: partnerReports.filter(report => report.status === 'Submitted').length,
+        publishedReports: impactReports.filter(report => Boolean(report.publishedAt)).length,
       });
 
       // Get recent updates
@@ -81,7 +103,7 @@ export default function DashboardScreen({ navigation }: any) {
 
   useEffect(() => {
     return subscribeToStorageChanges(
-      ['users', 'projects', 'partners', 'volunteers', 'statusUpdates', 'volunteerProjectJoins'],
+      ['users', 'projects', 'partners', 'volunteers', 'statusUpdates', 'volunteerProjectJoins', 'partnerEventCheckIns', 'partnerReports', 'publishedImpactReports'],
       () => {
         void loadDashboardData();
       }
@@ -197,6 +219,53 @@ export default function DashboardScreen({ navigation }: any) {
               <MaterialIcons name="trending-up" size={32} color="#2E7D32" />
               <Text style={styles.metricValue}>{projectStats.active}</Text>
               <Text style={styles.metricLabel}>Active</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {isAdmin && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Admin Workflow</Text>
+          <View style={styles.metricsGrid}>
+            <TouchableOpacity
+              style={styles.metricCard}
+              onPress={() => navigation.navigate('Partners')}
+              activeOpacity={0.8}
+            >
+              <MaterialIcons name="mark-email-unread" size={32} color="#f59e0b" />
+              <Text style={styles.metricValue}>{workflowStats.inboundInquiries}</Text>
+              <Text style={styles.metricLabel}>Inbound Inquiries</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.metricCard}
+              onPress={() => navigation.navigate('Map')}
+              activeOpacity={0.8}
+            >
+              <MaterialIcons name="pin-drop" size={32} color="#2563eb" />
+              <Text style={styles.metricValue}>{workflowStats.liveCheckIns}</Text>
+              <Text style={styles.metricLabel}>Live Check-Ins</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.metricCard}
+              onPress={() => navigation.navigate('Lifecycle')}
+              activeOpacity={0.8}
+            >
+              <MaterialIcons name="assignment-late" size={32} color="#dc2626" />
+              <Text style={styles.metricValue}>{workflowStats.pendingReports}</Text>
+              <Text style={styles.metricLabel}>Pending Reports</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.metricCard}
+              onPress={() => navigation.navigate('Lifecycle')}
+              activeOpacity={0.8}
+            >
+              <MaterialIcons name="published-with-changes" size={32} color="#16a34a" />
+              <Text style={styles.metricValue}>{workflowStats.publishedReports}</Text>
+              <Text style={styles.metricLabel}>Published Files</Text>
             </TouchableOpacity>
           </View>
         </View>

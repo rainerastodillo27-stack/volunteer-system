@@ -1,6 +1,11 @@
 import Constants from 'expo-constants';
 import { NativeModules, Platform } from 'react-native';
 import {
+  AdvocacyFocus,
+  PartnerEventCheckIn,
+  PartnerReport,
+  PartnerReportType,
+  PartnerSectorType,
   User,
   UserType,
   Partner,
@@ -13,6 +18,7 @@ import {
   SectorNeed,
   VolunteerTimeLog,
   PartnerProjectApplication,
+  PublishedImpactReport,
   VolunteerProjectJoinRecord,
 } from './types';
 import { NVCSector, UserRole } from './types';
@@ -31,6 +37,9 @@ const STORAGE_KEYS = {
   VOLUNTEER_TIME_LOGS: 'volunteerTimeLogs',
   VOLUNTEER_PROJECT_JOINS: 'volunteerProjectJoins',
   PARTNER_PROJECT_APPLICATIONS: 'partnerProjectApplications',
+  PARTNER_EVENT_CHECK_INS: 'partnerEventCheckIns',
+  PARTNER_REPORTS: 'partnerReports',
+  PUBLISHED_IMPACT_REPORTS: 'publishedImpactReports',
 };
 
 const WEB_MESSAGE_SYNC_KEY = 'volcre:messages:updatedAt';
@@ -603,12 +612,20 @@ export async function getDashboardSnapshot(): Promise<{
 export async function getPartnerDashboardSnapshot(): Promise<{
   projects: Project[];
   partners: Partner[];
+  partnerApplications: PartnerProjectApplication[];
+  partnerCheckIns: PartnerEventCheckIn[];
+  partnerReports: PartnerReport[];
+  publishedImpactReports: PublishedImpactReport[];
   sectorNeeds: SectorNeed[];
 }> {
   await ensurePartnerOwnershipLinks();
   const items = await getStorageItems([
     STORAGE_KEYS.PROJECTS,
     STORAGE_KEYS.PARTNERS,
+    STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
+    STORAGE_KEYS.PARTNER_EVENT_CHECK_INS,
+    STORAGE_KEYS.PARTNER_REPORTS,
+    STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS,
   ]);
 
   const partners = ((items[STORAGE_KEYS.PARTNERS] as Partner[] | null) || [])
@@ -617,6 +634,14 @@ export async function getPartnerDashboardSnapshot(): Promise<{
   return {
     projects: (items[STORAGE_KEYS.PROJECTS] as Project[] | null) || [],
     partners,
+    partnerApplications:
+      (items[STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS] as PartnerProjectApplication[] | null) ||
+      [],
+    partnerCheckIns:
+      (items[STORAGE_KEYS.PARTNER_EVENT_CHECK_INS] as PartnerEventCheckIn[] | null) || [],
+    partnerReports: (items[STORAGE_KEYS.PARTNER_REPORTS] as PartnerReport[] | null) || [],
+    publishedImpactReports:
+      (items[STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS] as PublishedImpactReport[] | null) || [],
     sectorNeeds: [],
   };
 }
@@ -675,6 +700,48 @@ export async function saveUser(user: User): Promise<void> {
   await setStorageItem(STORAGE_KEYS.USERS, users);
 }
 
+// Validates DSWD accreditation numbers before partner applications are saved.
+export function isValidDswdAccreditationNo(value: string): boolean {
+  const normalizedValue = value.trim().toUpperCase();
+  return /^[A-Z0-9][A-Z0-9\-\/]{5,}$/.test(normalizedValue);
+}
+
+// Maps one advocacy focus into the existing project/partner category taxonomy.
+function getCategoryFromAdvocacyFocus(focuses: AdvocacyFocus[]): Partner['category'] {
+  if (focuses.includes('Education')) {
+    return 'Education';
+  }
+  if (focuses.includes('Livelihood')) {
+    return 'Livelihood';
+  }
+  if (focuses.includes('Nutrition')) {
+    return 'Nutrition';
+  }
+  return 'Other';
+}
+
+// Upgrades older partner records so the newer workflow can rely on required fields.
+function normalizePartnerRecord(partner: Partner): Partner {
+  const advocacyFocus = (partner.advocacyFocus || []).filter(Boolean);
+  const derivedCategory =
+    partner.category || getCategoryFromAdvocacyFocus(advocacyFocus);
+
+  return {
+    ...partner,
+    description: partner.description?.trim() || '',
+    category: derivedCategory,
+    sectorType: partner.sectorType || 'NGO',
+    dswdAccreditationNo: partner.dswdAccreditationNo?.trim().toUpperCase() || '',
+    advocacyFocus,
+    contactEmail: partner.contactEmail?.trim().toLowerCase() || '',
+    contactPhone: partner.contactPhone?.trim() || '',
+    address: partner.address?.trim() || '',
+    verificationStatus:
+      partner.verificationStatus ||
+      (partner.status === 'Approved' ? 'Verified' : 'Pending'),
+  };
+}
+
 // Creates a new sign-in account and optional volunteer profile records.
 export async function createUserAccount(input: {
   name: string;
@@ -684,6 +751,12 @@ export async function createUserAccount(input: {
   role: Exclude<UserRole, 'admin'>;
   userType: UserType;
   pillarsOfInterest: NVCSector[];
+  partnerRegistration?: {
+    organizationName: string;
+    sectorType: PartnerSectorType;
+    dswdAccreditationNo: string;
+    advocacyFocus: AdvocacyFocus[];
+  };
   volunteerMembershipSheet?: {
     gender: string;
     dateOfBirth: string;
@@ -712,6 +785,16 @@ export async function createUserAccount(input: {
 
   if (!normalizedEmail && !normalizedPhone) {
     throw new Error('Email or phone is required.');
+  }
+
+  if (
+    input.role === 'partner' &&
+    (!input.partnerRegistration ||
+      !input.partnerRegistration.organizationName.trim() ||
+      !isValidDswdAccreditationNo(input.partnerRegistration.dswdAccreditationNo) ||
+      input.partnerRegistration.advocacyFocus.length === 0)
+  ) {
+    throw new Error('Complete the organization application details before submitting.');
   }
 
   const users = await getStorageItem<User[]>(STORAGE_KEYS.USERS) || [];
@@ -775,6 +858,24 @@ export async function createUserAccount(input: {
       hobbiesAndInterests: input.volunteerMembershipSheet?.hobbiesAndInterests || '',
       specialSkills: input.volunteerMembershipSheet?.specialSkills || '',
       affiliations: input.volunteerMembershipSheet?.affiliations || [],
+      createdAt,
+    });
+  }
+
+  if (input.role === 'partner' && input.partnerRegistration) {
+    await savePartner({
+      id: `partner-${createdUser.id}`,
+      ownerUserId: createdUser.id,
+      name: input.partnerRegistration.organizationName.trim(),
+      description: `${input.partnerRegistration.advocacyFocus.join(', ')} partnership application`,
+      category: getCategoryFromAdvocacyFocus(input.partnerRegistration.advocacyFocus),
+      sectorType: input.partnerRegistration.sectorType,
+      dswdAccreditationNo: input.partnerRegistration.dswdAccreditationNo.trim().toUpperCase(),
+      advocacyFocus: input.partnerRegistration.advocacyFocus,
+      contactEmail: createdUser.email,
+      contactPhone: createdUser.phone,
+      status: 'Pending',
+      verificationStatus: 'Pending',
       createdAt,
     });
   }
@@ -918,17 +1019,21 @@ export async function savePartner(partner: Partner): Promise<void> {
   const existingPartner = existingIndex >= 0 ? partners[existingIndex] : null;
 
   let ownerUserId = partner.ownerUserId || existingPartner?.ownerUserId;
-  if (!ownerUserId && partner.contactEmail.trim()) {
+  if (!ownerUserId && partner.contactEmail?.trim()) {
     const users = await getAllUsers();
     ownerUserId = users.find(user =>
       user.role === 'partner' &&
-      user.email?.toLowerCase() === partner.contactEmail.trim().toLowerCase()
+      user.email?.toLowerCase() === partner.contactEmail?.trim().toLowerCase()
     )?.id;
   }
 
   const normalizedPartner: Partner = {
-    ...partner,
-    ownerUserId,
+    ...normalizePartnerRecord({
+      ...existingPartner,
+      ...partner,
+      ownerUserId,
+      name: partner.name.trim(),
+    } as Partner),
   };
 
   if (existingIndex >= 0) {
@@ -942,14 +1047,52 @@ export async function savePartner(partner: Partner): Promise<void> {
 // Looks up a single partner organization by id.
 export async function getPartner(id: string): Promise<Partner | null> {
   const partners = await getStorageItem<Partner[]>(STORAGE_KEYS.PARTNERS) || [];
-  return partners.find(p => p.id === id) || null;
+  const partner = partners.find(p => p.id === id) || null;
+  return partner ? normalizePartnerRecord(partner) : null;
+}
+
+// Returns partner organizations owned by a specific partner account.
+export async function getPartnersByOwnerUserId(ownerUserId: string): Promise<Partner[]> {
+  const partners = await getAllPartners();
+  return partners.filter(partner => partner.ownerUserId === ownerUserId);
 }
 
 // Returns all partner organization records.
 export async function getAllPartners(): Promise<Partner[]> {
   await ensurePartnerOwnershipLinks();
   const partners = (await getStorageItem<Partner[]>(STORAGE_KEYS.PARTNERS)) || [];
-  return partners.filter(p => !p.contactEmail?.toLowerCase().includes('eduindia.org'));
+  return partners
+    .map(normalizePartnerRecord)
+    .filter(p => !p.contactEmail?.toLowerCase().includes('eduindia.org'));
+}
+
+// Checks whether a partner account already has admin-approved organization access.
+export async function canPartnerLogin(user: User): Promise<{
+  allowed: boolean;
+  reason?: string;
+}> {
+  if (user.role !== 'partner') {
+    return { allowed: true };
+  }
+
+  const partners = await getPartnersByOwnerUserId(user.id);
+  const approvedPartner = partners.find(partner => partner.status === 'Approved');
+  if (approvedPartner) {
+    return { allowed: true };
+  }
+
+  const rejectedPartner = partners.find(partner => partner.status === 'Rejected');
+  if (rejectedPartner) {
+    return {
+      allowed: false,
+      reason: 'Your organization application was rejected. Please contact the admin team.',
+    };
+  }
+
+  return {
+    allowed: false,
+    reason: 'Your organization application is still pending admin approval.',
+  };
 }
 
 // Returns partner organization records filtered by approval status.
@@ -977,6 +1120,9 @@ export async function deleteProject(projectId: string): Promise<void> {
     projects,
     statusUpdates,
     partnerApplications,
+    partnerCheckIns,
+    partnerReports,
+    publishedImpactReports,
     volunteerJoinRecords,
     volunteerTimeLogs,
     projectGroupMessages,
@@ -985,6 +1131,9 @@ export async function deleteProject(projectId: string): Promise<void> {
       getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS),
       getStorageItem<StatusUpdate[]>(STORAGE_KEYS.STATUS_UPDATES),
       getStorageItem<PartnerProjectApplication[]>(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS),
+      getStorageItem<PartnerEventCheckIn[]>(STORAGE_KEYS.PARTNER_EVENT_CHECK_INS),
+      getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS),
+      getStorageItem<PublishedImpactReport[]>(STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS),
       getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS),
       getStorageItem<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS),
       getStorageItem<ProjectGroupMessage[]>(STORAGE_KEYS.PROJECT_GROUP_MESSAGES),
@@ -1002,6 +1151,18 @@ export async function deleteProject(projectId: string): Promise<void> {
     setStorageItem(
       STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
       (partnerApplications || []).filter(application => application.projectId !== projectId)
+    ),
+    setStorageItem(
+      STORAGE_KEYS.PARTNER_EVENT_CHECK_INS,
+      (partnerCheckIns || []).filter(checkIn => checkIn.projectId !== projectId)
+    ),
+    setStorageItem(
+      STORAGE_KEYS.PARTNER_REPORTS,
+      (partnerReports || []).filter(report => report.projectId !== projectId)
+    ),
+    setStorageItem(
+      STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS,
+      (publishedImpactReports || []).filter(report => report.projectId !== projectId)
     ),
     setStorageItem(
       STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
@@ -1890,6 +2051,315 @@ export async function reviewPartnerProjectApplication(
   }
 }
 
+// Marks a partner registration as externally verified by admin.
+export async function verifyPartnerRegistration(
+  partnerId: string,
+  reviewedBy: string,
+  verificationNotes?: string
+): Promise<Partner> {
+  const partner = await getPartner(partnerId);
+  if (!partner) {
+    throw new Error('Partner application not found.');
+  }
+
+  const updatedPartner: Partner = {
+    ...partner,
+    verificationStatus: 'Verified',
+    verificationNotes: verificationNotes?.trim() || `DSWD accreditation checked by admin on ${new Date().toLocaleString()}.`,
+    validatedBy: reviewedBy,
+    validatedAt: new Date().toISOString(),
+  };
+
+  await savePartner(updatedPartner);
+  return updatedPartner;
+}
+
+// Approves or rejects a partner registration and unlocks login access when approved.
+export async function reviewPartnerRegistration(
+  partnerId: string,
+  status: Partner['status'],
+  reviewedBy: string
+): Promise<Partner> {
+  const partner = await getPartner(partnerId);
+  if (!partner) {
+    throw new Error('Partner application not found.');
+  }
+
+  if (status === 'Pending') {
+    throw new Error('Partner registration review must approve or reject the application.');
+  }
+
+  const now = new Date().toISOString();
+  const updatedPartner: Partner = {
+    ...partner,
+    status,
+    validatedBy: reviewedBy,
+    validatedAt: now,
+    credentialsUnlockedAt: status === 'Approved' ? now : undefined,
+  };
+
+  await savePartner(updatedPartner);
+  return updatedPartner;
+}
+
+// Saves one partner event check-in captured from the field.
+export async function savePartnerEventCheckIn(checkIn: PartnerEventCheckIn): Promise<void> {
+  const checkIns =
+    await getStorageItem<PartnerEventCheckIn[]>(STORAGE_KEYS.PARTNER_EVENT_CHECK_INS) || [];
+  const existingIndex = checkIns.findIndex(entry => entry.id === checkIn.id);
+  if (existingIndex >= 0) {
+    checkIns[existingIndex] = checkIn;
+  } else {
+    checkIns.push(checkIn);
+  }
+  await setStorageItem(STORAGE_KEYS.PARTNER_EVENT_CHECK_INS, checkIns);
+}
+
+// Returns partner event check-ins for a specific project.
+export async function getPartnerEventCheckInsByProject(
+  projectId: string
+): Promise<PartnerEventCheckIn[]> {
+  const checkIns =
+    await getStorageItem<PartnerEventCheckIn[]>(STORAGE_KEYS.PARTNER_EVENT_CHECK_INS) || [];
+  return checkIns
+    .filter(checkIn => checkIn.projectId === projectId)
+    .sort((a, b) => new Date(b.checkInTime).getTime() - new Date(a.checkInTime).getTime());
+}
+
+// Returns partner event check-ins submitted by one partner user.
+export async function getPartnerEventCheckInsByUser(
+  partnerUserId: string
+): Promise<PartnerEventCheckIn[]> {
+  const checkIns =
+    await getStorageItem<PartnerEventCheckIn[]>(STORAGE_KEYS.PARTNER_EVENT_CHECK_INS) || [];
+  return checkIns
+    .filter(checkIn => checkIn.partnerUserId === partnerUserId)
+    .sort((a, b) => new Date(b.checkInTime).getTime() - new Date(a.checkInTime).getTime());
+}
+
+// Returns every partner event check-in stored in the system.
+export async function getAllPartnerEventCheckIns(): Promise<PartnerEventCheckIn[]> {
+  const checkIns =
+    await getStorageItem<PartnerEventCheckIn[]>(STORAGE_KEYS.PARTNER_EVENT_CHECK_INS) || [];
+  return checkIns.sort((a, b) => new Date(b.checkInTime).getTime() - new Date(a.checkInTime).getTime());
+}
+
+// Captures a new partner event check-in for an approved project collaboration.
+export async function createPartnerEventCheckIn(input: {
+  projectId: string;
+  partnerId: string;
+  partnerUserId: string;
+  gpsCoordinates: {
+    latitude: number;
+    longitude: number;
+  };
+}): Promise<PartnerEventCheckIn> {
+  const checkIn: PartnerEventCheckIn = {
+    id: `partner-checkin-${Date.now()}`,
+    projectId: input.projectId,
+    partnerId: input.partnerId,
+    partnerUserId: input.partnerUserId,
+    gpsCoordinates: input.gpsCoordinates,
+    checkInTime: new Date().toISOString(),
+  };
+
+  await savePartnerEventCheckIn(checkIn);
+  return checkIn;
+}
+
+// Saves one uploaded partner report.
+export async function savePartnerReport(report: PartnerReport): Promise<void> {
+  const reports = await getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [];
+  const existingIndex = reports.findIndex(entry => entry.id === report.id);
+  if (existingIndex >= 0) {
+    reports[existingIndex] = report;
+  } else {
+    reports.push(report);
+  }
+  await setStorageItem(STORAGE_KEYS.PARTNER_REPORTS, reports);
+}
+
+// Returns partner reports associated with one project.
+export async function getPartnerReportsByProject(projectId: string): Promise<PartnerReport[]> {
+  const reports = await getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [];
+  return reports
+    .filter(report => report.projectId === projectId)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+// Returns partner reports submitted by one partner user.
+export async function getPartnerReportsByUser(partnerUserId: string): Promise<PartnerReport[]> {
+  const reports = await getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [];
+  return reports
+    .filter(report => report.partnerUserId === partnerUserId)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+// Returns every partner report stored in the system.
+export async function getAllPartnerReports(): Promise<PartnerReport[]> {
+  const reports = await getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [];
+  return reports.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+// Submits a partner impact or operations report.
+export async function submitPartnerReport(input: {
+  projectId: string;
+  partnerId: string;
+  partnerUserId: string;
+  partnerName: string;
+  reportType: PartnerReportType;
+  description: string;
+  impactCount: number;
+  mediaFile?: string;
+}): Promise<PartnerReport> {
+  const report: PartnerReport = {
+    id: `partner-report-${Date.now()}`,
+    projectId: input.projectId,
+    partnerId: input.partnerId,
+    partnerUserId: input.partnerUserId,
+    partnerName: input.partnerName,
+    reportType: input.reportType,
+    description: input.description.trim(),
+    impactCount: input.impactCount,
+    mediaFile: input.mediaFile?.trim() || undefined,
+    createdAt: new Date().toISOString(),
+    status: 'Submitted',
+  };
+
+  await savePartnerReport(report);
+  return report;
+}
+
+// Marks a submitted partner report as reviewed by admin.
+export async function reviewPartnerReport(
+  reportId: string,
+  reviewedBy: string
+): Promise<PartnerReport> {
+  const reports = await getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [];
+  const reportIndex = reports.findIndex(report => report.id === reportId);
+  if (reportIndex === -1) {
+    throw new Error('Partner report not found.');
+  }
+
+  const updatedReport: PartnerReport = {
+    ...reports[reportIndex],
+    status: 'Reviewed',
+    reviewedAt: new Date().toISOString(),
+    reviewedBy,
+  };
+  reports[reportIndex] = updatedReport;
+  await setStorageItem(STORAGE_KEYS.PARTNER_REPORTS, reports);
+  return updatedReport;
+}
+
+// Saves one generated impact file entry.
+export async function savePublishedImpactReport(report: PublishedImpactReport): Promise<void> {
+  const reports =
+    await getStorageItem<PublishedImpactReport[]>(STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS) || [];
+  const existingIndex = reports.findIndex(entry => entry.id === report.id);
+  if (existingIndex >= 0) {
+    reports[existingIndex] = report;
+  } else {
+    reports.push(report);
+  }
+  await setStorageItem(STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS, reports);
+}
+
+// Returns generated impact files for a specific project.
+export async function getPublishedImpactReportsByProject(
+  projectId: string
+): Promise<PublishedImpactReport[]> {
+  const reports =
+    await getStorageItem<PublishedImpactReport[]>(STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS) || [];
+  return reports
+    .filter(report => report.projectId === projectId)
+    .sort((a, b) => new Date(b.generatedAt).getTime() - new Date(a.generatedAt).getTime());
+}
+
+// Returns every generated impact file regardless of partner visibility.
+export async function getAllPublishedImpactReports(): Promise<PublishedImpactReport[]> {
+  const reports =
+    await getStorageItem<PublishedImpactReport[]>(STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS) || [];
+  return reports.sort((a, b) => new Date(b.generatedAt).getTime() - new Date(a.generatedAt).getTime());
+}
+
+// Returns only partner-visible impact files for the owning partner user.
+export async function getPublishedImpactReportsByPartnerUser(
+  partnerUserId: string
+): Promise<PublishedImpactReport[]> {
+  const [partners, reports, projects] = await Promise.all([
+    getPartnersByOwnerUserId(partnerUserId),
+    getStorageItem<PublishedImpactReport[]>(STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS),
+    getAllProjects(),
+  ]);
+
+  const partnerIds = new Set(partners.map(partner => partner.id));
+  const allowedProjectIds = new Set(
+    projects.filter(project => partnerIds.has(project.partnerId)).map(project => project.id)
+  );
+
+  return (reports || [])
+    .filter(report => Boolean(report.publishedAt) && allowedProjectIds.has(report.projectId))
+    .sort((a, b) => new Date(b.generatedAt).getTime() - new Date(a.generatedAt).getTime());
+}
+
+// Generates PDF and Excel impact files from reviewed partner reports.
+export async function generateFinalImpactReports(
+  projectId: string,
+  generatedBy: string
+): Promise<PublishedImpactReport[]> {
+  const project = await getProject(projectId);
+  if (!project) {
+    throw new Error('Project not found.');
+  }
+
+  const timestamp = Date.now();
+  const slug = project.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const generatedAt = new Date().toISOString();
+  const reports: PublishedImpactReport[] = [
+    {
+      id: `impact-${projectId}-pdf-${timestamp}`,
+      projectId,
+      generatedBy,
+      generatedAt,
+      reportFile: `${slug || 'project'}-impact-report-${timestamp}.pdf`,
+      format: 'PDF',
+    },
+    {
+      id: `impact-${projectId}-excel-${timestamp}`,
+      projectId,
+      generatedBy,
+      generatedAt,
+      reportFile: `${slug || 'project'}-impact-report-${timestamp}.xlsx`,
+      format: 'Excel',
+    },
+  ];
+
+  for (const report of reports) {
+    await savePublishedImpactReport(report);
+  }
+
+  return reports;
+}
+
+// Publishes a generated impact file to the partner portal.
+export async function publishImpactReport(reportId: string): Promise<PublishedImpactReport> {
+  const reports =
+    await getStorageItem<PublishedImpactReport[]>(STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS) || [];
+  const reportIndex = reports.findIndex(report => report.id === reportId);
+  if (reportIndex === -1) {
+    throw new Error('Generated impact report not found.');
+  }
+
+  const updatedReport: PublishedImpactReport = {
+    ...reports[reportIndex],
+    publishedAt: new Date().toISOString(),
+  };
+  reports[reportIndex] = updatedReport;
+  await setStorageItem(STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS, reports);
+  return updatedReport;
+}
+
 // Adds a user directly to a project or event once access has been approved.
 export async function joinProjectEvent(
   projectId: string,
@@ -2095,7 +2565,7 @@ async function ensurePartnerOwnershipLinks(): Promise<void> {
       return partner;
     }
 
-    const partnerEmail = partner.contactEmail.trim().toLowerCase();
+    const partnerEmail = (partner.contactEmail || '').trim().toLowerCase();
     const partnerPhone = normalizeComparablePhone(partner.contactPhone);
 
     const matchedUser = users.find(user => {

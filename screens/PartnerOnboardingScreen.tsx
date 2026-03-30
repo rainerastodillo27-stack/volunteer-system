@@ -1,86 +1,124 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
   Alert,
+  ScrollView,
+  StyleSheet,
+  Text,
   TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import { Partner } from '../models/types';
-import { getAllPartners, savePartner, subscribeToStorageChanges } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
+import {
+  getAllPartners,
+  isValidDswdAccreditationNo,
+  reviewPartnerRegistration,
+  savePartner,
+  subscribeToStorageChanges,
+  verifyPartnerRegistration,
+} from '../models/storage';
+import { AdvocacyFocus, Partner, PartnerSectorType } from '../models/types';
 
 type PartnerFormState = {
-  name: string;
-  description: string;
+  organizationName: string;
+  sectorType: PartnerSectorType;
+  dswdAccreditationNo: string;
+  advocacyFocus: AdvocacyFocus[];
   contactEmail: string;
   contactPhone: string;
-  address: string;
-  category: Partner['category'];
+  description: string;
 };
 
-// Returns the default partner form state for create or edit mode.
-function createEmptyPartnerForm(defaultEmail = ''): PartnerFormState {
+const sectorOptions: PartnerSectorType[] = ['NGO', 'Hospital', 'Institution', 'Private'];
+const advocacyOptions: AdvocacyFocus[] = ['Nutrition', 'Education', 'Livelihood', 'Disaster'];
+
+function derivePartnerCategory(focuses: AdvocacyFocus[]): Partner['category'] {
+  if (focuses.includes('Education')) {
+    return 'Education';
+  }
+  if (focuses.includes('Livelihood')) {
+    return 'Livelihood';
+  }
+  if (focuses.includes('Nutrition')) {
+    return 'Nutrition';
+  }
+  return 'Other';
+}
+
+function createEmptyPartnerForm(defaultEmail = '', defaultPhone = ''): PartnerFormState {
   return {
-    name: '',
-    description: '',
+    organizationName: '',
+    sectorType: 'NGO',
+    dswdAccreditationNo: '',
+    advocacyFocus: [],
     contactEmail: defaultEmail,
-    contactPhone: '',
-    address: '',
-    category: 'Other',
+    contactPhone: defaultPhone,
+    description: '',
   };
 }
 
-// Manages partner organization submission, review, and admin editing flows.
-export default function PartnerOnboardingScreen({ navigation }: any) {
+function createFormFromPartner(partner: Partner): PartnerFormState {
+  return {
+    organizationName: partner.name,
+    sectorType: partner.sectorType || 'NGO',
+    dswdAccreditationNo: partner.dswdAccreditationNo || '',
+    advocacyFocus: partner.advocacyFocus || [],
+    contactEmail: partner.contactEmail || '',
+    contactPhone: partner.contactPhone || '',
+    description: partner.description || '',
+  };
+}
+
+// Manages partner registration applications and admin inbound verification.
+export default function PartnerOnboardingScreen() {
   const { user, isAdmin } = useAuth();
   const [partners, setPartners] = useState<Partner[]>([]);
   const [filter, setFilter] = useState<'All' | 'Pending' | 'Approved' | 'Rejected'>('All');
-  const [loading, setLoading] = useState(true);
   const [partnerForm, setPartnerForm] = useState<PartnerFormState>(
-    createEmptyPartnerForm(user?.email ?? '')
+    createEmptyPartnerForm(user?.email || '', user?.phone || '')
   );
   const [editingPartnerId, setEditingPartnerId] = useState<string | null>(null);
   const [showAdminEditor, setShowAdminEditor] = useState(false);
 
-  // Checks whether a partner record belongs to the signed-in partner account.
-  const isOwnedByCurrentPartner = React.useCallback((partner: Partner) => {
-    if (!user) {
-      return false;
-    }
+  const isOwnedByCurrentPartner = React.useCallback(
+    (partner: Partner) => {
+      if (!user) {
+        return false;
+      }
 
-    if (partner.ownerUserId) {
-      return partner.ownerUserId === user.id;
-    }
+      if (partner.ownerUserId) {
+        return partner.ownerUserId === user.id;
+      }
 
-    return partner.contactEmail.toLowerCase() === user.email?.toLowerCase();
-  }, [user]);
+      return partner.contactEmail?.toLowerCase() === user.email?.toLowerCase();
+    },
+    [user]
+  );
 
-  // Loads the partner list for the current role and active filter.
   const loadPartners = React.useCallback(async () => {
     try {
       const allPartners = await getAllPartners();
-      if (isAdmin) {
-        if (filter === 'All') {
-          setPartners(allPartners);
-        } else {
-          setPartners(allPartners.filter(p => p.status === filter));
-        }
-        return;
-      }
+      const scopedPartners = isAdmin
+        ? filter === 'All'
+          ? allPartners
+          : allPartners.filter(partner => partner.status === filter)
+        : allPartners
+            .filter(isOwnedByCurrentPartner)
+            .sort(
+              (left, right) =>
+                new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+            );
 
-      const ownPartners = allPartners.filter(isOwnedByCurrentPartner);
-      setPartners(ownPartners);
-    } catch (error) {
-      Alert.alert('Error', 'Failed to load partners');
-    } finally {
-      setLoading(false);
+      setPartners(scopedPartners);
+      if (!isAdmin && scopedPartners[0] && !editingPartnerId) {
+        setPartnerForm(createFormFromPartner(scopedPartners[0]));
+      }
+    } catch {
+      Alert.alert('Error', 'Failed to load partner applications.');
     }
-  }, [filter, isAdmin, isOwnedByCurrentPartner]);
+  }, [editingPartnerId, filter, isAdmin, isOwnedByCurrentPartner]);
 
   useEffect(() => {
     void loadPartners();
@@ -98,7 +136,8 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
     });
   }, [loadPartners]);
 
-  // Updates a single field in the partner form state.
+  const latestOwnedPartner = useMemo(() => partners[0] || null, [partners]);
+
   const updatePartnerForm = <K extends keyof PartnerFormState>(
     key: K,
     value: PartnerFormState[K]
@@ -106,163 +145,210 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
     setPartnerForm(current => ({ ...current, [key]: value }));
   };
 
-  // Resets the partner form after save or cancel actions.
   const resetPartnerForm = () => {
-    setPartnerForm(createEmptyPartnerForm(isAdmin ? '' : user?.email ?? ''));
+    setPartnerForm(createEmptyPartnerForm(isAdmin ? '' : user?.email || '', isAdmin ? '' : user?.phone || ''));
     setEditingPartnerId(null);
     setShowAdminEditor(false);
   };
 
-  // Marks a pending partner organization as approved.
-  const handleApprove = async (partnerId: string) => {
-    try {
-      const partner = partners.find(p => p.id === partnerId);
-      if (!partner) return;
-
-      await savePartner({
-        ...partner,
-        status: 'Approved',
-        validatedBy: user?.id,
-        validatedAt: new Date().toISOString(),
-      });
-      Alert.alert('Success', `${partner.name} has been approved`);
-      void loadPartners();
-    } catch (error) {
-      Alert.alert('Error', 'Failed to approve partner');
+  const validateForm = () => {
+    if (!partnerForm.organizationName.trim()) {
+      Alert.alert('Validation Error', 'Organization name is required.');
+      return false;
     }
-  };
 
-  // Marks a pending partner organization as rejected.
-  const handleReject = async (partnerId: string) => {
-    try {
-      const partner = partners.find(p => p.id === partnerId);
-      if (!partner) return;
-
-      await savePartner({
-        ...partner,
-        status: 'Rejected',
-        validatedBy: user?.id,
-        validatedAt: new Date().toISOString(),
-      });
-      Alert.alert('Success', `${partner.name} has been rejected`);
-      void loadPartners();
-    } catch (error) {
-      Alert.alert('Error', 'Failed to reject partner');
+    if (!isValidDswdAccreditationNo(partnerForm.dswdAccreditationNo)) {
+      Alert.alert('Validation Error', 'Enter a valid DSWD accreditation number.');
+      return false;
     }
+
+    if (partnerForm.advocacyFocus.length === 0) {
+      Alert.alert('Validation Error', 'Select at least one advocacy focus.');
+      return false;
+    }
+
+    return true;
   };
 
-  // Opens the admin edit form using an existing partner record.
-  const handleEditPartner = (partner: Partner) => {
-    setEditingPartnerId(partner.id);
-    setPartnerForm({
-      name: partner.name,
-      description: partner.description,
-      contactEmail: partner.contactEmail,
-      contactPhone: partner.contactPhone,
-      address: partner.address,
-      category: partner.category,
-    });
-    setShowAdminEditor(true);
-  };
-
-  // Opens an empty admin form for creating a new partner organization.
-  const handleOpenAdminCreate = () => {
-    setEditingPartnerId(null);
-    setPartnerForm(createEmptyPartnerForm());
-    setShowAdminEditor(true);
-  };
-
-  // Saves an admin-created or admin-edited partner organization profile.
-  const handleSavePartnerProfile = async () => {
-    if (
-      !partnerForm.name.trim() ||
-      !partnerForm.description.trim() ||
-      !partnerForm.contactEmail.trim() ||
-      !partnerForm.contactPhone.trim() ||
-      !partnerForm.address.trim()
-    ) {
-      Alert.alert('Validation Error', 'Please fill all partner organization fields.');
+  const handleSaveApplication = async () => {
+    if (!validateForm()) {
       return;
     }
 
     try {
       const existingPartner =
-        editingPartnerId ? partners.find(partner => partner.id === editingPartnerId) || null : null;
+        editingPartnerId
+          ? partners.find(partner => partner.id === editingPartnerId) || null
+          : !isAdmin
+          ? latestOwnedPartner
+          : null;
       const now = new Date().toISOString();
 
-      const savedPartner: Partner = {
+      const nextPartner: Partner = {
         id: existingPartner?.id || `partner-${Date.now()}`,
-        ownerUserId: existingPartner?.ownerUserId,
-        name: partnerForm.name.trim(),
-        description: partnerForm.description.trim(),
-        category: partnerForm.category,
+        ownerUserId: existingPartner?.ownerUserId || user?.id,
+        name: partnerForm.organizationName.trim(),
+        description:
+          partnerForm.description.trim() ||
+          `${partnerForm.advocacyFocus.join(', ')} partnership application`,
+        category: derivePartnerCategory(partnerForm.advocacyFocus),
+        sectorType: partnerForm.sectorType,
+        dswdAccreditationNo: partnerForm.dswdAccreditationNo.trim().toUpperCase(),
+        advocacyFocus: partnerForm.advocacyFocus,
         contactEmail: partnerForm.contactEmail.trim().toLowerCase(),
         contactPhone: partnerForm.contactPhone.trim(),
-        address: partnerForm.address.trim(),
-        status: existingPartner?.status || 'Pending',
-        validatedBy: existingPartner?.validatedBy,
-        validatedAt: existingPartner?.validatedAt,
+        status: existingPartner?.status === 'Approved' && !isAdmin ? 'Approved' : 'Pending',
+        verificationStatus:
+          existingPartner?.status === 'Approved' && !isAdmin
+            ? existingPartner.verificationStatus || 'Verified'
+            : 'Pending',
+        verificationNotes: existingPartner?.status === 'Approved' && !isAdmin
+          ? existingPartner.verificationNotes
+          : undefined,
+        validatedAt: existingPartner?.status === 'Approved' && !isAdmin ? existingPartner.validatedAt : undefined,
+        validatedBy: existingPartner?.status === 'Approved' && !isAdmin ? existingPartner.validatedBy : undefined,
+        credentialsUnlockedAt:
+          existingPartner?.status === 'Approved' && !isAdmin
+            ? existingPartner.credentialsUnlockedAt
+            : undefined,
         createdAt: existingPartner?.createdAt || now,
-        registrationDocuments: existingPartner?.registrationDocuments,
       };
 
-      await savePartner(savedPartner);
-      resetPartnerForm();
+      await savePartner(nextPartner);
+      setPartnerForm(createFormFromPartner(nextPartner));
+      setEditingPartnerId(nextPartner.id);
+      setShowAdminEditor(false);
       Alert.alert(
-        'Saved',
-        existingPartner ? 'Partner organization updated.' : 'Partner organization created.'
+        isAdmin ? 'Saved' : 'Application Submitted',
+        isAdmin
+          ? 'Partner record saved.'
+          : 'Your organization application is now in the inbound inquiry queue for admin verification.'
       );
       void loadPartners();
-    } catch (error) {
-      Alert.alert('Error', 'Failed to save partner organization.');
+    } catch {
+      Alert.alert('Error', 'Failed to save the partner application.');
     }
   };
 
-  // Renders the reusable partner submission form for admin and partner flows.
-  const renderPartnerFormCard = ({
+  const handleVerify = async (partnerId: string) => {
+    if (!user?.id) {
+      return;
+    }
+
+    try {
+      const partner = await verifyPartnerRegistration(partnerId, user.id);
+      Alert.alert('Verified', `${partner.name} was marked as DSWD-verified.`);
+      void loadPartners();
+    } catch (error: any) {
+      Alert.alert('Error', error?.message || 'Failed to verify partner application.');
+    }
+  };
+
+  const handleReview = async (partnerId: string, status: 'Approved' | 'Rejected') => {
+    if (!user?.id) {
+      return;
+    }
+
+    try {
+      const partner = await reviewPartnerRegistration(partnerId, status, user.id);
+      Alert.alert(
+        status === 'Approved' ? 'Approved' : 'Rejected',
+        status === 'Approved'
+          ? `${partner.name} can now log in to the partner portal.`
+          : `${partner.name} was rejected.`
+      );
+      void loadPartners();
+    } catch (error: any) {
+      Alert.alert('Error', error?.message || 'Failed to review partner application.');
+    }
+  };
+
+  const openAdminEditor = (partner?: Partner) => {
+    if (partner) {
+      setEditingPartnerId(partner.id);
+      setPartnerForm(createFormFromPartner(partner));
+    } else {
+      setEditingPartnerId(null);
+      setPartnerForm(createEmptyPartnerForm());
+    }
+    setShowAdminEditor(true);
+  };
+
+  const renderChipGroup = (
+    options: readonly string[],
+    selectedValues: string[],
+    onToggle: (value: string) => void
+  ) => (
+    <View style={styles.chipRow}>
+      {options.map(option => {
+        const selected = selectedValues.includes(option);
+        return (
+          <TouchableOpacity
+            key={option}
+            style={[styles.chip, selected && styles.chipActive]}
+            onPress={() => onToggle(option)}
+          >
+            <Text style={[styles.chipText, selected && styles.chipTextActive]}>{option}</Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+
+  const renderFormCard = ({
     title,
     submitLabel,
     onSubmit,
-    onCancel,
   }: {
     title: string;
     submitLabel: string;
     onSubmit: () => void;
-    onCancel?: () => void;
   }) => (
-    <View style={styles.submissionCard}>
-      <Text style={styles.submissionTitle}>{title}</Text>
+    <View style={styles.formCard}>
+      <Text style={styles.formTitle}>{title}</Text>
       <TextInput
         style={styles.input}
-        placeholder="Program or Organization Name"
-        value={partnerForm.name}
-        onChangeText={value => updatePartnerForm('name', value)}
+        placeholder="Organization Name"
+        value={partnerForm.organizationName}
+        onChangeText={value => updatePartnerForm('organizationName', value)}
       />
-      <TextInput
-        style={[styles.input, styles.inputMultiline]}
-        placeholder="Description / Focus area"
-        value={partnerForm.description}
-        onChangeText={value => updatePartnerForm('description', value)}
-        multiline
-      />
+
+      <Text style={styles.sectionLabel}>Sector Type</Text>
       <View style={styles.chipRow}>
-        {(['Education', 'Livelihood', 'Nutrition', 'Other'] as const).map(option => (
-          <TouchableOpacity
-            key={option}
-            style={[styles.chip, partnerForm.category === option && styles.chipActive]}
-            onPress={() => updatePartnerForm('category', option)}
-          >
-            <Text
-              style={[
-                styles.chipText,
-                partnerForm.category === option && styles.chipTextActive,
-              ]}
+        {sectorOptions.map(option => {
+          const selected = partnerForm.sectorType === option;
+          return (
+            <TouchableOpacity
+              key={option}
+              style={[styles.chip, selected && styles.chipActive]}
+              onPress={() => updatePartnerForm('sectorType', option)}
             >
-              {option}
-            </Text>
-          </TouchableOpacity>
-        ))}
+              <Text style={[styles.chipText, selected && styles.chipTextActive]}>{option}</Text>
+            </TouchableOpacity>
+          );
+        })}
       </View>
+
+      <TextInput
+        style={styles.input}
+        placeholder="DSWD Accreditation No."
+        value={partnerForm.dswdAccreditationNo}
+        onChangeText={value => updatePartnerForm('dswdAccreditationNo', value)}
+        autoCapitalize="characters"
+      />
+
+      <Text style={styles.sectionLabel}>Advocacy Focus</Text>
+      {renderChipGroup(
+        advocacyOptions,
+        partnerForm.advocacyFocus,
+        value => {
+          const nextValues = partnerForm.advocacyFocus.includes(value as AdvocacyFocus)
+            ? partnerForm.advocacyFocus.filter(item => item !== value)
+            : [...partnerForm.advocacyFocus, value as AdvocacyFocus];
+          updatePartnerForm('advocacyFocus', nextValues);
+        }
+      )}
+
       <TextInput
         style={styles.input}
         placeholder="Contact Email"
@@ -273,210 +359,181 @@ export default function PartnerOnboardingScreen({ navigation }: any) {
       />
       <TextInput
         style={styles.input}
-        placeholder="Contact Phone"
+        placeholder="Mobile Number"
         value={partnerForm.contactPhone}
         onChangeText={value => updatePartnerForm('contactPhone', value)}
         keyboardType="phone-pad"
       />
       <TextInput
-        style={styles.input}
-        placeholder="Address / City"
-        value={partnerForm.address}
-        onChangeText={value => updatePartnerForm('address', value)}
+        style={[styles.input, styles.inputMultiline]}
+        placeholder="Partnership notes or description"
+        value={partnerForm.description}
+        onChangeText={value => updatePartnerForm('description', value)}
+        multiline
       />
-      <View style={styles.formActions}>
-        {onCancel ? (
-          <TouchableOpacity style={[styles.formButton, styles.cancelButton]} onPress={onCancel}>
-            <Text style={styles.cancelButtonText}>Cancel</Text>
-          </TouchableOpacity>
-        ) : null}
-        <TouchableOpacity style={[styles.formButton, styles.submitButton]} onPress={onSubmit}>
-          <Text style={styles.submitButtonText}>{submitLabel}</Text>
-        </TouchableOpacity>
-      </View>
+
+      <TouchableOpacity style={styles.submitButton} onPress={onSubmit}>
+        <Text style={styles.submitButtonText}>{submitLabel}</Text>
+      </TouchableOpacity>
     </View>
   );
 
-  // Renders one partner organization card with actions based on the current role.
-  const renderPartnerCard = (partner: Partner) => {
-    // Chooses the background color for the partner status badge.
-    const getStatusColor = (status: string) => {
-      switch (status) {
-        case 'Approved':
-          return '#4CAF50';
-        case 'Pending':
-          return '#FFA500';
-        case 'Rejected':
-          return '#f44336';
-        default:
-          return '#999';
-      }
-    };
+  const getStatusColor = (status: Partner['status']) => {
+    switch (status) {
+      case 'Approved':
+        return '#16a34a';
+      case 'Rejected':
+        return '#dc2626';
+      default:
+        return '#f59e0b';
+    }
+  };
 
-    return (
-      <View key={partner.id} style={styles.card}>
-        <View style={styles.cardHeader}>
-          <View>
-            <Text style={styles.cardTitle}>{partner.name}</Text>
-            <View style={styles.categoryBadge}>
-              <Text style={styles.categoryText}>{partner.category}</Text>
-            </View>
-          </View>
-          <View style={[styles.statusBadge, { backgroundColor: getStatusColor(partner.status) }]}>
-            <Text style={styles.statusText}>{partner.status}</Text>
-          </View>
+  const renderPartnerCard = (partner: Partner) => (
+    <View key={partner.id} style={styles.partnerCard}>
+      <View style={styles.partnerHeader}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.partnerName}>{partner.name}</Text>
+          <Text style={styles.partnerMeta}>
+            {partner.sectorType} • DSWD {partner.dswdAccreditationNo || 'Pending'}
+          </Text>
         </View>
-
-        <Text style={styles.description}>{partner.description}</Text>
-
-        <View style={styles.contactInfo}>
-          <View style={styles.contactRow}>
-            <MaterialIcons name="email" size={16} color="#666" />
-            <Text style={styles.contactText}>{partner.contactEmail}</Text>
-          </View>
-          <View style={styles.contactRow}>
-            <MaterialIcons name="phone" size={16} color="#666" />
-            <Text style={styles.contactText}>{partner.contactPhone}</Text>
-          </View>
-          <View style={styles.contactRow}>
-            <MaterialIcons name="location-on" size={16} color="#666" />
-            <Text style={styles.contactText}>{partner.address}</Text>
-          </View>
+        <View style={[styles.statusBadge, { backgroundColor: getStatusColor(partner.status) }]}>
+          <Text style={styles.statusText}>{partner.status}</Text>
         </View>
+      </View>
 
-        {isAdmin && (
-          <View style={styles.adminActionStack}>
-            <TouchableOpacity
-              style={[styles.button, styles.editButton]}
-              onPress={() => handleEditPartner(partner)}
-            >
-              <MaterialIcons name="edit" size={18} color="#166534" />
-              <Text style={styles.editButtonText}>Edit Profile</Text>
-            </TouchableOpacity>
-
-            {partner.status === 'Pending' && (
-              <View style={styles.actionButtons}>
-                <TouchableOpacity
-                  style={[styles.button, styles.approveButton]}
-                  onPress={() => handleApprove(partner.id)}
-                >
-                  <MaterialIcons name="check-circle" size={20} color="#fff" />
-                  <Text style={styles.buttonText}>Approve</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.button, styles.rejectButton]}
-                  onPress={() => handleReject(partner.id)}
-                >
-                  <MaterialIcons name="cancel" size={20} color="#fff" />
-                  <Text style={styles.buttonText}>Reject</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-          </View>
+      <View style={styles.metaList}>
+        <Text style={styles.metaLabel}>Advocacy Focus</Text>
+        {renderChipGroup(
+          partner.advocacyFocus.length > 0 ? partner.advocacyFocus : ['None'],
+          [],
+          () => {}
         )}
       </View>
-    );
-  };
 
-  // Submits a new partner onboarding request from a partner account.
-  const handleSubmitPartner = async () => {
-    if (
-      !partnerForm.name.trim() ||
-      !partnerForm.description.trim() ||
-      !partnerForm.contactEmail.trim() ||
-      !partnerForm.contactPhone.trim() ||
-      !partnerForm.address.trim()
-    ) {
-      Alert.alert('Validation Error', 'Please fill all partner program fields.');
-      return;
-    }
+      <View style={styles.infoGrid}>
+        <View style={styles.infoCard}>
+          <Text style={styles.infoLabel}>Verification</Text>
+          <Text style={styles.infoValue}>{partner.verificationStatus || 'Pending'}</Text>
+        </View>
+        <View style={styles.infoCard}>
+          <Text style={styles.infoLabel}>Credentials</Text>
+          <Text style={styles.infoValue}>
+            {partner.credentialsUnlockedAt ? 'Unlocked' : 'Locked'}
+          </Text>
+        </View>
+      </View>
 
-    try {
-      const newPartner: Partner = {
-        id: `partner-${Date.now()}`,
-        ownerUserId: user?.id,
-        name: partnerForm.name.trim(),
-        description: partnerForm.description.trim(),
-        category: partnerForm.category,
-        contactEmail: partnerForm.contactEmail.trim().toLowerCase(),
-        contactPhone: partnerForm.contactPhone.trim(),
-        address: partnerForm.address.trim(),
-        status: 'Pending',
-        createdAt: new Date().toISOString(),
-      };
+      {partner.contactEmail ? (
+        <Text style={styles.partnerMeta}>Email: {partner.contactEmail}</Text>
+      ) : null}
+      {partner.contactPhone ? (
+        <Text style={styles.partnerMeta}>Mobile: {partner.contactPhone}</Text>
+      ) : null}
+      {partner.description ? (
+        <Text style={styles.partnerDescription}>{partner.description}</Text>
+      ) : null}
+      {partner.verificationNotes ? (
+        <View style={styles.verificationNote}>
+          <MaterialIcons name="verified" size={16} color="#92400e" />
+          <Text style={styles.verificationNoteText}>{partner.verificationNotes}</Text>
+        </View>
+      ) : null}
 
-      await savePartner(newPartner);
-      setPartnerForm(createEmptyPartnerForm(user?.email ?? ''));
-      Alert.alert('Submitted', 'Program onboarding request sent for admin approval.');
-      void loadPartners();
-    } catch (error) {
-      Alert.alert('Error', 'Failed to submit program.');
-    }
-  };
+      {isAdmin ? (
+        <View style={styles.adminActions}>
+          <TouchableOpacity style={styles.editButton} onPress={() => openAdminEditor(partner)}>
+            <MaterialIcons name="edit" size={18} color="#166534" />
+            <Text style={styles.editButtonText}>Edit</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.verifyButton}
+            onPress={() => handleVerify(partner.id)}
+          >
+            <MaterialIcons name="fact-check" size={18} color="#fff" />
+            <Text style={styles.adminButtonText}>Verify</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.approveButton}
+            onPress={() => handleReview(partner.id, 'Approved')}
+          >
+            <MaterialIcons name="check-circle" size={18} color="#fff" />
+            <Text style={styles.adminButtonText}>Approve</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.rejectButton}
+            onPress={() => handleReview(partner.id, 'Rejected')}
+          >
+            <MaterialIcons name="cancel" size={18} color="#fff" />
+            <Text style={styles.adminButtonText}>Reject</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+    </View>
+  );
 
   return (
-    <ScrollView style={styles.container}>
-      <Text style={styles.title}>Partner Onboarding</Text>
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <Text style={styles.title}>{isAdmin ? 'Inbound Inquiries' : 'Partner Registration Form'}</Text>
+      <Text style={styles.subtitle}>
+        {isAdmin
+          ? 'Review organization submissions, verify DSWD accreditation numbers, and approve or reject portal access.'
+          : 'Submit your organization details for verification. Partner login is unlocked after admin approval.'}
+      </Text>
 
-      {user?.role === 'partner' && (
-        renderPartnerFormCard({
-          title: 'Submit Program / Organization',
-          submitLabel: 'Submit for Approval',
-          onSubmit: handleSubmitPartner,
-        })
-      )}
+      {!isAdmin &&
+        renderFormCard({
+          title: latestOwnedPartner ? 'Update Organization Application' : 'New Organization Application',
+          submitLabel: latestOwnedPartner ? 'Submit Application Update' : 'Submit Application',
+          onSubmit: handleSaveApplication,
+        })}
 
-      {isAdmin && showAdminEditor && (
-        renderPartnerFormCard({
-          title: editingPartnerId ? 'Edit Partner Organization' : 'Create Partner Organization',
-          submitLabel: editingPartnerId ? 'Save Changes' : 'Create Partner',
-          onSubmit: handleSavePartnerProfile,
-          onCancel: resetPartnerForm,
-        })
-      )}
+      {isAdmin && showAdminEditor
+        ? renderFormCard({
+            title: editingPartnerId ? 'Edit Partner Record' : 'Create Partner Record',
+            submitLabel: editingPartnerId ? 'Save Changes' : 'Create Partner',
+            onSubmit: handleSaveApplication,
+          })
+        : null}
 
-      {isAdmin && (
-        <View style={styles.filterContainer}>
+      {isAdmin ? (
+        <View style={styles.filterRow}>
           {(['All', 'Pending', 'Approved', 'Rejected'] as const).map(status => (
             <TouchableOpacity
               key={status}
-              style={[styles.filterButton, filter === status && styles.filterButtonActive]}
+              style={[styles.filterChip, filter === status && styles.filterChipActive]}
               onPress={() => setFilter(status)}
             >
-              <Text
-                style={[
-                  styles.filterButtonText,
-                  filter === status && styles.filterButtonTextActive,
-                ]}
-              >
+              <Text style={[styles.filterChipText, filter === status && styles.filterChipTextActive]}>
                 {status}
               </Text>
             </TouchableOpacity>
           ))}
         </View>
-      )}
+      ) : null}
 
-      {partners.length === 0 ? (
-        <View style={styles.emptyState}>
-          <MaterialIcons name="business" size={48} color="#ccc" />
-          <Text style={styles.emptyText}>
-            {isAdmin ? 'No partners found' : 'Partners are visible to admins only'}
-          </Text>
-        </View>
-      ) : (
-        <View style={styles.list}>
-          {partners.map(renderPartnerCard)}
-        </View>
-      )}
+      <View style={styles.list}>
+        {partners.length === 0 ? (
+          <View style={styles.emptyState}>
+            <MaterialIcons name="business" size={42} color="#94a3b8" />
+            <Text style={styles.emptyText}>
+              {isAdmin ? 'No inbound partner applications yet.' : 'No organization application submitted yet.'}
+            </Text>
+          </View>
+        ) : (
+          partners.map(renderPartnerCard)
+        )}
+      </View>
 
-      {isAdmin && (
+      {isAdmin ? (
         <TouchableOpacity
           style={styles.fab}
-          onPress={showAdminEditor ? resetPartnerForm : handleOpenAdminCreate}
+          onPress={() => (showAdminEditor ? resetPartnerForm() : openAdminEditor())}
         >
-          <MaterialIcons name={showAdminEditor ? 'close' : 'add'} size={28} color="#fff" />
+          <MaterialIcons name={showAdminEditor ? 'close' : 'add'} size={26} color="#fff" />
         </TouchableOpacity>
-      )}
+      ) : null}
     </ScrollView>
   );
 }
@@ -485,246 +542,270 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
+  },
+  content: {
     padding: 16,
+    paddingBottom: 96,
   },
   title: {
     fontSize: 24,
-    fontWeight: 'bold',
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  subtitle: {
+    marginTop: 8,
+    fontSize: 13,
+    color: '#475569',
+    lineHeight: 20,
     marginBottom: 16,
-    color: '#333',
   },
-  submissionCard: {
+  formCard: {
     backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 14,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
   },
-  submissionTitle: {
+  formTitle: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#333',
-    marginBottom: 10,
+    color: '#0f172a',
+    marginBottom: 12,
   },
   input: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 9,
-    marginBottom: 8,
     backgroundColor: '#fff',
-    color: '#333',
+    borderWidth: 1,
+    borderColor: '#dbe2ea',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    color: '#0f172a',
+    marginBottom: 12,
   },
   inputMultiline: {
-    minHeight: 72,
+    minHeight: 88,
     textAlignVertical: 'top',
   },
-  submitButton: {
-    backgroundColor: '#4CAF50',
-    borderRadius: 8,
-    paddingVertical: 10,
-    alignItems: 'center',
-    marginTop: 4,
-  },
-  submitButtonText: {
-    color: '#fff',
+  sectionLabel: {
+    fontSize: 13,
     fontWeight: '700',
-  },
-  formActions: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 4,
-  },
-  formButton: {
-    flex: 1,
-  },
-  cancelButton: {
-    backgroundColor: '#e5e7eb',
-    borderRadius: 8,
-    paddingVertical: 10,
-    alignItems: 'center',
-  },
-  cancelButtonText: {
     color: '#334155',
-    fontWeight: '700',
+    marginBottom: 8,
   },
   chipRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
-    marginBottom: 8,
+    marginBottom: 12,
   },
   chip: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 16,
-    backgroundColor: '#e0e0e0',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#e2e8f0',
   },
   chipActive: {
-    backgroundColor: '#4CAF50',
+    backgroundColor: '#166534',
   },
   chipText: {
+    color: '#475569',
+    fontWeight: '700',
     fontSize: 12,
-    color: '#666',
-    fontWeight: '600',
   },
   chipTextActive: {
     color: '#fff',
   },
-  filterContainer: {
-    flexDirection: 'row',
-    marginBottom: 16,
-    gap: 8,
+  submitButton: {
+    backgroundColor: '#166534',
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
   },
-  filterButton: {
+  submitButtonText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  filterRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 16,
+  },
+  filterChip: {
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: '#e0e0e0',
+    borderRadius: 999,
+    backgroundColor: '#e2e8f0',
   },
-  filterButtonActive: {
-    backgroundColor: '#4CAF50',
+  filterChipActive: {
+    backgroundColor: '#166534',
   },
-  filterButtonText: {
-    color: '#666',
+  filterChipText: {
+    color: '#475569',
+    fontWeight: '700',
     fontSize: 12,
-    fontWeight: '600',
   },
-  filterButtonTextActive: {
+  filterChipTextActive: {
     color: '#fff',
   },
-  card: {
+  list: {
+    gap: 12,
+  },
+  partnerCard: {
     backgroundColor: '#fff',
-    borderRadius: 12,
+    borderRadius: 16,
     padding: 16,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    gap: 12,
   },
-  cardHeader: {
+  partnerHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    gap: 12,
     alignItems: 'flex-start',
-    marginBottom: 12,
   },
-  cardTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 4,
+  partnerName: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#0f172a',
   },
-  categoryBadge: {
-    backgroundColor: '#E8F5E9',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-    alignSelf: 'flex-start',
-  },
-  categoryText: {
-    color: '#2E7D32',
+  partnerMeta: {
     fontSize: 12,
-    fontWeight: '600',
+    color: '#64748b',
+    marginTop: 4,
   },
   statusBadge: {
     paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
+    paddingVertical: 7,
+    borderRadius: 999,
   },
   statusText: {
     color: '#fff',
     fontSize: 12,
-    fontWeight: 'bold',
+    fontWeight: '700',
   },
-  description: {
-    color: '#666',
-    fontSize: 14,
-    marginBottom: 12,
-    lineHeight: 20,
+  metaList: {
+    gap: 8,
   },
-  contactInfo: {
-    backgroundColor: '#f9f9f9',
-    borderRadius: 8,
+  metaLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  infoGrid: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  infoCard: {
+    flex: 1,
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
     padding: 12,
-    marginBottom: 12,
-    gap: 8,
   },
-  contactRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  infoLabel: {
+    fontSize: 11,
+    color: '#64748b',
+    fontWeight: '700',
   },
-  contactText: {
-    color: '#666',
+  infoValue: {
+    marginTop: 6,
     fontSize: 13,
-    flex: 1,
+    fontWeight: '700',
+    color: '#0f172a',
   },
-  actionButtons: {
+  partnerDescription: {
+    fontSize: 13,
+    color: '#334155',
+    lineHeight: 19,
+  },
+  verificationNote: {
     flexDirection: 'row',
     gap: 8,
+    alignItems: 'flex-start',
+    backgroundColor: '#fffbeb',
+    borderWidth: 1,
+    borderColor: '#fde68a',
+    borderRadius: 12,
+    padding: 12,
   },
-  adminActionStack: {
-    gap: 8,
-  },
-  button: {
+  verificationNoteText: {
     flex: 1,
+    fontSize: 12,
+    color: '#92400e',
+    lineHeight: 18,
+    fontWeight: '600',
+  },
+  adminActions: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 10,
-    borderRadius: 8,
-    gap: 6,
-  },
-  approveButton: {
-    backgroundColor: '#4CAF50',
-  },
-  rejectButton: {
-    backgroundColor: '#f44336',
+    flexWrap: 'wrap',
+    gap: 8,
   },
   editButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     backgroundColor: '#ecfdf5',
     borderWidth: 1,
     borderColor: '#86efac',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   editButtonText: {
     color: '#166534',
-    fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '700',
   },
-  buttonText: {
+  verifyButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#f59e0b',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  approveButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#16a34a',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  rejectButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#dc2626',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  adminButtonText: {
     color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  list: {
-    marginBottom: 80,
+    fontWeight: '700',
+    fontSize: 12,
   },
   emptyState: {
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 40,
+    backgroundColor: '#fff',
+    borderRadius: 16,
   },
   emptyText: {
-    color: '#999',
-    fontSize: 16,
-    marginTop: 8,
+    marginTop: 10,
+    fontSize: 14,
+    color: '#64748b',
   },
   fab: {
     position: 'absolute',
-    bottom: 20,
-    right: 20,
+    bottom: 24,
+    right: 24,
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: '#4CAF50',
-    justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 5,
+    justifyContent: 'center',
+    backgroundColor: '#166534',
   },
 });

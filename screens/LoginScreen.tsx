@@ -2,15 +2,17 @@ import React, { useEffect, useRef, useState } from 'react';
 import { View, TextInput, TouchableOpacity, Text, StyleSheet, Alert, ActivityIndicator, Platform, ScrollView, Modal } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import {
+  canPartnerLogin,
   createUserAccount,
   getAllUsers,
   getApiBaseUrl,
+  isValidDswdAccreditationNo,
   loginWithCredentials,
   subscribeToStorageChanges,
 } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
 import AppLogo from '../components/AppLogo';
-import { NVCSector, User, UserRole, UserType } from '../models/types';
+import { AdvocacyFocus, NVCSector, PartnerSectorType, User, UserRole, UserType } from '../models/types';
 
 type SignupVolunteerSheetState = {
   gender: string;
@@ -27,6 +29,13 @@ type SignupVolunteerSheetState = {
   affiliationPos1: string;
   affiliationOrg2: string;
   affiliationPos2: string;
+};
+
+type SignupPartnerApplicationState = {
+  organizationName: string;
+  sectorType: PartnerSectorType;
+  dswdAccreditationNo: string;
+  advocacyFocus: AdvocacyFocus[];
 };
 
 // Returns a clean volunteer membership form state for the signup modal.
@@ -49,6 +58,16 @@ function createEmptySignupVolunteerSheet(): SignupVolunteerSheetState {
   };
 }
 
+// Returns the default state for partner registration applications.
+function createEmptySignupPartnerApplication(): SignupPartnerApplicationState {
+  return {
+    organizationName: '',
+    sectorType: 'NGO',
+    dswdAccreditationNo: '',
+    advocacyFocus: [],
+  };
+}
+
 // Handles account login and volunteer or partner self-registration.
 export default function LoginScreen() {
   const isWeb = Platform.OS === 'web';
@@ -65,6 +84,8 @@ export default function LoginScreen() {
   const [signupUserType, setSignupUserType] = useState<UserType>('Student');
   const [signupPillars, setSignupPillars] = useState<NVCSector[]>([]);
   const [signupRole, setSignupRole] = useState<Exclude<UserRole, 'admin'>>('volunteer');
+  const [signupPartnerApplication, setSignupPartnerApplication] =
+    useState<SignupPartnerApplicationState>(createEmptySignupPartnerApplication());
   const [signupVolunteerSheet, setSignupVolunteerSheet] = useState<SignupVolunteerSheetState>(
     createEmptySignupVolunteerSheet()
   );
@@ -196,6 +217,15 @@ export default function LoginScreen() {
         return;
       }
 
+      if (user.role === 'partner') {
+        const access = await canPartnerLogin(user);
+        if (!access.allowed) {
+          Alert.alert('Application Pending', access.reason || 'Partner access is still locked.');
+          setLoading(false);
+          return;
+        }
+      }
+
       // Update auth context - this triggers state change and navigation
       await login(user);
       setIdentifier('');
@@ -219,6 +249,7 @@ export default function LoginScreen() {
     setSignupUserType('Student');
     setSignupPillars([]);
     setSignupRole('volunteer');
+    setSignupPartnerApplication(createEmptySignupPartnerApplication());
     setSignupVolunteerSheet(createEmptySignupVolunteerSheet());
     setSignupAcceptedCommitment(false);
   };
@@ -229,6 +260,14 @@ export default function LoginScreen() {
     value: SignupVolunteerSheetState[K]
   ) => {
     setSignupVolunteerSheet(current => ({ ...current, [key]: value }));
+  };
+
+  // Updates one field in the partner application form.
+  const updateSignupPartnerApplication = <K extends keyof SignupPartnerApplicationState>(
+    key: K,
+    value: SignupPartnerApplicationState[K]
+  ) => {
+    setSignupPartnerApplication(current => ({ ...current, [key]: value }));
   };
 
   // Validates and creates a new volunteer or partner account.
@@ -248,9 +287,26 @@ export default function LoginScreen() {
       return;
     }
 
-    if (signupPillars.length === 0) {
+    if (signupRole === 'volunteer' && signupPillars.length === 0) {
       Alert.alert('Validation Error', 'Select at least one pillar of interest.');
       return;
+    }
+
+    if (signupRole === 'partner') {
+      if (!signupPartnerApplication.organizationName.trim()) {
+        Alert.alert('Validation Error', 'Organization name is required.');
+        return;
+      }
+
+      if (!isValidDswdAccreditationNo(signupPartnerApplication.dswdAccreditationNo)) {
+        Alert.alert('Validation Error', 'Enter a valid DSWD accreditation number.');
+        return;
+      }
+
+      if (signupPartnerApplication.advocacyFocus.length === 0) {
+        Alert.alert('Validation Error', 'Select at least one advocacy focus.');
+        return;
+      }
     }
 
     if (signupRole === 'volunteer') {
@@ -287,7 +343,21 @@ export default function LoginScreen() {
         phone: signupAccountPhone,
         role: signupRole,
         userType: signupUserType,
-        pillarsOfInterest: signupPillars,
+        pillarsOfInterest:
+          signupRole === 'partner'
+            ? signupPartnerApplication.advocacyFocus.filter(
+                (focus): focus is NVCSector => focus !== 'Disaster'
+              )
+            : signupPillars,
+        partnerRegistration:
+          signupRole === 'partner'
+            ? {
+                organizationName: signupPartnerApplication.organizationName.trim(),
+                sectorType: signupPartnerApplication.sectorType,
+                dswdAccreditationNo: signupPartnerApplication.dswdAccreditationNo.trim(),
+                advocacyFocus: signupPartnerApplication.advocacyFocus,
+              }
+            : undefined,
         volunteerMembershipSheet:
           signupRole === 'volunteer'
             ? {
@@ -321,8 +391,10 @@ export default function LoginScreen() {
       setShowSignupModal(false);
       resetSignupForm();
       Alert.alert(
-        'Account Created',
-        'Your account has been registered and will appear in admin user management.'
+        signupRole === 'partner' ? 'Application Submitted' : 'Account Created',
+        signupRole === 'partner'
+          ? 'Your partner application was submitted. An admin must verify and approve it before partner login is unlocked.'
+          : 'Your account has been registered and will appear in admin user management.'
       );
     } catch (error: any) {
       Alert.alert('Sign Up Error', error?.message || 'Failed to create account.');
@@ -419,7 +491,7 @@ export default function LoginScreen() {
           {loading ? (
             <ActivityIndicator color="#fff" />
           ) : (
-            <Text style={styles.buttonText}>Sign In</Text>
+            <Text style={styles.buttonText}>Log In</Text>
           )}
         </TouchableOpacity>
 
@@ -490,7 +562,7 @@ export default function LoginScreen() {
         )}
 
         <TouchableOpacity onPress={() => setShowSignupModal(true)}>
-          <Text style={styles.signupText}>Don't have an account? Sign Up</Text>
+          <Text style={styles.signupText}>Don't have an account? Register</Text>
         </TouchableOpacity>
       </View>
 
@@ -502,11 +574,13 @@ export default function LoginScreen() {
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Create Account</Text>
+            <Text style={styles.modalTitle}>
+              {signupRole === 'partner' ? 'Partner Registration' : 'Create Account'}
+            </Text>
             <Text style={styles.modalSubtitle}>
               {signupRole === 'volunteer'
                 ? 'Register with email or phone, choose a profile type, and complete the volunteer membership information sheet.'
-                : 'Register with email or phone, choose a profile type, and pick your pillar interests.'}
+                : 'Submit your organization application with DSWD details. Partner login is unlocked after admin approval.'}
             </Text>
 
             <ScrollView
@@ -517,7 +591,7 @@ export default function LoginScreen() {
             >
               <TextInput
                 style={styles.input}
-                placeholder="Full Name"
+                placeholder={signupRole === 'partner' ? 'Primary Contact Name' : 'Full Name'}
                 placeholderTextColor="#999"
                 value={signupName}
                 onChangeText={setSignupName}
@@ -567,46 +641,124 @@ export default function LoginScreen() {
                 ))}
               </View>
 
-              <Text style={styles.modalSectionLabel}>Profile Creation</Text>
-              <View style={styles.roleSelector}>
-                {(['Student', 'Adult', 'Senior'] as const).map(userType => (
-                  <TouchableOpacity
-                    key={userType}
-                    style={[styles.roleChip, signupUserType === userType && styles.roleChipActive]}
-                    onPress={() => setSignupUserType(userType)}
-                    disabled={signupLoading}
-                  >
-                    <Text style={[styles.roleChipText, signupUserType === userType && styles.roleChipTextActive]}>
-                      {userType}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
+              {signupRole === 'volunteer' ? (
+                <>
+                  <Text style={styles.modalSectionLabel}>Profile Creation</Text>
+                  <View style={styles.roleSelector}>
+                    {(['Student', 'Adult', 'Senior'] as const).map(userType => (
+                      <TouchableOpacity
+                        key={userType}
+                        style={[styles.roleChip, signupUserType === userType && styles.roleChipActive]}
+                        onPress={() => setSignupUserType(userType)}
+                        disabled={signupLoading}
+                      >
+                        <Text style={[styles.roleChipText, signupUserType === userType && styles.roleChipTextActive]}>
+                          {userType}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
 
-              <Text style={styles.modalSectionLabel}>Preferences</Text>
-              <View style={styles.pillarGrid}>
-                {(['Nutrition', 'Education', 'Livelihood'] as const).map(pillar => {
-                  const selected = signupPillars.includes(pillar);
-                  return (
-                    <TouchableOpacity
-                      key={pillar}
-                      style={[styles.pillarChip, selected && styles.pillarChipActive]}
-                      onPress={() =>
-                        setSignupPillars(current =>
-                          current.includes(pillar)
-                            ? current.filter(item => item !== pillar)
-                            : [...current, pillar]
-                        )
-                      }
-                      disabled={signupLoading}
-                    >
-                      <Text style={[styles.pillarChipText, selected && styles.pillarChipTextActive]}>
-                        {pillar}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
+                  <Text style={styles.modalSectionLabel}>Preferences</Text>
+                  <View style={styles.pillarGrid}>
+                    {(['Nutrition', 'Education', 'Livelihood'] as const).map(pillar => {
+                      const selected = signupPillars.includes(pillar);
+                      return (
+                        <TouchableOpacity
+                          key={pillar}
+                          style={[styles.pillarChip, selected && styles.pillarChipActive]}
+                          onPress={() =>
+                            setSignupPillars(current =>
+                              current.includes(pillar)
+                                ? current.filter(item => item !== pillar)
+                                : [...current, pillar]
+                            )
+                          }
+                          disabled={signupLoading}
+                        >
+                          <Text style={[styles.pillarChipText, selected && styles.pillarChipTextActive]}>
+                            {pillar}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.modalSectionLabel}>Organization Application</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Organization Name"
+                    placeholderTextColor="#999"
+                    value={signupPartnerApplication.organizationName}
+                    onChangeText={value => updateSignupPartnerApplication('organizationName', value)}
+                    editable={!signupLoading}
+                  />
+
+                  <Text style={styles.modalSectionSubLabel}>Sector Type</Text>
+                  <View style={styles.pillarGrid}>
+                    {(['NGO', 'Hospital', 'Institution', 'Private'] as const).map(sector => {
+                      const selected = signupPartnerApplication.sectorType === sector;
+                      return (
+                        <TouchableOpacity
+                          key={sector}
+                          style={[styles.pillarChip, selected && styles.pillarChipActive]}
+                          onPress={() => updateSignupPartnerApplication('sectorType', sector)}
+                          disabled={signupLoading}
+                        >
+                          <Text style={[styles.pillarChipText, selected && styles.pillarChipTextActive]}>
+                            {sector}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+
+                  <TextInput
+                    style={styles.input}
+                    placeholder="DSWD Accreditation No."
+                    placeholderTextColor="#999"
+                    value={signupPartnerApplication.dswdAccreditationNo}
+                    onChangeText={value => updateSignupPartnerApplication('dswdAccreditationNo', value)}
+                    autoCapitalize="characters"
+                    editable={!signupLoading}
+                  />
+
+                  <Text style={styles.modalSectionSubLabel}>Advocacy Focus</Text>
+                  <View style={styles.pillarGrid}>
+                    {(['Nutrition', 'Education', 'Livelihood', 'Disaster'] as const).map(focus => {
+                      const selected = signupPartnerApplication.advocacyFocus.includes(focus);
+                      return (
+                        <TouchableOpacity
+                          key={focus}
+                          style={[styles.pillarChip, selected && styles.pillarChipActive]}
+                          onPress={() =>
+                            updateSignupPartnerApplication(
+                              'advocacyFocus',
+                              selected
+                                ? signupPartnerApplication.advocacyFocus.filter(item => item !== focus)
+                                : [...signupPartnerApplication.advocacyFocus, focus]
+                            )
+                          }
+                          disabled={signupLoading}
+                        >
+                          <Text style={[styles.pillarChipText, selected && styles.pillarChipTextActive]}>
+                            {focus}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+
+                  <View style={styles.partnerLockNotice}>
+                    <MaterialIcons name="verified-user" size={18} color="#92400e" />
+                    <Text style={styles.partnerLockNoticeText}>
+                      Admin will review your DSWD accreditation number, verify the application, and unlock partner login after approval.
+                    </Text>
+                  </View>
+                </>
+              )}
 
               {signupRole === 'volunteer' && (
                 <>
@@ -797,7 +949,9 @@ export default function LoginScreen() {
                 {signupLoading ? (
                   <ActivityIndicator color="#fff" />
                 ) : (
-                  <Text style={styles.modalPrimaryText}>Create</Text>
+                  <Text style={styles.modalPrimaryText}>
+                    {signupRole === 'partner' ? 'Submit Application' : 'Create'}
+                  </Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -1091,6 +1245,24 @@ const styles = StyleSheet.create({
   },
   pillarChipTextActive: {
     color: '#fff',
+  },
+  partnerLockNotice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: '#fffbeb',
+    borderWidth: 1,
+    borderColor: '#fcd34d',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 16,
+  },
+  partnerLockNoticeText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#78350f',
+    fontWeight: '600',
   },
   affiliationRow: {
     flexDirection: 'row',

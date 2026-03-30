@@ -1,91 +1,136 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
   Alert,
   Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import * as Location from 'expo-location';
 import { useFocusEffect } from '@react-navigation/native';
+import { useAuth } from '../contexts/AuthContext';
 import {
+  createPartnerEventCheckIn,
   getPartnerDashboardSnapshot,
+  requestPartnerProjectJoin,
+  submitPartnerReport,
   subscribeToStorageChanges,
 } from '../models/storage';
-import { useAuth } from '../contexts/AuthContext';
-import { Partner, SectorNeed } from '../models/types';
+import {
+  Partner,
+  PartnerProjectApplication,
+  PartnerReportType,
+  Project,
+  PublishedImpactReport,
+} from '../models/types';
 
-// Shows dashboard metrics and shortcuts for partner organization accounts.
-export default function PartnerDashboardScreen({ navigation }: any) {
+type ReportFormState = {
+  projectId: string;
+  reportType: PartnerReportType;
+  description: string;
+  impactCount: string;
+  mediaFile: string;
+};
+
+function createEmptyReportForm(projectId = ''): ReportFormState {
+  return {
+    projectId,
+    reportType: 'General',
+    description: '',
+    impactCount: '',
+    mediaFile: '',
+  };
+}
+
+function getDisplayProjectStatus(status: Project['status']): 'Planned' | 'Active' | 'Completed' | 'Cancelled' {
+  switch (status) {
+    case 'Planning':
+      return 'Planned';
+    case 'Completed':
+      return 'Completed';
+    case 'Cancelled':
+      return 'Cancelled';
+    default:
+      return 'Active';
+  }
+}
+
+function getProjectStatusColor(status: ReturnType<typeof getDisplayProjectStatus>) {
+  switch (status) {
+    case 'Planned':
+      return '#2563eb';
+    case 'Completed':
+      return '#16a34a';
+    case 'Cancelled':
+      return '#dc2626';
+    default:
+      return '#f59e0b';
+  }
+}
+
+// Shows the partner workspace for RSVP, field check-in, report uploads, and published impact files.
+export default function PartnerDashboardScreen() {
   const { user, logout } = useAuth();
-  const [orgStats, setOrgStats] = useState({ total: 0, pending: 0, approved: 0, rejected: 0 });
-  const [projectStats, setProjectStats] = useState({ total: 0, active: 0, completed: 0 });
-  const [sectorNeeds, setSectorNeeds] = useState<SectorNeed[]>([]);
-  const [myOrganizations, setMyOrganizations] = useState<Partner[]>([]);
+  const [partners, setPartners] = useState<Partner[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [partnerApplications, setPartnerApplications] = useState<PartnerProjectApplication[]>([]);
+  const [publishedImpactReports, setPublishedImpactReports] = useState<PublishedImpactReport[]>([]);
+  const [partnerCheckInProjectId, setPartnerCheckInProjectId] = useState<string | null>(null);
+  const [actionProjectId, setActionProjectId] = useState<string | null>(null);
+  const [reportForm, setReportForm] = useState<ReportFormState>(createEmptyReportForm());
 
-  // Checks whether an organization record belongs to the current partner user.
-  const isOwnedByCurrentPartner = React.useCallback((partner: {
-    ownerUserId?: string;
-    contactEmail: string;
-  }) => {
-    if (!user) {
-      return false;
-    }
+  const isOwnedByCurrentPartner = React.useCallback(
+    (partner: Partner) => {
+      if (!user) {
+        return false;
+      }
 
-    if (partner.ownerUserId) {
-      return partner.ownerUserId === user.id;
-    }
+      if (partner.ownerUserId) {
+        return partner.ownerUserId === user.id;
+      }
 
-    return partner.contactEmail.toLowerCase() === user.email?.toLowerCase();
-  }, [user]);
+      return partner.contactEmail?.toLowerCase() === user.email?.toLowerCase();
+    },
+    [user]
+  );
 
-  // Loads partner-owned organizations, related projects, and current sector needs.
   const loadDashboardData = React.useCallback(async () => {
     try {
-      const { partners, projects, sectorNeeds: nextSectorNeeds } = await getPartnerDashboardSnapshot();
-      const myOrgs = partners.filter(isOwnedByCurrentPartner);
-      const myOrgIds = new Set(myOrgs.map((partner) => partner.id));
-      const myProjects = projects.filter((project) => myOrgIds.has(project.partnerId));
-      const sortedOrganizations = [...myOrgs].sort((left, right) => {
-        const leftTime = left.validatedAt || left.createdAt;
-        const rightTime = right.validatedAt || right.createdAt;
-        return new Date(rightTime).getTime() - new Date(leftTime).getTime();
-      });
+      const snapshot = await getPartnerDashboardSnapshot();
+      const ownedPartners = snapshot.partners.filter(isOwnedByCurrentPartner);
+      setPartners(ownedPartners);
+      setProjects(snapshot.projects);
+      setPartnerApplications(
+        snapshot.partnerApplications
+          .filter(application => application.partnerUserId === user?.id)
+          .sort((a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime())
+      );
+      setPublishedImpactReports(
+        snapshot.publishedImpactReports.filter(report =>
+          snapshot.projects.some(
+            project =>
+              project.id === report.projectId &&
+              ownedPartners.some(partner => partner.id === project.partnerId) &&
+              Boolean(report.publishedAt)
+          )
+        )
+      );
 
-      setOrgStats({
-        total: myOrgs.length,
-        pending: myOrgs.filter(p => p.status === 'Pending').length,
-        approved: myOrgs.filter(p => p.status === 'Approved').length,
-        rejected: myOrgs.filter(p => p.status === 'Rejected').length,
-      });
-      setMyOrganizations(sortedOrganizations);
-
-      setProjectStats({
-        total: myProjects.length,
-        active: myProjects.filter(p => p.status === 'In Progress').length,
-        completed: myProjects.filter(p => p.status === 'Completed').length,
-      });
-
-      setSectorNeeds(nextSectorNeeds);
+      setReportForm(current =>
+        current.projectId
+          ? current
+          : createEmptyReportForm(
+              snapshot.projects.find(project => project.joinedUserIds?.includes(user?.id || ''))?.id || ''
+            )
+      );
     } catch (error: any) {
-      Alert.alert('Error', error?.message || 'Failed to load dashboard data');
+      Alert.alert('Error', error?.message || 'Failed to load the partner dashboard.');
     }
-  }, [isOwnedByCurrentPartner]);
-
-  // Chooses the color used for each organization approval status.
-  const getStatusColor = (status: Partner['status']) => {
-    switch (status) {
-      case 'Approved':
-        return '#16a34a';
-      case 'Rejected':
-        return '#dc2626';
-      case 'Pending':
-      default:
-        return '#f59e0b';
-    }
-  };
+  }, [isOwnedByCurrentPartner, user?.id]);
 
   useEffect(() => {
     void loadDashboardData();
@@ -98,15 +143,56 @@ export default function PartnerDashboardScreen({ navigation }: any) {
   );
 
   useEffect(() => {
-    return subscribeToStorageChanges(['projects', 'partners'], () => {
-      void loadDashboardData();
-    });
+    return subscribeToStorageChanges(
+      [
+        'partners',
+        'projects',
+        'partnerProjectApplications',
+        'partnerEventCheckIns',
+        'partnerReports',
+        'publishedImpactReports',
+      ],
+      () => {
+        void loadDashboardData();
+      }
+    );
   }, [loadDashboardData]);
 
-  // Confirms and clears the current partner session.
+  const approvedPartner = useMemo(
+    () => partners.find(partner => partner.status === 'Approved') || null,
+    [partners]
+  );
+
+  const applicationByProjectId = useMemo(
+    () => new Map(partnerApplications.map(application => [application.projectId, application])),
+    [partnerApplications]
+  );
+
+  const attendingProjects = useMemo(
+    () =>
+      projects.filter(project => {
+        const application = applicationByProjectId.get(project.id);
+        return (
+          project.joinedUserIds?.includes(user?.id || '') ||
+          application?.status === 'Approved'
+        );
+      }),
+    [applicationByProjectId, projects, user?.id]
+  );
+
+  const activeProjects = useMemo(
+    () => projects.filter(project => getDisplayProjectStatus(project.status) !== 'Cancelled'),
+    [projects]
+  );
+
+  const updateReportForm = <K extends keyof ReportFormState>(key: K, value: ReportFormState[K]) => {
+    setReportForm(current => ({ ...current, [key]: value }));
+  };
+
   const handleLogout = async () => {
     if (Platform.OS === 'web') {
-      const confirmed = typeof window !== 'undefined' ? window.confirm('Are you sure you want to logout?') : true;
+      const confirmed =
+        typeof window !== 'undefined' ? window.confirm('Are you sure you want to logout?') : true;
       if (confirmed) {
         await logout();
       }
@@ -114,84 +200,151 @@ export default function PartnerDashboardScreen({ navigation }: any) {
     }
 
     Alert.alert('Logout', 'Are you sure you want to logout?', [
-      { text: 'Cancel', onPress: () => {} },
+      { text: 'Cancel' },
       { text: 'Logout', onPress: async () => await logout() },
     ]);
   };
 
+  const handleJoinProject = async (projectId: string) => {
+    if (!user) {
+      return;
+    }
+
+    try {
+      setActionProjectId(projectId);
+      await requestPartnerProjectJoin(projectId, user);
+      Alert.alert('Request Sent', 'Your RSVP has been sent to the admin for approval.');
+      void loadDashboardData();
+    } catch (error: any) {
+      Alert.alert('Error', error?.message || 'Failed to send the RSVP request.');
+    } finally {
+      setActionProjectId(null);
+    }
+  };
+
+  const handleCheckIn = async (project: Project) => {
+    if (!user || !approvedPartner) {
+      Alert.alert('Approval Required', 'You need an approved partner application before checking in.');
+      return;
+    }
+
+    try {
+      setPartnerCheckInProjectId(project.id);
+      const permission = await Location.requestForegroundPermissionsAsync();
+      if (permission.status !== 'granted') {
+        Alert.alert('Location Required', 'Location access is required to capture GPS coordinates.');
+        return;
+      }
+
+      const position = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+
+      const checkIn = await createPartnerEventCheckIn({
+        projectId: project.id,
+        partnerId: approvedPartner.id,
+        partnerUserId: user.id,
+        gpsCoordinates: {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+        },
+      });
+
+      Alert.alert(
+        'Checked In',
+        `GPS captured at ${checkIn.gpsCoordinates.latitude.toFixed(4)}, ${checkIn.gpsCoordinates.longitude.toFixed(4)} on ${new Date(checkIn.checkInTime).toLocaleString()}.`
+      );
+    } catch (error: any) {
+      Alert.alert('Check-In Failed', error?.message || 'Unable to complete event check-in.');
+    } finally {
+      setPartnerCheckInProjectId(null);
+    }
+  };
+
+  const handleUploadReport = async () => {
+    if (!user || !approvedPartner) {
+      Alert.alert('Approval Required', 'You need an approved partner application before uploading a report.');
+      return;
+    }
+
+    if (!reportForm.projectId || !reportForm.description.trim() || !reportForm.impactCount.trim()) {
+      Alert.alert('Validation Error', 'Select a project and complete the report details.');
+      return;
+    }
+
+    const impactCount = Number(reportForm.impactCount);
+    if (Number.isNaN(impactCount) || impactCount <= 0) {
+      Alert.alert('Validation Error', 'Impact count must be a positive number.');
+      return;
+    }
+
+    try {
+      await submitPartnerReport({
+        projectId: reportForm.projectId,
+        partnerId: approvedPartner.id,
+        partnerUserId: user.id,
+        partnerName: approvedPartner.name,
+        reportType: reportForm.reportType,
+        description: reportForm.description,
+        impactCount,
+        mediaFile: reportForm.mediaFile,
+      });
+      setReportForm(createEmptyReportForm(reportForm.projectId));
+      Alert.alert('Uploaded', 'Your report was submitted to the admin impact hub.');
+    } catch (error: any) {
+      Alert.alert('Upload Failed', error?.message || 'Unable to upload the report.');
+    }
+  };
+
+  const handleDownloadReport = (report: PublishedImpactReport) => {
+    Alert.alert(
+      'Download Report',
+      `${report.reportFile}\nGenerated ${new Date(report.generatedAt).toLocaleString()}`
+    );
+  };
+
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.header}>
-        <View style={styles.userSection}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>{user?.name?.charAt(0) ?? 'P'}</Text>
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.greeting}>Welcome, {user?.name}</Text>
-            <Text style={styles.role}>Partner Org Account</Text>
-          </View>
-          <TouchableOpacity onPress={handleLogout}>
-            <MaterialIcons name="logout" size={24} color="#666" />
-          </TouchableOpacity>
+        <View style={styles.avatar}>
+          <Text style={styles.avatarText}>{user?.name?.charAt(0) || 'P'}</Text>
         </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.greeting}>Welcome, {user?.name}</Text>
+          <Text style={styles.role}>Partner Dashboard</Text>
+        </View>
+        <TouchableOpacity onPress={handleLogout}>
+          <MaterialIcons name="logout" size={22} color="#475569" />
+        </TouchableOpacity>
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Organization Summary</Text>
-        <View style={styles.metricsGrid}>
-          <View style={styles.metricCard}>
-            <MaterialIcons name="business" size={30} color="#4CAF50" />
-            <Text style={styles.metricValue}>{orgStats.total}</Text>
-            <Text style={styles.metricLabel}>My Orgs</Text>
-          </View>
-          <View style={styles.metricCard}>
-            <MaterialIcons name="hourglass-empty" size={30} color="#66BB6A" />
-            <Text style={styles.metricValue}>{orgStats.pending}</Text>
-            <Text style={styles.metricLabel}>Pending</Text>
-          </View>
-          <View style={styles.metricCard}>
-            <MaterialIcons name="check-circle" size={30} color="#4CAF50" />
-            <Text style={styles.metricValue}>{orgStats.approved}</Text>
-            <Text style={styles.metricLabel}>Approved</Text>
-          </View>
-          <View style={styles.metricCard}>
-            <MaterialIcons name="cancel" size={30} color="#f44336" />
-            <Text style={styles.metricValue}>{orgStats.rejected}</Text>
-            <Text style={styles.metricLabel}>Rejected</Text>
-          </View>
-        </View>
-      </View>
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>My Organization Status</Text>
-        {myOrganizations.length === 0 ? (
+        <Text style={styles.sectionTitle}>Registration Status</Text>
+        {partners.length === 0 ? (
           <View style={styles.card}>
-            <Text style={styles.cardLine}>No submitted organizations yet.</Text>
+            <Text style={styles.cardText}>No organization application found yet.</Text>
           </View>
         ) : (
-          myOrganizations.map((organization) => (
-            <View key={organization.id} style={styles.orgCard}>
-              <View style={styles.orgHeader}>
+          partners.map(partner => (
+            <View key={partner.id} style={styles.card}>
+              <View style={styles.cardHeader}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.orgName}>{organization.name}</Text>
-                  <Text style={styles.orgMeta}>{organization.category}</Text>
+                  <Text style={styles.cardTitle}>{partner.name}</Text>
+                  <Text style={styles.cardMeta}>
+                    {partner.sectorType} • DSWD {partner.dswdAccreditationNo || 'Pending'}
+                  </Text>
                 </View>
                 <View
                   style={[
-                    styles.orgStatusBadge,
-                    { backgroundColor: getStatusColor(organization.status) },
+                    styles.statusBadge,
+                    { backgroundColor: getProjectStatusColor(partner.status === 'Approved' ? 'Completed' : 'Active') },
                   ]}
                 >
-                  <Text style={styles.orgStatusText}>{organization.status}</Text>
+                  <Text style={styles.statusBadgeText}>{partner.status}</Text>
                 </View>
               </View>
-              <Text style={styles.orgDescription}>{organization.description}</Text>
-              <Text style={styles.orgMeta}>
-                {organization.status === 'Pending'
-                  ? `Submitted ${new Date(organization.createdAt).toLocaleDateString()}`
-                  : `Updated ${new Date(
-                      organization.validatedAt || organization.createdAt
-                    ).toLocaleDateString()}`}
+              <Text style={styles.cardText}>
+                Verification: {partner.verificationStatus || 'Pending'}{partner.credentialsUnlockedAt ? ' • Login unlocked' : ' • Login locked'}
               </Text>
             </View>
           ))
@@ -199,47 +352,149 @@ export default function PartnerDashboardScreen({ navigation }: any) {
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Project Snapshot</Text>
-        <View style={styles.card}>
-          <Text style={styles.cardLine}>Total Projects: {projectStats.total}</Text>
-          <Text style={styles.cardLine}>Active Projects: {projectStats.active}</Text>
-          <Text style={styles.cardLine}>Completed Projects: {projectStats.completed}</Text>
-        </View>
-      </View>
+        <Text style={styles.sectionTitle}>Project Management</Text>
+        {activeProjects.map(project => {
+          const displayStatus = getDisplayProjectStatus(project.status);
+          const application = applicationByProjectId.get(project.id);
+          const attending =
+            project.joinedUserIds?.includes(user?.id || '') || application?.status === 'Approved';
+          const buttonLabel = attending
+            ? 'Attending'
+            : application?.status === 'Pending'
+            ? 'Pending Approval'
+            : application?.status === 'Rejected'
+            ? 'Request Again'
+            : 'Join Event';
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Project Coordination</Text>
-        <View style={styles.card}>
-          <Text style={styles.cardLine}>
-            Review active programs, join approved collaborations, and coordinate with NVC admins through messages.
-          </Text>
-          <View style={styles.actionRow}>
-            <TouchableOpacity
-              style={[styles.smallButton, styles.primaryButton]}
-              onPress={() => navigation.navigate('Projects')}
-            >
-              <Text style={styles.smallButtonText}>View Projects</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.smallButton, styles.secondaryButton]}
-              onPress={() => navigation.navigate('Messages')}
-            >
-              <Text style={styles.smallButtonText}>Message Admin</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>NVC Sector Needs</Text>
-        {sectorNeeds.map((need) => {
           return (
-            <View key={need.sector} style={styles.needCard}>
-              <Text style={styles.needTitle}>{need.title}</Text>
-              <Text style={styles.needDescription}>{need.description}</Text>
+            <View key={project.id} style={styles.projectCard}>
+              <View style={styles.cardHeader}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cardTitle}>{project.title}</Text>
+                  <Text style={styles.cardMeta}>{project.description}</Text>
+                </View>
+                <View style={[styles.statusBadge, { backgroundColor: getProjectStatusColor(displayStatus) }]}>
+                  <Text style={styles.statusBadgeText}>{displayStatus}</Text>
+                </View>
+              </View>
+
+              <TouchableOpacity
+                style={[styles.primaryButton, attending && styles.secondaryButton]}
+                onPress={() => handleJoinProject(project.id)}
+                disabled={attending || application?.status === 'Pending' || actionProjectId === project.id}
+              >
+                <Text style={[styles.primaryButtonText, attending && styles.secondaryButtonText]}>
+                  {actionProjectId === project.id ? 'Sending...' : buttonLabel}
+                </Text>
+              </TouchableOpacity>
+
+              {attending ? (
+                <TouchableOpacity
+                  style={styles.checkInButton}
+                  onPress={() => handleCheckIn(project)}
+                  disabled={partnerCheckInProjectId === project.id}
+                >
+                  <MaterialIcons name="place" size={16} color="#fff" />
+                  <Text style={styles.checkInButtonText}>
+                    {partnerCheckInProjectId === project.id ? 'Checking In...' : 'Check-In'}
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
           );
         })}
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Data Submission Form</Text>
+        <View style={styles.card}>
+          <Text style={styles.fieldLabel}>Project</Text>
+          <View style={styles.selectorGrid}>
+            {attendingProjects.map(project => {
+              const selected = reportForm.projectId === project.id;
+              return (
+                <TouchableOpacity
+                  key={project.id}
+                  style={[styles.selectorChip, selected && styles.selectorChipActive]}
+                  onPress={() => updateReportForm('projectId', project.id)}
+                >
+                  <Text style={[styles.selectorChipText, selected && styles.selectorChipTextActive]}>
+                    {project.title}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <Text style={styles.fieldLabel}>Report Type</Text>
+          <View style={styles.selectorGrid}>
+            {(['General', 'Medical', 'Logistics'] as const).map(type => {
+              const selected = reportForm.reportType === type;
+              return (
+                <TouchableOpacity
+                  key={type}
+                  style={[styles.selectorChip, selected && styles.selectorChipActive]}
+                  onPress={() => updateReportForm('reportType', type)}
+                >
+                  <Text style={[styles.selectorChipText, selected && styles.selectorChipTextActive]}>
+                    {type}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <TextInput
+            style={[styles.input, styles.inputMultiline]}
+            placeholder="Description"
+            value={reportForm.description}
+            onChangeText={value => updateReportForm('description', value)}
+            multiline
+          />
+          <TextInput
+            style={styles.input}
+            placeholder="Impact Count"
+            value={reportForm.impactCount}
+            onChangeText={value => updateReportForm('impactCount', value)}
+            keyboardType="number-pad"
+          />
+          <TextInput
+            style={styles.input}
+            placeholder="Media File (photo/video name or link)"
+            value={reportForm.mediaFile}
+            onChangeText={value => updateReportForm('mediaFile', value)}
+          />
+
+          <TouchableOpacity style={styles.primaryButton} onPress={handleUploadReport}>
+            <Text style={styles.primaryButtonText}>Upload Report</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Impact Report Hub</Text>
+        {publishedImpactReports.filter(report => Boolean(report.publishedAt)).length === 0 ? (
+          <View style={styles.card}>
+            <Text style={styles.cardText}>No published PDF or Excel files yet.</Text>
+          </View>
+        ) : (
+          publishedImpactReports
+            .filter(report => Boolean(report.publishedAt))
+            .map(report => (
+              <View key={report.id} style={styles.card}>
+                <Text style={styles.cardTitle}>{report.reportFile}</Text>
+                <Text style={styles.cardMeta}>
+                  {report.format} • Published {new Date(report.publishedAt || report.generatedAt).toLocaleDateString()}
+                </Text>
+                <TouchableOpacity
+                  style={styles.primaryButton}
+                  onPress={() => handleDownloadReport(report)}
+                >
+                  <Text style={styles.primaryButtonText}>Download Report</Text>
+                </TouchableOpacity>
+              </View>
+            ))
+        )}
       </View>
     </ScrollView>
   );
@@ -250,155 +505,160 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f5f5f5',
   },
-  header: {
+  content: {
     padding: 16,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
+    paddingBottom: 32,
   },
-  userSection: {
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
+    backgroundColor: '#fff',
+    padding: 16,
+    borderRadius: 18,
   },
   avatar: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: '#4CAF50',
-    justifyContent: 'center',
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#166534',
     alignItems: 'center',
+    justifyContent: 'center',
   },
   avatarText: {
     color: '#fff',
     fontSize: 18,
-    fontWeight: 'bold',
+    fontWeight: '700',
   },
   greeting: {
     fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
+    fontWeight: '700',
+    color: '#0f172a',
   },
   role: {
     marginTop: 2,
     fontSize: 12,
-    color: '#666',
+    color: '#64748b',
   },
   section: {
-    padding: 16,
+    marginTop: 16,
+    gap: 12,
   },
   sectionTitle: {
     fontSize: 18,
     fontWeight: '700',
-    color: '#333',
-    marginBottom: 12,
-  },
-  metricsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-  },
-  metricCard: {
-    width: '47%',
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 14,
-    alignItems: 'center',
-  },
-  metricValue: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#333',
-    marginTop: 6,
-  },
-  metricLabel: {
-    marginTop: 4,
-    color: '#666',
-    fontSize: 12,
+    color: '#0f172a',
   },
   card: {
     backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 14,
-    gap: 8,
+    borderRadius: 16,
+    padding: 16,
+    gap: 10,
   },
-  orgCard: {
+  projectCard: {
     backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 10,
-    gap: 8,
-  },
-  orgHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
+    borderRadius: 16,
+    padding: 16,
     gap: 12,
   },
-  orgName: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#111827',
+  cardHeader: {
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'flex-start',
   },
-  orgDescription: {
-    color: '#475569',
-    fontSize: 13,
+  cardTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  cardMeta: {
+    marginTop: 4,
+    fontSize: 12,
+    color: '#64748b',
     lineHeight: 18,
   },
-  orgMeta: {
-    color: '#64748b',
-    fontSize: 12,
+  cardText: {
+    fontSize: 13,
+    color: '#334155',
+    lineHeight: 19,
   },
-  orgStatusBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+  statusBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
     borderRadius: 999,
   },
-  orgStatusText: {
+  statusBadgeText: {
     color: '#fff',
     fontSize: 12,
     fontWeight: '700',
-  },
-  needCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 10,
-  },
-  needTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#333',
-    marginBottom: 4,
-  },
-  needDescription: {
-    color: '#666',
-    fontSize: 12,
-    marginBottom: 8,
-  },
-  actionRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 10,
-    marginTop: 10,
-  },
-  smallButton: {
-    flex: 1,
-    borderRadius: 8,
-    paddingVertical: 10,
-    alignItems: 'center',
   },
   primaryButton: {
-    backgroundColor: '#4CAF50',
+    backgroundColor: '#166534',
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
   },
-  secondaryButton: {
-    backgroundColor: '#e0e0e0',
-  },
-  smallButtonText: {
+  primaryButtonText: {
     color: '#fff',
     fontWeight: '700',
   },
-  cardLine: {
-    color: '#333',
-    fontSize: 14,
+  secondaryButton: {
+    backgroundColor: '#dcfce7',
+  },
+  secondaryButtonText: {
+    color: '#166534',
+  },
+  checkInButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#2563eb',
+    borderRadius: 10,
+    paddingVertical: 12,
+  },
+  checkInButtonText: {
+    color: '#fff',
+    fontWeight: '700',
+  },
+  fieldLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  selectorGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 4,
+  },
+  selectorChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#e2e8f0',
+  },
+  selectorChipActive: {
+    backgroundColor: '#166534',
+  },
+  selectorChipText: {
+    color: '#475569',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  selectorChipTextActive: {
+    color: '#fff',
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: '#dbe2ea',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    color: '#0f172a',
+  },
+  inputMultiline: {
+    minHeight: 88,
+    textAlignVertical: 'top',
   },
 });

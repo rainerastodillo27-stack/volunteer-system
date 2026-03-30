@@ -4,6 +4,9 @@
 export type UserRole = 'admin' | 'volunteer' | 'partner';
 export type UserType = 'Student' | 'Adult' | 'Senior';
 export type NVCSector = 'Education' | 'Livelihood' | 'Nutrition';
+export type PartnerSectorType = 'NGO' | 'Hospital' | 'Institution' | 'Private';
+export type AdvocacyFocus = 'Nutrition' | 'Education' | 'Livelihood' | 'Disaster';
+export type PartnerReportType = 'General' | 'Medical' | 'Logistics';
 
 // Represents an application account that can sign in to the system.
 export interface User {
@@ -23,14 +26,20 @@ export interface Partner {
   id: string;
   ownerUserId?: string; // Partner account that owns/submitted this org profile
   name: string;
-  description: string;
+  description?: string;
   category: 'Education' | 'Livelihood' | 'Nutrition' | 'Other';
-  contactEmail: string;
-  contactPhone: string;
-  address: string;
+  sectorType: PartnerSectorType;
+  dswdAccreditationNo: string;
+  advocacyFocus: AdvocacyFocus[];
+  contactEmail?: string;
+  contactPhone?: string;
+  address?: string;
   status: 'Pending' | 'Approved' | 'Rejected'; // Admin validation
+  verificationStatus?: 'Pending' | 'Verified';
+  verificationNotes?: string;
   validatedBy?: string; // Admin ID
   validatedAt?: string;
+  credentialsUnlockedAt?: string;
   createdAt: string;
   registrationDocuments?: string[]; // URLs to documents
 }
@@ -41,6 +50,7 @@ export interface Project {
   title: string;
   description: string;
   partnerId: string;
+  programModule?: AdvocacyFocus;
   isEvent?: boolean;
   status: 'Planning' | 'In Progress' | 'On Hold' | 'Completed' | 'Cancelled';
   category: 'Education' | 'Livelihood' | 'Nutrition' | 'Other';
@@ -176,6 +186,47 @@ export interface PartnerProjectApplication {
   requestedAt: string;
   reviewedAt?: string;
   reviewedBy?: string;
+}
+
+// Represents a partner event check-in captured during field execution.
+export interface PartnerEventCheckIn {
+  id: string;
+  projectId: string;
+  partnerId: string;
+  partnerUserId: string;
+  gpsCoordinates: {
+    latitude: number;
+    longitude: number;
+  };
+  checkInTime: string;
+}
+
+// Represents a partner-submitted operational or impact report for a project.
+export interface PartnerReport {
+  id: string;
+  projectId: string;
+  partnerId: string;
+  partnerUserId: string;
+  partnerName: string;
+  reportType: PartnerReportType;
+  description: string;
+  impactCount: number;
+  mediaFile?: string;
+  createdAt: string;
+  status: 'Submitted' | 'Reviewed';
+  reviewedAt?: string;
+  reviewedBy?: string;
+}
+
+// Represents a generated final impact file that can be published to partners.
+export interface PublishedImpactReport {
+  id: string;
+  projectId: string;
+  generatedBy: string;
+  generatedAt: string;
+  reportFile: string;
+  format: 'PDF' | 'Excel';
+  publishedAt?: string;
 }
 
 // Represents top-level admin dashboard statistics.

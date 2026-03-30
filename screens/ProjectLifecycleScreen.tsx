@@ -11,19 +11,34 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import { Partner, PartnerProjectApplication, Project, StatusUpdate } from '../models/types';
+import {
+  AdvocacyFocus,
+  Partner,
+  PartnerEventCheckIn,
+  PartnerProjectApplication,
+  PartnerReport,
+  Project,
+  PublishedImpactReport,
+  StatusUpdate,
+} from '../models/types';
 import {
   completeVolunteerProjectParticipation,
   deleteProject,
   getAllVolunteerProjectMatches,
   getAllPartners,
+  getPartnerEventCheckInsByProject,
   getAllProjects,
   getAllVolunteers,
+  generateFinalImpactReports,
+  getPartnerReportsByProject,
   getPartnerProjectApplications,
+  getPublishedImpactReportsByProject,
   getProjectMatches,
   getStatusUpdatesByProject,
   getVolunteerProjectJoinRecords,
+  publishImpactReport,
   reviewPartnerProjectApplication,
+  reviewPartnerReport,
   reviewVolunteerProjectMatch,
   saveProject,
   saveStatusUpdate,
@@ -35,14 +50,14 @@ import { format } from 'date-fns';
 import { getProjectStatusColor } from '../utils/projectStatus';
 
 const statuses = ['Planning', 'In Progress', 'On Hold', 'Completed', 'Cancelled'];
-const projectCategories: Project['category'][] = ['Education', 'Livelihood', 'Nutrition', 'Other'];
+const projectModules: AdvocacyFocus[] = ['Nutrition', 'Education', 'Livelihood', 'Disaster'];
 const PROJECT_REFRESH_INTERVAL_MS = 5000;
 
 type ProjectDraft = {
   id?: string;
   title: string;
   description: string;
-  category: Project['category'];
+  programModule: AdvocacyFocus;
   status: Project['status'];
   partnerId: string;
   startDate: string;
@@ -79,7 +94,7 @@ type ProjectVolunteerRequestEntry = {
 const createEmptyProjectDraft = (partnerId = ''): ProjectDraft => ({
   title: '',
   description: '',
-  category: 'Education',
+  programModule: 'Education',
   status: 'Planning',
   partnerId,
   startDate: '',
@@ -91,6 +106,19 @@ const createEmptyProjectDraft = (partnerId = ''): ProjectDraft => ({
   isEvent: false,
 });
 
+function getProjectCategoryFromModule(module: AdvocacyFocus): Project['category'] {
+  switch (module) {
+    case 'Education':
+      return 'Education';
+    case 'Livelihood':
+      return 'Livelihood';
+    case 'Nutrition':
+      return 'Nutrition';
+    default:
+      return 'Other';
+  }
+}
+
 // Gives admins a project lifecycle workspace for projects, updates, and approvals.
 export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const { user, isAdmin } = useAuth();
@@ -99,6 +127,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [statusUpdates, setStatusUpdates] = useState<StatusUpdate[]>([]);
   const [partnerApplications, setPartnerApplications] = useState<PartnerProjectApplication[]>([]);
+  const [partnerCheckIns, setPartnerCheckIns] = useState<PartnerEventCheckIn[]>([]);
+  const [partnerReports, setPartnerReports] = useState<PartnerReport[]>([]);
+  const [impactReports, setImpactReports] = useState<PublishedImpactReport[]>([]);
   const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
   const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
@@ -127,6 +158,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           await Promise.all([
             loadStatusUpdates(selectedProject.id),
             loadPartnerApplicationsForProject(selectedProject.id),
+            loadPartnerCheckInsForProject(selectedProject.id),
+            loadPartnerReportsForProject(selectedProject.id),
+            loadImpactReportsForProject(selectedProject.id),
             loadVolunteerJoinsForProject(selectedProject.id),
             loadVolunteerMatchesForProject(selectedProject.id),
           ]);
@@ -155,13 +189,16 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   useEffect(() => {
     return subscribeToStorageChanges(
-      ['projects', 'volunteers', 'statusUpdates', 'partnerProjectApplications', 'volunteerProjectJoins', 'volunteerMatches'],
+      ['projects', 'volunteers', 'statusUpdates', 'partnerProjectApplications', 'partnerEventCheckIns', 'partnerReports', 'publishedImpactReports', 'volunteerProjectJoins', 'volunteerMatches'],
       () => {
         void Promise.all([loadProjects(), loadPartners(), loadVolunteers(), loadAllVolunteerMatches()]);
         if (selectedProject?.id) {
           void Promise.all([
             loadStatusUpdates(selectedProject.id),
             loadPartnerApplicationsForProject(selectedProject.id),
+            loadPartnerCheckInsForProject(selectedProject.id),
+            loadPartnerReportsForProject(selectedProject.id),
+            loadImpactReportsForProject(selectedProject.id),
             loadVolunteerJoinsForProject(selectedProject.id),
             loadVolunteerMatchesForProject(selectedProject.id),
           ]);
@@ -232,6 +269,36 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     }
   };
 
+  // Loads partner field check-ins for the selected project.
+  const loadPartnerCheckInsForProject = async (projectId: string) => {
+    try {
+      const checkIns = await getPartnerEventCheckInsByProject(projectId);
+      setPartnerCheckIns(checkIns);
+    } catch (error) {
+      Alert.alert('Error', 'Failed to load partner check-ins');
+    }
+  };
+
+  // Loads partner-uploaded reports for the selected project.
+  const loadPartnerReportsForProject = async (projectId: string) => {
+    try {
+      const reports = await getPartnerReportsByProject(projectId);
+      setPartnerReports(reports);
+    } catch (error) {
+      Alert.alert('Error', 'Failed to load partner reports');
+    }
+  };
+
+  // Loads generated final impact files for the selected project.
+  const loadImpactReportsForProject = async (projectId: string) => {
+    try {
+      const reports = await getPublishedImpactReportsByProject(projectId);
+      setImpactReports(reports);
+    } catch (error) {
+      Alert.alert('Error', 'Failed to load generated impact reports');
+    }
+  };
+
   // Loads volunteers who have already joined the selected project.
   const loadVolunteerJoinsForProject = async (projectId: string) => {
     try {
@@ -268,6 +335,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     await Promise.all([
       loadStatusUpdates(project.id),
       loadPartnerApplicationsForProject(project.id),
+      loadPartnerCheckInsForProject(project.id),
+      loadPartnerReportsForProject(project.id),
+      loadImpactReportsForProject(project.id),
       loadVolunteerJoinsForProject(project.id),
       loadVolunteerMatchesForProject(project.id),
     ]);
@@ -302,7 +372,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       id: project.id,
       title: project.title,
       description: project.description,
-      category: project.category,
+      programModule: project.programModule || (project.category === 'Other' ? 'Disaster' : (project.category as AdvocacyFocus)),
       status: project.status,
       partnerId: project.partnerId,
       startDate: project.startDate.slice(0, 10),
@@ -360,9 +430,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       title: projectDraft.title.trim(),
       description: projectDraft.description.trim(),
       partnerId: projectDraft.partnerId.trim(),
+      programModule: projectDraft.programModule,
       isEvent: projectDraft.isEvent,
       status: projectDraft.status,
-      category: projectDraft.category,
+      category: getProjectCategoryFromModule(projectDraft.programModule),
       startDate: startDateValue.toISOString(),
       endDate: endDateValue.toISOString(),
       location: {
@@ -387,6 +458,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       await Promise.all([
         loadStatusUpdates(savedProject.id),
         loadPartnerApplicationsForProject(savedProject.id),
+        loadPartnerCheckInsForProject(savedProject.id),
+        loadPartnerReportsForProject(savedProject.id),
+        loadImpactReportsForProject(savedProject.id),
         loadVolunteerJoinsForProject(savedProject.id),
       ]);
     } catch (error) {
@@ -414,6 +488,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               setSelectedProject(null);
               setStatusUpdates([]);
               setPartnerApplications([]);
+              setPartnerCheckIns([]);
+              setPartnerReports([]);
+              setImpactReports([]);
               setVolunteerJoinRecords([]);
               await loadProjects();
               Alert.alert('Deleted', 'Program removed.');
@@ -487,6 +564,48 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       Alert.alert('Success', `Partner application ${nextStatus.toLowerCase()}. The partner has been notified.`);
     } catch (error) {
       Alert.alert('Error', 'Failed to review partner application');
+    }
+  };
+
+  const handleReviewPartnerReport = async (reportId: string) => {
+    if (!isAdmin || !user?.id || !selectedProject) {
+      return;
+    }
+
+    try {
+      await reviewPartnerReport(reportId, user.id);
+      await loadPartnerReportsForProject(selectedProject.id);
+      Alert.alert('Reviewed', 'Partner report marked as reviewed.');
+    } catch (error) {
+      Alert.alert('Error', 'Failed to review the partner report.');
+    }
+  };
+
+  const handleGenerateFinalReports = async () => {
+    if (!isAdmin || !user?.id || !selectedProject) {
+      return;
+    }
+
+    try {
+      await generateFinalImpactReports(selectedProject.id, user.id);
+      await loadImpactReportsForProject(selectedProject.id);
+      Alert.alert('Generated', 'Final PDF and Excel report files are ready to publish.');
+    } catch (error) {
+      Alert.alert('Error', 'Failed to generate the final impact reports.');
+    }
+  };
+
+  const handlePublishImpactFile = async (reportId: string) => {
+    if (!selectedProject) {
+      return;
+    }
+
+    try {
+      await publishImpactReport(reportId);
+      await loadImpactReportsForProject(selectedProject.id);
+      Alert.alert('Published', 'The file is now available in the partner portal.');
+    } catch (error) {
+      Alert.alert('Error', 'Failed to publish the impact report.');
     }
   };
 
@@ -657,7 +776,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         <View style={styles.cardHeader}>
           <View style={{ flex: 1 }}>
             <Text style={styles.cardTitle}>{project.title}</Text>
-            <Text style={styles.cardSubtitle}>{project.category}</Text>
+            <Text style={styles.cardSubtitle}>{project.programModule || project.category}</Text>
           </View>
           <View style={styles.cardHeaderBadges}>
             {pendingRequestCount > 0 && (
@@ -771,6 +890,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               <Text style={styles.timelineValue}>{selectedProject.isEvent ? 'Event' : 'Program'}</Text>
             </View>
             <View style={styles.timelineDetails}>
+              <Text style={styles.timelineLabel}>Program Module:</Text>
+              <Text style={styles.timelineValue}>{selectedProject.programModule || selectedProject.category}</Text>
+            </View>
+            <View style={styles.timelineDetails}>
               <Text style={styles.timelineLabel}>Partner:</Text>
               <Text style={styles.timelineValue}>
                 {partners.find(partner => partner.id === selectedProject.partnerId)?.name || selectedProject.partnerId}
@@ -863,6 +986,28 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                 ))}
               </View>
             )}
+          </View>
+
+          <View style={styles.detailsSection}>
+            <Text style={styles.sectionTitle}>Live Command Center</Text>
+            <View style={styles.timelineDetails}>
+              <Text style={styles.timelineLabel}>Partner Check-Ins:</Text>
+              <Text style={styles.timelineValue}>{partnerCheckIns.length}</Text>
+            </View>
+            <View style={styles.timelineDetails}>
+              <Text style={styles.timelineLabel}>Uploaded Impact Count:</Text>
+              <Text style={styles.timelineValue}>
+                {partnerReports.reduce((sum, report) => sum + report.impactCount, 0)}
+              </Text>
+            </View>
+            <View style={styles.timelineDetails}>
+              <Text style={styles.timelineLabel}>Latest GPS Ping:</Text>
+              <Text style={styles.timelineValue}>
+                {partnerCheckIns[0]
+                  ? `${partnerCheckIns[0].gpsCoordinates.latitude.toFixed(4)}, ${partnerCheckIns[0].gpsCoordinates.longitude.toFixed(4)}`
+                  : 'No check-ins yet'}
+              </Text>
+            </View>
           </View>
 
           <View style={styles.detailsSection}>
@@ -999,6 +1144,101 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                       <MaterialIcons name="person-search" size={16} color="#2563eb" />
                       <Text style={styles.viewVolunteerProfileText}>Open Volunteer Profile</Text>
                     </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            )}
+          </View>
+
+          <View style={styles.detailsSection}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Impact Hub</Text>
+              {isAdmin && (
+                <TouchableOpacity style={styles.addButton} onPress={handleGenerateFinalReports}>
+                  <MaterialIcons name="description" size={18} color="#fff" />
+                </TouchableOpacity>
+              )}
+            </View>
+
+            <Text style={styles.timelineLabel}>Partner Reports</Text>
+            {partnerReports.length === 0 ? (
+              <Text style={styles.emptyText}>No partner reports uploaded yet</Text>
+            ) : (
+              <View style={styles.updatesList}>
+                {partnerReports.map(report => (
+                  <View key={report.id} style={styles.applicationCard}>
+                    <View style={styles.applicationHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.applicationName}>{report.partnerName}</Text>
+                        <Text style={styles.applicationMeta}>
+                          {report.reportType} • Impact {report.impactCount}
+                        </Text>
+                        <Text style={styles.applicationMeta}>{report.description}</Text>
+                        <Text style={styles.applicationMeta}>
+                          Uploaded {format(new Date(report.createdAt), 'PPpp')}
+                        </Text>
+                        {report.mediaFile ? (
+                          <Text style={styles.applicationMeta}>Media: {report.mediaFile}</Text>
+                        ) : null}
+                      </View>
+                      <View
+                        style={[
+                          styles.applicationStatusBadge,
+                          report.status === 'Reviewed'
+                            ? styles.applicationStatusApproved
+                            : styles.applicationStatusPending,
+                        ]}
+                      >
+                        <Text style={styles.applicationStatusText}>{report.status}</Text>
+                      </View>
+                    </View>
+
+                    {isAdmin && report.status !== 'Reviewed' ? (
+                      <View style={styles.applicationActions}>
+                        <TouchableOpacity
+                          style={[styles.applicationButton, styles.approveButton]}
+                          onPress={() => handleReviewPartnerReport(report.id)}
+                        >
+                          <Text style={styles.applicationButtonText}>Review</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ) : null}
+                  </View>
+                ))}
+              </View>
+            )}
+
+            <Text style={styles.timelineLabel}>Generated Final Reports</Text>
+            {impactReports.length === 0 ? (
+              <Text style={styles.emptyText}>No final report files generated yet</Text>
+            ) : (
+              <View style={styles.updatesList}>
+                {impactReports.map(report => (
+                  <View key={report.id} style={styles.applicationCard}>
+                    <View style={styles.applicationHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.applicationName}>{report.reportFile}</Text>
+                        <Text style={styles.applicationMeta}>
+                          {report.format} • Generated {format(new Date(report.generatedAt), 'PPpp')}
+                        </Text>
+                        <Text style={styles.applicationMeta}>
+                          {report.publishedAt
+                            ? `Published ${format(new Date(report.publishedAt), 'PPpp')}`
+                            : 'Not published to partner portal yet'}
+                        </Text>
+                      </View>
+                    </View>
+
+                    {isAdmin && !report.publishedAt ? (
+                      <View style={styles.applicationActions}>
+                        <TouchableOpacity
+                          style={[styles.applicationButton, styles.approveButton]}
+                          onPress={() => handlePublishImpactFile(report.id)}
+                        >
+                          <Text style={styles.applicationButtonText}>Publish to Partner Portal</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ) : null}
                   </View>
                 ))}
               </View>
@@ -1176,19 +1416,19 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
             <View style={[styles.formRow, styles.formRowTop]}>
               <View style={[styles.statusOptions, styles.statusOptionsCard]}>
-                {projectCategories.map(category => (
+                {projectModules.map(category => (
                   <TouchableOpacity
                     key={category}
                     style={[
                       styles.statusOption,
-                      projectDraft.category === category && styles.statusOptionSelected,
+                      projectDraft.programModule === category && styles.statusOptionSelected,
                     ]}
-                    onPress={() => handleProjectDraftChange('category', category)}
+                    onPress={() => handleProjectDraftChange('programModule', category)}
                   >
                     <Text
                       style={[
                         styles.statusOptionText,
-                        projectDraft.category === category && styles.statusOptionTextSelected,
+                        projectDraft.programModule === category && styles.statusOptionTextSelected,
                       ]}
                     >
                       {category}
@@ -1196,7 +1436,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                   </TouchableOpacity>
                 ))}
               </View>
-              <Text style={[styles.labelRight, styles.labelTop]}>Category</Text>
+              <Text style={[styles.labelRight, styles.labelTop]}>Program Module</Text>
             </View>
 
             <View style={[styles.formRow, styles.formRowTop]}>
