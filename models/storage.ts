@@ -2287,15 +2287,25 @@ export async function getAllPublishedImpactReports(): Promise<PublishedImpactRep
 export async function getPublishedImpactReportsByPartnerUser(
   partnerUserId: string
 ): Promise<PublishedImpactReport[]> {
-  const [partners, reports, projects] = await Promise.all([
-    getPartnersByOwnerUserId(partnerUserId),
+  const [reports, projects, partnerApplications] = await Promise.all([
     getStorageItem<PublishedImpactReport[]>(STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS),
     getAllProjects(),
+    getPartnerProjectApplicationsByUser(partnerUserId),
   ]);
 
-  const partnerIds = new Set(partners.map(partner => partner.id));
+  const approvedApplicationProjectIds = new Set(
+    partnerApplications
+      .filter(application => application.status === 'Approved')
+      .map(application => application.projectId)
+  );
   const allowedProjectIds = new Set(
-    projects.filter(project => partnerIds.has(project.partnerId)).map(project => project.id)
+    projects
+      .filter(
+        project =>
+          (project.joinedUserIds || []).includes(partnerUserId) ||
+          approvedApplicationProjectIds.has(project.id)
+      )
+      .map(project => project.id)
   );
 
   return (reports || [])

@@ -16,6 +16,7 @@ import { useAuth } from '../contexts/AuthContext';
 import {
   createPartnerEventCheckIn,
   getPartnerDashboardSnapshot,
+  getPublishedImpactReportsByPartnerUser,
   requestPartnerProjectJoin,
   submitPartnerReport,
   subscribeToStorageChanges,
@@ -100,31 +101,29 @@ export default function PartnerDashboardScreen() {
 
   const loadDashboardData = React.useCallback(async () => {
     try {
-      const snapshot = await getPartnerDashboardSnapshot();
+      if (!user?.id) {
+        return;
+      }
+
+      const [snapshot, visibleImpactReports] = await Promise.all([
+        getPartnerDashboardSnapshot(),
+        getPublishedImpactReportsByPartnerUser(user.id),
+      ]);
       const ownedPartners = snapshot.partners.filter(isOwnedByCurrentPartner);
       setPartners(ownedPartners);
       setProjects(snapshot.projects);
       setPartnerApplications(
         snapshot.partnerApplications
-          .filter(application => application.partnerUserId === user?.id)
+          .filter(application => application.partnerUserId === user.id)
           .sort((a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime())
       );
-      setPublishedImpactReports(
-        snapshot.publishedImpactReports.filter(report =>
-          snapshot.projects.some(
-            project =>
-              project.id === report.projectId &&
-              ownedPartners.some(partner => partner.id === project.partnerId) &&
-              Boolean(report.publishedAt)
-          )
-        )
-      );
+      setPublishedImpactReports(visibleImpactReports);
 
       setReportForm(current =>
         current.projectId
           ? current
           : createEmptyReportForm(
-              snapshot.projects.find(project => project.joinedUserIds?.includes(user?.id || ''))?.id || ''
+              snapshot.projects.find(project => project.joinedUserIds?.includes(user.id))?.id || ''
             )
       );
     } catch (error: any) {
