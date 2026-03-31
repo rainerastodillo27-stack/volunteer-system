@@ -1,2 +1,99 @@
-INFO:     Started server process [17876]
+INFO:     Started server process [9336]
 INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     ('127.0.0.1', 58289) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     ('127.0.0.1', 54793) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 53372) - "WebSocket /ws/messages/admin-1" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 50169) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 49673) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 59518) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 58418) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 59827) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 60565) - "WebSocket /ws/messages/admin-1" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 58435) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     connection closed
+INFO:     connection closed
+INFO:     connection closed
+INFO:     connection closed
+INFO:     connection closed
+INFO:     connection closed
+INFO:     connection closed
+INFO:     connection closed
+INFO:     ('127.0.0.1', 50252) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     ('127.0.0.1', 62258) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 57493) - "WebSocket /ws/messages/admin-1" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 58965) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 57484) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 49672) - "WebSocket /ws/messages/admin-1" [accepted]
+INFO:     connection open
+INFO:     ('192.168.0.102', 59254) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 64488) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 55685) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 61602) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('192.168.0.102', 46690) - "WebSocket /ws/messages/volunteer-1" [accepted]
+INFO:     connection closed
+INFO:     connection open
+INFO:     ('192.168.0.102', 46682) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('192.168.0.102', 41608) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('192.168.0.102', 50788) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('192.168.0.102', 57280) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('192.168.0.102', 57264) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('192.168.0.102', 57316) - "WebSocket /ws/messages/volunteer-1" [accepted]
+INFO:     connection open
+INFO:     ('192.168.0.102', 50508) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+ConnectionClosedOK exception in shielded future
+future: <Future finished exception=ConnectionClosedOK(Close(code=1000, reason=''), Close(code=1000, reason=''), True)>
+websockets.exceptions.ConnectionClosedOK: received 1000 (OK); then sent 1000 (OK)
+ConnectionClosedOK exception in shielded future
+future: <Future finished exception=ConnectionClosedOK(Close(code=1000, reason=''), Close(code=1000, reason=''), True)>
+websockets.exceptions.ConnectionClosedOK: received 1000 (OK); then sent 1000 (OK)
+INFO:     connection closed
+INFO:     connection closed
+INFO:     connection closed
+INFO:     connection closed
+INFO:     connection closed
+INFO:     connection closed
+INFO:     connection closed
+INFO:     connection closed
+INFO:     ('192.168.0.102', 35216) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 64647) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 58184) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     ('127.0.0.1', 61095) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     connection closed
+INFO:     ('127.0.0.1', 56361) - "WebSocket /ws/storage" [accepted]
+INFO:     connection open
+INFO:     connection closed

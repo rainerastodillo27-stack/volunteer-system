@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import { View, TextInput, TouchableOpacity, Text, StyleSheet, Alert, ActivityIndicator, Platform, ScrollView, Modal } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import {
-  canPartnerLogin,
   createUserAccount,
   getAllUsers,
   getApiBaseUrl,
@@ -217,22 +216,23 @@ export default function LoginScreen() {
         return;
       }
 
-      if (user.role === 'partner') {
-        const access = await canPartnerLogin(user);
-        if (!access.allowed) {
-          Alert.alert('Application Pending', access.reason || 'Partner access is still locked.');
-          setLoading(false);
-          return;
-        }
-      }
-
       // Update auth context - this triggers state change and navigation
       await login(user);
       setIdentifier('');
       setPassword('');
     } catch (error) {
       console.error('Login error:', error);
-      Alert.alert('Login Error', 'An error occurred during login. Please try again.');
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : 'An error occurred during login. Please try again.';
+      const title =
+        message.includes('rejected')
+          ? 'Application Rejected'
+          : message.includes('organization application') || message.includes('partner account')
+          ? 'Application Pending'
+          : 'Login Error';
+      Alert.alert(title, message);
     } finally {
       if (mountedRef.current) {
         setLoading(false);

@@ -392,6 +392,49 @@ def _get_user_by_identifier(identifier: str) -> dict[str, Any] | None:
     return None if row is None else row[0]
 
 
+def _normalize_comparable_phone(value: Any) -> str:
+    return "".join(character for character in str(value or "") if character.isdigit())
+
+
+# Returns the login restriction message for partner accounts that are not yet approved.
+def _get_partner_login_block_reason(connection: Any, user: dict[str, Any]) -> str | None:
+    if str(user.get("role") or "") != "partner":
+        return None
+
+    user_id = str(user.get("id") or "").strip()
+    user_email = str(user.get("email") or "").strip().lower()
+    user_phone = _normalize_comparable_phone(user.get("phone"))
+    partners = get_postgres_hot_storage_collection(connection, "partners")
+
+    owned_partners: list[dict[str, Any]] = []
+    for partner in partners:
+        owner_user_id = str(partner.get("ownerUserId") or "").strip()
+        partner_email = str(partner.get("contactEmail") or "").strip().lower()
+        partner_phone = _normalize_comparable_phone(partner.get("contactPhone"))
+
+        if owner_user_id and user_id and owner_user_id == user_id:
+            owned_partners.append(partner)
+            continue
+
+        if user_email and partner_email and partner_email == user_email:
+            owned_partners.append(partner)
+            continue
+
+        if user_phone and partner_phone and partner_phone == user_phone:
+            owned_partners.append(partner)
+
+    if any(str(partner.get("status") or "") == "Approved" for partner in owned_partners):
+        return None
+
+    if any(str(partner.get("status") or "") == "Rejected" for partner in owned_partners):
+        return "Your organization application was rejected. Please contact the admin team."
+
+    if owned_partners:
+        return "Your organization application is still pending admin approval."
+
+    return "No organization application is linked to this partner account yet."
+
+
 # Blocks routes when Postgres is not available.
 def _require_postgres() -> None:
     if get_db_mode() != "postgres":
@@ -794,6 +837,11 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
     user = _get_user_by_identifier(payload.identifier)
     if user is None or user.get("password") != payload.password:
         raise HTTPException(status_code=401, detail="Invalid email/phone or password.")
+
+    with get_postgres_connection() as connection:
+        partner_block_reason = _get_partner_login_block_reason(connection, user)
+    if partner_block_reason:
+        raise HTTPException(status_code=403, detail=partner_block_reason)
 
     return {"user": user}
 
