@@ -21,11 +21,13 @@ import {
   Project,
   PublishedImpactReport,
   StatusUpdate,
+  VolunteerTimeLog,
 } from '../models/types';
 import {
   completeVolunteerProjectParticipation,
   deleteProject,
   getAllVolunteerProjectMatches,
+  getAllVolunteerTimeLogs,
   getAllPartners,
   getPartnerEventCheckInsByProject,
   getAllProjects,
@@ -92,6 +94,11 @@ type ProjectVolunteerRequestEntry = {
   status: VolunteerProjectMatch['status'];
 };
 
+type ProjectTimeLogEntry = VolunteerTimeLog & {
+  volunteerName: string;
+  volunteerEmail: string;
+};
+
 // Returns the default project form used for create and edit flows.
 const createEmptyProjectDraft = (partnerId = ''): ProjectDraft => ({
   title: '',
@@ -136,6 +143,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
   const [allVolunteerMatches, setAllVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
+  const [volunteerTimeLogs, setVolunteerTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
@@ -148,6 +156,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     loadPartners();
     loadVolunteers();
     loadAllVolunteerMatches();
+    loadVolunteerTimeLogs();
   }, []);
 
   useFocusEffect(
@@ -155,7 +164,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       let active = true;
 
       const refresh = async () => {
-        await Promise.all([loadProjects(), loadPartners(), loadVolunteers(), loadAllVolunteerMatches()]);
+        await Promise.all([loadProjects(), loadPartners(), loadVolunteers(), loadAllVolunteerMatches(), loadVolunteerTimeLogs()]);
         if (selectedProject?.id) {
           await Promise.all([
             loadStatusUpdates(selectedProject.id),
@@ -191,9 +200,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   useEffect(() => {
     return subscribeToStorageChanges(
-      ['projects', 'volunteers', 'statusUpdates', 'partnerProjectApplications', 'partnerEventCheckIns', 'partnerReports', 'publishedImpactReports', 'volunteerProjectJoins', 'volunteerMatches'],
+      ['projects', 'volunteers', 'statusUpdates', 'partnerProjectApplications', 'partnerEventCheckIns', 'partnerReports', 'publishedImpactReports', 'volunteerProjectJoins', 'volunteerMatches', 'volunteerTimeLogs'],
       () => {
-        void Promise.all([loadProjects(), loadPartners(), loadVolunteers(), loadAllVolunteerMatches()]);
+        void Promise.all([loadProjects(), loadPartners(), loadVolunteers(), loadAllVolunteerMatches(), loadVolunteerTimeLogs()]);
         if (selectedProject?.id) {
           void Promise.all([
             loadStatusUpdates(selectedProject.id),
@@ -328,6 +337,16 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       setAllVolunteerMatches(matches);
     } catch (error) {
       Alert.alert('Error', 'Failed to load volunteer request notifications');
+    }
+  };
+
+  // Loads all volunteer time-in and time-out records for project monitoring.
+  const loadVolunteerTimeLogs = async () => {
+    try {
+      const logs = await getAllVolunteerTimeLogs();
+      setVolunteerTimeLogs(logs);
+    } catch (error) {
+      Alert.alert('Error', 'Failed to load volunteer time logs');
     }
   };
 
@@ -837,6 +856,18 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   if (selectedProject) {
     const volunteerEntries = getProjectVolunteerEntries(selectedProject);
     const volunteerRequestEntries = getProjectVolunteerRequestEntries();
+    const projectTimeLogEntries: ProjectTimeLogEntry[] = volunteerTimeLogs
+      .filter(log => log.projectId === selectedProject.id)
+      .map(log => {
+        const volunteer = volunteers.find(entry => entry.id === log.volunteerId);
+        return {
+          ...log,
+          volunteerName: volunteer?.name || 'Volunteer',
+          volunteerEmail: volunteer?.email || 'No email on file',
+        };
+      });
+    const projectTimeInCount = projectTimeLogEntries.length;
+    const projectTimeOutCount = projectTimeLogEntries.filter(log => Boolean(log.timeOut)).length;
 
     return (
       <ScrollView style={styles.container}>
@@ -991,25 +1022,63 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           </View>
 
           <View style={styles.detailsSection}>
-            <Text style={styles.sectionTitle}>Live Command Center</Text>
+            <Text style={styles.sectionTitle}>Project Time Tracking</Text>
             <View style={styles.timelineDetails}>
-              <Text style={styles.timelineLabel}>Partner Check-Ins:</Text>
-              <Text style={styles.timelineValue}>{partnerCheckIns.length}</Text>
+              <Text style={styles.timelineLabel}>Time Ins:</Text>
+              <Text style={styles.timelineValue}>{projectTimeInCount}</Text>
             </View>
             <View style={styles.timelineDetails}>
-              <Text style={styles.timelineLabel}>Uploaded Impact Count:</Text>
+              <Text style={styles.timelineLabel}>Time Outs:</Text>
+              <Text style={styles.timelineValue}>{projectTimeOutCount}</Text>
+            </View>
+            <View style={styles.timelineDetails}>
+              <Text style={styles.timelineLabel}>Latest Time Activity:</Text>
               <Text style={styles.timelineValue}>
-                {partnerReports.reduce((sum, report) => sum + report.impactCount, 0)}
+                {projectTimeLogEntries[0]
+                  ? projectTimeLogEntries[0].timeOut
+                    ? `Time Out ${format(new Date(projectTimeLogEntries[0].timeOut), 'PPpp')}`
+                    : `Time In ${format(new Date(projectTimeLogEntries[0].timeIn), 'PPpp')}`
+                  : 'No time logs yet'}
               </Text>
             </View>
-            <View style={styles.timelineDetails}>
-              <Text style={styles.timelineLabel}>Latest GPS Ping:</Text>
-              <Text style={styles.timelineValue}>
-                {partnerCheckIns[0]
-                  ? `${partnerCheckIns[0].gpsCoordinates.latitude.toFixed(4)}, ${partnerCheckIns[0].gpsCoordinates.longitude.toFixed(4)}`
-                  : 'No check-ins yet'}
-              </Text>
-            </View>
+
+            <Text style={styles.timelineLabel}>Volunteer Time Logs</Text>
+            {projectTimeLogEntries.length === 0 ? (
+              <Text style={styles.emptyText}>No time in or time out records yet</Text>
+            ) : (
+              <View style={styles.updatesList}>
+                {projectTimeLogEntries.map(log => (
+                  <View key={log.id} style={styles.applicationCard}>
+                    <View style={styles.applicationHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.applicationName}>{log.volunteerName}</Text>
+                        <Text style={styles.applicationMeta}>{log.volunteerEmail}</Text>
+                        <Text style={styles.applicationMeta}>
+                          Time In {format(new Date(log.timeIn), 'PPpp')}
+                        </Text>
+                        <Text style={styles.applicationMeta}>
+                          {log.timeOut
+                            ? `Time Out ${format(new Date(log.timeOut), 'PPpp')}`
+                            : 'Time Out still pending'}
+                        </Text>
+                      </View>
+                      <View
+                        style={[
+                          styles.applicationStatusBadge,
+                          log.timeOut
+                            ? styles.applicationStatusApproved
+                            : styles.applicationStatusPending,
+                        ]}
+                      >
+                        <Text style={styles.applicationStatusText}>
+                          {log.timeOut ? 'Timed Out' : 'Timed In'}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            )}
           </View>
 
           <View style={styles.detailsSection}>

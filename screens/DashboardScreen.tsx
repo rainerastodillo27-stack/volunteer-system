@@ -11,7 +11,7 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import {
-  getAllPartnerEventCheckIns,
+  getAllVolunteerTimeLogs,
   getAllPartnerReports,
   getAllPublishedImpactReports,
   getDashboardSnapshot,
@@ -27,9 +27,14 @@ export default function DashboardScreen({ navigation }: any) {
   const [userStats, setUserStats] = useState({ total: 0 });
   const [workflowStats, setWorkflowStats] = useState({
     inboundInquiries: 0,
-    liveCheckIns: 0,
+    timeIns: 0,
+    timeOuts: 0,
     pendingReports: 0,
     publishedReports: 0,
+  });
+  const [timeTrackingTarget, setTimeTrackingTarget] = useState({
+    latestTimeInProjectId: undefined as string | undefined,
+    latestTimeOutProjectId: undefined as string | undefined,
   });
   const [recentUpdates, setRecentUpdates] = useState<any[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -37,10 +42,10 @@ export default function DashboardScreen({ navigation }: any) {
   // Loads dashboard totals and recent status updates from storage.
   const loadDashboardData = React.useCallback(async () => {
     try {
-      const [{ projects, partners, users, statusUpdates }, partnerCheckIns, partnerReports, impactReports] =
+      const [{ projects, partners, users, statusUpdates }, volunteerTimeLogs, partnerReports, impactReports] =
         await Promise.all([
           getDashboardSnapshot(),
-          getAllPartnerEventCheckIns(),
+          getAllVolunteerTimeLogs(),
           getAllPartnerReports(),
           getAllPublishedImpactReports(),
         ]);
@@ -65,9 +70,18 @@ export default function DashboardScreen({ navigation }: any) {
 
       setWorkflowStats({
         inboundInquiries: partners.filter(p => p.status === 'Pending').length,
-        liveCheckIns: partnerCheckIns.length,
+        timeIns: volunteerTimeLogs.length,
+        timeOuts: volunteerTimeLogs.filter(log => Boolean(log.timeOut)).length,
         pendingReports: partnerReports.filter(report => report.status === 'Submitted').length,
         publishedReports: impactReports.filter(report => Boolean(report.publishedAt)).length,
+      });
+
+      const latestTimeInLog = volunteerTimeLogs[0];
+      const latestTimeOutLog =
+        volunteerTimeLogs.find(log => Boolean(log.timeOut)) || null;
+      setTimeTrackingTarget({
+        latestTimeInProjectId: latestTimeInLog?.projectId,
+        latestTimeOutProjectId: latestTimeOutLog?.projectId,
       });
 
       // Get recent updates
@@ -103,7 +117,7 @@ export default function DashboardScreen({ navigation }: any) {
 
   useEffect(() => {
     return subscribeToStorageChanges(
-      ['users', 'projects', 'partners', 'volunteers', 'statusUpdates', 'volunteerProjectJoins', 'partnerEventCheckIns', 'partnerReports', 'publishedImpactReports'],
+      ['users', 'projects', 'partners', 'volunteers', 'statusUpdates', 'volunteerProjectJoins', 'volunteerTimeLogs', 'partnerReports', 'publishedImpactReports'],
       () => {
         void loadDashboardData();
       }
@@ -240,12 +254,30 @@ export default function DashboardScreen({ navigation }: any) {
 
             <TouchableOpacity
               style={styles.metricCard}
-              onPress={() => navigation.navigate('Map')}
+              onPress={() =>
+                navigation.navigate('Lifecycle', {
+                  projectId: timeTrackingTarget.latestTimeInProjectId,
+                })
+              }
               activeOpacity={0.8}
             >
-              <MaterialIcons name="pin-drop" size={32} color="#2563eb" />
-              <Text style={styles.metricValue}>{workflowStats.liveCheckIns}</Text>
-              <Text style={styles.metricLabel}>Live Check-Ins</Text>
+              <MaterialIcons name="login" size={32} color="#2563eb" />
+              <Text style={styles.metricValue}>{workflowStats.timeIns}</Text>
+              <Text style={styles.metricLabel}>Time Ins</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.metricCard}
+              onPress={() =>
+                navigation.navigate('Lifecycle', {
+                  projectId: timeTrackingTarget.latestTimeOutProjectId,
+                })
+              }
+              activeOpacity={0.8}
+            >
+              <MaterialIcons name="logout" size={32} color="#0f766e" />
+              <Text style={styles.metricValue}>{workflowStats.timeOuts}</Text>
+              <Text style={styles.metricLabel}>Time Outs</Text>
             </TouchableOpacity>
 
             <TouchableOpacity

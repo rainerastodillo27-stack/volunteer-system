@@ -1290,6 +1290,12 @@ export async function getVolunteerTimeLogs(volunteerId: string): Promise<Volunte
   return payload.logs || [];
 }
 
+// Returns every volunteer time log stored in the system.
+export async function getAllVolunteerTimeLogs(): Promise<VolunteerTimeLog[]> {
+  const logs = await getStorageItem<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS) || [];
+  return logs.sort((a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime());
+}
+
 // Starts a volunteer time log for the selected project.
 export async function startVolunteerTimeLog(
   volunteerId: string,
