@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
+  Image,
   Platform,
   ScrollView,
   StyleSheet,
@@ -24,10 +25,12 @@ import {
 import {
   Partner,
   PartnerProjectApplication,
+  PartnerReport,
   PartnerReportType,
   Project,
   PublishedImpactReport,
 } from '../models/types';
+import { isImageMediaUri, pickImageFromDevice } from '../utils/media';
 
 type ReportFormState = {
   projectId: string;
@@ -60,6 +63,8 @@ function getDisplayProjectStatus(status: Project['status']): 'Planned' | 'Active
   }
 }
 
+const REPORT_TYPE_OPTIONS: PartnerReportType[] = ['General', 'Medical', 'Logistics'];
+
 function getProjectStatusColor(status: ReturnType<typeof getDisplayProjectStatus>) {
   switch (status) {
     case 'Planned':
@@ -74,11 +79,12 @@ function getProjectStatusColor(status: ReturnType<typeof getDisplayProjectStatus
 }
 
 // Shows the partner workspace for RSVP, field check-in, report uploads, and published impact files.
-export default function PartnerDashboardScreen() {
+export default function PartnerDashboardScreen({ navigation }: any) {
   const { user, logout } = useAuth();
   const [partners, setPartners] = useState<Partner[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [partnerApplications, setPartnerApplications] = useState<PartnerProjectApplication[]>([]);
+  const [partnerReports, setPartnerReports] = useState<PartnerReport[]>([]);
   const [publishedImpactReports, setPublishedImpactReports] = useState<PublishedImpactReport[]>([]);
   const [partnerCheckInProjectId, setPartnerCheckInProjectId] = useState<string | null>(null);
   const [actionProjectId, setActionProjectId] = useState<string | null>(null);
@@ -117,14 +123,15 @@ export default function PartnerDashboardScreen() {
           .filter(application => application.partnerUserId === user.id)
           .sort((a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime())
       );
+      setPartnerReports(
+        snapshot.partnerReports
+          .filter(report => report.partnerUserId === user.id)
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      );
       setPublishedImpactReports(visibleImpactReports);
 
       setReportForm(current =>
-        current.projectId
-          ? current
-          : createEmptyReportForm(
-              snapshot.projects.find(project => project.joinedUserIds?.includes(user.id))?.id || ''
-            )
+        current.projectId ? current : createEmptyReportForm()
       );
     } catch (error: any) {
       Alert.alert('Error', error?.message || 'Failed to load the partner dashboard.');
@@ -184,8 +191,25 @@ export default function PartnerDashboardScreen() {
     [projects]
   );
 
-  const updateReportForm = <K extends keyof ReportFormState>(key: K, value: ReportFormState[K]) => {
-    setReportForm(current => ({ ...current, [key]: value }));
+  const openReportForm = (projectId: string) => {
+    setReportForm(current =>
+      current.projectId === projectId ? current : createEmptyReportForm(projectId)
+    );
+  };
+
+  const closeReportForm = () => {
+    setReportForm(createEmptyReportForm());
+  };
+
+  const updateReportFormForProject = (
+    projectId: string,
+    updates: Partial<Omit<ReportFormState, 'projectId'>>
+  ) => {
+    setReportForm(current => ({
+      ...(current.projectId === projectId ? current : createEmptyReportForm(projectId)),
+      projectId,
+      ...updates,
+    }));
   };
 
   const handleLogout = async () => {
@@ -260,18 +284,27 @@ export default function PartnerDashboardScreen() {
     }
   };
 
-  const handleUploadReport = async () => {
+  const handleUploadReport = async (projectId: string) => {
     if (!user || !approvedPartner) {
       Alert.alert('Approval Required', 'You need an approved partner application before uploading a report.');
       return;
     }
 
-    if (!reportForm.projectId || !reportForm.description.trim() || !reportForm.impactCount.trim()) {
-      Alert.alert('Validation Error', 'Select a project and complete the report details.');
+    const targetProject = attendingProjects.find(project => project.id === projectId);
+    if (!targetProject) {
+      Alert.alert('Validation Error', 'Join the event first before submitting a report.');
       return;
     }
 
-    const impactCount = Number(reportForm.impactCount);
+    const activeReportForm =
+      reportForm.projectId === projectId ? reportForm : createEmptyReportForm(projectId);
+
+    if (!activeReportForm.description.trim() || !activeReportForm.impactCount.trim()) {
+      Alert.alert('Validation Error', 'Complete the report details for this event.');
+      return;
+    }
+
+    const impactCount = Number(activeReportForm.impactCount);
     if (Number.isNaN(impactCount) || impactCount <= 0) {
       Alert.alert('Validation Error', 'Impact count must be a positive number.');
       return;
@@ -279,26 +312,52 @@ export default function PartnerDashboardScreen() {
 
     try {
       await submitPartnerReport({
-        projectId: reportForm.projectId,
+        projectId,
         partnerId: approvedPartner.id,
         partnerUserId: user.id,
         partnerName: approvedPartner.name,
-        reportType: reportForm.reportType,
-        description: reportForm.description,
+        reportType: activeReportForm.reportType,
+        description: activeReportForm.description,
         impactCount,
-        mediaFile: reportForm.mediaFile,
+        mediaFile: activeReportForm.mediaFile,
       });
-      setReportForm(createEmptyReportForm(reportForm.projectId));
+      setReportForm(createEmptyReportForm(projectId));
+      void loadDashboardData();
       Alert.alert('Uploaded', 'Your report was submitted to the admin impact hub.');
     } catch (error: any) {
       Alert.alert('Upload Failed', error?.message || 'Unable to upload the report.');
     }
   };
 
+  const handlePickReportImage = async (projectId: string) => {
+    try {
+      const pickedImage = await pickImageFromDevice();
+      if (!pickedImage) {
+        return;
+      }
+
+      updateReportFormForProject(projectId, { mediaFile: pickedImage });
+    } catch (error: any) {
+      Alert.alert('Photo Access Needed', error?.message || 'Unable to open your photo library.');
+    }
+  };
+
+  const handleRemoveReportImage = (projectId: string) => {
+    updateReportFormForProject(projectId, { mediaFile: '' });
+  };
+
   const handleDownloadReport = (report: PublishedImpactReport) => {
+    const linkedProject = projects.find(project => project.id === report.projectId);
     Alert.alert(
-      'Download Report',
-      `${report.reportFile}\nGenerated ${new Date(report.generatedAt).toLocaleString()}`
+      'Open Project File',
+      `${report.reportFile}\n${linkedProject?.title || 'Project'}\nGenerated ${new Date(report.generatedAt).toLocaleString()}`,
+      [
+        { text: 'Close', style: 'cancel' },
+        {
+          text: 'Open Project',
+          onPress: () => navigation.navigate('Projects', { projectId: report.projectId }),
+        },
+      ]
     );
   };
 
@@ -355,15 +414,22 @@ export default function PartnerDashboardScreen() {
         {activeProjects.map(project => {
           const displayStatus = getDisplayProjectStatus(project.status);
           const application = applicationByProjectId.get(project.id);
+          const projectReportsForCard = partnerReports.filter(report => report.projectId === project.id);
+          const latestProjectReport = projectReportsForCard[0];
+          const reportFormOpen = reportForm.projectId === project.id;
           const attending =
             project.joinedUserIds?.includes(user?.id || '') || application?.status === 'Approved';
           const buttonLabel = attending
-            ? 'Attending'
+            ? project.isEvent
+              ? 'Joined Event'
+              : 'Joined Project'
             : application?.status === 'Pending'
             ? 'Pending Approval'
             : application?.status === 'Rejected'
             ? 'Request Again'
-            : 'Join Event';
+            : project.isEvent
+            ? 'Join Event'
+            : 'Join Project';
 
           return (
             <View key={project.id} style={styles.projectCard}>
@@ -388,86 +454,128 @@ export default function PartnerDashboardScreen() {
               </TouchableOpacity>
 
               {attending ? (
-                <TouchableOpacity
-                  style={styles.checkInButton}
-                  onPress={() => handleCheckIn(project)}
-                  disabled={partnerCheckInProjectId === project.id}
-                >
-                  <MaterialIcons name="place" size={16} color="#fff" />
-                  <Text style={styles.checkInButtonText}>
-                    {partnerCheckInProjectId === project.id ? 'Checking In...' : 'Check-In'}
-                  </Text>
-                </TouchableOpacity>
+                <>
+                  <TouchableOpacity
+                    style={styles.checkInButton}
+                    onPress={() => handleCheckIn(project)}
+                    disabled={partnerCheckInProjectId === project.id}
+                  >
+                    <MaterialIcons name="place" size={16} color="#fff" />
+                    <Text style={styles.checkInButtonText}>
+                      {partnerCheckInProjectId === project.id ? 'Checking In...' : 'Check-In'}
+                    </Text>
+                  </TouchableOpacity>
+
+                  <View style={styles.inlineReportCard}>
+                    <View style={styles.inlineReportHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.inlineReportTitle}>Data Submission Form</Text>
+                        <Text style={styles.inlineReportMeta}>
+                          {projectReportsForCard.length === 0
+                            ? `Upload a report inside this ${project.isEvent ? 'event' : 'project'}.`
+                            : `${projectReportsForCard.length} submitted report${
+                                projectReportsForCard.length === 1 ? '' : 's'
+                              } for this ${project.isEvent ? 'event' : 'project'}.`}
+                        </Text>
+                        {latestProjectReport ? (
+                          <Text style={styles.inlineReportMeta}>
+                            Latest: {latestProjectReport.reportType} report on{' '}
+                            {new Date(latestProjectReport.createdAt).toLocaleDateString()}
+                          </Text>
+                        ) : null}
+                      </View>
+                      <TouchableOpacity
+                        style={styles.inlineReportToggle}
+                        onPress={() =>
+                          reportFormOpen ? closeReportForm() : openReportForm(project.id)
+                        }
+                      >
+                        <Text style={styles.inlineReportToggleText}>
+                          {reportFormOpen ? 'Hide Form' : 'Open Form'}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    {reportFormOpen ? (
+                      <View style={styles.inlineReportForm}>
+                        <Text style={styles.fieldLabel}>Report Type</Text>
+                        <View style={styles.selectorGrid}>
+                          {REPORT_TYPE_OPTIONS.map(type => {
+                            const selected = reportForm.reportType === type;
+                            return (
+                              <TouchableOpacity
+                                key={type}
+                                style={[styles.selectorChip, selected && styles.selectorChipActive]}
+                                onPress={() => updateReportFormForProject(project.id, { reportType: type })}
+                              >
+                                <Text style={[styles.selectorChipText, selected && styles.selectorChipTextActive]}>
+                                  {type}
+                                </Text>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </View>
+
+                        <TextInput
+                          style={[styles.input, styles.inputMultiline]}
+                          placeholder="Description"
+                          value={reportForm.description}
+                          onChangeText={value =>
+                            updateReportFormForProject(project.id, { description: value })
+                          }
+                          multiline
+                        />
+                        <TextInput
+                          style={styles.input}
+                          placeholder="Impact Count"
+                          value={reportForm.impactCount}
+                          onChangeText={value =>
+                            updateReportFormForProject(project.id, { impactCount: value })
+                          }
+                          keyboardType="number-pad"
+                        />
+                        <TouchableOpacity
+                          style={styles.photoPickerButton}
+                          onPress={() => handlePickReportImage(project.id)}
+                        >
+                          <MaterialIcons name="photo-library" size={18} color="#166534" />
+                          <Text style={styles.photoPickerButtonText}>
+                            {reportForm.mediaFile ? 'Replace Photo' : 'Choose Photo From Phone'}
+                          </Text>
+                        </TouchableOpacity>
+
+                        {reportForm.mediaFile ? (
+                          <View style={styles.photoPreviewCard}>
+                            {isImageMediaUri(reportForm.mediaFile) ? (
+                              <Image
+                                source={{ uri: reportForm.mediaFile }}
+                                style={styles.photoPreview}
+                                resizeMode="cover"
+                              />
+                            ) : null}
+                            <View style={styles.photoPreviewMeta}>
+                              <Text style={styles.photoPreviewLabel}>Photo ready to upload</Text>
+                              <TouchableOpacity onPress={() => handleRemoveReportImage(project.id)}>
+                                <Text style={styles.photoRemoveText}>Remove Photo</Text>
+                              </TouchableOpacity>
+                            </View>
+                          </View>
+                        ) : null}
+
+                        <TouchableOpacity
+                          style={styles.primaryButton}
+                          onPress={() => handleUploadReport(project.id)}
+                        >
+                          <Text style={styles.primaryButtonText}>Upload Report</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ) : null}
+                  </View>
+                </>
               ) : null}
             </View>
           );
         })}
-      </View>
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Data Submission Form</Text>
-        <View style={styles.card}>
-          <Text style={styles.fieldLabel}>Project</Text>
-          <View style={styles.selectorGrid}>
-            {attendingProjects.map(project => {
-              const selected = reportForm.projectId === project.id;
-              return (
-                <TouchableOpacity
-                  key={project.id}
-                  style={[styles.selectorChip, selected && styles.selectorChipActive]}
-                  onPress={() => updateReportForm('projectId', project.id)}
-                >
-                  <Text style={[styles.selectorChipText, selected && styles.selectorChipTextActive]}>
-                    {project.title}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-
-          <Text style={styles.fieldLabel}>Report Type</Text>
-          <View style={styles.selectorGrid}>
-            {(['General', 'Medical', 'Logistics'] as const).map(type => {
-              const selected = reportForm.reportType === type;
-              return (
-                <TouchableOpacity
-                  key={type}
-                  style={[styles.selectorChip, selected && styles.selectorChipActive]}
-                  onPress={() => updateReportForm('reportType', type)}
-                >
-                  <Text style={[styles.selectorChipText, selected && styles.selectorChipTextActive]}>
-                    {type}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-
-          <TextInput
-            style={[styles.input, styles.inputMultiline]}
-            placeholder="Description"
-            value={reportForm.description}
-            onChangeText={value => updateReportForm('description', value)}
-            multiline
-          />
-          <TextInput
-            style={styles.input}
-            placeholder="Impact Count"
-            value={reportForm.impactCount}
-            onChangeText={value => updateReportForm('impactCount', value)}
-            keyboardType="number-pad"
-          />
-          <TextInput
-            style={styles.input}
-            placeholder="Media File (photo/video name or link)"
-            value={reportForm.mediaFile}
-            onChangeText={value => updateReportForm('mediaFile', value)}
-          />
-
-          <TouchableOpacity style={styles.primaryButton} onPress={handleUploadReport}>
-            <Text style={styles.primaryButtonText}>Upload Report</Text>
-          </TouchableOpacity>
-        </View>
       </View>
 
       <View style={styles.section}>
@@ -483,7 +591,7 @@ export default function PartnerDashboardScreen() {
               <View key={report.id} style={styles.card}>
                 <Text style={styles.cardTitle}>{report.reportFile}</Text>
                 <Text style={styles.cardMeta}>
-                  {report.format} • Published {new Date(report.publishedAt || report.generatedAt).toLocaleDateString()}
+                  {(projects.find(project => project.id === report.projectId)?.title || 'Project')} • {report.format} • Published {new Date(report.publishedAt || report.generatedAt).toLocaleDateString()}
                 </Text>
                 <TouchableOpacity
                   style={styles.primaryButton}
@@ -620,6 +728,44 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '700',
   },
+  inlineReportCard: {
+    borderWidth: 1,
+    borderColor: '#dbe2ea',
+    borderRadius: 14,
+    padding: 14,
+    gap: 12,
+    backgroundColor: '#f8fafc',
+  },
+  inlineReportHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  inlineReportTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  inlineReportMeta: {
+    marginTop: 4,
+    fontSize: 12,
+    color: '#64748b',
+    lineHeight: 18,
+  },
+  inlineReportToggle: {
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 999,
+    backgroundColor: '#dcfce7',
+  },
+  inlineReportToggleText: {
+    color: '#166534',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  inlineReportForm: {
+    gap: 10,
+  },
   fieldLabel: {
     fontSize: 12,
     fontWeight: '700',
@@ -659,5 +805,50 @@ const styles = StyleSheet.create({
   inputMultiline: {
     minHeight: 88,
     textAlignVertical: 'top',
+  },
+  photoPickerButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#86efac',
+    backgroundColor: '#f0fdf4',
+    borderRadius: 10,
+    paddingVertical: 12,
+  },
+  photoPickerButtonText: {
+    color: '#166534',
+    fontWeight: '700',
+  },
+  photoPreviewCard: {
+    borderWidth: 1,
+    borderColor: '#dbe2ea',
+    borderRadius: 12,
+    overflow: 'hidden',
+    backgroundColor: '#fff',
+  },
+  photoPreview: {
+    width: '100%',
+    height: 180,
+    backgroundColor: '#e2e8f0',
+  },
+  photoPreviewMeta: {
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  photoPreviewLabel: {
+    flex: 1,
+    fontSize: 12,
+    color: '#475569',
+    fontWeight: '600',
+  },
+  photoRemoveText: {
+    fontSize: 12,
+    color: '#dc2626',
+    fontWeight: '700',
   },
 });

@@ -9,6 +9,7 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  Image,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -28,6 +29,7 @@ import {
 } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
 import { format } from 'date-fns';
+import { isImageMediaUri, pickImageFromDevice } from '../utils/media';
 
 const WEB_MESSAGE_SYNC_KEY = 'volcre:messages:updatedAt';
 
@@ -70,6 +72,19 @@ const formatMessageTime = (timestamp?: string) => {
 // Generates a lightweight local id before the message is saved.
 const createMessageId = () =>
   `msg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+// Builds the one-line preview shown in conversation rows when a photo was sent.
+const getMessagePreview = (message?: Message) => {
+  if (!message) {
+    return '';
+  }
+
+  if (message.content?.trim()) {
+    return message.content;
+  }
+
+  return message.attachments?.length ? 'Photo attachment' : '';
+};
 
 // Keeps direct conversations ordered by the newest message first.
 function sortConversations(items: ConversationItem[]): ConversationItem[] {
@@ -128,6 +143,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   const [selectedProjectChat, setSelectedProjectChat] = useState<ProjectChatItem | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [messageText, setMessageText] = useState('');
+  const [selectedAttachmentUri, setSelectedAttachmentUri] = useState<string | null>(null);
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const selectedUserRef = useRef<User | null>(null);
   const selectedProjectChatRef = useRef<ProjectChatItem | null>(null);
@@ -204,15 +220,27 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     }
   };
 
-  // Loads joined project or event chats for volunteer accounts.
+  // Loads the project or event chats available to the current account.
   const loadProjectChats = async () => {
-    if (!user?.id || user.role !== 'volunteer') {
+    if (!user?.id || (user.role !== 'volunteer' && user.role !== 'admin')) {
       setProjectChats([]);
       return;
     }
 
     try {
       const snapshot = await getProjectsScreenSnapshot(user);
+      if (user.role === 'admin') {
+        const nextProjectChats = snapshot.projects
+          .map(project => ({
+            project,
+            participantCount: countProjectParticipants(project, snapshot.volunteerJoinRecords),
+          }))
+          .sort((left, right) => left.project.title.localeCompare(right.project.title));
+
+        setProjectChats(nextProjectChats);
+        return;
+      }
+
       const joinedProjectIds = new Set<string>(
         snapshot.volunteerJoinRecords.map(record => record.projectId)
       );
@@ -464,10 +492,23 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     }
   }, [projectChats, selectedProjectChat]);
 
+  const handlePickAttachment = async () => {
+    try {
+      const pickedImage = await pickImageFromDevice();
+      if (!pickedImage) {
+        return;
+      }
+
+      setSelectedAttachmentUri(pickedImage);
+    } catch (error: any) {
+      Alert.alert('Photo Access Needed', error?.message || 'Unable to open your photo library.');
+    }
+  };
+
   // Sends a direct or project group message from the current detail view.
   const handleSendMessage = async () => {
-    if (!messageText.trim() || !user) {
-      Alert.alert('Error', 'Message cannot be empty');
+    if ((!messageText.trim() && !selectedAttachmentUri) || !user) {
+      Alert.alert('Error', 'Add a message or photo before sending.');
       return;
     }
 
@@ -480,6 +521,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
           content: messageText,
           timestamp: new Date().toISOString(),
           read: false,
+          attachments: selectedAttachmentUri ? [selectedAttachmentUri] : undefined,
         };
 
         setMessages(current => upsertChatMessage(current, newMessage));
@@ -498,6 +540,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         });
         await saveMessage(newMessage);
         setMessageText('');
+        setSelectedAttachmentUri(null);
         return;
       }
 
@@ -511,11 +554,13 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         senderId: user.id,
         content: messageText,
         timestamp: new Date().toISOString(),
+        attachments: selectedAttachmentUri ? [selectedAttachmentUri] : undefined,
       };
 
       setMessages(current => upsertChatMessage(current, newMessage));
       await saveProjectGroupMessage(newMessage);
       setMessageText('');
+      setSelectedAttachmentUri(null);
     } catch (error: any) {
       Alert.alert('Error', error?.message || 'Failed to send message');
       await loadSelectedMessages();
@@ -528,6 +573,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     setSelectedUser(chatUser);
     setSelectedProjectChat(null);
     setMessages([]);
+    setSelectedAttachmentUri(null);
     setView('detail');
   };
 
@@ -536,6 +582,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     setSelectedProjectChat(projectChat);
     setSelectedUser(null);
     setMessages([]);
+    setSelectedAttachmentUri(null);
     setView('detail');
   };
 
@@ -550,13 +597,23 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   const conversationUserIds = new Set(conversations.map(conversation => conversation.user.id));
   const suggestedUsers = allUsers.filter(chatUser => !conversationUserIds.has(chatUser.id));
+  const isAdminUser = user?.role === 'admin';
+  const projectChatSectionTitle = isAdminUser ? 'All Project Group Chats' : 'Your Project Group Chats';
+  const projectChatSubtitle =
+    isAdminUser
+      ? 'Direct messages plus project and event group chats across the system'
+      : 'Direct messages plus joined project and event group chats';
   const selectedChatTitle = selectedUser?.name || selectedProjectChat?.project.title || '';
   const selectedChatSubtitle = selectedUser
     ? formatRoleLabel(selectedUser)
     : selectedProjectChat
-    ? `${selectedProjectChat.participantCount} volunteer${
-        selectedProjectChat.participantCount === 1 ? '' : 's'
-      } in this ${selectedProjectChat.project.isEvent ? 'event' : 'project'} chat`
+    ? isAdminUser
+      ? `${selectedProjectChat.participantCount} volunteer${
+          selectedProjectChat.participantCount === 1 ? '' : 's'
+        } currently joined in this ${selectedProjectChat.project.isEvent ? 'event' : 'project'} chat`
+      : `${selectedProjectChat.participantCount} volunteer${
+          selectedProjectChat.participantCount === 1 ? '' : 's'
+        } in this ${selectedProjectChat.project.isEvent ? 'event' : 'project'} chat`
     : '';
 
   if (!user) {
@@ -584,6 +641,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
               setSelectedUser(null);
               setSelectedProjectChat(null);
               setMessages([]);
+              setSelectedAttachmentUri(null);
             }}
           >
             <MaterialIcons name="arrow-back" size={24} color="#333" />
@@ -612,6 +670,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
             messages.map(message => {
               const isOwnMessage = message.senderId === user.id;
               const senderLabel = getSenderLabel(message.senderId);
+              const imageAttachments = (message.attachments || []).filter(isImageMediaUri);
 
               return (
                 <View
@@ -631,14 +690,24 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                       {senderLabel}
                     </Text>
                   )}
-                  <Text
-                    style={[
-                      styles.messageText,
-                      isOwnMessage && styles.messageTextSent,
-                    ]}
-                  >
-                    {message.content}
-                  </Text>
+                  {imageAttachments.map((attachmentUri, index) => (
+                    <Image
+                      key={`${message.id}-attachment-${index}`}
+                      source={{ uri: attachmentUri }}
+                      style={styles.messageAttachment}
+                      resizeMode="cover"
+                    />
+                  ))}
+                  {message.content?.trim() ? (
+                    <Text
+                      style={[
+                        styles.messageText,
+                        isOwnMessage && styles.messageTextSent,
+                      ]}
+                    >
+                      {message.content}
+                    </Text>
+                  ) : null}
                   {!!formatMessageTime(message.timestamp) && (
                     <Text style={styles.messageTime}>{formatMessageTime(message.timestamp)}</Text>
                   )}
@@ -649,19 +718,35 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         </ScrollView>
 
         <View style={styles.inputContainer}>
-          <TextInput
-            style={styles.messageInput}
-            placeholder={
-              selectedProjectChat ? 'Message this volunteer group...' : 'Type a message...'
-            }
-            placeholderTextColor="#999"
-            value={messageText}
-            onChangeText={setMessageText}
-            multiline
-          />
-          <TouchableOpacity style={styles.sendButton} onPress={handleSendMessage}>
-            <MaterialIcons name="send" size={20} color="#fff" />
-          </TouchableOpacity>
+          {selectedAttachmentUri ? (
+            <View style={styles.attachmentPreviewCard}>
+              <Image source={{ uri: selectedAttachmentUri }} style={styles.attachmentPreviewImage} />
+              <TouchableOpacity
+                style={styles.attachmentRemoveButton}
+                onPress={() => setSelectedAttachmentUri(null)}
+              >
+                <MaterialIcons name="close" size={18} color="#fff" />
+              </TouchableOpacity>
+            </View>
+          ) : null}
+          <View style={styles.inputRow}>
+            <TouchableOpacity style={styles.attachmentButton} onPress={handlePickAttachment}>
+              <MaterialIcons name="photo-library" size={18} color="#166534" />
+            </TouchableOpacity>
+            <TextInput
+              style={styles.messageInput}
+              placeholder={
+                selectedProjectChat ? 'Message this volunteer group...' : 'Type a message...'
+              }
+              placeholderTextColor="#999"
+              value={messageText}
+              onChangeText={setMessageText}
+              multiline
+            />
+            <TouchableOpacity style={styles.sendButton} onPress={handleSendMessage}>
+              <MaterialIcons name="send" size={20} color="#fff" />
+            </TouchableOpacity>
+          </View>
         </View>
       </KeyboardAvoidingView>
     );
@@ -675,7 +760,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       <Text style={styles.title}>Communication Hub</Text>
 
       <Text style={styles.subtitle}>
-        Direct messages plus joined project and event group chats
+        {projectChatSubtitle}
       </Text>
 
       {showEmptyState ? (
@@ -687,7 +772,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         <ScrollView style={styles.listContainer} showsVerticalScrollIndicator={false}>
           {projectChats.length > 0 && (
             <View style={styles.projectChatsSection}>
-              <Text style={styles.sectionTitle}>Your Project Group Chats</Text>
+              <Text style={styles.sectionTitle}>{projectChatSectionTitle}</Text>
               {projectChats.map(projectChat => (
                 <TouchableOpacity
                   key={projectChat.project.id}
@@ -763,7 +848,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                           item.unreadCount > 0 && styles.conversationPreviewUnread,
                         ]}
                       >
-                        {item.lastMessage.content}
+                        {getMessagePreview(item.lastMessage)}
                       </Text>
                     )}
                   </View>
@@ -865,6 +950,13 @@ const styles = StyleSheet.create({
   messageSenderSent: {
     color: '#e8f5e9',
   },
+  messageAttachment: {
+    width: 180,
+    height: 180,
+    borderRadius: 10,
+    marginBottom: 8,
+    backgroundColor: '#d1d5db',
+  },
   messageText: {
     fontSize: 14,
     color: '#333',
@@ -880,14 +972,50 @@ const styles = StyleSheet.create({
     textAlign: 'right',
   },
   inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
+    gap: 8,
     paddingHorizontal: 16,
     paddingVertical: 12,
     backgroundColor: '#fff',
     borderTopWidth: 1,
     borderTopColor: '#eee',
+  },
+  inputRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
     gap: 8,
+  },
+  attachmentButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#dcfce7',
+    borderWidth: 1,
+    borderColor: '#86efac',
+  },
+  attachmentPreviewCard: {
+    alignSelf: 'flex-start',
+    width: 108,
+    height: 108,
+    borderRadius: 14,
+    overflow: 'hidden',
+    backgroundColor: '#e5e7eb',
+  },
+  attachmentPreviewImage: {
+    width: '100%',
+    height: '100%',
+  },
+  attachmentRemoveButton: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(15, 23, 42, 0.75)',
   },
   messageInput: {
     flex: 1,

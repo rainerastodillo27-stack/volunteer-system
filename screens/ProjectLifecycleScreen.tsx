@@ -8,6 +8,7 @@ import {
   Alert,
   Modal,
   TextInput,
+  Image,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -48,6 +49,7 @@ import { Volunteer, VolunteerProjectJoinRecord, VolunteerProjectMatch } from '..
 import { useAuth } from '../contexts/AuthContext';
 import { format } from 'date-fns';
 import { getProjectStatusColor } from '../utils/projectStatus';
+import { isImageMediaUri } from '../utils/media';
 
 const statuses = ['Planning', 'In Progress', 'On Hold', 'Completed', 'Cancelled'];
 const projectModules: AdvocacyFocus[] = ['Nutrition', 'Education', 'Livelihood', 'Disaster'];
@@ -1178,7 +1180,15 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                           Uploaded {format(new Date(report.createdAt), 'PPpp')}
                         </Text>
                         {report.mediaFile ? (
-                          <Text style={styles.applicationMeta}>Media: {report.mediaFile}</Text>
+                          isImageMediaUri(report.mediaFile) ? (
+                            <Image
+                              source={{ uri: report.mediaFile }}
+                              style={styles.reportImagePreview}
+                              resizeMode="cover"
+                            />
+                          ) : (
+                            <Text style={styles.applicationMeta}>Media: {report.mediaFile}</Text>
+                          )
                         ) : null}
                       </View>
                       <View
@@ -1905,6 +1915,13 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#64748b',
     marginTop: 4,
+  },
+  reportImagePreview: {
+    width: '100%',
+    height: 180,
+    borderRadius: 10,
+    marginTop: 10,
+    backgroundColor: '#e2e8f0',
   },
   applicationStatusBadge: {
     paddingHorizontal: 10,

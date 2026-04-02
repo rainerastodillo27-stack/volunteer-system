@@ -5,6 +5,7 @@ import { format } from 'date-fns';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import {
+  getAllPublishedImpactReports,
   getProjectsScreenSnapshot,
   getVolunteerProjectMatches,
   requestVolunteerProjectJoin,
@@ -13,7 +14,7 @@ import {
   endVolunteerTimeLog,
   subscribeToStorageChanges,
 } from '../models/storage';
-import { PartnerProjectApplication, Project, Volunteer, VolunteerProjectJoinRecord, VolunteerProjectMatch, VolunteerTimeLog } from '../models/types';
+import { PartnerProjectApplication, Project, PublishedImpactReport, Volunteer, VolunteerProjectJoinRecord, VolunteerProjectMatch, VolunteerTimeLog } from '../models/types';
 import { getProjectStatusColor } from '../utils/projectStatus';
 
 const CATEGORY_KEYWORDS: Record<Project['category'], string[]> = {
@@ -85,6 +86,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
   const [timeLogs, setTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
+  const [impactReports, setImpactReports] = useState<PublishedImpactReport[]>([]);
   const [loadingProjectId, setLoadingProjectId] = useState<string | null>(null);
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
 
@@ -108,8 +110,12 @@ export default function ProjectsScreen({ navigation, route }: any) {
   // Loads projects plus role-specific volunteer or partner data for this screen.
   const loadProjectsData = useCallback(async () => {
     try {
-      const snapshot = await getProjectsScreenSnapshot(user);
+      const [snapshot, publishedReports] = await Promise.all([
+        getProjectsScreenSnapshot(user),
+        getAllPublishedImpactReports(),
+      ]);
       applySnapshot(snapshot);
+      setImpactReports(publishedReports.filter(report => Boolean(report.publishedAt)));
       if (snapshot.volunteerProfile?.id) {
         const matches = await getVolunteerProjectMatches(snapshot.volunteerProfile.id);
         setVolunteerMatches(matches);
@@ -124,6 +130,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
         setPartnerApplications([]);
         setVolunteerJoinRecords([]);
         setVolunteerMatches([]);
+        setImpactReports([]);
       });
       Alert.alert('Database Unavailable', error?.message || 'Failed to load projects from Postgres.');
     }
@@ -141,7 +148,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
 
   useEffect(() => {
     return subscribeToStorageChanges(
-      ['projects', 'volunteers', 'volunteerProjectJoins', 'volunteerTimeLogs', 'partnerProjectApplications', 'volunteerMatches'],
+      ['projects', 'volunteers', 'volunteerProjectJoins', 'volunteerTimeLogs', 'partnerProjectApplications', 'volunteerMatches', 'publishedImpactReports'],
       () => {
         void loadProjectsData();
       }
@@ -317,6 +324,12 @@ export default function ProjectsScreen({ navigation, route }: any) {
           const completedParticipation = joinRecord?.participationStatus === 'Completed';
           const isExpanded = expandedProjectId === item.id;
           const partnerApplication = partnerApplicationByProjectId.get(item.id);
+          const projectImpactReports = impactReports.filter(report => report.projectId === item.id);
+          const canViewProjectFiles =
+            user?.role === 'admin' ||
+            (user?.role === 'volunteer' && (joined || Boolean(joinRecord))) ||
+            (user?.role === 'partner' &&
+              (joined || partnerApplication?.status === 'Approved'));
           const isPendingApproval = volunteerMatch?.status === 'Requested';
           const wasRejected = volunteerMatch?.status === 'Rejected';
           const joinButtonLabel = completedParticipation
@@ -511,6 +524,27 @@ export default function ProjectsScreen({ navigation, route }: any) {
                             : 'No logs yet'}
                         </Text>
                       </View>
+
+                      {canViewProjectFiles && (
+                        <View style={styles.filesSection}>
+                          <Text style={styles.filesSectionTitle}>Published Files</Text>
+                          {projectImpactReports.length === 0 ? (
+                            <Text style={styles.filesEmptyText}>
+                              No published files for this project yet.
+                            </Text>
+                          ) : (
+                            projectImpactReports.map(report => (
+                              <View key={report.id} style={styles.fileCard}>
+                                <Text style={styles.fileName}>{report.reportFile}</Text>
+                                <Text style={styles.fileMeta}>
+                                  {report.format} • Published{' '}
+                                  {format(new Date(report.publishedAt || report.generatedAt), 'MMM d, yyyy')}
+                                </Text>
+                              </View>
+                            ))
+                          )}
+                        </View>
+                      )}
                     </>
                   )}
                 </View>
@@ -551,13 +585,36 @@ export default function ProjectsScreen({ navigation, route }: any) {
                     </Text>
                   </TouchableOpacity>
                   {(joined || partnerApplication) && (
-                    <Text style={styles.partnerNote}>
-                      {joined
-                        ? 'Your org is approved as a collaborator for this program.'
-                        : partnerApplication?.status === 'Pending'
-                        ? 'Your request is pending admin approval.'
-                        : 'This request was rejected by the admin.'}
-                    </Text>
+                    <>
+                      <Text style={styles.partnerNote}>
+                        {joined
+                          ? 'Your org is approved as a collaborator for this program.'
+                          : partnerApplication?.status === 'Pending'
+                          ? 'Your request is pending admin approval.'
+                          : 'This request was rejected by the admin.'}
+                      </Text>
+
+                      {canViewProjectFiles && (
+                        <View style={styles.filesSection}>
+                          <Text style={styles.filesSectionTitle}>Published Files</Text>
+                          {projectImpactReports.length === 0 ? (
+                            <Text style={styles.filesEmptyText}>
+                              No published files for this project yet.
+                            </Text>
+                          ) : (
+                            projectImpactReports.map(report => (
+                              <View key={report.id} style={styles.fileCard}>
+                                <Text style={styles.fileName}>{report.reportFile}</Text>
+                                <Text style={styles.fileMeta}>
+                                  {report.format} • Published{' '}
+                                  {format(new Date(report.publishedAt || report.generatedAt), 'MMM d, yyyy')}
+                                </Text>
+                              </View>
+                            ))
+                          )}
+                        </View>
+                      )}
+                    </>
                   )}
                 </View>
               )}
@@ -600,6 +657,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
           latestLogByProjectId,
           loadingProjectId,
           partnerApplicationByProjectId,
+          impactReports,
           user,
           volunteerJoinRecordByProjectId,
           volunteerProfile,
@@ -869,6 +927,42 @@ const styles = StyleSheet.create({
   partnerNote: {
     fontSize: 12,
     color: '#0f172a',
+  },
+  filesSection: {
+    marginTop: 10,
+    padding: 12,
+    borderRadius: 10,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#dbe2ea',
+    gap: 8,
+  },
+  filesSectionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  filesEmptyText: {
+    fontSize: 12,
+    color: '#64748b',
+    lineHeight: 18,
+  },
+  fileCard: {
+    padding: 10,
+    borderRadius: 8,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  fileName: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#166534',
+  },
+  fileMeta: {
+    marginTop: 4,
+    fontSize: 11,
+    color: '#64748b',
   },
   openProgramButton: {
     alignSelf: 'flex-start',

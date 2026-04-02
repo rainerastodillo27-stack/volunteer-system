@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { createBottomTabNavigator, BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { MaterialIcons } from '@expo/vector-icons';
-import { Platform, StyleSheet, TouchableOpacity, View, Text } from 'react-native';
+import { Platform, ScrollView, StyleSheet, TouchableOpacity, View, Text } from 'react-native';
 import { useAuth } from '../contexts/AuthContext';
 import AppLogo from '../components/AppLogo';
 import ScreenBrandHeader from '../components/ScreenBrandHeader';
@@ -179,11 +179,17 @@ function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle }: 
           color="#15803d"
         />
       </TouchableOpacity>
-      {!collapsed && <Text style={styles.sidebarHeading}>Systems</Text>}
-      {systemsRoutes.map(route => renderItem(route.name))}
-      <View style={[styles.sidebarDivider, collapsed && styles.sidebarDividerCollapsed]} />
-      {!collapsed && <Text style={styles.sidebarHeading}>System Settings</Text>}
-      {settingsRoutes.map(route => renderItem(route.name))}
+      <ScrollView
+        style={styles.sidebarScrollArea}
+        contentContainerStyle={styles.sidebarScrollContent}
+        showsVerticalScrollIndicator
+      >
+        {!collapsed && <Text style={styles.sidebarHeading}>Systems</Text>}
+        {systemsRoutes.map(route => renderItem(route.name))}
+        <View style={[styles.sidebarDivider, collapsed && styles.sidebarDividerCollapsed]} />
+        {!collapsed && <Text style={styles.sidebarHeading}>System Settings</Text>}
+        {settingsRoutes.map(route => renderItem(route.name))}
+      </ScrollView>
     </View>
   );
 }
@@ -458,6 +464,12 @@ const styles = StyleSheet.create({
   sidebarContainerCollapsed: {
     width: SIDEBAR_WIDTH_COLLAPSED,
     paddingHorizontal: 8,
+  },
+  sidebarScrollArea: {
+    flex: 1,
+  },
+  sidebarScrollContent: {
+    paddingBottom: 20,
   },
   toggleButton: {
     alignSelf: 'flex-end',
