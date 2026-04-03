@@ -40,6 +40,7 @@ import {
   getStatusUpdatesByProject,
   getVolunteerProjectJoinRecords,
   publishImpactReport,
+  rateVolunteerProjectParticipation,
   reviewPartnerProjectApplication,
   reviewPartnerReport,
   reviewVolunteerProjectMatch,
@@ -55,7 +56,6 @@ import { isImageMediaUri } from '../utils/media';
 
 const statuses = ['Planning', 'In Progress', 'On Hold', 'Completed', 'Cancelled'];
 const projectModules: AdvocacyFocus[] = ['Nutrition', 'Education', 'Livelihood', 'Disaster'];
-const PROJECT_REFRESH_INTERVAL_MS = 5000;
 
 type ProjectDraft = {
   id?: string;
@@ -80,6 +80,8 @@ type ProjectVolunteerEntry = {
   joinedAt: string | undefined;
   source: VolunteerProjectJoinRecord['source'] | undefined;
   participationStatus: VolunteerProjectJoinRecord['participationStatus'];
+  projectRating: number;
+  ratedAt: string | undefined;
   completedAt: string | undefined;
   status: Volunteer['engagementStatus'] | undefined;
 };
@@ -144,6 +146,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
   const [allVolunteerMatches, setAllVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
   const [volunteerTimeLogs, setVolunteerTimeLogs] = useState<VolunteerTimeLog[]>([]);
+  const [reviewingVolunteerRequestId, setReviewingVolunteerRequestId] = useState<string | null>(null);
+  const [ratingVolunteerKey, setRatingVolunteerKey] = useState<string | null>(null);
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
@@ -161,8 +165,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   useFocusEffect(
     React.useCallback(() => {
-      let active = true;
-
       const refresh = async () => {
         await Promise.all([loadProjects(), loadPartners(), loadVolunteers(), loadAllVolunteerMatches(), loadVolunteerTimeLogs()]);
         if (selectedProject?.id) {
@@ -177,9 +179,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           ]);
 
           const refreshedProjects = await getAllProjects();
-          if (!active) {
-            return;
-          }
           const refreshedSelectedProject =
             refreshedProjects.find(project => project.id === selectedProject.id) || null;
           setSelectedProject(refreshedSelectedProject);
@@ -187,14 +186,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       };
 
       void refresh();
-      const refreshTimer = setInterval(() => {
-        void refresh();
-      }, PROJECT_REFRESH_INTERVAL_MS);
-
-      return () => {
-        active = false;
-        clearInterval(refreshTimer);
-      };
+      return undefined;
     }, [selectedProject?.id])
   );
 
@@ -575,6 +567,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     try {
       await reviewPartnerProjectApplication(applicationId, nextStatus, user.id);
+      setPartnerApplications(current =>
+        current.filter(application => application.id !== applicationId)
+      );
       await Promise.all([
         loadPartnerApplicationsForProject(selectedProject.id),
         loadProjects(),
@@ -649,6 +644,76 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     }
   };
 
+  const handleRateVolunteerParticipation = async (volunteerId: string, rating: number) => {
+    if (!isAdmin || !user?.id || !selectedProject) {
+      return;
+    }
+
+    const activeProjectId = selectedProject.id;
+    const ratingKey = `${activeProjectId}:${volunteerId}`;
+    const volunteer = volunteers.find(currentVolunteer => currentVolunteer.id === volunteerId) || null;
+
+    try {
+      setRatingVolunteerKey(ratingKey);
+      setVolunteerJoinRecords(current => {
+        const nextRatedAt = new Date().toISOString();
+        const existingRecordIndex = current.findIndex(
+          record => record.projectId === activeProjectId && record.volunteerId === volunteerId
+        );
+
+        if (existingRecordIndex >= 0) {
+          return current.map(record =>
+            record.projectId === activeProjectId && record.volunteerId === volunteerId
+              ? {
+                  ...record,
+                  projectRating: rating,
+                  ratedAt: nextRatedAt,
+                  ratedBy: user.id,
+                }
+              : record
+          );
+        }
+
+        if (!volunteer) {
+          return current;
+        }
+
+        return [
+          {
+            id: `volunteer-join-${activeProjectId}-${volunteerId}`,
+            projectId: activeProjectId,
+            volunteerId,
+            volunteerUserId: volunteer.userId,
+            volunteerName: volunteer.name,
+            volunteerEmail: volunteer.email,
+            joinedAt: new Date().toISOString(),
+            source: 'AdminMatch',
+            participationStatus: 'Active',
+            projectRating: rating,
+            ratedAt: nextRatedAt,
+            ratedBy: user.id,
+          },
+          ...current,
+        ];
+      });
+
+      await rateVolunteerProjectParticipation(activeProjectId, volunteerId, rating, user.id);
+
+      void Promise.all([
+        loadVolunteerJoinsForProject(activeProjectId),
+        loadVolunteers(),
+      ]);
+    } catch (error) {
+      void Promise.all([
+        loadVolunteerJoinsForProject(activeProjectId),
+        loadVolunteers(),
+      ]);
+      Alert.alert('Error', 'Failed to save volunteer rating.');
+    } finally {
+      setRatingVolunteerKey(null);
+    }
+  };
+
   const handleReviewVolunteerRequest = async (
     matchId: string,
     nextStatus: 'Matched' | 'Rejected'
@@ -657,23 +722,105 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       return;
     }
 
+    const activeProjectId = selectedProject.id;
+    const pendingMatch =
+      volunteerMatches.find(match => match.id === matchId) ||
+      allVolunteerMatches.find(match => match.id === matchId) ||
+      null;
+    const matchedVolunteer = pendingMatch
+      ? volunteers.find(volunteer => volunteer.id === pendingMatch.volunteerId) || null
+      : null;
+
     try {
+      setReviewingVolunteerRequestId(matchId);
+      setVolunteerMatches(current => current.filter(match => match.id !== matchId));
+      setAllVolunteerMatches(current => current.filter(match => match.id !== matchId));
+
+      if (nextStatus === 'Matched' && pendingMatch && matchedVolunteer) {
+        const optimisticJoinedAt = new Date().toISOString();
+
+        setSelectedProject(current => {
+          if (!current || current.id !== pendingMatch.projectId) {
+            return current;
+          }
+
+          const nextVolunteerIds = current.volunteers.includes(matchedVolunteer.id)
+            ? current.volunteers
+            : [...current.volunteers, matchedVolunteer.id];
+          const currentJoinedUserIds = current.joinedUserIds || [];
+          const nextJoinedUserIds = currentJoinedUserIds.includes(matchedVolunteer.userId)
+            ? currentJoinedUserIds
+            : [...currentJoinedUserIds, matchedVolunteer.userId];
+
+          return {
+            ...current,
+            volunteers: nextVolunteerIds,
+            joinedUserIds: nextJoinedUserIds,
+          };
+        });
+
+        setVolunteerJoinRecords(current => {
+          if (
+            current.some(
+              record =>
+                record.projectId === pendingMatch.projectId &&
+                record.volunteerId === matchedVolunteer.id
+            )
+          ) {
+            return current;
+          }
+
+          return [
+            {
+              id: `volunteer-join-${pendingMatch.projectId}-${matchedVolunteer.id}`,
+              projectId: pendingMatch.projectId,
+              volunteerId: matchedVolunteer.id,
+              volunteerUserId: matchedVolunteer.userId,
+              volunteerName: matchedVolunteer.name,
+              volunteerEmail: matchedVolunteer.email,
+              joinedAt: optimisticJoinedAt,
+              source: 'VolunteerJoin',
+              participationStatus: 'Active',
+            },
+            ...current,
+          ];
+        });
+
+        setVolunteers(current =>
+          current.map(volunteer =>
+            volunteer.id === matchedVolunteer.id
+              ? { ...volunteer, engagementStatus: 'Busy' }
+              : volunteer
+          )
+        );
+      }
+
       await reviewVolunteerProjectMatch(matchId, nextStatus, user.id);
-      await Promise.all([
-        loadAllVolunteerMatches(),
-        loadVolunteerMatchesForProject(selectedProject.id),
-        loadVolunteerJoinsForProject(selectedProject.id),
-        loadVolunteers(),
-        loadProjects(),
-      ]);
       Alert.alert(
         'Success',
         nextStatus === 'Matched'
           ? 'Volunteer approved and notified.'
           : 'Volunteer request rejected and volunteer notified.'
       );
+
+      void Promise.all([
+        loadAllVolunteerMatches(),
+        loadVolunteerMatchesForProject(activeProjectId),
+        loadVolunteerJoinsForProject(activeProjectId),
+        loadVolunteers(),
+        loadProjects(),
+      ]);
     } catch (error) {
+      void Promise.all([
+        loadAllVolunteerMatches(),
+        loadVolunteerMatchesForProject(activeProjectId),
+        loadVolunteerJoinsForProject(activeProjectId),
+        loadVolunteers(),
+        loadProjects(),
+      ]);
       Alert.alert('Error', 'Failed to review volunteer request.');
+    } finally {
+      setReviewingVolunteerRequestId(null);
     }
   };
 
@@ -681,11 +828,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     requestEntry: ProjectVolunteerRequestEntry,
     nextStatus: 'Matched' | 'Rejected'
   ) => {
-    const actionLabel = nextStatus === 'Matched' ? 'Approve' : 'Reject';
-    const message =
-      nextStatus === 'Matched'
-        ? `Allow ${requestEntry.volunteerName} to join this program? The volunteer will be notified.`
-        : `Reject ${requestEntry.volunteerName}'s join request? The volunteer will be notified.`;
+    if (nextStatus === 'Matched') {
+      void handleReviewVolunteerRequest(requestEntry.id, nextStatus);
+      return;
+    }
+
+    const actionLabel = 'Reject';
+    const message = `Reject ${requestEntry.volunteerName}'s join request? The volunteer will be notified.`;
 
     Alert.alert(
       `${actionLabel} Volunteer Request`,
@@ -746,6 +895,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           joinedAt: joinRecord?.joinedAt,
           source: joinRecord?.source,
           participationStatus: joinRecord?.participationStatus || 'Active',
+          projectRating: joinRecord?.projectRating || 0,
+          ratedAt: joinRecord?.ratedAt,
           completedAt: joinRecord?.completedAt,
           status: volunteer?.engagementStatus,
         };
@@ -763,7 +914,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     const volunteerById = new Map(volunteers.map(volunteer => [volunteer.id, volunteer]));
 
     return volunteerMatches
-      .filter(match => match.status === 'Requested' || match.status === 'Rejected')
+      .filter(match => match.status === 'Requested')
       .map<ProjectVolunteerRequestEntry | null>(match => {
         const volunteer = volunteerById.get(match.volunteerId);
         if (!volunteer) {
@@ -856,6 +1007,27 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   if (selectedProject) {
     const volunteerEntries = getProjectVolunteerEntries(selectedProject);
     const volunteerRequestEntries = getProjectVolunteerRequestEntries();
+    const pendingPartnerApplications = partnerApplications.filter(
+      application => application.status === 'Pending'
+    );
+    const joinedPartnerEntries = partnerApplications
+      .filter(application => application.status === 'Approved')
+      .map(application => {
+        const linkedPartner =
+          partners.find(partner => partner.ownerUserId === application.partnerUserId) || null;
+
+        return {
+          id: application.id,
+          organizationName: linkedPartner?.name || application.partnerName,
+          partnerName: application.partnerName,
+          partnerEmail: linkedPartner?.contactEmail || application.partnerEmail,
+          sectorType: linkedPartner?.sectorType || 'Not provided',
+          cooperationDurationValue: application.cooperationDurationValue,
+          cooperationDurationUnit: application.cooperationDurationUnit,
+          requestedAt: application.requestedAt,
+          reviewedAt: application.reviewedAt,
+        };
+      });
     const projectTimeLogEntries: ProjectTimeLogEntry[] = volunteerTimeLogs
       .filter(log => log.projectId === selectedProject.id)
       .map(log => {
@@ -971,16 +1143,21 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           <View style={styles.detailsSection}>
             <Text style={styles.sectionTitle}>Partner Join Requests</Text>
 
-            {partnerApplications.length === 0 ? (
+            {pendingPartnerApplications.length === 0 ? (
               <Text style={styles.emptyText}>No partner applications yet</Text>
             ) : (
               <View style={styles.updatesList}>
-                {partnerApplications.map(application => (
+                {pendingPartnerApplications.map(application => (
                   <View key={application.id} style={styles.applicationCard}>
                     <View style={styles.applicationHeader}>
                       <View style={{ flex: 1 }}>
                         <Text style={styles.applicationName}>{application.partnerName}</Text>
                         <Text style={styles.applicationMeta}>{application.partnerEmail}</Text>
+                        {application.cooperationDurationValue ? (
+                          <Text style={styles.applicationMeta}>
+                            Cooperation period: {application.cooperationDurationValue} {application.cooperationDurationUnit?.toLowerCase()}
+                          </Text>
+                        ) : null}
                         <Text style={styles.applicationMeta}>
                           Requested {format(new Date(application.requestedAt), 'PPpp')}
                         </Text>
@@ -1015,6 +1192,51 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                         </TouchableOpacity>
                       </View>
                     )}
+                  </View>
+                ))}
+              </View>
+            )}
+          </View>
+
+          <View style={styles.detailsSection}>
+            <Text style={styles.sectionTitle}>Joined Partners</Text>
+
+            {joinedPartnerEntries.length === 0 ? (
+              <Text style={styles.emptyText}>No partner organizations have joined this program yet</Text>
+            ) : (
+              <View style={styles.updatesList}>
+                {joinedPartnerEntries.map(partnerEntry => (
+                  <View key={partnerEntry.id} style={styles.applicationCard}>
+                    <View style={styles.applicationHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.applicationName}>{partnerEntry.organizationName}</Text>
+                        <Text style={styles.applicationMeta}>
+                          Representative: {partnerEntry.partnerName}
+                        </Text>
+                        <Text style={styles.applicationMeta}>{partnerEntry.partnerEmail}</Text>
+                        <Text style={styles.applicationMeta}>
+                          Sector Type: {partnerEntry.sectorType}
+                        </Text>
+                        {partnerEntry.cooperationDurationValue ? (
+                          <Text style={styles.applicationMeta}>
+                            Cooperation period: {partnerEntry.cooperationDurationValue} {partnerEntry.cooperationDurationUnit?.toLowerCase()}
+                          </Text>
+                        ) : null}
+                        <Text style={styles.applicationMeta}>
+                          Approved {partnerEntry.reviewedAt
+                            ? format(new Date(partnerEntry.reviewedAt), 'PPpp')
+                            : format(new Date(partnerEntry.requestedAt), 'PPpp')}
+                        </Text>
+                      </View>
+                      <View
+                        style={[
+                          styles.applicationStatusBadge,
+                          styles.applicationStatusApproved,
+                        ]}
+                      >
+                        <Text style={styles.applicationStatusText}>Joined</Text>
+                      </View>
+                    </View>
                   </View>
                 ))}
               </View>
@@ -1115,16 +1337,30 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                     {isAdmin && requestEntry.status === 'Requested' && (
                       <View style={styles.applicationActions}>
                         <TouchableOpacity
-                          style={[styles.applicationButton, styles.approveButton]}
+                          style={[
+                            styles.applicationButton,
+                            styles.approveButton,
+                            reviewingVolunteerRequestId === requestEntry.id && styles.applicationButtonDisabled,
+                          ]}
+                          disabled={reviewingVolunteerRequestId === requestEntry.id}
                           onPress={() => confirmReviewVolunteerRequest(requestEntry, 'Matched')}
                         >
-                          <Text style={styles.applicationButtonText}>Approve</Text>
+                          <Text style={styles.applicationButtonText}>
+                            {reviewingVolunteerRequestId === requestEntry.id ? 'Approving...' : 'Approve'}
+                          </Text>
                         </TouchableOpacity>
                         <TouchableOpacity
-                          style={[styles.applicationButton, styles.rejectButton]}
+                          style={[
+                            styles.applicationButton,
+                            styles.rejectButton,
+                            reviewingVolunteerRequestId === requestEntry.id && styles.applicationButtonDisabled,
+                          ]}
+                          disabled={reviewingVolunteerRequestId === requestEntry.id}
                           onPress={() => confirmReviewVolunteerRequest(requestEntry, 'Rejected')}
                         >
-                          <Text style={styles.applicationButtonText}>Reject</Text>
+                          <Text style={styles.applicationButtonText}>
+                            {reviewingVolunteerRequestId === requestEntry.id ? 'Working...' : 'Reject'}
+                          </Text>
                         </TouchableOpacity>
                       </View>
                     )}
@@ -1198,6 +1434,42 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                           </View>
                         )}
                       </View>
+                    </View>
+                    <View style={styles.volunteerRatingSection}>
+                      <Text style={styles.volunteerRatingLabel}>Project Rating</Text>
+                      <View style={styles.volunteerRatingRow}>
+                        {[1, 2, 3, 4, 5].map(star => (
+                          <TouchableOpacity
+                            key={`${volunteerEntry.id}-star-${star}`}
+                            style={styles.volunteerRatingStarButton}
+                            onPress={() => handleRateVolunteerParticipation(volunteerEntry.id, star)}
+                            disabled={
+                              !isAdmin ||
+                              ratingVolunteerKey === `${selectedProject.id}:${volunteerEntry.id}`
+                            }
+                          >
+                            <MaterialIcons
+                              name={star <= volunteerEntry.projectRating ? 'star' : 'star-border'}
+                              size={22}
+                              color={star <= volunteerEntry.projectRating ? '#f59e0b' : '#cbd5e1'}
+                            />
+                          </TouchableOpacity>
+                        ))}
+                        <Text style={styles.volunteerRatingValue}>
+                          {volunteerEntry.projectRating > 0
+                            ? `${volunteerEntry.projectRating}/5`
+                            : 'Not rated yet'}
+                        </Text>
+                      </View>
+                      {volunteerEntry.ratedAt ? (
+                        <Text style={styles.volunteerRatingMeta}>
+                          Rated {format(new Date(volunteerEntry.ratedAt), 'PPpp')}
+                        </Text>
+                      ) : (
+                        <Text style={styles.volunteerRatingMeta}>
+                          Admin can rate this volunteer based on this project.
+                        </Text>
+                      )}
                     </View>
                     {isAdmin && volunteerEntry.participationStatus !== 'Completed' && (
                       <TouchableOpacity
@@ -2081,6 +2353,41 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#0f172a',
   },
+  volunteerRatingSection: {
+    marginTop: 12,
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 10,
+  },
+  volunteerRatingLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#334155',
+    marginBottom: 6,
+  },
+  volunteerRatingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 2,
+  },
+  volunteerRatingStarButton: {
+    paddingVertical: 2,
+    paddingHorizontal: 1,
+  },
+  volunteerRatingValue: {
+    marginLeft: 8,
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  volunteerRatingMeta: {
+    marginTop: 6,
+    fontSize: 11,
+    color: '#64748b',
+  },
   completeVolunteerButton: {
     marginTop: 12,
     alignSelf: 'flex-start',
@@ -2114,6 +2421,9 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 8,
     alignItems: 'center',
+  },
+  applicationButtonDisabled: {
+    opacity: 0.7,
   },
   applicationButtonText: {
     color: '#fff',

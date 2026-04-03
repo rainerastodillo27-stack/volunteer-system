@@ -7,8 +7,10 @@ from dotenv import load_dotenv
 
 try:
     import psycopg
+    from psycopg_pool import ConnectionPool
 except ImportError:  # pragma: no cover - dependency is required for runtime
     psycopg = None
+    ConnectionPool = None
 
 
 POSTGRES_PROBE_CACHE_TTL_SECONDS = 10
@@ -17,6 +19,9 @@ _POSTGRES_PROBE_CACHE: dict[str, Any] = {
     "available": False,
     "error": None,
 }
+
+# Connection pool for persistent connections instead of creating new ones per request
+_CONNECTION_POOL: ConnectionPool | None = None
 
 
 """Shared Postgres connection helpers for the backend API and seed scripts."""
@@ -114,7 +119,34 @@ def get_db_mode() -> str:
     return "postgres" if postgres_available else "unavailable"
 
 
-# Creates a direct Psycopg connection to Supabase Postgres.
+# Initializes the connection pool for efficient connection reuse.
+def _initialize_connection_pool() -> ConnectionPool | None:
+    """Creates a connection pool if not already initialized."""
+    global _CONNECTION_POOL
+    
+    if _CONNECTION_POOL is not None:
+        return _CONNECTION_POOL
+    
+    if get_configured_db_mode() != "postgres" or ConnectionPool is None:
+        return None
+    
+    database_url = _get_raw_database_url()
+    connect_timeout = _get_connect_timeout()
+    
+    try:
+        _CONNECTION_POOL = ConnectionPool(
+            _normalize_database_url(database_url),
+            min_size=2,  # Minimum idle connections
+            max_size=10,  # Maximum total connections
+            timeout=connect_timeout,
+        )
+        return _CONNECTION_POOL
+    except Exception as exc:
+        print(f"Failed to initialize connection pool: {exc}")
+        return None
+
+
+# Creates a direct Psycopg connection to Supabase Postgres using connection pool.
 def get_postgres_connection():
     database_url = _get_raw_database_url()
     connect_timeout = _get_connect_timeout()
@@ -122,7 +154,23 @@ def get_postgres_connection():
         raise RuntimeError("SUPABASE_DB_URL is not set.")
     if psycopg is None:
         raise RuntimeError("psycopg is not installed.")
+    
+    # Try to use connection pool for better performance
+    pool = _initialize_connection_pool()
+    if pool:
+        return pool.getconn()
+    
+    # Fallback to direct connection if pooling is unavailable
     return psycopg.connect(_normalize_database_url(database_url), connect_timeout=connect_timeout)
+
+
+# Closes the connection pool gracefully (should be called at app shutdown).
+def close_connection_pool() -> None:
+    """Closes the connection pool and all idle connections."""
+    global _CONNECTION_POOL
+    if _CONNECTION_POOL:
+        _CONNECTION_POOL.close()
+        _CONNECTION_POOL = None
 
 
 # Returns the default backend database connection.

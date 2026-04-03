@@ -1,13 +1,12 @@
 import React, { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, FlatList, StyleSheet, Text, TouchableOpacity, Alert, Pressable } from 'react-native';
+import { View, FlatList, StyleSheet, Text, TouchableOpacity, Alert, Pressable, AppState, Modal, Image, TextInput } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { format } from 'date-fns';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import {
-  getAllPublishedImpactReports,
   getProjectsScreenSnapshot,
-  getVolunteerProjectMatches,
   requestVolunteerProjectJoin,
   requestPartnerProjectJoin,
   startVolunteerTimeLog,
@@ -89,6 +88,22 @@ export default function ProjectsScreen({ navigation, route }: any) {
   const [impactReports, setImpactReports] = useState<PublishedImpactReport[]>([]);
   const [loadingProjectId, setLoadingProjectId] = useState<string | null>(null);
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
+  const [pendingTimeOutProjectId, setPendingTimeOutProjectId] = useState<string | null>(null);
+  const [pendingTimeOutPhotoUri, setPendingTimeOutPhotoUri] = useState<string | null>(null);
+  const [partnerJoinProjectId, setPartnerJoinProjectId] = useState<string | null>(null);
+  const [partnerDurationValueDraft, setPartnerDurationValueDraft] = useState('1');
+  const [partnerDurationUnitDraft, setPartnerDurationUnitDraft] = useState<'Days' | 'Months'>('Months');
+
+  const resetTimeOutPhotoFlow = useCallback(() => {
+    setPendingTimeOutProjectId(null);
+    setPendingTimeOutPhotoUri(null);
+  }, []);
+
+  const resetPartnerJoinFlow = useCallback(() => {
+    setPartnerJoinProjectId(null);
+    setPartnerDurationValueDraft('1');
+    setPartnerDurationUnitDraft('Months');
+  }, []);
 
   // Applies the latest project snapshot to local screen state.
   const applySnapshot = useCallback((snapshot: {
@@ -97,6 +112,8 @@ export default function ProjectsScreen({ navigation, route }: any) {
     timeLogs: VolunteerTimeLog[];
     partnerApplications: PartnerProjectApplication[];
     volunteerJoinRecords: VolunteerProjectJoinRecord[];
+    volunteerMatches: VolunteerProjectMatch[];
+    publishedImpactReports: PublishedImpactReport[];
   }) => {
     startTransition(() => {
       setProjects(snapshot.projects);
@@ -104,24 +121,16 @@ export default function ProjectsScreen({ navigation, route }: any) {
       setTimeLogs(snapshot.timeLogs);
       setPartnerApplications(snapshot.partnerApplications);
       setVolunteerJoinRecords(snapshot.volunteerJoinRecords);
+      setVolunteerMatches(snapshot.volunteerMatches);
+      setImpactReports(snapshot.publishedImpactReports.filter(report => Boolean(report.publishedAt)));
     });
   }, []);
 
   // Loads projects plus role-specific volunteer or partner data for this screen.
   const loadProjectsData = useCallback(async () => {
     try {
-      const [snapshot, publishedReports] = await Promise.all([
-        getProjectsScreenSnapshot(user),
-        getAllPublishedImpactReports(),
-      ]);
+      const snapshot = await getProjectsScreenSnapshot(user);
       applySnapshot(snapshot);
-      setImpactReports(publishedReports.filter(report => Boolean(report.publishedAt)));
-      if (snapshot.volunteerProfile?.id) {
-        const matches = await getVolunteerProjectMatches(snapshot.volunteerProfile.id);
-        setVolunteerMatches(matches);
-      } else {
-        setVolunteerMatches([]);
-      }
     } catch (error: any) {
       startTransition(() => {
         setProjects([]);
@@ -145,6 +154,18 @@ export default function ProjectsScreen({ navigation, route }: any) {
       void loadProjectsData();
     }, [loadProjectsData])
   );
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        void loadProjectsData();
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [loadProjectsData]);
 
   useEffect(() => {
     return subscribeToStorageChanges(
@@ -181,21 +202,12 @@ export default function ProjectsScreen({ navigation, route }: any) {
   const handleJoinProject = async (projectId: string) => {
     if (!user?.id) return;
     try {
-      setLoadingProjectId(projectId);
       if (user.role === 'partner') {
-        const application = await requestPartnerProjectJoin(projectId, user);
-        startTransition(() => {
-          setPartnerApplications(prev => {
-            const withoutCurrent = prev.filter(existing => existing.id !== application.id);
-            return [application, ...withoutCurrent].sort(
-              (a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime()
-            );
-          });
-        });
-        Alert.alert('Submitted', 'Admin has been notified and your request is waiting for approval.');
+        setPartnerJoinProjectId(projectId);
         return;
       }
 
+      setLoadingProjectId(projectId);
       const requestedMatch = await requestVolunteerProjectJoin(projectId, user.id);
       startTransition(() => {
         setVolunteerMatches(prev => {
@@ -211,6 +223,40 @@ export default function ProjectsScreen({ navigation, route }: any) {
       );
     } catch (error: any) {
       Alert.alert('Error', error?.message || 'Failed to request this program. Please try again.');
+    } finally {
+      setLoadingProjectId(null);
+    }
+  };
+
+  const handleSavePartnerJoinDuration = async () => {
+    if (!user?.id || user.role !== 'partner' || !partnerJoinProjectId) {
+      return;
+    }
+
+    const normalizedDurationValue = Number.parseInt(partnerDurationValueDraft.trim(), 10);
+    if (Number.isNaN(normalizedDurationValue) || normalizedDurationValue <= 0) {
+      Alert.alert('Invalid duration', 'Please enter how many days or months your organization will cooperate.');
+      return;
+    }
+
+    try {
+      setLoadingProjectId(partnerJoinProjectId);
+      const application = await requestPartnerProjectJoin(partnerJoinProjectId, user, {
+        value: normalizedDurationValue,
+        unit: partnerDurationUnitDraft,
+      });
+      startTransition(() => {
+        setPartnerApplications(prev => {
+          const withoutCurrent = prev.filter(existing => existing.id !== application.id);
+          return [application, ...withoutCurrent].sort(
+            (a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime()
+          );
+        });
+      });
+      resetPartnerJoinFlow();
+      Alert.alert('Submitted', 'Admin has been notified and your request is waiting for approval.');
+    } catch (error: any) {
+      Alert.alert('Error', error?.message || 'Failed to submit partner join request.');
     } finally {
       setLoadingProjectId(null);
     }
@@ -237,12 +283,64 @@ export default function ProjectsScreen({ navigation, route }: any) {
     }
   };
 
-  // Ends the active volunteer time log for the selected project.
-  const handleTimeOut = async (projectId: string) => {
-    if (!volunteerProfile) return;
+  const pickTimeOutPhoto = useCallback(async (source: 'camera' | 'library', projectId: string) => {
     try {
-      setLoadingProjectId(projectId);
-      const result = await endVolunteerTimeLog(volunteerProfile.id, projectId);
+      if (source === 'camera') {
+        const cameraPermission = await ImagePicker.requestCameraPermissionsAsync();
+        if (!cameraPermission.granted) {
+          Alert.alert('Permission needed', 'Please grant camera access before timing out.');
+          return;
+        }
+      } else {
+        const libraryPermission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!libraryPermission.granted) {
+          Alert.alert('Permission needed', 'Please grant photo library access before timing out.');
+          return;
+        }
+      }
+
+      const imageResult =
+        source === 'camera'
+          ? await ImagePicker.launchCameraAsync({
+              mediaTypes: ImagePicker.MediaTypeOptions.Images,
+              allowsEditing: true,
+              aspect: [4, 5],
+              quality: 0.8,
+            })
+          : await ImagePicker.launchImageLibraryAsync({
+              mediaTypes: ImagePicker.MediaTypeOptions.Images,
+              allowsEditing: true,
+              aspect: [4, 5],
+              quality: 0.8,
+            });
+
+      if (imageResult.canceled || !imageResult.assets?.length) {
+        Alert.alert(
+          'Time-out photo required',
+          source === 'camera'
+            ? 'Please take a photo before timing out.'
+            : 'Please choose a photo before timing out.'
+        );
+        return;
+      }
+
+      setPendingTimeOutProjectId(projectId);
+      setPendingTimeOutPhotoUri(imageResult.assets[0].uri);
+    } catch (error: any) {
+      Alert.alert('Unable to attach photo', error?.message || 'Please try again.');
+    }
+  }, []);
+
+  // Ends the active volunteer time log for the selected project after the photo is confirmed.
+  const handleConfirmTimeOut = async () => {
+    if (!volunteerProfile || !pendingTimeOutProjectId || !pendingTimeOutPhotoUri) return;
+    try {
+      setLoadingProjectId(pendingTimeOutProjectId);
+      const result = await endVolunteerTimeLog(
+        volunteerProfile.id,
+        pendingTimeOutProjectId,
+        pendingTimeOutPhotoUri
+      );
       if (!result.log) {
         Alert.alert('No active log', 'Please tap Time In before timing out.');
         return;
@@ -257,12 +355,36 @@ export default function ProjectsScreen({ navigation, route }: any) {
           setVolunteerProfile(result.volunteerProfile);
         }
       });
-      Alert.alert('Time Out recorded', 'Hours added to your profile.');
+      resetTimeOutPhotoFlow();
+      Alert.alert('Time Out recorded', 'Hours added to your profile and your photo was attached.');
     } catch (error: any) {
       Alert.alert('Unable to time out', error?.message || 'Please try again.');
     } finally {
       setLoadingProjectId(null);
     }
+  };
+
+  // Starts the time-out photo flow so volunteers can take or upload before saving.
+  const handleTimeOut = async (projectId: string) => {
+    Alert.alert(
+      'Attach Time-out Photo',
+      'Choose how you want to add your time-out photo.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Upload Photo',
+          onPress: () => {
+            void pickTimeOutPhoto('library', projectId);
+          },
+        },
+        {
+          text: 'Take Photo',
+          onPress: () => {
+            void pickTimeOutPhoto('camera', projectId);
+          },
+        },
+      ]
+    );
   };
 
   // Opens the group chat tied to the selected project or event.
@@ -291,7 +413,15 @@ export default function ProjectsScreen({ navigation, route }: any) {
   );
 
   const volunteerMatchByProjectId = useMemo(
-    () => new Map(volunteerMatches.map(match => [match.projectId, match])),
+    () => {
+      const matchesByProjectId = new Map<string, VolunteerProjectMatch>();
+      volunteerMatches.forEach(match => {
+        if (!matchesByProjectId.has(match.projectId)) {
+          matchesByProjectId.set(match.projectId, match);
+        }
+      });
+      return matchesByProjectId;
+    },
     [volunteerMatches]
   );
 
@@ -316,39 +446,43 @@ export default function ProjectsScreen({ navigation, route }: any) {
   // Renders a single project card with role-specific actions.
   const renderProjectItem = useCallback(({ item }: { item: Project }) => {
           const suggestion = getProjectSuggestion(item, volunteerProfile);
-          const joined = isJoined(item);
           const activeLog = activeLogByProjectId.get(item.id);
           const latestLog = latestLogByProjectId.get(item.id);
           const joinRecord = volunteerJoinRecordByProjectId.get(item.id);
           const volunteerMatch = volunteerMatchByProjectId.get(item.id);
+          const isApprovedVolunteerState =
+            isJoined(item) ||
+            Boolean(joinRecord) ||
+            volunteerMatch?.status === 'Matched';
           const completedParticipation = joinRecord?.participationStatus === 'Completed';
           const isExpanded = expandedProjectId === item.id;
           const partnerApplication = partnerApplicationByProjectId.get(item.id);
+          const isApprovedPartnerState =
+            isJoined(item) || partnerApplication?.status === 'Approved';
           const projectImpactReports = impactReports.filter(report => report.projectId === item.id);
           const canViewProjectFiles =
             user?.role === 'admin' ||
-            (user?.role === 'volunteer' && (joined || Boolean(joinRecord))) ||
+            (user?.role === 'volunteer' && isApprovedVolunteerState) ||
             (user?.role === 'partner' &&
-              (joined || partnerApplication?.status === 'Approved'));
+              isApprovedPartnerState);
           const isPendingApproval = volunteerMatch?.status === 'Requested';
           const wasRejected = volunteerMatch?.status === 'Rejected';
+          const isAwaitingVolunteerApproval = isPendingApproval || wasRejected;
+          const isAwaitingPartnerApproval =
+            partnerApplication?.status === 'Pending' || partnerApplication?.status === 'Rejected';
           const joinButtonLabel = completedParticipation
             ? 'Completed'
-            : joined
+            : isApprovedVolunteerState
             ? 'Approved'
-            : isPendingApproval
+            : isAwaitingVolunteerApproval
             ? 'Pending Approval'
-            : wasRejected
-            ? 'Request Again'
             : 'Request to Join';
           const joinButtonIcon = completedParticipation
             ? 'task-alt'
-            : joined
+            : isApprovedVolunteerState
             ? 'check-circle'
-            : isPendingApproval
+            : isAwaitingVolunteerApproval
             ? 'hourglass-empty'
-            : wasRejected
-            ? 'refresh'
             : 'add-circle-outline';
 
           return (
@@ -424,10 +558,15 @@ export default function ProjectsScreen({ navigation, route }: any) {
                         styles.joinButton,
                         completedParticipation
                           ? styles.joinButtonCompleted
-                          : (joined || isPendingApproval) && styles.joinButtonJoined,
+                          : (isApprovedVolunteerState || isAwaitingVolunteerApproval) && styles.joinButtonJoined,
                         loadingProjectId === item.id && styles.joinButtonLoading,
                       ]}
-                      disabled={joined || completedParticipation || isPendingApproval || loadingProjectId === item.id}
+                      disabled={
+                        isApprovedVolunteerState ||
+                        completedParticipation ||
+                        isAwaitingVolunteerApproval ||
+                        loadingProjectId === item.id
+                      }
                       onPress={() => handleJoinProject(item.id)}
                     >
                       <MaterialIcons
@@ -436,7 +575,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                         color={
                           completedParticipation
                             ? '#166534'
-                            : joined || isPendingApproval
+                            : isApprovedVolunteerState || isAwaitingVolunteerApproval
                             ? '#155724'
                             : '#fff'
                         }
@@ -446,14 +585,14 @@ export default function ProjectsScreen({ navigation, route }: any) {
                           styles.joinButtonText,
                           completedParticipation
                             ? styles.joinButtonTextCompleted
-                            : (joined || isPendingApproval) && styles.joinButtonTextJoined,
+                            : (isApprovedVolunteerState || isAwaitingVolunteerApproval) && styles.joinButtonTextJoined,
                         ]}
                       >
                         {joinButtonLabel}
                       </Text>
                     </TouchableOpacity>
 
-                    {joined && !completedParticipation && (
+                    {isApprovedVolunteerState && !completedParticipation && (
                       <TouchableOpacity
                         style={[
                           styles.timeButton,
@@ -476,18 +615,16 @@ export default function ProjectsScreen({ navigation, route }: any) {
                     )}
                   </View>
 
-                  {(isPendingApproval || wasRejected) && !joined && (
+                  {isAwaitingVolunteerApproval && !isApprovedVolunteerState && (
                     <View style={styles.logMeta}>
                       <Text style={styles.logMetaLabel}>Request status</Text>
                       <Text style={styles.logMetaValue}>
-                        {isPendingApproval
-                          ? 'Waiting for admin approval'
-                          : 'Rejected. You may submit a new request.'}
+                        Waiting for admin approval
                       </Text>
                     </View>
                   )}
 
-                  {joined && (
+                  {isApprovedVolunteerState && (
                     <>
                       <TouchableOpacity
                         style={styles.groupChatButton}
@@ -504,10 +641,8 @@ export default function ProjectsScreen({ navigation, route }: any) {
                             ? joinRecord?.completedAt
                               ? `Completed ${formatTimestamp(joinRecord.completedAt)}`
                               : 'Completed and saved to profile'
-                            : isPendingApproval
+                            : isAwaitingVolunteerApproval
                             ? 'Waiting for admin approval'
-                            : wasRejected
-                            ? 'Request rejected by admin'
                             : 'Joined'}
                         </Text>
                       </View>
@@ -558,41 +693,42 @@ export default function ProjectsScreen({ navigation, route }: any) {
                   <TouchableOpacity
                     style={[
                       styles.joinButton,
-                      (joined || partnerApplication) && styles.joinButtonJoined,
+                      (isApprovedPartnerState || isAwaitingPartnerApproval) && styles.joinButtonJoined,
                       loadingProjectId === item.id && styles.joinButtonLoading,
                     ]}
-                    disabled={joined || !!partnerApplication || loadingProjectId === item.id}
+                    disabled={isApprovedPartnerState || isAwaitingPartnerApproval || loadingProjectId === item.id}
                     onPress={() => handleJoinProject(item.id)}
                   >
                     <MaterialIcons
-                      name={joined ? 'check-circle' : partnerApplication ? 'hourglass-empty' : 'group-add'}
+                      name={isApprovedPartnerState ? 'check-circle' : isAwaitingPartnerApproval ? 'hourglass-empty' : 'group-add'}
                       size={18}
-                      color={joined || partnerApplication ? '#155724' : '#fff'}
+                      color={isApprovedPartnerState || isAwaitingPartnerApproval ? '#155724' : '#fff'}
                     />
                     <Text
                       style={[
                         styles.joinButtonText,
-                        (joined || partnerApplication) && styles.joinButtonTextJoined,
+                        (isApprovedPartnerState || isAwaitingPartnerApproval) && styles.joinButtonTextJoined,
                       ]}
                     >
-                      {joined
+                      {isApprovedPartnerState
                         ? 'Approved as Partner'
-                        : partnerApplication?.status === 'Pending'
-                        ? 'Waiting for Approval'
-                        : partnerApplication?.status === 'Rejected'
-                        ? 'Request Rejected'
+                        : isAwaitingPartnerApproval
+                        ? 'Pending Approval'
                         : 'Join as Partner'}
                     </Text>
                   </TouchableOpacity>
-                  {(joined || partnerApplication) && (
+                  {(isApprovedPartnerState || isAwaitingPartnerApproval) && (
                     <>
                       <Text style={styles.partnerNote}>
-                        {joined
+                        {isApprovedPartnerState
                           ? 'Your org is approved as a collaborator for this program.'
-                          : partnerApplication?.status === 'Pending'
-                          ? 'Your request is pending admin approval.'
-                          : 'This request was rejected by the admin.'}
+                          : 'Your request is pending admin approval.'}
                       </Text>
+                      {partnerApplication?.cooperationDurationValue ? (
+                        <Text style={styles.partnerDurationNote}>
+                          Cooperation period: {partnerApplication.cooperationDurationValue} {partnerApplication.cooperationDurationUnit?.toLowerCase()}
+                        </Text>
+                      ) : null}
 
                       {canViewProjectFiles && (
                         <View style={styles.filesSection}>
@@ -660,6 +796,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
           impactReports,
           user,
           volunteerJoinRecordByProjectId,
+          volunteerMatchByProjectId,
           volunteerProfile,
         ]);
 
@@ -692,6 +829,118 @@ export default function ProjectsScreen({ navigation, route }: any) {
           });
         }}
       />
+
+      <Modal
+        visible={Boolean(pendingTimeOutProjectId && pendingTimeOutPhotoUri)}
+        transparent
+        animationType="fade"
+        onRequestClose={resetTimeOutPhotoFlow}
+      >
+        <View style={styles.photoModalOverlay}>
+          <View style={styles.photoModalCard}>
+            <Text style={styles.photoModalTitle}>Confirm Time-out Photo</Text>
+            {pendingTimeOutPhotoUri ? (
+              <Image source={{ uri: pendingTimeOutPhotoUri }} style={styles.photoPreviewImage} />
+            ) : null}
+            <Text style={styles.photoModalText}>
+              Save this photo to complete your time-out, or cancel to choose a different one.
+            </Text>
+            <View style={styles.photoModalActions}>
+              <TouchableOpacity
+                style={styles.photoModalCancelButton}
+                onPress={resetTimeOutPhotoFlow}
+                disabled={Boolean(loadingProjectId)}
+              >
+                <Text style={styles.photoModalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.photoModalSaveButton,
+                  Boolean(loadingProjectId) && styles.joinButtonLoading,
+                ]}
+                onPress={() => {
+                  void handleConfirmTimeOut();
+                }}
+                disabled={Boolean(loadingProjectId)}
+              >
+                <Text style={styles.photoModalSaveText}>
+                  {loadingProjectId ? 'Saving...' : 'Save'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={Boolean(partnerJoinProjectId)}
+        transparent
+        animationType="fade"
+        onRequestClose={resetPartnerJoinFlow}
+      >
+        <View style={styles.photoModalOverlay}>
+          <View style={styles.photoModalCard}>
+            <Text style={styles.photoModalTitle}>Set Cooperation Duration</Text>
+            <Text style={styles.photoModalText}>
+              Tell the admin how long your organization plans to cooperate on this program.
+            </Text>
+            <TextInput
+              style={styles.durationInput}
+              value={partnerDurationValueDraft}
+              onChangeText={setPartnerDurationValueDraft}
+              keyboardType="number-pad"
+              placeholder="Enter duration"
+              placeholderTextColor="#94a3b8"
+              editable={!Boolean(loadingProjectId)}
+            />
+            <View style={styles.durationUnitRow}>
+              {(['Days', 'Months'] as const).map(unit => (
+                <TouchableOpacity
+                  key={unit}
+                  style={[
+                    styles.durationUnitButton,
+                    partnerDurationUnitDraft === unit && styles.durationUnitButtonActive,
+                  ]}
+                  onPress={() => setPartnerDurationUnitDraft(unit)}
+                  disabled={Boolean(loadingProjectId)}
+                >
+                  <Text
+                    style={[
+                      styles.durationUnitButtonText,
+                      partnerDurationUnitDraft === unit && styles.durationUnitButtonTextActive,
+                    ]}
+                  >
+                    {unit}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <View style={styles.photoModalActions}>
+              <TouchableOpacity
+                style={styles.photoModalCancelButton}
+                onPress={resetPartnerJoinFlow}
+                disabled={Boolean(loadingProjectId)}
+              >
+                <Text style={styles.photoModalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.photoModalSaveButton,
+                  Boolean(loadingProjectId) && styles.joinButtonLoading,
+                ]}
+                onPress={() => {
+                  void handleSavePartnerJoinDuration();
+                }}
+                disabled={Boolean(loadingProjectId)}
+              >
+                <Text style={styles.photoModalSaveText}>
+                  {loadingProjectId ? 'Saving...' : 'Save'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -891,6 +1140,107 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontSize: 12,
   },
+  photoModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.55)',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+  },
+  photoModalCard: {
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+  },
+  photoModalTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0f172a',
+    textAlign: 'center',
+  },
+  photoPreviewImage: {
+    width: '100%',
+    height: 260,
+    borderRadius: 14,
+    marginTop: 16,
+    backgroundColor: '#e2e8f0',
+  },
+  photoModalText: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#475569',
+    marginTop: 14,
+    textAlign: 'center',
+  },
+  photoModalActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 18,
+  },
+  durationInput: {
+    marginTop: 16,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: '#0f172a',
+    backgroundColor: '#f8fafc',
+  },
+  durationUnitRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 14,
+  },
+  durationUnitButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 12,
+    paddingVertical: 11,
+    alignItems: 'center',
+    backgroundColor: '#fff',
+  },
+  durationUnitButtonActive: {
+    backgroundColor: '#dcfce7',
+    borderColor: '#4CAF50',
+  },
+  durationUnitButtonText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  durationUnitButtonTextActive: {
+    color: '#166534',
+  },
+  photoModalCancelButton: {
+    flex: 1,
+    backgroundColor: '#fee2e2',
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+  },
+  photoModalSaveButton: {
+    flex: 1,
+    backgroundColor: '#166534',
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  photoModalCancelText: {
+    color: '#b91c1c',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  photoModalSaveText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
   groupChatButton: {
     alignSelf: 'flex-start',
     flexDirection: 'row',
@@ -927,6 +1277,12 @@ const styles = StyleSheet.create({
   partnerNote: {
     fontSize: 12,
     color: '#0f172a',
+  },
+  partnerDurationNote: {
+    fontSize: 12,
+    color: '#166534',
+    fontWeight: '700',
+    lineHeight: 18,
   },
   filesSection: {
     marginTop: 10,

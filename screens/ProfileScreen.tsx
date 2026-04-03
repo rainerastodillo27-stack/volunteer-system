@@ -10,15 +10,19 @@ import {
   Modal,
   TextInput,
   Switch,
+  Image,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import VolunteerImpactMap from '../components/VolunteerImpactMap';
 import {
   getAllProjects,
   getAllUsers,
+  getPartnersByOwnerUserId,
   getVolunteerCompletedProjectIds,
+  getVolunteerProjectRatingSummary,
   getVolunteerRecognitionStatus,
   getUserByEmailOrPhone,
   getVolunteerByUserId,
@@ -27,7 +31,7 @@ import {
   subscribeToStorageChanges,
 } from '../models/storage';
 import { VolunteerRecognitionStatus } from '../models/storage';
-import { NVCSector, Project, User, UserType, Volunteer } from '../models/types';
+import { NVCSector, Partner, Project, User, UserType, Volunteer } from '../models/types';
 
 const USER_TYPES: UserType[] = ['Student', 'Adult', 'Senior'];
 const PILLAR_OPTIONS: NVCSector[] = ['Nutrition', 'Education', 'Livelihood'];
@@ -35,17 +39,20 @@ const SAVE_SYNC_RETRY_COUNT = 3;
 const SAVE_SYNC_RETRY_DELAY_MS = 250;
 
 // Displays the signed-in user's profile, volunteer recognition, and edit form.
-export default function ProfileScreen() {
+const ProfileScreen = () => {
   const { user, logout, updateUserProfile } = useAuth();
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
+  const [partnerProfile, setPartnerProfile] = useState<Partner | null>(null);
   const [completedProjectIds, setCompletedProjectIds] = useState<string[]>([]);
   const [recognitionStatus, setRecognitionStatus] = useState<VolunteerRecognitionStatus>({
     joinedProgramCount: 0,
     isTopVolunteer: false,
   });
+  const [ratedProjectCount, setRatedProjectCount] = useState(0);
   const [projects, setProjects] = useState<Project[]>([]);
   const [showEditModal, setShowEditModal] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
+  const [profilePictureUri, setProfilePictureUri] = useState<string | null>(null);
   const [nameDraft, setNameDraft] = useState('');
   const [emailDraft, setEmailDraft] = useState('');
   const [phoneDraft, setPhoneDraft] = useState('');
@@ -66,6 +73,7 @@ export default function ProfileScreen() {
         joinedProgramCount: 0,
         isTopVolunteer: false,
       });
+      setRatedProjectCount(0);
       return;
     }
 
@@ -73,21 +81,43 @@ export default function ProfileScreen() {
       const profile = await getVolunteerByUserId(user.id);
       setVolunteerProfile(profile);
       if (profile?.id) {
-        const [completedIds, recognition] = await Promise.all([
+        const [completedIds, recognition, ratingSummary] = await Promise.all([
           getVolunteerCompletedProjectIds(profile.id),
           getVolunteerRecognitionStatus(profile.id),
+          getVolunteerProjectRatingSummary(profile.id),
         ]);
         setCompletedProjectIds(completedIds);
         setRecognitionStatus(recognition);
+        setRatedProjectCount(ratingSummary.ratedProjectCount);
       } else {
         setCompletedProjectIds([]);
         setRecognitionStatus({
           joinedProgramCount: 0,
           isTopVolunteer: false,
         });
+        setRatedProjectCount(0);
       }
     } catch (error) {
       console.error('Error loading volunteer profile:', error);
+    }
+  }, [user?.id, user?.role]);
+
+  // Loads the latest organization registration linked to the signed-in partner account.
+  const loadPartnerProfile = useCallback(async () => {
+    if (user?.role !== 'partner' || !user.id) {
+      setPartnerProfile(null);
+      return;
+    }
+
+    try {
+      const ownedPartners = await getPartnersByOwnerUserId(user.id);
+      const latestPartner =
+        [...ownedPartners].sort(
+          (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+        )[0] || null;
+      setPartnerProfile(latestPartner);
+    } catch (error) {
+      console.error('Error loading partner profile:', error);
     }
   }, [user?.id, user?.role]);
 
@@ -101,26 +131,29 @@ export default function ProfileScreen() {
     }
   }, []);
 
-  useEffect(() => {
+  const refreshProfileData = useCallback(() => {
     void loadVolunteerProfile();
+    void loadPartnerProfile();
     void loadProjectTitles();
-  }, [loadProjectTitles, loadVolunteerProfile]);
+  }, [loadPartnerProfile, loadProjectTitles, loadVolunteerProfile]);
+
+  useEffect(() => {
+    refreshProfileData();
+  }, [refreshProfileData]);
 
   useEffect(() => {
     return subscribeToStorageChanges(
-      ['volunteers', 'projects', 'volunteerProjectJoins'],
+      ['volunteers', 'partners', 'projects', 'volunteerProjectJoins'],
       () => {
-        void loadVolunteerProfile();
-        void loadProjectTitles();
+        refreshProfileData();
       }
     );
-  }, [loadProjectTitles, loadVolunteerProfile]);
+  }, [refreshProfileData]);
 
   useFocusEffect(
     useCallback(() => {
-      void loadVolunteerProfile();
-      void loadProjectTitles();
-    }, [loadProjectTitles, loadVolunteerProfile])
+      refreshProfileData();
+    }, [refreshProfileData])
   );
 
   // Copies the current profile into editable draft fields.
@@ -291,6 +324,7 @@ export default function ProfileScreen() {
           rating: volunteerProfile?.rating || 0,
           engagementStatus: isBusyDraft ? 'Busy' : 'Open to Volunteer',
           background: backgroundDraft.trim(),
+          verificationStatus: volunteerProfile?.verificationStatus || 'Pending',
           createdAt: volunteerProfile?.createdAt || new Date().toISOString(),
         };
 
@@ -319,12 +353,66 @@ export default function ProfileScreen() {
     }
   };
 
-  const initials = (user?.name || 'U')
-    .split(' ')
-    .map(part => part.charAt(0))
-    .join('')
-    .slice(0, 2)
-    .toUpperCase();
+  // Function to save profile picture
+  const handleSaveProfilePicture = async () => {
+    if (!user || !profilePictureUri) {
+      return;
+    }
+
+    try {
+      setSaveLoading(true);
+
+      // Update user profile with profile picture
+      const updatedUser: User = {
+        ...user,
+        profilePictureUrl: profilePictureUri,
+      };
+
+      await saveUser(updatedUser);
+
+      if (user.role === 'volunteer' && volunteerProfile) {
+        const updatedVolunteerProfile: Volunteer = {
+          ...volunteerProfile,
+          profilePictureUrl: profilePictureUri,
+        };
+
+        await saveVolunteer(updatedVolunteerProfile);
+        setVolunteerProfile(updatedVolunteerProfile);
+      }
+
+      await updateUserProfile(updatedUser);
+      Alert.alert('Success', 'Profile picture saved successfully!');
+    } catch (error: any) {
+      Alert.alert('Error', error?.message || 'Failed to save profile picture.');
+    } finally {
+      setSaveLoading(false);
+    }
+  };
+
+  const pickProfilePicture = async () => {
+    try {
+      const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permissionResult.granted) {
+        Alert.alert('Permission needed', 'Please grant access to your photos to upload a profile picture.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        setProfilePictureUri(result.assets[0].uri);
+      }
+    } catch (error) {
+      console.error('Error picking profile picture:', error);
+      Alert.alert('Error', 'Failed to pick profile picture. Please try again.');
+    }
+  };
+
   const completedPrograms = completedProjectIds;
   const joinedProgramCount = recognitionStatus.joinedProgramCount;
   const isTopVolunteer = recognitionStatus.isTopVolunteer;
@@ -334,12 +422,66 @@ export default function ProfileScreen() {
   const completedProjects = completedProjectIds
     .map(projectId => projectById[projectId] || null)
     .filter((project): project is Project => project !== null);
+  const volunteerAffiliations = (volunteerProfile?.affiliations || []).filter(
+    affiliation => affiliation.organization || affiliation.position
+  );
+  const roundedVolunteerRating = Math.max(0, Math.min(5, Math.round((volunteerProfile?.rating || 0) * 2) / 2));
+  const partnerRegistrationStatus = partnerProfile?.status || 'Pending';
+  const savedProfilePictureUri =
+    user?.profilePictureUrl || volunteerProfile?.profilePictureUrl || partnerProfile?.profilePictureUrl || null;
+  const displayedProfilePictureUri = profilePictureUri || savedProfilePictureUri;
+  const hasPendingProfilePictureChange =
+    Boolean(profilePictureUri) && profilePictureUri !== savedProfilePictureUri;
+  const userInitials = user?.name
+    ? user.name
+        .split(' ')
+        .filter(Boolean)
+        .map(part => part[0].toUpperCase())
+        .slice(0, 2)
+        .join('')
+    : 'U';
+
+  const partnerVerificationText = partnerProfile
+    ? `${partnerProfile.verificationStatus || 'Pending'}${
+        partnerProfile.credentialsUnlockedAt ? ' - Login unlocked' : ' - Login locked'
+      }`
+    : 'Pending';
 
   return (
     <ScrollView style={styles.container}>
       <View style={styles.profileCard}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>{initials}</Text>
+        <View style={styles.avatarContainer}>
+          <View style={styles.avatarFrame}>
+            {displayedProfilePictureUri ? (
+              <Image source={{ uri: displayedProfilePictureUri }} style={styles.avatarImage} />
+            ) : (
+              <View style={styles.avatar}>
+                <Text style={styles.avatarText}>{userInitials}</Text>
+              </View>
+            )}
+            <TouchableOpacity style={styles.changePhotoButton} onPress={pickProfilePicture}>
+              <MaterialIcons name="camera-alt" size={16} color="#fff" />
+            </TouchableOpacity>
+          </View>
+
+          {hasPendingProfilePictureChange && (
+            <View style={styles.avatarActionRow}>
+              <TouchableOpacity
+                style={[styles.saveButton, saveLoading && styles.saveButtonDisabled]}
+                onPress={handleSaveProfilePicture}
+                disabled={saveLoading}
+              >
+                <Text style={styles.saveButtonText}>{saveLoading ? 'Saving...' : 'Save'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.cancelButton}
+                onPress={() => setProfilePictureUri(savedProfilePictureUri)}
+                disabled={saveLoading}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
 
         <Text style={styles.name}>{user?.name ?? 'User'}</Text>
@@ -376,15 +518,19 @@ export default function ProfileScreen() {
           <Text style={styles.infoLabel}>Phone</Text>
           <Text style={styles.infoValue}>{user?.phone ?? volunteerProfile?.phone ?? 'Not provided'}</Text>
 
-          <Text style={styles.infoLabel}>Profile Type</Text>
-          <Text style={styles.infoValue}>{user?.userType || 'Adult'}</Text>
+          {user?.role === 'volunteer' && (
+            <>
+              <Text style={styles.infoLabel}>Profile Type</Text>
+              <Text style={styles.infoValue}>{user?.userType || 'Adult'}</Text>
 
-          <Text style={styles.infoLabel}>Pillars of Interest</Text>
-          <Text style={styles.infoValue}>
-            {(user?.pillarsOfInterest || []).length > 0
-              ? user?.pillarsOfInterest?.join(', ')
-              : 'No pillar preferences'}
-          </Text>
+              <Text style={styles.infoLabel}>Pillars of Interest</Text>
+              <Text style={styles.infoValue}>
+                {(user?.pillarsOfInterest || []).length > 0
+                  ? user?.pillarsOfInterest?.join(', ')
+                  : 'No pillar preferences'}
+              </Text>
+            </>
+          )}
         </View>
 
         {user?.role === 'admin' && (
@@ -433,7 +579,94 @@ export default function ProfileScreen() {
               </View>
             </View>
 
+            <View style={styles.ratingSummaryCard}>
+              <Text style={styles.sectionHeading}>Volunteer Rating</Text>
+              <View style={styles.ratingStarsRow}>
+                {[1, 2, 3, 4, 5].map(star => (
+                  <MaterialIcons
+                    key={`profile-rating-${star}`}
+                    name={
+                      star <= Math.floor(roundedVolunteerRating)
+                        ? 'star'
+                        : star - 0.5 === roundedVolunteerRating
+                        ? 'star-half'
+                        : 'star-border'
+                    }
+                    size={22}
+                    color={
+                      star <= roundedVolunteerRating || star - 0.5 === roundedVolunteerRating
+                        ? '#f59e0b'
+                        : '#cbd5e1'
+                    }
+                  />
+                ))}
+              </View>
+              <Text style={styles.ratingSummaryValue}>
+                {volunteerProfile.rating > 0 ? `${volunteerProfile.rating.toFixed(1)} / 5` : 'Not rated yet'}
+              </Text>
+              <Text style={styles.ratingSummaryMeta}>
+                {ratedProjectCount > 0
+                  ? `Based on ${ratedProjectCount} rated project${ratedProjectCount === 1 ? '' : 's'}.`
+                  : 'Your star rating will appear after an admin rates your joined projects.'}
+              </Text>
+            </View>
+
             <View style={styles.infoContainer}>
+              <Text style={styles.sectionHeading}>Registration Details</Text>
+
+              <Text style={styles.infoLabel}>Gender</Text>
+              <Text style={styles.infoValue}>{volunteerProfile.gender || 'Not provided'}</Text>
+
+              <Text style={styles.infoLabel}>Date of Birth</Text>
+              <Text style={styles.infoValue}>{volunteerProfile.dateOfBirth || 'Not provided'}</Text>
+
+              <Text style={styles.infoLabel}>Civil Status</Text>
+              <Text style={styles.infoValue}>{volunteerProfile.civilStatus || 'Not provided'}</Text>
+
+              <Text style={styles.infoLabel}>Home Address</Text>
+              <Text style={styles.infoValue}>{volunteerProfile.homeAddress || 'Not provided'}</Text>
+
+              <Text style={styles.infoLabel}>Occupation</Text>
+              <Text style={styles.infoValue}>{volunteerProfile.occupation || 'Not provided'}</Text>
+
+              <Text style={styles.infoLabel}>Workplace or School</Text>
+              <Text style={styles.infoValue}>{volunteerProfile.workplaceOrSchool || 'Not provided'}</Text>
+
+              <Text style={styles.infoLabel}>College Course</Text>
+              <Text style={styles.infoValue}>{volunteerProfile.collegeCourse || 'Not provided'}</Text>
+
+              <Text style={styles.infoLabel}>Certifications or Trainings</Text>
+              <Text style={styles.infoValue}>
+                {volunteerProfile.certificationsOrTrainings || 'Not provided'}
+              </Text>
+
+              <Text style={styles.infoLabel}>Hobbies and Interests</Text>
+              <Text style={styles.infoValue}>{volunteerProfile.hobbiesAndInterests || 'Not provided'}</Text>
+
+              <Text style={styles.infoLabel}>Special Skills</Text>
+              <Text style={styles.infoValue}>{volunteerProfile.specialSkills || 'Not provided'}</Text>
+
+              <Text style={styles.infoLabel}>Affiliations</Text>
+              {volunteerAffiliations.length > 0 ? (
+                <View style={styles.detailCardList}>
+                  {volunteerAffiliations.map((affiliation, index) => (
+                    <View
+                      key={`${affiliation.organization}-${affiliation.position}-${index}`}
+                      style={styles.detailCard}
+                    >
+                      <Text style={styles.detailCardTitle}>{affiliation.organization || 'Organization'}</Text>
+                      <Text style={styles.detailCardMeta}>{affiliation.position || 'Position not provided'}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <Text style={styles.infoValue}>No affiliations provided.</Text>
+              )}
+            </View>
+
+            <View style={styles.infoContainer}>
+              <Text style={styles.sectionHeading}>Volunteer Profile</Text>
+
               <Text style={styles.infoLabel}>Skills</Text>
               {volunteerProfile.skills.length > 0 ? (
                 <View style={styles.skillList}>
@@ -478,6 +711,72 @@ export default function ProfileScreen() {
               ) : (
                 <Text style={styles.infoValue}>No completed programs yet.</Text>
               )}
+            </View>
+          </>
+        )}
+
+        {user?.role === 'partner' && (
+          <>
+            <View
+              style={[
+                styles.statusChip,
+                partnerRegistrationStatus === 'Approved'
+                  ? styles.statusChipOpen
+                  : partnerRegistrationStatus === 'Rejected'
+                  ? styles.statusChipRejected
+                  : styles.statusChipPending,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.statusChipText,
+                  partnerRegistrationStatus === 'Approved'
+                    ? styles.statusChipTextOpen
+                    : partnerRegistrationStatus === 'Rejected'
+                    ? styles.statusChipTextRejected
+                    : styles.statusChipTextPending,
+                ]}
+              >
+                Registration Status: {partnerRegistrationStatus}
+              </Text>
+            </View>
+
+            <View style={styles.infoContainer}>
+              <Text style={styles.sectionHeading}>Organization Registration</Text>
+
+              <Text style={styles.infoLabel}>Organization Name</Text>
+              <Text style={styles.infoValue}>{partnerProfile?.name || 'Not submitted yet'}</Text>
+
+              <Text style={styles.infoLabel}>Sector Type</Text>
+              <Text style={styles.infoValue}>{partnerProfile?.sectorType || 'Not provided'}</Text>
+
+              <Text style={styles.infoLabel}>DSWD Accreditation No.</Text>
+              <Text style={styles.infoValue}>{partnerProfile?.dswdAccreditationNo || 'Not provided'}</Text>
+
+              <Text style={styles.infoLabel}>Advocacy Focus</Text>
+              {partnerProfile && partnerProfile.advocacyFocus.length > 0 ? (
+                <View style={styles.skillList}>
+                  {partnerProfile.advocacyFocus.map(focus => (
+                    <View key={focus} style={styles.skillChip}>
+                      <Text style={styles.skillChipText}>{focus}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <Text style={styles.infoValue}>No advocacy focus selected.</Text>
+              )}
+
+              <Text style={styles.infoLabel}>Verification</Text>
+              <Text style={styles.infoValue}>{partnerVerificationText}</Text>
+
+              <Text style={styles.infoLabel}>Organization Contact Email</Text>
+              <Text style={styles.infoValue}>{partnerProfile?.contactEmail || user?.email || 'Not provided'}</Text>
+
+              <Text style={styles.infoLabel}>Organization Contact Phone</Text>
+              <Text style={styles.infoValue}>{partnerProfile?.contactPhone || user?.phone || 'Not provided'}</Text>
+
+              <Text style={styles.infoLabel}>Description</Text>
+              <Text style={styles.infoValue}>{partnerProfile?.description || 'No description provided yet.'}</Text>
             </View>
           </>
         )}
@@ -636,7 +935,9 @@ export default function ProfileScreen() {
       </Modal>
     </ScrollView>
   );
-}
+};
+
+export default ProfileScreen;
 
 const styles = StyleSheet.create({
   container: {
@@ -658,6 +959,34 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 15,
+  },
+  avatarContainer: {
+    marginBottom: 15,
+    alignItems: 'center',
+    width: '100%',
+  },
+  avatarFrame: {
+    position: 'relative',
+  },
+  avatarImage: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    borderWidth: 3,
+    borderColor: '#4CAF50',
+  },
+  changePhotoButton: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    backgroundColor: '#4CAF50',
+    borderRadius: 15,
+    width: 30,
+    height: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
   },
   avatarText: {
     fontSize: 32,
@@ -723,6 +1052,42 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
   },
+  saveButton: {
+    backgroundColor: '#166534',
+    borderRadius: 999,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    minWidth: 96,
+  },
+  saveButtonDisabled: {
+    backgroundColor: '#9ca3af',
+  },
+  saveButtonText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  avatarActionRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
+    alignSelf: 'stretch',
+    marginTop: 14,
+  },
+  cancelButton: {
+    backgroundColor: '#dc2626',
+    borderRadius: 999,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    minWidth: 96,
+  },
+  cancelButtonText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
   statusChip: {
     paddingHorizontal: 12,
     paddingVertical: 6,
@@ -735,6 +1100,12 @@ const styles = StyleSheet.create({
   statusChipBusy: {
     backgroundColor: '#fee2e2',
   },
+  statusChipPending: {
+    backgroundColor: '#fef3c7',
+  },
+  statusChipRejected: {
+    backgroundColor: '#fee2e2',
+  },
   statusChipText: {
     fontSize: 12,
     fontWeight: '700',
@@ -743,6 +1114,12 @@ const styles = StyleSheet.create({
     color: '#166534',
   },
   statusChipTextBusy: {
+    color: '#b91c1c',
+  },
+  statusChipTextPending: {
+    color: '#92400e',
+  },
+  statusChipTextRejected: {
     color: '#b91c1c',
   },
   statsContainer: {
@@ -767,6 +1144,33 @@ const styles = StyleSheet.create({
     color: '#666',
     marginTop: 5,
   },
+  ratingSummaryCard: {
+    width: '100%',
+    backgroundColor: '#fff7ed',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#fed7aa',
+    padding: 16,
+    marginBottom: 20,
+  },
+  ratingStarsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 8,
+  },
+  ratingSummaryValue: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#9a3412',
+    marginTop: 10,
+  },
+  ratingSummaryMeta: {
+    fontSize: 12,
+    color: '#7c2d12',
+    marginTop: 4,
+    lineHeight: 18,
+  },
   infoContainer: {
     width: '100%',
     marginBottom: 20,
@@ -783,6 +1187,12 @@ const styles = StyleSheet.create({
     color: '#333',
     marginTop: 3,
     marginBottom: 10,
+  },
+  sectionHeading: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginBottom: 4,
   },
   skillList: {
     flexDirection: 'row',
@@ -811,6 +1221,30 @@ const styles = StyleSheet.create({
   completedProgramsList: {
     marginTop: 8,
     gap: 10,
+  },
+  detailCardList: {
+    marginTop: 8,
+    gap: 10,
+    marginBottom: 10,
+  },
+  detailCard: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  detailCardTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  detailCardMeta: {
+    marginTop: 4,
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#64748b',
   },
   completedProgramCard: {
     backgroundColor: '#f8fafc',

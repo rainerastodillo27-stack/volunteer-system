@@ -44,14 +44,17 @@ const STORAGE_KEYS = {
 
 const WEB_MESSAGE_SYNC_KEY = 'volcre:messages:updatedAt';
 const memoryStorageCache = new Map<string, unknown>();
+const sharedStorageCache = new Map<string, { value: unknown | null; cachedAt: number }>();
 let mockDataInitializationPromise: Promise<void> | null = null;
 // Supabase-backed storage reads can exceed 2.5s on some networks.
 // Keep this comfortably above the observed backend round-trip so web/mobile
 // prefer shared storage instead of silently falling back to stale local cache.
-const REMOTE_STORAGE_TIMEOUT_MS = 60000;
-const API_HEALTH_TIMEOUT_MS = 10000;
+const REMOTE_STORAGE_TIMEOUT_MS = 10000;
+const API_HEALTH_TIMEOUT_MS = 5000;
 const API_READY_RETRY_MS = 800;
 const API_READY_MAX_ATTEMPTS = 6;
+const API_READY_CACHE_TTL_MS = 45000;
+const SHARED_STORAGE_CACHE_TTL_MS = 30000;
 const LOCAL_ONLY_STORAGE_KEYS = new Set([STORAGE_KEYS.CURRENT_USER]);
 const NEGROS_OCCIDENTAL_BOUNDS = {
   minLatitude: 9.85,
@@ -66,6 +69,8 @@ type ProjectsScreenSnapshot = {
   timeLogs: VolunteerTimeLog[];
   partnerApplications: PartnerProjectApplication[];
   volunteerJoinRecords: VolunteerProjectJoinRecord[];
+  volunteerMatches: VolunteerProjectMatch[];
+  publishedImpactReports: PublishedImpactReport[];
 };
 
 type JoinProjectResult = {
@@ -82,6 +87,9 @@ export type VolunteerRecognitionStatus = {
   joinedProgramCount: number;
   isTopVolunteer: boolean;
 };
+
+let apiReadyUntil = 0;
+let apiReadyPromise: Promise<void> | null = null;
 
 // Broadcasts a local storage timestamp so web tabs refresh message state.
 function notifyWebMessageUpdate(): void {
@@ -206,6 +214,41 @@ async function notifyVolunteerAboutProjectMatchDecision(
   await sendSystemMessage(
     reviewedBy,
     volunteerUserId,
+    `NVC Admin ${outcome}`
+  );
+}
+
+async function notifyPartnerAboutRegistrationReview(
+  partner: Partner,
+  reviewedBy: string,
+  decision: 'Approved' | 'Rejected'
+): Promise<void> {
+  let recipientUser: User | null = null;
+
+  if (partner.ownerUserId) {
+    recipientUser = await getUser(partner.ownerUserId);
+  }
+
+  if (!recipientUser && partner.contactEmail?.trim()) {
+    recipientUser = await getUserByEmailOrPhone(partner.contactEmail.trim());
+  }
+
+  if (!recipientUser && partner.contactPhone?.trim()) {
+    recipientUser = await getUserByEmailOrPhone(partner.contactPhone.trim());
+  }
+
+  if (!recipientUser) {
+    return;
+  }
+
+  const outcome =
+    decision === 'Approved'
+      ? `approved your organization registration for "${partner.name}". Your partner account can now access the portal.`
+      : `rejected your organization registration for "${partner.name}". Please contact NVC admin for clarification.`;
+
+  await sendSystemMessage(
+    reviewedBy,
+    recipientUser.id,
     `NVC Admin ${outcome}`
   );
 }
@@ -352,59 +395,124 @@ async function getApiHealthError(): Promise<string | null> {
 }
 
 async function waitForApiReady(): Promise<void> {
-  let lastError = `Backend unavailable at ${getApiBaseUrl()}.`;
-
-  for (let attempt = 0; attempt < API_READY_MAX_ATTEMPTS; attempt += 1) {
-    const healthError = await getApiHealthError();
-    if (!healthError) {
-      return;
-    }
-    lastError = healthError;
-
-    if (attempt < API_READY_MAX_ATTEMPTS - 1) {
-      await delay(API_READY_RETRY_MS);
-    }
+  if (Date.now() < apiReadyUntil) {
+    return;
   }
 
-  throw new Error(lastError);
+  if (apiReadyPromise) {
+    return apiReadyPromise;
+  }
+
+  apiReadyPromise = (async () => {
+    let lastError = `Backend unavailable at ${getApiBaseUrl()}.`;
+
+    for (let attempt = 0; attempt < API_READY_MAX_ATTEMPTS; attempt += 1) {
+      const healthError = await getApiHealthError();
+      if (!healthError) {
+        apiReadyUntil = Date.now() + API_READY_CACHE_TTL_MS;
+        return;
+      }
+      lastError = healthError;
+
+      if (attempt < API_READY_MAX_ATTEMPTS - 1) {
+        await delay(API_READY_RETRY_MS);
+      }
+    }
+
+    throw new Error(lastError);
+  })().finally(() => {
+    apiReadyPromise = null;
+  });
+
+  return apiReadyPromise;
+}
+
+function invalidateApiReadyCache(): void {
+  apiReadyUntil = 0;
+}
+
+function getSharedStorageCacheEntry<T>(key: string): { hit: boolean; value: T | null } {
+  const cachedEntry = sharedStorageCache.get(key);
+  if (!cachedEntry) {
+    return { hit: false, value: null };
+  }
+
+  if (Date.now() - cachedEntry.cachedAt > SHARED_STORAGE_CACHE_TTL_MS) {
+    sharedStorageCache.delete(key);
+    return { hit: false, value: null };
+  }
+
+  return { hit: true, value: cachedEntry.value as T | null };
+}
+
+function setSharedStorageCacheEntry(key: string, value: unknown | null): void {
+  sharedStorageCache.set(key, {
+    value,
+    cachedAt: Date.now(),
+  });
+}
+
+function invalidateSharedStorageCache(keys?: string[]): void {
+  if (!keys || keys.length === 0) {
+    sharedStorageCache.clear();
+    return;
+  }
+
+  keys.forEach(key => {
+    sharedStorageCache.delete(key);
+  });
 }
 
 async function fetchRemoteStorageItem<T>(key: string): Promise<T | null> {
-  await waitForApiReady();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REMOTE_STORAGE_TIMEOUT_MS);
-  const response = await fetch(`${getApiBaseUrl()}/storage/${encodeURIComponent(key)}`, {
-    signal: controller.signal,
-  }).finally(() => clearTimeout(timeout));
-  if (!response.ok) {
-    throw new Error(`Remote storage read failed: ${response.status}`);
-  }
+  try {
+    await waitForApiReady();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REMOTE_STORAGE_TIMEOUT_MS);
+    const response = await fetch(`${getApiBaseUrl()}/storage/${encodeURIComponent(key)}`, {
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timeout));
+    if (!response.ok) {
+      throw new Error(`Remote storage read failed: ${response.status}`);
+    }
 
-  const payload = (await response.json()) as { value: T | null };
-  return payload.value ?? null;
+    const payload = (await response.json()) as { value: T | null };
+    return payload.value ?? null;
+  } catch (error) {
+    if (isExpectedRemoteStorageError(error)) {
+      invalidateApiReadyCache();
+    }
+    throw error;
+  }
 }
 
 async function fetchRemoteStorageItems(
   keys: string[]
 ): Promise<Record<string, unknown | null>> {
-  await waitForApiReady();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REMOTE_STORAGE_TIMEOUT_MS);
-  const response = await fetch(`${getApiBaseUrl()}/storage/batch`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ keys }),
-    signal: controller.signal,
-  }).finally(() => clearTimeout(timeout));
+  try {
+    await waitForApiReady();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REMOTE_STORAGE_TIMEOUT_MS);
+    const response = await fetch(`${getApiBaseUrl()}/storage/batch`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ keys }),
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timeout));
 
-  if (!response.ok) {
-    throw new Error(`Remote storage batch read failed: ${response.status}`);
+    if (!response.ok) {
+      throw new Error(`Remote storage batch read failed: ${response.status}`);
+    }
+
+    const payload = (await response.json()) as { items?: Record<string, unknown | null> };
+    return payload.items || {};
+  } catch (error) {
+    if (isExpectedRemoteStorageError(error)) {
+      invalidateApiReadyCache();
+    }
+    throw error;
   }
-
-  const payload = (await response.json()) as { items?: Record<string, unknown | null> };
-  return payload.items || {};
 }
 
 async function getApiErrorMessage(response: Response, fallback: string): Promise<string> {
@@ -425,25 +533,31 @@ async function requestApiJson<T>(
   init?: RequestInit,
   timeoutMs = REMOTE_STORAGE_TIMEOUT_MS
 ): Promise<T> {
-  await waitForApiReady();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
   try {
-    const response = await fetch(`${getApiBaseUrl()}${path}`, {
-      ...init,
-      signal: controller.signal,
-    });
+    await waitForApiReady();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(`${getApiBaseUrl()}${path}`, {
+        ...init,
+        signal: controller.signal,
+      });
 
-    if (!response.ok) {
-      throw new Error(
-        await getApiErrorMessage(response, `API request failed: ${response.status}`)
-      );
+      if (!response.ok) {
+        throw new Error(
+          await getApiErrorMessage(response, `API request failed: ${response.status}`)
+        );
+      }
+
+      return (await response.json()) as T;
+    } finally {
+      clearTimeout(timeout);
     }
-
-    return (await response.json()) as T;
-  } finally {
-    clearTimeout(timeout);
+  } catch (error) {
+    if (isExpectedRemoteStorageError(error)) {
+      invalidateApiReadyCache();
+    }
+    throw error;
   }
 }
 
@@ -465,48 +579,75 @@ function isLocalOnlyStorageKey(key: string): boolean {
 }
 
 async function saveRemoteStorageItem<T>(key: string, value: T): Promise<void> {
-  await waitForApiReady();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REMOTE_STORAGE_TIMEOUT_MS);
-  const response = await fetch(`${getApiBaseUrl()}/storage/${encodeURIComponent(key)}`, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ value }),
-    signal: controller.signal,
-  }).finally(() => clearTimeout(timeout));
+  try {
+    await waitForApiReady();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REMOTE_STORAGE_TIMEOUT_MS);
+    const response = await fetch(`${getApiBaseUrl()}/storage/${encodeURIComponent(key)}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ value }),
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timeout));
 
-  if (!response.ok) {
-    throw new Error(`Remote storage write failed: ${response.status}`);
+    if (!response.ok) {
+      throw new Error(`Remote storage write failed: ${response.status}`);
+    }
+
+    setSharedStorageCacheEntry(key, value);
+  } catch (error) {
+    if (isExpectedRemoteStorageError(error)) {
+      invalidateApiReadyCache();
+    }
+    throw error;
   }
 }
 
 async function deleteRemoteStorageItem(key: string): Promise<void> {
-  await waitForApiReady();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REMOTE_STORAGE_TIMEOUT_MS);
-  const response = await fetch(`${getApiBaseUrl()}/storage/${encodeURIComponent(key)}`, {
-    method: 'DELETE',
-    signal: controller.signal,
-  }).finally(() => clearTimeout(timeout));
+  try {
+    await waitForApiReady();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REMOTE_STORAGE_TIMEOUT_MS);
+    const response = await fetch(`${getApiBaseUrl()}/storage/${encodeURIComponent(key)}`, {
+      method: 'DELETE',
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timeout));
 
-  if (!response.ok) {
-    throw new Error(`Remote storage delete failed: ${response.status}`);
+    if (!response.ok) {
+      throw new Error(`Remote storage delete failed: ${response.status}`);
+    }
+
+    invalidateSharedStorageCache([key]);
+  } catch (error) {
+    if (isExpectedRemoteStorageError(error)) {
+      invalidateApiReadyCache();
+    }
+    throw error;
   }
 }
 
 async function clearRemoteStorage(): Promise<void> {
-  await waitForApiReady();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REMOTE_STORAGE_TIMEOUT_MS);
-  const response = await fetch(`${getApiBaseUrl()}/storage`, {
-    method: 'DELETE',
-    signal: controller.signal,
-  }).finally(() => clearTimeout(timeout));
+  try {
+    await waitForApiReady();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REMOTE_STORAGE_TIMEOUT_MS);
+    const response = await fetch(`${getApiBaseUrl()}/storage`, {
+      method: 'DELETE',
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timeout));
 
-  if (!response.ok) {
-    throw new Error(`Remote storage clear failed: ${response.status}`);
+    if (!response.ok) {
+      throw new Error(`Remote storage clear failed: ${response.status}`);
+    }
+
+    invalidateSharedStorageCache();
+  } catch (error) {
+    if (isExpectedRemoteStorageError(error)) {
+      invalidateApiReadyCache();
+    }
+    throw error;
   }
 }
 
@@ -540,7 +681,14 @@ export async function getStorageItem<T>(key: string): Promise<T | null> {
   }
 
   try {
-    return await fetchRemoteStorageItem<T>(key);
+    const cached = getSharedStorageCacheEntry<T>(key);
+    if (cached.hit) {
+      return cached.value;
+    }
+
+    const value = await fetchRemoteStorageItem<T>(key);
+    setSharedStorageCacheEntry(key, value);
+    return value;
   } catch (error) {
     console.error(`Error reading shared ${key} from backend:`, error);
     throw error;
@@ -554,6 +702,7 @@ export async function getStorageItems(
   const localKeys = keys.filter(isLocalOnlyStorageKey);
   const sharedKeys = keys.filter(key => !isLocalOnlyStorageKey(key));
   const results: Record<string, unknown | null> = {};
+  const missingSharedKeys: string[] = [];
 
   for (const key of localKeys) {
     try {
@@ -564,14 +713,25 @@ export async function getStorageItems(
     }
   }
 
-  if (sharedKeys.length === 0) {
+  for (const key of sharedKeys) {
+    const cached = getSharedStorageCacheEntry(key);
+    if (cached.hit) {
+      results[key] = cached.value;
+    } else {
+      missingSharedKeys.push(key);
+    }
+  }
+
+  if (missingSharedKeys.length === 0) {
     return results;
   }
 
   try {
-    const remoteResults = await fetchRemoteStorageItems(sharedKeys);
-    for (const key of sharedKeys) {
-      results[key] = remoteResults[key] ?? null;
+    const remoteResults = await fetchRemoteStorageItems(missingSharedKeys);
+    for (const key of missingSharedKeys) {
+      const value = remoteResults[key] ?? null;
+      results[key] = value;
+      setSharedStorageCacheEntry(key, value);
     }
     return results;
   } catch (error) {
@@ -663,12 +823,27 @@ export async function getProjectsScreenSnapshot(
     `/projects/snapshot${query ? `?${query}` : ''}`
   );
 
+  const volunteerProfile = payload.volunteerProfile || null;
+  let volunteerMatches = payload.volunteerMatches || [];
+
+  // Falls back to the shared volunteer-match collection when the snapshot
+  // omits pending request records, keeping the project button state accurate.
+  if (user?.role === 'volunteer' && volunteerProfile && volunteerMatches.length === 0) {
+    try {
+      volunteerMatches = await getVolunteerProjectMatches(volunteerProfile.id);
+    } catch (error) {
+      console.error('Error loading volunteer matches fallback for projects snapshot:', error);
+    }
+  }
+
   return {
     projects: payload.projects || [],
-    volunteerProfile: payload.volunteerProfile || null,
+    volunteerProfile,
     timeLogs: payload.timeLogs || [],
     partnerApplications: payload.partnerApplications || [],
     volunteerJoinRecords: payload.volunteerJoinRecords || [],
+    volunteerMatches,
+    publishedImpactReports: payload.publishedImpactReports || [],
   };
 }
 
@@ -858,6 +1033,8 @@ export async function createUserAccount(input: {
       hobbiesAndInterests: input.volunteerMembershipSheet?.hobbiesAndInterests || '',
       specialSkills: input.volunteerMembershipSheet?.specialSkills || '',
       affiliations: input.volunteerMembershipSheet?.affiliations || [],
+      certificateUrls: [],
+      verificationStatus: 'Pending',
       createdAt,
     });
   }
@@ -1247,6 +1424,56 @@ export async function getAllVolunteers(): Promise<Volunteer[]> {
   return (await getStorageItem<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS)) || [];
 }
 
+// Allows admin users to verify a volunteer account for event participation.
+export async function verifyVolunteerAccount(
+  volunteerId: string,
+  adminUserId: string,
+  verificationNotes?: string
+): Promise<void> {
+  const volunteer = await getVolunteer(volunteerId);
+  if (!volunteer) {
+    throw new Error('Volunteer not found.');
+  }
+
+  const updatedVolunteer: Volunteer = {
+    ...volunteer,
+    verificationStatus: 'Verified',
+    verifiedBy: adminUserId,
+    verifiedAt: new Date().toISOString(),
+    verificationNotes: verificationNotes || '',
+  };
+
+  await saveVolunteer(updatedVolunteer);
+}
+
+// Allows admin users to reject a volunteer account.
+export async function rejectVolunteerAccount(
+  volunteerId: string,
+  adminUserId: string,
+  rejectionReason: string
+): Promise<void> {
+  const volunteer = await getVolunteer(volunteerId);
+  if (!volunteer) {
+    throw new Error('Volunteer not found.');
+  }
+
+  const updatedVolunteer: Volunteer = {
+    ...volunteer,
+    verificationStatus: 'Rejected',
+    verifiedBy: adminUserId,
+    verifiedAt: new Date().toISOString(),
+    verificationNotes: rejectionReason,
+  };
+
+  await saveVolunteer(updatedVolunteer);
+}
+
+// Returns all pending volunteer verifications (for admin dashboard).
+export async function getPendingVolunteerVerifications(): Promise<Volunteer[]> {
+  const volunteers = await getAllVolunteers();
+  return volunteers.filter(v => v.verificationStatus === 'Pending');
+}
+
 // Looks up the volunteer profile linked to a specific user account.
 export async function getVolunteerByUserId(userId: string): Promise<Volunteer | null> {
   const payload = await requestApiJson<{ volunteer?: Volunteer | null }>(
@@ -1326,7 +1553,8 @@ export async function startVolunteerTimeLog(
 // Ends an active volunteer time log and updates contributed hours.
 export async function endVolunteerTimeLog(
   volunteerId: string,
-  projectId: string
+  projectId: string,
+  timeOutPhotoUrl: string
 ): Promise<VolunteerTimeLogMutationResult> {
   const payload = await requestApiJson<Partial<VolunteerTimeLogMutationResult>>(
     `/volunteers/${encodeURIComponent(volunteerId)}/time-logs/end`,
@@ -1335,7 +1563,7 @@ export async function endVolunteerTimeLog(
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ projectId }),
+      body: JSON.stringify({ projectId, timeOutPhotoUrl }),
     }
   );
 
@@ -1386,7 +1614,9 @@ export async function saveMessage(message: Message): Promise<void> {
     }
     notifyWebMessageUpdate();
   } catch (error) {
-    if (!isExpectedRemoteStorageError(error)) {
+    if (isExpectedRemoteStorageError(error)) {
+      invalidateApiReadyCache();
+    } else {
       console.error('Error saving message:', error);
     }
     throw error;
@@ -1414,7 +1644,9 @@ export async function saveProjectGroupMessage(message: ProjectGroupMessage): Pro
     }
     notifyWebMessageUpdate();
   } catch (error) {
-    if (!isExpectedRemoteStorageError(error)) {
+    if (isExpectedRemoteStorageError(error)) {
+      invalidateApiReadyCache();
+    } else {
       console.error('Error saving project group message:', error);
     }
     throw error;
@@ -1534,7 +1766,7 @@ export function subscribeToMessages(
 export function subscribeToStorageChanges(
   keys: string[],
   onChange: (event: { type: string; keys: string[] }) => void,
-  pollIntervalMs = 1000
+  pollIntervalMs = 500
 ): () => void {
   let socket: WebSocket | null = null;
   let heartbeat: ReturnType<typeof setInterval> | null = null;
@@ -1557,6 +1789,7 @@ export function subscribeToStorageChanges(
     }
 
     pollTimer = setInterval(() => {
+      invalidateSharedStorageCache(watchedKeyList);
       onChange({ type: 'storage.poll', keys: watchedKeyList });
     }, pollIntervalMs);
   };
@@ -1588,6 +1821,7 @@ export function subscribeToStorageChanges(
           socket.send('ping');
         }
       }, 25000);
+      invalidateSharedStorageCache(watchedKeyList);
       onChange({ type: 'storage.connected', keys: watchedKeyList });
     };
 
@@ -1599,6 +1833,7 @@ export function subscribeToStorageChanges(
           return;
         }
         if (changedKeys.some(key => watchedKeys.has(key))) {
+          invalidateSharedStorageCache(changedKeys);
           onChange({ type: payload.type, keys: changedKeys });
         }
       } catch (error) {
@@ -1610,7 +1845,7 @@ export function subscribeToStorageChanges(
       cleanupSocket();
       startPolling();
       if (!closed) {
-        reconnectTimer = setTimeout(connect, 1500);
+        reconnectTimer = setTimeout(connect, 800);
       }
     };
 
@@ -1711,6 +1946,14 @@ export async function requestVolunteerProjectJoin(
     throw new Error('Volunteer profile not found.');
   }
 
+  if (volunteer.verificationStatus !== 'Verified') {
+    throw new Error(
+      volunteer.verificationStatus === 'Rejected'
+        ? 'Your volunteer account was not approved. Please contact admin for details.'
+        : 'Your volunteer account is pending admin verification. You will be able to join events once approved.'
+    );
+  }
+
   const existingMatches = await getVolunteerProjectMatches(volunteer.id);
   const existingMatch = existingMatches.find(match => match.projectId === projectId) || null;
 
@@ -1752,42 +1995,103 @@ export async function reviewVolunteerProjectMatch(
   nextStatus: 'Matched' | 'Rejected',
   reviewedBy: string
 ): Promise<VolunteerProjectMatch> {
-  const matches = await getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES) || [];
-  const existingMatch = matches.find(match => match.id === matchId) || null;
+  const reviewVolunteerProjectMatchLegacy = async (): Promise<VolunteerProjectMatch> => {
+    const matches = await getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES) || [];
+    const existingMatch = matches.find(match => match.id === matchId) || null;
 
-  if (!existingMatch) {
-    throw new Error('Volunteer request not found.');
-  }
+    if (!existingMatch) {
+      throw new Error('Volunteer request not found.');
+    }
 
-  const volunteer = await getVolunteer(existingMatch.volunteerId);
-  if (!volunteer) {
-    throw new Error('Volunteer not found.');
-  }
+    const volunteer = await getVolunteer(existingMatch.volunteerId);
+    if (!volunteer) {
+      throw new Error('Volunteer not found.');
+    }
 
-  const updatedMatch: VolunteerProjectMatch = {
-    ...existingMatch,
-    status: nextStatus,
-    matchedAt: new Date().toISOString(),
-  };
+    const updatedMatch: VolunteerProjectMatch = {
+      ...existingMatch,
+      status: nextStatus,
+      matchedAt: new Date().toISOString(),
+    };
 
-  await saveVolunteerProjectMatch(updatedMatch);
-  if (nextStatus === 'Matched') {
-    await ensureVolunteerProjectJoinRecord(updatedMatch.projectId, updatedMatch.volunteerId, 'VolunteerJoin');
-  }
+    await saveVolunteerProjectMatch(updatedMatch);
+    if (nextStatus === 'Matched') {
+      await ensureVolunteerProjectJoinRecord(updatedMatch.projectId, updatedMatch.volunteerId, 'VolunteerJoin');
+    }
 
-  try {
-    await notifyVolunteerAboutProjectMatchDecision(
+    void notifyVolunteerAboutProjectMatchDecision(
       updatedMatch.projectId,
       volunteer.userId,
       reviewedBy,
       nextStatus,
       'request'
-    );
-  } catch (error) {
-    console.error('Error notifying volunteer about request review:', error);
-  }
+    ).catch(error => {
+      console.error('Error notifying volunteer about request review:', error);
+    });
 
-  return updatedMatch;
+    return updatedMatch;
+  };
+
+  try {
+    const payload = await requestApiJson<{ match?: VolunteerProjectMatch | null }>(
+      `/volunteer-project-matches/${encodeURIComponent(matchId)}/review`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          status: nextStatus,
+          reviewedBy,
+        }),
+      }
+    );
+
+    const updatedMatch = payload.match || null;
+    if (!updatedMatch) {
+      throw new Error('Volunteer request review did not complete.');
+    }
+
+    invalidateSharedStorageCache([
+      STORAGE_KEYS.VOLUNTEER_MATCHES,
+      STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
+      STORAGE_KEYS.PROJECTS,
+      STORAGE_KEYS.VOLUNTEERS,
+    ]);
+
+    void getVolunteer(updatedMatch.volunteerId)
+      .then(volunteer => {
+        if (!volunteer) {
+          return;
+        }
+
+        return notifyVolunteerAboutProjectMatchDecision(
+          updatedMatch.projectId,
+          volunteer.userId,
+          reviewedBy,
+          nextStatus,
+          'request'
+        );
+      })
+      .catch(error => {
+        console.error('Error notifying volunteer about request review:', error);
+      });
+
+    return updatedMatch;
+  } catch (error: any) {
+    const message = String(error?.message || '');
+    const normalizedMessage = message.toLowerCase();
+    const canFallbackToLegacy =
+      normalizedMessage.includes('404') ||
+      normalizedMessage.includes('not found') ||
+      normalizedMessage.includes('volunteer request review');
+
+    if (!canFallbackToLegacy) {
+      throw error;
+    }
+
+    return reviewVolunteerProjectMatchLegacy();
+  }
 }
 
 // Immediately assigns a volunteer to a project on behalf of an admin.
@@ -1808,6 +2112,14 @@ export async function assignVolunteerToProject(
 
   if (!volunteer) {
     throw new Error('Volunteer not found.');
+  }
+
+  if (volunteer.verificationStatus !== 'Verified') {
+    throw new Error(
+      volunteer.verificationStatus === 'Rejected'
+        ? 'Cannot assign rejected volunteer. Create a new volunteer account.'
+        : 'Volunteer account is pending verification. Verify the account first before assignment.'
+    );
   }
 
   const existingMatch = existingMatches.find(match => match.projectId === projectId) || null;
@@ -1880,6 +2192,48 @@ export async function getVolunteerProjectJoinRecords(
     .sort((a, b) => new Date(b.joinedAt).getTime() - new Date(a.joinedAt).getTime());
 }
 
+// Returns every joined-project record for one volunteer profile.
+export async function getVolunteerProjectJoinRecordsByVolunteer(
+  volunteerId: string
+): Promise<VolunteerProjectJoinRecord[]> {
+  const records =
+    await getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS) || [];
+  return records
+    .filter(record => record.volunteerId === volunteerId)
+    .map(record => ({
+      ...record,
+      participationStatus: record.participationStatus || 'Active',
+    }))
+    .sort((a, b) => new Date(b.joinedAt).getTime() - new Date(a.joinedAt).getTime());
+}
+
+// Returns the volunteer's overall star rating summary across rated joined projects.
+export async function getVolunteerProjectRatingSummary(
+  volunteerId: string
+): Promise<{ averageRating: number; ratedProjectCount: number }> {
+  const records =
+    await getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS) || [];
+  const ratedRecords = records.filter(
+    record =>
+      record.volunteerId === volunteerId &&
+      typeof record.projectRating === 'number' &&
+      record.projectRating >= 1
+  );
+
+  if (ratedRecords.length === 0) {
+    return {
+      averageRating: 0,
+      ratedProjectCount: 0,
+    };
+  }
+
+  const total = ratedRecords.reduce((sum, record) => sum + Number(record.projectRating || 0), 0);
+  return {
+    averageRating: Math.round((total / ratedRecords.length) * 10) / 10,
+    ratedProjectCount: ratedRecords.length,
+  };
+}
+
 // Returns project ids that a volunteer has already completed.
 export async function getVolunteerCompletedProjectIds(
   volunteerId: string
@@ -1943,6 +2297,38 @@ export async function completeVolunteerProjectParticipation(
   return updatedRecord;
 }
 
+// Saves or updates the admin's star rating for one volunteer on one joined project.
+export async function rateVolunteerProjectParticipation(
+  projectId: string,
+  volunteerId: string,
+  rating: number,
+  ratedBy: string
+): Promise<VolunteerProjectJoinRecord> {
+  const normalizedRating = Math.max(1, Math.min(5, Math.round(rating)));
+  await ensureVolunteerProjectJoinRecord(projectId, volunteerId, 'AdminMatch');
+  const records =
+    await getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS) || [];
+  const recordIndex = records.findIndex(
+    record => record.projectId === projectId && record.volunteerId === volunteerId
+  );
+
+  if (recordIndex === -1) {
+    throw new Error('Volunteer participation record not found.');
+  }
+
+  const updatedRecord: VolunteerProjectJoinRecord = {
+    ...records[recordIndex],
+    projectRating: normalizedRating,
+    ratedAt: new Date().toISOString(),
+    ratedBy,
+  };
+
+  records[recordIndex] = updatedRecord;
+  await setStorageItem(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS, records);
+  await syncVolunteerAverageRating(volunteerId);
+  return updatedRecord;
+}
+
 // Persists a partner application to join a project or event.
 export async function savePartnerProjectApplication(
   application: PartnerProjectApplication
@@ -1982,7 +2368,11 @@ export async function getPartnerProjectApplicationsByUser(
 // Creates a partner join request for admin review.
 export async function requestPartnerProjectJoin(
   projectId: string,
-  partnerUser: User
+  partnerUser: User,
+  cooperationDuration: {
+    value: number;
+    unit: 'Days' | 'Months';
+  }
 ): Promise<PartnerProjectApplication> {
   const payload = await requestApiJson<{ application?: PartnerProjectApplication | null }>(
     '/partner-project-applications/request',
@@ -1996,6 +2386,8 @@ export async function requestPartnerProjectJoin(
         partnerUserId: partnerUser.id,
         partnerName: partnerUser.name,
         partnerEmail: partnerUser.email || '',
+        cooperationDurationValue: cooperationDuration.value,
+        cooperationDurationUnit: cooperationDuration.unit,
       }),
     }
   );
@@ -2050,11 +2442,9 @@ export async function reviewPartnerProjectApplication(
     }
   }
 
-  try {
-    await notifyPartnerAboutProjectJoinReview(updatedApplication, reviewedBy);
-  } catch (error) {
+  void notifyPartnerAboutProjectJoinReview(updatedApplication, reviewedBy).catch(error => {
     console.error('Error notifying partner about application review:', error);
-  }
+  });
 }
 
 // Marks a partner registration as externally verified by admin.
@@ -2105,6 +2495,15 @@ export async function reviewPartnerRegistration(
   };
 
   await savePartner(updatedPartner);
+
+  void notifyPartnerAboutRegistrationReview(
+    updatedPartner,
+    reviewedBy,
+    status as 'Approved' | 'Rejected'
+  ).catch(error => {
+    console.error('Error notifying partner about registration review:', error);
+  });
+
   return updatedPartner;
 }
 
@@ -2532,6 +2931,21 @@ async function addProjectToVolunteerHistory(
   });
 }
 
+async function syncVolunteerAverageRating(volunteerId: string): Promise<void> {
+  const volunteer = await getVolunteer(volunteerId);
+  if (!volunteer) return;
+
+  const summary = await getVolunteerProjectRatingSummary(volunteerId);
+  if (volunteer.rating === summary.averageRating) {
+    return;
+  }
+
+  await saveVolunteer({
+    ...volunteer,
+    rating: summary.averageRating,
+  });
+}
+
 async function syncVolunteerEngagementStatus(volunteerId: string): Promise<void> {
   const volunteer = await getVolunteer(volunteerId);
   if (!volunteer) return;
@@ -2614,4 +3028,3 @@ async function ensurePartnerOwnershipLinks(): Promise<void> {
     await setStorageItem(STORAGE_KEYS.PARTNERS, nextPartners);
   }
 }
-

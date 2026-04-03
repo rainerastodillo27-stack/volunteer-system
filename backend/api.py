@@ -23,6 +23,8 @@ from .db import (
     get_db_mode,
     get_postgres_connection,
     get_postgres_status,
+    close_connection_pool,
+    _initialize_connection_pool,
 )
 
 
@@ -61,6 +63,7 @@ class VolunteerTimeLogStartPayload(BaseModel):
 # Request payload for ending a volunteer time log.
 class VolunteerTimeLogEndPayload(BaseModel):
     projectId: str
+    timeOutPhotoUrl: str
 
 
 # Request payload for partner join requests.
@@ -69,6 +72,14 @@ class PartnerProjectJoinRequestPayload(BaseModel):
     partnerUserId: str
     partnerName: str
     partnerEmail: str = ""
+    cooperationDurationValue: int
+    cooperationDurationUnit: str
+
+
+# Request payload for approving or rejecting a volunteer join request.
+class VolunteerProjectMatchReviewPayload(BaseModel):
+    status: str
+    reviewedBy: str
 
 
 # Request payload for direct chat messages.
@@ -324,12 +335,19 @@ def _assert_project_group_chat_access(
 
 
 @app.on_event("startup")
-# Prepares storage tables when the FastAPI app starts.
+# Prepares storage tables and initializes connection pool when the FastAPI app starts.
 def startup() -> None:
+    _initialize_connection_pool()  # Initialize connection pool for better performance
     ensure_app_storage_seeded()
     with get_postgres_connection() as connection:
         _postgres_sync_all_legacy_app_users(connection)
         connection.commit()
+
+
+@app.on_event("shutdown")
+# Cleans up connection pool when the FastAPI app shuts down.
+def shutdown() -> None:
+    close_connection_pool()
 
 
 @app.get("/health", response_model=None)
@@ -759,6 +777,8 @@ def _build_projects_snapshot(
         "timeLogs": [],
         "partnerApplications": [],
         "volunteerJoinRecords": [],
+        "volunteerMatches": [],
+        "publishedImpactReports": get_postgres_hot_storage_collection(connection, "publishedImpactReports"),
     }
 
     if not user_id or not role:
@@ -769,6 +789,10 @@ def _build_projects_snapshot(
         snapshot["volunteerProfile"] = volunteer
         if volunteer is not None:
             snapshot["timeLogs"] = _postgres_get_volunteer_time_logs(connection, volunteer["id"])
+            snapshot["volunteerMatches"] = _sort_iso_desc(
+                _postgres_get_hot_items_by_field(connection, "volunteerMatches", "volunteerId", volunteer["id"]),
+                "matchedAt",
+            )
             snapshot["volunteerJoinRecords"] = _sort_iso_desc(
                 _postgres_get_hot_items_by_field(connection, "volunteerProjectJoins", "volunteerId", volunteer["id"]),
                 "joinedAt",
@@ -919,6 +943,10 @@ async def start_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogStartP
 # API endpoint that ends a volunteer time log.
 async def end_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogEndPayload) -> dict[str, Any]:
     _require_postgres()
+    time_out_photo_url = str(payload.timeOutPhotoUrl or "").strip()
+    if not time_out_photo_url:
+        raise HTTPException(status_code=400, detail="Please upload a time-out photo before finishing your log.")
+
     with get_postgres_connection() as connection:
         existing_logs = _postgres_get_volunteer_time_logs(connection, volunteer_id)
         active_log = next(
@@ -935,6 +963,7 @@ async def end_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogEndPaylo
         updated_log = {
             **active_log,
             "timeOut": datetime.now(timezone.utc).isoformat(),
+            "timeOutPhotoUrl": time_out_photo_url,
         }
         _postgres_upsert_hot_item(connection, "volunteerTimeLogs", updated_log)
         volunteer = _postgres_add_logged_hours_to_volunteer(connection, volunteer_id, updated_log)
@@ -956,6 +985,12 @@ def get_partner_applications_by_user(partner_user_id: str) -> dict[str, Any]:
 # API endpoint that creates a partner join request for a project.
 async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload) -> dict[str, Any]:
     _require_postgres()
+    duration_unit = str(payload.cooperationDurationUnit or "").strip()
+    if payload.cooperationDurationValue <= 0:
+        raise HTTPException(status_code=400, detail="Cooperation duration must be greater than zero.")
+    if duration_unit not in {"Days", "Months"}:
+        raise HTTPException(status_code=400, detail="Cooperation duration unit must be 'Days' or 'Months'.")
+
     with get_postgres_connection() as connection:
         project = _postgres_get_hot_item_by_id(connection, "projects", payload.projectId)
         if project is None:
@@ -981,6 +1016,8 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
             "partnerUserId": payload.partnerUserId,
             "partnerName": payload.partnerName,
             "partnerEmail": payload.partnerEmail,
+            "cooperationDurationValue": payload.cooperationDurationValue,
+            "cooperationDurationUnit": duration_unit,
             "status": "Pending",
             "requestedAt": datetime.now(timezone.utc).isoformat(),
         }
@@ -988,6 +1025,79 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
         connection.commit()
     await connection_manager.broadcast_storage_event(["partnerProjectApplications"])
     return {"application": application}
+
+
+@app.post("/volunteer-project-matches/{match_id}/review")
+# API endpoint that approves or rejects a volunteer join request in one transaction.
+async def review_volunteer_project_match(
+    match_id: str,
+    payload: VolunteerProjectMatchReviewPayload,
+) -> dict[str, Any]:
+    _require_postgres()
+    next_status = str(payload.status or "").strip()
+    if next_status not in {"Matched", "Rejected"}:
+        raise HTTPException(status_code=400, detail="Volunteer request status must be 'Matched' or 'Rejected'.")
+
+    with get_postgres_connection() as connection:
+        existing_match = _postgres_get_hot_item_by_id(connection, "volunteerMatches", match_id)
+        if existing_match is None:
+            raise HTTPException(status_code=404, detail="Volunteer request not found.")
+
+        volunteer_id = str(existing_match.get("volunteerId") or "").strip()
+        if not volunteer_id:
+            raise HTTPException(status_code=400, detail="Volunteer request is missing a volunteer id.")
+
+        volunteer = _postgres_get_hot_item_by_id(connection, "volunteers", volunteer_id)
+        if volunteer is None:
+            raise HTTPException(status_code=404, detail="Volunteer not found.")
+
+        updated_at = datetime.now(timezone.utc).isoformat()
+        updated_match = {
+            **existing_match,
+            "status": next_status,
+            "matchedAt": updated_at,
+        }
+        _postgres_upsert_hot_item(connection, "volunteerMatches", updated_match)
+
+        updated_project = None
+        if next_status == "Matched":
+            project_id = str(updated_match.get("projectId") or "").strip()
+            project = _postgres_get_hot_item_by_id(connection, "projects", project_id)
+            if project is None:
+                raise HTTPException(status_code=404, detail="Project not found.")
+
+            joined_user_ids = list(project.get("joinedUserIds") or [])
+            volunteer_user_id = str(volunteer.get("userId") or "").strip()
+            if volunteer_user_id and volunteer_user_id not in joined_user_ids:
+                joined_user_ids.append(volunteer_user_id)
+
+            volunteer_ids = list(project.get("volunteers") or [])
+            if volunteer_id not in volunteer_ids:
+                volunteer_ids.append(volunteer_id)
+
+            updated_project = {
+                **project,
+                "joinedUserIds": joined_user_ids,
+                "volunteers": volunteer_ids,
+                "updatedAt": updated_at,
+            }
+            _postgres_upsert_hot_item(connection, "projects", updated_project)
+            _postgres_ensure_volunteer_project_join_record(connection, project_id, volunteer, "VolunteerJoin")
+
+        updated_volunteer = _postgres_sync_volunteer_engagement_status(connection, volunteer_id) or volunteer
+        connection.commit()
+
+    changed_keys = ["volunteerMatches", "volunteers"]
+    if next_status == "Matched":
+        changed_keys.extend(["projects", "volunteerProjectJoins"])
+    await connection_manager.broadcast_storage_event(changed_keys)
+
+    return {
+        "match": updated_match,
+        "project": updated_project,
+        "volunteerProfile": updated_volunteer,
+        "reviewedBy": payload.reviewedBy,
+    }
 
 
 @app.post("/projects/{project_id}/join")

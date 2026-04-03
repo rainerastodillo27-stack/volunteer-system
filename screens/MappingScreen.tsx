@@ -18,6 +18,8 @@ import {
   getAllPartnerEventCheckIns,
   getAllPartnerReports,
   getAllProjects,
+  getPartnerDashboardSnapshot,
+  getProjectsScreenSnapshot,
   subscribeToStorageChanges,
 } from '../models/storage';
 import { getInitialProjectRegion, getProjectMarkerColor } from '../utils/projectMap';
@@ -40,16 +42,76 @@ export default function MappingScreen({ navigation }: any) {
 
   useEffect(() => {
     return subscribeToStorageChanges(
-      ['projects', 'partnerEventCheckIns', 'partnerReports'],
+      ['projects', 'partnerEventCheckIns', 'partnerReports', 'partnerProjectApplications', 'volunteerProjectJoins', 'volunteerMatches', 'volunteers'],
       () => {
         void loadProjects();
       }
     );
-  }, []);
+  }, [user]);
 
   // Loads all projects so they can be plotted on the map.
   const loadProjects = async () => {
     try {
+      if (user?.role === 'volunteer') {
+        const snapshot = await getProjectsScreenSnapshot(user);
+        const completedProjectIds = new Set(
+          snapshot.volunteerJoinRecords
+            .filter(record => (record.participationStatus || 'Active') === 'Completed')
+            .map(record => record.projectId)
+        );
+        const visibleProjectIds = new Set<string>();
+
+        snapshot.volunteerJoinRecords.forEach(record => {
+          if ((record.participationStatus || 'Active') !== 'Completed') {
+            visibleProjectIds.add(record.projectId);
+          }
+        });
+        snapshot.volunteerMatches.forEach(match => {
+          if (match.status === 'Matched') {
+            visibleProjectIds.add(match.projectId);
+          }
+        });
+        snapshot.projects.forEach(project => {
+          const isLegacyJoined =
+            Boolean(user?.id && project.joinedUserIds?.includes(user.id)) &&
+            !completedProjectIds.has(project.id);
+          if (isLegacyJoined) {
+            visibleProjectIds.add(project.id);
+          }
+        });
+
+        setProjects(snapshot.projects.filter(project => visibleProjectIds.has(project.id)));
+        setPartnerCheckIns([]);
+        setPartnerReports([]);
+        setLoading(false);
+        return;
+      }
+
+      if (user?.role === 'partner' && user.id) {
+        const [snapshot, allCheckIns, allReports] = await Promise.all([
+          getPartnerDashboardSnapshot(),
+          getAllPartnerEventCheckIns(),
+          getAllPartnerReports(),
+        ]);
+        const approvedProjectIds = new Set(
+          snapshot.partnerApplications
+            .filter(application => application.partnerUserId === user.id && application.status === 'Approved')
+            .map(application => application.projectId)
+        );
+        const visibleProjects = snapshot.projects.filter(
+          project =>
+            project.joinedUserIds?.includes(user.id) ||
+            approvedProjectIds.has(project.id)
+        );
+        const visibleProjectIds = new Set(visibleProjects.map(project => project.id));
+
+        setProjects(visibleProjects);
+        setPartnerCheckIns(allCheckIns.filter(checkIn => visibleProjectIds.has(checkIn.projectId)));
+        setPartnerReports(allReports.filter(report => visibleProjectIds.has(report.projectId)));
+        setLoading(false);
+        return;
+      }
+
       const allProjects = await getAllProjects();
       const allCheckIns = await getAllPartnerEventCheckIns();
       const allReports = await getAllPartnerReports();
