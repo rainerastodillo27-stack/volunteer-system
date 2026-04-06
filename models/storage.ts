@@ -249,6 +249,33 @@ function resolveConfiguredApiBaseUrl(configuredBaseUrl: string): string {
   return trimmedBaseUrl;
 }
 
+type ExpoConstantsWithManifest = {
+  expoConfig?: { extra?: Record<string, unknown> };
+  extra?: Record<string, unknown>;
+  manifest?: { extra?: Record<string, unknown> };
+  manifest2?: { extra?: { expoClient?: { extra?: Record<string, unknown> } } };
+};
+
+function getExpoExtraValue(key: string): string | undefined {
+  const constantsAny = Constants as unknown as ExpoConstantsWithManifest;
+  const fromExpoConfig = constantsAny.expoConfig?.extra?.[key];
+  if (typeof fromExpoConfig === 'string' && fromExpoConfig.trim().length > 0) {
+    return fromExpoConfig.trim();
+  }
+
+  const fromManifest = constantsAny.manifest?.extra?.[key];
+  if (typeof fromManifest === 'string' && fromManifest.trim().length > 0) {
+    return fromManifest.trim();
+  }
+
+  const fromManifest2 = constantsAny.manifest2?.extra?.expoClient?.extra?.[key];
+  if (typeof fromManifest2 === 'string' && fromManifest2.trim().length > 0) {
+    return fromManifest2.trim();
+  }
+
+  return undefined;
+}
+
 // Resolves the native-device API base URL from Expo config or Metro host info.
 function resolveNativeApiBaseUrl(configuredBaseUrl?: string): string {
   const bundlerHost = getBundlerHost();
@@ -286,7 +313,7 @@ function resolveNativeApiBaseUrl(configuredBaseUrl?: string): string {
 
 // Returns the effective HTTP base URL used by the frontend storage layer.
 export function getApiBaseUrl(): string {
-  const configuredWebBaseUrl = Constants.expoConfig?.extra?.webApiBaseUrl as string | undefined;
+  const configuredWebBaseUrl = getExpoExtraValue('webApiBaseUrl');
   if (typeof document !== 'undefined') {
     if (configuredWebBaseUrl && configuredWebBaseUrl.trim().length > 0) {
       return configuredWebBaseUrl.trim().replace(/\/$/, '');
@@ -295,7 +322,7 @@ export function getApiBaseUrl(): string {
     return 'http://127.0.0.1:8000';
   }
 
-  const configuredNativeBaseUrl = Constants.expoConfig?.extra?.apiBaseUrl as string | undefined;
+  const configuredNativeBaseUrl = getExpoExtraValue('apiBaseUrl');
   return resolveNativeApiBaseUrl(configuredNativeBaseUrl);
 }
 

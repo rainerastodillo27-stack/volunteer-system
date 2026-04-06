@@ -135,11 +135,15 @@ export default function LoginScreen() {
         }
       } catch (error: any) {
         if (!cancelled && mountedRef.current) {
+          const defaultMessage = `Database backend unavailable at ${getApiBaseUrl()}. Check the backend process and Supabase connection.`;
+          const fallbackMessage =
+            error?.message === 'Failed to fetch' ||
+            error?.message === 'Network request failed'
+              ? `Unable to reach the backend at ${getApiBaseUrl()}. Ensure the backend is running and accessible from your browser.`
+              : error?.message || defaultMessage;
+
           setBackendStatus('offline');
-          setBackendMessage(
-            error?.message ||
-            `Database backend unavailable at ${getApiBaseUrl()}. Check the backend process and Supabase connection.`
-          );
+          setBackendMessage(fallbackMessage);
         }
       } finally {
         clearTimeout(timeout);
