@@ -9,22 +9,20 @@ import {
   Modal,
   TextInput,
   FlatList,
+  Platform,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { Volunteer, Project, User, VolunteerProjectJoinRecord, VolunteerProjectMatch } from '../models/types';
+import { format } from 'date-fns';
+import { Volunteer, Project, VolunteerProjectMatch, VolunteerTimeLog } from '../models/types';
 import {
   assignVolunteerToProject,
   getAllVolunteers,
   getAllProjects,
-  getAllUsers,
   getVolunteerCompletedProjectIds,
-  getVolunteerProjectJoinRecordsByVolunteer,
+  getAllVolunteerTimeLogs,
   saveVolunteer,
   getVolunteerProjectMatches,
-  rateVolunteerProjectParticipation,
   subscribeToStorageChanges,
-  verifyVolunteerAccount,
-  rejectVolunteerAccount,
 } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -32,29 +30,25 @@ import { useAuth } from '../contexts/AuthContext';
 export default function VolunteerManagementScreen({ navigation, route }: any) {
   const { user, isAdmin } = useAuth();
   const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
-  const [accountUsers, setAccountUsers] = useState<User[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [view, setView] = useState<'list' | 'detail'>('list');
   const [selectedVolunteer, setSelectedVolunteer] = useState<Volunteer | null>(null);
   const [selectedVolunteerCompletedProjectIds, setSelectedVolunteerCompletedProjectIds] = useState<string[]>([]);
-  const [selectedVolunteerJoinRecords, setSelectedVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
-  const [ratingProjectKey, setRatingProjectKey] = useState<string | null>(null);
+  const [volunteerTimeLogs, setVolunteerTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const [showAvailabilityModal, setShowAvailabilityModal] = useState(false);
   const [daysPerWeek, setDaysPerWeek] = useState('3');
   const [hoursPerWeek, setHoursPerWeek] = useState('12');
   const [availableDays, setAvailableDays] = useState<string[]>(['Monday', 'Wednesday', 'Saturday']);
-  const [showVerificationModal, setShowVerificationModal] = useState(false);
-  const [verificationNotes, setVerificationNotes] = useState('');
 
   useEffect(() => {
     if (!isAdmin) {
       return;
     }
 
-    loadVolunteers();
-    loadAccountUsers();
-    loadProjects();
+    void loadVolunteers();
+    void loadProjects();
+    void loadTimeLogs();
   }, [isAdmin]);
 
   useEffect(() => {
@@ -78,11 +72,11 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     }
 
     return subscribeToStorageChanges(
-      ['volunteers', 'users', 'projects', 'volunteerMatches', 'volunteerProjectJoins'],
+      ['volunteers', 'projects', 'volunteerMatches', 'volunteerProjectJoins', 'volunteerTimeLogs'],
       () => {
         void loadVolunteers();
-        void loadAccountUsers();
         void loadProjects();
+        void loadTimeLogs();
         if (selectedVolunteer) {
           void loadSelectedVolunteerDetails(selectedVolunteer.id);
         }
@@ -120,26 +114,24 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     }
   };
 
-  // Loads user accounts so admin views can show volunteer account details too.
-  const loadAccountUsers = async () => {
+  // Loads every volunteer time log so admins can audit time-in/time-out activity.
+  const loadTimeLogs = async () => {
     try {
-      const allUsers = await getAllUsers();
-      setAccountUsers(allUsers);
+      const logs = await getAllVolunteerTimeLogs();
+      setVolunteerTimeLogs(logs);
     } catch (error) {
-      Alert.alert('Error', 'Failed to load volunteer account details');
+      Alert.alert('Error', 'Failed to load volunteer time logs');
     }
   };
 
   // Loads match history and completed projects for the selected volunteer.
   const loadSelectedVolunteerDetails = async (volunteerId: string) => {
-    const [matches, completedProjectIds, joinRecords] = await Promise.all([
+    const [matches, completedProjectIds] = await Promise.all([
       getVolunteerProjectMatches(volunteerId),
       getVolunteerCompletedProjectIds(volunteerId),
-      getVolunteerProjectJoinRecordsByVolunteer(volunteerId),
     ]);
     setVolunteerMatches(matches);
     setSelectedVolunteerCompletedProjectIds(completedProjectIds);
-    setSelectedVolunteerJoinRecords(joinRecords);
   };
 
   // Opens the detail view for the chosen volunteer.
@@ -210,120 +202,76 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     );
   };
 
-  const handleRateVolunteerProject = async (projectId: string, rating: number) => {
-    if (!isAdmin || !selectedVolunteer || !user) {
-      return;
-    }
+  const daysOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
-    const nextKey = `${selectedVolunteer.id}:${projectId}`;
-    try {
-      setRatingProjectKey(nextKey);
-      setSelectedVolunteerJoinRecords(current => {
-        const nextRatedAt = new Date().toISOString();
-        const existingRecordIndex = current.findIndex(record => record.projectId === projectId);
-
-        if (existingRecordIndex >= 0) {
-          return current.map(record =>
-            record.projectId === projectId
-              ? {
-                  ...record,
-                  projectRating: rating,
-                  ratedAt: nextRatedAt,
-                  ratedBy: user.id,
-                }
-              : record
-          );
-        }
-
-        return [
-          {
-            id: `volunteer-join-${projectId}-${selectedVolunteer.id}`,
-            projectId,
-            volunteerId: selectedVolunteer.id,
-            volunteerUserId: selectedVolunteer.userId,
-            volunteerName: selectedVolunteer.name,
-            volunteerEmail: selectedVolunteer.email,
-            joinedAt: new Date().toISOString(),
-            source: 'AdminMatch',
-            participationStatus: 'Active',
-            projectRating: rating,
-            ratedAt: nextRatedAt,
-            ratedBy: user.id,
-          },
-          ...current,
-        ];
-      });
-
-      await rateVolunteerProjectParticipation(projectId, selectedVolunteer.id, rating, user.id);
-      await Promise.all([
-        loadVolunteers(),
-        loadSelectedVolunteerDetails(selectedVolunteer.id),
-      ]);
-    } catch (error) {
-      Alert.alert('Error', 'Failed to save volunteer project rating.');
-      void loadSelectedVolunteerDetails(selectedVolunteer.id);
-    } finally {
-      setRatingProjectKey(null);
-    }
+  // Returns one formatted timestamp for the time-log cards.
+  const formatTimestamp = (value?: string) => {
+    if (!value) return '--';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return '--';
+    return format(parsed, 'PPpp');
   };
 
-  // Verifies a pending volunteer account so they can join events.
-  const handleVerifyVolunteer = async () => {
-    if (!isAdmin || !selectedVolunteer || !user) {
-      Alert.alert('Error', 'Admin context required for verification.');
-      return;
+  // Returns the logged duration in hours for one completed volunteer time log.
+  const getLogDurationHours = (log: VolunteerTimeLog) => {
+    if (!log.timeOut) {
+      return 0;
     }
 
-    try {
-      await verifyVolunteerAccount(selectedVolunteer.id, user.id, verificationNotes);
-      Alert.alert('Success', 'Volunteer account verified. They can now join events.');
-      setShowVerificationModal(false);
-      setVerificationNotes('');
-      loadVolunteers();
-      if (selectedVolunteer) {
-        void loadSelectedVolunteerDetails(selectedVolunteer.id);
-      }
-    } catch (error: any) {
-      Alert.alert('Error', error?.message || 'Failed to verify volunteer.');
-    }
-  };
-
-  // Rejects a volunteer account.
-  const handleRejectVolunteer = async () => {
-    if (!isAdmin || !selectedVolunteer || !user) {
-      Alert.alert('Error', 'Admin context required for rejection.');
-      return;
-    }
-
-    Alert.prompt(
-      'Reject Volunteer Account',
-      'Please provide a reason for rejection:',
-      [
-        { text: 'Cancel', onPress: () => {} },
-        {
-          text: 'Reject',
-          onPress: async (reason) => {
-            if (!reason?.trim()) {
-              Alert.alert('Error', 'Please provide a rejection reason.');
-              return;
-            }
-
-            try {
-              await rejectVolunteerAccount(selectedVolunteer.id, user.id, reason.trim());
-              Alert.alert('Success', 'Volunteer account rejected.');
-              setShowVerificationModal(false);
-              setVerificationNotes('');
-              loadVolunteers();
-            } catch (error: any) {
-              Alert.alert('Error', error?.message || 'Failed to reject volunteer.');
-            }
-          },
-        },
-      ]
+    return Math.max(
+      0,
+      (new Date(log.timeOut).getTime() - new Date(log.timeIn).getTime()) / 3_600_000
     );
   };
 
-  const daysOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  // Downloads a CSV report with total hours per volunteer for admin review.
+  const handleDownloadVolunteerHoursReport = () => {
+    const rows = volunteers
+      .slice()
+      .sort((left, right) => right.totalHoursContributed - left.totalHoursContributed)
+      .map(volunteer => {
+        const logsForVolunteer = volunteerTimeLogs.filter(log => log.volunteerId === volunteer.id);
+        const completedLogs = logsForVolunteer.filter(log => Boolean(log.timeOut)).length;
+        const activeLogs = logsForVolunteer.length - completedLogs;
+
+        return [
+          volunteer.name,
+          volunteer.email,
+          volunteer.totalHoursContributed.toFixed(1),
+          String(completedLogs),
+          String(activeLogs),
+        ];
+      });
+
+    const csv = [
+      ['Volunteer Name', 'Email', 'Total Hours', 'Completed Logs', 'Active Logs'],
+      ...rows,
+    ]
+      .map(columns =>
+        columns
+          .map(value => `"${String(value).replace(/"/g, '""')}"`)
+          .join(',')
+      )
+      .join('\n');
+
+    if (typeof document !== 'undefined') {
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `volunteer-hours-report-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      return;
+    }
+
+    Alert.alert(
+      'Report Ready',
+      'CSV download is currently available on the admin web view.'
+    );
+  };
 
   if (!isAdmin) {
     return (
@@ -367,19 +315,12 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   };
 
   if (view === 'detail' && selectedVolunteer) {
-    const selectedVolunteerUser =
-      accountUsers.find(account => account.id === selectedVolunteer.userId) || null;
     const matchedProjects = getMatchedProjects();
     const pendingProjects = getPendingProjects();
     const availableProjects = getAvailableProjects();
-    const joinedProjectRatings = selectedVolunteerJoinRecords.map(record => {
-      const project = projects.find(projectEntry => projectEntry.id === record.projectId);
-      return {
-        ...record,
-        title: project?.title || record.projectId,
-        category: project?.category || 'Joined program',
-      };
-    });
+    const selectedVolunteerTimeLogs = volunteerTimeLogs
+      .filter(log => log.volunteerId === selectedVolunteer.id)
+      .sort((a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime());
     const completedProjects = selectedVolunteerCompletedProjectIds.map(projectId => {
       const project = projects.find(projectEntry => projectEntry.id === projectId);
       return {
@@ -419,33 +360,8 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                   {selectedVolunteer.engagementStatus}
                 </Text>
               </View>
-              <View
-                style={[
-                  styles.statusBadge,
-                  selectedVolunteer.verificationStatus === 'Verified'
-                    ? styles.verificationVerified
-                    : selectedVolunteer.verificationStatus === 'Rejected'
-                    ? styles.verificationRejected
-                    : styles.verificationPending,
-                ]}
-              >
-                <Text style={styles.statusBadgeText}>
-                  {selectedVolunteer.verificationStatus || 'Pending'}
-                </Text>
-              </View>
             </View>
           </View>
-
-          {(!selectedVolunteer.verificationStatus || selectedVolunteer.verificationStatus === 'Pending') && (
-            <View style={styles.verificationPromptBanner}>
-              <MaterialIcons name="info" size={20} color="#f59e0b" />
-              <View style={styles.verificationPromptText}>
-                <Text style={styles.verificationPromptTitle}>Action Required</Text>
-                <Text style={styles.verificationPromptSubtitle}>Scroll down to verify this account</Text>
-              </View>
-              <MaterialIcons name="arrow-downward" size={20} color="#f59e0b" />
-            </View>
-          )}
 
           <View style={styles.statsGrid}>
             <View style={styles.stat}>
@@ -462,102 +378,6 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
               <MaterialIcons name="task-alt" size={24} color="#4CAF50" />
               <Text style={styles.statValue}>{selectedVolunteerCompletedProjectIds.length}</Text>
               <Text style={styles.statLabel}>Projects</Text>
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Account Details</Text>
-          <View style={styles.infoGridSingle}>
-            <View style={styles.detailCard}>
-              <Text style={styles.detailCardLabel}>Account Name</Text>
-              <Text style={styles.detailCardValue}>{selectedVolunteerUser?.name || selectedVolunteer.name}</Text>
-            </View>
-            <View style={styles.detailCard}>
-              <Text style={styles.detailCardLabel}>Email</Text>
-              <Text style={styles.detailCardValue}>
-                {selectedVolunteerUser?.email || selectedVolunteer.email || 'Not provided'}
-              </Text>
-            </View>
-            <View style={styles.detailCard}>
-              <Text style={styles.detailCardLabel}>Phone</Text>
-              <Text style={styles.detailCardValue}>
-                {selectedVolunteerUser?.phone || selectedVolunteer.phone || 'Not provided'}
-              </Text>
-            </View>
-            <View style={styles.detailCard}>
-              <Text style={styles.detailCardLabel}>Profile Type</Text>
-              <Text style={styles.detailCardValue}>{selectedVolunteerUser?.userType || 'Not provided'}</Text>
-            </View>
-            <View style={styles.detailCard}>
-              <Text style={styles.detailCardLabel}>Pillars of Interest</Text>
-              <Text style={styles.detailCardValue}>
-                {(selectedVolunteerUser?.pillarsOfInterest || []).length > 0
-                  ? selectedVolunteerUser?.pillarsOfInterest?.join(', ')
-                  : 'No pillar preferences'}
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Registration Details</Text>
-          <View style={styles.infoGridSingle}>
-            <View style={styles.detailCard}>
-              <Text style={styles.detailCardLabel}>Gender</Text>
-              <Text style={styles.detailCardValue}>{selectedVolunteer.gender || 'Not provided'}</Text>
-            </View>
-            <View style={styles.detailCard}>
-              <Text style={styles.detailCardLabel}>Date of Birth</Text>
-              <Text style={styles.detailCardValue}>{selectedVolunteer.dateOfBirth || 'Not provided'}</Text>
-            </View>
-            <View style={styles.detailCard}>
-              <Text style={styles.detailCardLabel}>Civil Status</Text>
-              <Text style={styles.detailCardValue}>{selectedVolunteer.civilStatus || 'Not provided'}</Text>
-            </View>
-            <View style={styles.detailCard}>
-              <Text style={styles.detailCardLabel}>Home Address</Text>
-              <Text style={styles.detailCardValue}>{selectedVolunteer.homeAddress || 'Not provided'}</Text>
-            </View>
-            <View style={styles.detailCard}>
-              <Text style={styles.detailCardLabel}>Occupation</Text>
-              <Text style={styles.detailCardValue}>{selectedVolunteer.occupation || 'Not provided'}</Text>
-            </View>
-            <View style={styles.detailCard}>
-              <Text style={styles.detailCardLabel}>Workplace or School</Text>
-              <Text style={styles.detailCardValue}>{selectedVolunteer.workplaceOrSchool || 'Not provided'}</Text>
-            </View>
-            <View style={styles.detailCard}>
-              <Text style={styles.detailCardLabel}>College Course</Text>
-              <Text style={styles.detailCardValue}>{selectedVolunteer.collegeCourse || 'Not provided'}</Text>
-            </View>
-            <View style={styles.detailCard}>
-              <Text style={styles.detailCardLabel}>Certifications or Trainings</Text>
-              <Text style={styles.detailCardValue}>
-                {selectedVolunteer.certificationsOrTrainings || 'Not provided'}
-              </Text>
-            </View>
-            <View style={styles.detailCard}>
-              <Text style={styles.detailCardLabel}>Hobbies and Interests</Text>
-              <Text style={styles.detailCardValue}>
-                {selectedVolunteer.hobbiesAndInterests || 'Not provided'}
-              </Text>
-            </View>
-            <View style={styles.detailCard}>
-              <Text style={styles.detailCardLabel}>Special Skills</Text>
-              <Text style={styles.detailCardValue}>{selectedVolunteer.specialSkills || 'Not provided'}</Text>
-            </View>
-            <View style={styles.detailCard}>
-              <Text style={styles.detailCardLabel}>Affiliations</Text>
-              <Text style={styles.detailCardValue}>
-                {(selectedVolunteer.affiliations || []).length > 0
-                  ? selectedVolunteer.affiliations
-                      ?.map(affiliation =>
-                        [affiliation.organization, affiliation.position].filter(Boolean).join(' - ')
-                      )
-                      .join('\n')
-                  : 'No affiliations provided'}
-              </Text>
             </View>
           </View>
         </View>
@@ -603,62 +423,6 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Account Verification</Text>
-          <View style={[
-            styles.verificationStatusBox,
-            selectedVolunteer.verificationStatus === 'Verified' ? styles.verificationStatusVerified
-              : selectedVolunteer.verificationStatus === 'Rejected' ? styles.verificationStatusRejected
-              : styles.verificationStatusPending
-          ]}>
-            <MaterialIcons 
-              name={selectedVolunteer.verificationStatus === 'Verified' ? 'verified-user' 
-                : selectedVolunteer.verificationStatus === 'Rejected' ? 'block' 
-                : 'schedule'} 
-              size={20} 
-              color={selectedVolunteer.verificationStatus === 'Verified' ? '#166534'
-                : selectedVolunteer.verificationStatus === 'Rejected' ? '#dc2626'
-                : '#f59e0b'} 
-            />
-            <View style={styles.verificationStatusContent}>
-              <Text style={styles.verificationStatusTitle}>
-                Status: {selectedVolunteer.verificationStatus || 'Pending'}
-              </Text>
-              <Text style={styles.verificationStatusSubtitle}>
-                {selectedVolunteer.verificationStatus === 'Verified' 
-                  ? 'Verified by admin - can join events'
-                  : selectedVolunteer.verificationStatus === 'Rejected'
-                  ? 'Account rejected'
-                  : 'Awaiting admin review'}
-              </Text>
-              {selectedVolunteer.verificationNotes && (
-                <Text style={styles.verificationStatusNotes}>
-                  Note: {selectedVolunteer.verificationNotes}
-                </Text>
-              )}
-            </View>
-          </View>
-
-          {(!selectedVolunteer.verificationStatus || selectedVolunteer.verificationStatus === 'Pending' || selectedVolunteer.verificationStatus === 'Rejected') && (
-            <View style={styles.verificationActionsContainer}>
-              <TouchableOpacity
-                style={[styles.verificationButton, styles.verifyButton]}
-                onPress={() => setShowVerificationModal(true)}
-              >
-                <MaterialIcons name="checked-circle" size={18} color="#fff" />
-                <Text style={styles.verificationButtonText}>Verify Account</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.verificationButton, styles.rejectButton]}
-                onPress={handleRejectVolunteer}
-              >
-                <MaterialIcons name="cancel" size={18} color="#fff" />
-                <Text style={styles.verificationButtonText}>Reject</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-        </View>
-
-        <View style={styles.section}>
           <Text style={styles.sectionTitle}>Skills</Text>
           <View style={styles.skillsContainer}>
             {selectedVolunteer.skills.map(skill => (
@@ -667,6 +431,62 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
               </View>
             ))}
           </View>
+        </View>
+
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Time Log History</Text>
+            <Text style={styles.sectionSummary}>
+              {selectedVolunteerTimeLogs.length} total record{selectedVolunteerTimeLogs.length === 1 ? '' : 's'}
+            </Text>
+          </View>
+
+          {selectedVolunteerTimeLogs.length === 0 ? (
+            <Text style={styles.emptyText}>No time in or time out records yet</Text>
+          ) : (
+            selectedVolunteerTimeLogs.map(log => {
+              const linkedProject = projects.find(project => project.id === log.projectId);
+              const durationHours = getLogDurationHours(log);
+
+              return (
+                <View key={log.id} style={styles.timeLogCard}>
+                  <View style={styles.timeLogHeader}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.projectName}>
+                        {linkedProject?.title || 'Project'}
+                      </Text>
+                      <Text style={styles.projectCategory}>
+                        {linkedProject?.category || 'Volunteer activity'}
+                      </Text>
+                    </View>
+                    <View
+                      style={[
+                        styles.timeLogStatusBadge,
+                        log.timeOut ? styles.timeLogStatusCompleted : styles.timeLogStatusActive,
+                      ]}
+                    >
+                      <Text style={styles.timeLogStatusText}>
+                        {log.timeOut ? 'Timed Out' : 'Timed In'}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <Text style={styles.timeLogMeta}>Time In: {formatTimestamp(log.timeIn)}</Text>
+                  <Text style={styles.timeLogMeta}>
+                    {log.timeOut
+                      ? `Time Out: ${formatTimestamp(log.timeOut)}`
+                      : 'Time Out still pending'}
+                  </Text>
+                  <Text style={styles.timeLogMeta}>
+                    Hours Logged: {log.timeOut ? durationHours.toFixed(1) : '--'}
+                  </Text>
+                  {log.note ? (
+                    <Text style={styles.timeLogNote}>Note: {log.note}</Text>
+                  ) : null}
+                </View>
+              );
+            })
+          )}
         </View>
 
         {matchedProjects.length > 0 && (
@@ -700,48 +520,6 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
             ))}
           </View>
         )}
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Project Ratings</Text>
-          {joinedProjectRatings.length === 0 ? (
-            <Text style={styles.emptyText}>This volunteer has not joined any project yet</Text>
-          ) : (
-            joinedProjectRatings.map(projectRecord => (
-              <View key={projectRecord.id} style={styles.ratingCard}>
-                <View style={styles.projectInfo}>
-                  <Text style={styles.projectName}>{projectRecord.title}</Text>
-                  <Text style={styles.projectCategory}>{projectRecord.category}</Text>
-                  <Text style={styles.ratingCardMeta}>
-                    {projectRecord.participationStatus === 'Completed'
-                      ? 'Completed participation'
-                      : 'Active participation'}
-                  </Text>
-                </View>
-                <View style={styles.ratingCardActions}>
-                  <View style={styles.ratingStarsRow}>
-                    {[1, 2, 3, 4, 5].map(star => (
-                      <TouchableOpacity
-                        key={`${projectRecord.projectId}-rate-${star}`}
-                        onPress={() => handleRateVolunteerProject(projectRecord.projectId, star)}
-                        disabled={ratingProjectKey === `${selectedVolunteer.id}:${projectRecord.projectId}`}
-                        style={styles.ratingStarButton}
-                      >
-                        <MaterialIcons
-                          name={star <= (projectRecord.projectRating || 0) ? 'star' : 'star-border'}
-                          size={22}
-                          color={star <= (projectRecord.projectRating || 0) ? '#f59e0b' : '#cbd5e1'}
-                        />
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                  <Text style={styles.ratingCardValue}>
-                    {projectRecord.projectRating ? `${projectRecord.projectRating}/5` : 'Not rated yet'}
-                  </Text>
-                </View>
-              </View>
-            ))
-          )}
-        </View>
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Completed Projects</Text>
@@ -867,73 +645,26 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
             </ScrollView>
           </View>
         </Modal>
-
-        <Modal
-          visible={showVerificationModal}
-          transparent
-          animationType="slide"
-          onRequestClose={() => setShowVerificationModal(false)}
-        >
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
-              <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>Verify Volunteer Account</Text>
-                <TouchableOpacity onPress={() => setShowVerificationModal(false)}>
-                  <MaterialIcons name="close" size={24} color="#334155" />
-                </TouchableOpacity>
-              </View>
-
-              <ScrollView style={styles.modalBody}>
-                <Text style={styles.modalLabel}>
-                  Review the volunteer information and add verification notes if needed.
-                </Text>
-
-                <View style={styles.infoBox}>
-                  <Text style={styles.infoLabel}>Volunteer:</Text>
-                  <Text style={styles.infoLabel}>{selectedVolunteer?.name}</Text>
-                  <Text style={styles.infoLabel}>Email: {selectedVolunteer?.email}</Text>
-                  <Text style={styles.infoLabel}>Phone: {selectedVolunteer?.phone}</Text>
-                </View>
-
-                <Text style={styles.modalLabel}>Verification Notes (optional)</Text>
-                <TextInput
-                  style={[styles.input, styles.textAreaInput]}
-                  placeholder="Add any notes about this verification..."
-                  placeholderTextColor="#999"
-                  multiline
-                  value={verificationNotes}
-                  onChangeText={setVerificationNotes}
-                />
-
-                <View style={styles.modalActions}>
-                  <TouchableOpacity
-                    style={styles.cancelButton}
-                    onPress={() => {
-                      setShowVerificationModal(false);
-                      setVerificationNotes('');
-                    }}
-                  >
-                    <Text style={styles.cancelButtonText}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.approveButton}
-                    onPress={handleVerifyVolunteer}
-                  >
-                    <MaterialIcons name="verified-user" size={18} color="#fff" />
-                    <Text style={styles.approveButtonText}>Verify Account</Text>
-                  </TouchableOpacity>
-                </View>
-              </ScrollView>
-            </View>
-          </View>
-        </Modal>
       </ScrollView>
     );
   }
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Volunteer Management</Text>
+      <View style={styles.titleRow}>
+        <Text style={styles.title}>Volunteer Management</Text>
+        <TouchableOpacity
+          style={styles.reportButton}
+          onPress={handleDownloadVolunteerHoursReport}
+        >
+          <MaterialIcons
+            name={Platform.OS === 'web' ? 'download' : 'summarize'}
+            size={16}
+            color="#fff"
+          />
+          <Text style={styles.reportButtonText}>Download Hours Report</Text>
+        </TouchableOpacity>
+      </View>
       <FlatList
         data={volunteers}
         keyExtractor={vol => vol.id}
@@ -989,11 +720,29 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: 'bold',
     color: '#333',
+  },
+  titleRow: {
     paddingHorizontal: 16,
     paddingVertical: 12,
     backgroundColor: '#fff',
     borderBottomWidth: 1,
     borderBottomColor: '#eee',
+    gap: 12,
+  },
+  reportButton: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#166534',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  reportButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
   },
   header: {
     flexDirection: 'row',
@@ -1062,9 +811,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 12,
   },
-  infoGridSingle: {
-    gap: 10,
-  },
   stat: {
     flex: 1,
     backgroundColor: '#f9f9f9',
@@ -1101,6 +847,11 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#333',
   },
+  sectionSummary: {
+    fontSize: 12,
+    color: '#64748b',
+    fontWeight: '600',
+  },
   editButton: {
     padding: 8,
   },
@@ -1119,27 +870,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: '#333',
-  },
-  detailCard: {
-    backgroundColor: '#f8fafc',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    padding: 12,
-  },
-  detailCardLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#64748b',
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-  },
-  detailCardValue: {
-    marginTop: 6,
-    fontSize: 13,
-    lineHeight: 20,
-    color: '#0f172a',
-    fontWeight: '600',
   },
   availableDaysLabel: {
     fontSize: 12,
@@ -1179,6 +909,47 @@ const styles = StyleSheet.create({
     color: '#333',
     fontWeight: '500',
   },
+  timeLogCard: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  timeLogHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 8,
+  },
+  timeLogStatusBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  timeLogStatusActive: {
+    backgroundColor: '#fef3c7',
+  },
+  timeLogStatusCompleted: {
+    backgroundColor: '#dcfce7',
+  },
+  timeLogStatusText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#1f2937',
+  },
+  timeLogMeta: {
+    fontSize: 12,
+    color: '#334155',
+    marginTop: 4,
+  },
+  timeLogNote: {
+    fontSize: 12,
+    color: '#475569',
+    marginTop: 6,
+    fontStyle: 'italic',
+  },
   projectItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1199,38 +970,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#666',
     marginTop: 2,
-  },
-  ratingCard: {
-    backgroundColor: '#fff7ed',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#fed7aa',
-    padding: 12,
-    marginBottom: 10,
-  },
-  ratingCardMeta: {
-    fontSize: 11,
-    color: '#9a3412',
-    marginTop: 4,
-  },
-  ratingCardActions: {
-    marginTop: 10,
-    gap: 6,
-  },
-  ratingStarsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: 2,
-  },
-  ratingStarButton: {
-    paddingVertical: 2,
-    paddingHorizontal: 1,
-  },
-  ratingCardValue: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#9a3412',
   },
   pendingRequestBadge: {
     backgroundColor: '#fef3c7',
@@ -1350,13 +1089,8 @@ const styles = StyleSheet.create({
     color: '#333',
   },
   modalContent: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    maxHeight: '85%',
-    maxWidth: 500,
-    width: '100%',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    flex: 1,
+    padding: 16,
   },
   label: {
     fontSize: 14,
@@ -1448,170 +1182,5 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: 'bold',
-  },
-  verificationStatusBox: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 12,
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 12,
-  },
-  verificationStatusVerified: {
-    backgroundColor: '#dcfce7',
-    borderLeftWidth: 4,
-    borderLeftColor: '#166534',
-  },
-  verificationStatusRejected: {
-    backgroundColor: '#fee2e2',
-    borderLeftWidth: 4,
-    borderLeftColor: '#dc2626',
-  },
-  verificationStatusPending: {
-    backgroundColor: '#fef3c7',
-    borderLeftWidth: 4,
-    borderLeftColor: '#f59e0b',
-  },
-  verificationStatusContent: {
-    flex: 1,
-  },
-  verificationStatusTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#334155',
-  },
-  verificationStatusSubtitle: {
-    fontSize: 12,
-    color: '#64748b',
-    marginTop: 2,
-  },
-  verificationStatusNotes: {
-    fontSize: 12,
-    color: '#64748b',
-    marginTop: 6,
-    fontStyle: 'italic',
-  },
-  verificationActionsContainer: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  verificationButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 10,
-    borderRadius: 6,
-  },
-  verifyButton: {
-    backgroundColor: '#166534',
-  },
-  rejectButton: {
-    backgroundColor: '#dc2626',
-  },
-  verificationButtonText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  verificationVerified: {
-    backgroundColor: '#dcfce7',
-  },
-  verificationRejected: {
-    backgroundColor: '#fee2e2',
-  },
-  verificationPending: {
-    backgroundColor: '#fef3c7',
-  },
-  statusBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-    marginTop: 6,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-  },
-  modalLabel: {
-    fontSize: 13,
-    color: '#334155',
-    marginBottom: 8,
-    fontWeight: '500',
-  },
-  infoBox: {
-    backgroundColor: '#f1f5f9',
-    padding: 10,
-    borderRadius: 6,
-    marginBottom: 12,
-  },
-  textAreaInput: {
-    minHeight: 80,
-    textAlignVertical: 'top',
-  },
-  modalActions: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 16,
-  },
-  cancelButton: {
-    flex: 1,
-    backgroundColor: '#e2e8f0',
-    paddingVertical: 10,
-    borderRadius: 6,
-    alignItems: 'center',
-  },
-  cancelButtonText: {
-    color: '#334155',
-    fontWeight: '600',
-  },
-  approveButton: {
-    flex: 1,
-    flexDirection: 'row',
-    backgroundColor: '#166534',
-    paddingVertical: 10,
-    borderRadius: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-  },
-  approveButtonText: {
-    color: '#fff',
-    fontWeight: '600',
-  },
-  modalBody: {
-    paddingHorizontal: 4,
-    paddingVertical: 12,
-    maxHeight: 500,
-  },
-  verificationPromptBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    backgroundColor: '#fef3c7',
-    borderLeftWidth: 4,
-    borderLeftColor: '#f59e0b',
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    borderRadius: 6,
-    marginTop: 12,
-    marginBottom: 12,
-  },
-  verificationPromptText: {
-    flex: 1,
-  },
-  verificationPromptTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#92400e',
-  },
-  verificationPromptSubtitle: {
-    fontSize: 12,
-    color: '#b45309',
-    marginTop: 2,
   },
 });

@@ -1,8 +1,0 @@
-env: load .env
-env: export SUPABASE_DB_URL ALLOWED_ORIGINS DB_STRICT_POSTGRES DB_CONNECT_TIMEOUT
-Starting project at C:\Users\ACER\OneDrive\Desktop\volunteer system2\volunteer-system
-Starting Metro Bundler
-Waiting on http://localhost:8081
-Logs for your project will appear below.
-Web Bundled 1260ms node_modules\expo\AppEntry.js (913 modules)
- LOG  [web] Logs will appear in the browser console

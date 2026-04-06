@@ -18,7 +18,6 @@ export interface User {
   phone?: string;
   userType?: UserType;
   pillarsOfInterest?: NVCSector[];
-  profilePictureUrl?: string; // Profile picture URL
   createdAt: string;
 }
 
@@ -35,7 +34,6 @@ export interface Partner {
   contactEmail?: string;
   contactPhone?: string;
   address?: string;
-  profilePictureUrl?: string; // Profile picture URL
   status: 'Pending' | 'Approved' | 'Rejected'; // Admin validation
   verificationStatus?: 'Pending' | 'Verified';
   verificationNotes?: string;
@@ -110,7 +108,6 @@ export interface Volunteer {
   dateOfBirth?: string;
   civilStatus?: string;
   homeAddress?: string;
-  homeAddressCoordinates?: { latitude: number; longitude: number };
   occupation?: string;
   workplaceOrSchool?: string;
   collegeCourse?: string;
@@ -118,12 +115,6 @@ export interface Volunteer {
   hobbiesAndInterests?: string;
   specialSkills?: string;
   affiliations?: VolunteerAffiliation[];
-  certificateUrls?: string[]; // Uploaded certificate file URLs
-  profilePictureUrl?: string; // Profile picture URL
-  verificationStatus: 'Pending' | 'Verified' | 'Rejected'; // Admin approval status
-  verifiedBy?: string; // Admin user ID
-  verifiedAt?: string;
-  verificationNotes?: string;
   createdAt: string;
 }
 
@@ -135,7 +126,6 @@ export interface VolunteerTimeLog {
   timeIn: string;
   timeOut?: string;
   note?: string;
-  timeOutPhotoUrl?: string;
 }
 
 // Represents a direct message between two users.
@@ -181,9 +171,6 @@ export interface VolunteerProjectJoinRecord {
   joinedAt: string;
   source: 'VolunteerJoin' | 'AdminMatch';
   participationStatus: 'Active' | 'Completed';
-  projectRating?: number;
-  ratedAt?: string;
-  ratedBy?: string;
   completedAt?: string;
   completedBy?: string;
 }
@@ -195,8 +182,6 @@ export interface PartnerProjectApplication {
   partnerUserId: string;
   partnerName: string;
   partnerEmail: string;
-  cooperationDurationValue?: number;
-  cooperationDurationUnit?: 'Days' | 'Months';
   status: 'Pending' | 'Approved' | 'Rejected';
   requestedAt: string;
   reviewedAt?: string;

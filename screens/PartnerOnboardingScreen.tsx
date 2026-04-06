@@ -75,7 +75,7 @@ function createFormFromPartner(partner: Partner): PartnerFormState {
 export default function PartnerOnboardingScreen() {
   const { user, isAdmin } = useAuth();
   const [partners, setPartners] = useState<Partner[]>([]);
-  const [filter, setFilter] = useState<'All' | 'Pending' | 'Approved' | 'Rejected'>('Pending');
+  const [filter, setFilter] = useState<'All' | 'Pending' | 'Approved' | 'Rejected'>('All');
   const [partnerForm, setPartnerForm] = useState<PartnerFormState>(
     createEmptyPartnerForm(user?.email || '', user?.phone || '')
   );
@@ -251,7 +251,6 @@ export default function PartnerOnboardingScreen() {
 
     try {
       const partner = await reviewPartnerRegistration(partnerId, status, user.id);
-      setPartners(current => current.filter(entry => entry.id !== partnerId));
       Alert.alert(
         status === 'Approved' ? 'Approved' : 'Rejected',
         status === 'Approved'

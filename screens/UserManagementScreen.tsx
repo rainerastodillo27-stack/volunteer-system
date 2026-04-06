@@ -18,6 +18,7 @@ import { NVCSector, User, UserRole, UserType } from '../models/types';
 
 const roleOptions: UserRole[] = ['admin', 'partner', 'volunteer'];
 const NEW_ACCOUNT_WINDOW_MS = 1000 * 60 * 60 * 24 * 3;
+const USER_REFRESH_INTERVAL_MS = 5000;
 
 // Lets admins review, edit, and remove application user accounts.
 export default function UserManagementScreen() {
@@ -66,7 +67,11 @@ export default function UserManagementScreen() {
       }
 
       void loadUsers();
-      return undefined;
+      const refreshTimer = setInterval(() => {
+        void loadUsers();
+      }, USER_REFRESH_INTERVAL_MS);
+
+      return () => clearInterval(refreshTimer);
     }, [isAdmin, loadUsers])
   );
 

@@ -414,7 +414,17 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       }
     );
 
+    const fallbackRefresh = setInterval(() => {
+      if (viewRef.current === 'detail') {
+        void loadSelectedMessages();
+        return;
+      }
+      void loadConversations();
+      void loadProjectChats();
+    }, 10000);
+
     return () => {
+      clearInterval(fallbackRefresh);
       unsubscribe();
     };
   }, [user?.id]);

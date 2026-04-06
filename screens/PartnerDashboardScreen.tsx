@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Image,
-  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -13,7 +12,6 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
-import * as ImagePicker from 'expo-image-picker';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -23,10 +21,8 @@ import {
   requestPartnerProjectJoin,
   submitPartnerReport,
   subscribeToStorageChanges,
-  saveUser,
 } from '../models/storage';
 import {
-  User,
   Partner,
   PartnerProjectApplication,
   PartnerReport,
@@ -92,12 +88,7 @@ export default function PartnerDashboardScreen({ navigation }: any) {
   const [publishedImpactReports, setPublishedImpactReports] = useState<PublishedImpactReport[]>([]);
   const [partnerCheckInProjectId, setPartnerCheckInProjectId] = useState<string | null>(null);
   const [actionProjectId, setActionProjectId] = useState<string | null>(null);
-  const [joinDurationProjectId, setJoinDurationProjectId] = useState<string | null>(null);
-  const [joinDurationValueDraft, setJoinDurationValueDraft] = useState('1');
-  const [joinDurationUnitDraft, setJoinDurationUnitDraft] = useState<'Days' | 'Months'>('Months');
   const [reportForm, setReportForm] = useState<ReportFormState>(createEmptyReportForm());
-  const [profilePictureUri, setProfilePictureUri] = useState<string | null>(null);
-  const [saveLoading, setSaveLoading] = useState(false);
 
   const isOwnedByCurrentPartner = React.useCallback(
     (partner: Partner) => {
@@ -206,63 +197,6 @@ export default function PartnerDashboardScreen({ navigation }: any) {
     );
   };
 
-  // Function to pick profile picture
-  const pickProfilePicture = async () => {
-    try {
-      const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!permissionResult.granted) {
-        Alert.alert('Permission needed', 'Please grant access to your photos to upload a profile picture.');
-        return;
-      }
-
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.8,
-      });
-
-      if (!result.canceled && result.assets && result.assets.length > 0) {
-        setProfilePictureUri(result.assets[0].uri);
-      }
-    } catch (error) {
-      console.error('Error picking profile picture:', error);
-      Alert.alert('Error', 'Failed to pick profile picture. Please try again.');
-    }
-  };
-
-  // Function to save profile picture
-  const handleSaveProfilePicture = async () => {
-    if (!user || !profilePictureUri) {
-      return;
-    }
-
-    try {
-      // For partners, we need to update both the user and partner records
-      const updatedUser: User = {
-        ...user,
-        profilePictureUrl: profilePictureUri,
-      };
-
-      await saveUser(updatedUser);
-
-      // Update partner profile if it exists
-      if (approvedPartner) {
-        const updatedPartner: Partner = {
-          ...approvedPartner,
-          profilePictureUrl: profilePictureUri,
-        };
-
-        // Note: We would need a savePartner function, but for now we'll just update the user
-        // In a full implementation, you'd save the partner profile here
-      }
-
-      Alert.alert('Success', 'Profile picture saved successfully!');
-    } catch (error: any) {
-      Alert.alert('Error', error?.message || 'Failed to save profile picture.');
-    }
-  };
-
   const closeReportForm = () => {
     setReportForm(createEmptyReportForm());
   };
@@ -299,33 +233,9 @@ export default function PartnerDashboardScreen({ navigation }: any) {
       return;
     }
 
-    setJoinDurationProjectId(projectId);
-  };
-
-  const resetJoinDurationFlow = () => {
-    setJoinDurationProjectId(null);
-    setJoinDurationValueDraft('1');
-    setJoinDurationUnitDraft('Months');
-  };
-
-  const handleSaveJoinDuration = async () => {
-    if (!user || !joinDurationProjectId) {
-      return;
-    }
-
-    const normalizedDurationValue = Number.parseInt(joinDurationValueDraft.trim(), 10);
-    if (Number.isNaN(normalizedDurationValue) || normalizedDurationValue <= 0) {
-      Alert.alert('Invalid duration', 'Please enter how many days or months your organization will cooperate.');
-      return;
-    }
-
     try {
-      setActionProjectId(joinDurationProjectId);
-      await requestPartnerProjectJoin(joinDurationProjectId, user, {
-        value: normalizedDurationValue,
-        unit: joinDurationUnitDraft,
-      });
-      resetJoinDurationFlow();
+      setActionProjectId(projectId);
+      await requestPartnerProjectJoin(projectId, user);
       Alert.alert('Request Sent', 'Your RSVP has been sent to the admin for approval.');
       void loadDashboardData();
     } catch (error: any) {
@@ -454,36 +364,8 @@ export default function PartnerDashboardScreen({ navigation }: any) {
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.header}>
-        <View style={styles.avatarContainer}>
-          {profilePictureUri ? (
-            <Image source={{ uri: profilePictureUri }} style={styles.avatarImage} />
-          ) : (
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>{user?.name?.charAt(0) || 'P'}</Text>
-            </View>
-          )}
-          <TouchableOpacity style={styles.changePhotoButton} onPress={pickProfilePicture}>
-            <MaterialIcons name="camera-alt" size={16} color="#fff" />
-          </TouchableOpacity>
-
-          {profilePictureUri && (
-            <View style={styles.avatarActionRow}>
-              <TouchableOpacity
-                style={[styles.saveButton, saveLoading && styles.saveButtonDisabled]}
-                onPress={handleSaveProfilePicture}
-                disabled={saveLoading}
-              >
-                <Text style={styles.saveButtonText}>{saveLoading ? 'Saving...' : 'Save'}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.cancelButton}
-                onPress={() => setProfilePictureUri(null)}
-                disabled={saveLoading}
-              >
-                <Text style={styles.cancelButtonText}>Cancel</Text>
-              </TouchableOpacity>
-            </View>
-          )}
+        <View style={styles.avatar}>
+          <Text style={styles.avatarText}>{user?.name?.charAt(0) || 'P'}</Text>
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.greeting}>Welcome, {user?.name}</Text>
@@ -493,7 +375,6 @@ export default function PartnerDashboardScreen({ navigation }: any) {
           <MaterialIcons name="logout" size={22} color="#475569" />
         </TouchableOpacity>
       </View>
-
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Registration Status</Text>
@@ -571,12 +452,6 @@ export default function PartnerDashboardScreen({ navigation }: any) {
                   {actionProjectId === project.id ? 'Sending...' : buttonLabel}
                 </Text>
               </TouchableOpacity>
-
-              {application?.cooperationDurationValue ? (
-                <Text style={styles.joinDurationBadgeText}>
-                  Cooperation period: {application.cooperationDurationValue} {application.cooperationDurationUnit?.toLowerCase()}
-                </Text>
-              ) : null}
 
               {attending ? (
                 <>
@@ -728,73 +603,6 @@ export default function PartnerDashboardScreen({ navigation }: any) {
             ))
         )}
       </View>
-
-      <Modal
-        visible={Boolean(joinDurationProjectId)}
-        transparent
-        animationType="fade"
-        onRequestClose={resetJoinDurationFlow}
-      >
-        <View style={styles.joinDurationOverlay}>
-          <View style={styles.joinDurationCard}>
-            <Text style={styles.joinDurationTitle}>Set Cooperation Duration</Text>
-            <Text style={styles.joinDurationText}>
-              Choose how long your organization plans to cooperate on this project.
-            </Text>
-            <TextInput
-              style={styles.joinDurationInput}
-              value={joinDurationValueDraft}
-              onChangeText={setJoinDurationValueDraft}
-              keyboardType="number-pad"
-              placeholder="Enter duration"
-              placeholderTextColor="#94a3b8"
-              editable={!Boolean(actionProjectId)}
-            />
-            <View style={styles.joinDurationUnitRow}>
-              {(['Days', 'Months'] as const).map(unit => (
-                <TouchableOpacity
-                  key={unit}
-                  style={[
-                    styles.joinDurationUnitButton,
-                    joinDurationUnitDraft === unit && styles.joinDurationUnitButtonActive,
-                  ]}
-                  onPress={() => setJoinDurationUnitDraft(unit)}
-                  disabled={Boolean(actionProjectId)}
-                >
-                  <Text
-                    style={[
-                      styles.joinDurationUnitButtonText,
-                      joinDurationUnitDraft === unit && styles.joinDurationUnitButtonTextActive,
-                    ]}
-                  >
-                    {unit}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <View style={styles.joinDurationActions}>
-              <TouchableOpacity
-                style={styles.joinDurationCancelButton}
-                onPress={resetJoinDurationFlow}
-                disabled={Boolean(actionProjectId)}
-              >
-                <Text style={styles.joinDurationCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.joinDurationSaveButton}
-                onPress={() => {
-                  void handleSaveJoinDuration();
-                }}
-                disabled={Boolean(actionProjectId)}
-              >
-                <Text style={styles.joinDurationSaveText}>
-                  {actionProjectId ? 'Saving...' : 'Save'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </ScrollView>
   );
 }
@@ -823,29 +631,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#166534',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  avatarContainer: {
-    position: 'relative',
-  },
-  avatarImage: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    borderWidth: 2,
-    borderColor: '#166534',
-  },
-  changePhotoButton: {
-    position: 'absolute',
-    bottom: -4,
-    right: -4,
-    backgroundColor: '#166534',
-    borderRadius: 12,
-    width: 24,
-    height: 24,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#fff',
   },
   avatarText: {
     color: '#fff',
@@ -1064,151 +849,6 @@ const styles = StyleSheet.create({
   photoRemoveText: {
     fontSize: 12,
     color: '#dc2626',
-    fontWeight: '700',
-  },
-  saveButtonContainer: {
-    marginTop: 12,
-    flexDirection: 'row',
-    gap: 12,
-    justifyContent: 'center',
-  },
-  saveButton: {
-    backgroundColor: '#166534',
-    borderRadius: 10,
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    alignItems: 'center',
-    minWidth: 120,
-  },
-  saveButtonDisabled: {
-    backgroundColor: '#9ca3af',
-  },
-  saveButtonText: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 14,
-  },
-  avatarActionRow: {
-    position: 'absolute',
-    bottom: -40,
-    left: 0,
-    right: 0,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 8,
-    paddingHorizontal: 8,
-  },
-  cancelButton: {
-    backgroundColor: '#dc2626',
-    borderRadius: 10,
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    alignItems: 'center',
-    minWidth: 120,
-  },
-  cancelButtonText: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 14,
-  },
-  joinDurationBadgeText: {
-    marginTop: 10,
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#166534',
-  },
-  joinDurationOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.55)',
-    justifyContent: 'center',
-    paddingHorizontal: 20,
-  },
-  joinDurationCard: {
-    backgroundColor: '#fff',
-    borderRadius: 18,
-    padding: 18,
-    borderWidth: 1,
-    borderColor: '#dbeafe',
-  },
-  joinDurationTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#0f172a',
-    textAlign: 'center',
-  },
-  joinDurationText: {
-    marginTop: 12,
-    fontSize: 13,
-    lineHeight: 19,
-    color: '#475569',
-    textAlign: 'center',
-  },
-  joinDurationInput: {
-    marginTop: 16,
-    borderWidth: 1,
-    borderColor: '#dbe2ea',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 15,
-    color: '#0f172a',
-    backgroundColor: '#f8fafc',
-  },
-  joinDurationUnitRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 14,
-  },
-  joinDurationUnitButton: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 12,
-    paddingVertical: 11,
-    alignItems: 'center',
-    backgroundColor: '#fff',
-  },
-  joinDurationUnitButtonActive: {
-    backgroundColor: '#dcfce7',
-    borderColor: '#4CAF50',
-  },
-  joinDurationUnitButtonText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#475569',
-  },
-  joinDurationUnitButtonTextActive: {
-    color: '#166534',
-  },
-  joinDurationActions: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 18,
-  },
-  joinDurationCancelButton: {
-    flex: 1,
-    backgroundColor: '#fee2e2',
-    borderRadius: 12,
-    paddingVertical: 12,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#fecaca',
-  },
-  joinDurationSaveButton: {
-    flex: 1,
-    backgroundColor: '#166534',
-    borderRadius: 12,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  joinDurationCancelText: {
-    color: '#b91c1c',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  joinDurationSaveText: {
-    color: '#fff',
-    fontSize: 14,
     fontWeight: '700',
   },
 });

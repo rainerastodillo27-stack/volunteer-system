@@ -1,12 +1,13 @@
 import React, { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, FlatList, StyleSheet, Text, TouchableOpacity, Alert, Pressable, AppState, Modal, Image, TextInput } from 'react-native';
+import { View, FlatList, StyleSheet, Text, TouchableOpacity, Alert, Pressable, Image, Platform, ImageSourcePropType, Modal } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
 import { format } from 'date-fns';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import {
+  getAllPublishedImpactReports,
   getProjectsScreenSnapshot,
+  getVolunteerProjectMatches,
   requestVolunteerProjectJoin,
   requestPartnerProjectJoin,
   startVolunteerTimeLog,
@@ -21,6 +22,31 @@ const CATEGORY_KEYWORDS: Record<Project['category'], string[]> = {
   Livelihood: ['livelihood', 'training', 'skills', 'sewing', 'enterprise', 'food', 'workshop'],
   Nutrition: ['nutrition', 'feeding', 'meal', 'health', 'wellness', 'food'],
   Other: ['community', 'cleanup', 'outreach', 'event', 'logistics', 'coordination'],
+};
+
+const PROGRAM_IMAGE_BY_CATEGORY: Partial<Record<Project['category'], ImageSourcePropType>> = {
+  Nutrition: require('../assets/programs/nutrition.jpg'),
+  Education: require('../assets/programs/education.jpg'),
+  Livelihood: require('../assets/programs/livelihood.jpg'),
+};
+
+const PROGRAM_PHOTO_BY_TITLE: Record<string, ImageSourcePropType> = {
+  'Farm to Fork Program': require('../assets/programs/farm-to-fork.jpg'),
+  'Mingo for Nutritional Support': require('../assets/programs/nutrition.jpg'),
+  'Mingo for Emergency Relief': require('../assets/programs/mingo-relief.jpg'),
+  LoveBags: require('../assets/programs/lovebags.jpg'),
+  'School Support': require('../assets/programs/school-support.jpg'),
+  'Artisans of Hope': require('../assets/programs/artisans-of-hope.jpg'),
+  'Project Joseph': require('../assets/programs/project-joseph.jpg'),
+  'Growing Hope': require('../assets/programs/growing-hope.jpg'),
+  'Peter Project': require('../assets/programs/peter-project.jpg'),
+};
+
+const FALLBACK_ICON_BY_CATEGORY: Record<Project['category'], keyof typeof MaterialIcons.glyphMap> = {
+  Nutrition: 'restaurant',
+  Education: 'school',
+  Livelihood: 'volunteer-activism',
+  Other: 'groups',
 };
 
 type Recommendation = {
@@ -75,6 +101,157 @@ function getProjectSuggestion(project: Project, volunteer: Volunteer | null): Re
   };
 }
 
+const PROGRAM_PHOTO_MATCHERS: Array<{
+  matches: (project: Project, normalizedTitle: string) => boolean;
+  source: ImageSourcePropType;
+}> = [
+  {
+    matches: (_project, normalizedTitle) =>
+      normalizedTitle.includes('farm to fork'),
+    source: require('../assets/programs/farm-to-fork.jpg'),
+  },
+  {
+    matches: (_project, normalizedTitle) =>
+      normalizedTitle.includes('emergency') || normalizedTitle.includes('relief'),
+    source: require('../assets/programs/mingo-relief.jpg'),
+  },
+  {
+    matches: (_project, normalizedTitle) =>
+      normalizedTitle.includes('lovebag') || normalizedTitle.includes('school bag'),
+    source: require('../assets/programs/lovebags.jpg'),
+  },
+  {
+    matches: (_project, normalizedTitle) =>
+      normalizedTitle.includes('school'),
+    source: require('../assets/programs/school-support.jpg'),
+  },
+  {
+    matches: (_project, normalizedTitle) =>
+      normalizedTitle.includes('artisans'),
+    source: require('../assets/programs/artisans-of-hope.jpg'),
+  },
+  {
+    matches: (_project, normalizedTitle) =>
+      normalizedTitle.includes('joseph') || normalizedTitle.includes('sewing'),
+    source: require('../assets/programs/project-joseph.jpg'),
+  },
+  {
+    matches: (_project, normalizedTitle) =>
+      normalizedTitle.includes('growing hope') || normalizedTitle.includes('garden'),
+    source: require('../assets/programs/growing-hope.jpg'),
+  },
+  {
+    matches: (_project, normalizedTitle) =>
+      normalizedTitle.includes('peter'),
+    source: require('../assets/programs/peter-project.jpg'),
+  },
+  {
+    matches: (project, normalizedTitle) =>
+      normalizedTitle.includes('mingo') || normalizedTitle.includes('masiglang') || project.category === 'Nutrition',
+    source: require('../assets/programs/nutrition.jpg'),
+  },
+];
+
+function getProgramPhotoSource(project: Project): ImageSourcePropType | undefined {
+  if (PROGRAM_PHOTO_BY_TITLE[project.title]) {
+    return PROGRAM_PHOTO_BY_TITLE[project.title];
+  }
+
+  const normalizedTitle = project.title.trim().toLowerCase();
+  return PROGRAM_PHOTO_MATCHERS.find((entry) => entry.matches(project, normalizedTitle))?.source;
+}
+
+// Returns image candidates for a project card, prioritizing bundled local program photos.
+function getProjectImageSources(project: Project): ImageSourcePropType[] {
+  const imageSources: ImageSourcePropType[] = [];
+  const programPhotoSource = getProgramPhotoSource(project);
+
+  if (programPhotoSource) {
+    imageSources.push(programPhotoSource);
+  }
+
+  if (project.programModule && project.programModule in PROGRAM_IMAGE_BY_CATEGORY) {
+    imageSources.push(PROGRAM_IMAGE_BY_CATEGORY[project.programModule as Project['category']] as ImageSourcePropType);
+  }
+
+  const categoryImageSource = PROGRAM_IMAGE_BY_CATEGORY[project.category];
+  if (categoryImageSource && !imageSources.includes(categoryImageSource)) {
+    imageSources.push(categoryImageSource);
+  }
+
+  return imageSources;
+}
+
+function getPrimaryProjectImageSource(project: Project): ImageSourcePropType | undefined {
+  return getProjectImageSources(project)[0];
+}
+
+function ProjectCardImage({
+  project,
+  onPress,
+}: {
+  project: Project;
+  onPress: () => void;
+}) {
+  const imageSources = useMemo(() => getProjectImageSources(project), [project]);
+  const [imageIndex, setImageIndex] = useState(0);
+
+  useEffect(() => {
+    setImageIndex(0);
+  }, [imageSources]);
+
+  const activeImageSource = imageSources[imageIndex];
+  if (!activeImageSource) {
+    return (
+      <Pressable
+        onPress={onPress}
+        style={({ pressed }) => [
+          styles.programImageFallback,
+          styles[`programImageFallback${project.category}`],
+          pressed && styles.programImagePressed,
+        ]}
+      >
+        <MaterialIcons
+          name={FALLBACK_ICON_BY_CATEGORY[project.category]}
+          size={34}
+          color="#166534"
+        />
+        <Text style={styles.programImageFallbackTitle}>{project.title}</Text>
+        <Text style={styles.programImageFallbackSubtitle}>Program preview</Text>
+        <Text style={styles.programImageHint}>Click image to open</Text>
+      </Pressable>
+    );
+  }
+
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [styles.programImageButton, pressed && styles.programImagePressed]}
+    >
+      <Image
+        source={activeImageSource}
+        style={styles.programImageBackdrop}
+        resizeMode="cover"
+      />
+      <Image
+        source={activeImageSource}
+        style={styles.programImage}
+        resizeMode="contain"
+        onError={() => {
+          setImageIndex((currentIndex) => currentIndex + 1);
+        }}
+      />
+      <View style={styles.programImageTitleBadge}>
+        <Text style={styles.programImageTitle}>{project.title}</Text>
+        <Text style={styles.programImageCategory}>{project.category}</Text>
+      </View>
+      <View style={styles.programImageOverlay}>
+        <Text style={styles.programImageOverlayText}>Click image to open</Text>
+      </View>
+    </Pressable>
+  );
+}
+
 // Lists projects and actions for volunteers, partners, and admins.
 export default function ProjectsScreen({ navigation, route }: any) {
   const { user } = useAuth();
@@ -88,22 +265,10 @@ export default function ProjectsScreen({ navigation, route }: any) {
   const [impactReports, setImpactReports] = useState<PublishedImpactReport[]>([]);
   const [loadingProjectId, setLoadingProjectId] = useState<string | null>(null);
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
-  const [pendingTimeOutProjectId, setPendingTimeOutProjectId] = useState<string | null>(null);
-  const [pendingTimeOutPhotoUri, setPendingTimeOutPhotoUri] = useState<string | null>(null);
-  const [partnerJoinProjectId, setPartnerJoinProjectId] = useState<string | null>(null);
-  const [partnerDurationValueDraft, setPartnerDurationValueDraft] = useState('1');
-  const [partnerDurationUnitDraft, setPartnerDurationUnitDraft] = useState<'Days' | 'Months'>('Months');
-
-  const resetTimeOutPhotoFlow = useCallback(() => {
-    setPendingTimeOutProjectId(null);
-    setPendingTimeOutPhotoUri(null);
-  }, []);
-
-  const resetPartnerJoinFlow = useCallback(() => {
-    setPartnerJoinProjectId(null);
-    setPartnerDurationValueDraft('1');
-    setPartnerDurationUnitDraft('Months');
-  }, []);
+  const [imagePreview, setImagePreview] = useState<{
+    title: string;
+    source: ImageSourcePropType;
+  } | null>(null);
 
   // Applies the latest project snapshot to local screen state.
   const applySnapshot = useCallback((snapshot: {
@@ -112,8 +277,6 @@ export default function ProjectsScreen({ navigation, route }: any) {
     timeLogs: VolunteerTimeLog[];
     partnerApplications: PartnerProjectApplication[];
     volunteerJoinRecords: VolunteerProjectJoinRecord[];
-    volunteerMatches: VolunteerProjectMatch[];
-    publishedImpactReports: PublishedImpactReport[];
   }) => {
     startTransition(() => {
       setProjects(snapshot.projects);
@@ -121,16 +284,24 @@ export default function ProjectsScreen({ navigation, route }: any) {
       setTimeLogs(snapshot.timeLogs);
       setPartnerApplications(snapshot.partnerApplications);
       setVolunteerJoinRecords(snapshot.volunteerJoinRecords);
-      setVolunteerMatches(snapshot.volunteerMatches);
-      setImpactReports(snapshot.publishedImpactReports.filter(report => Boolean(report.publishedAt)));
     });
   }, []);
 
   // Loads projects plus role-specific volunteer or partner data for this screen.
   const loadProjectsData = useCallback(async () => {
     try {
-      const snapshot = await getProjectsScreenSnapshot(user);
+      const [snapshot, publishedReports] = await Promise.all([
+        getProjectsScreenSnapshot(user),
+        getAllPublishedImpactReports(),
+      ]);
       applySnapshot(snapshot);
+      setImpactReports(publishedReports.filter(report => Boolean(report.publishedAt)));
+      if (snapshot.volunteerProfile?.id) {
+        const matches = await getVolunteerProjectMatches(snapshot.volunteerProfile.id);
+        setVolunteerMatches(matches);
+      } else {
+        setVolunteerMatches([]);
+      }
     } catch (error: any) {
       startTransition(() => {
         setProjects([]);
@@ -154,18 +325,6 @@ export default function ProjectsScreen({ navigation, route }: any) {
       void loadProjectsData();
     }, [loadProjectsData])
   );
-
-  useEffect(() => {
-    const subscription = AppState.addEventListener('change', (nextState) => {
-      if (nextState === 'active') {
-        void loadProjectsData();
-      }
-    });
-
-    return () => {
-      subscription.remove();
-    };
-  }, [loadProjectsData]);
 
   useEffect(() => {
     return subscribeToStorageChanges(
@@ -202,12 +361,21 @@ export default function ProjectsScreen({ navigation, route }: any) {
   const handleJoinProject = async (projectId: string) => {
     if (!user?.id) return;
     try {
+      setLoadingProjectId(projectId);
       if (user.role === 'partner') {
-        setPartnerJoinProjectId(projectId);
+        const application = await requestPartnerProjectJoin(projectId, user);
+        startTransition(() => {
+          setPartnerApplications(prev => {
+            const withoutCurrent = prev.filter(existing => existing.id !== application.id);
+            return [application, ...withoutCurrent].sort(
+              (a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime()
+            );
+          });
+        });
+        Alert.alert('Submitted', 'Admin has been notified and your request is waiting for approval.');
         return;
       }
 
-      setLoadingProjectId(projectId);
       const requestedMatch = await requestVolunteerProjectJoin(projectId, user.id);
       startTransition(() => {
         setVolunteerMatches(prev => {
@@ -223,40 +391,6 @@ export default function ProjectsScreen({ navigation, route }: any) {
       );
     } catch (error: any) {
       Alert.alert('Error', error?.message || 'Failed to request this program. Please try again.');
-    } finally {
-      setLoadingProjectId(null);
-    }
-  };
-
-  const handleSavePartnerJoinDuration = async () => {
-    if (!user?.id || user.role !== 'partner' || !partnerJoinProjectId) {
-      return;
-    }
-
-    const normalizedDurationValue = Number.parseInt(partnerDurationValueDraft.trim(), 10);
-    if (Number.isNaN(normalizedDurationValue) || normalizedDurationValue <= 0) {
-      Alert.alert('Invalid duration', 'Please enter how many days or months your organization will cooperate.');
-      return;
-    }
-
-    try {
-      setLoadingProjectId(partnerJoinProjectId);
-      const application = await requestPartnerProjectJoin(partnerJoinProjectId, user, {
-        value: normalizedDurationValue,
-        unit: partnerDurationUnitDraft,
-      });
-      startTransition(() => {
-        setPartnerApplications(prev => {
-          const withoutCurrent = prev.filter(existing => existing.id !== application.id);
-          return [application, ...withoutCurrent].sort(
-            (a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime()
-          );
-        });
-      });
-      resetPartnerJoinFlow();
-      Alert.alert('Submitted', 'Admin has been notified and your request is waiting for approval.');
-    } catch (error: any) {
-      Alert.alert('Error', error?.message || 'Failed to submit partner join request.');
     } finally {
       setLoadingProjectId(null);
     }
@@ -283,64 +417,12 @@ export default function ProjectsScreen({ navigation, route }: any) {
     }
   };
 
-  const pickTimeOutPhoto = useCallback(async (source: 'camera' | 'library', projectId: string) => {
+  // Ends the active volunteer time log for the selected project.
+  const handleTimeOut = async (projectId: string) => {
+    if (!volunteerProfile) return;
     try {
-      if (source === 'camera') {
-        const cameraPermission = await ImagePicker.requestCameraPermissionsAsync();
-        if (!cameraPermission.granted) {
-          Alert.alert('Permission needed', 'Please grant camera access before timing out.');
-          return;
-        }
-      } else {
-        const libraryPermission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (!libraryPermission.granted) {
-          Alert.alert('Permission needed', 'Please grant photo library access before timing out.');
-          return;
-        }
-      }
-
-      const imageResult =
-        source === 'camera'
-          ? await ImagePicker.launchCameraAsync({
-              mediaTypes: ImagePicker.MediaTypeOptions.Images,
-              allowsEditing: true,
-              aspect: [4, 5],
-              quality: 0.8,
-            })
-          : await ImagePicker.launchImageLibraryAsync({
-              mediaTypes: ImagePicker.MediaTypeOptions.Images,
-              allowsEditing: true,
-              aspect: [4, 5],
-              quality: 0.8,
-            });
-
-      if (imageResult.canceled || !imageResult.assets?.length) {
-        Alert.alert(
-          'Time-out photo required',
-          source === 'camera'
-            ? 'Please take a photo before timing out.'
-            : 'Please choose a photo before timing out.'
-        );
-        return;
-      }
-
-      setPendingTimeOutProjectId(projectId);
-      setPendingTimeOutPhotoUri(imageResult.assets[0].uri);
-    } catch (error: any) {
-      Alert.alert('Unable to attach photo', error?.message || 'Please try again.');
-    }
-  }, []);
-
-  // Ends the active volunteer time log for the selected project after the photo is confirmed.
-  const handleConfirmTimeOut = async () => {
-    if (!volunteerProfile || !pendingTimeOutProjectId || !pendingTimeOutPhotoUri) return;
-    try {
-      setLoadingProjectId(pendingTimeOutProjectId);
-      const result = await endVolunteerTimeLog(
-        volunteerProfile.id,
-        pendingTimeOutProjectId,
-        pendingTimeOutPhotoUri
-      );
+      setLoadingProjectId(projectId);
+      const result = await endVolunteerTimeLog(volunteerProfile.id, projectId);
       if (!result.log) {
         Alert.alert('No active log', 'Please tap Time In before timing out.');
         return;
@@ -355,36 +437,12 @@ export default function ProjectsScreen({ navigation, route }: any) {
           setVolunteerProfile(result.volunteerProfile);
         }
       });
-      resetTimeOutPhotoFlow();
-      Alert.alert('Time Out recorded', 'Hours added to your profile and your photo was attached.');
+      Alert.alert('Time Out recorded', 'Hours added to your profile.');
     } catch (error: any) {
       Alert.alert('Unable to time out', error?.message || 'Please try again.');
     } finally {
       setLoadingProjectId(null);
     }
-  };
-
-  // Starts the time-out photo flow so volunteers can take or upload before saving.
-  const handleTimeOut = async (projectId: string) => {
-    Alert.alert(
-      'Attach Time-out Photo',
-      'Choose how you want to add your time-out photo.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Upload Photo',
-          onPress: () => {
-            void pickTimeOutPhoto('library', projectId);
-          },
-        },
-        {
-          text: 'Take Photo',
-          onPress: () => {
-            void pickTimeOutPhoto('camera', projectId);
-          },
-        },
-      ]
-    );
   };
 
   // Opens the group chat tied to the selected project or event.
@@ -413,15 +471,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
   );
 
   const volunteerMatchByProjectId = useMemo(
-    () => {
-      const matchesByProjectId = new Map<string, VolunteerProjectMatch>();
-      volunteerMatches.forEach(match => {
-        if (!matchesByProjectId.has(match.projectId)) {
-          matchesByProjectId.set(match.projectId, match);
-        }
-      });
-      return matchesByProjectId;
-    },
+    () => new Map(volunteerMatches.map(match => [match.projectId, match])),
     [volunteerMatches]
   );
 
@@ -443,50 +493,72 @@ export default function ProjectsScreen({ navigation, route }: any) {
     return format(parsed, 'MMM d, HH:mm');
   };
 
+  const handleOpenProject = useCallback((projectId: string) => {
+    if (user?.role === 'admin') {
+      navigation.navigate('Lifecycle', { projectId });
+      return;
+    }
+
+    setExpandedProjectId((current) => (current === projectId ? null : projectId));
+  }, [navigation, user?.role]);
+
+  const handleOpenImagePreview = useCallback((project: Project) => {
+    const source = getPrimaryProjectImageSource(project);
+    if (!source) {
+      return;
+    }
+
+    setImagePreview({
+      title: project.title,
+      source,
+    });
+  }, []);
+
   // Renders a single project card with role-specific actions.
   const renderProjectItem = useCallback(({ item }: { item: Project }) => {
           const suggestion = getProjectSuggestion(item, volunteerProfile);
+          const joined = isJoined(item);
           const activeLog = activeLogByProjectId.get(item.id);
           const latestLog = latestLogByProjectId.get(item.id);
           const joinRecord = volunteerJoinRecordByProjectId.get(item.id);
           const volunteerMatch = volunteerMatchByProjectId.get(item.id);
-          const isApprovedVolunteerState =
-            isJoined(item) ||
-            Boolean(joinRecord) ||
-            volunteerMatch?.status === 'Matched';
           const completedParticipation = joinRecord?.participationStatus === 'Completed';
           const isExpanded = expandedProjectId === item.id;
           const partnerApplication = partnerApplicationByProjectId.get(item.id);
-          const isApprovedPartnerState =
-            isJoined(item) || partnerApplication?.status === 'Approved';
           const projectImpactReports = impactReports.filter(report => report.projectId === item.id);
           const canViewProjectFiles =
             user?.role === 'admin' ||
-            (user?.role === 'volunteer' && isApprovedVolunteerState) ||
+            (user?.role === 'volunteer' && (joined || Boolean(joinRecord))) ||
             (user?.role === 'partner' &&
-              isApprovedPartnerState);
+              (joined || partnerApplication?.status === 'Approved'));
           const isPendingApproval = volunteerMatch?.status === 'Requested';
           const wasRejected = volunteerMatch?.status === 'Rejected';
-          const isAwaitingVolunteerApproval = isPendingApproval || wasRejected;
-          const isAwaitingPartnerApproval =
-            partnerApplication?.status === 'Pending' || partnerApplication?.status === 'Rejected';
           const joinButtonLabel = completedParticipation
             ? 'Completed'
-            : isApprovedVolunteerState
+            : joined
             ? 'Approved'
-            : isAwaitingVolunteerApproval
+            : isPendingApproval
             ? 'Pending Approval'
+            : wasRejected
+            ? 'Request Again'
             : 'Request to Join';
           const joinButtonIcon = completedParticipation
             ? 'task-alt'
-            : isApprovedVolunteerState
+            : joined
             ? 'check-circle'
-            : isAwaitingVolunteerApproval
+            : isPendingApproval
             ? 'hourglass-empty'
+            : wasRejected
+            ? 'refresh'
             : 'add-circle-outline';
 
           return (
             <View style={styles.card}>
+              <ProjectCardImage
+                project={item}
+                onPress={() => handleOpenImagePreview(item)}
+              />
+
               <View style={styles.cardHeader}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.title}>{item.title}</Text>
@@ -558,15 +630,10 @@ export default function ProjectsScreen({ navigation, route }: any) {
                         styles.joinButton,
                         completedParticipation
                           ? styles.joinButtonCompleted
-                          : (isApprovedVolunteerState || isAwaitingVolunteerApproval) && styles.joinButtonJoined,
+                          : (joined || isPendingApproval) && styles.joinButtonJoined,
                         loadingProjectId === item.id && styles.joinButtonLoading,
                       ]}
-                      disabled={
-                        isApprovedVolunteerState ||
-                        completedParticipation ||
-                        isAwaitingVolunteerApproval ||
-                        loadingProjectId === item.id
-                      }
+                      disabled={joined || completedParticipation || isPendingApproval || loadingProjectId === item.id}
                       onPress={() => handleJoinProject(item.id)}
                     >
                       <MaterialIcons
@@ -575,7 +642,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                         color={
                           completedParticipation
                             ? '#166534'
-                            : isApprovedVolunteerState || isAwaitingVolunteerApproval
+                            : joined || isPendingApproval
                             ? '#155724'
                             : '#fff'
                         }
@@ -585,14 +652,14 @@ export default function ProjectsScreen({ navigation, route }: any) {
                           styles.joinButtonText,
                           completedParticipation
                             ? styles.joinButtonTextCompleted
-                            : (isApprovedVolunteerState || isAwaitingVolunteerApproval) && styles.joinButtonTextJoined,
+                            : (joined || isPendingApproval) && styles.joinButtonTextJoined,
                         ]}
                       >
                         {joinButtonLabel}
                       </Text>
                     </TouchableOpacity>
 
-                    {isApprovedVolunteerState && !completedParticipation && (
+                    {joined && !completedParticipation && (
                       <TouchableOpacity
                         style={[
                           styles.timeButton,
@@ -615,16 +682,18 @@ export default function ProjectsScreen({ navigation, route }: any) {
                     )}
                   </View>
 
-                  {isAwaitingVolunteerApproval && !isApprovedVolunteerState && (
+                  {(isPendingApproval || wasRejected) && !joined && (
                     <View style={styles.logMeta}>
                       <Text style={styles.logMetaLabel}>Request status</Text>
                       <Text style={styles.logMetaValue}>
-                        Waiting for admin approval
+                        {isPendingApproval
+                          ? 'Waiting for admin approval'
+                          : 'Rejected. You may submit a new request.'}
                       </Text>
                     </View>
                   )}
 
-                  {isApprovedVolunteerState && (
+                  {joined && (
                     <>
                       <TouchableOpacity
                         style={styles.groupChatButton}
@@ -641,8 +710,10 @@ export default function ProjectsScreen({ navigation, route }: any) {
                             ? joinRecord?.completedAt
                               ? `Completed ${formatTimestamp(joinRecord.completedAt)}`
                               : 'Completed and saved to profile'
-                            : isAwaitingVolunteerApproval
+                            : isPendingApproval
                             ? 'Waiting for admin approval'
+                            : wasRejected
+                            ? 'Request rejected by admin'
                             : 'Joined'}
                         </Text>
                       </View>
@@ -693,42 +764,41 @@ export default function ProjectsScreen({ navigation, route }: any) {
                   <TouchableOpacity
                     style={[
                       styles.joinButton,
-                      (isApprovedPartnerState || isAwaitingPartnerApproval) && styles.joinButtonJoined,
+                      (joined || partnerApplication) && styles.joinButtonJoined,
                       loadingProjectId === item.id && styles.joinButtonLoading,
                     ]}
-                    disabled={isApprovedPartnerState || isAwaitingPartnerApproval || loadingProjectId === item.id}
+                    disabled={joined || !!partnerApplication || loadingProjectId === item.id}
                     onPress={() => handleJoinProject(item.id)}
                   >
                     <MaterialIcons
-                      name={isApprovedPartnerState ? 'check-circle' : isAwaitingPartnerApproval ? 'hourglass-empty' : 'group-add'}
+                      name={joined ? 'check-circle' : partnerApplication ? 'hourglass-empty' : 'group-add'}
                       size={18}
-                      color={isApprovedPartnerState || isAwaitingPartnerApproval ? '#155724' : '#fff'}
+                      color={joined || partnerApplication ? '#155724' : '#fff'}
                     />
                     <Text
                       style={[
                         styles.joinButtonText,
-                        (isApprovedPartnerState || isAwaitingPartnerApproval) && styles.joinButtonTextJoined,
+                        (joined || partnerApplication) && styles.joinButtonTextJoined,
                       ]}
                     >
-                      {isApprovedPartnerState
+                      {joined
                         ? 'Approved as Partner'
-                        : isAwaitingPartnerApproval
-                        ? 'Pending Approval'
+                        : partnerApplication?.status === 'Pending'
+                        ? 'Waiting for Approval'
+                        : partnerApplication?.status === 'Rejected'
+                        ? 'Request Rejected'
                         : 'Join as Partner'}
                     </Text>
                   </TouchableOpacity>
-                  {(isApprovedPartnerState || isAwaitingPartnerApproval) && (
+                  {(joined || partnerApplication) && (
                     <>
                       <Text style={styles.partnerNote}>
-                        {isApprovedPartnerState
+                        {joined
                           ? 'Your org is approved as a collaborator for this program.'
-                          : 'Your request is pending admin approval.'}
+                          : partnerApplication?.status === 'Pending'
+                          ? 'Your request is pending admin approval.'
+                          : 'This request was rejected by the admin.'}
                       </Text>
-                      {partnerApplication?.cooperationDurationValue ? (
-                        <Text style={styles.partnerDurationNote}>
-                          Cooperation period: {partnerApplication.cooperationDurationValue} {partnerApplication.cooperationDurationUnit?.toLowerCase()}
-                        </Text>
-                      ) : null}
 
                       {canViewProjectFiles && (
                         <View style={styles.filesSection}>
@@ -762,7 +832,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                   </Text>
                   <TouchableOpacity
                     style={styles.openProgramButton}
-                    onPress={() => navigation.navigate('Lifecycle', { projectId: item.id })}
+                    onPress={() => handleOpenProject(item.id)}
                   >
                     <MaterialIcons name="folder-open" size={18} color="#fff" />
                     <Text style={styles.openProgramButtonText}>Open Program</Text>
@@ -794,9 +864,10 @@ export default function ProjectsScreen({ navigation, route }: any) {
           loadingProjectId,
           partnerApplicationByProjectId,
           impactReports,
+          handleOpenImagePreview,
+          handleOpenProject,
           user,
           volunteerJoinRecordByProjectId,
-          volunteerMatchByProjectId,
           volunteerProfile,
         ]);
 
@@ -831,115 +902,31 @@ export default function ProjectsScreen({ navigation, route }: any) {
       />
 
       <Modal
-        visible={Boolean(pendingTimeOutProjectId && pendingTimeOutPhotoUri)}
+        visible={Boolean(imagePreview)}
         transparent
         animationType="fade"
-        onRequestClose={resetTimeOutPhotoFlow}
+        onRequestClose={() => setImagePreview(null)}
       >
-        <View style={styles.photoModalOverlay}>
-          <View style={styles.photoModalCard}>
-            <Text style={styles.photoModalTitle}>Confirm Time-out Photo</Text>
-            {pendingTimeOutPhotoUri ? (
-              <Image source={{ uri: pendingTimeOutPhotoUri }} style={styles.photoPreviewImage} />
+        <Pressable style={styles.imagePreviewBackdrop} onPress={() => setImagePreview(null)}>
+          <Pressable style={styles.imagePreviewCard} onPress={() => undefined}>
+            <View style={styles.imagePreviewHeader}>
+              <Text style={styles.imagePreviewTitle}>{imagePreview?.title}</Text>
+              <TouchableOpacity
+                onPress={() => setImagePreview(null)}
+                style={styles.imagePreviewCloseButton}
+              >
+                <MaterialIcons name="close" size={22} color="#fff" />
+              </TouchableOpacity>
+            </View>
+            {imagePreview ? (
+              <Image
+                source={imagePreview.source}
+                style={styles.imagePreviewImage}
+                resizeMode="contain"
+              />
             ) : null}
-            <Text style={styles.photoModalText}>
-              Save this photo to complete your time-out, or cancel to choose a different one.
-            </Text>
-            <View style={styles.photoModalActions}>
-              <TouchableOpacity
-                style={styles.photoModalCancelButton}
-                onPress={resetTimeOutPhotoFlow}
-                disabled={Boolean(loadingProjectId)}
-              >
-                <Text style={styles.photoModalCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.photoModalSaveButton,
-                  Boolean(loadingProjectId) && styles.joinButtonLoading,
-                ]}
-                onPress={() => {
-                  void handleConfirmTimeOut();
-                }}
-                disabled={Boolean(loadingProjectId)}
-              >
-                <Text style={styles.photoModalSaveText}>
-                  {loadingProjectId ? 'Saving...' : 'Save'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      <Modal
-        visible={Boolean(partnerJoinProjectId)}
-        transparent
-        animationType="fade"
-        onRequestClose={resetPartnerJoinFlow}
-      >
-        <View style={styles.photoModalOverlay}>
-          <View style={styles.photoModalCard}>
-            <Text style={styles.photoModalTitle}>Set Cooperation Duration</Text>
-            <Text style={styles.photoModalText}>
-              Tell the admin how long your organization plans to cooperate on this program.
-            </Text>
-            <TextInput
-              style={styles.durationInput}
-              value={partnerDurationValueDraft}
-              onChangeText={setPartnerDurationValueDraft}
-              keyboardType="number-pad"
-              placeholder="Enter duration"
-              placeholderTextColor="#94a3b8"
-              editable={!Boolean(loadingProjectId)}
-            />
-            <View style={styles.durationUnitRow}>
-              {(['Days', 'Months'] as const).map(unit => (
-                <TouchableOpacity
-                  key={unit}
-                  style={[
-                    styles.durationUnitButton,
-                    partnerDurationUnitDraft === unit && styles.durationUnitButtonActive,
-                  ]}
-                  onPress={() => setPartnerDurationUnitDraft(unit)}
-                  disabled={Boolean(loadingProjectId)}
-                >
-                  <Text
-                    style={[
-                      styles.durationUnitButtonText,
-                      partnerDurationUnitDraft === unit && styles.durationUnitButtonTextActive,
-                    ]}
-                  >
-                    {unit}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <View style={styles.photoModalActions}>
-              <TouchableOpacity
-                style={styles.photoModalCancelButton}
-                onPress={resetPartnerJoinFlow}
-                disabled={Boolean(loadingProjectId)}
-              >
-                <Text style={styles.photoModalCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.photoModalSaveButton,
-                  Boolean(loadingProjectId) && styles.joinButtonLoading,
-                ]}
-                onPress={() => {
-                  void handleSavePartnerJoinDuration();
-                }}
-                disabled={Boolean(loadingProjectId)}
-              >
-                <Text style={styles.photoModalSaveText}>
-                  {loadingProjectId ? 'Saving...' : 'Save'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
+          </Pressable>
+        </Pressable>
       </Modal>
     </View>
   );
@@ -948,7 +935,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    padding: 15,
+    padding: Platform.select({ web: 8, default: 15 }),
     backgroundColor: '#f5f5f5',
   },
   heading: {
@@ -965,8 +952,7 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: '#fff',
-    borderRadius: 14,
-    padding: 15,
+    borderRadius: Platform.select({ web: 10, default: 14 }),
     marginBottom: 12,
     borderLeftWidth: 4,
     borderLeftColor: '#4CAF50',
@@ -975,11 +961,121 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 3,
     elevation: 3,
+    overflow: 'hidden',
+  },
+  programImage: {
+    width: '100%',
+    height: Platform.select({ web: 460, default: 190 }),
+    backgroundColor: '#ffffff',
+  },
+  programImageButton: {
+    position: 'relative',
+    backgroundColor: '#f8fafc',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  programImagePressed: {
+    opacity: 0.92,
+  },
+  programImageBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    opacity: 0.32,
+  },
+  programImageTitleBadge: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    backgroundColor: 'rgba(15, 23, 42, 0.28)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  programImageTitle: {
+    color: '#ffffff',
+    fontSize: Platform.select({ web: 24, default: 18 }),
+    fontWeight: '800',
+    lineHeight: Platform.select({ web: 30, default: 22 }),
+    textAlign: 'center',
+    textShadowColor: 'rgba(0, 0, 0, 0.65)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 6,
+  },
+  programImageCategory: {
+    marginTop: 4,
+    color: '#f0fdf4',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    textAlign: 'center',
+    textShadowColor: 'rgba(0, 0, 0, 0.55)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  programImageOverlay: {
+    position: 'absolute',
+    right: 14,
+    bottom: 14,
+    backgroundColor: 'rgba(22, 101, 52, 0.92)',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  programImageOverlayText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  programImageFallback: {
+    width: '100%',
+    height: Platform.select({ web: 420, default: 190 }),
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+    gap: 8,
+    backgroundColor: '#ecfdf5',
+  },
+  programImageFallbackNutrition: {
+    backgroundColor: '#ecfdf5',
+  },
+  programImageFallbackEducation: {
+    backgroundColor: '#eff6ff',
+  },
+  programImageFallbackLivelihood: {
+    backgroundColor: '#fff7ed',
+  },
+  programImageFallbackOther: {
+    backgroundColor: '#f8fafc',
+  },
+  programImageFallbackTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#166534',
+    textAlign: 'center',
+  },
+  programImageFallbackSubtitle: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#4b5563',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  programImageHint: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#166534',
   },
   cardHeader: {
     flexDirection: 'row',
     gap: 10,
     marginBottom: 8,
+    paddingHorizontal: 15,
+    paddingTop: 15,
   },
   metaRow: {
     flexDirection: 'row',
@@ -1029,6 +1125,7 @@ const styles = StyleSheet.create({
     color: '#666',
     marginBottom: 10,
     lineHeight: 20,
+    paddingHorizontal: 15,
   },
   expandToggle: {
     flexDirection: 'row',
@@ -1039,6 +1136,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     marginBottom: 10,
+    marginHorizontal: 15,
   },
   expandToggleText: {
     color: '#166534',
@@ -1050,6 +1148,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     padding: 10,
     marginBottom: 10,
+    marginHorizontal: 15,
     gap: 8,
     borderWidth: 1,
     borderColor: '#e2e8f0',
@@ -1074,14 +1173,17 @@ const styles = StyleSheet.create({
   volunteerActions: {
     marginBottom: 4,
     gap: 8,
+    paddingHorizontal: 15,
   },
   partnerActions: {
     marginBottom: 4,
     gap: 8,
+    paddingHorizontal: 15,
   },
   adminActions: {
     marginBottom: 4,
     gap: 8,
+    paddingHorizontal: 15,
   },
   joinRow: {
     flexDirection: 'row',
@@ -1140,107 +1242,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontSize: 12,
   },
-  photoModalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.55)',
-    justifyContent: 'center',
-    paddingHorizontal: 20,
-  },
-  photoModalCard: {
-    backgroundColor: '#fff',
-    borderRadius: 18,
-    padding: 18,
-    borderWidth: 1,
-    borderColor: '#dbeafe',
-  },
-  photoModalTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#0f172a',
-    textAlign: 'center',
-  },
-  photoPreviewImage: {
-    width: '100%',
-    height: 260,
-    borderRadius: 14,
-    marginTop: 16,
-    backgroundColor: '#e2e8f0',
-  },
-  photoModalText: {
-    fontSize: 13,
-    lineHeight: 19,
-    color: '#475569',
-    marginTop: 14,
-    textAlign: 'center',
-  },
-  photoModalActions: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 18,
-  },
-  durationInput: {
-    marginTop: 16,
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 15,
-    color: '#0f172a',
-    backgroundColor: '#f8fafc',
-  },
-  durationUnitRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 14,
-  },
-  durationUnitButton: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 12,
-    paddingVertical: 11,
-    alignItems: 'center',
-    backgroundColor: '#fff',
-  },
-  durationUnitButtonActive: {
-    backgroundColor: '#dcfce7',
-    borderColor: '#4CAF50',
-  },
-  durationUnitButtonText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#475569',
-  },
-  durationUnitButtonTextActive: {
-    color: '#166534',
-  },
-  photoModalCancelButton: {
-    flex: 1,
-    backgroundColor: '#fee2e2',
-    borderRadius: 12,
-    paddingVertical: 12,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#fecaca',
-  },
-  photoModalSaveButton: {
-    flex: 1,
-    backgroundColor: '#166534',
-    borderRadius: 12,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  photoModalCancelText: {
-    color: '#b91c1c',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  photoModalSaveText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '700',
-  },
   groupChatButton: {
     alignSelf: 'flex-start',
     flexDirection: 'row',
@@ -1277,12 +1278,6 @@ const styles = StyleSheet.create({
   partnerNote: {
     fontSize: 12,
     color: '#0f172a',
-  },
-  partnerDurationNote: {
-    fontSize: 12,
-    color: '#166534',
-    fontWeight: '700',
-    lineHeight: 18,
   },
   filesSection: {
     marginTop: 10,
@@ -1335,12 +1330,59 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
   },
+  imagePreviewBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.88)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  imagePreviewCard: {
+    width: '100%',
+    maxWidth: 1200,
+    maxHeight: '92%',
+    backgroundColor: '#0f172a',
+    borderRadius: 18,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+  },
+  imagePreviewHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+  },
+  imagePreviewTitle: {
+    flex: 1,
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '800',
+    paddingRight: 12,
+  },
+  imagePreviewCloseButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+  },
+  imagePreviewImage: {
+    width: '100%',
+    height: Platform.select({ web: 760, default: 420 }),
+    backgroundColor: '#0b1120',
+  },
   footer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginTop: 10,
     paddingTop: 10,
+    paddingHorizontal: 15,
+    paddingBottom: 15,
     borderTopWidth: 1,
     borderTopColor: '#eee',
   },

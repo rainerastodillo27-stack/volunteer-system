@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, TextInput, TouchableOpacity, Text, StyleSheet, Alert, ActivityIndicator, Platform, ScrollView, Modal, Picker, Image } from 'react-native';
+import { View, TextInput, TouchableOpacity, Text, StyleSheet, Alert, ActivityIndicator, Platform, ScrollView, Modal } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
 import {
   createUserAccount,
   getAllUsers,
@@ -19,7 +18,6 @@ type SignupVolunteerSheetState = {
   dateOfBirth: string;
   civilStatus: string;
   homeAddress: string;
-  profilePhotoUrl?: string;
   occupation: string;
   workplaceOrSchool: string;
   collegeCourse: string;
@@ -37,138 +35,6 @@ type SignupPartnerApplicationState = {
   sectorType: PartnerSectorType;
   dswdAccreditationNo: string;
   advocacyFocus: AdvocacyFocus[];
-};
-
-// Validates email format
-function isValidEmail(email: string): boolean {
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  return emailRegex.test(email);
-}
-
-// Validates phone number format (basic validation)
-function isValidPhone(phone: string): boolean {
-  const phoneRegex = /^[0-9\s+()-]{7,}$/;
-  return phoneRegex.test(phone);
-}
-
-// Validates date format (YYYY-MM-DD or MM/DD/YYYY)
-function isValidDateFormat(dateStr: string): boolean {
-  if (!dateStr.trim()) return false;
-  const dateRegex = /^(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}|\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2})$/;
-  return dateRegex.test(dateStr);
-}
-
-// Converts date string to Date object
-function parseDate(dateStr: string): Date | null {
-  if (!dateStr.trim()) return null;
-  try {
-    const date = new Date(dateStr);
-    if (!isNaN(date.getTime())) return date;
-    
-    // Try MM/DD/YYYY format
-    const parts = dateStr.split('/');
-    if (parts.length === 3) {
-      return new Date(`${parts[2]}-${parts[0].padStart(2, '0')}-${parts[1].padStart(2, '0')}`);
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-// Formats date to MM/DD/YYYY
-function formatDateToString(date: Date): string {
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  const year = date.getFullYear();
-  return `${month}/${day}/${year}`;
-}
-
-// Helper function to get days in a month
-function getDaysInMonth(date: Date): number {
-  return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
-}
-
-// Helper function to get first day of month (0 = Sunday, 1 = Monday, etc.)
-function getFirstDayOfMonth(date: Date): number {
-  return new Date(date.getFullYear(), date.getMonth(), 1).getDay();
-}
-
-// Function to pick an image from device library
-async function pickProfilePhoto(setSelectedPhoto: React.Dispatch<React.SetStateAction<string | null>>) {
-  try {
-    const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permissionResult.granted) {
-      Alert.alert('Permission needed', 'Please grant access to your photos to upload a profile picture.');
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.7,
-    });
-
-    if (!result.canceled && result.assets && result.assets.length > 0) {
-      setSelectedPhoto(result.assets[0].uri);
-    }
-  } catch (error) {
-    console.error('Error picking image:', error);
-    Alert.alert('Error', 'Failed to pick image. Please try again.');
-  }
-}
-
-// Function to pick certificate images
-async function pickCertificateImages(setCertificates: React.Dispatch<React.SetStateAction<string[]>>) {
-  try {
-    const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permissionResult.granted) {
-      Alert.alert('Permission needed', 'Please grant access to your photos to upload certificates.');
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsMultipleSelection: true,
-      quality: 0.8,
-      selectionLimit: 5, // Limit to 5 certificates
-    });
-
-    if (!result.canceled && result.assets && result.assets.length > 0) {
-      setCertificates(prev => {
-        const total = prev.length + result.assets.length;
-        if (total > 5) {
-          Alert.alert('Limit reached', 'You can upload a maximum of 5 certificates.');
-          return prev;
-        }
-        const newCertificates = result.assets.map(asset => asset.uri);
-        return [...prev, ...newCertificates];
-      });
-    }
-  } catch (error) {
-    console.error('Error picking certificate images:', error);
-    Alert.alert('Error', 'Failed to pick certificate images. Please try again.');
-  }
-}
-
-// Philippine regions and cities
-const PHILIPPINES_LOCATIONS: Record<string, string[]> = {
-  'NCR': ['Caloocan City', 'Las Piñas City', 'Makati City', 'Malabon City', 'Mandaluyong City', 'Manila', 'Marikina City', 'Muntinlupa City', 'Navotas City', 'Parañaque City', 'Pasay City', 'Quezon City', 'San Juan City', 'Taguig City', 'Valenzuela City'],
-  'Region 1': ['Alaminos City', 'Batac City', 'Candon City', 'Dagupan City', 'Laoag City', 'San Fernando', 'Vigan City'],
-  'Region 2': ['Batanes', 'Bayombong', 'Bulacan', 'Cabanatuan City', 'Cauayan City', 'Gapan City', 'Ilagan City', 'Nueva Ecija', 'Nueva Vizcaya', 'Quirino', 'Santiago City', 'Tuguegarao City'],
-  'Region 3': ['Angeles City', 'Arayat', 'Bataan', 'Bulacan', 'Cabanatuan', 'Calapan', 'Dinalupihan', 'Gapan', 'Guimba', 'Iba', 'Lucena', 'Mabalacat City', 'Mariveles', 'Morong', 'Nueva Ecija', 'Olongapo City', 'Palayan City', 'Pampanga', 'San Fernando', 'Subic'],
-  'Region 4A': ['Agujón', 'Angono', 'Antipolo City', 'Baras', 'Bauan', 'Binagouan', 'Biñan City', 'Calatagan', 'Calayab', 'Cavite City', 'Cavitenõ', 'Coco', 'Dasmariñas', 'Imus City', 'Kawit', 'Lipa City', 'Magdalo', 'Maragondon', 'Mendez-Nuñez', 'Morong', 'Nasugbu', 'Palawan', 'Pila', 'Quezon', 'Rosario', 'Silang', 'Tagaytay City', 'Tanuan City', 'Tanza', 'Ternate', 'Tuy', 'Unisan'],
-  'Region 5': ['Albay', 'Camarines Norte', 'Camarines Sur', 'Catanduanes', 'Daet', 'Dagang', 'Daraga', 'Guinobatan', 'Iriga City', 'Legaspi City', 'Ligao City', 'Masbate', 'Masbate City', 'Naga City', 'Nabua', 'Pili', 'Polangui', 'Ragay', 'Sorsogon', 'Sorsogon City'],
-  'Region 6': ['Aklan', 'Antique', 'Bacolod City', 'Bago City', 'Bauan', 'Cabanatuan', 'Calinog', 'Camarines', 'Capay', 'Capiz', 'Culasi', 'Dingle', 'Dumalag', 'Estancia', 'Hamtic', 'Iloilo', 'Iloilo City', 'Janiuay', 'Kalibo', 'Lambunao', 'Leganes', 'Maayon', 'Mambusao', 'Mandurriao', 'Miagao', 'Negros Occidental', 'Panay', 'Panitan', 'Pavia', 'Pilo', 'Roxas City', 'Saravia', 'San Dionisio', 'San Joaquin', 'San Remedio', 'Santa Barbara', 'Sipalay', 'Sumisip'],
-  'Region 7': ['Badian', 'Bohol', 'Capiznon', 'Carcar City', 'Catmon', 'Cebu', 'Cebu City', 'Compostela', 'Cordova', 'Daanbantayan', 'Dalaguete', 'Danao City', 'Dumaguete City', 'Ginatilan', 'Lapu-Lapu City', 'Liloan', 'Mactan', 'Malabuyoc', 'Mandaue City', 'Medellin', 'Minglanilla', 'Moalboal', 'Naga City', 'Negros Oriental', 'Oslob', 'Pilar', 'San Fernando', 'Santa Fe', 'Santander', 'Sibulan', 'Sibonga', 'Siquijor', 'Talisay City', 'Toledo City', 'Tubigon'],
-  'Region 8': ['Abuyog', 'Alangalang', 'Barugo', 'Baybay City', 'Biliran', 'Borongan City', 'Calbayog City', 'Calsigüey', 'Capul', 'Catarman', 'Catabangan', 'Catbalogan City', 'Culasi', 'Eastern Samar', 'Giporlos', 'Guiuan', 'Hernani', 'Hinunangan', 'Ibarra', 'Jaro', 'Jipapad', 'Kananga', 'Laoang', 'Laua-an', 'Leyte', 'Leyte City', 'Macrohon', 'Mahayag', 'Maribojoc', 'Mariposa', 'Matag-ob', 'Matarinao', 'Motiong', 'Northern Samar', 'Ormoc City', 'Palompon', 'Paranas', 'Piat', 'Placer', 'Quezon', 'Rosario', 'Sabal', 'San Isidro', 'San Jorge', 'San Policarpo', 'San Ricardo', 'Santa Margarita', 'Santo Tomas', 'Southern Leyte', 'Tabango', 'Tacloban City', 'Tanauan', 'Tanauan City', 'Tabontabon', 'Tagapul-an', 'Tabina', 'Tago-Iloco', 'Ügat', 'Villareal', 'Villasis'],
-  'Region 9': ['Dipolog City', 'Dapitan City', 'Ipil', 'Isabela City', 'Labuhan', 'Liloy', 'Pagadian City', 'Siayan', 'Sibuco', 'Zamboanga City', 'Zamboanga Sibugay', 'Zamboanga del Norte', 'Zamboanga del Sur'],
-  'Region 10': ['Agusan del Norte', 'Agusan del Sur', 'Butuan City', 'Cabadbaran City', 'Cagayan de Oro City', 'Camiguin', 'Gingoog City', 'Hinatuan', 'Kolambugan', 'Lanuza', 'Lianga', 'Misamis Oriental', 'Misamis Occidental', 'Nasipit', 'Oroquieta City', 'Ozamiz City', 'Prosperidad', 'Rotonda', 'Surigao City', 'Surigao del Norte', 'Surigao del Sur', 'Tandag City', 'Ubay'],
-  'Region 11': ['Baganga', 'Bansalan', 'Calinog', 'Cotabato', 'Dali-Dali', 'Davao City', 'Davao del Norte', 'Davao del Sur', 'Davao Oriental', 'Digos City', 'Dolores', 'Dueling', 'Filemon', 'General Santos City', 'Glan', 'Godod', 'Hagonoy', 'Kiblawan', 'Maco', 'Malalag', 'Marilog', 'Masipit', 'Matanao', 'Mati City', 'Monkayo', 'Montalban', 'Nabunturan', 'Padada', 'Panabo City', 'Pantukan', 'Paquibato', 'Paredon', 'Pujada', 'Santo Tomas', 'Santa Cruz', 'Sarangani', 'Saug', 'Sitio', 'Somot', 'South Cotabato', 'Tagum City', 'Tamisan', 'Taraka', 'Tayabas', 'Teguestaga', 'Ternate', 'Tiagos', 'Tibungco', 'Todaya'],
-  'Region 12': ['Awang', 'Bacolod City', 'Baguio', 'Banisilan', 'Bamanga', 'Baraan', 'Bele', 'Bendum', 'Bentayan', 'Bessayag', 'Binzanon', 'Biong', 'Biraran', 'Bolongan', 'Bontod', 'Borowan', 'Botanon', 'Boworan', 'Bucayan', 'Buduan', 'Buguias', 'Bulang', 'Bunawan', 'Cachipayan', 'Cadz-an', 'Calasio', 'Calinog', 'Calongkot', 'Calubian', 'Caluwan', 'Calumpang', 'Calumpit', 'Columbog', 'Cotabato', 'Cotabato City', 'Darahan', 'Dumiring', 'Enoguran', 'Esperanza', 'Estancia', 'Falone', 'Finaz-an', 'Gadalon', 'Gaddi', 'Gadi', 'Galoyon', 'Gamay', 'Ganga', 'Garo', 'Gasan', 'Gasigan', 'Gaupang', 'Gil', 'Gilangel', 'Gilutongan', 'Ginayan', 'Ginigaran', 'Ginolayan', 'Ginoton', 'Giparion', 'Gipodan', 'Girito', 'Gitagum', 'Glaiza', 'Glaizo', 'Glango', 'Gluyon', 'Godod', 'Goka', 'Golbao', 'Golen', 'General Santos City', 'Gon-Gon', 'Goyo', 'Goza', 'Gradel', 'Gralagan', 'Graland', 'Grana', 'Grane', 'Granim', 'Granito', 'Grano', 'Gran-ub', 'Granyar', 'Grapil', 'Grapo', 'Grapu', 'Grasil', 'Grasol', 'Gratez', 'Gratia', 'Gratiala', 'Gratin', 'Gratio', 'Gratirn', 'Gratnion', 'Gratrion', 'Gratul', 'Graueloa', 'Gravane', 'Gravilla', 'Graya', 'Gre', 'Greba', 'Grebu', 'Greca', 'Gredata', 'Gredel', 'Gredey', 'Gredia', 'Grediel', 'Greding', 'Gredia', 'Gregonia', 'Gregorio', 'Grela', 'Grelado', 'Grelancia', 'Grelbay', 'Grelburn', 'Grelcy', 'Grelda', 'Grelei', 'Grelfey', 'Greli', 'Grelita', 'Greliz', 'Grelka', 'Grella', 'Grelli', 'Grelo', 'Grelod', 'Grelona', 'Grelon', 'Grelonja', 'Grelop', 'Grelopon', 'Grelopz', 'Grelornia', 'Grelosea', 'Greloue', 'Greloveia', 'Grelovia', 'Grelovinca', 'Grelovinia', 'Grelovinka', 'Grelovio', 'Grelovolia', 'Grelovulia', 'Grelowa', 'Greloy', 'Greloza', 'Grelph', 'Grelsix', 'Grelta', 'Greltha', 'Greltia', 'Greltina', 'Grelto', 'Greltonia', 'Greltra', 'Greltu', 'Greltuna', 'Greltus', 'Grelua', 'Grelu', 'Greluba', 'Grelucia', 'Greluda', 'Greludicia', 'Greludion', 'Greludy', 'Greluffrey', 'Grelugo', 'Grelu', 'Kalalayan', 'Kalamansig', 'Kalapati', 'Kalapawis', 'Kalarabutan', 'Kalawakan', 'Kalaya-an', 'Kalayaan', 'Kalaya', 'Kalayaga', 'Kalayahan', 'Kalayakan', 'Kalayalangan', 'Kalbatayan', 'Kalbog', 'Kalbugan', 'Kalbulan', 'Kalburan', 'Kaldaba', 'Kaldabang', 'Kaldabasan', 'Koronadal City', 'Tacurong City'],
-  'Region 13': ['Bislig City', 'Butuan City', 'Cabadbaran City', 'Mati City', 'Nasipit City', 'Surigao City', 'Tandag City', 'Agusan del Norte', 'Agusan del Sur', 'Dinagat Islands', 'Surigao del Norte', 'Surigao del Sur'],
-  'BARMM': ['Basilan', 'Basilan City', 'Cotabato City', 'Isabella City', 'Jolo City', 'Lamitan City', 'Marawi City', 'Zamboanga City'],
 };
 
 // Returns a clean volunteer membership form state for the signup modal.
@@ -223,18 +89,6 @@ export default function LoginScreen() {
     createEmptySignupVolunteerSheet()
   );
   const [signupAcceptedCommitment, setSignupAcceptedCommitment] = useState(false);
-  const [signupWatchedVideo, setSignupWatchedVideo] = useState(false);
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const [showGenderPicker, setShowGenderPicker] = useState(false);
-  const [showCivilStatusPicker, setShowCivilStatusPicker] = useState(false);
-  const [calendarDate, setCalendarDate] = useState(new Date(2000, 0, 1));
-  const [currentCalendarMonth, setCurrentCalendarMonth] = useState(new Date(2000, 0, 1));
-  const [showYearPicker, setShowYearPicker] = useState(false);
-  const [showAddressSearchModal, setShowAddressSearchModal] = useState(false);
-  const [addressSearchQuery, setAddressSearchQuery] = useState('');
-  const [selectedRegion, setSelectedRegion] = useState<string | null>(null);
-  const [selectedProfilePhoto, setSelectedProfilePhoto] = useState<string | null>(null);
-  const [uploadedCertificates, setUploadedCertificates] = useState<string[]>([]);
   const [backendStatus, setBackendStatus] = useState<'checking' | 'online' | 'offline'>('checking');
   const [backendMessage, setBackendMessage] = useState('Checking backend connection...');
   const [savedAccounts, setSavedAccounts] = useState<User[]>([]);
@@ -398,11 +252,6 @@ export default function LoginScreen() {
     setSignupPartnerApplication(createEmptySignupPartnerApplication());
     setSignupVolunteerSheet(createEmptySignupVolunteerSheet());
     setSignupAcceptedCommitment(false);
-    setSignupWatchedVideo(false);
-    setShowDatePicker(false);
-    setShowGenderPicker(false);
-    setShowCivilStatusPicker(false);
-    setUploadedCertificates([]);
   };
 
   // Updates one field in the volunteer membership form without replacing the whole object.
@@ -428,33 +277,13 @@ export default function LoginScreen() {
       return;
     }
 
-    if (!signupName.trim()) {
-      Alert.alert('Validation Error', 'Name is required.');
-      return;
-    }
-
-    if (!signupPassword.trim()) {
-      Alert.alert('Validation Error', 'Password is required.');
-      return;
-    }
-
-    if (signupPassword.trim().length < 6) {
-      Alert.alert('Validation Error', 'Password must be at least 6 characters.');
-      return;
-    }
-
     if (!signupEmail.trim() && !signupAccountPhone.trim()) {
       Alert.alert('Validation Error', 'Please provide an email or phone number.');
       return;
     }
 
-    if (signupEmail.trim() && !isValidEmail(signupEmail.trim())) {
-      Alert.alert('Validation Error', 'Please enter a valid email address (e.g., user@example.com).');
-      return;
-    }
-
-    if (signupAccountPhone.trim() && !isValidPhone(signupAccountPhone.trim())) {
-      Alert.alert('Validation Error', 'Please enter a valid phone number.');
+    if (signupEmail.trim() && !signupEmail.includes('@')) {
+      Alert.alert('Validation Error', 'Please enter a valid email address.');
       return;
     }
 
@@ -496,26 +325,10 @@ export default function LoginScreen() {
         return;
       }
 
-      if (!isValidDateFormat(signupVolunteerSheet.dateOfBirth.trim())) {
-        Alert.alert(
-          'Validation Error',
-          'Please enter a valid date of birth (e.g., 01/15/1990 or 1990-01-15).'
-        );
-        return;
-      }
-
       if (!signupAcceptedCommitment) {
         Alert.alert(
           'Validation Error',
           'You must accept the NVC volunteer commitment before creating the account.'
-        );
-        return;
-      }
-
-      if (!signupWatchedVideo) {
-        Alert.alert(
-          'Validation Error',
-          'You must watch the volunteer orientation video before creating your account.'
         );
         return;
       }
@@ -950,314 +763,38 @@ export default function LoginScreen() {
               {signupRole === 'volunteer' && (
                 <>
                   <Text style={styles.modalSectionLabel}>NVC Membership Information Sheet</Text>
-                  
-                  <Text style={styles.inputLabel}>Gender *</Text>
-                  <TouchableOpacity 
-                    style={styles.dropdownButton}
-                    onPress={() => setShowGenderPicker(!showGenderPicker)}
-                    disabled={signupLoading}
-                  >
-                    <Text style={styles.dropdownButtonText}>
-                      {signupVolunteerSheet.gender || 'Select Gender'}
-                    </Text>
-                    <MaterialIcons name="arrow-drop-down" size={20} color="#64748b" />
-                  </TouchableOpacity>
-                  {showGenderPicker && (
-                    <View style={styles.pickerContainer}>
-                      {['Male', 'Female', 'Other', 'Prefer not to say'].map(option => (
-                        <TouchableOpacity 
-                          key={option}
-                          style={styles.pickerOption}
-                          onPress={() => {
-                            updateSignupVolunteerSheet('gender', option);
-                            setShowGenderPicker(false);
-                          }}
-                        >
-                          <Text style={styles.pickerOptionText}>{option}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  )}
-
-                  <Text style={styles.inputLabel}>Date of Birth (MM/DD/YYYY) *</Text>
-                  <TouchableOpacity 
-                    style={styles.dropdownButton}
-                    onPress={() => {
-                      setShowDatePicker(!showDatePicker);
-                      if (!showDatePicker) {
-                        const parsed = parseDate(signupVolunteerSheet.dateOfBirth);
-                        if (parsed) {
-                          setCalendarDate(parsed);
-                          setCurrentCalendarMonth(new Date(parsed.getFullYear(), parsed.getMonth(), 1));
-                        }
-                      }
-                    }}
-                    disabled={signupLoading}
-                  >
-                    <Text style={styles.dropdownButtonText}>
-                      {signupVolunteerSheet.dateOfBirth || 'Select Date'}
-                    </Text>
-                    <MaterialIcons name="calendar-today" size={20} color="#64748b" />
-                  </TouchableOpacity>
-                  {showDatePicker && (
-                    <View style={styles.calendarContainer}>
-                      {/* Year/Month Navigation */}
-                      {!showYearPicker && (
-                        <>
-                          <View style={styles.calendarHeader}>
-                            <TouchableOpacity 
-                              onPress={() => setCurrentCalendarMonth(new Date(currentCalendarMonth.getFullYear(), currentCalendarMonth.getMonth() - 1, 1))}
-                              style={styles.calendarNavButton}
-                            >
-                              <MaterialIcons name="chevron-left" size={24} color="#2563eb" />
-                            </TouchableOpacity>
-                            <TouchableOpacity 
-                              onPress={() => setShowYearPicker(true)}
-                              style={styles.monthYearButton}
-                            >
-                              <Text style={styles.calendarMonthYear}>
-                                {currentCalendarMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
-                              </Text>
-                              <MaterialIcons name="arrow-drop-down" size={20} color="#2563eb" />
-                            </TouchableOpacity>
-                            <TouchableOpacity 
-                              onPress={() => setCurrentCalendarMonth(new Date(currentCalendarMonth.getFullYear(), currentCalendarMonth.getMonth() + 1, 1))}
-                              style={styles.calendarNavButton}
-                            >
-                              <MaterialIcons name="chevron-right" size={24} color="#2563eb" />
-                            </TouchableOpacity>
-                          </View>
-                          
-                          {/* Day Headers */}
-                          <View style={styles.calendarDayHeaders}>
-                            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
-                              <Text key={day} style={styles.calendarDayHeader}>{day}</Text>
-                            ))}
-                          </View>
-                          
-                          {/* Calendar Days */}
-                          <View style={styles.calendarDaysGrid}>
-                            {Array.from({ length: getFirstDayOfMonth(currentCalendarMonth) }).map((_, i) => (
-                              <View key={`empty-${i}`} style={styles.calendarDaySlot} />
-                            ))}
-                            {Array.from({ length: getDaysInMonth(currentCalendarMonth) }).map((_, i) => {
-                              const day = i + 1;
-                              const date = new Date(currentCalendarMonth.getFullYear(), currentCalendarMonth.getMonth(), day);
-                              const isSelected = calendarDate.getDate() === day &&
-                                                calendarDate.getMonth() === currentCalendarMonth.getMonth() &&
-                                                calendarDate.getFullYear() === currentCalendarMonth.getFullYear();
-                              
-                              return (
-                                <TouchableOpacity
-                                  key={day}
-                                  style={[styles.calendarDaySlot, isSelected && styles.calendarDaySelected]}
-                                  onPress={() => {
-                                    setCalendarDate(date);
-                                    updateSignupVolunteerSheet('dateOfBirth', formatDateToString(date));
-                                    setShowDatePicker(false);
-                                  }}
-                                >
-                                  <Text style={[styles.calendarDay, isSelected && styles.calendarDaySelectedText]}>
-                                    {day}
-                                  </Text>
-                                </TouchableOpacity>
-                              );
-                            })}
-                          </View>
-                        </>
-                      )}
-                      
-                      {/* Year Picker */}
-                      {showYearPicker && (
-                        <View style={styles.yearPickerContainer}>
-                          <View style={styles.yearPickerHeader}>
-                            <TouchableOpacity 
-                              onPress={() => setCurrentCalendarMonth(new Date(currentCalendarMonth.getFullYear() - 10, 0, 1))}
-                              style={styles.yearNavButton}
-                            >
-                              <MaterialIcons name="chevron-left" size={24} color="#2563eb" />
-                            </TouchableOpacity>
-                            <Text style={styles.yearPickerTitle}>
-                              {currentCalendarMonth.getFullYear() - 5} - {currentCalendarMonth.getFullYear() + 4}
-                            </Text>
-                            <TouchableOpacity 
-                              onPress={() => setCurrentCalendarMonth(new Date(currentCalendarMonth.getFullYear() + 10, 0, 1))}
-                              style={styles.yearNavButton}
-                            >
-                              <MaterialIcons name="chevron-right" size={24} color="#2563eb" />
-                            </TouchableOpacity>
-                          </View>
-                          <View style={styles.yearGrid}>
-                            {Array.from({ length: 10 }).map((_, i) => {
-                              const year = currentCalendarMonth.getFullYear() - 5 + i;
-                              const isSelected = calendarDate.getFullYear() === year;
-                              
-                              return (
-                                <TouchableOpacity
-                                  key={year}
-                                  style={[styles.yearCell, isSelected && styles.yearCellSelected]}
-                                  onPress={() => {
-                                    setCurrentCalendarMonth(new Date(year, 0, 1));
-                                    setShowYearPicker(false);
-                                  }}
-                                >
-                                  <Text style={[styles.yearCellText, isSelected && styles.yearCellSelectedText]}>
-                                    {year}
-                                  </Text>
-                                </TouchableOpacity>
-                              );
-                            })}
-                          </View>
-                          <TouchableOpacity 
-                            style={styles.pickerConfirmButton}
-                            onPress={() => setShowYearPicker(false)}
-                          >
-                            <Text style={styles.pickerConfirmText}>Done</Text>
-                          </TouchableOpacity>
-                        </View>
-                      )}
-                      
-                      {!showYearPicker && (
-                        <TouchableOpacity 
-                          style={styles.pickerConfirmButton}
-                          onPress={() => setShowDatePicker(false)}
-                        >
-                          <Text style={styles.pickerConfirmText}>Done</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  )}
-
-                  <Text style={styles.inputLabel}>Civil Status *</Text>
-                  <TouchableOpacity 
-                    style={styles.dropdownButton}
-                    onPress={() => setShowCivilStatusPicker(!showCivilStatusPicker)}
-                    disabled={signupLoading}
-                  >
-                    <Text style={styles.dropdownButtonText}>
-                      {signupVolunteerSheet.civilStatus || 'Select Civil Status'}
-                    </Text>
-                    <MaterialIcons name="arrow-drop-down" size={20} color="#64748b" />
-                  </TouchableOpacity>
-                  {showCivilStatusPicker && (
-                    <View style={styles.pickerContainer}>
-                      {['Single', 'Married', 'Divorced', 'Widowed', 'Prefer not to say'].map(option => (
-                        <TouchableOpacity 
-                          key={option}
-                          style={styles.pickerOption}
-                          onPress={() => {
-                            updateSignupVolunteerSheet('civilStatus', option);
-                            setShowCivilStatusPicker(false);
-                          }}
-                        >
-                          <Text style={styles.pickerOptionText}>{option}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  )}
-
-                  <Text style={styles.inputLabel}>Profile Photo (Optional)</Text>
-                  <TouchableOpacity 
-                    style={styles.uploadButton}
-                    onPress={() => pickProfilePhoto(setSelectedProfilePhoto)}
-                    disabled={signupLoading}
-                  >
-                    <MaterialIcons name="camera-alt" size={24} color="#166534" />
-                    <Text style={styles.uploadButtonText}>
-                      {selectedProfilePhoto ? 'Change Photo' : 'Upload Profile Photo'}
-                    </Text>
-                  </TouchableOpacity>
-                  {selectedProfilePhoto && (
-                    <View style={styles.photoPreviewContainer}>
-                      <Image
-                        source={{ uri: selectedProfilePhoto }}
-                        style={styles.photoPreview}
-                      />
-                      <TouchableOpacity
-                        style={styles.photoRemoveButton}
-                        onPress={() => setSelectedProfilePhoto(null)}
-                      >
-                        <MaterialIcons name="close" size={18} color="#fff" />
-                      </TouchableOpacity>
-                    </View>
-                  )}
-
-                  <Text style={styles.inputLabel}>Home Address *</Text>
-                  <TouchableOpacity 
-                    style={styles.dropdownButton}
-                    onPress={() => setShowAddressSearchModal(!showAddressSearchModal)}
-                    disabled={signupLoading}
-                  >
-                    <Text style={[styles.dropdownButtonText, !signupVolunteerSheet.homeAddress && { color: '#999' }]}>
-                      {signupVolunteerSheet.homeAddress || 'Select Address'}
-                    </Text>
-                    <MaterialIcons name="location-on" size={20} color="#64748b" />
-                  </TouchableOpacity>
-                  {showAddressSearchModal && (
-                    <View style={styles.addressSearchContainer}>
-                      {!selectedRegion ? (
-                        <>
-                          <Text style={styles.pickerLabel}>Select Region:</Text>
-                          <ScrollView style={styles.addressSuggestions} nestedScrollEnabled>
-                            {Object.keys(PHILIPPINES_LOCATIONS)
-                              .sort()
-                              .map(region => (
-                                <TouchableOpacity
-                                  key={region}
-                                  style={styles.addressSuggestion}
-                                  onPress={() => setSelectedRegion(region)}
-                                >
-                                  <MaterialIcons name="location-on" size={16} color="#2563eb" />
-                                  <Text style={styles.addressSuggestionText}>{region}</Text>
-                                  <MaterialIcons name="chevron-right" size={16} color="#64748b" />
-                                </TouchableOpacity>
-                              ))}
-                          </ScrollView>
-                        </>
-                      ) : (
-                        <>
-                          <TouchableOpacity
-                            style={styles.backButton}
-                            onPress={() => setSelectedRegion(null)}
-                          >
-                            <MaterialIcons name="chevron-left" size={20} color="#2563eb" />
-                            <Text style={styles.backButtonText}>{selectedRegion}</Text>
-                          </TouchableOpacity>
-                          <Text style={styles.pickerLabel}>Select City/Municipality:</Text>
-                          <ScrollView style={styles.addressSuggestions} nestedScrollEnabled>
-                            {PHILIPPINES_LOCATIONS[selectedRegion]
-                              .sort()
-                              .map((city, idx) => (
-                                <TouchableOpacity
-                                  key={idx}
-                                  style={styles.addressSuggestion}
-                                  onPress={() => {
-                                    updateSignupVolunteerSheet('homeAddress', `${city}, ${selectedRegion}`);
-                                    setShowAddressSearchModal(false);
-                                    setAddressSearchQuery('');
-                                    setSelectedRegion(null);
-                                  }}
-                                >
-                                  <MaterialIcons name="location-on" size={16} color="#2563eb" />
-                                  <Text style={styles.addressSuggestionText}>{city}</Text>
-                                </TouchableOpacity>
-                              ))}
-                          </ScrollView>
-                        </>
-                      )}
-                      <TouchableOpacity 
-                        style={styles.pickerConfirmButton}
-                        onPress={() => {
-                          setShowAddressSearchModal(false);
-                          setAddressSearchQuery('');
-                          setSelectedRegion(null);
-                        }}
-                      >
-                        <Text style={styles.pickerConfirmText}>Close</Text>
-                      </TouchableOpacity>
-                    </View>
-                  )}
-
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Gender"
+                    placeholderTextColor="#999"
+                    value={signupVolunteerSheet.gender}
+                    onChangeText={value => updateSignupVolunteerSheet('gender', value)}
+                    editable={!signupLoading}
+                  />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Date of Birth"
+                    placeholderTextColor="#999"
+                    value={signupVolunteerSheet.dateOfBirth}
+                    onChangeText={value => updateSignupVolunteerSheet('dateOfBirth', value)}
+                    editable={!signupLoading}
+                  />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Civil Status"
+                    placeholderTextColor="#999"
+                    value={signupVolunteerSheet.civilStatus}
+                    onChangeText={value => updateSignupVolunteerSheet('civilStatus', value)}
+                    editable={!signupLoading}
+                  />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Home Address"
+                    placeholderTextColor="#999"
+                    value={signupVolunteerSheet.homeAddress}
+                    onChangeText={value => updateSignupVolunteerSheet('homeAddress', value)}
+                    editable={!signupLoading}
+                  />
                   <TextInput
                     style={styles.input}
                     placeholder="Occupation"
@@ -1306,44 +843,6 @@ export default function LoginScreen() {
                     onChangeText={value => updateSignupVolunteerSheet('specialSkills', value)}
                     editable={!signupLoading}
                   />
-
-                  <Text style={styles.modalSectionSubLabel}>Professional Certifications (optional)</Text>
-                  <TouchableOpacity
-                    style={styles.uploadButton}
-                    onPress={() => pickCertificateImages(setUploadedCertificates)}
-                    disabled={signupLoading}
-                  >
-                    <MaterialIcons name="cloud-upload" size={24} color="#166534" />
-                    <Text style={styles.uploadButtonText}>
-                      {uploadedCertificates.length > 0 
-                        ? `${uploadedCertificates.length} certificate(s) uploaded` 
-                        : 'Upload Certificates'}
-                    </Text>
-                  </TouchableOpacity>
-                  <Text style={styles.uploadHint}>
-                    Supported formats: PDF, JPG, PNG (Max 5MB each). You can upload multiple files.
-                  </Text>
-                  {uploadedCertificates.length > 0 && (
-                    <View style={styles.certificatesList}>
-                      {uploadedCertificates.map((cert, index) => (
-                        <View key={index} style={styles.certificateItem}>
-                          <Image
-                            source={{ uri: cert }}
-                            style={styles.certificatePreview}
-                          />
-                          <View style={styles.certificateInfo}>
-                            <Text style={styles.certificateItemText}>Certificate {index + 1}</Text>
-                            <TouchableOpacity
-                              onPress={() => setUploadedCertificates(uploadedCertificates.filter((_, i) => i !== index))}
-                              style={styles.certificateRemoveButton}
-                            >
-                              <MaterialIcons name="close" size={16} color="#dc2626" />
-                            </TouchableOpacity>
-                          </View>
-                        </View>
-                      ))}
-                    </View>
-                  )}
 
                   <Text style={styles.modalSectionSubLabel}>Affiliations (if any)</Text>
                   <View style={styles.affiliationRow}>
@@ -1411,34 +910,6 @@ export default function LoginScreen() {
                       • To insure that my personal interests do not conflict with those of NVC&apos;s.
                     </Text>
                   </View>
-
-                  <Text style={styles.modalSectionLabel}>Volunteer Orientation Video</Text>
-                  <View style={styles.videoContainer}>
-                    <View style={styles.videoPlaceholder}>
-                      <MaterialIcons name="play-circle-outline" size={64} color="#166534" />
-                      <Text style={styles.videoPlaceholderText}>Sample Video</Text>
-                      <Text style={styles.videoPlaceholderSubText}>Learn about NVC volunteer opportunities</Text>
-                    </View>
-                    <Text style={styles.videoDescription}>
-                      This orientation video introduces you to the NVC Foundation, our mission, volunteer roles, and what to expect as a member.
-                    </Text>
-                  </View>
-
-                  <TouchableOpacity
-                    style={styles.commitmentAcceptanceRow}
-                    onPress={() => setSignupWatchedVideo(current => !current)}
-                    disabled={signupLoading}
-                    activeOpacity={0.8}
-                  >
-                    <MaterialIcons
-                      name={signupWatchedVideo ? 'check-box' : 'check-box-outline-blank'}
-                      size={22}
-                      color={signupWatchedVideo ? '#166534' : '#64748b'}
-                    />
-                    <Text style={styles.commitmentAcceptanceText}>
-                      I have watched the orientation video.
-                    </Text>
-                  </TouchableOpacity>
 
                   <TouchableOpacity
                     style={styles.commitmentAcceptanceRow}
@@ -1883,363 +1354,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#666',
     marginTop: 16,
-    textAlign: 'center',
-  },
-  inputLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#334155',
-    marginTop: 12,
-    marginBottom: 6,
-  },
-  dropdownButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    marginBottom: 4,
-  },
-  dropdownButtonText: {
-    flex: 1,
-    fontSize: 14,
-    color: '#334155',
-  },
-  pickerContainer: {
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 8,
-    marginBottom: 12,
-    overflow: 'hidden',
-  },
-  pickerOption: {
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
-  },
-  pickerOptionText: {
-    fontSize: 14,
-    color: '#334155',
-  },
-  datePickerContainer: {
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 12,
-  },
-  calendarContainer: {
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 12,
-  },
-  calendarHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-    paddingVertical: 8,
-  },
-  calendarNavButton: {
-    padding: 8,
-  },
-  monthYearButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 6,
-    backgroundColor: '#f0f9ff',
-    gap: 4,
-  },
-  calendarMonthYear: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#0f172a',
-  },
-  yearPickerContainer: {
-    paddingVertical: 12,
-  },
-  yearPickerHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-    paddingHorizontal: 8,
-  },
-  yearNavButton: {
-    padding: 8,
-  },
-  yearPickerTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#0f172a',
-  },
-  yearGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-around',
-    paddingHorizontal: 8,
-    marginBottom: 12,
-  },
-  yearCell: {
-    width: '20%',
-    paddingVertical: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderRadius: 6,
-    marginVertical: 4,
-  },
-  yearCellSelected: {
-    backgroundColor: '#2563eb',
-  },
-  yearCellText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#334155',
-  },
-  yearCellSelectedText: {
-    color: '#fff',
-  },
-  calendarDayHeaders: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    marginBottom: 8,
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
-  },
-  calendarDayHeader: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#64748b',
-    width: '14.28%',
-    textAlign: 'center',
-  },
-  calendarDaysGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    marginBottom: 12,
-  },
-  calendarDaySlot: {
-    width: '14.28%',
-    aspectRatio: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginVertical: 2,
-    borderRadius: 6,
-  },
-  calendarDay: {
-    fontSize: 13,
-    color: '#334155',
-    textAlign: 'center',
-  },
-  calendarDaySelected: {
-    backgroundColor: '#2563eb',
-  },
-  calendarDaySelectedText: {
-    color: '#fff',
-    fontWeight: '600',
-  },
-  backButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 8,
-    marginBottom: 12,
-    backgroundColor: '#eff6ff',
-    borderRadius: 6,
-    gap: 8,
-  },
-  backButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#2563eb',
-  },
-  pickerLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#334155',
-    marginBottom: 8,
-  },
-  pickerConfirmButton: {
-    backgroundColor: '#166534',
-    paddingVertical: 10,
-    borderRadius: 6,
-    alignItems: 'center',
-    marginTop: 12,
-  },
-  pickerConfirmText: {
-    color: '#fff',
-    fontWeight: '600',
-    fontSize: 14,
-  },
-  addressSearchContainer: {
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 12,
-    maxHeight: 300,
-  },
-  addressSuggestions: {
-    maxHeight: 200,
-    marginVertical: 8,
-  },
-  addressSuggestion: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-    gap: 8,
-  },
-  addressSuggestionText: {
-    flex: 1,
-    fontSize: 13,
-    color: '#334155',
-  },
-  regionHeader: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#2563eb',
-    backgroundColor: '#eff6ff',
-    paddingVertical: 6,
-    paddingHorizontal: 8,
-    marginTop: 8,
-    marginBottom: 4,
-    borderRadius: 4,
-  },
-  addressInput: {
-    minHeight: 60,
-    textAlignVertical: 'top',
-  },
-  inputHint: {
-    fontSize: 12,
-    color: '#64748b',
-    marginBottom: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  uploadButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-    backgroundColor: '#f0fdf4',
-    borderWidth: 2,
-    borderColor: '#166534',
-    borderStyle: 'dashed',
-    borderRadius: 8,
-    paddingVertical: 20,
-    marginBottom: 8,
-  },
-  uploadButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#166534',
-  },
-  uploadHint: {
-    fontSize: 12,
-    color: '#64748b',
-    marginBottom: 12,
-  },
-  photoPreviewContainer: {
-    position: 'relative',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  photoPreview: {
-    width: 150,
-    height: 150,
-    borderRadius: 10,
-    backgroundColor: '#f0f0f0',
-    borderWidth: 2,
-    borderColor: '#e2e8f0',
-  },
-  photoRemoveButton: {
-    position: 'absolute',
-    top: -8,
-    right: -8,
-    backgroundColor: '#dc2626',
-    borderRadius: 50,
-    padding: 6,
-  },
-  certificatesList: {
-    backgroundColor: '#f8fafc',
-    borderRadius: 8,
-    marginBottom: 12,
-    padding: 8,
-  },
-  certificateItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
-  },
-  certificatePreview: {
-    width: 50,
-    height: 50,
-    borderRadius: 6,
-    backgroundColor: '#f0f0f0',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  certificateInfo: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  certificateRemoveButton: {
-    padding: 4,
-  },
-  certificateItemText: {
-    flex: 1,
-    fontSize: 13,
-    color: '#334155',
-  },
-  videoContainer: {
-    backgroundColor: '#f8fafc',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 12,
-    alignItems: 'center',
-  },
-  videoPlaceholder: {
-    alignItems: 'center',
-    paddingVertical: 20,
-  },
-  videoPlaceholderText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#334155',
-    marginTop: 10,
-  },
-  videoPlaceholderSubText: {
-    fontSize: 13,
-    color: '#64748b',
-    marginTop: 4,
-  },
-  videoDescription: {
-    fontSize: 13,
-    color: '#334155',
-    lineHeight: 20,
     textAlign: 'center',
   },
 });

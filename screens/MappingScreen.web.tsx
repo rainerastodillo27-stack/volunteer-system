@@ -12,7 +12,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { useAuth } from '../contexts/AuthContext';
 import { Project } from '../models/types';
-import { getAllProjects, getPartnerDashboardSnapshot, getProjectsScreenSnapshot, subscribeToStorageChanges } from '../models/storage';
+import { getAllProjects } from '../models/storage';
 import {
   PHILIPPINES_BOUNDS,
   PHILIPPINES_WEB_CENTER,
@@ -116,16 +116,7 @@ export default function MappingScreen({ navigation }: any) {
 
   useEffect(() => {
     void loadProjects();
-  }, [user]);
-
-  useEffect(() => {
-    return subscribeToStorageChanges(
-      ['projects', 'partnerProjectApplications', 'volunteerProjectJoins', 'volunteerMatches', 'volunteers'],
-      () => {
-        void loadProjects();
-      }
-    );
-  }, [user]);
+  }, []);
 
   useEffect(() => {
     if (!googleMapsApiKey) {
@@ -243,57 +234,6 @@ export default function MappingScreen({ navigation }: any) {
   // Loads all projects so they can be rendered as web map markers.
   const loadProjects = async () => {
     try {
-      if (user?.role === 'volunteer') {
-        const snapshot = await getProjectsScreenSnapshot(user);
-        const completedProjectIds = new Set(
-          snapshot.volunteerJoinRecords
-            .filter(record => (record.participationStatus || 'Active') === 'Completed')
-            .map(record => record.projectId)
-        );
-        const visibleProjectIds = new Set<string>();
-
-        snapshot.volunteerJoinRecords.forEach(record => {
-          if ((record.participationStatus || 'Active') !== 'Completed') {
-            visibleProjectIds.add(record.projectId);
-          }
-        });
-        snapshot.volunteerMatches.forEach(match => {
-          if (match.status === 'Matched') {
-            visibleProjectIds.add(match.projectId);
-          }
-        });
-        snapshot.projects.forEach(project => {
-          const isLegacyJoined =
-            Boolean(user?.id && project.joinedUserIds?.includes(user.id)) &&
-            !completedProjectIds.has(project.id);
-          if (isLegacyJoined) {
-            visibleProjectIds.add(project.id);
-          }
-        });
-
-        setProjects(snapshot.projects.filter(project => visibleProjectIds.has(project.id)));
-        setLoading(false);
-        return;
-      }
-
-      if (user?.role === 'partner' && user.id) {
-        const snapshot = await getPartnerDashboardSnapshot();
-        const approvedProjectIds = new Set(
-          snapshot.partnerApplications
-            .filter(application => application.partnerUserId === user.id && application.status === 'Approved')
-            .map(application => application.projectId)
-        );
-        setProjects(
-          snapshot.projects.filter(
-            project =>
-              project.joinedUserIds?.includes(user.id) ||
-              approvedProjectIds.has(project.id)
-          )
-        );
-        setLoading(false);
-        return;
-      }
-
       const allProjects = await getAllProjects();
       setProjects(allProjects);
       setLoading(false);
