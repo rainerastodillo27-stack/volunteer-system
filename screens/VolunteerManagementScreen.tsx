@@ -25,10 +25,13 @@ import {
   subscribeToStorageChanges,
 } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
+import InlineLoadError from '../components/InlineLoadError';
+import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 // Lets admins inspect volunteers, update availability, and assign projects.
 export default function VolunteerManagementScreen({ navigation, route }: any) {
   const { user, isAdmin } = useAuth();
+  const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [view, setView] = useState<'list' | 'detail'>('list');
@@ -89,6 +92,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     try {
       const allVolunteers = await getAllVolunteers();
       setVolunteers(allVolunteers);
+      setLoadError(null);
       setSelectedVolunteer(currentSelectedVolunteer => {
         if (!currentSelectedVolunteer) {
           return currentSelectedVolunteer;
@@ -100,7 +104,10 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
         );
       });
     } catch (error) {
-      Alert.alert('Error', 'Failed to load volunteers');
+      setLoadError({
+        title: getRequestErrorTitle(error),
+        message: getRequestErrorMessage(error, 'Failed to load volunteers.'),
+      });
     }
   };
 
@@ -109,8 +116,12 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     try {
       const allProjects = await getAllProjects();
       setProjects(allProjects);
+      setLoadError(null);
     } catch (error) {
-      Alert.alert('Error', 'Failed to load projects');
+      setLoadError({
+        title: getRequestErrorTitle(error),
+        message: getRequestErrorMessage(error, 'Failed to load projects.'),
+      });
     }
   };
 
@@ -119,8 +130,12 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     try {
       const logs = await getAllVolunteerTimeLogs();
       setVolunteerTimeLogs(logs);
+      setLoadError(null);
     } catch (error) {
-      Alert.alert('Error', 'Failed to load volunteer time logs');
+      setLoadError({
+        title: getRequestErrorTitle(error),
+        message: getRequestErrorMessage(error, 'Failed to load volunteer time logs.'),
+      });
     }
   };
 
@@ -146,6 +161,11 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     setView('detail');
   };
 
+  // Closes the availability editor after save or cancel.
+  const closeAvailabilityModal = () => {
+    setShowAvailabilityModal(false);
+  };
+
   // Assigns the selected volunteer to an in-progress project.
   const handleMatchVolunteer = async (projectId: string) => {
     if (!isAdmin) {
@@ -162,7 +182,10 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
       const matches = await getVolunteerProjectMatches(selectedVolunteer.id);
       setVolunteerMatches(matches);
     } catch (error) {
-      Alert.alert('Error', 'Failed to match volunteer');
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to match volunteer.')
+      );
     }
   };
 
@@ -187,11 +210,14 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
 
       await saveVolunteer(updated);
       Alert.alert('Success', 'Availability updated');
-      setShowAvailabilityModal(false);
+      closeAvailabilityModal();
       setSelectedVolunteer(updated);
       loadVolunteers();
     } catch (error) {
-      Alert.alert('Error', 'Failed to update availability');
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to update availability.')
+      );
     }
   };
 
@@ -573,11 +599,11 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
         <Modal
           visible={showAvailabilityModal}
           animationType="slide"
-          onRequestClose={() => setShowAvailabilityModal(false)}
+          onRequestClose={closeAvailabilityModal}
         >
           <View style={styles.modalContainer}>
             <View style={styles.modalHeader}>
-              <TouchableOpacity onPress={() => setShowAvailabilityModal(false)}>
+              <TouchableOpacity onPress={closeAvailabilityModal}>
                 <MaterialIcons name="close" size={24} color="#333" />
               </TouchableOpacity>
               <Text style={styles.modalTitle}>Update Availability</Text>
@@ -665,6 +691,19 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
           <Text style={styles.reportButtonText}>Download Hours Report</Text>
         </TouchableOpacity>
       </View>
+      <View style={styles.listContent}>
+        {loadError ? (
+          <InlineLoadError
+            title={loadError.title}
+            message={loadError.message}
+            onRetry={() => {
+              void loadVolunteers();
+              void loadProjects();
+              void loadTimeLogs();
+            }}
+          />
+        ) : null}
+      </View>
       <FlatList
         data={volunteers}
         keyExtractor={vol => vol.id}
@@ -705,7 +744,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
           </TouchableOpacity>
         )}
         scrollEnabled={true}
-        contentContainerStyle={{ paddingHorizontal: 16, paddingVertical: 8 }}
+        contentContainerStyle={styles.listContent}
       />
     </View>
   );
@@ -743,6 +782,10 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 12,
     fontWeight: '700',
+  },
+  listContent: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
   },
   header: {
     flexDirection: 'row',

@@ -5,6 +5,7 @@ import {
   createUserAccount,
   getAllUsers,
   getApiBaseUrl,
+  getUserByEmailOrPhone,
   isValidDswdAccreditationNo,
   loginWithCredentials,
   subscribeToStorageChanges,
@@ -12,6 +13,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import AppLogo from '../components/AppLogo';
 import { AdvocacyFocus, NVCSector, PartnerSectorType, User, UserRole, UserType } from '../models/types';
+import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 type SignupVolunteerSheetState = {
   gender: string;
@@ -65,6 +67,20 @@ function createEmptySignupPartnerApplication(): SignupPartnerApplicationState {
     dswdAccreditationNo: '',
     advocacyFocus: [],
   };
+}
+
+// Chooses the most specific credential error message for failed login attempts.
+function getIncorrectLoginMessage(
+  matchedUser: User | null,
+  allUsers: User[],
+  attemptedPassword: string
+): string {
+  if (matchedUser) {
+    return 'Incorrect password.';
+  }
+
+  const passwordExists = allUsers.some(user => user.password === attemptedPassword);
+  return passwordExists ? 'Incorrect user.' : 'Incorrect user and password.';
 }
 
 // Handles account login and volunteer or partner self-registration.
@@ -133,14 +149,12 @@ export default function LoginScreen() {
           setBackendStatus('online');
           setBackendMessage(`Backend connected to Postgres: ${getApiBaseUrl()}`);
         }
-      } catch (error: any) {
+      } catch (error) {
         if (!cancelled && mountedRef.current) {
           const defaultMessage = `Database backend unavailable at ${getApiBaseUrl()}. Check the backend process and Supabase connection.`;
-          const fallbackMessage =
-            error?.message === 'Failed to fetch' ||
-            error?.message === 'Network request failed'
-              ? `Unable to reach the backend at ${getApiBaseUrl()}. Ensure the backend is running and accessible from your browser.`
-              : error?.message || defaultMessage;
+          const fallbackMessage = getRequestErrorMessage(error, defaultMessage, {
+            backendUrl: getApiBaseUrl(),
+          });
 
           setBackendStatus('offline');
           setBackendMessage(fallbackMessage);
@@ -194,7 +208,10 @@ export default function LoginScreen() {
 
   // Authenticates the user with an email or phone identifier and password.
   const handleLogin = async () => {
-    if (!identifier.trim() || !password.trim()) {
+    const trimmedIdentifier = identifier.trim();
+    const trimmedPassword = password.trim();
+
+    if (!trimmedIdentifier || !trimmedPassword) {
       Alert.alert('Validation Error', 'Please enter email or phone and password');
       return;
     }
@@ -206,10 +223,18 @@ export default function LoginScreen() {
 
     try {
       setLoading(true);
-      const user = await loginWithCredentials(identifier.trim(), password.trim());
+      const user = await loginWithCredentials(trimmedIdentifier, trimmedPassword);
 
       if (!user) {
-        Alert.alert('Authentication Failed', 'Incorrect email/phone or password.');
+        const [matchedUser, allUsers] = await Promise.all([
+          getUserByEmailOrPhone(trimmedIdentifier),
+          getAllUsers(),
+        ]);
+
+        Alert.alert(
+          'Authentication Failed',
+          getIncorrectLoginMessage(matchedUser, allUsers, trimmedPassword)
+        );
         setLoading(false);
         return;
       }
@@ -226,12 +251,15 @@ export default function LoginScreen() {
       setPassword('');
     } catch (error) {
       console.error('Login error:', error);
-      const message =
-        error instanceof Error && error.message
-          ? error.message
-          : 'An error occurred during login. Please try again.';
+      const message = getRequestErrorMessage(
+        error,
+        'An error occurred during login. Please try again.',
+        { backendUrl: getApiBaseUrl() }
+      );
       const title =
-        message.includes('rejected')
+        getRequestErrorTitle(error, '') === 'Database Unavailable'
+          ? 'Database Unavailable'
+          : message.includes('rejected')
           ? 'Application Rejected'
           : message.includes('organization application') || message.includes('partner account')
           ? 'Application Pending'
@@ -400,8 +428,13 @@ export default function LoginScreen() {
           ? 'Your partner application was submitted. An admin must verify and approve it before partner login is unlocked.'
           : 'Your account has been registered and will appear in admin user management.'
       );
-    } catch (error: any) {
-      Alert.alert('Sign Up Error', error?.message || 'Failed to create account.');
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error, 'Sign Up Error'),
+        getRequestErrorMessage(error, 'Failed to create account.', {
+          backendUrl: getApiBaseUrl(),
+        })
+      );
     } finally {
       setSignupLoading(false);
     }

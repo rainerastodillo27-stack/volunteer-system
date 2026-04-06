@@ -9,9 +9,11 @@ import {
   Modal,
   TextInput,
   Image,
+  ActivityIndicator,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
+import InlineLoadError from '../components/InlineLoadError';
 import {
   AdvocacyFocus,
   Partner,
@@ -50,8 +52,10 @@ import {
 import { Volunteer, VolunteerProjectJoinRecord, VolunteerProjectMatch } from '../models/types';
 import { useAuth } from '../contexts/AuthContext';
 import { format } from 'date-fns';
+import { navigateToAvailableRoute } from '../utils/navigation';
 import { getProjectStatusColor } from '../utils/projectStatus';
 import { isImageMediaUri } from '../utils/media';
+import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 const statuses = ['Planning', 'In Progress', 'On Hold', 'Completed', 'Cancelled'];
 const projectModules: AdvocacyFocus[] = ['Nutrition', 'Education', 'Livelihood', 'Disaster'];
@@ -131,6 +135,7 @@ function getProjectCategoryFromModule(module: AdvocacyFocus): Project['category'
 // Gives admins a project lifecycle workspace for projects, updates, and approvals.
 export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const { user, isAdmin } = useAuth();
+  const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [partners, setPartners] = useState<Partner[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
@@ -139,6 +144,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [partnerCheckIns, setPartnerCheckIns] = useState<PartnerEventCheckIn[]>([]);
   const [partnerReports, setPartnerReports] = useState<PartnerReport[]>([]);
   const [impactReports, setImpactReports] = useState<PublishedImpactReport[]>([]);
+  const [actionLoadingKey, setActionLoadingKey] = useState<string | null>(null);
   const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
   const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
@@ -223,6 +229,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     try {
       const allProjects = await getAllProjects();
       setProjects(allProjects);
+      setLoadError(null);
       setSelectedProject(currentSelectedProject => {
         if (!currentSelectedProject) {
           return currentSelectedProject;
@@ -232,7 +239,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       });
       return allProjects;
     } catch (error) {
-      Alert.alert('Error', 'Failed to load projects');
+      setLoadError({
+        title: getRequestErrorTitle(error),
+        message: getRequestErrorMessage(error, 'Failed to load projects.'),
+      });
       return [];
     }
   };
@@ -246,7 +256,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         current.partnerId ? current : { ...current, partnerId: allPartners[0]?.id || '' }
       );
     } catch (error) {
-      Alert.alert('Error', 'Failed to load partners');
+      setLoadError({
+        title: getRequestErrorTitle(error),
+        message: getRequestErrorMessage(error, 'Failed to load partners.'),
+      });
     }
   };
 
@@ -256,7 +269,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       const allVolunteers = await getAllVolunteers();
       setVolunteers(allVolunteers);
     } catch (error) {
-      Alert.alert('Error', 'Failed to load volunteers');
+      setLoadError({
+        title: getRequestErrorTitle(error),
+        message: getRequestErrorMessage(error, 'Failed to load volunteers.'),
+      });
     }
   };
 
@@ -266,7 +282,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       const updates = await getStatusUpdatesByProject(projectId);
       setStatusUpdates(updates);
     } catch (error) {
-      Alert.alert('Error', 'Failed to load status updates');
+      setLoadError({
+        title: getRequestErrorTitle(error),
+        message: getRequestErrorMessage(error, 'Failed to load status updates.'),
+      });
     }
   };
 
@@ -276,7 +295,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       const applications = await getPartnerProjectApplications(projectId);
       setPartnerApplications(applications);
     } catch (error) {
-      Alert.alert('Error', 'Failed to load partner applications');
+      setLoadError({
+        title: getRequestErrorTitle(error),
+        message: getRequestErrorMessage(error, 'Failed to load partner applications.'),
+      });
     }
   };
 
@@ -286,7 +308,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       const checkIns = await getPartnerEventCheckInsByProject(projectId);
       setPartnerCheckIns(checkIns);
     } catch (error) {
-      Alert.alert('Error', 'Failed to load partner check-ins');
+      setLoadError({
+        title: getRequestErrorTitle(error),
+        message: getRequestErrorMessage(error, 'Failed to load partner check-ins.'),
+      });
     }
   };
 
@@ -296,7 +321,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       const reports = await getPartnerReportsByProject(projectId);
       setPartnerReports(reports);
     } catch (error) {
-      Alert.alert('Error', 'Failed to load partner reports');
+      setLoadError({
+        title: getRequestErrorTitle(error),
+        message: getRequestErrorMessage(error, 'Failed to load partner reports.'),
+      });
     }
   };
 
@@ -306,7 +334,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       const reports = await getPublishedImpactReportsByProject(projectId);
       setImpactReports(reports);
     } catch (error) {
-      Alert.alert('Error', 'Failed to load generated impact reports');
+      setLoadError({
+        title: getRequestErrorTitle(error),
+        message: getRequestErrorMessage(error, 'Failed to load generated impact reports.'),
+      });
     }
   };
 
@@ -316,7 +347,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       const records = await getVolunteerProjectJoinRecords(projectId);
       setVolunteerJoinRecords(records);
     } catch (error) {
-      Alert.alert('Error', 'Failed to load joined volunteers');
+      setLoadError({
+        title: getRequestErrorTitle(error),
+        message: getRequestErrorMessage(error, 'Failed to load joined volunteers.'),
+      });
     }
   };
 
@@ -326,7 +360,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       const matches = await getProjectMatches(projectId);
       setVolunteerMatches(matches);
     } catch (error) {
-      Alert.alert('Error', 'Failed to load volunteer requests');
+      setLoadError({
+        title: getRequestErrorTitle(error),
+        message: getRequestErrorMessage(error, 'Failed to load volunteer requests.'),
+      });
     }
   };
 
@@ -336,7 +373,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       const matches = await getAllVolunteerProjectMatches();
       setAllVolunteerMatches(matches);
     } catch (error) {
-      Alert.alert('Error', 'Failed to load volunteer request notifications');
+      setLoadError({
+        title: getRequestErrorTitle(error),
+        message: getRequestErrorMessage(error, 'Failed to load volunteer request notifications.'),
+      });
     }
   };
 
@@ -346,7 +386,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       const logs = await getAllVolunteerTimeLogs();
       setVolunteerTimeLogs(logs);
     } catch (error) {
-      Alert.alert('Error', 'Failed to load volunteer time logs');
+      setLoadError({
+        title: getRequestErrorTitle(error),
+        message: getRequestErrorMessage(error, 'Failed to load volunteer time logs.'),
+      });
     }
   };
 
@@ -386,6 +429,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     setShowProjectModal(true);
   };
 
+  // Closes the project editor and clears edit mode so the main screen is shown again.
+  const closeProjectModal = () => {
+    setShowProjectModal(false);
+    setEditingProjectId(null);
+  };
+
   // Opens the project modal in edit mode using the selected project values.
   const openEditProjectModal = (project: Project) => {
     setEditingProjectId(project.id);
@@ -411,6 +460,27 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const handleProjectDraftChange = <K extends keyof ProjectDraft>(key: K, value: ProjectDraft[K]) => {
     setProjectDraft(current => ({ ...current, [key]: value }));
   };
+
+  // Opens the volunteer management route for one volunteer when available.
+  const openVolunteerProfile = (volunteerId: string) => {
+    navigateToAvailableRoute(navigation, 'Volunteers', { volunteerId }, {
+      routeName: 'Dashboard',
+    });
+  };
+
+  const visibleImpactReports = useMemo(() => {
+    const latestReportByFormat = new Map<PublishedImpactReport['format'], PublishedImpactReport>();
+
+    [...impactReports]
+      .sort((left, right) => new Date(right.generatedAt).getTime() - new Date(left.generatedAt).getTime())
+      .forEach(report => {
+        if (!latestReportByFormat.has(report.format)) {
+          latestReportByFormat.set(report.format, report);
+        }
+      });
+
+    return Array.from(latestReportByFormat.values());
+  }, [impactReports]);
 
   // Creates or updates a project record from the modal form.
   const handleSaveProjectRecord = async () => {
@@ -474,7 +544,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       await saveProject(savedProject);
       await loadProjects();
       setSelectedProject(savedProject);
-      setShowProjectModal(false);
+      closeProjectModal();
       Alert.alert('Saved', editingProjectId ? 'Program updated.' : 'Program created.');
       await Promise.all([
         loadStatusUpdates(savedProject.id),
@@ -485,7 +555,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         loadVolunteerJoinsForProject(savedProject.id),
       ]);
     } catch (error) {
-      Alert.alert('Error', 'Failed to save program.');
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to save program.')
+      );
     }
   };
 
@@ -516,7 +589,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               await loadProjects();
               Alert.alert('Deleted', 'Program removed.');
             } catch (error) {
-              Alert.alert('Error', 'Failed to delete program.');
+              Alert.alert(
+                getRequestErrorTitle(error),
+                getRequestErrorMessage(error, 'Failed to delete program.')
+              );
             }
           },
         },
@@ -563,7 +639,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       await loadStatusUpdates(selectedProject.id);
       loadProjects();
     } catch (error) {
-      Alert.alert('Error', 'Failed to add status update');
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to add status update.')
+      );
     }
   };
 
@@ -584,7 +663,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       setSelectedProject(nextSelectedProject);
       Alert.alert('Success', `Partner application ${nextStatus.toLowerCase()}. The partner has been notified.`);
     } catch (error) {
-      Alert.alert('Error', 'Failed to review partner application');
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to review partner application.')
+      );
     }
   };
 
@@ -598,7 +680,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       await loadPartnerReportsForProject(selectedProject.id);
       Alert.alert('Reviewed', 'Partner report marked as reviewed.');
     } catch (error) {
-      Alert.alert('Error', 'Failed to review the partner report.');
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to review the partner report.')
+      );
     }
   };
 
@@ -608,11 +693,17 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     }
 
     try {
+      setActionLoadingKey('generate-reports');
       await generateFinalImpactReports(selectedProject.id, user.id);
       await loadImpactReportsForProject(selectedProject.id);
       Alert.alert('Generated', 'Final PDF and Excel report files are ready to publish.');
     } catch (error) {
-      Alert.alert('Error', 'Failed to generate the final impact reports.');
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to generate the final impact reports.')
+      );
+    } finally {
+      setActionLoadingKey(null);
     }
   };
 
@@ -622,11 +713,30 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     }
 
     try {
+      setActionLoadingKey(`publish-${reportId}`);
       await publishImpactReport(reportId);
       await loadImpactReportsForProject(selectedProject.id);
       Alert.alert('Published', 'The file is now available in the partner portal.');
     } catch (error) {
-      Alert.alert('Error', 'Failed to publish the impact report.');
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to publish the impact report.')
+      );
+    } finally {
+      setActionLoadingKey(null);
+    }
+  };
+
+  const handleRefreshProjectDetails = async () => {
+    if (!selectedProject) {
+      return;
+    }
+
+    try {
+      setActionLoadingKey('refresh-project');
+      await handleSelectProject(selectedProject);
+    } finally {
+      setActionLoadingKey(null);
     }
   };
 
@@ -645,7 +755,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       ]);
       Alert.alert('Success', 'Volunteer marked as completed for this program.');
     } catch (error) {
-      Alert.alert('Error', 'Failed to complete volunteer participation.');
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to complete volunteer participation.')
+      );
     }
   };
 
@@ -673,7 +786,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           : 'Volunteer request rejected and volunteer notified.'
       );
     } catch (error) {
-      Alert.alert('Error', 'Failed to review volunteer request.');
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to review volunteer request.')
+      );
     }
   };
 
@@ -853,9 +969,254 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     );
   };
 
+  const renderProjectEditorModal = () => (
+    <Modal
+      visible={showProjectModal}
+      animationType="slide"
+      onRequestClose={closeProjectModal}
+    >
+      <View style={styles.modalContainer}>
+        <View style={styles.modalHeader}>
+          <TouchableOpacity onPress={closeProjectModal}>
+            <MaterialIcons name="close" size={24} color="#333" />
+          </TouchableOpacity>
+          <Text style={styles.modalTitle}>
+            {editingProjectId ? 'Edit Program' : 'Create Program'}
+          </Text>
+          <TouchableOpacity onPress={handleSaveProjectRecord}>
+            <Text style={styles.projectModalSave}>Save</Text>
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView style={styles.modalContent}>
+          <View style={styles.formRow}>
+            <TextInput
+              style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
+              placeholder="Program title"
+              placeholderTextColor="#999"
+              value={projectDraft.title}
+              onChangeText={value => handleProjectDraftChange('title', value)}
+            />
+            <Text style={styles.labelRight}>Title</Text>
+          </View>
+
+          <View style={[styles.formRow, styles.formRowTop]}>
+            <TextInput
+              style={[styles.textArea, styles.inputWithLabel]}
+              placeholder="Program description"
+              placeholderTextColor="#999"
+              multiline
+              numberOfLines={4}
+              value={projectDraft.description}
+              onChangeText={value => handleProjectDraftChange('description', value)}
+            />
+            <Text style={[styles.labelRight, styles.labelTop]}>Description</Text>
+          </View>
+
+          <View style={[styles.formRow, styles.formRowTop]}>
+            <View style={[styles.statusOptions, styles.statusOptionsCard]}>
+              {projectModules.map(category => (
+                <TouchableOpacity
+                  key={category}
+                  style={[
+                    styles.statusOption,
+                    projectDraft.programModule === category && styles.statusOptionSelected,
+                  ]}
+                  onPress={() => handleProjectDraftChange('programModule', category)}
+                >
+                  <Text
+                    style={[
+                      styles.statusOptionText,
+                      projectDraft.programModule === category && styles.statusOptionTextSelected,
+                    ]}
+                  >
+                    {category}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <Text style={[styles.labelRight, styles.labelTop]}>Program Module</Text>
+          </View>
+
+          <View style={[styles.formRow, styles.formRowTop]}>
+            <View style={[styles.statusOptions, styles.statusOptionsCard]}>
+              {statuses.map(status => (
+                <TouchableOpacity
+                  key={status}
+                  style={[
+                    styles.statusOption,
+                    projectDraft.status === status && styles.statusOptionSelected,
+                  ]}
+                  onPress={() => handleProjectDraftChange('status', status as Project['status'])}
+                >
+                  <Text
+                    style={[
+                      styles.statusOptionText,
+                      projectDraft.status === status && styles.statusOptionTextSelected,
+                    ]}
+                  >
+                    {status}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <Text style={[styles.labelRight, styles.labelTop]}>Status</Text>
+          </View>
+
+          <View style={styles.formRow}>
+            <View style={[styles.statusOptions, styles.statusOptionsCard]}>
+              <TouchableOpacity
+                style={[
+                  styles.statusOption,
+                  !projectDraft.isEvent && styles.statusOptionSelected,
+                ]}
+                onPress={() => handleProjectDraftChange('isEvent', false)}
+              >
+                <Text
+                  style={[
+                    styles.statusOptionText,
+                    !projectDraft.isEvent && styles.statusOptionTextSelected,
+                  ]}
+                >
+                  Program
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.statusOption,
+                  projectDraft.isEvent && styles.statusOptionSelected,
+                ]}
+                onPress={() => handleProjectDraftChange('isEvent', true)}
+              >
+                <Text
+                  style={[
+                    styles.statusOptionText,
+                    projectDraft.isEvent && styles.statusOptionTextSelected,
+                  ]}
+                >
+                  Event
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.labelRight}>Type</Text>
+          </View>
+
+          <View style={[styles.formRow, styles.formRowTop]}>
+            <View style={[styles.statusOptions, styles.statusOptionsCard]}>
+              {partners.map(partner => (
+                <TouchableOpacity
+                  key={partner.id}
+                  style={[
+                    styles.statusOption,
+                    projectDraft.partnerId === partner.id && styles.statusOptionSelected,
+                  ]}
+                  onPress={() => handleProjectDraftChange('partnerId', partner.id)}
+                >
+                  <Text
+                    style={[
+                      styles.statusOptionText,
+                      projectDraft.partnerId === partner.id && styles.statusOptionTextSelected,
+                    ]}
+                  >
+                    {partner.name}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <Text style={[styles.labelRight, styles.labelTop]}>Partner</Text>
+          </View>
+
+          <View style={styles.formRow}>
+            <TextInput
+              style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
+              placeholder="YYYY-MM-DD"
+              placeholderTextColor="#999"
+              value={projectDraft.startDate}
+              onChangeText={value => handleProjectDraftChange('startDate', value)}
+            />
+            <Text style={styles.labelRight}>Start Date</Text>
+          </View>
+
+          <View style={styles.formRow}>
+            <TextInput
+              style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
+              placeholder="YYYY-MM-DD"
+              placeholderTextColor="#999"
+              value={projectDraft.endDate}
+              onChangeText={value => handleProjectDraftChange('endDate', value)}
+            />
+            <Text style={styles.labelRight}>End Date</Text>
+          </View>
+
+          <View style={styles.formRow}>
+            <TextInput
+              style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
+              placeholder="Location address"
+              placeholderTextColor="#999"
+              value={projectDraft.address}
+              onChangeText={value => handleProjectDraftChange('address', value)}
+            />
+            <Text style={styles.labelRight}>Address</Text>
+          </View>
+
+          <View style={styles.formRow}>
+            <TextInput
+              style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
+              placeholder="Latitude"
+              placeholderTextColor="#999"
+              keyboardType="decimal-pad"
+              value={projectDraft.latitude}
+              onChangeText={value => handleProjectDraftChange('latitude', value)}
+            />
+            <Text style={styles.labelRight}>Latitude</Text>
+          </View>
+
+          <View style={styles.formRow}>
+            <TextInput
+              style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
+              placeholder="Longitude"
+              placeholderTextColor="#999"
+              keyboardType="decimal-pad"
+              value={projectDraft.longitude}
+              onChangeText={value => handleProjectDraftChange('longitude', value)}
+            />
+            <Text style={styles.labelRight}>Longitude</Text>
+          </View>
+
+          <View style={styles.formRow}>
+            <TextInput
+              style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
+              placeholder="Volunteer slots"
+              placeholderTextColor="#999"
+              keyboardType="number-pad"
+              value={projectDraft.volunteersNeeded}
+              onChangeText={value => handleProjectDraftChange('volunteersNeeded', value)}
+            />
+            <Text style={styles.labelRight}>Volunteer Slots</Text>
+          </View>
+
+          <TouchableOpacity
+            style={styles.submitButton}
+            onPress={handleSaveProjectRecord}
+          >
+            <Text style={styles.submitButtonText}>
+              {editingProjectId ? 'Update Program' : 'Create Program'}
+            </Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </View>
+    </Modal>
+  );
+
   if (selectedProject) {
     const volunteerEntries = getProjectVolunteerEntries(selectedProject);
     const volunteerRequestEntries = getProjectVolunteerRequestEntries();
+    const openPartnerApplications = partnerApplications.filter(
+      application => application.status !== 'Approved',
+    );
+    const approvedPartnerApplications = partnerApplications.filter(
+      application => application.status === 'Approved',
+    );
     const projectTimeLogEntries: ProjectTimeLogEntry[] = volunteerTimeLogs
       .filter(log => log.projectId === selectedProject.id)
       .map(log => {
@@ -868,6 +1229,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       });
     const projectTimeInCount = projectTimeLogEntries.length;
     const projectTimeOutCount = projectTimeLogEntries.filter(log => Boolean(log.timeOut)).length;
+    const selectedPartnerName =
+      partners.find(partner => partner.id === selectedProject.partnerId)?.name || selectedProject.partnerId;
+    const pendingPartnerRequests = openPartnerApplications.filter(
+      application => application.status === 'Pending',
+    ).length;
 
     return (
       <ScrollView style={styles.container}>
@@ -876,35 +1242,103 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             <MaterialIcons name="arrow-back" size={24} color="#333" />
           </TouchableOpacity>
           <Text style={styles.title}>Project Details</Text>
-          <View style={styles.headerActions}>
-            {isAdmin && (
-              <TouchableOpacity
-                style={styles.iconActionButton}
-                onPress={() => openEditProjectModal(selectedProject)}
-              >
-                <MaterialIcons name="edit" size={20} color="#166534" />
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity
-              style={styles.iconActionButton}
-              onPress={() => handleSelectProject(selectedProject)}
-            >
-              <MaterialIcons name="refresh" size={22} color="#166534" />
-            </TouchableOpacity>
-            {isAdmin && (
-              <TouchableOpacity
-                style={styles.iconActionButton}
-                onPress={handleDeleteProjectRecord}
-              >
-                <MaterialIcons name="delete-outline" size={20} color="#b91c1c" />
-              </TouchableOpacity>
-            )}
-          </View>
+          <View style={styles.headerSpacer} />
         </View>
 
         <View style={styles.detailsCard}>
-          <Text style={styles.detailsTitle}>{selectedProject.title}</Text>
-          <Text style={styles.detailsSubtitle}>{selectedProject.description}</Text>
+          <View style={styles.detailsHero}>
+            <View style={styles.detailsHeroHeader}>
+              <View style={styles.detailsHeroCopy}>
+                <Text style={styles.detailsEyebrow}>
+                  {selectedProject.isEvent ? 'Event Workspace' : 'Program Workspace'}
+                </Text>
+                <Text style={styles.detailsTitle}>{selectedProject.title}</Text>
+                <Text style={styles.detailsSubtitle}>{selectedProject.description}</Text>
+              </View>
+              <View
+                style={[
+                  styles.detailsHeroStatus,
+                  { backgroundColor: getProjectStatusColor(selectedProject.status) },
+                ]}
+              >
+                <Text style={styles.statusText}>{selectedProject.status}</Text>
+              </View>
+            </View>
+
+            <View style={styles.detailsQuickGrid}>
+              <View style={styles.detailsQuickCard}>
+                <Text style={styles.detailsQuickLabel}>Program Module</Text>
+                <Text style={styles.detailsQuickValue}>
+                  {selectedProject.programModule || selectedProject.category}
+                </Text>
+              </View>
+              <View style={styles.detailsQuickCard}>
+                <Text style={styles.detailsQuickLabel}>Assigned Partner</Text>
+                <Text style={styles.detailsQuickValue}>{selectedPartnerName}</Text>
+              </View>
+              <View style={styles.detailsQuickCard}>
+                <Text style={styles.detailsQuickLabel}>Volunteer Slots</Text>
+                <Text style={styles.detailsQuickValue}>
+                  {selectedProject.volunteers.length}/{selectedProject.volunteersNeeded}
+                </Text>
+              </View>
+              <View style={styles.detailsQuickCard}>
+                <Text style={styles.detailsQuickLabel}>Pending Partner Requests</Text>
+                <Text style={styles.detailsQuickValue}>{pendingPartnerRequests}</Text>
+              </View>
+              <View style={styles.detailsQuickCard}>
+                <Text style={styles.detailsQuickLabel}>Start Date</Text>
+                <Text style={styles.detailsQuickValue}>
+                  {format(new Date(selectedProject.startDate), 'PPP')}
+                </Text>
+              </View>
+              <View style={styles.detailsQuickCard}>
+                <Text style={styles.detailsQuickLabel}>End Date</Text>
+                <Text style={styles.detailsQuickValue}>
+                  {format(new Date(selectedProject.endDate), 'PPP')}
+                </Text>
+              </View>
+            </View>
+          </View>
+
+          {isAdmin && (
+            <View style={styles.detailsActionRow}>
+              <TouchableOpacity
+                style={[styles.detailsActionButton, Boolean(actionLoadingKey) && styles.detailsActionButtonDisabled]}
+                onPress={() => openEditProjectModal(selectedProject)}
+                disabled={Boolean(actionLoadingKey)}
+              >
+                <MaterialIcons name="edit" size={18} color="#166534" />
+                <Text style={styles.detailsActionButtonText}>Edit Program</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.detailsActionButton, Boolean(actionLoadingKey) && styles.detailsActionButtonDisabled]}
+                onPress={handleRefreshProjectDetails}
+                disabled={Boolean(actionLoadingKey)}
+              >
+                {actionLoadingKey === 'refresh-project' ? (
+                  <ActivityIndicator size="small" color="#166534" />
+                ) : (
+                  <MaterialIcons name="refresh" size={18} color="#166534" />
+                )}
+                <Text style={styles.detailsActionButtonText}>Refresh</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.detailsActionButton,
+                  styles.detailsDeleteButton,
+                  Boolean(actionLoadingKey) && styles.detailsActionButtonDisabled,
+                ]}
+                onPress={handleDeleteProjectRecord}
+                disabled={Boolean(actionLoadingKey)}
+              >
+                <MaterialIcons name="delete-outline" size={18} color="#b91c1c" />
+                <Text style={styles.detailsDeleteButtonText}>Delete</Text>
+              </TouchableOpacity>
+            </View>
+          )}
 
           {volunteerRequestEntries.some(entry => entry.status === 'Requested') && (
             <View style={styles.requestNotificationPanel}>
@@ -916,66 +1350,56 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             </View>
           )}
 
-          <View style={styles.detailsSection}>
+          <View style={[styles.detailsSection, styles.detailsSectionCard]}>
             <Text style={styles.sectionTitle}>Program Setup</Text>
-            <View style={styles.timelineDetails}>
-              <Text style={styles.timelineLabel}>Type:</Text>
-              <Text style={styles.timelineValue}>{selectedProject.isEvent ? 'Event' : 'Program'}</Text>
+            <Text style={styles.sectionHint}>Core project information for admin review.</Text>
+            <View style={styles.detailField}>
+              <Text style={styles.detailFieldLabel}>Project Type</Text>
+              <Text style={styles.detailFieldValue}>{selectedProject.isEvent ? 'Event' : 'Program'}</Text>
             </View>
-            <View style={styles.timelineDetails}>
-              <Text style={styles.timelineLabel}>Program Module:</Text>
-              <Text style={styles.timelineValue}>{selectedProject.programModule || selectedProject.category}</Text>
-            </View>
-            <View style={styles.timelineDetails}>
-              <Text style={styles.timelineLabel}>Partner:</Text>
-              <Text style={styles.timelineValue}>
-                {partners.find(partner => partner.id === selectedProject.partnerId)?.name || selectedProject.partnerId}
+            <View style={styles.detailField}>
+              <Text style={styles.detailFieldLabel}>Program Module</Text>
+              <Text style={styles.detailFieldValue}>
+                {selectedProject.programModule || selectedProject.category}
               </Text>
             </View>
-            <View style={styles.timelineDetails}>
-              <Text style={styles.timelineLabel}>Slots:</Text>
-              <Text style={styles.timelineValue}>
+            <View style={styles.detailField}>
+              <Text style={styles.detailFieldLabel}>Assigned Partner</Text>
+              <Text style={styles.detailFieldValue}>{selectedPartnerName}</Text>
+            </View>
+          </View>
+
+          <View style={[styles.detailsSection, styles.detailsSectionCard]}>
+            <Text style={styles.sectionTitle}>Schedule and Capacity</Text>
+            <Text style={styles.sectionHint}>Quick schedule and staffing snapshot.</Text>
+            <View style={styles.detailField}>
+              <Text style={styles.detailFieldLabel}>Start Date</Text>
+              <Text style={styles.detailFieldValue}>
+                {format(new Date(selectedProject.startDate), 'PPP')}
+              </Text>
+            </View>
+            <View style={styles.detailField}>
+              <Text style={styles.detailFieldLabel}>End Date</Text>
+              <Text style={styles.detailFieldValue}>
+                {format(new Date(selectedProject.endDate), 'PPP')}
+              </Text>
+            </View>
+            <View style={styles.detailField}>
+              <Text style={styles.detailFieldLabel}>Volunteer Slots</Text>
+              <Text style={styles.detailFieldValue}>
                 {selectedProject.volunteers.length}/{selectedProject.volunteersNeeded}
               </Text>
             </View>
           </View>
 
           <View style={styles.detailsSection}>
-            <Text style={styles.sectionTitle}>Timeline</Text>
-            <View style={styles.timelineDetails}>
-              <Text style={styles.timelineLabel}>Start:</Text>
-              <Text style={styles.timelineValue}>
-                {format(new Date(selectedProject.startDate), 'PPP')}
-              </Text>
-            </View>
-            <View style={styles.timelineDetails}>
-              <Text style={styles.timelineLabel}>End:</Text>
-              <Text style={styles.timelineValue}>
-                {format(new Date(selectedProject.endDate), 'PPP')}
-              </Text>
-            </View>
-          </View>
-
-          <View style={styles.detailsSection}>
-            <Text style={styles.sectionTitle}>Current Status</Text>
-            <View
-              style={[
-                styles.currentStatusBadge,
-                { backgroundColor: getProjectStatusColor(selectedProject.status) },
-              ]}
-            >
-              <Text style={styles.statusText}>{selectedProject.status}</Text>
-            </View>
-          </View>
-
-          <View style={styles.detailsSection}>
             <Text style={styles.sectionTitle}>Partner Join Requests</Text>
 
-            {partnerApplications.length === 0 ? (
-              <Text style={styles.emptyText}>No partner applications yet</Text>
+            {openPartnerApplications.length === 0 ? (
+              <Text style={styles.emptyText}>No pending or rejected partner requests right now</Text>
             ) : (
               <View style={styles.updatesList}>
-                {partnerApplications.map(application => (
+                {openPartnerApplications.map(application => (
                   <View key={application.id} style={styles.applicationCard}>
                     <View style={styles.applicationHeader}>
                       <View style={{ flex: 1 }}>
@@ -1015,6 +1439,43 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                         </TouchableOpacity>
                       </View>
                     )}
+                  </View>
+                ))}
+              </View>
+            )}
+          </View>
+
+          <View style={styles.detailsSection}>
+            <Text style={styles.sectionTitle}>Approved Partners</Text>
+
+            {approvedPartnerApplications.length === 0 ? (
+              <Text style={styles.emptyText}>No approved partners yet</Text>
+            ) : (
+              <View style={styles.updatesList}>
+                {approvedPartnerApplications.map(application => (
+                  <View key={application.id} style={styles.applicationCard}>
+                    <View style={styles.applicationHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.applicationName}>{application.partnerName}</Text>
+                        <Text style={styles.applicationMeta}>{application.partnerEmail}</Text>
+                        <Text style={styles.applicationMeta}>
+                          Requested {format(new Date(application.requestedAt), 'PPpp')}
+                        </Text>
+                        {application.reviewedAt ? (
+                          <Text style={styles.applicationMeta}>
+                            Approved {format(new Date(application.reviewedAt), 'PPpp')}
+                          </Text>
+                        ) : null}
+                      </View>
+                      <View
+                        style={[
+                          styles.applicationStatusBadge,
+                          styles.applicationStatusApproved,
+                        ]}
+                      >
+                        <Text style={styles.applicationStatusText}>Approved</Text>
+                      </View>
+                    </View>
                   </View>
                 ))}
               </View>
@@ -1131,7 +1592,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                     <TouchableOpacity
                       style={styles.viewVolunteerProfileButton}
-                      onPress={() => navigation.navigate('Volunteers', { volunteerId: requestEntry.volunteerId })}
+                      onPress={() => openVolunteerProfile(requestEntry.volunteerId)}
                     >
                       <MaterialIcons name="person-search" size={16} color="#2563eb" />
                       <Text style={styles.viewVolunteerProfileText}>Open Volunteer Profile</Text>
@@ -1210,7 +1671,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                     )}
                     <TouchableOpacity
                       style={styles.viewVolunteerProfileButton}
-                      onPress={() => navigation.navigate('Volunteers', { volunteerId: volunteerEntry.id })}
+                      onPress={() => openVolunteerProfile(volunteerEntry.id)}
                     >
                       <MaterialIcons name="person-search" size={16} color="#2563eb" />
                       <Text style={styles.viewVolunteerProfileText}>Open Volunteer Profile</Text>
@@ -1225,8 +1686,19 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Impact Hub</Text>
               {isAdmin && (
-                <TouchableOpacity style={styles.addButton} onPress={handleGenerateFinalReports}>
-                  <MaterialIcons name="description" size={18} color="#fff" />
+                <TouchableOpacity
+                  style={[
+                    styles.addButton,
+                    actionLoadingKey === 'generate-reports' && styles.addButtonDisabled,
+                  ]}
+                  onPress={handleGenerateFinalReports}
+                  disabled={Boolean(actionLoadingKey)}
+                >
+                  {actionLoadingKey === 'generate-reports' ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <MaterialIcons name="description" size={18} color="#fff" />
+                  )}
                 </TouchableOpacity>
               )}
             </View>
@@ -1288,11 +1760,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             )}
 
             <Text style={styles.timelineLabel}>Generated Final Reports</Text>
-            {impactReports.length === 0 ? (
+            {visibleImpactReports.length === 0 ? (
               <Text style={styles.emptyText}>No final report files generated yet</Text>
             ) : (
               <View style={styles.updatesList}>
-                {impactReports.map(report => (
+                {visibleImpactReports.map(report => (
                   <View key={report.id} style={styles.applicationCard}>
                     <View style={styles.applicationHeader}>
                       <View style={{ flex: 1 }}>
@@ -1311,10 +1783,19 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                     {isAdmin && !report.publishedAt ? (
                       <View style={styles.applicationActions}>
                         <TouchableOpacity
-                          style={[styles.applicationButton, styles.approveButton]}
+                          style={[
+                            styles.applicationButton,
+                            styles.approveButton,
+                            actionLoadingKey === `publish-${report.id}` && styles.applicationButtonDisabled,
+                          ]}
                           onPress={() => handlePublishImpactFile(report.id)}
+                          disabled={Boolean(actionLoadingKey)}
                         >
-                          <Text style={styles.applicationButtonText}>Publish to Partner Portal</Text>
+                          {actionLoadingKey === `publish-${report.id}` ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <Text style={styles.applicationButtonText}>Publish to Partner Portal</Text>
+                          )}
                         </TouchableOpacity>
                       </View>
                     ) : null}
@@ -1425,6 +1906,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             </ScrollView>
           </View>
         </Modal>
+        {renderProjectEditorModal()}
       </ScrollView>
     );
   }
@@ -1441,7 +1923,23 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         )}
       </View>
 
-      {projects.length === 0 ? (
+      {loadError ? (
+        <View style={styles.inlineErrorWrap}>
+          <InlineLoadError
+            title={loadError.title}
+            message={loadError.message}
+            onRetry={() => {
+              void loadProjects();
+              void loadPartners();
+              void loadVolunteers();
+              void loadAllVolunteerMatches();
+              void loadVolunteerTimeLogs();
+            }}
+          />
+        </View>
+      ) : null}
+
+      {!loadError && projects.length === 0 ? (
         <View style={styles.emptyState}>
           <MaterialIcons name="folder-open" size={48} color="#ccc" />
           <Text style={styles.emptyText}>No projects found</Text>
@@ -1450,242 +1948,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         <View style={styles.list}>{projects.map(renderProjectCard)}</View>
       )}
 
-      <Modal
-        visible={showProjectModal}
-        animationType="slide"
-        onRequestClose={() => setShowProjectModal(false)}
-      >
-        <View style={styles.modalContainer}>
-          <View style={styles.modalHeader}>
-            <TouchableOpacity onPress={() => setShowProjectModal(false)}>
-              <MaterialIcons name="close" size={24} color="#333" />
-            </TouchableOpacity>
-            <Text style={styles.modalTitle}>
-              {editingProjectId ? 'Edit Program' : 'Create Program'}
-            </Text>
-            <TouchableOpacity onPress={handleSaveProjectRecord}>
-              <Text style={styles.projectModalSave}>Save</Text>
-            </TouchableOpacity>
-          </View>
-
-          <ScrollView style={styles.modalContent}>
-            <View style={styles.formRow}>
-              <TextInput
-                style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
-                placeholder="Program title"
-                placeholderTextColor="#999"
-                value={projectDraft.title}
-                onChangeText={value => handleProjectDraftChange('title', value)}
-              />
-              <Text style={styles.labelRight}>Title</Text>
-            </View>
-
-            <View style={[styles.formRow, styles.formRowTop]}>
-              <TextInput
-                style={[styles.textArea, styles.inputWithLabel]}
-                placeholder="Program description"
-                placeholderTextColor="#999"
-                multiline
-                numberOfLines={4}
-                value={projectDraft.description}
-                onChangeText={value => handleProjectDraftChange('description', value)}
-              />
-              <Text style={[styles.labelRight, styles.labelTop]}>Description</Text>
-            </View>
-
-            <View style={[styles.formRow, styles.formRowTop]}>
-              <View style={[styles.statusOptions, styles.statusOptionsCard]}>
-                {projectModules.map(category => (
-                  <TouchableOpacity
-                    key={category}
-                    style={[
-                      styles.statusOption,
-                      projectDraft.programModule === category && styles.statusOptionSelected,
-                    ]}
-                    onPress={() => handleProjectDraftChange('programModule', category)}
-                  >
-                    <Text
-                      style={[
-                        styles.statusOptionText,
-                        projectDraft.programModule === category && styles.statusOptionTextSelected,
-                      ]}
-                    >
-                      {category}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              <Text style={[styles.labelRight, styles.labelTop]}>Program Module</Text>
-            </View>
-
-            <View style={[styles.formRow, styles.formRowTop]}>
-              <View style={[styles.statusOptions, styles.statusOptionsCard]}>
-                {statuses.map(status => (
-                  <TouchableOpacity
-                    key={status}
-                    style={[
-                      styles.statusOption,
-                      projectDraft.status === status && styles.statusOptionSelected,
-                    ]}
-                    onPress={() => handleProjectDraftChange('status', status as Project['status'])}
-                  >
-                    <Text
-                      style={[
-                        styles.statusOptionText,
-                        projectDraft.status === status && styles.statusOptionTextSelected,
-                      ]}
-                    >
-                      {status}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              <Text style={[styles.labelRight, styles.labelTop]}>Status</Text>
-            </View>
-
-            <View style={styles.formRow}>
-              <View style={[styles.statusOptions, styles.statusOptionsCard]}>
-                <TouchableOpacity
-                  style={[
-                    styles.statusOption,
-                    !projectDraft.isEvent && styles.statusOptionSelected,
-                  ]}
-                  onPress={() => handleProjectDraftChange('isEvent', false)}
-                >
-                  <Text
-                    style={[
-                      styles.statusOptionText,
-                      !projectDraft.isEvent && styles.statusOptionTextSelected,
-                    ]}
-                  >
-                    Program
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[
-                    styles.statusOption,
-                    projectDraft.isEvent && styles.statusOptionSelected,
-                  ]}
-                  onPress={() => handleProjectDraftChange('isEvent', true)}
-                >
-                  <Text
-                    style={[
-                      styles.statusOptionText,
-                      projectDraft.isEvent && styles.statusOptionTextSelected,
-                    ]}
-                  >
-                    Event
-                  </Text>
-                </TouchableOpacity>
-              </View>
-              <Text style={styles.labelRight}>Type</Text>
-            </View>
-
-            <View style={[styles.formRow, styles.formRowTop]}>
-              <View style={[styles.statusOptions, styles.statusOptionsCard]}>
-                {partners.map(partner => (
-                  <TouchableOpacity
-                    key={partner.id}
-                    style={[
-                      styles.statusOption,
-                      projectDraft.partnerId === partner.id && styles.statusOptionSelected,
-                    ]}
-                    onPress={() => handleProjectDraftChange('partnerId', partner.id)}
-                  >
-                    <Text
-                      style={[
-                        styles.statusOptionText,
-                        projectDraft.partnerId === partner.id && styles.statusOptionTextSelected,
-                      ]}
-                    >
-                      {partner.name}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              <Text style={[styles.labelRight, styles.labelTop]}>Partner</Text>
-            </View>
-
-            <View style={styles.formRow}>
-              <TextInput
-                style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
-                placeholder="YYYY-MM-DD"
-                placeholderTextColor="#999"
-                value={projectDraft.startDate}
-                onChangeText={value => handleProjectDraftChange('startDate', value)}
-              />
-              <Text style={styles.labelRight}>Start Date</Text>
-            </View>
-
-            <View style={styles.formRow}>
-              <TextInput
-                style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
-                placeholder="YYYY-MM-DD"
-                placeholderTextColor="#999"
-                value={projectDraft.endDate}
-                onChangeText={value => handleProjectDraftChange('endDate', value)}
-              />
-              <Text style={styles.labelRight}>End Date</Text>
-            </View>
-
-            <View style={styles.formRow}>
-              <TextInput
-                style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
-                placeholder="Location address"
-                placeholderTextColor="#999"
-                value={projectDraft.address}
-                onChangeText={value => handleProjectDraftChange('address', value)}
-              />
-              <Text style={styles.labelRight}>Address</Text>
-            </View>
-
-            <View style={styles.formRow}>
-              <TextInput
-                style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
-                placeholder="Latitude"
-                placeholderTextColor="#999"
-                keyboardType="decimal-pad"
-                value={projectDraft.latitude}
-                onChangeText={value => handleProjectDraftChange('latitude', value)}
-              />
-              <Text style={styles.labelRight}>Latitude</Text>
-            </View>
-
-            <View style={styles.formRow}>
-              <TextInput
-                style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
-                placeholder="Longitude"
-                placeholderTextColor="#999"
-                keyboardType="decimal-pad"
-                value={projectDraft.longitude}
-                onChangeText={value => handleProjectDraftChange('longitude', value)}
-              />
-              <Text style={styles.labelRight}>Longitude</Text>
-            </View>
-
-            <View style={styles.formRow}>
-              <TextInput
-                style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
-                placeholder="Volunteer slots"
-                placeholderTextColor="#999"
-                keyboardType="number-pad"
-                value={projectDraft.volunteersNeeded}
-                onChangeText={value => handleProjectDraftChange('volunteersNeeded', value)}
-              />
-              <Text style={styles.labelRight}>Volunteer Slots</Text>
-            </View>
-
-            <TouchableOpacity
-              style={styles.submitButton}
-              onPress={handleSaveProjectRecord}
-            >
-              <Text style={styles.submitButtonText}>
-                {editingProjectId ? 'Update Program' : 'Create Program'}
-              </Text>
-            </TouchableOpacity>
-          </ScrollView>
-        </View>
-      </Modal>
+      {renderProjectEditorModal()}
     </ScrollView>
   );
 }
@@ -1702,20 +1965,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: 16,
   },
-  headerActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  iconActionButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#f8fafc',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
+  headerSpacer: {
+    width: 24,
+    height: 24,
   },
   listHeader: {
     flexDirection: 'row',
@@ -1723,6 +1975,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: 16,
     gap: 12,
+  },
+  inlineErrorWrap: {
+    marginBottom: 16,
   },
   title: {
     fontSize: 24,
@@ -1860,20 +2115,109 @@ const styles = StyleSheet.create({
   },
   detailsCard: {
     backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
+    borderRadius: 18,
+    padding: 20,
+  },
+  detailsHero: {
+    backgroundColor: '#f8fff9',
+    borderWidth: 1,
+    borderColor: '#d1fae5',
+    borderRadius: 16,
+    padding: 18,
+    marginBottom: 22,
+  },
+  detailsHeroHeader: {
+    gap: 12,
+    marginBottom: 18,
+  },
+  detailsHeroCopy: {
+    gap: 8,
+  },
+  detailsEyebrow: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#166534',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
   },
   detailsTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 8,
+    fontSize: 28,
+    fontWeight: '800',
+    color: '#0f172a',
   },
   detailsSubtitle: {
-    fontSize: 14,
-    color: '#666',
-    lineHeight: 20,
-    marginBottom: 16,
+    fontSize: 15,
+    color: '#475569',
+    lineHeight: 24,
+  },
+  detailsHeroStatus: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 999,
+    alignSelf: 'flex-start',
+  },
+  detailsQuickGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 14,
+  },
+  detailsQuickCard: {
+    minWidth: 170,
+    flexGrow: 1,
+    flexShrink: 1,
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#dcfce7',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  detailsQuickLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
+  detailsQuickValue: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  detailsActionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginBottom: 22,
+  },
+  detailsActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#86efac',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  detailsActionButtonDisabled: {
+    opacity: 0.7,
+  },
+  detailsActionButtonText: {
+    color: '#166534',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  detailsDeleteButton: {
+    backgroundColor: '#fef2f2',
+    borderColor: '#fecaca',
+  },
+  detailsDeleteButtonText: {
+    color: '#b91c1c',
+    fontSize: 13,
+    fontWeight: '700',
   },
   requestNotificationPanel: {
     flexDirection: 'row',
@@ -1885,7 +2229,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    marginBottom: 16,
+    marginBottom: 20,
   },
   requestNotificationPanelText: {
     flex: 1,
@@ -1895,10 +2239,18 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   detailsSection: {
-    marginVertical: 16,
+    marginVertical: 18,
     paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#eee',
+  },
+  detailsSectionCard: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 16,
+    padding: 18,
+    marginVertical: 12,
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -1906,10 +2258,38 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   sectionTitle: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#333',
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0f172a',
     marginBottom: 8,
+  },
+  sectionHint: {
+    fontSize: 13,
+    color: '#64748b',
+    lineHeight: 19,
+    marginBottom: 16,
+  },
+  detailField: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    marginBottom: 12,
+  },
+  detailFieldLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
+  detailFieldValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0f172a',
   },
   timelineDetails: {
     flexDirection: 'row',
@@ -1932,7 +2312,7 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   updatesList: {
-    marginTop: 12,
+    marginTop: 14,
   },
   updateItem: {
     flexDirection: 'row',
@@ -1967,8 +2347,8 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    padding: 12,
-    marginBottom: 12,
+    padding: 14,
+    marginBottom: 14,
   },
   applicationHeader: {
     flexDirection: 'row',
@@ -2114,6 +2494,11 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 8,
     alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 42,
+  },
+  applicationButtonDisabled: {
+    opacity: 0.75,
   },
   applicationButtonText: {
     color: '#fff',
@@ -2133,6 +2518,9 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  addButtonDisabled: {
+    opacity: 0.75,
   },
   modalContainer: {
     flex: 1,

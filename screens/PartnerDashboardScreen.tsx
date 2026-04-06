@@ -13,6 +13,7 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useFocusEffect } from '@react-navigation/native';
+import InlineLoadError from '../components/InlineLoadError';
 import { useAuth } from '../contexts/AuthContext';
 import {
   createPartnerEventCheckIn,
@@ -31,6 +32,8 @@ import {
   PublishedImpactReport,
 } from '../models/types';
 import { isImageMediaUri, pickImageFromDevice } from '../utils/media';
+import { navigateToAvailableRoute } from '../utils/navigation';
+import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 type ReportFormState = {
   projectId: string;
@@ -81,6 +84,7 @@ function getProjectStatusColor(status: ReturnType<typeof getDisplayProjectStatus
 // Shows the partner workspace for RSVP, field check-in, report uploads, and published impact files.
 export default function PartnerDashboardScreen({ navigation }: any) {
   const { user, logout } = useAuth();
+  const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [partners, setPartners] = useState<Partner[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [partnerApplications, setPartnerApplications] = useState<PartnerProjectApplication[]>([]);
@@ -129,12 +133,16 @@ export default function PartnerDashboardScreen({ navigation }: any) {
           .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       );
       setPublishedImpactReports(visibleImpactReports);
+      setLoadError(null);
 
       setReportForm(current =>
         current.projectId ? current : createEmptyReportForm()
       );
-    } catch (error: any) {
-      Alert.alert('Error', error?.message || 'Failed to load the partner dashboard.');
+    } catch (error) {
+      setLoadError({
+        title: getRequestErrorTitle(error),
+        message: getRequestErrorMessage(error, 'Failed to load the partner dashboard.'),
+      });
     }
   }, [isOwnedByCurrentPartner, user?.id]);
 
@@ -238,8 +246,11 @@ export default function PartnerDashboardScreen({ navigation }: any) {
       await requestPartnerProjectJoin(projectId, user);
       Alert.alert('Request Sent', 'Your RSVP has been sent to the admin for approval.');
       void loadDashboardData();
-    } catch (error: any) {
-      Alert.alert('Error', error?.message || 'Failed to send the RSVP request.');
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to send the RSVP request.')
+      );
     } finally {
       setActionProjectId(null);
     }
@@ -277,8 +288,11 @@ export default function PartnerDashboardScreen({ navigation }: any) {
         'Checked In',
         `GPS captured at ${checkIn.gpsCoordinates.latitude.toFixed(4)}, ${checkIn.gpsCoordinates.longitude.toFixed(4)} on ${new Date(checkIn.checkInTime).toLocaleString()}.`
       );
-    } catch (error: any) {
-      Alert.alert('Check-In Failed', error?.message || 'Unable to complete event check-in.');
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error, 'Check-In Failed'),
+        getRequestErrorMessage(error, 'Unable to complete event check-in.')
+      );
     } finally {
       setPartnerCheckInProjectId(null);
     }
@@ -324,8 +338,11 @@ export default function PartnerDashboardScreen({ navigation }: any) {
       setReportForm(createEmptyReportForm(projectId));
       void loadDashboardData();
       Alert.alert('Uploaded', 'Your report was submitted to the admin impact hub.');
-    } catch (error: any) {
-      Alert.alert('Upload Failed', error?.message || 'Unable to upload the report.');
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error, 'Upload Failed'),
+        getRequestErrorMessage(error, 'Unable to upload the report.')
+      );
     }
   };
 
@@ -355,7 +372,10 @@ export default function PartnerDashboardScreen({ navigation }: any) {
         { text: 'Close', style: 'cancel' },
         {
           text: 'Open Project',
-          onPress: () => navigation.navigate('Projects', { projectId: report.projectId }),
+          onPress: () =>
+            navigateToAvailableRoute(navigation, 'Projects', {
+              projectId: report.projectId,
+            }),
         },
       ]
     );
@@ -375,6 +395,14 @@ export default function PartnerDashboardScreen({ navigation }: any) {
           <MaterialIcons name="logout" size={22} color="#475569" />
         </TouchableOpacity>
       </View>
+
+      {loadError ? (
+        <InlineLoadError
+          title={loadError.title}
+          message={loadError.message}
+          onRetry={() => void loadDashboardData()}
+        />
+      ) : null}
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Registration Status</Text>

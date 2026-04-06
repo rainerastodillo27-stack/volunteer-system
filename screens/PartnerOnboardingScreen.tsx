@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
+import InlineLoadError from '../components/InlineLoadError';
 import { useAuth } from '../contexts/AuthContext';
 import {
   getAllPartners,
@@ -20,6 +21,7 @@ import {
   verifyPartnerRegistration,
 } from '../models/storage';
 import { AdvocacyFocus, Partner, PartnerSectorType } from '../models/types';
+import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 type PartnerFormState = {
   organizationName: string;
@@ -75,6 +77,7 @@ function createFormFromPartner(partner: Partner): PartnerFormState {
 export default function PartnerOnboardingScreen() {
   const { user, isAdmin } = useAuth();
   const [partners, setPartners] = useState<Partner[]>([]);
+  const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [filter, setFilter] = useState<'All' | 'Pending' | 'Approved' | 'Rejected'>('All');
   const [partnerForm, setPartnerForm] = useState<PartnerFormState>(
     createEmptyPartnerForm(user?.email || '', user?.phone || '')
@@ -112,11 +115,15 @@ export default function PartnerOnboardingScreen() {
             );
 
       setPartners(scopedPartners);
+      setLoadError(null);
       if (!isAdmin && scopedPartners[0] && !editingPartnerId) {
         setPartnerForm(createFormFromPartner(scopedPartners[0]));
       }
-    } catch {
-      Alert.alert('Error', 'Failed to load partner applications.');
+    } catch (error) {
+      setLoadError({
+        title: getRequestErrorTitle(error),
+        message: getRequestErrorMessage(error, 'Failed to load partner applications.'),
+      });
     }
   }, [editingPartnerId, filter, isAdmin, isOwnedByCurrentPartner]);
 
@@ -149,6 +156,12 @@ export default function PartnerOnboardingScreen() {
     setPartnerForm(createEmptyPartnerForm(isAdmin ? '' : user?.email || '', isAdmin ? '' : user?.phone || ''));
     setEditingPartnerId(null);
     setShowAdminEditor(false);
+  };
+
+  // Opens the partner editor for the current partner-owned record.
+  const openPartnerEditor = (partner: Partner) => {
+    setEditingPartnerId(partner.id);
+    setPartnerForm(createFormFromPartner(partner));
   };
 
   const validateForm = () => {
@@ -215,18 +228,22 @@ export default function PartnerOnboardingScreen() {
       };
 
       await savePartner(nextPartner);
-      setPartnerForm(createFormFromPartner(nextPartner));
-      setEditingPartnerId(nextPartner.id);
-      setShowAdminEditor(false);
+      await loadPartners();
+      if (!isAdmin) {
+        setPartnerForm(createFormFromPartner(nextPartner));
+      }
+      resetPartnerForm();
       Alert.alert(
         isAdmin ? 'Saved' : 'Application Submitted',
         isAdmin
           ? 'Partner record saved.'
           : 'Your organization application is now in the inbound inquiry queue for admin verification.'
       );
-      void loadPartners();
-    } catch {
-      Alert.alert('Error', 'Failed to save the partner application.');
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to save the partner application.')
+      );
     }
   };
 
@@ -239,8 +256,11 @@ export default function PartnerOnboardingScreen() {
       const partner = await verifyPartnerRegistration(partnerId, user.id);
       Alert.alert('Verified', `${partner.name} was marked as DSWD-verified.`);
       void loadPartners();
-    } catch (error: any) {
-      Alert.alert('Error', error?.message || 'Failed to verify partner application.');
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to verify partner application.')
+      );
     }
   };
 
@@ -258,8 +278,11 @@ export default function PartnerOnboardingScreen() {
           : `${partner.name} was rejected.`
       );
       void loadPartners();
-    } catch (error: any) {
-      Alert.alert('Error', error?.message || 'Failed to review partner application.');
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to review partner application.')
+      );
     }
   };
 
@@ -482,10 +505,10 @@ export default function PartnerOnboardingScreen() {
           : 'Submit your organization details for verification. Partner login is unlocked after admin approval.'}
       </Text>
 
-      {!isAdmin &&
+      {!isAdmin && (!latestOwnedPartner || editingPartnerId !== null) &&
         renderFormCard({
           title: latestOwnedPartner ? 'Update Organization Application' : 'New Organization Application',
-          submitLabel: latestOwnedPartner ? 'Submit Application Update' : 'Submit Application',
+          submitLabel: latestOwnedPartner ? 'Save Application Update' : 'Submit Application',
           onSubmit: handleSaveApplication,
         })}
 
@@ -496,6 +519,16 @@ export default function PartnerOnboardingScreen() {
             onSubmit: handleSaveApplication,
           })
         : null}
+
+      {!isAdmin && latestOwnedPartner && editingPartnerId === null ? (
+        <TouchableOpacity
+          style={styles.editExistingButton}
+          onPress={() => openPartnerEditor(latestOwnedPartner)}
+        >
+          <MaterialIcons name="edit" size={18} color="#166534" />
+          <Text style={styles.editExistingButtonText}>Edit Application</Text>
+        </TouchableOpacity>
+      ) : null}
 
       {isAdmin ? (
         <View style={styles.filterRow}>
@@ -513,8 +546,16 @@ export default function PartnerOnboardingScreen() {
         </View>
       ) : null}
 
+      {loadError ? (
+        <InlineLoadError
+          title={loadError.title}
+          message={loadError.message}
+          onRetry={() => void loadPartners()}
+        />
+      ) : null}
+
       <View style={styles.list}>
-        {partners.length === 0 ? (
+        {!loadError && partners.length === 0 ? (
           <View style={styles.emptyState}>
             <MaterialIcons name="business" size={42} color="#94a3b8" />
             <Text style={styles.emptyText}>
@@ -630,6 +671,23 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 8,
     marginBottom: 16,
+  },
+  editExistingButton: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#86efac',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 16,
+  },
+  editExistingButtonText: {
+    color: '#166534',
+    fontWeight: '700',
   },
   filterChip: {
     paddingHorizontal: 12,

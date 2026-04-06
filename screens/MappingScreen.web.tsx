@@ -13,12 +13,14 @@ import Constants from 'expo-constants';
 import { useAuth } from '../contexts/AuthContext';
 import { Project } from '../models/types';
 import { getAllProjects } from '../models/storage';
+import { navigateToAvailableRoute } from '../utils/navigation';
 import {
   PHILIPPINES_BOUNDS,
   PHILIPPINES_WEB_CENTER,
   getProjectMarkerColor,
 } from '../utils/projectMap';
 import { getProjectStatusColor } from '../utils/projectStatus';
+import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 const MapHost = 'div' as any;
 
@@ -237,10 +239,13 @@ export default function MappingScreen({ navigation }: any) {
       const allProjects = await getAllProjects();
       setProjects(allProjects);
       setLoading(false);
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error loading projects for map:', error);
       setProjects([]);
-      Alert.alert('Database Unavailable', error?.message || 'Failed to load projects from Postgres.');
+      Alert.alert(
+        getRequestErrorTitle(error, 'Database Unavailable'),
+        getRequestErrorMessage(error, 'Failed to load projects from Postgres.')
+      );
       setLoading(false);
     }
   };
@@ -253,11 +258,14 @@ export default function MappingScreen({ navigation }: any) {
 
     setShowDetails(false);
     if (user?.role === 'admin') {
-      navigation.navigate('Lifecycle', { projectId: selectedProject.id });
+      navigateToAvailableRoute(navigation, 'Lifecycle', { projectId: selectedProject.id }, {
+        routeName: 'Projects',
+        params: { projectId: selectedProject.id },
+      });
       return;
     }
 
-    navigation.navigate('Projects', { projectId: selectedProject.id });
+    navigateToAvailableRoute(navigation, 'Projects', { projectId: selectedProject.id });
   };
 
   if (loading) {

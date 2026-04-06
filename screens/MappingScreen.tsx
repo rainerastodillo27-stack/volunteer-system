@@ -12,6 +12,7 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
+import InlineLoadError from '../components/InlineLoadError';
 import { useAuth } from '../contexts/AuthContext';
 import { PartnerEventCheckIn, PartnerReport, Project } from '../models/types';
 import {
@@ -20,12 +21,15 @@ import {
   getAllProjects,
   subscribeToStorageChanges,
 } from '../models/storage';
+import { navigateToAvailableRoute } from '../utils/navigation';
 import { getInitialProjectRegion, getProjectMarkerColor } from '../utils/projectMap';
 import { getProjectStatusColor } from '../utils/projectStatus';
+import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 // Displays the native project map with a detail sheet for the selected marker.
 export default function MappingScreen({ navigation }: any) {
   const { user } = useAuth();
+  const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [partnerCheckIns, setPartnerCheckIns] = useState<PartnerEventCheckIn[]>([]);
   const [partnerReports, setPartnerReports] = useState<PartnerReport[]>([]);
@@ -53,13 +57,17 @@ export default function MappingScreen({ navigation }: any) {
       setProjects(allProjects);
       setPartnerCheckIns(allCheckIns);
       setPartnerReports(allReports);
+      setLoadError(null);
       setLoading(false);
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error loading projects for map:', error);
       setProjects([]);
       setPartnerCheckIns([]);
       setPartnerReports([]);
-      Alert.alert('Database Unavailable', error?.message || 'Failed to load projects from Postgres.');
+      setLoadError({
+        title: getRequestErrorTitle(error, 'Database Unavailable'),
+        message: getRequestErrorMessage(error, 'Failed to load projects from Postgres.'),
+      });
       setLoading(false);
     }
   };
@@ -83,11 +91,14 @@ export default function MappingScreen({ navigation }: any) {
 
     setShowDetails(false);
     if (user?.role === 'admin') {
-      navigation.navigate('Lifecycle', { projectId: selectedProject.id });
+      navigateToAvailableRoute(navigation, 'Lifecycle', { projectId: selectedProject.id }, {
+        routeName: 'Projects',
+        params: { projectId: selectedProject.id },
+      });
       return;
     }
 
-    navigation.navigate('Projects', { projectId: selectedProject.id });
+    navigateToAvailableRoute(navigation, 'Projects', { projectId: selectedProject.id });
   };
 
   if (loading) {
@@ -107,6 +118,16 @@ export default function MappingScreen({ navigation }: any) {
           Projects, partner GPS check-ins, and field uploads in Negros Occidental
         </Text>
       </View>
+
+      {loadError ? (
+        <View style={styles.inlineErrorWrap}>
+          <InlineLoadError
+            title={loadError.title}
+            message={loadError.message}
+            onRetry={() => void loadProjects()}
+          />
+        </View>
+      ) : null}
 
       <View style={styles.mapContainer}>
         <MapView
@@ -277,6 +298,10 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#e0e0e0',
+  },
+  inlineErrorWrap: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
   },
   headerTitle: {
     fontSize: 20,

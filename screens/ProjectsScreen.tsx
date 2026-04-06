@@ -3,6 +3,7 @@ import { View, FlatList, StyleSheet, Text, TouchableOpacity, Alert, Pressable, I
 import { MaterialIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
 import { useFocusEffect } from '@react-navigation/native';
+import InlineLoadError from '../components/InlineLoadError';
 import { useAuth } from '../contexts/AuthContext';
 import {
   getAllPublishedImpactReports,
@@ -15,7 +16,9 @@ import {
   subscribeToStorageChanges,
 } from '../models/storage';
 import { PartnerProjectApplication, Project, PublishedImpactReport, Volunteer, VolunteerProjectJoinRecord, VolunteerProjectMatch, VolunteerTimeLog } from '../models/types';
+import { navigateToAvailableRoute } from '../utils/navigation';
 import { getProjectStatusColor } from '../utils/projectStatus';
+import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 const CATEGORY_KEYWORDS: Record<Project['category'], string[]> = {
   Education: ['teaching', 'mentoring', 'reading', 'library', 'school', 'student', 'tutor'],
@@ -256,6 +259,7 @@ function ProjectCardImage({
 export default function ProjectsScreen({ navigation, route }: any) {
   const { user } = useAuth();
   const projectListRef = useRef<FlatList<Project> | null>(null);
+  const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
   const [partnerApplications, setPartnerApplications] = useState<PartnerProjectApplication[]>([]);
@@ -295,6 +299,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
         getAllPublishedImpactReports(),
       ]);
       applySnapshot(snapshot);
+      setLoadError(null);
       setImpactReports(publishedReports.filter(report => Boolean(report.publishedAt)));
       if (snapshot.volunteerProfile?.id) {
         const matches = await getVolunteerProjectMatches(snapshot.volunteerProfile.id);
@@ -302,7 +307,11 @@ export default function ProjectsScreen({ navigation, route }: any) {
       } else {
         setVolunteerMatches([]);
       }
-    } catch (error: any) {
+    } catch (error) {
+      const nextLoadError = {
+        title: 'Database Unavailable',
+        message: getRequestErrorMessage(error, 'Failed to load projects from Postgres.'),
+      };
       startTransition(() => {
         setProjects([]);
         setVolunteerProfile(null);
@@ -312,7 +321,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
         setVolunteerMatches([]);
         setImpactReports([]);
       });
-      Alert.alert('Database Unavailable', error?.message || 'Failed to load projects from Postgres.');
+      setLoadError(nextLoadError);
     }
   }, [applySnapshot, user]);
 
@@ -389,8 +398,11 @@ export default function ProjectsScreen({ navigation, route }: any) {
         'Request Sent',
         'Your join request was sent to the admin. You will be notified once it is approved or rejected.'
       );
-    } catch (error: any) {
-      Alert.alert('Error', error?.message || 'Failed to request this program. Please try again.');
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to request this program. Please try again.')
+      );
     } finally {
       setLoadingProjectId(null);
     }
@@ -410,8 +422,11 @@ export default function ProjectsScreen({ navigation, route }: any) {
         );
       });
       Alert.alert('Time In recorded', 'Remember to time out when you finish.');
-    } catch (error: any) {
-      Alert.alert('Unable to time in', error?.message || 'Please try again.');
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error, 'Unable to time in'),
+        getRequestErrorMessage(error, 'Please try again.')
+      );
     } finally {
       setLoadingProjectId(null);
     }
@@ -438,8 +453,11 @@ export default function ProjectsScreen({ navigation, route }: any) {
         }
       });
       Alert.alert('Time Out recorded', 'Hours added to your profile.');
-    } catch (error: any) {
-      Alert.alert('Unable to time out', error?.message || 'Please try again.');
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error, 'Unable to time out'),
+        getRequestErrorMessage(error, 'Please try again.')
+      );
     } finally {
       setLoadingProjectId(null);
     }
@@ -447,7 +465,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
 
   // Opens the group chat tied to the selected project or event.
   const handleOpenGroupChat = (projectId: string) => {
-    navigation.navigate('Messages', { projectId });
+    navigateToAvailableRoute(navigation, 'Messages', { projectId });
   };
 
   const partnerApplicationByProjectId = useMemo(
@@ -495,7 +513,10 @@ export default function ProjectsScreen({ navigation, route }: any) {
 
   const handleOpenProject = useCallback((projectId: string) => {
     if (user?.role === 'admin') {
-      navigation.navigate('Lifecycle', { projectId });
+      navigateToAvailableRoute(navigation, 'Lifecycle', { projectId }, {
+        routeName: 'Projects',
+        params: { projectId },
+      });
       return;
     }
 
@@ -882,6 +903,14 @@ export default function ProjectsScreen({ navigation, route }: any) {
           : 'Current program list and participation needs.'}
       </Text>
 
+      {loadError ? (
+        <InlineLoadError
+          title={loadError.title}
+          message={loadError.message}
+          onRetry={() => void loadProjectsData()}
+        />
+      ) : null}
+
       <FlatList
         ref={projectListRef}
         data={projects}
@@ -899,6 +928,17 @@ export default function ProjectsScreen({ navigation, route }: any) {
             animated: true,
           });
         }}
+        ListEmptyComponent={
+          loadError ? null : (
+            <View style={styles.emptyState}>
+              <MaterialIcons name="folder-open" size={44} color="#94a3b8" />
+              <Text style={styles.emptyStateTitle}>No programs yet</Text>
+              <Text style={styles.emptyStateText}>
+                There are no programs or projects available right now.
+              </Text>
+            </View>
+          )
+        }
       />
 
       <Modal
@@ -949,6 +989,28 @@ const styles = StyleSheet.create({
     color: '#64748b',
     marginBottom: 15,
     lineHeight: 18,
+  },
+  emptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    paddingVertical: 36,
+    paddingHorizontal: 24,
+    marginTop: 8,
+  },
+  emptyStateTitle: {
+    marginTop: 10,
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  emptyStateText: {
+    marginTop: 6,
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#64748b',
+    textAlign: 'center',
   },
   card: {
     backgroundColor: '#fff',

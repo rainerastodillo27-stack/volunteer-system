@@ -18,6 +18,8 @@ import {
   subscribeToStorageChanges,
 } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
+import { navigateToAvailableRoute } from '../utils/navigation';
+import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 // Shows the latest dashboard metrics and shortcuts for the logged-in user.
 export default function DashboardScreen({ navigation }: any) {
@@ -96,12 +98,13 @@ export default function DashboardScreen({ navigation }: any) {
             new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
         );
       setRecentUpdates(allUpdates.slice(0, 5));
-    } catch (error: any) {
-      setLoadError(
-        error?.message || 'Database data is unavailable. Check the backend and Supabase connection.'
+    } catch (error) {
+      const errorMessage = getRequestErrorMessage(
+        error,
+        'Database data is unavailable. Check the backend and Supabase connection.'
       );
+      setLoadError(errorMessage);
       setRecentUpdates([]);
-      Alert.alert('Error', error?.message || 'Failed to load dashboard data from Postgres.');
     }
   }, []);
 
@@ -153,6 +156,56 @@ export default function DashboardScreen({ navigation }: any) {
         ? 'NVC Admin Account'
         : 'Administrator'
       : 'Volunteer Account';
+  const openProjects = React.useCallback(
+    (projectId?: string) => {
+      navigateToAvailableRoute(
+        navigation,
+        'Projects',
+        projectId ? { projectId } : undefined
+      );
+    },
+    [navigation]
+  );
+  const openPartners = React.useCallback(() => {
+    navigateToAvailableRoute(navigation, 'Partners', undefined, {
+      routeName: 'Dashboard',
+    });
+  }, [navigation]);
+  const openUsers = React.useCallback(() => {
+    navigateToAvailableRoute(navigation, 'Users', undefined, {
+      routeName: 'Dashboard',
+    });
+  }, [navigation]);
+  const openLifecycle = React.useCallback(
+    (projectId?: string) => {
+      navigateToAvailableRoute(
+        navigation,
+        'Lifecycle',
+        projectId ? { projectId } : undefined,
+        {
+          routeName: 'Projects',
+          params: projectId ? { projectId } : undefined,
+        }
+      );
+    },
+    [navigation]
+  );
+  const openMessages = React.useCallback(
+    (projectId?: string) => {
+      navigateToAvailableRoute(
+        navigation,
+        'Messages',
+        projectId ? { projectId } : undefined,
+        { routeName: 'Dashboard' }
+      );
+    },
+    [navigation]
+  );
+  const openMap = React.useCallback(() => {
+    navigateToAvailableRoute(navigation, 'Map', undefined, {
+      routeName: 'Dashboard',
+    });
+  }, [navigation]);
 
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
@@ -193,7 +246,7 @@ export default function DashboardScreen({ navigation }: any) {
           <View style={styles.metricsGrid}>
             <TouchableOpacity
               style={styles.metricCard}
-              onPress={() => navigation.navigate('Projects')}
+              onPress={() => openProjects()}
               activeOpacity={0.8}
               accessibilityRole="button"
             >
@@ -204,7 +257,7 @@ export default function DashboardScreen({ navigation }: any) {
 
             <TouchableOpacity
               style={styles.metricCard}
-              onPress={() => navigation.navigate('Partners')}
+              onPress={openPartners}
               activeOpacity={0.8}
               accessibilityRole="button"
             >
@@ -215,7 +268,7 @@ export default function DashboardScreen({ navigation }: any) {
 
             <TouchableOpacity
               style={styles.metricCard}
-              onPress={() => navigation.navigate('Users')}
+              onPress={openUsers}
               activeOpacity={0.8}
               accessibilityRole="button"
             >
@@ -226,7 +279,7 @@ export default function DashboardScreen({ navigation }: any) {
 
             <TouchableOpacity
               style={styles.metricCard}
-              onPress={() => navigation.navigate('Projects')}
+              onPress={() => openProjects()}
               activeOpacity={0.8}
               accessibilityRole="button"
             >
@@ -244,7 +297,7 @@ export default function DashboardScreen({ navigation }: any) {
           <View style={styles.metricsGrid}>
             <TouchableOpacity
               style={styles.metricCard}
-              onPress={() => navigation.navigate('Partners')}
+              onPress={openPartners}
               activeOpacity={0.8}
             >
               <MaterialIcons name="mark-email-unread" size={32} color="#f59e0b" />
@@ -254,11 +307,7 @@ export default function DashboardScreen({ navigation }: any) {
 
             <TouchableOpacity
               style={styles.metricCard}
-              onPress={() =>
-                navigation.navigate('Lifecycle', {
-                  projectId: timeTrackingTarget.latestTimeInProjectId,
-                })
-              }
+              onPress={() => openLifecycle(timeTrackingTarget.latestTimeInProjectId)}
               activeOpacity={0.8}
             >
               <MaterialIcons name="login" size={32} color="#2563eb" />
@@ -268,11 +317,7 @@ export default function DashboardScreen({ navigation }: any) {
 
             <TouchableOpacity
               style={styles.metricCard}
-              onPress={() =>
-                navigation.navigate('Lifecycle', {
-                  projectId: timeTrackingTarget.latestTimeOutProjectId,
-                })
-              }
+              onPress={() => openLifecycle(timeTrackingTarget.latestTimeOutProjectId)}
               activeOpacity={0.8}
             >
               <MaterialIcons name="logout" size={32} color="#0f766e" />
@@ -282,7 +327,7 @@ export default function DashboardScreen({ navigation }: any) {
 
             <TouchableOpacity
               style={styles.metricCard}
-              onPress={() => navigation.navigate('Lifecycle')}
+              onPress={() => openLifecycle()}
               activeOpacity={0.8}
             >
               <MaterialIcons name="assignment-late" size={32} color="#dc2626" />
@@ -292,7 +337,7 @@ export default function DashboardScreen({ navigation }: any) {
 
             <TouchableOpacity
               style={styles.metricCard}
-              onPress={() => navigation.navigate('Lifecycle')}
+              onPress={() => openLifecycle()}
               activeOpacity={0.8}
             >
               <MaterialIcons name="published-with-changes" size={32} color="#16a34a" />
@@ -307,14 +352,14 @@ export default function DashboardScreen({ navigation }: any) {
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Project Overview</Text>
-          <TouchableOpacity onPress={() => navigation.navigate('Projects')}>
+          <TouchableOpacity onPress={() => openProjects()}>
             <Text style={styles.viewAll}>View All</Text>
           </TouchableOpacity>
         </View>
 
         <TouchableOpacity
           style={styles.card}
-          onPress={() => navigation.navigate('Projects')}
+          onPress={() => openProjects()}
           activeOpacity={0.85}
           accessibilityRole="button"
         >
@@ -341,16 +386,16 @@ export default function DashboardScreen({ navigation }: any) {
       {/* Partner Overview (Admin Only) */}
       {isAdmin && (
         <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Partner Overview</Text>
-            <TouchableOpacity onPress={() => navigation.navigate('Partners')}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Partner Overview</Text>
+            <TouchableOpacity onPress={openPartners}>
               <Text style={styles.viewAll}>View All</Text>
             </TouchableOpacity>
           </View>
 
           <TouchableOpacity
             style={styles.card}
-            onPress={() => navigation.navigate('Partners')}
+            onPress={openPartners}
             activeOpacity={0.85}
             accessibilityRole="button"
           >
@@ -378,9 +423,9 @@ export default function DashboardScreen({ navigation }: any) {
       {/* Recent Updates */}
       {isAdmin && recentUpdates.length > 0 && (
         <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Recent Updates</Text>
-            <TouchableOpacity onPress={() => navigation.navigate('Lifecycle')}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Recent Updates</Text>
+            <TouchableOpacity onPress={() => openLifecycle()}>
               <Text style={styles.viewAll}>View All</Text>
             </TouchableOpacity>
           </View>
@@ -389,7 +434,7 @@ export default function DashboardScreen({ navigation }: any) {
             <TouchableOpacity
               key={index}
               style={styles.updateItem}
-              onPress={() => navigation.navigate('Lifecycle')}
+              onPress={() => openLifecycle(update.projectId)}
               activeOpacity={0.85}
               accessibilityRole="button"
             >
@@ -416,7 +461,7 @@ export default function DashboardScreen({ navigation }: any) {
         <View style={styles.actionsGrid}>
           <TouchableOpacity
             style={styles.actionButton}
-            onPress={() => navigation.navigate('Messages')}
+            onPress={() => openMessages()}
           >
             <MaterialIcons name="mail" size={24} color="#4CAF50" />
             <Text style={styles.actionButtonText}>Messages</Text>
@@ -424,7 +469,7 @@ export default function DashboardScreen({ navigation }: any) {
 
           <TouchableOpacity
             style={styles.actionButton}
-            onPress={() => navigation.navigate('Map')}
+            onPress={openMap}
           >
             <MaterialIcons name="map" size={24} color="#FF6B6B" />
             <Text style={styles.actionButtonText}>Map</Text>
@@ -433,7 +478,7 @@ export default function DashboardScreen({ navigation }: any) {
           {isAdmin && (
             <TouchableOpacity
               style={styles.actionButton}
-              onPress={() => navigation.navigate('Users')}
+              onPress={openUsers}
             >
               <MaterialIcons name="group" size={24} color="#2E7D32" />
               <Text style={styles.actionButtonText}>Users</Text>

@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
+import InlineLoadError from '../components/InlineLoadError';
 import { Message, Project, ProjectGroupMessage, User, VolunteerProjectJoinRecord } from '../models/types';
 import {
   getAllUsers,
@@ -30,6 +31,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { format } from 'date-fns';
 import { isImageMediaUri, pickImageFromDevice } from '../utils/media';
+import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 const WEB_MESSAGE_SYNC_KEY = 'volcre:messages:updatedAt';
 
@@ -145,10 +147,12 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   const [messageText, setMessageText] = useState('');
   const [selectedAttachmentUri, setSelectedAttachmentUri] = useState<string | null>(null);
   const [allUsers, setAllUsers] = useState<User[]>([]);
+  const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const selectedUserRef = useRef<User | null>(null);
   const selectedProjectChatRef = useRef<ProjectChatItem | null>(null);
   const viewRef = useRef<'conversations' | 'detail'>('conversations');
   const allUsersRef = useRef<User[]>([]);
+  const lastLoadAlertMessageRef = useRef<string | null>(null);
 
   useEffect(() => {
     selectedUserRef.current = selectedUser;
@@ -166,6 +170,22 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     allUsersRef.current = allUsers;
   }, [allUsers]);
 
+  const showRequestAlert = React.useCallback(
+    (error: unknown, fallbackTitle = 'Error', fallbackMessage: string) => {
+      const title = getRequestErrorTitle(error, fallbackTitle);
+      const message = getRequestErrorMessage(error, fallbackMessage);
+      const alertKey = `${title}:${message}`;
+
+      if (lastLoadAlertMessageRef.current === alertKey) {
+        return;
+      }
+
+      setLoadError({ title, message });
+      lastLoadAlertMessageRef.current = alertKey;
+    },
+    []
+  );
+
   // Loads all chatable users except the currently logged-in account.
   const loadUsers = async () => {
     try {
@@ -179,8 +199,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       });
 
       setAllUsers(otherUsers);
+      setLoadError(null);
+      lastLoadAlertMessageRef.current = null;
     } catch (error) {
-      console.error('Error loading users:', error);
+      showRequestAlert(error, 'Database Unavailable', 'Failed to load users for messaging.');
     }
   };
 
@@ -215,8 +237,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       }
 
       setConversations(sortConversations(Array.from(conversationMap.values())));
+      setLoadError(null);
+      lastLoadAlertMessageRef.current = null;
     } catch (error) {
-      Alert.alert('Error', 'Failed to load conversations');
+      showRequestAlert(error, 'Database Unavailable', 'Failed to load conversations.');
     }
   };
 
@@ -238,6 +262,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
           .sort((left, right) => left.project.title.localeCompare(right.project.title));
 
         setProjectChats(nextProjectChats);
+        setLoadError(null);
+        lastLoadAlertMessageRef.current = null;
         return;
       }
 
@@ -267,8 +293,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         .sort((left, right) => left.project.title.localeCompare(right.project.title));
 
       setProjectChats(nextProjectChats);
+      setLoadError(null);
+      lastLoadAlertMessageRef.current = null;
     } catch (error) {
-      console.error('Error loading project chats:', error);
+      showRequestAlert(error, 'Database Unavailable', 'Failed to load project chats.');
     }
   };
 
@@ -303,8 +331,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
             )
           );
         }
+        setLoadError(null);
+        lastLoadAlertMessageRef.current = null;
       } catch (error) {
-        console.error('Error loading messages:', error);
+        showRequestAlert(error, 'Database Unavailable', 'Failed to load messages.');
       }
       return;
     }
@@ -320,11 +350,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         user.id
       );
       setMessages(projectMessages);
-    } catch (error: any) {
-      Alert.alert(
-        'Group chat unavailable',
-        error?.message || 'Failed to load this project group chat.'
-      );
+      setLoadError(null);
+      lastLoadAlertMessageRef.current = null;
+    } catch (error) {
+      showRequestAlert(error, 'Group chat unavailable', 'Failed to load this project group chat.');
     }
   };
 
@@ -561,8 +590,11 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       await saveProjectGroupMessage(newMessage);
       setMessageText('');
       setSelectedAttachmentUri(null);
-    } catch (error: any) {
-      Alert.alert('Error', error?.message || 'Failed to send message');
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to send message.')
+      );
       await loadSelectedMessages();
       await loadConversations();
     }
@@ -651,6 +683,16 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
             <Text style={styles.detailHeaderRole}>{selectedChatSubtitle}</Text>
           </View>
         </View>
+
+        {loadError ? (
+          <View style={styles.inlineErrorWrap}>
+            <InlineLoadError
+              title={loadError.title}
+              message={loadError.message}
+              onRetry={() => void loadSelectedMessages()}
+            />
+          </View>
+        ) : null}
 
         <ScrollView style={styles.messagesContainer} showsVerticalScrollIndicator={false}>
           {messages.length === 0 ? (
@@ -762,6 +804,20 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       <Text style={styles.subtitle}>
         {projectChatSubtitle}
       </Text>
+
+      {loadError ? (
+        <View style={styles.inlineErrorWrap}>
+          <InlineLoadError
+            title={loadError.title}
+            message={loadError.message}
+            onRetry={() => {
+              void loadUsers();
+              void loadProjectChats();
+              void loadConversations();
+            }}
+          />
+        </View>
+      ) : null}
 
       {showEmptyState ? (
         <View style={styles.emptyState}>
@@ -895,6 +951,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 8,
     backgroundColor: '#fff',
+  },
+  inlineErrorWrap: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
   },
   listContainer: {
     flex: 1,

@@ -12,9 +12,11 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { format } from 'date-fns';
+import InlineLoadError from '../components/InlineLoadError';
 import { useAuth } from '../contexts/AuthContext';
 import { deleteUser, getAllUsers, saveUser, subscribeToStorageChanges } from '../models/storage';
 import { NVCSector, User, UserRole, UserType } from '../models/types';
+import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 const roleOptions: UserRole[] = ['admin', 'partner', 'volunteer'];
 const NEW_ACCOUNT_WINDOW_MS = 1000 * 60 * 60 * 24 * 3;
@@ -23,6 +25,7 @@ const USER_REFRESH_INTERVAL_MS = 5000;
 // Lets admins review, edit, and remove application user accounts.
 export default function UserManagementScreen() {
   const { user, isAdmin } = useAuth();
+  const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -49,8 +52,12 @@ export default function UserManagementScreen() {
       });
       setUsers(sortedUsers);
       setLastSyncedAt(new Date().toISOString());
+      setLoadError(null);
     } catch (error) {
-      Alert.alert('Error', 'Failed to load users.');
+      setLoadError({
+        title: getRequestErrorTitle(error),
+        message: getRequestErrorMessage(error, 'Failed to load users.'),
+      });
     }
   }, []);
 
@@ -107,6 +114,12 @@ export default function UserManagementScreen() {
     setShowEditModal(true);
   };
 
+  // Closes the user editor and clears the current selection.
+  const closeEditModal = () => {
+    setShowEditModal(false);
+    setSelectedUser(null);
+  };
+
   // Saves changes made to the selected user account.
   const handleSaveUser = async () => {
     if (!selectedUser) return;
@@ -126,12 +139,14 @@ export default function UserManagementScreen() {
         userType: userTypeDraft,
         pillarsOfInterest: pillarsDraft,
       });
-      setShowEditModal(false);
-      setSelectedUser(null);
+      closeEditModal();
       await loadUsers();
       Alert.alert('Saved', 'User updated.');
     } catch (error) {
-      Alert.alert('Error', 'Failed to update user.');
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to update user.')
+      );
     }
   };
 
@@ -156,7 +171,10 @@ export default function UserManagementScreen() {
               await loadUsers();
               Alert.alert('Deleted', 'User removed.');
             } catch (error) {
-              Alert.alert('Error', 'Failed to delete user.');
+              Alert.alert(
+                getRequestErrorTitle(error),
+                getRequestErrorMessage(error, 'Failed to delete user.')
+              );
             }
           },
         },
@@ -188,6 +206,8 @@ export default function UserManagementScreen() {
         <Text style={styles.syncText}>
           {lastSyncedAt
             ? `Last synced ${format(new Date(lastSyncedAt), 'MMM dd, yyyy hh:mm a')}`
+            : loadError
+            ? 'Unable to sync users right now.'
             : 'Syncing users...'}
         </Text>
         <TouchableOpacity style={styles.refreshButton} onPress={() => void loadUsers()}>
@@ -196,6 +216,17 @@ export default function UserManagementScreen() {
         </TouchableOpacity>
       </View>
 
+      {loadError ? (
+        <View style={styles.bannerWrap}>
+          <InlineLoadError
+            title={loadError.title}
+            message={loadError.message}
+            onRetry={() => void loadUsers()}
+          />
+        </View>
+      ) : null}
+
+      {!loadError || users.length > 0 ? (
       <View style={styles.summaryRow}>
         <View style={styles.summaryCard}>
           <Text style={styles.summaryValue}>{users.length}</Text>
@@ -214,6 +245,7 @@ export default function UserManagementScreen() {
           <Text style={styles.summaryLabel}>Volunteers</Text>
         </View>
       </View>
+      ) : null}
 
       <FlatList
         data={users}
@@ -265,10 +297,10 @@ export default function UserManagementScreen() {
         )}
       />
 
-      <Modal visible={showEditModal} animationType="slide" onRequestClose={() => setShowEditModal(false)}>
+      <Modal visible={showEditModal} animationType="slide" onRequestClose={closeEditModal}>
         <View style={styles.modalContainer}>
           <View style={styles.modalHeader}>
-            <TouchableOpacity onPress={() => setShowEditModal(false)}>
+            <TouchableOpacity onPress={closeEditModal}>
               <Text style={styles.modalCancel}>Cancel</Text>
             </TouchableOpacity>
             <Text style={styles.modalTitle}>Edit User</Text>
@@ -386,6 +418,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
+  },
+  bannerWrap: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
   },
   syncText: {
     flex: 1,

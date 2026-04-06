@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
+import InlineLoadError from '../components/InlineLoadError';
 import { useAuth } from '../contexts/AuthContext';
 import VolunteerImpactMap from '../components/VolunteerImpactMap';
 import {
@@ -28,6 +29,7 @@ import {
 } from '../models/storage';
 import { VolunteerRecognitionStatus } from '../models/storage';
 import { NVCSector, Project, User, UserType, Volunteer } from '../models/types';
+import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 const USER_TYPES: UserType[] = ['Student', 'Adult', 'Senior'];
 const PILLAR_OPTIONS: NVCSector[] = ['Nutrition', 'Education', 'Livelihood'];
@@ -37,6 +39,7 @@ const SAVE_SYNC_RETRY_DELAY_MS = 250;
 // Displays the signed-in user's profile, volunteer recognition, and edit form.
 export default function ProfileScreen() {
   const { user, logout, updateUserProfile } = useAuth();
+  const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
   const [completedProjectIds, setCompletedProjectIds] = useState<string[]>([]);
   const [recognitionStatus, setRecognitionStatus] = useState<VolunteerRecognitionStatus>({
@@ -86,8 +89,13 @@ export default function ProfileScreen() {
           isTopVolunteer: false,
         });
       }
+      setLoadError(null);
     } catch (error) {
       console.error('Error loading volunteer profile:', error);
+      setLoadError({
+        title: getRequestErrorTitle(error),
+        message: getRequestErrorMessage(error, 'Failed to load your volunteer profile.'),
+      });
     }
   }, [user?.id, user?.role]);
 
@@ -96,8 +104,13 @@ export default function ProfileScreen() {
     try {
       const allProjects = await getAllProjects();
       setProjects(allProjects);
+      setLoadError(null);
     } catch (error) {
       console.error('Error loading projects for profile:', error);
+      setLoadError({
+        title: getRequestErrorTitle(error),
+        message: getRequestErrorMessage(error, 'Failed to load your project history.'),
+      });
     }
   }, []);
 
@@ -175,6 +188,11 @@ export default function ProfileScreen() {
   const openEditModal = () => {
     populateDrafts();
     setShowEditModal(true);
+  };
+
+  // Closes the profile editor once saving or cancellation is complete.
+  const closeEditModal = () => {
+    setShowEditModal(false);
   };
 
   // Adds or removes a pillar-of-interest selection from the draft profile.
@@ -307,13 +325,16 @@ export default function ProfileScreen() {
       );
 
       await updateUserProfile(syncedUser);
-      setShowEditModal(false);
+      closeEditModal();
       Alert.alert(
         'Saved',
         `Profile updated successfully. Use ${loginIdentifier} the next time you log in.`
       );
-    } catch (error: any) {
-      Alert.alert('Error', error?.message || 'Failed to update profile.');
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to update profile.')
+      );
     } finally {
       setSaveLoading(false);
     }
@@ -337,6 +358,18 @@ export default function ProfileScreen() {
 
   return (
     <ScrollView style={styles.container}>
+      {loadError ? (
+        <View style={styles.inlineErrorWrap}>
+          <InlineLoadError
+            title={loadError.title}
+            message={loadError.message}
+            onRetry={() => {
+              void loadVolunteerProfile();
+              void loadProjectTitles();
+            }}
+          />
+        </View>
+      ) : null}
       <View style={styles.profileCard}>
         <View style={styles.avatar}>
           <Text style={styles.avatarText}>{initials}</Text>
@@ -487,10 +520,10 @@ export default function ProfileScreen() {
         </TouchableOpacity>
       </View>
 
-      <Modal visible={showEditModal} animationType="slide" onRequestClose={() => setShowEditModal(false)}>
+      <Modal visible={showEditModal} animationType="slide" onRequestClose={closeEditModal}>
         <View style={styles.modalContainer}>
           <View style={styles.modalHeader}>
-            <TouchableOpacity onPress={() => setShowEditModal(false)} disabled={saveLoading}>
+            <TouchableOpacity onPress={closeEditModal} disabled={saveLoading}>
               <Text style={styles.modalCancel}>Cancel</Text>
             </TouchableOpacity>
             <Text style={styles.modalTitle}>Edit Profile</Text>
@@ -643,6 +676,9 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f5f5f5',
     padding: 15,
+  },
+  inlineErrorWrap: {
+    marginBottom: 16,
   },
   profileCard: {
     backgroundColor: '#fff',

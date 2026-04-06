@@ -52,6 +52,7 @@ const REMOTE_STORAGE_TIMEOUT_MS = 60000;
 const API_HEALTH_TIMEOUT_MS = 10000;
 const API_READY_RETRY_MS = 800;
 const API_READY_MAX_ATTEMPTS = 6;
+const API_READY_CACHE_MS = 5000;
 const LOCAL_ONLY_STORAGE_KEYS = new Set([STORAGE_KEYS.CURRENT_USER]);
 const NEGROS_OCCIDENTAL_BOUNDS = {
   minLatitude: 9.85,
@@ -59,6 +60,8 @@ const NEGROS_OCCIDENTAL_BOUNDS = {
   minLongitude: 122.45,
   maxLongitude: 123.35,
 };
+let apiReadyConfirmedAt = 0;
+let apiReadyCheckPromise: Promise<void> | null = null;
 
 type ProjectsScreenSnapshot = {
   projects: Project[];
@@ -342,6 +345,14 @@ async function delay(ms: number): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function markApiReady(): void {
+  apiReadyConfirmedAt = Date.now();
+}
+
+function invalidateApiReady(): void {
+  apiReadyConfirmedAt = 0;
+}
+
 async function getApiHealthError(): Promise<string | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), API_HEALTH_TIMEOUT_MS);
@@ -379,21 +390,39 @@ async function getApiHealthError(): Promise<string | null> {
 }
 
 async function waitForApiReady(): Promise<void> {
-  let lastError = `Backend unavailable at ${getApiBaseUrl()}.`;
-
-  for (let attempt = 0; attempt < API_READY_MAX_ATTEMPTS; attempt += 1) {
-    const healthError = await getApiHealthError();
-    if (!healthError) {
-      return;
-    }
-    lastError = healthError;
-
-    if (attempt < API_READY_MAX_ATTEMPTS - 1) {
-      await delay(API_READY_RETRY_MS);
-    }
+  if (Date.now() - apiReadyConfirmedAt < API_READY_CACHE_MS) {
+    return;
   }
 
-  throw new Error(lastError);
+  if (apiReadyCheckPromise) {
+    return apiReadyCheckPromise;
+  }
+
+  apiReadyCheckPromise = (async () => {
+    let lastError = `Backend unavailable at ${getApiBaseUrl()}.`;
+
+    for (let attempt = 0; attempt < API_READY_MAX_ATTEMPTS; attempt += 1) {
+      const healthError = await getApiHealthError();
+      if (!healthError) {
+        markApiReady();
+        return;
+      }
+      lastError = healthError;
+
+      if (attempt < API_READY_MAX_ATTEMPTS - 1) {
+        await delay(API_READY_RETRY_MS);
+      }
+    }
+
+    invalidateApiReady();
+    throw new Error(lastError);
+  })();
+
+  try {
+    await apiReadyCheckPromise;
+  } finally {
+    apiReadyCheckPromise = null;
+  }
 }
 
 async function fetchRemoteStorageItem<T>(key: string): Promise<T | null> {
@@ -404,9 +433,11 @@ async function fetchRemoteStorageItem<T>(key: string): Promise<T | null> {
     signal: controller.signal,
   }).finally(() => clearTimeout(timeout));
   if (!response.ok) {
+    invalidateApiReady();
     throw new Error(`Remote storage read failed: ${response.status}`);
   }
 
+  markApiReady();
   const payload = (await response.json()) as { value: T | null };
   return payload.value ?? null;
 }
@@ -427,9 +458,11 @@ async function fetchRemoteStorageItems(
   }).finally(() => clearTimeout(timeout));
 
   if (!response.ok) {
+    invalidateApiReady();
     throw new Error(`Remote storage batch read failed: ${response.status}`);
   }
 
+  markApiReady();
   const payload = (await response.json()) as { items?: Record<string, unknown | null> };
   return payload.items || {};
 }
@@ -463,11 +496,13 @@ async function requestApiJson<T>(
     });
 
     if (!response.ok) {
+      invalidateApiReady();
       throw new Error(
         await getApiErrorMessage(response, `API request failed: ${response.status}`)
       );
     }
 
+    markApiReady();
     return (await response.json()) as T;
   } finally {
     clearTimeout(timeout);
@@ -505,8 +540,11 @@ async function saveRemoteStorageItem<T>(key: string, value: T): Promise<void> {
   }).finally(() => clearTimeout(timeout));
 
   if (!response.ok) {
+    invalidateApiReady();
     throw new Error(`Remote storage write failed: ${response.status}`);
   }
+
+  markApiReady();
 }
 
 async function deleteRemoteStorageItem(key: string): Promise<void> {
@@ -519,8 +557,11 @@ async function deleteRemoteStorageItem(key: string): Promise<void> {
   }).finally(() => clearTimeout(timeout));
 
   if (!response.ok) {
+    invalidateApiReady();
     throw new Error(`Remote storage delete failed: ${response.status}`);
   }
+
+  markApiReady();
 }
 
 async function clearRemoteStorage(): Promise<void> {
@@ -533,8 +574,11 @@ async function clearRemoteStorage(): Promise<void> {
   }).finally(() => clearTimeout(timeout));
 
   if (!response.ok) {
+    invalidateApiReady();
     throw new Error(`Remote storage clear failed: ${response.status}`);
   }
+
+  markApiReady();
 }
 
 // Filters expected network and backend errors from real application exceptions.
@@ -2378,9 +2422,15 @@ export async function generateFinalImpactReports(
     },
   ];
 
-  for (const report of reports) {
-    await savePublishedImpactReport(report);
-  }
+  const existingReports =
+    await getStorageItem<PublishedImpactReport[]>(STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS) || [];
+  const nextReports = existingReports.filter(
+    report =>
+      report.projectId !== projectId ||
+      Boolean(report.publishedAt) ||
+      !reports.some(generatedReport => generatedReport.format === report.format)
+  );
+  await setStorageItem(STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS, [...nextReports, ...reports]);
 
   return reports;
 }

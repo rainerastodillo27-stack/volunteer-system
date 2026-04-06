@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Platform }
 import Constants from 'expo-constants';
 import { useAuth } from '../contexts/AuthContext';
 import { getApiBaseUrl, initializeMockData } from '../models/storage';
+import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 // Shows environment details, backend controls, and session actions.
 export default function SystemSettingsScreen() {
@@ -14,7 +15,10 @@ export default function SystemSettingsScreen() {
       await initializeMockData();
       Alert.alert('Updated', 'Demo login accounts have been synchronized to the Postgres-backed backend.');
     } catch (error) {
-      Alert.alert('Error', 'Failed to seed demo login accounts into the backend.');
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to seed demo login accounts into the backend.')
+      );
     }
   };
 

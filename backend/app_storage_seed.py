@@ -253,6 +253,21 @@ def get_postgres_hot_storage_collection(connection: Any, key: str) -> list[Any]:
     return [row[0] for row in rows]
 
 
+# Keeps the generic app-storage mirror aligned with hot-storage collections.
+def _upsert_app_storage_value(connection: Any, key: str, value: Any) -> None:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            insert into app_storage (key, value, updated_at)
+            values (%s, %s::jsonb, now())
+            on conflict (key) do update set
+              value = excluded.value,
+              updated_at = excluded.updated_at
+            """,
+            (key, json.dumps(value)),
+        )
+
+
 # Replaces all rows in a hot-storage collection with a normalized item list.
 def replace_postgres_hot_storage_collection(
     connection: Any,
@@ -293,6 +308,8 @@ def replace_postgres_hot_storage_collection(
                 (item["id"], json.dumps(item), sort_order),
             )
 
+    _upsert_app_storage_value(connection, key, normalized_items)
+
 
 # Deletes all rows for one hot-storage collection.
 def clear_postgres_hot_storage_collection(connection: Any, key: str) -> None:
@@ -300,12 +317,17 @@ def clear_postgres_hot_storage_collection(connection: Any, key: str) -> None:
     with connection.cursor() as cursor:
         cursor.execute(f"delete from {table_name}")
 
+    _upsert_app_storage_value(connection, key, [])
+
 
 # Deletes all rows from every hot-storage collection.
 def clear_all_postgres_hot_storage(connection: Any) -> None:
     with connection.cursor() as cursor:
         for table_name in HOT_STORAGE_TABLES.values():
             cursor.execute(f"delete from {table_name}")
+
+    for key in HOT_STORAGE_TABLES:
+        _upsert_app_storage_value(connection, key, [])
 
 
 # Reads a batch of generic app-storage items from Postgres.
