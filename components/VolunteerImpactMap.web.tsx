@@ -27,11 +27,7 @@ function getWebGoogleMapsApiKey(): string | undefined {
   const fromManifest2 = constantsAny.manifest2?.extra?.expoClient?.extra?.webGoogleMapsApiKey;
   const fromPublicEnv = process.env.EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY;
 
-  const resolvedKey =
-    fromExpoConfig ??
-    fromManifest ??
-    fromManifest2 ??
-    fromPublicEnv;
+  const resolvedKey = fromExpoConfig ?? fromManifest ?? fromManifest2 ?? fromPublicEnv;
 
   return typeof resolvedKey === 'string' && resolvedKey.trim().length > 0
     ? resolvedKey.trim()
@@ -230,7 +226,7 @@ export default function VolunteerImpactMap({ projects }: VolunteerImpactMapProps
         <View style={styles.detailCard}>
           <Text style={styles.detailTitle}>{selectedProject.title}</Text>
           <Text style={styles.detailMeta}>
-            {selectedProject.isEvent ? 'Event' : 'Program'} • {selectedProject.category}
+            {`${selectedProject.isEvent ? 'Event' : 'Program'} | ${selectedProject.category}`}
           </Text>
           <Text style={styles.detailAddress}>{selectedProject.location.address}</Text>
         </View>

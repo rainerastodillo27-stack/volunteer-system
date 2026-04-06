@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { createBottomTabNavigator, BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Platform, ScrollView, StyleSheet, TouchableOpacity, View, Text } from 'react-native';
@@ -70,6 +70,29 @@ type SidebarProps = BottomTabBarProps & {
   collapsed: boolean;
   onToggle: () => void;
 };
+
+type SidebarCaptureProps = BottomTabBarProps & {
+  onPropsChange: (props: BottomTabBarProps, signature: string) => void;
+};
+
+// Captures tab bar props after render so the web sidebar can stay outside the navigator tree.
+function SidebarCapture({ onPropsChange, ...tabBarProps }: SidebarCaptureProps) {
+  const signature = [
+    String(tabBarProps.state.index),
+    ...tabBarProps.state.routes.map(route => {
+      const options = tabBarProps.descriptors[route.key]?.options;
+      const title = typeof options?.title === 'string' ? options.title : route.name;
+      const badge = typeof options?.tabBarBadge === 'number' ? options.tabBarBadge : 0;
+      return `${route.key}:${title}:${badge}`;
+    }),
+  ].join('|');
+
+  useEffect(() => {
+    onPropsChange(tabBarProps, signature);
+  }, [onPropsChange, signature, tabBarProps]);
+
+  return null;
+}
 
 // Renders the custom admin web sidebar in place of the default tab bar.
 function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle }: SidebarProps) {
@@ -213,6 +236,7 @@ export default function TabNavigator() {
   const useSidebar = isWeb && isAdmin;
   const [collapsed, setCollapsed] = useState(true);
   const [tabBarProps, setTabBarProps] = useState<BottomTabBarProps | null>(null);
+  const [tabBarSignature, setTabBarSignature] = useState('');
   const sidebarWidth = collapsed ? SIDEBAR_WIDTH_COLLAPSED : SIDEBAR_WIDTH;
   const contentGutter = collapsed ? CONTENT_GUTTER_COLLAPSED : CONTENT_GUTTER;
 
@@ -247,12 +271,32 @@ export default function TabNavigator() {
     };
   }, [user?.id]);
 
+  const handleSidebarPropsChange = useCallback(
+    (props: BottomTabBarProps, signature: string) => {
+      if (signature === tabBarSignature) {
+        return;
+      }
+
+      setTabBarProps(props);
+      setTabBarSignature(signature);
+    },
+    [tabBarSignature]
+  );
+
+  useEffect(() => {
+    if (!useSidebar) {
+      setTabBarProps(null);
+      setTabBarSignature('');
+    }
+  }, [useSidebar]);
+
   const navigator = (
     <Tab.Navigator
-      tabBar={useSidebar ? props => {
-        setTabBarProps(prev => (prev?.state === props.state ? prev : props));
-        return null;
-      } : undefined}
+      tabBar={
+        useSidebar
+          ? props => <SidebarCapture {...props} onPropsChange={handleSidebarPropsChange} />
+          : undefined
+      }
       screenOptions={({ route }) => ({
         headerShown: true,
         header: ({ options }) => {
@@ -350,11 +394,11 @@ export default function TabNavigator() {
             options={{ title: 'Admin Profile' }}
           />
 
-        <Tab.Screen
-          name="Settings"
-          component={SystemSettingsScreen}
-          options={{ title: 'System Settings' }}
-        />
+          <Tab.Screen
+            name="Settings"
+            component={SystemSettingsScreen}
+            options={{ title: 'System Settings' }}
+          />
         </>
       ) : (
         <Tab.Screen

@@ -1,6 +1,10 @@
 node_modules/
 .expo/
 dist/
+.run-logs/
+.run-state/
+backend/__pycache__/
+*.py[cod]
 npm-debug.*
 *.jks
 *.p8

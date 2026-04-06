@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Platform } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
@@ -12,6 +12,10 @@ type VolunteerImpactMapProps = {
 // Displays a native map of projects that the volunteer has participated in.
 export default function VolunteerImpactMap({ projects }: VolunteerImpactMapProps) {
   const [selectedProject, setSelectedProject] = useState<Project | null>(projects[0] || null);
+
+  useEffect(() => {
+    setSelectedProject(projects[0] || null);
+  }, [projects]);
 
   if (projects.length === 0) {
     return null;
@@ -59,7 +63,7 @@ export default function VolunteerImpactMap({ projects }: VolunteerImpactMapProps
         <View style={styles.detailCard}>
           <Text style={styles.detailTitle}>{selectedProject.title}</Text>
           <Text style={styles.detailMeta}>
-            {selectedProject.isEvent ? 'Event' : 'Program'} • {selectedProject.category}
+            {`${selectedProject.isEvent ? 'Event' : 'Program'} | ${selectedProject.category}`}
           </Text>
           <Text style={styles.detailAddress}>{selectedProject.location.address}</Text>
         </View>

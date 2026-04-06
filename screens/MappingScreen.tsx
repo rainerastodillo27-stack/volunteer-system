@@ -39,12 +39,9 @@ export default function MappingScreen({ navigation }: any) {
   }, []);
 
   useEffect(() => {
-    return subscribeToStorageChanges(
-      ['projects', 'partnerEventCheckIns', 'partnerReports'],
-      () => {
-        void loadProjects();
-      }
-    );
+    return subscribeToStorageChanges(['projects', 'partnerEventCheckIns', 'partnerReports'], () => {
+      void loadProjects();
+    });
   }, []);
 
   // Loads all projects so they can be plotted on the map.
@@ -62,10 +59,7 @@ export default function MappingScreen({ navigation }: any) {
       setProjects([]);
       setPartnerCheckIns([]);
       setPartnerReports([]);
-      Alert.alert(
-        'Database Unavailable',
-        error?.message || 'Failed to load projects from Postgres.'
-      );
+      Alert.alert('Database Unavailable', error?.message || 'Failed to load projects from Postgres.');
       setLoading(false);
     }
   };
@@ -109,7 +103,9 @@ export default function MappingScreen({ navigation }: any) {
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Live Command Center</Text>
-        <Text style={styles.headerSubtitle}>Projects, partner GPS check-ins, and field uploads in Negros Occidental</Text>
+        <Text style={styles.headerSubtitle}>
+          Projects, partner GPS check-ins, and field uploads in Negros Occidental
+        </Text>
       </View>
 
       <View style={styles.mapContainer}>
@@ -150,7 +146,9 @@ export default function MappingScreen({ navigation }: any) {
       </View>
 
       <View style={styles.projectListContainer}>
-        <Text style={styles.projectListTitle}>Projects {projects.length} • Check-Ins {partnerCheckIns.length} • Uploaded Impact {partnerReports.reduce((sum, report) => sum + report.impactCount, 0)}</Text>
+        <Text style={styles.projectListTitle}>
+          {`Projects ${projects.length} | Check-Ins ${partnerCheckIns.length} | Uploaded Impact ${partnerReports.reduce((sum, report) => sum + report.impactCount, 0)}`}
+        </Text>
         {Platform.OS === 'android' && !androidGoogleMapsApiKey ? (
           <Text style={styles.projectListWarning}>
             Android Google Maps key is missing. Add `GOOGLE_MAPS_ANDROID_API_KEY` to `.env`.
@@ -166,10 +164,7 @@ export default function MappingScreen({ navigation }: any) {
       >
         <View style={styles.centeredView}>
           <View style={styles.modalView}>
-            <TouchableOpacity
-              style={styles.closeButton}
-              onPress={() => setShowDetails(false)}
-            >
+            <TouchableOpacity style={styles.closeButton} onPress={() => setShowDetails(false)}>
               <MaterialIcons name="close" size={28} color="#333" />
             </TouchableOpacity>
 
@@ -191,7 +186,9 @@ export default function MappingScreen({ navigation }: any) {
                 <View style={styles.infoGrid}>
                   <View style={styles.infoItem}>
                     <Text style={styles.infoLabel}>Category</Text>
-                    <Text style={styles.infoValue}>{selectedProject.programModule || selectedProject.category}</Text>
+                    <Text style={styles.infoValue}>
+                      {selectedProject.programModule || selectedProject.category}
+                    </Text>
                   </View>
                   <View style={styles.infoItem}>
                     <Text style={styles.infoLabel}>Volunteers Needed</Text>
@@ -246,10 +243,7 @@ export default function MappingScreen({ navigation }: any) {
                   </View>
                 </View>
 
-                <TouchableOpacity
-                  style={styles.viewDetailsButton}
-                  onPress={handleOpenProjectDetails}
-                >
+                <TouchableOpacity style={styles.viewDetailsButton} onPress={handleOpenProjectDetails}>
                   <Text style={styles.viewDetailsButtonText}>View Full Details</Text>
                 </TouchableOpacity>
               </View>
