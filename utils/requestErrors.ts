@@ -42,7 +42,7 @@ export function getRequestErrorMessage(
       normalizedMessage.includes('timeout') ||
       normalizedMessage.includes('aborted')
     ) {
-      return 'The server is taking too long to respond. Please try again in a moment.';
+      return 'The connection is very slow right now. Please wait a moment and try again.';
     }
 
     if (

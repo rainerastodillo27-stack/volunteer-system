@@ -458,7 +458,7 @@ export default function DashboardScreen({ navigation }: any) {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Quick Actions</Text>
 
-        <View style={styles.actionsGrid}>
+      <View style={styles.actionsGrid}>
           <TouchableOpacity
             style={styles.actionButton}
             onPress={() => openMessages()}
@@ -466,6 +466,16 @@ export default function DashboardScreen({ navigation }: any) {
             <MaterialIcons name="mail" size={24} color="#4CAF50" />
             <Text style={styles.actionButtonText}>Messages</Text>
           </TouchableOpacity>
+
+          {isAdmin && (
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={() => openLifecycle()}
+            >
+              <MaterialIcons name="timeline" size={24} color="#2563eb" />
+              <Text style={styles.actionButtonText}>Lifecycle</Text>
+            </TouchableOpacity>
+          )}
 
           <TouchableOpacity
             style={styles.actionButton}

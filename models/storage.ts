@@ -48,11 +48,14 @@ let mockDataInitializationPromise: Promise<void> | null = null;
 // Supabase-backed storage reads can exceed 2.5s on some networks.
 // Keep this comfortably above the observed backend round-trip so web/mobile
 // prefer shared storage instead of silently falling back to stale local cache.
-const REMOTE_STORAGE_TIMEOUT_MS = 60000;
-const API_HEALTH_TIMEOUT_MS = 10000;
-const API_READY_RETRY_MS = 800;
-const API_READY_MAX_ATTEMPTS = 6;
-const API_READY_CACHE_MS = 5000;
+const REMOTE_STORAGE_TIMEOUT_MS = 90000;
+const API_HEALTH_TIMEOUT_MS = 20000;
+const API_READY_RETRY_MS = 1500;
+const API_READY_MAX_ATTEMPTS = 8;
+const API_READY_CACHE_MS = 10000;
+const API_REQUEST_MAX_ATTEMPTS = 3;
+const API_REQUEST_RETRY_BASE_MS = 1500;
+const API_REQUEST_RETRY_MAX_MS = 6000;
 const LOCAL_ONLY_STORAGE_KEYS = new Set([STORAGE_KEYS.CURRENT_USER]);
 const NEGROS_OCCIDENTAL_BOUNDS = {
   minLatitude: 9.85,
@@ -353,6 +356,17 @@ function invalidateApiReady(): void {
   apiReadyConfirmedAt = 0;
 }
 
+function getApiRetryDelayMs(attempt: number): number {
+  return Math.min(
+    API_REQUEST_RETRY_BASE_MS * Math.pow(2, attempt),
+    API_REQUEST_RETRY_MAX_MS
+  );
+}
+
+function isRetryableApiStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
 async function getApiHealthError(): Promise<string | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), API_HEALTH_TIMEOUT_MS);
@@ -426,18 +440,7 @@ async function waitForApiReady(): Promise<void> {
 }
 
 async function fetchRemoteStorageItem<T>(key: string): Promise<T | null> {
-  await waitForApiReady();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REMOTE_STORAGE_TIMEOUT_MS);
-  const response = await fetch(`${getApiBaseUrl()}/storage/${encodeURIComponent(key)}`, {
-    signal: controller.signal,
-  }).finally(() => clearTimeout(timeout));
-  if (!response.ok) {
-    invalidateApiReady();
-    throw new Error(`Remote storage read failed: ${response.status}`);
-  }
-
-  markApiReady();
+  const response = await fetchApiResponse(`/storage/${encodeURIComponent(key)}`);
   const payload = (await response.json()) as { value: T | null };
   return payload.value ?? null;
 }
@@ -445,24 +448,13 @@ async function fetchRemoteStorageItem<T>(key: string): Promise<T | null> {
 async function fetchRemoteStorageItems(
   keys: string[]
 ): Promise<Record<string, unknown | null>> {
-  await waitForApiReady();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REMOTE_STORAGE_TIMEOUT_MS);
-  const response = await fetch(`${getApiBaseUrl()}/storage/batch`, {
+  const response = await fetchApiResponse('/storage/batch', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ keys }),
-    signal: controller.signal,
-  }).finally(() => clearTimeout(timeout));
-
-  if (!response.ok) {
-    invalidateApiReady();
-    throw new Error(`Remote storage batch read failed: ${response.status}`);
-  }
-
-  markApiReady();
+  });
   const payload = (await response.json()) as { items?: Record<string, unknown | null> };
   return payload.items || {};
 }
@@ -480,33 +472,70 @@ async function getApiErrorMessage(response: Response, fallback: string): Promise
   return fallback;
 }
 
+async function fetchApiResponse(
+  path: string,
+  init?: RequestInit,
+  timeoutMs = REMOTE_STORAGE_TIMEOUT_MS
+): Promise<Response> {
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt < API_REQUEST_MAX_ATTEMPTS; attempt += 1) {
+    await waitForApiReady();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const response = await fetch(`${getApiBaseUrl()}${path}`, {
+        ...init,
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const message = await getApiErrorMessage(
+          response,
+          `API request failed: ${response.status}`
+        );
+
+        if (isRetryableApiStatus(response.status) && attempt < API_REQUEST_MAX_ATTEMPTS - 1) {
+          invalidateApiReady();
+          lastError = new Error(message);
+          await delay(getApiRetryDelayMs(attempt));
+          continue;
+        }
+
+        invalidateApiReady();
+        throw new Error(message);
+      }
+
+      markApiReady();
+      return response;
+    } catch (error) {
+      if (isExpectedRemoteStorageError(error) && attempt < API_REQUEST_MAX_ATTEMPTS - 1) {
+        invalidateApiReady();
+        lastError = error;
+        await delay(getApiRetryDelayMs(attempt));
+        continue;
+      }
+
+      invalidateApiReady();
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`Backend unavailable at ${getApiBaseUrl()}.`);
+}
+
 async function requestApiJson<T>(
   path: string,
   init?: RequestInit,
   timeoutMs = REMOTE_STORAGE_TIMEOUT_MS
 ): Promise<T> {
-  await waitForApiReady();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(`${getApiBaseUrl()}${path}`, {
-      ...init,
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      invalidateApiReady();
-      throw new Error(
-        await getApiErrorMessage(response, `API request failed: ${response.status}`)
-      );
-    }
-
-    markApiReady();
-    return (await response.json()) as T;
-  } finally {
-    clearTimeout(timeout);
-  }
+  const response = await fetchApiResponse(path, init, timeoutMs);
+  return (await response.json()) as T;
 }
 
 async function getLocalStorageItem<T>(key: string): Promise<T | null> {
@@ -527,58 +556,25 @@ function isLocalOnlyStorageKey(key: string): boolean {
 }
 
 async function saveRemoteStorageItem<T>(key: string, value: T): Promise<void> {
-  await waitForApiReady();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REMOTE_STORAGE_TIMEOUT_MS);
-  const response = await fetch(`${getApiBaseUrl()}/storage/${encodeURIComponent(key)}`, {
+  await fetchApiResponse(`/storage/${encodeURIComponent(key)}`, {
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ value }),
-    signal: controller.signal,
-  }).finally(() => clearTimeout(timeout));
-
-  if (!response.ok) {
-    invalidateApiReady();
-    throw new Error(`Remote storage write failed: ${response.status}`);
-  }
-
-  markApiReady();
+  });
 }
 
 async function deleteRemoteStorageItem(key: string): Promise<void> {
-  await waitForApiReady();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REMOTE_STORAGE_TIMEOUT_MS);
-  const response = await fetch(`${getApiBaseUrl()}/storage/${encodeURIComponent(key)}`, {
+  await fetchApiResponse(`/storage/${encodeURIComponent(key)}`, {
     method: 'DELETE',
-    signal: controller.signal,
-  }).finally(() => clearTimeout(timeout));
-
-  if (!response.ok) {
-    invalidateApiReady();
-    throw new Error(`Remote storage delete failed: ${response.status}`);
-  }
-
-  markApiReady();
+  });
 }
 
 async function clearRemoteStorage(): Promise<void> {
-  await waitForApiReady();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REMOTE_STORAGE_TIMEOUT_MS);
-  const response = await fetch(`${getApiBaseUrl()}/storage`, {
+  await fetchApiResponse('/storage', {
     method: 'DELETE',
-    signal: controller.signal,
-  }).finally(() => clearTimeout(timeout));
-
-  if (!response.ok) {
-    invalidateApiReady();
-    throw new Error(`Remote storage clear failed: ${response.status}`);
-  }
-
-  markApiReady();
+  });
 }
 
 // Filters expected network and backend errors from real application exceptions.
@@ -1442,19 +1438,13 @@ async function addLoggedHoursToVolunteer(
 // Persists a direct user-to-user message and triggers refresh notifications.
 export async function saveMessage(message: Message): Promise<void> {
   try {
-    await waitForApiReady();
-    const response = await fetch(`${getApiBaseUrl()}/messages`, {
+    await fetchApiResponse('/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(message),
     });
-    if (!response.ok) {
-      throw new Error(
-        await getApiErrorMessage(response, `Message send failed: ${response.status}`)
-      );
-    }
     notifyWebMessageUpdate();
   } catch (error) {
     if (!isExpectedRemoteStorageError(error)) {
@@ -1467,9 +1457,8 @@ export async function saveMessage(message: Message): Promise<void> {
 // Persists a project group chat message and triggers refresh notifications.
 export async function saveProjectGroupMessage(message: ProjectGroupMessage): Promise<void> {
   try {
-    await waitForApiReady();
-    const response = await fetch(
-      `${getApiBaseUrl()}/projects/${encodeURIComponent(message.projectId)}/group-messages`,
+    await fetchApiResponse(
+      `/projects/${encodeURIComponent(message.projectId)}/group-messages`,
       {
         method: 'POST',
         headers: {
@@ -1478,11 +1467,6 @@ export async function saveProjectGroupMessage(message: ProjectGroupMessage): Pro
         body: JSON.stringify(message),
       }
     );
-    if (!response.ok) {
-      throw new Error(
-        await getApiErrorMessage(response, `Group message send failed: ${response.status}`)
-      );
-    }
     notifyWebMessageUpdate();
   } catch (error) {
     if (!isExpectedRemoteStorageError(error)) {
@@ -2521,14 +2505,22 @@ async function initializeMockDataInternal(): Promise<void> {
 }
 
 async function attachVolunteerToProject(projectId: string, volunteerId: string): Promise<void> {
-  const project = await getProject(projectId);
-  if (!project) return;
+  const [project, volunteer] = await Promise.all([
+    getProject(projectId),
+    getVolunteer(volunteerId),
+  ]);
+  if (!project || !volunteer) return;
 
-  if (project.volunteers.includes(volunteerId)) return;
+  const joinedUserIds = project.joinedUserIds || [];
+  const hasVolunteerId = project.volunteers.includes(volunteerId);
+  const hasUserId = joinedUserIds.includes(volunteer.userId);
+
+  if (hasVolunteerId && hasUserId) return;
 
   await saveProject({
     ...project,
-    volunteers: [...project.volunteers, volunteerId],
+    volunteers: hasVolunteerId ? project.volunteers : [...project.volunteers, volunteerId],
+    joinedUserIds: hasUserId ? joinedUserIds : [...joinedUserIds, volunteer.userId],
     updatedAt: new Date().toISOString(),
   });
 }

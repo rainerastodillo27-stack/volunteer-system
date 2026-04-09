@@ -34,11 +34,11 @@ def load_environment() -> None:
 
 # Returns the database connect timeout used for Postgres connections.
 def _get_connect_timeout() -> int:
-    raw_timeout = os.getenv("DB_CONNECT_TIMEOUT", "5").strip()
+    raw_timeout = os.getenv("DB_CONNECT_TIMEOUT", "15").strip()
     try:
         return max(1, int(raw_timeout))
     except ValueError:
-        return 5
+        return 15
 
 
 # Returns how long Postgres health checks should stay cached.

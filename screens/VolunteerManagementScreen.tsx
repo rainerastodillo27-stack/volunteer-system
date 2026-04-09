@@ -344,6 +344,14 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     const matchedProjects = getMatchedProjects();
     const pendingProjects = getPendingProjects();
     const availableProjects = getAvailableProjects();
+    const matchRecords = volunteerMatches.map(match => {
+      const project = projects.find(projectEntry => projectEntry.id === match.projectId);
+      return {
+        ...match,
+        projectTitle: project?.title || 'Project',
+        projectCategory: project?.category || 'Volunteer activity',
+      };
+    });
     const selectedVolunteerTimeLogs = volunteerTimeLogs
       .filter(log => log.volunteerId === selectedVolunteer.id)
       .sort((a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime());
@@ -546,6 +554,51 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
             ))}
           </View>
         )}
+
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Match Records</Text>
+            <Text style={styles.sectionSummary}>
+              {matchRecords.length} total record{matchRecords.length === 1 ? '' : 's'}
+            </Text>
+          </View>
+
+          {matchRecords.length === 0 ? (
+            <Text style={styles.emptyText}>No match records yet</Text>
+          ) : (
+            matchRecords.map(match => {
+              const statusStyle =
+                match.status === 'Matched'
+                  ? styles.matchRecordStatusMatched
+                  : match.status === 'Requested'
+                  ? styles.matchRecordStatusRequested
+                  : match.status === 'Completed'
+                  ? styles.matchRecordStatusCompleted
+                  : styles.matchRecordStatusInactive;
+
+              return (
+                <View key={match.id} style={styles.matchRecordCard}>
+                  <View style={styles.matchRecordHeader}>
+                    <View style={styles.projectInfo}>
+                      <Text style={styles.projectName}>{match.projectTitle}</Text>
+                      <Text style={styles.projectCategory}>{match.projectCategory}</Text>
+                    </View>
+                    <View style={[styles.matchRecordStatusBadge, statusStyle]}>
+                      <Text style={styles.matchRecordStatusText}>{match.status}</Text>
+                    </View>
+                  </View>
+
+                  <Text style={styles.matchRecordMeta}>
+                    Updated: {format(new Date(match.matchedAt), 'PPpp')}
+                  </Text>
+                  <Text style={styles.matchRecordMeta}>
+                    Hours Contributed: {match.hoursContributed.toFixed(1)}
+                  </Text>
+                </View>
+              );
+            })
+          )}
+        </View>
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Completed Projects</Text>
@@ -1024,6 +1077,46 @@ const styles = StyleSheet.create({
     color: '#92400e',
     fontSize: 11,
     fontWeight: '700',
+  },
+  matchRecordCard: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  matchRecordHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  matchRecordStatusBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  matchRecordStatusMatched: {
+    backgroundColor: '#dcfce7',
+  },
+  matchRecordStatusRequested: {
+    backgroundColor: '#fef3c7',
+  },
+  matchRecordStatusCompleted: {
+    backgroundColor: '#dbeafe',
+  },
+  matchRecordStatusInactive: {
+    backgroundColor: '#e5e7eb',
+  },
+  matchRecordStatusText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#1f2937',
+  },
+  matchRecordMeta: {
+    fontSize: 12,
+    color: '#475569',
+    marginTop: 6,
   },
   emptyText: {
     color: '#999',

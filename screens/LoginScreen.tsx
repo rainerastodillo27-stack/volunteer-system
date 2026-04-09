@@ -12,8 +12,12 @@ import {
 } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
 import AppLogo from '../components/AppLogo';
+import InlineLoadError from '../components/InlineLoadError';
 import { AdvocacyFocus, NVCSector, PartnerSectorType, User, UserRole, UserType } from '../models/types';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
+
+const BACKEND_HEALTH_TIMEOUT_MS = 20000;
+const BACKEND_HEALTH_POLL_MS = 10000;
 
 type SignupVolunteerSheetState = {
   gender: string;
@@ -76,11 +80,11 @@ function getIncorrectLoginMessage(
   attemptedPassword: string
 ): string {
   if (matchedUser) {
-    return 'Incorrect password.';
+    return 'Wrong password.';
   }
 
   const passwordExists = allUsers.some(user => user.password === attemptedPassword);
-  return passwordExists ? 'Incorrect user.' : 'Incorrect user and password.';
+  return passwordExists ? 'Wrong user.' : 'Wrong user and password.';
 }
 
 // Handles account login and volunteer or partner self-registration.
@@ -90,6 +94,7 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(true);
   const [initialized, setInitialized] = useState(false);
+  const [loginError, setLoginError] = useState<{ title: string; message: string } | null>(null);
   const [showSignupModal, setShowSignupModal] = useState(false);
   const [signupLoading, setSignupLoading] = useState(false);
   const [signupName, setSignupName] = useState('');
@@ -126,7 +131,7 @@ export default function LoginScreen() {
     // Checks whether the backend is reachable before allowing authentication flows.
     const checkBackend = async () => {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10000);
+      const timeout = setTimeout(() => controller.abort(), BACKEND_HEALTH_TIMEOUT_MS);
 
       try {
         setBackendStatus(current => (current === 'online' ? current : 'checking'));
@@ -167,7 +172,7 @@ export default function LoginScreen() {
     void checkBackend();
     const intervalId = setInterval(() => {
       void checkBackend();
-    }, 5000);
+    }, BACKEND_HEALTH_POLL_MS);
 
     return () => {
       cancelled = true;
@@ -211,18 +216,28 @@ export default function LoginScreen() {
     const trimmedIdentifier = identifier.trim();
     const trimmedPassword = password.trim();
 
+    const showLoginError = (title: string, message: string) => {
+      if (isWeb) {
+        setLoginError({ title, message });
+        return;
+      }
+
+      Alert.alert(title, message);
+    };
+
+    setLoginError(null);
+
     if (!trimmedIdentifier || !trimmedPassword) {
       Alert.alert('Validation Error', 'Please enter email or phone and password');
       return;
     }
 
-    if (backendStatus !== 'online') {
-      Alert.alert('Database Unavailable', backendMessage);
-      return;
-    }
-
     try {
       setLoading(true);
+      if (backendStatus !== 'online') {
+        setBackendStatus('checking');
+        setBackendMessage('Trying to reach the database on a slow connection...');
+      }
       const user = await loginWithCredentials(trimmedIdentifier, trimmedPassword);
 
       if (!user) {
@@ -231,7 +246,7 @@ export default function LoginScreen() {
           getAllUsers(),
         ]);
 
-        Alert.alert(
+        showLoginError(
           'Authentication Failed',
           getIncorrectLoginMessage(matchedUser, allUsers, trimmedPassword)
         );
@@ -240,13 +255,19 @@ export default function LoginScreen() {
       }
 
       if (isWeb && user.role !== 'admin') {
-        Alert.alert('Access Restricted', 'Volunteer and partner accounts can only log in on mobile.');
+        showLoginError(
+          'Access Restricted',
+          'Volunteer and partner accounts can only log in on mobile.'
+        );
         setLoading(false);
         return;
       }
 
       // Update auth context - this triggers state change and navigation
       await login(user);
+      setBackendStatus('online');
+      setBackendMessage(`Backend connected to Postgres: ${getApiBaseUrl()}`);
+      setLoginError(null);
       setIdentifier('');
       setPassword('');
     } catch (error) {
@@ -264,7 +285,7 @@ export default function LoginScreen() {
           : message.includes('organization application') || message.includes('partner account')
           ? 'Application Pending'
           : 'Login Error';
-      Alert.alert(title, message);
+      showLoginError(title, message);
     } finally {
       if (mountedRef.current) {
         setLoading(false);
@@ -442,6 +463,7 @@ export default function LoginScreen() {
 
   // Prefills the login form with a saved account for faster access.
   const handleUseSavedAccount = (account: User) => {
+    setLoginError(null);
     setIdentifier(account.email || account.phone || '');
     setPassword(account.password);
   };
@@ -506,7 +528,12 @@ export default function LoginScreen() {
           placeholder="Email or Phone"
           placeholderTextColor="#999"
           value={identifier}
-          onChangeText={setIdentifier}
+          onChangeText={value => {
+            setIdentifier(value);
+            if (loginError) {
+              setLoginError(null);
+            }
+          }}
           editable={!loading}
         />
 
@@ -515,15 +542,24 @@ export default function LoginScreen() {
           placeholder="Password"
           placeholderTextColor="#999"
           value={password}
-          onChangeText={setPassword}
+          onChangeText={value => {
+            setPassword(value);
+            if (loginError) {
+              setLoginError(null);
+            }
+          }}
           secureTextEntry
           editable={!loading}
         />
 
+        {isWeb && loginError ? (
+          <InlineLoadError title={loginError.title} message={loginError.message} />
+        ) : null}
+
         <TouchableOpacity 
           style={[styles.button, loading ? styles.buttonDisabled : null]} 
           onPress={handleLogin} 
-          disabled={loading || !identifier || !password || backendStatus !== 'online'}
+          disabled={loading || !identifier || !password}
         >
           {loading ? (
             <ActivityIndicator color="#fff" />
