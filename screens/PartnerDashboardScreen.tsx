@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Alert,
   Image,
@@ -146,31 +146,24 @@ export default function PartnerDashboardScreen({ navigation }: any) {
     }
   }, [isOwnedByCurrentPartner, user?.id]);
 
-  useEffect(() => {
-    void loadDashboardData();
-  }, [loadDashboardData]);
-
   useFocusEffect(
     React.useCallback(() => {
       void loadDashboardData();
+      return subscribeToStorageChanges(
+        [
+          'partners',
+          'projects',
+          'partnerProjectApplications',
+          'partnerEventCheckIns',
+          'partnerReports',
+          'publishedImpactReports',
+        ],
+        () => {
+          void loadDashboardData();
+        }
+      );
     }, [loadDashboardData])
   );
-
-  useEffect(() => {
-    return subscribeToStorageChanges(
-      [
-        'partners',
-        'projects',
-        'partnerProjectApplications',
-        'partnerEventCheckIns',
-        'partnerReports',
-        'publishedImpactReports',
-      ],
-      () => {
-        void loadDashboardData();
-      }
-    );
-  }, [loadDashboardData]);
 
   const approvedPartner = useMemo(
     () => partners.find(partner => partner.status === 'Approved') || null,

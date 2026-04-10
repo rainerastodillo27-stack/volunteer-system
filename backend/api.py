@@ -17,6 +17,7 @@ from .app_storage_seed import (
     get_postgres_hot_storage_collection,
     is_hot_storage_key,
     replace_postgres_hot_storage_collection,
+    sync_relational_mirror_collection,
 )
 from .db import (
     get_configured_db_mode,
@@ -61,6 +62,8 @@ class VolunteerTimeLogStartPayload(BaseModel):
 # Request payload for ending a volunteer time log.
 class VolunteerTimeLogEndPayload(BaseModel):
     projectId: str
+    completionReport: str | None = None
+    completionPhoto: str | None = None
 
 
 # Request payload for partner join requests.
@@ -435,6 +438,45 @@ def _get_partner_login_block_reason(connection: Any, user: dict[str, Any]) -> st
     return "No organization application is linked to this partner account yet."
 
 
+# Returns the login restriction message for volunteer accounts that are not yet approved.
+def _get_volunteer_login_block_reason(connection: Any, user: dict[str, Any]) -> str | None:
+    if str(user.get("role") or "") != "volunteer":
+        return None
+
+    user_id = str(user.get("id") or "").strip()
+    user_email = str(user.get("email") or "").strip().lower()
+    user_phone = _normalize_comparable_phone(user.get("phone"))
+    volunteers = get_postgres_hot_storage_collection(connection, "volunteers")
+
+    owned_volunteers: list[dict[str, Any]] = []
+    for volunteer in volunteers:
+        volunteer_user_id = str(volunteer.get("userId") or "").strip()
+        volunteer_email = str(volunteer.get("email") or "").strip().lower()
+        volunteer_phone = _normalize_comparable_phone(volunteer.get("phone"))
+
+        if volunteer_user_id and user_id and volunteer_user_id == user_id:
+            owned_volunteers.append(volunteer)
+            continue
+
+        if user_email and volunteer_email and volunteer_email == user_email:
+            owned_volunteers.append(volunteer)
+            continue
+
+        if user_phone and volunteer_phone and volunteer_phone == user_phone:
+            owned_volunteers.append(volunteer)
+
+    if any(str(volunteer.get("registrationStatus") or "Approved") == "Approved" for volunteer in owned_volunteers):
+        return None
+
+    if any(str(volunteer.get("registrationStatus") or "") == "Rejected" for volunteer in owned_volunteers):
+        return "Your volunteer account was rejected. Please contact the admin team."
+
+    if owned_volunteers:
+        return "Your volunteer account is still pending admin approval."
+
+    return None
+
+
 # Blocks routes when Postgres is not available.
 def _require_postgres() -> None:
     if get_db_mode() != "postgres":
@@ -584,6 +626,11 @@ def _postgres_upsert_hot_item(connection: Any, key: str, item: dict[str, Any]) -
             (item_id, json.dumps(item), sort_order),
         )
 
+    sync_relational_mirror_collection(
+        connection,
+        key,
+        get_postgres_hot_storage_collection(connection, key),
+    )
     return item
 
 
@@ -843,6 +890,11 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
     if partner_block_reason:
         raise HTTPException(status_code=403, detail=partner_block_reason)
 
+    with get_postgres_connection() as connection:
+        volunteer_block_reason = _get_volunteer_login_block_reason(connection, user)
+    if volunteer_block_reason:
+        raise HTTPException(status_code=403, detail=volunteer_block_reason)
+
     return {"user": user}
 
 
@@ -932,9 +984,19 @@ async def end_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogEndPaylo
         if active_log is None:
             return {"log": None, "volunteerProfile": _postgres_get_hot_item_by_id(connection, "volunteers", volunteer_id)}
 
+        completion_report = str(payload.completionReport or "").strip()
+        completion_photo = str(payload.completionPhoto or "").strip()
+        if not completion_report and not completion_photo:
+            raise HTTPException(
+                status_code=400,
+                detail="Upload a completion photo or write a completion report before timing out.",
+            )
+
         updated_log = {
             **active_log,
             "timeOut": datetime.now(timezone.utc).isoformat(),
+            "completionReport": completion_report or None,
+            "completionPhoto": completion_photo or None,
         }
         _postgres_upsert_hot_item(connection, "volunteerTimeLogs", updated_log)
         volunteer = _postgres_add_logged_hours_to_volunteer(connection, volunteer_id, updated_log)

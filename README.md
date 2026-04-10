@@ -105,6 +105,14 @@ npm run ios
 npm run web
 ```
 
+Supervised dev mode (keeps the backend and Expo running and restarts them if they crash):
+
+```bash
+npm run all:bg
+npm run all:status
+npm run all:stop
+```
+
 Backend:
 
 ```bash

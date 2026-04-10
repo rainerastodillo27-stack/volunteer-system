@@ -16,6 +16,7 @@ export interface User {
   role: UserRole;
   name: string;
   phone?: string;
+  profilePhoto?: string;
   userType?: UserType;
   pillarsOfInterest?: NVCSector[];
   createdAt: string;
@@ -27,9 +28,10 @@ export interface Partner {
   ownerUserId?: string; // Partner account that owns/submitted this org profile
   name: string;
   description?: string;
-  category: 'Education' | 'Livelihood' | 'Nutrition' | 'Other';
+  category: 'Education' | 'Livelihood' | 'Nutrition' | 'Disaster';
   sectorType: PartnerSectorType;
   dswdAccreditationNo: string;
+  secRegistrationNo?: string;
   advocacyFocus: AdvocacyFocus[];
   contactEmail?: string;
   contactPhone?: string;
@@ -44,6 +46,19 @@ export interface Partner {
   registrationDocuments?: string[]; // URLs to documents
 }
 
+export interface ProjectInternalTask {
+  id: string;
+  title: string;
+  description: string;
+  category: string;
+  priority: 'High' | 'Medium' | 'Low';
+  status: 'Unassigned' | 'Assigned' | 'In Progress' | 'Completed';
+  assignedVolunteerId?: string;
+  assignedVolunteerName?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // Represents a project or event managed inside the volunteer system.
 export interface Project {
   id: string;
@@ -53,7 +68,7 @@ export interface Project {
   programModule?: AdvocacyFocus;
   isEvent?: boolean;
   status: 'Planning' | 'In Progress' | 'On Hold' | 'Completed' | 'Cancelled';
-  category: 'Education' | 'Livelihood' | 'Nutrition' | 'Other';
+  category: 'Education' | 'Livelihood' | 'Nutrition' | 'Disaster';
   startDate: string;
   endDate: string;
   location: {
@@ -67,6 +82,7 @@ export interface Project {
   createdAt: string;
   updatedAt: string;
   statusUpdates: StatusUpdate[];
+  internalTasks?: ProjectInternalTask[];
 }
 
 // Represents one lifecycle update attached to a project.
@@ -108,13 +124,21 @@ export interface Volunteer {
   dateOfBirth?: string;
   civilStatus?: string;
   homeAddress?: string;
+  homeAddressRegion?: string;
+  homeAddressCityMunicipality?: string;
+  homeAddressBarangay?: string;
   occupation?: string;
   workplaceOrSchool?: string;
   collegeCourse?: string;
   certificationsOrTrainings?: string;
   hobbiesAndInterests?: string;
   specialSkills?: string;
+  videoBriefingUrl?: string;
   affiliations?: VolunteerAffiliation[];
+  registrationStatus?: 'Pending' | 'Approved' | 'Rejected';
+  reviewedBy?: string;
+  reviewedAt?: string;
+  credentialsUnlockedAt?: string;
   createdAt: string;
 }
 
@@ -126,6 +150,8 @@ export interface VolunteerTimeLog {
   timeIn: string;
   timeOut?: string;
   note?: string;
+  completionPhoto?: string;
+  completionReport?: string;
 }
 
 // Represents a direct message between two users.

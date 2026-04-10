@@ -17,12 +17,14 @@ function isDatabaseUnavailableMessage(message: string): boolean {
     normalizedMessage.includes('temporary failure in name resolution') ||
     normalizedMessage.includes('connection refused') ||
     normalizedMessage.includes('connection reset') ||
-    normalizedMessage.includes('supabase')
+    normalizedMessage.includes('supabase') ||
+    normalizedMessage.includes('can’t connect to the database') ||
+    normalizedMessage.includes("can't connect to the database")
   );
 }
 
 function getFriendlyDatabaseUnavailableMessage(): string {
-  return 'We can’t connect to the database right now. Please check your internet connection and try again in a moment.';
+  return 'We can’t connect to the database right now. Start the backend and Expo using npm run all:bg or npm run all, then try again.';
 }
 
 export function getRequestErrorMessage(
@@ -70,6 +72,17 @@ export function getRequestErrorMessage(
 }
 
 export function getRequestErrorTitle(error: unknown, fallback = 'Error'): string {
+  const rawMessage =
+    typeof error === 'string'
+      ? error
+      : error instanceof Error
+      ? error.message
+      : '';
+
+  if (rawMessage && isDatabaseUnavailableMessage(rawMessage)) {
+    return 'Database Unavailable';
+  }
+
   const message = getRequestErrorMessage(error, '');
   return message && isDatabaseUnavailableMessage(message) ? 'Database Unavailable' : fallback;
 }

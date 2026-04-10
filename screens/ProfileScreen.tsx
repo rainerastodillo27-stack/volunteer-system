@@ -19,16 +19,18 @@ import VolunteerImpactMap from '../components/VolunteerImpactMap';
 import {
   getAllProjects,
   getAllUsers,
+  getPartnersByOwnerUserId,
   getVolunteerCompletedProjectIds,
   getVolunteerRecognitionStatus,
   getUserByEmailOrPhone,
   getVolunteerByUserId,
+  savePartner,
   saveUser,
   saveVolunteer,
   subscribeToStorageChanges,
 } from '../models/storage';
 import { VolunteerRecognitionStatus } from '../models/storage';
-import { NVCSector, Project, User, UserType, Volunteer } from '../models/types';
+import { NVCSector, Partner, Project, User, UserType, Volunteer } from '../models/types';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 const USER_TYPES: UserType[] = ['Student', 'Adult', 'Senior'];
@@ -41,6 +43,7 @@ export default function ProfileScreen() {
   const { user, logout, updateUserProfile } = useAuth();
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
+  const [partnerProfiles, setPartnerProfiles] = useState<Partner[]>([]);
   const [completedProjectIds, setCompletedProjectIds] = useState<string[]>([]);
   const [recognitionStatus, setRecognitionStatus] = useState<VolunteerRecognitionStatus>({
     joinedProgramCount: 0,
@@ -99,6 +102,29 @@ export default function ProfileScreen() {
     }
   }, [user?.id, user?.role]);
 
+  // Loads the signed-in partner's organization application records.
+  const loadPartnerProfiles = useCallback(async () => {
+    if (user?.role !== 'partner' || !user.id) {
+      setPartnerProfiles([]);
+      return;
+    }
+
+    try {
+      const ownedPartners = await getPartnersByOwnerUserId(user.id);
+      const sortedPartners = [...ownedPartners].sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      );
+      setPartnerProfiles(sortedPartners);
+      setLoadError(null);
+    } catch (error) {
+      console.error('Error loading partner profile:', error);
+      setLoadError({
+        title: getRequestErrorTitle(error),
+        message: getRequestErrorMessage(error, 'Failed to load your partner profile.'),
+      });
+    }
+  }, [user?.id, user?.role]);
+
   // Loads project titles used to display completed volunteer work.
   const loadProjectTitles = useCallback(async () => {
     try {
@@ -114,26 +140,20 @@ export default function ProfileScreen() {
     }
   }, []);
 
-  useEffect(() => {
-    void loadVolunteerProfile();
-    void loadProjectTitles();
-  }, [loadProjectTitles, loadVolunteerProfile]);
-
-  useEffect(() => {
-    return subscribeToStorageChanges(
-      ['volunteers', 'projects', 'volunteerProjectJoins'],
-      () => {
-        void loadVolunteerProfile();
-        void loadProjectTitles();
-      }
-    );
-  }, [loadProjectTitles, loadVolunteerProfile]);
-
   useFocusEffect(
     useCallback(() => {
       void loadVolunteerProfile();
+      void loadPartnerProfiles();
       void loadProjectTitles();
-    }, [loadProjectTitles, loadVolunteerProfile])
+      return subscribeToStorageChanges(
+        ['volunteers', 'partners', 'projects', 'volunteerProjectJoins'],
+        () => {
+          void loadVolunteerProfile();
+          void loadPartnerProfiles();
+          void loadProjectTitles();
+        }
+      );
+    }, [loadPartnerProfiles, loadProjectTitles, loadVolunteerProfile])
   );
 
   // Copies the current profile into editable draft fields.
@@ -317,6 +337,27 @@ export default function ProfileScreen() {
         setCompletedProjectIds(updatedVolunteerProfile.pastProjects || []);
       }
 
+      if (user.role === 'partner' && partnerProfiles.length > 0) {
+        const updatedPartnerProfiles = await Promise.all(
+          partnerProfiles.map(async partnerProfile => {
+            const updatedPartnerProfile: Partner = {
+              ...partnerProfile,
+              ownerUserId: user.id,
+              contactEmail: normalizedEmail || undefined,
+              contactPhone: normalizedPhone || undefined,
+            };
+            await savePartner(updatedPartnerProfile);
+            return updatedPartnerProfile;
+          })
+        );
+
+        setPartnerProfiles(
+          updatedPartnerProfiles.sort(
+            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+          )
+        );
+      }
+
       const loginIdentifier = normalizedEmail || normalizedPhone;
       const syncedUser = await waitForCredentialSync(
         loginIdentifier,
@@ -349,6 +390,7 @@ export default function ProfileScreen() {
   const completedPrograms = completedProjectIds;
   const joinedProgramCount = recognitionStatus.joinedProgramCount;
   const isTopVolunteer = recognitionStatus.isTopVolunteer;
+  const primaryPartnerProfile = partnerProfiles[0] || null;
   const projectById: Record<string, Project> = Object.fromEntries(
     projects.map(project => [project.id, project])
   );
@@ -377,6 +419,9 @@ export default function ProfileScreen() {
 
         <Text style={styles.name}>{user?.name ?? 'User'}</Text>
         <Text style={styles.email}>{user?.email ?? user?.phone ?? 'No contact info'}</Text>
+        {user?.role === 'partner' && primaryPartnerProfile ? (
+          <Text style={styles.subheading}>{primaryPartnerProfile.name}</Text>
+        ) : null}
 
         {user?.role === 'volunteer' && volunteerProfile && isTopVolunteer && (
           <View style={styles.topVolunteerBadge}>
@@ -401,16 +446,20 @@ export default function ProfileScreen() {
           <Text style={styles.infoValue}>
             {user?.role === 'admin'
               ? 'National Volunteer Coordinator (NVC)'
-              : user?.role === 'partner'
+                : user?.role === 'partner'
                 ? 'Partner Account'
                 : 'Volunteer'}
           </Text>
 
-          <Text style={styles.infoLabel}>Phone</Text>
-          <Text style={styles.infoValue}>{user?.phone ?? volunteerProfile?.phone ?? 'Not provided'}</Text>
+          <Text style={styles.infoLabel}>Email</Text>
+          <Text style={styles.infoValue}>
+            {user?.email ?? volunteerProfile?.email ?? primaryPartnerProfile?.contactEmail ?? 'Not provided'}
+          </Text>
 
-          <Text style={styles.infoLabel}>Profile Type</Text>
-          <Text style={styles.infoValue}>{user?.userType || 'Adult'}</Text>
+          <Text style={styles.infoLabel}>Phone</Text>
+          <Text style={styles.infoValue}>
+            {user?.phone ?? volunteerProfile?.phone ?? primaryPartnerProfile?.contactPhone ?? 'Not provided'}
+          </Text>
 
           <Text style={styles.infoLabel}>Pillars of Interest</Text>
           <Text style={styles.infoValue}>
@@ -418,6 +467,13 @@ export default function ProfileScreen() {
               ? user?.pillarsOfInterest?.join(', ')
               : 'No pillar preferences'}
           </Text>
+
+          {user?.role !== 'partner' ? (
+            <>
+              <Text style={styles.infoLabel}>Profile Type</Text>
+              <Text style={styles.infoValue}>{user?.userType || 'Adult'}</Text>
+            </>
+          ) : null}
         </View>
 
         {user?.role === 'admin' && (
@@ -467,6 +523,63 @@ export default function ProfileScreen() {
             </View>
 
             <View style={styles.infoContainer}>
+              <Text style={styles.sectionTitle}>Volunteer Registration Details</Text>
+              <Text style={styles.infoLabel}>Gender</Text>
+              <Text style={styles.infoValue}>{volunteerProfile.gender || 'Not provided'}</Text>
+
+              <Text style={styles.infoLabel}>Date of Birth</Text>
+              <Text style={styles.infoValue}>{volunteerProfile.dateOfBirth || 'Not provided'}</Text>
+
+              <Text style={styles.infoLabel}>Civil Status</Text>
+              <Text style={styles.infoValue}>{volunteerProfile.civilStatus || 'Not provided'}</Text>
+
+              <Text style={styles.infoLabel}>Home Address</Text>
+              <Text style={styles.infoValue}>{volunteerProfile.homeAddress || 'Not provided'}</Text>
+
+              <Text style={styles.infoLabel}>Occupation</Text>
+              <Text style={styles.infoValue}>{volunteerProfile.occupation || 'Not provided'}</Text>
+
+              <Text style={styles.infoLabel}>Workplace or School</Text>
+              <Text style={styles.infoValue}>{volunteerProfile.workplaceOrSchool || 'Not provided'}</Text>
+
+              <Text style={styles.infoLabel}>College Course</Text>
+              <Text style={styles.infoValue}>{volunteerProfile.collegeCourse || 'Not provided'}</Text>
+
+              <Text style={styles.infoLabel}>Certifications or Trainings</Text>
+              <Text style={styles.infoValue}>
+                {volunteerProfile.certificationsOrTrainings || 'Not provided'}
+              </Text>
+
+              <Text style={styles.infoLabel}>Hobbies and Interests</Text>
+              <Text style={styles.infoValue}>{volunteerProfile.hobbiesAndInterests || 'Not provided'}</Text>
+
+              <Text style={styles.infoLabel}>Special Skills</Text>
+              <Text style={styles.infoValue}>{volunteerProfile.specialSkills || 'Not provided'}</Text>
+
+              <Text style={styles.infoLabel}>Affiliations</Text>
+              {volunteerProfile.affiliations && volunteerProfile.affiliations.length > 0 ? (
+                <View style={styles.detailCardList}>
+                  {volunteerProfile.affiliations.map((affiliation, index) => (
+                    <View
+                      key={`${affiliation.organization}-${affiliation.position}-${index}`}
+                      style={styles.detailCard}
+                    >
+                      <Text style={styles.detailCardTitle}>
+                        {affiliation.organization || 'Organization not provided'}
+                      </Text>
+                      <Text style={styles.detailCardSubtitle}>
+                        {affiliation.position || 'Position not provided'}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <Text style={styles.infoValue}>No affiliations provided.</Text>
+              )}
+            </View>
+
+            <View style={styles.infoContainer}>
+              <Text style={styles.sectionTitle}>Volunteer Activity</Text>
               <Text style={styles.infoLabel}>Skills</Text>
               {volunteerProfile.skills.length > 0 ? (
                 <View style={styles.skillList}>
@@ -513,6 +626,62 @@ export default function ProfileScreen() {
               )}
             </View>
           </>
+        )}
+
+        {user?.role === 'partner' && (
+          <View style={styles.infoContainer}>
+            <Text style={styles.sectionTitle}>Partner Registration Details</Text>
+            {partnerProfiles.length > 0 ? (
+              <View style={styles.detailCardList}>
+                {partnerProfiles.map(partnerProfile => (
+                  <View key={partnerProfile.id} style={styles.detailCard}>
+                    <Text style={styles.detailCardTitle}>{partnerProfile.name}</Text>
+                    <Text style={styles.detailCardSubtitle}>
+                      {partnerProfile.status} / {partnerProfile.verificationStatus || 'Pending'}
+                    </Text>
+
+                    <Text style={styles.infoLabel}>Sector Type</Text>
+                    <Text style={styles.infoValue}>{partnerProfile.sectorType || 'Not provided'}</Text>
+
+                    <Text style={styles.infoLabel}>DSWD Accreditation No.</Text>
+                    <Text style={styles.infoValue}>
+                      {partnerProfile.dswdAccreditationNo || 'Not provided'}
+                    </Text>
+
+                    <Text style={styles.infoLabel}>SEC Registration No.</Text>
+                    <Text style={styles.infoValue}>
+                      {partnerProfile.secRegistrationNo || 'Not provided'}
+                    </Text>
+
+                    <Text style={styles.infoLabel}>Advocacy Focus</Text>
+                    <Text style={styles.infoValue}>
+                      {partnerProfile.advocacyFocus.length > 0
+                        ? partnerProfile.advocacyFocus.join(', ')
+                        : 'Not provided'}
+                    </Text>
+
+                    <Text style={styles.infoLabel}>Contact Email</Text>
+                    <Text style={styles.infoValue}>{partnerProfile.contactEmail || 'Not provided'}</Text>
+
+                    <Text style={styles.infoLabel}>Contact Phone</Text>
+                    <Text style={styles.infoValue}>{partnerProfile.contactPhone || 'Not provided'}</Text>
+
+                    <Text style={styles.infoLabel}>Login Access</Text>
+                    <Text style={styles.infoValue}>
+                      {partnerProfile.credentialsUnlockedAt ? 'Unlocked' : 'Locked'}
+                    </Text>
+
+                    <Text style={styles.infoLabel}>Submitted On</Text>
+                    <Text style={styles.infoValue}>
+                      {new Date(partnerProfile.createdAt).toLocaleString()}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            ) : (
+              <Text style={styles.infoValue}>No partner registration details found yet.</Text>
+            )}
+          </View>
         )}
 
         <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
@@ -711,6 +880,13 @@ const styles = StyleSheet.create({
     color: '#666',
     marginBottom: 12,
   },
+  subheading: {
+    fontSize: 15,
+    color: '#4b5563',
+    fontWeight: '600',
+    marginBottom: 12,
+    textAlign: 'center',
+  },
   topVolunteerBadge: {
     width: '100%',
     flexDirection: 'row',
@@ -807,6 +983,12 @@ const styles = StyleSheet.create({
     width: '100%',
     marginBottom: 20,
   },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginBottom: 6,
+  },
   infoLabel: {
     fontSize: 12,
     color: '#999',
@@ -843,6 +1025,29 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
     color: '#334155',
+  },
+  detailCardList: {
+    marginTop: 8,
+    gap: 10,
+  },
+  detailCard: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  detailCardTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  detailCardSubtitle: {
+    marginTop: 4,
+    fontSize: 13,
+    color: '#475569',
+    fontWeight: '600',
   },
   completedProgramsList: {
     marginTop: 8,

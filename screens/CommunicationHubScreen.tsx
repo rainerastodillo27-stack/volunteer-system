@@ -357,29 +357,6 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     }
   };
 
-  useEffect(() => {
-    void loadUsers();
-    void loadProjectChats();
-  }, [user?.id, user?.role]);
-
-  useEffect(() => {
-    const unsubscribeUsers = subscribeToStorageChanges(['users'], () => {
-      void loadUsers();
-    });
-
-    const unsubscribeProjectChats = subscribeToStorageChanges(
-      ['projects', 'volunteerProjectJoins'],
-      () => {
-        void loadProjectChats();
-      }
-    );
-
-    return () => {
-      unsubscribeUsers();
-      unsubscribeProjectChats();
-    };
-  }, [user?.id, user?.role]);
-
   useFocusEffect(
     React.useCallback(() => {
       void loadUsers();
@@ -390,6 +367,22 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       } else {
         void loadConversations();
       }
+
+      const unsubscribeUsers = subscribeToStorageChanges(['users'], () => {
+        void loadUsers();
+      });
+
+      const unsubscribeProjectChats = subscribeToStorageChanges(
+        ['projects', 'volunteerProjectJoins'],
+        () => {
+          void loadProjectChats();
+        }
+      );
+
+      return () => {
+        unsubscribeUsers();
+        unsubscribeProjectChats();
+      };
     }, [view, selectedUser, selectedProjectChat, user?.id, user?.role])
   );
 
@@ -450,7 +443,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       }
       void loadConversations();
       void loadProjectChats();
-    }, 10000);
+    }, 30000);
 
     return () => {
       clearInterval(fallbackRefresh);

@@ -1,5 +1,5 @@
 import React, { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, FlatList, StyleSheet, Text, TouchableOpacity, Alert, Pressable, Image, Platform, ImageSourcePropType, Modal } from 'react-native';
+import { View, FlatList, StyleSheet, Text, TouchableOpacity, Alert, Pressable, Image, Platform, ImageSourcePropType, Modal, TextInput } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
 import { useFocusEffect } from '@react-navigation/native';
@@ -16,6 +16,7 @@ import {
   subscribeToStorageChanges,
 } from '../models/storage';
 import { PartnerProjectApplication, Project, PublishedImpactReport, Volunteer, VolunteerProjectJoinRecord, VolunteerProjectMatch, VolunteerTimeLog } from '../models/types';
+import { isImageMediaUri, pickImageFromDevice } from '../utils/media';
 import { navigateToAvailableRoute } from '../utils/navigation';
 import { getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
@@ -24,13 +25,14 @@ const CATEGORY_KEYWORDS: Record<Project['category'], string[]> = {
   Education: ['teaching', 'mentoring', 'reading', 'library', 'school', 'student', 'tutor'],
   Livelihood: ['livelihood', 'training', 'skills', 'sewing', 'enterprise', 'food', 'workshop'],
   Nutrition: ['nutrition', 'feeding', 'meal', 'health', 'wellness', 'food'],
-  Other: ['community', 'cleanup', 'outreach', 'event', 'logistics', 'coordination'],
+  Disaster: ['disaster', 'relief', 'emergency', 'evacuation', 'response', 'rescue', 'aid'],
 };
 
 const PROGRAM_IMAGE_BY_CATEGORY: Partial<Record<Project['category'], ImageSourcePropType>> = {
   Nutrition: require('../assets/programs/nutrition.jpg'),
   Education: require('../assets/programs/education.jpg'),
   Livelihood: require('../assets/programs/livelihood.jpg'),
+  Disaster: require('../assets/programs/mingo-relief.jpg'),
 };
 
 const PROGRAM_PHOTO_BY_TITLE: Record<string, ImageSourcePropType> = {
@@ -49,13 +51,27 @@ const FALLBACK_ICON_BY_CATEGORY: Record<Project['category'], keyof typeof Materi
   Nutrition: 'restaurant',
   Education: 'school',
   Livelihood: 'volunteer-activism',
-  Other: 'groups',
+  Disaster: 'warning',
 };
 
 type Recommendation = {
   label: 'Good Skill Fit' | 'Suggested for You' | 'Open Program';
   reasons: string[];
 };
+
+function getCompletionProofSummary(log?: VolunteerTimeLog | null): string {
+  const proofItems: string[] = [];
+
+  if (log?.completionPhoto) {
+    proofItems.push('Photo uploaded');
+  }
+
+  if (log?.completionReport) {
+    proofItems.push('Report submitted');
+  }
+
+  return proofItems.length > 0 ? proofItems.join(' and ') : 'No proof submitted';
+}
 
 // Normalizes text into searchable word tokens for project recommendations.
 const normalizeWords = (value?: string) =>
@@ -269,6 +285,9 @@ export default function ProjectsScreen({ navigation, route }: any) {
   const [impactReports, setImpactReports] = useState<PublishedImpactReport[]>([]);
   const [loadingProjectId, setLoadingProjectId] = useState<string | null>(null);
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
+  const [timeOutProjectId, setTimeOutProjectId] = useState<string | null>(null);
+  const [timeOutReportDraft, setTimeOutReportDraft] = useState('');
+  const [timeOutPhotoDraft, setTimeOutPhotoDraft] = useState('');
   const [imagePreview, setImagePreview] = useState<{
     title: string;
     source: ImageSourcePropType;
@@ -325,24 +344,17 @@ export default function ProjectsScreen({ navigation, route }: any) {
     }
   }, [applySnapshot, user]);
 
-  useEffect(() => {
-    void loadProjectsData();
-  }, [loadProjectsData]);
-
   useFocusEffect(
     React.useCallback(() => {
       void loadProjectsData();
+      return subscribeToStorageChanges(
+        ['projects', 'volunteers', 'volunteerProjectJoins', 'volunteerTimeLogs', 'partnerProjectApplications', 'volunteerMatches', 'publishedImpactReports'],
+        () => {
+          void loadProjectsData();
+        }
+      );
     }, [loadProjectsData])
   );
-
-  useEffect(() => {
-    return subscribeToStorageChanges(
-      ['projects', 'volunteers', 'volunteerProjectJoins', 'volunteerTimeLogs', 'partnerProjectApplications', 'volunteerMatches', 'publishedImpactReports'],
-      () => {
-        void loadProjectsData();
-      }
-    );
-  }, [loadProjectsData]);
 
   useEffect(() => {
     const requestedProjectId = route?.params?.projectId;
@@ -432,37 +444,6 @@ export default function ProjectsScreen({ navigation, route }: any) {
     }
   };
 
-  // Ends the active volunteer time log for the selected project.
-  const handleTimeOut = async (projectId: string) => {
-    if (!volunteerProfile) return;
-    try {
-      setLoadingProjectId(projectId);
-      const result = await endVolunteerTimeLog(volunteerProfile.id, projectId);
-      if (!result.log) {
-        Alert.alert('No active log', 'Please tap Time In before timing out.');
-        return;
-      }
-      startTransition(() => {
-        setTimeLogs(prev =>
-          prev
-            .map(log => (log.id === result.log?.id ? result.log : log))
-            .sort((a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime())
-        );
-        if (result.volunteerProfile) {
-          setVolunteerProfile(result.volunteerProfile);
-        }
-      });
-      Alert.alert('Time Out recorded', 'Hours added to your profile.');
-    } catch (error) {
-      Alert.alert(
-        getRequestErrorTitle(error, 'Unable to time out'),
-        getRequestErrorMessage(error, 'Please try again.')
-      );
-    } finally {
-      setLoadingProjectId(null);
-    }
-  };
-
   // Opens the group chat tied to the selected project or event.
   const handleOpenGroupChat = (projectId: string) => {
     navigateToAvailableRoute(navigation, 'Messages', { projectId });
@@ -491,6 +472,11 @@ export default function ProjectsScreen({ navigation, route }: any) {
   const volunteerMatchByProjectId = useMemo(
     () => new Map(volunteerMatches.map(match => [match.projectId, match])),
     [volunteerMatches]
+  );
+
+  const activeTimeOutProject = useMemo(
+    () => projects.find(project => project.id === timeOutProjectId) || null,
+    [projects, timeOutProjectId]
   );
 
   // Checks whether the current volunteer is already part of a project.
@@ -533,6 +519,36 @@ export default function ProjectsScreen({ navigation, route }: any) {
       title: project.title,
       source,
     });
+  }, []);
+
+  const openTimeOutModal = useCallback((projectId: string) => {
+    const activeLog = activeLogByProjectId.get(projectId);
+    setTimeOutProjectId(projectId);
+    setTimeOutReportDraft(activeLog?.completionReport || '');
+    setTimeOutPhotoDraft(activeLog?.completionPhoto || '');
+  }, [activeLogByProjectId]);
+
+  const closeTimeOutModal = useCallback(() => {
+    if (loadingProjectId === timeOutProjectId && timeOutProjectId) {
+      return;
+    }
+
+    setTimeOutProjectId(null);
+    setTimeOutReportDraft('');
+    setTimeOutPhotoDraft('');
+  }, [loadingProjectId, timeOutProjectId]);
+
+  const handlePickTimeOutPhoto = useCallback(async () => {
+    try {
+      const pickedImage = await pickImageFromDevice();
+      if (!pickedImage) {
+        return;
+      }
+
+      setTimeOutPhotoDraft(pickedImage);
+    } catch (error: any) {
+      Alert.alert('Photo Access Needed', error?.message || 'Unable to open your photo library.');
+    }
   }, []);
 
   // Renders a single project card with role-specific actions.
@@ -687,7 +703,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                           activeLog ? styles.timeOutButton : styles.timeInButton,
                         ]}
                         onPress={() =>
-                          activeLog ? handleTimeOut(item.id) : handleTimeIn(item.id)
+                          activeLog ? openTimeOutModal(item.id) : handleTimeIn(item.id)
                         }
                         disabled={loadingProjectId === item.id}
                       >
@@ -751,6 +767,23 @@ export default function ProjectsScreen({ navigation, route }: any) {
                             : 'No logs yet'}
                         </Text>
                       </View>
+
+                      {activeLog ? (
+                        <View style={styles.proofReminderCard}>
+                          <MaterialIcons name="verified" size={16} color="#b45309" />
+                          <Text style={styles.proofReminderText}>
+                            Upload a task photo or write a completion report before timing out.
+                          </Text>
+                        </View>
+                      ) : latestLog?.completionPhoto || latestLog?.completionReport ? (
+                        <View style={styles.logMeta}>
+                          <Text style={styles.logMetaLabel}>Completion proof</Text>
+                          <Text style={styles.logMetaValue}>{getCompletionProofSummary(latestLog)}</Text>
+                          {latestLog.completionReport ? (
+                            <Text style={styles.proofReportText}>{latestLog.completionReport}</Text>
+                          ) : null}
+                        </View>
+                      ) : null}
 
                       {canViewProjectFiles && (
                         <View style={styles.filesSection}>
@@ -887,10 +920,64 @@ export default function ProjectsScreen({ navigation, route }: any) {
           impactReports,
           handleOpenImagePreview,
           handleOpenProject,
+          openTimeOutModal,
           user,
           volunteerJoinRecordByProjectId,
           volunteerProfile,
         ]);
+
+  // Ends the active volunteer time log after proof-of-work is submitted.
+  const handleTimeOut = async (projectId: string) => {
+    if (!volunteerProfile) return;
+
+    const completionReport = timeOutReportDraft.trim();
+    const completionPhoto = timeOutPhotoDraft.trim();
+
+    if (!completionReport && !completionPhoto) {
+      Alert.alert(
+        'Proof Required',
+        'Upload a photo or write a completion report before timing out.'
+      );
+      return;
+    }
+
+    try {
+      setLoadingProjectId(projectId);
+      const result = await endVolunteerTimeLog(
+        volunteerProfile.id,
+        projectId,
+        completionReport || undefined,
+        completionPhoto || undefined
+      );
+      if (!result.log) {
+        Alert.alert('No active log', 'Please tap Time In before timing out.');
+        return;
+      }
+      startTransition(() => {
+        setTimeLogs(prev =>
+          prev
+            .map(log => (log.id === result.log?.id ? result.log : log))
+            .sort((a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime())
+        );
+        if (result.volunteerProfile) {
+          setVolunteerProfile(result.volunteerProfile);
+        }
+      });
+      setTimeOutProjectId(null);
+      setTimeOutReportDraft('');
+      setTimeOutPhotoDraft('');
+      Alert.alert('Time Out recorded', 'Hours added to your profile and proof of work saved.');
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error, 'Unable to time out'),
+        getRequestErrorMessage(error, 'Please try again.')
+      );
+    } finally {
+      setLoadingProjectId(null);
+    }
+  };
+
+  const hasTimeOutProof = Boolean(timeOutReportDraft.trim() || timeOutPhotoDraft.trim());
 
   return (
     <View style={styles.container}>
@@ -940,6 +1027,112 @@ export default function ProjectsScreen({ navigation, route }: any) {
           )
         }
       />
+
+      <Modal
+        visible={Boolean(timeOutProjectId)}
+        transparent
+        animationType="slide"
+        onRequestClose={closeTimeOutModal}
+      >
+        <Pressable style={styles.timeOutModalBackdrop} onPress={closeTimeOutModal}>
+          <Pressable style={styles.timeOutModalCard} onPress={() => undefined}>
+            <View style={styles.timeOutModalHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.timeOutModalTitle}>Submit Completion Proof</Text>
+                <Text style={styles.timeOutModalSubtitle}>
+                  {activeTimeOutProject?.title || 'Selected project'}
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={closeTimeOutModal}
+                style={styles.timeOutModalCloseButton}
+                disabled={loadingProjectId === timeOutProjectId}
+              >
+                <MaterialIcons name="close" size={22} color="#0f172a" />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.timeOutModalHint}>
+              Before timing out, upload a photo or write a short report confirming that you finished the task.
+            </Text>
+
+            <View style={styles.timeOutProofActions}>
+              <TouchableOpacity
+                style={styles.timeOutProofButton}
+                onPress={handlePickTimeOutPhoto}
+                disabled={loadingProjectId === timeOutProjectId}
+              >
+                <MaterialIcons name="photo-camera" size={18} color="#166534" />
+                <Text style={styles.timeOutProofButtonText}>
+                  {timeOutPhotoDraft ? 'Replace Photo' : 'Upload Photo'}
+                </Text>
+              </TouchableOpacity>
+
+              {timeOutPhotoDraft ? (
+                <TouchableOpacity
+                  style={styles.timeOutProofRemoveButton}
+                  onPress={() => setTimeOutPhotoDraft('')}
+                  disabled={loadingProjectId === timeOutProjectId}
+                >
+                  <MaterialIcons name="delete-outline" size={18} color="#b91c1c" />
+                  <Text style={styles.timeOutProofRemoveText}>Remove</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+
+            {timeOutPhotoDraft ? (
+              <View style={styles.timeOutPhotoPreviewCard}>
+                {isImageMediaUri(timeOutPhotoDraft) ? (
+                  <Image
+                    source={{ uri: timeOutPhotoDraft }}
+                    style={styles.timeOutPhotoPreview}
+                    resizeMode="cover"
+                  />
+                ) : null}
+                <Text style={styles.timeOutPhotoCaption}>Completion photo attached</Text>
+              </View>
+            ) : null}
+
+            <Text style={styles.timeOutFieldLabel}>Completion Report</Text>
+            <TextInput
+              style={styles.timeOutReportInput}
+              multiline
+              numberOfLines={5}
+              value={timeOutReportDraft}
+              onChangeText={setTimeOutReportDraft}
+              placeholder="Describe the work you completed, what was delivered, and any important outcome."
+              placeholderTextColor="#94a3b8"
+              textAlignVertical="top"
+              editable={loadingProjectId !== timeOutProjectId}
+            />
+
+            <Text style={styles.timeOutRequirementText}>
+              {hasTimeOutProof
+                ? 'Proof attached. You can now submit your sign out.'
+                : 'At least one proof is required before sign out: upload a photo or write a completion report.'}
+            </Text>
+
+            <TouchableOpacity
+              style={[
+                styles.timeOutSubmitButton,
+                !hasTimeOutProof && styles.timeOutSubmitButtonDisabled,
+                loadingProjectId === timeOutProjectId && styles.timeOutSubmitButtonDisabled,
+              ]}
+              onPress={() => {
+                if (timeOutProjectId) {
+                  void handleTimeOut(timeOutProjectId);
+                }
+              }}
+              disabled={!hasTimeOutProof || loadingProjectId === timeOutProjectId}
+            >
+              <MaterialIcons name="task-alt" size={18} color="#fff" />
+              <Text style={styles.timeOutSubmitButtonText}>
+                {loadingProjectId === timeOutProjectId ? 'Submitting...' : 'Submit and Time Out'}
+              </Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       <Modal
         visible={Boolean(imagePreview)}
@@ -1111,8 +1304,8 @@ const styles = StyleSheet.create({
   programImageFallbackLivelihood: {
     backgroundColor: '#fff7ed',
   },
-  programImageFallbackOther: {
-    backgroundColor: '#f8fafc',
+  programImageFallbackDisaster: {
+    backgroundColor: '#fef2f2',
   },
   programImageFallbackTitle: {
     fontSize: 18,
@@ -1337,6 +1530,29 @@ const styles = StyleSheet.create({
     color: '#111827',
     fontWeight: '600',
   },
+  proofReminderCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: '#fffbeb',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#fcd34d',
+    padding: 10,
+  },
+  proofReminderText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#92400e',
+    fontWeight: '600',
+  },
+  proofReportText: {
+    marginTop: 8,
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#475569',
+  },
   partnerNote: {
     fontSize: 12,
     color: '#0f172a',
@@ -1391,6 +1607,147 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 13,
     fontWeight: '700',
+  },
+  timeOutModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.58)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  timeOutModalCard: {
+    width: '100%',
+    maxWidth: 520,
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    padding: 18,
+    gap: 14,
+  },
+  timeOutModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  timeOutModalTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  timeOutModalSubtitle: {
+    marginTop: 4,
+    fontSize: 13,
+    color: '#475569',
+    fontWeight: '600',
+  },
+  timeOutModalCloseButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f1f5f9',
+  },
+  timeOutModalHint: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#475569',
+  },
+  timeOutProofActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  timeOutProofButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#dcfce7',
+    borderWidth: 1,
+    borderColor: '#86efac',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  timeOutProofButtonText: {
+    color: '#166534',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  timeOutProofRemoveButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#fee2e2',
+    borderWidth: 1,
+    borderColor: '#fca5a5',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  timeOutProofRemoveText: {
+    color: '#b91c1c',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  timeOutPhotoPreviewCard: {
+    borderRadius: 14,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    backgroundColor: '#f8fafc',
+  },
+  timeOutPhotoPreview: {
+    width: '100%',
+    height: 180,
+    backgroundColor: '#e2e8f0',
+  },
+  timeOutPhotoCaption: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  timeOutFieldLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  timeOutReportInput: {
+    minHeight: 120,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#f8fafc',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#0f172a',
+  },
+  timeOutRequirementText: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#64748b',
+  },
+  timeOutSubmitButton: {
+    alignSelf: 'stretch',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#166534',
+    borderRadius: 12,
+    paddingVertical: 12,
+  },
+  timeOutSubmitButtonDisabled: {
+    opacity: 0.7,
+  },
+  timeOutSubmitButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '800',
   },
   imagePreviewBackdrop: {
     flex: 1,

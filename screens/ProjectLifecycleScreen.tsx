@@ -21,6 +21,7 @@ import {
   PartnerProjectApplication,
   PartnerReport,
   Project,
+  ProjectInternalTask,
   PublishedImpactReport,
   StatusUpdate,
   VolunteerTimeLog,
@@ -59,7 +60,6 @@ import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestEr
 
 const statuses = ['Planning', 'In Progress', 'On Hold', 'Completed', 'Cancelled'];
 const projectModules: AdvocacyFocus[] = ['Nutrition', 'Education', 'Livelihood', 'Disaster'];
-const PROJECT_REFRESH_INTERVAL_MS = 5000;
 
 type ProjectDraft = {
   id?: string;
@@ -98,6 +98,16 @@ type ProjectVolunteerRequestEntry = {
   status: VolunteerProjectMatch['status'];
 };
 
+type ProjectTaskDraft = {
+  id?: string;
+  title: string;
+  description: string;
+  category: string;
+  priority: ProjectInternalTask['priority'];
+  status: ProjectInternalTask['status'];
+  assignedVolunteerId: string;
+};
+
 type ProjectTimeLogEntry = VolunteerTimeLog & {
   volunteerName: string;
   volunteerEmail: string;
@@ -119,6 +129,15 @@ const createEmptyProjectDraft = (partnerId = ''): ProjectDraft => ({
   isEvent: false,
 });
 
+const createEmptyProjectTaskDraft = (): ProjectTaskDraft => ({
+  title: '',
+  description: '',
+  category: 'General',
+  priority: 'Medium',
+  status: 'Unassigned',
+  assignedVolunteerId: '',
+});
+
 function getProjectCategoryFromModule(module: AdvocacyFocus): Project['category'] {
   switch (module) {
     case 'Education':
@@ -127,9 +146,21 @@ function getProjectCategoryFromModule(module: AdvocacyFocus): Project['category'
       return 'Livelihood';
     case 'Nutrition':
       return 'Nutrition';
+    case 'Disaster':
+      return 'Disaster';
     default:
-      return 'Other';
+      return 'Disaster';
   }
+}
+
+function getProjectDraftModule(project: Project): AdvocacyFocus {
+  if (project.programModule) {
+    return project.programModule;
+  }
+
+  return (project.category as string) === 'Other'
+    ? 'Disaster'
+    : (project.category as AdvocacyFocus);
 }
 
 // Gives admins a project lifecycle workspace for projects, updates, and approvals.
@@ -152,23 +183,16 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [volunteerTimeLogs, setVolunteerTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [showProjectModal, setShowProjectModal] = useState(false);
+  const [showTaskModal, setShowTaskModal] = useState(false);
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [newStatus, setNewStatus] = useState<Project['status']>('Planning');
   const [updateDescription, setUpdateDescription] = useState('');
   const [projectDraft, setProjectDraft] = useState<ProjectDraft>(createEmptyProjectDraft());
-
-  useEffect(() => {
-    loadProjects();
-    loadPartners();
-    loadVolunteers();
-    loadAllVolunteerMatches();
-    loadVolunteerTimeLogs();
-  }, []);
+  const [taskDraft, setTaskDraft] = useState<ProjectTaskDraft>(createEmptyProjectTaskDraft());
 
   useFocusEffect(
     React.useCallback(() => {
-      let active = true;
-
       const refresh = async () => {
         await Promise.all([loadProjects(), loadPartners(), loadVolunteers(), loadAllVolunteerMatches(), loadVolunteerTimeLogs()]);
         if (selectedProject?.id) {
@@ -181,48 +205,22 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             loadVolunteerJoinsForProject(selectedProject.id),
             loadVolunteerMatchesForProject(selectedProject.id),
           ]);
-
-          const refreshedProjects = await getAllProjects();
-          if (!active) {
-            return;
-          }
-          const refreshedSelectedProject =
-            refreshedProjects.find(project => project.id === selectedProject.id) || null;
-          setSelectedProject(refreshedSelectedProject);
         }
       };
 
       void refresh();
-      const refreshTimer = setInterval(() => {
-        void refresh();
-      }, PROJECT_REFRESH_INTERVAL_MS);
+      const unsubscribe = subscribeToStorageChanges(
+        ['projects', 'partners', 'volunteers', 'statusUpdates', 'partnerProjectApplications', 'partnerEventCheckIns', 'partnerReports', 'publishedImpactReports', 'volunteerProjectJoins', 'volunteerMatches', 'volunteerTimeLogs'],
+        () => {
+          void refresh();
+        }
+      );
 
       return () => {
-        active = false;
-        clearInterval(refreshTimer);
+        unsubscribe();
       };
     }, [selectedProject?.id])
   );
-
-  useEffect(() => {
-    return subscribeToStorageChanges(
-      ['projects', 'volunteers', 'statusUpdates', 'partnerProjectApplications', 'partnerEventCheckIns', 'partnerReports', 'publishedImpactReports', 'volunteerProjectJoins', 'volunteerMatches', 'volunteerTimeLogs'],
-      () => {
-        void Promise.all([loadProjects(), loadPartners(), loadVolunteers(), loadAllVolunteerMatches(), loadVolunteerTimeLogs()]);
-        if (selectedProject?.id) {
-          void Promise.all([
-            loadStatusUpdates(selectedProject.id),
-            loadPartnerApplicationsForProject(selectedProject.id),
-            loadPartnerCheckInsForProject(selectedProject.id),
-            loadPartnerReportsForProject(selectedProject.id),
-            loadImpactReportsForProject(selectedProject.id),
-            loadVolunteerJoinsForProject(selectedProject.id),
-            loadVolunteerMatchesForProject(selectedProject.id),
-          ]);
-        }
-      }
-    );
-  }, [selectedProject?.id]);
 
   // Loads all projects and refreshes the currently selected project reference.
   const loadProjects = async () => {
@@ -442,7 +440,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       id: project.id,
       title: project.title,
       description: project.description,
-      programModule: project.programModule || (project.category === 'Other' ? 'Disaster' : (project.category as AdvocacyFocus)),
+      programModule: getProjectDraftModule(project),
       status: project.status,
       partnerId: project.partnerId,
       startDate: project.startDate.slice(0, 10),
@@ -459,6 +457,39 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   // Updates a single project draft field without replacing the entire object.
   const handleProjectDraftChange = <K extends keyof ProjectDraft>(key: K, value: ProjectDraft[K]) => {
     setProjectDraft(current => ({ ...current, [key]: value }));
+  };
+
+  const handleTaskDraftChange = <K extends keyof ProjectTaskDraft>(
+    key: K,
+    value: ProjectTaskDraft[K]
+  ) => {
+    setTaskDraft(current => ({ ...current, [key]: value }));
+  };
+
+  const openCreateTaskModal = () => {
+    setEditingTaskId(null);
+    setTaskDraft(createEmptyProjectTaskDraft());
+    setShowTaskModal(true);
+  };
+
+  const openEditTaskModal = (task: ProjectInternalTask) => {
+    setEditingTaskId(task.id);
+    setTaskDraft({
+      id: task.id,
+      title: task.title,
+      description: task.description,
+      category: task.category,
+      priority: task.priority,
+      status: task.status,
+      assignedVolunteerId: task.assignedVolunteerId || '',
+    });
+    setShowTaskModal(true);
+  };
+
+  const closeTaskModal = () => {
+    setShowTaskModal(false);
+    setEditingTaskId(null);
+    setTaskDraft(createEmptyProjectTaskDraft());
   };
 
   // Opens the volunteer management route for one volunteer when available.
@@ -538,6 +569,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       createdAt: existingProject?.createdAt || now,
       updatedAt: now,
       statusUpdates: existingProject?.statusUpdates || [],
+      internalTasks: existingProject?.internalTasks,
     };
 
     try {
@@ -874,7 +906,15 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       });
   };
 
-  // Builds the pending volunteer-request list for the selected project.
+  const getAssignableVolunteerOptions = (project: Project) => {
+    return getProjectVolunteerEntries(project).map(entry => ({
+      id: entry.id,
+      name: entry.name,
+      participationStatus: entry.participationStatus,
+    }));
+  };
+
+  // Builds the volunteer-request list for the selected project.
   const getProjectVolunteerRequestEntries = () => {
     const volunteerById = new Map(volunteers.map(volunteer => [volunteer.id, volunteer]));
 
@@ -898,6 +938,109 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       })
       .filter((entry): entry is ProjectVolunteerRequestEntry => entry !== null)
       .sort((a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime());
+  };
+
+  const handleSaveInternalTask = async () => {
+    if (!isAdmin) {
+      Alert.alert('Access Restricted', 'Only admin accounts can manage internal project tasks.');
+      return;
+    }
+
+    if (!selectedProject) {
+      return;
+    }
+
+    if (!taskDraft.title.trim() || !taskDraft.description.trim() || !taskDraft.category.trim()) {
+      Alert.alert('Validation Error', 'Add a task title, category, and description.');
+      return;
+    }
+
+    const assignableVolunteers = getAssignableVolunteerOptions(selectedProject);
+    const assignedVolunteer = assignableVolunteers.find(
+      volunteer => volunteer.id === taskDraft.assignedVolunteerId
+    );
+    const now = new Date().toISOString();
+    const taskStatus =
+      taskDraft.assignedVolunteerId && taskDraft.status === 'Unassigned'
+        ? 'Assigned'
+        : taskDraft.status;
+
+    const nextTask: ProjectInternalTask = {
+      id: editingTaskId || `${selectedProject.id}-task-${Date.now()}`,
+      title: taskDraft.title.trim(),
+      description: taskDraft.description.trim(),
+      category: taskDraft.category.trim(),
+      priority: taskDraft.priority,
+      status: taskStatus,
+      assignedVolunteerId: taskDraft.assignedVolunteerId || undefined,
+      assignedVolunteerName: assignedVolunteer?.name,
+      createdAt:
+        selectedProject.internalTasks?.find(task => task.id === editingTaskId)?.createdAt || now,
+      updatedAt: now,
+    };
+
+    const nextInternalTasks = editingTaskId
+      ? (selectedProject.internalTasks || []).map(task =>
+          task.id === editingTaskId ? nextTask : task
+        )
+      : [...(selectedProject.internalTasks || []), nextTask];
+
+    const updatedProject: Project = {
+      ...selectedProject,
+      internalTasks: nextInternalTasks,
+      updatedAt: now,
+    };
+
+    try {
+      await saveProject(updatedProject);
+      setSelectedProject(updatedProject);
+      closeTaskModal();
+      Alert.alert('Saved', editingTaskId ? 'Internal task updated.' : 'Internal task added.');
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to save the internal task.')
+      );
+    }
+  };
+
+  const handleDeleteInternalTask = (taskId: string) => {
+    if (!isAdmin || !selectedProject) {
+      return;
+    }
+
+    Alert.alert(
+      'Delete Task',
+      'Remove this internal task from the project?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            const updatedProject: Project = {
+              ...selectedProject,
+              internalTasks: (selectedProject.internalTasks || []).filter(task => task.id !== taskId),
+              updatedAt: new Date().toISOString(),
+            };
+
+            try {
+              await saveProject(updatedProject);
+              setSelectedProject(updatedProject);
+              if (editingTaskId === taskId) {
+                closeTaskModal();
+              }
+              Alert.alert('Deleted', 'Internal task removed.');
+            } catch (error) {
+              Alert.alert(
+                getRequestErrorTitle(error),
+                getRequestErrorMessage(error, 'Failed to delete the internal task.')
+              );
+            }
+          },
+        },
+      ]
+    );
   };
 
   // Renders one project card in the lifecycle list.
@@ -989,7 +1132,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         </View>
 
         <ScrollView style={styles.modalContent}>
-          <View style={styles.formRow}>
+          <View style={[styles.formRow, styles.formRowReverse]}>
             <TextInput
               style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
               placeholder="Program title"
@@ -1000,7 +1143,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             <Text style={styles.labelRight}>Title</Text>
           </View>
 
-          <View style={[styles.formRow, styles.formRowTop]}>
+          <View style={[styles.formRow, styles.formRowTop, styles.formRowReverse]}>
             <TextInput
               style={[styles.textArea, styles.inputWithLabel]}
               placeholder="Program description"
@@ -1013,7 +1156,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             <Text style={[styles.labelRight, styles.labelTop]}>Description</Text>
           </View>
 
-          <View style={[styles.formRow, styles.formRowTop]}>
+          <View style={[styles.formRow, styles.formRowTop, styles.formRowReverse]}>
             <View style={[styles.statusOptions, styles.statusOptionsCard]}>
               {projectModules.map(category => (
                 <TouchableOpacity
@@ -1038,7 +1181,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             <Text style={[styles.labelRight, styles.labelTop]}>Program Module</Text>
           </View>
 
-          <View style={[styles.formRow, styles.formRowTop]}>
+          <View style={[styles.formRow, styles.formRowTop, styles.formRowReverse]}>
             <View style={[styles.statusOptions, styles.statusOptionsCard]}>
               {statuses.map(status => (
                 <TouchableOpacity
@@ -1063,7 +1206,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             <Text style={[styles.labelRight, styles.labelTop]}>Status</Text>
           </View>
 
-          <View style={styles.formRow}>
+          <View style={[styles.formRow, styles.formRowReverse]}>
             <View style={[styles.statusOptions, styles.statusOptionsCard]}>
               <TouchableOpacity
                 style={[
@@ -1101,7 +1244,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             <Text style={styles.labelRight}>Type</Text>
           </View>
 
-          <View style={[styles.formRow, styles.formRowTop]}>
+          <View style={[styles.formRow, styles.formRowTop, styles.formRowReverse]}>
             <View style={[styles.statusOptions, styles.statusOptionsCard]}>
               {partners.map(partner => (
                 <TouchableOpacity
@@ -1126,7 +1269,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             <Text style={[styles.labelRight, styles.labelTop]}>Partner</Text>
           </View>
 
-          <View style={styles.formRow}>
+          <View style={[styles.formRow, styles.formRowReverse]}>
             <TextInput
               style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
               placeholder="YYYY-MM-DD"
@@ -1137,7 +1280,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             <Text style={styles.labelRight}>Start Date</Text>
           </View>
 
-          <View style={styles.formRow}>
+          <View style={[styles.formRow, styles.formRowReverse]}>
             <TextInput
               style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
               placeholder="YYYY-MM-DD"
@@ -1148,7 +1291,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             <Text style={styles.labelRight}>End Date</Text>
           </View>
 
-          <View style={styles.formRow}>
+          <View style={[styles.formRow, styles.formRowReverse]}>
             <TextInput
               style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
               placeholder="Location address"
@@ -1159,7 +1302,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             <Text style={styles.labelRight}>Address</Text>
           </View>
 
-          <View style={styles.formRow}>
+          <View style={[styles.formRow, styles.formRowReverse]}>
             <TextInput
               style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
               placeholder="Latitude"
@@ -1171,7 +1314,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             <Text style={styles.labelRight}>Latitude</Text>
           </View>
 
-          <View style={styles.formRow}>
+          <View style={[styles.formRow, styles.formRowReverse]}>
             <TextInput
               style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
               placeholder="Longitude"
@@ -1183,7 +1326,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             <Text style={styles.labelRight}>Longitude</Text>
           </View>
 
-          <View style={styles.formRow}>
+          <View style={[styles.formRow, styles.formRowReverse]}>
             <TextInput
               style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
               placeholder="Volunteer slots"
@@ -1210,12 +1353,16 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   if (selectedProject) {
     const volunteerEntries = getProjectVolunteerEntries(selectedProject);
+    const assignableVolunteerOptions = getAssignableVolunteerOptions(selectedProject);
     const volunteerRequestEntries = getProjectVolunteerRequestEntries();
-    const openPartnerApplications = partnerApplications.filter(
-      application => application.status !== 'Approved',
+    const pendingPartnerApplications = partnerApplications.filter(
+      application => application.status === 'Pending',
     );
     const approvedPartnerApplications = partnerApplications.filter(
       application => application.status === 'Approved',
+    );
+    const pendingVolunteerRequestEntries = volunteerRequestEntries.filter(
+      requestEntry => requestEntry.status === 'Requested',
     );
     const projectTimeLogEntries: ProjectTimeLogEntry[] = volunteerTimeLogs
       .filter(log => log.projectId === selectedProject.id)
@@ -1231,9 +1378,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     const projectTimeOutCount = projectTimeLogEntries.filter(log => Boolean(log.timeOut)).length;
     const selectedPartnerName =
       partners.find(partner => partner.id === selectedProject.partnerId)?.name || selectedProject.partnerId;
-    const pendingPartnerRequests = openPartnerApplications.filter(
-      application => application.status === 'Pending',
-    ).length;
+    const pendingPartnerRequests = pendingPartnerApplications.length;
+    const internalTasks = selectedProject.internalTasks || [];
 
     return (
       <ScrollView style={styles.container}>
@@ -1393,13 +1539,82 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           </View>
 
           <View style={styles.detailsSection}>
-            <Text style={styles.sectionTitle}>Partner Join Requests</Text>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Internal Task Board</Text>
+              {isAdmin && (
+                <TouchableOpacity style={styles.addButton} onPress={openCreateTaskModal}>
+                  <MaterialIcons name="add-task" size={20} color="#fff" />
+                </TouchableOpacity>
+              )}
+            </View>
+            <Text style={styles.sectionHint}>
+              Admin can add internal tasks and assign them to joined volunteers. Starter tasks are generated per project.
+            </Text>
 
-            {openPartnerApplications.length === 0 ? (
-              <Text style={styles.emptyText}>No pending or rejected partner requests right now</Text>
+            {internalTasks.length === 0 ? (
+              <Text style={styles.emptyText}>No internal tasks added yet</Text>
             ) : (
               <View style={styles.updatesList}>
-                {openPartnerApplications.map(application => (
+                {internalTasks.map(task => (
+                  <View key={task.id} style={styles.taskCard}>
+                    <View style={styles.taskCardHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.taskTitle}>{task.title}</Text>
+                        <Text style={styles.taskMeta}>
+                          {task.category} • {task.priority} Priority
+                        </Text>
+                      </View>
+                      <View
+                        style={[
+                          styles.taskStatusBadge,
+                          task.status === 'Completed'
+                            ? styles.taskStatusCompleted
+                            : task.status === 'In Progress'
+                            ? styles.taskStatusInProgress
+                            : task.status === 'Assigned'
+                            ? styles.taskStatusAssigned
+                            : styles.taskStatusUnassigned,
+                        ]}
+                      >
+                        <Text style={styles.taskStatusText}>{task.status}</Text>
+                      </View>
+                    </View>
+
+                    <Text style={styles.taskDescription}>{task.description}</Text>
+                    <Text style={styles.taskAssignmentText}>
+                      Assigned to: {task.assignedVolunteerName || 'Unassigned'}
+                    </Text>
+
+                    {isAdmin && (
+                      <View style={styles.taskActionRow}>
+                        <TouchableOpacity
+                          style={[styles.applicationButton, styles.approveButton]}
+                          onPress={() => openEditTaskModal(task)}
+                        >
+                          <Text style={styles.applicationButtonText}>Edit / Assign</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.applicationButton, styles.rejectButton]}
+                          onPress={() => handleDeleteInternalTask(task.id)}
+                        >
+                          <Text style={styles.applicationButtonText}>Delete</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                  </View>
+                ))}
+              </View>
+            )}
+          </View>
+
+          <View style={styles.detailsSection}>
+            <Text style={styles.sectionTitle}>Pending Partner Join Requests</Text>
+
+            {pendingPartnerApplications.length === 0 ? (
+              <Text style={styles.emptyText}>No pending partner requests right now</Text>
+            ) : (
+              <View style={styles.updatesList}>
+                {pendingPartnerApplications.map(application => (
                   <View key={application.id} style={styles.applicationCard}>
                     <View style={styles.applicationHeader}>
                       <View style={{ flex: 1 }}>
@@ -1412,18 +1627,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                       <View
                         style={[
                           styles.applicationStatusBadge,
-                          application.status === 'Approved'
-                            ? styles.applicationStatusApproved
-                            : application.status === 'Rejected'
-                            ? styles.applicationStatusRejected
-                            : styles.applicationStatusPending,
+                          styles.applicationStatusPending,
                         ]}
                       >
                         <Text style={styles.applicationStatusText}>{application.status}</Text>
                       </View>
                     </View>
 
-                    {isAdmin && application.status === 'Pending' && (
+                    {isAdmin && (
                       <View style={styles.applicationActions}>
                         <TouchableOpacity
                           style={[styles.applicationButton, styles.approveButton]}
@@ -1544,14 +1755,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
           <View style={styles.detailsSection}>
             <Text style={styles.sectionTitle}>
-              Volunteer Join Requests ({volunteerRequestEntries.length})
+              Pending Volunteer Join Requests ({pendingVolunteerRequestEntries.length})
             </Text>
 
-            {volunteerRequestEntries.length === 0 ? (
-              <Text style={styles.emptyText}>No volunteer join requests yet</Text>
+            {pendingVolunteerRequestEntries.length === 0 ? (
+              <Text style={styles.emptyText}>No pending volunteer join requests</Text>
             ) : (
               <View style={styles.updatesList}>
-                {volunteerRequestEntries.map(requestEntry => (
+                {pendingVolunteerRequestEntries.map(requestEntry => (
                   <View key={requestEntry.id} style={styles.applicationCard}>
                     <View style={styles.applicationHeader}>
                       <View style={{ flex: 1 }}>
@@ -1564,16 +1775,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                       <View
                         style={[
                           styles.applicationStatusBadge,
-                          requestEntry.status === 'Rejected'
-                            ? styles.applicationStatusRejected
-                            : styles.applicationStatusPending,
+                          styles.applicationStatusPending,
                         ]}
                       >
                         <Text style={styles.applicationStatusText}>{requestEntry.status}</Text>
                       </View>
                     </View>
 
-                    {isAdmin && requestEntry.status === 'Requested' && (
+                    {isAdmin && (
                       <View style={styles.applicationActions}>
                         <TouchableOpacity
                           style={[styles.applicationButton, styles.approveButton]}
@@ -1843,6 +2052,173 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             )}
           </View>
         </View>
+
+        <Modal
+          visible={showTaskModal}
+          animationType="slide"
+          onRequestClose={closeTaskModal}
+        >
+          <View style={styles.modalContainer}>
+            <View style={styles.modalHeader}>
+              <TouchableOpacity onPress={closeTaskModal}>
+                <MaterialIcons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+              <Text style={styles.modalTitle}>
+                {editingTaskId ? 'Edit Internal Task' : 'Add Internal Task'}
+              </Text>
+              <TouchableOpacity onPress={handleSaveInternalTask}>
+                <Text style={styles.projectModalSave}>Save</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.modalContent}>
+              <View style={styles.formRow}>
+                <TextInput
+                  style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
+                  placeholder="Task title"
+                  placeholderTextColor="#999"
+                  value={taskDraft.title}
+                  onChangeText={value => handleTaskDraftChange('title', value)}
+                />
+                <Text style={styles.labelRight}>Title</Text>
+              </View>
+
+              <View style={[styles.formRow, styles.formRowTop]}>
+                <TextInput
+                  style={[styles.textArea, styles.inputWithLabel]}
+                  placeholder="Describe what needs to be done"
+                  placeholderTextColor="#999"
+                  multiline
+                  numberOfLines={4}
+                  value={taskDraft.description}
+                  onChangeText={value => handleTaskDraftChange('description', value)}
+                />
+                <Text style={[styles.labelRight, styles.labelTop]}>Description</Text>
+              </View>
+
+              <View style={styles.formRow}>
+                <TextInput
+                  style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
+                  placeholder="Task category"
+                  placeholderTextColor="#999"
+                  value={taskDraft.category}
+                  onChangeText={value => handleTaskDraftChange('category', value)}
+                />
+                <Text style={styles.labelRight}>Category</Text>
+              </View>
+
+              <View style={[styles.formRow, styles.formRowTop]}>
+                <View style={[styles.statusOptions, styles.statusOptionsCard]}>
+                  {(['High', 'Medium', 'Low'] as const).map(priority => (
+                    <TouchableOpacity
+                      key={priority}
+                      style={[
+                        styles.statusOption,
+                        taskDraft.priority === priority && styles.statusOptionSelected,
+                      ]}
+                      onPress={() => handleTaskDraftChange('priority', priority)}
+                    >
+                      <Text
+                        style={[
+                          styles.statusOptionText,
+                          taskDraft.priority === priority && styles.statusOptionTextSelected,
+                        ]}
+                      >
+                        {priority}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <Text style={[styles.labelRight, styles.labelTop]}>Priority</Text>
+              </View>
+
+              <View style={[styles.formRow, styles.formRowTop]}>
+                <View style={[styles.statusOptions, styles.statusOptionsCard]}>
+                  {(['Unassigned', 'Assigned', 'In Progress', 'Completed'] as const).map(status => (
+                    <TouchableOpacity
+                      key={status}
+                      style={[
+                        styles.statusOption,
+                        taskDraft.status === status && styles.statusOptionSelected,
+                      ]}
+                      onPress={() => handleTaskDraftChange('status', status)}
+                    >
+                      <Text
+                        style={[
+                          styles.statusOptionText,
+                          taskDraft.status === status && styles.statusOptionTextSelected,
+                        ]}
+                      >
+                        {status}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <Text style={[styles.labelRight, styles.labelTop]}>Status</Text>
+              </View>
+
+              <View style={[styles.formRow, styles.formRowTop]}>
+                <View style={[styles.statusOptions, styles.statusOptionsCard]}>
+                  <TouchableOpacity
+                    style={[
+                      styles.statusOption,
+                      taskDraft.assignedVolunteerId === '' && styles.statusOptionSelected,
+                    ]}
+                    onPress={() => handleTaskDraftChange('assignedVolunteerId', '')}
+                  >
+                    <Text
+                      style={[
+                        styles.statusOptionText,
+                        taskDraft.assignedVolunteerId === '' && styles.statusOptionTextSelected,
+                      ]}
+                    >
+                      Unassigned
+                    </Text>
+                  </TouchableOpacity>
+                  {assignableVolunteerOptions.map(volunteerOption => (
+                    <TouchableOpacity
+                      key={volunteerOption.id}
+                      style={[
+                        styles.statusOption,
+                        taskDraft.assignedVolunteerId === volunteerOption.id &&
+                          styles.statusOptionSelected,
+                      ]}
+                      onPress={() =>
+                        handleTaskDraftChange('assignedVolunteerId', volunteerOption.id)
+                      }
+                    >
+                      <Text
+                        style={[
+                          styles.statusOptionText,
+                          taskDraft.assignedVolunteerId === volunteerOption.id &&
+                            styles.statusOptionTextSelected,
+                        ]}
+                      >
+                        {volunteerOption.name}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <Text style={[styles.labelRight, styles.labelTop]}>Assign To</Text>
+              </View>
+
+              {assignableVolunteerOptions.length === 0 ? (
+                <Text style={styles.helperText}>
+                  No volunteers have joined this project yet. You can still create the task and assign it later.
+                </Text>
+              ) : null}
+
+              <TouchableOpacity
+                style={styles.submitButton}
+                onPress={handleSaveInternalTask}
+              >
+                <Text style={styles.submitButtonText}>
+                  {editingTaskId ? 'Update Task' : 'Add Task'}
+                </Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </Modal>
 
         <Modal
           visible={showStatusModal}
@@ -2396,6 +2772,68 @@ const styles = StyleSheet.create({
     gap: 10,
     marginTop: 12,
   },
+  taskCard: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    padding: 14,
+    marginBottom: 14,
+  },
+  taskCardHeader: {
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'flex-start',
+  },
+  taskTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  taskMeta: {
+    fontSize: 12,
+    color: '#64748b',
+    marginTop: 4,
+  },
+  taskDescription: {
+    fontSize: 13,
+    color: '#334155',
+    lineHeight: 19,
+    marginTop: 10,
+  },
+  taskAssignmentText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginTop: 10,
+  },
+  taskActionRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 12,
+  },
+  taskStatusBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  taskStatusUnassigned: {
+    backgroundColor: '#e5e7eb',
+  },
+  taskStatusAssigned: {
+    backgroundColor: '#dbeafe',
+  },
+  taskStatusInProgress: {
+    backgroundColor: '#fef3c7',
+  },
+  taskStatusCompleted: {
+    backgroundColor: '#dcfce7',
+  },
+  taskStatusText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
   volunteerCard: {
     backgroundColor: '#f8fafc',
     borderRadius: 10,
@@ -2580,6 +3018,9 @@ const styles = StyleSheet.create({
   formRowTop: {
     alignItems: 'flex-start',
   },
+  formRowReverse: {
+    flexDirection: 'row-reverse',
+  },
   statusOptions: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -2636,6 +3077,12 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 2 },
+  },
+  helperText: {
+    fontSize: 12,
+    color: '#64748b',
+    lineHeight: 18,
+    marginBottom: 16,
   },
   submitButton: {
     backgroundColor: '#4CAF50',

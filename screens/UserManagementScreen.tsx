@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   View,
   Text,
@@ -8,25 +8,37 @@ import {
   Alert,
   Modal,
   TextInput,
+  ScrollView,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { format } from 'date-fns';
 import InlineLoadError from '../components/InlineLoadError';
 import { useAuth } from '../contexts/AuthContext';
-import { deleteUser, getAllUsers, saveUser, subscribeToStorageChanges } from '../models/storage';
-import { NVCSector, User, UserRole, UserType } from '../models/types';
+import {
+  deleteUser,
+  getAllPartners,
+  getAllUsers,
+  getAllVolunteers,
+  reviewPartnerRegistration,
+  reviewVolunteerRegistration,
+  saveUser,
+  subscribeToStorageChanges,
+  verifyPartnerRegistration,
+} from '../models/storage';
+import { NVCSector, Partner, User, UserRole, UserType, Volunteer } from '../models/types';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 const roleOptions: UserRole[] = ['admin', 'partner', 'volunteer'];
 const NEW_ACCOUNT_WINDOW_MS = 1000 * 60 * 60 * 24 * 3;
-const USER_REFRESH_INTERVAL_MS = 5000;
 
 // Lets admins review, edit, and remove application user accounts.
 export default function UserManagementScreen() {
   const { user, isAdmin } = useAuth();
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [users, setUsers] = useState<User[]>([]);
+  const [partners, setPartners] = useState<Partner[]>([]);
+  const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
@@ -37,11 +49,20 @@ export default function UserManagementScreen() {
   const [userTypeDraft, setUserTypeDraft] = useState<UserType>('Adult');
   const [pillarsDraft, setPillarsDraft] = useState<NVCSector[]>([]);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [reviewTarget, setReviewTarget] = useState<
+    | { type: 'partner'; record: Partner }
+    | { type: 'volunteer'; record: Volunteer }
+    | null
+  >(null);
 
   // Loads and sorts all user accounts for the admin management table.
   const loadUsers = useCallback(async () => {
     try {
-      const allUsers = await getAllUsers();
+      const [allUsers, allPartners, allVolunteers] = await Promise.all([
+        getAllUsers(),
+        getAllPartners(),
+        getAllVolunteers(),
+      ]);
       const sortedUsers = [...allUsers].sort((a, b) => {
         const createdAtDiff =
           new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
@@ -51,6 +72,8 @@ export default function UserManagementScreen() {
         return a.name.localeCompare(b.name);
       });
       setUsers(sortedUsers);
+      setPartners(allPartners);
+      setVolunteers(allVolunteers);
       setLastSyncedAt(new Date().toISOString());
       setLoadError(null);
     } catch (error) {
@@ -61,12 +84,6 @@ export default function UserManagementScreen() {
     }
   }, []);
 
-  useEffect(() => {
-    if (isAdmin) {
-      void loadUsers();
-    }
-  }, [isAdmin, loadUsers]);
-
   useFocusEffect(
     React.useCallback(() => {
       if (!isAdmin) {
@@ -74,23 +91,14 @@ export default function UserManagementScreen() {
       }
 
       void loadUsers();
-      const refreshTimer = setInterval(() => {
+      return subscribeToStorageChanges(['users', 'partners', 'volunteers'], () => {
         void loadUsers();
-      }, USER_REFRESH_INTERVAL_MS);
-
-      return () => clearInterval(refreshTimer);
+      });
     }, [isAdmin, loadUsers])
   );
 
-  useEffect(() => {
-    if (!isAdmin) {
-      return undefined;
-    }
-
-    return subscribeToStorageChanges(['users'], () => {
-      void loadUsers();
-    });
-  }, [isAdmin, loadUsers]);
+  const getVolunteerRegistrationStatus = (volunteer: Volunteer) =>
+    volunteer.registrationStatus || 'Approved';
 
   // Flags recently created accounts so they can be visually highlighted.
   const isNewAccount = (createdAt: string) => {
@@ -182,6 +190,89 @@ export default function UserManagementScreen() {
     );
   };
 
+  const handleVerifyPartner = async (partnerId: string) => {
+    if (!user?.id) {
+      return;
+    }
+
+    try {
+      const partner = await verifyPartnerRegistration(partnerId, user.id);
+      setReviewTarget(current =>
+        current?.type === 'partner' && current.record.id === partner.id
+          ? { type: 'partner', record: partner }
+          : current
+      );
+      Alert.alert('Verified', `${partner.name} was marked as DSWD-verified.`);
+      await loadUsers();
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to verify partner application.')
+      );
+    }
+  };
+
+  const handleReviewPartner = async (partnerId: string, status: 'Approved' | 'Rejected') => {
+    if (!user?.id) {
+      return;
+    }
+
+    try {
+      const partner = await reviewPartnerRegistration(partnerId, status, user.id);
+      setReviewTarget(null);
+      Alert.alert(
+        status === 'Approved' ? 'Partner Approved' : 'Partner Rejected',
+        status === 'Approved'
+          ? `${partner.name} can now log in to the partner portal.`
+          : `${partner.name} was rejected.`
+      );
+      await loadUsers();
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to review partner application.')
+      );
+    }
+  };
+
+  const handleReviewVolunteer = async (
+    volunteerId: string,
+    status: 'Approved' | 'Rejected'
+  ) => {
+    if (!user?.id) {
+      return;
+    }
+
+    try {
+      const volunteer = await reviewVolunteerRegistration(volunteerId, status, user.id);
+      setReviewTarget(null);
+      Alert.alert(
+        status === 'Approved' ? 'Volunteer Approved' : 'Volunteer Rejected',
+        status === 'Approved'
+          ? `${volunteer.name} can now log in to the volunteer account.`
+          : `${volunteer.name} was rejected.`
+      );
+      await loadUsers();
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to review volunteer account.')
+      );
+    }
+  };
+
+  const openPartnerReview = (partner: Partner) => {
+    setReviewTarget({ type: 'partner', record: partner });
+  };
+
+  const openVolunteerReview = (volunteer: Volunteer) => {
+    setReviewTarget({ type: 'volunteer', record: volunteer });
+  };
+
+  const closeReviewModal = () => {
+    setReviewTarget(null);
+  };
+
   if (!isAdmin) {
     return (
       <View style={styles.container}>
@@ -197,6 +288,15 @@ export default function UserManagementScreen() {
   const totalAdmins = users.filter(item => item.role === 'admin').length;
   const totalPartners = users.filter(item => item.role === 'partner').length;
   const totalVolunteers = users.filter(item => item.role === 'volunteer').length;
+  const pendingPartnerRequests = partners
+    .filter(partner => partner.status === 'Pending')
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+  const rejectedPartnerRequests = partners
+    .filter(partner => partner.status === 'Rejected')
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+  const pendingVolunteerRequests = volunteers
+    .filter(volunteer => getVolunteerRegistrationStatus(volunteer) === 'Pending')
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
 
   return (
     <View style={styles.container}>
@@ -251,50 +351,214 @@ export default function UserManagementScreen() {
         data={users}
         keyExtractor={item => item.id}
         contentContainerStyle={styles.listContent}
-        renderItem={({ item }) => (
-          <View style={styles.userCard}>
-            <View style={styles.userHeader}>
-              <View style={styles.avatar}>
-                <Text style={styles.avatarText}>{item.name.charAt(0).toUpperCase()}</Text>
-              </View>
-              <View style={styles.userInfo}>
-                <View style={styles.nameRow}>
-                  <Text style={styles.userName}>{item.name}</Text>
-                  {isNewAccount(item.createdAt) && (
-                    <View style={styles.newBadge}>
-                      <Text style={styles.newBadgeText}>New</Text>
+        ListHeaderComponent={
+          <>
+            <View style={styles.requestSection}>
+              <Text style={styles.requestSectionTitle}>Partner Onboarding Requests</Text>
+              <Text style={styles.requestSectionSubtitle}>
+                Pending partner applications that need verification and admin approval.
+              </Text>
+              {pendingPartnerRequests.length === 0 ? (
+                <Text style={styles.requestEmptyText}>No pending partner onboarding requests.</Text>
+              ) : (
+                pendingPartnerRequests.map(partner => (
+                  <View key={partner.id} style={styles.requestCard}>
+                    <View style={styles.requestHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.requestName}>{partner.name}</Text>
+                        <Text style={styles.requestMeta}>
+                          {partner.sectorType} • DSWD {partner.dswdAccreditationNo || 'Pending'}
+                        </Text>
+                        <Text style={styles.requestMeta}>
+                          {partner.contactEmail || partner.contactPhone || 'No contact details'}
+                        </Text>
+                        <Text style={styles.requestMeta}>
+                          Submitted {format(new Date(partner.createdAt), 'MMM dd, yyyy hh:mm a')}
+                        </Text>
+                      </View>
+                      <View style={[styles.requestBadge, styles.requestBadgePending]}>
+                        <Text style={styles.requestBadgeText}>Pending</Text>
+                      </View>
                     </View>
-                  )}
-                </View>
-                <Text style={styles.userMeta}>{item.email}</Text>
-                <Text style={styles.userMeta}>{item.phone || 'No phone number'}</Text>
-                <Text style={styles.userMeta}>{item.userType || 'No profile type'}</Text>
-                <Text style={styles.userMeta}>
-                  Created {format(new Date(item.createdAt), 'MMM dd, yyyy hh:mm a')}
-                </Text>
-                <Text style={styles.userMeta}>
-                  {(item.pillarsOfInterest || []).length > 0
-                    ? item.pillarsOfInterest?.join(', ')
-                    : 'No pillar preferences'}
-                </Text>
-              </View>
-              <View style={styles.roleBadge}>
-                <Text style={styles.roleBadgeText}>{item.role}</Text>
-              </View>
+                    <View style={styles.requestActionRow}>
+                      <TouchableOpacity
+                        style={[styles.requestActionButton, styles.reviewActionButton]}
+                        onPress={() => openPartnerReview(partner)}
+                      >
+                        <Text style={styles.requestActionButtonText}>View Application</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ))
+              )}
             </View>
 
-            <View style={styles.actionsRow}>
-              <TouchableOpacity style={styles.editButton} onPress={() => openEditModal(item)}>
-                <MaterialIcons name="edit" size={16} color="#166534" />
-                <Text style={styles.editButtonText}>Edit</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.deleteButton} onPress={() => handleDeleteUser(item)}>
-                <MaterialIcons name="delete-outline" size={16} color="#b91c1c" />
-                <Text style={styles.deleteButtonText}>Delete</Text>
-              </TouchableOpacity>
+            <View style={styles.requestSection}>
+              <Text style={styles.requestSectionTitle}>Volunteer Onboarding Requests</Text>
+              <Text style={styles.requestSectionSubtitle}>
+                Pending volunteer accounts that need admin approval before login.
+              </Text>
+              {pendingVolunteerRequests.length === 0 ? (
+                <Text style={styles.requestEmptyText}>No pending volunteer onboarding requests.</Text>
+              ) : (
+                pendingVolunteerRequests.map(volunteer => (
+                  <View key={volunteer.id} style={styles.requestCard}>
+                    <View style={styles.requestHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.requestName}>{volunteer.name}</Text>
+                        <Text style={styles.requestMeta}>{volunteer.email || 'No email on file'}</Text>
+                        <Text style={styles.requestMeta}>{volunteer.phone || 'No phone number on file'}</Text>
+                        <Text style={styles.requestMeta}>
+                          Submitted {format(new Date(volunteer.createdAt), 'MMM dd, yyyy hh:mm a')}
+                        </Text>
+                      </View>
+                      <View style={[styles.requestBadge, styles.requestBadgePending]}>
+                        <Text style={styles.requestBadgeText}>Pending</Text>
+                      </View>
+                    </View>
+                    <View style={styles.requestActionRow}>
+                      <TouchableOpacity
+                        style={[styles.requestActionButton, styles.reviewActionButton]}
+                        onPress={() => openVolunteerReview(volunteer)}
+                      >
+                        <Text style={styles.requestActionButtonText}>View Membership Form</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ))
+              )}
             </View>
-          </View>
-        )}
+
+            <View style={styles.requestSection}>
+              <Text style={styles.requestSectionTitle}>Rejected Partner Requests</Text>
+              <Text style={styles.requestSectionSubtitle}>
+                Rejected partner applications stay here so admins can still approve them later.
+              </Text>
+              {rejectedPartnerRequests.length === 0 ? (
+                <Text style={styles.requestEmptyText}>No rejected partner requests.</Text>
+              ) : (
+                rejectedPartnerRequests.map(partner => (
+                  <View key={partner.id} style={styles.requestCard}>
+                    <View style={styles.requestHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.requestName}>{partner.name}</Text>
+                        <Text style={styles.requestMeta}>
+                          {partner.sectorType} • DSWD {partner.dswdAccreditationNo || 'Pending'}
+                        </Text>
+                        <Text style={styles.requestMeta}>
+                          {partner.contactEmail || partner.contactPhone || 'No contact details'}
+                        </Text>
+                        <Text style={styles.requestMeta}>
+                          Submitted {format(new Date(partner.createdAt), 'MMM dd, yyyy hh:mm a')}
+                        </Text>
+                        {partner.validatedAt ? (
+                          <Text style={styles.requestMeta}>
+                            Last reviewed {format(new Date(partner.validatedAt), 'MMM dd, yyyy hh:mm a')}
+                          </Text>
+                        ) : null}
+                      </View>
+                      <View style={[styles.requestBadge, styles.requestBadgeRejected]}>
+                        <Text style={[styles.requestBadgeText, styles.requestBadgeTextRejected]}>Rejected</Text>
+                      </View>
+                    </View>
+                    <View style={styles.requestActionRow}>
+                      <TouchableOpacity
+                        style={[styles.requestActionButton, styles.reviewActionButton]}
+                        onPress={() => openPartnerReview(partner)}
+                      >
+                        <Text style={styles.requestActionButtonText}>Review Decision</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ))
+              )}
+            </View>
+          </>
+        }
+        renderItem={({ item }) => {
+          const linkedPartners = partners.filter(partner => {
+            if (partner.ownerUserId) {
+              return partner.ownerUserId === item.id;
+            }
+
+            return (
+              (partner.contactEmail || '').trim().toLowerCase() === (item.email || '').trim().toLowerCase() ||
+              (partner.contactPhone || '').trim() === (item.phone || '').trim()
+            );
+          });
+          const linkedVolunteer =
+            volunteers.find(volunteer => {
+              if (volunteer.userId) {
+                return volunteer.userId === item.id;
+              }
+
+              return (
+                (volunteer.email || '').trim().toLowerCase() === (item.email || '').trim().toLowerCase() ||
+                (volunteer.phone || '').trim() === (item.phone || '').trim()
+              );
+            }) || null;
+
+          return (
+            <View style={styles.userCard}>
+              <View style={styles.userHeader}>
+                <View style={styles.avatar}>
+                  <Text style={styles.avatarText}>{item.name.charAt(0).toUpperCase()}</Text>
+                </View>
+                <View style={styles.userInfo}>
+                  <View style={styles.nameRow}>
+                    <Text style={styles.userName}>{item.name}</Text>
+                    {isNewAccount(item.createdAt) && (
+                      <View style={styles.newBadge}>
+                        <Text style={styles.newBadgeText}>New</Text>
+                      </View>
+                    )}
+                  </View>
+                  <Text style={styles.userMeta}>{item.email}</Text>
+                  <Text style={styles.userMeta}>{item.phone || 'No phone number'}</Text>
+                  <Text style={styles.userMeta}>{item.userType || 'No profile type'}</Text>
+                  <Text style={styles.userMeta}>
+                    Created {format(new Date(item.createdAt), 'MMM dd, yyyy hh:mm a')}
+                  </Text>
+                  <Text style={styles.userMeta}>
+                    {(item.pillarsOfInterest || []).length > 0
+                      ? item.pillarsOfInterest?.join(', ')
+                      : 'No pillar preferences'}
+                  </Text>
+                  {item.role === 'partner' ? (
+                    linkedPartners.length > 0 ? (
+                      linkedPartners.map(partner => (
+                        <View key={partner.id} style={styles.linkedRecordBox}>
+                          <Text style={styles.linkedRecordTitle}>{partner.name}</Text>
+                          <Text style={styles.linkedRecordMeta}>
+                            {partner.status} • {partner.sectorType} • DSWD {partner.dswdAccreditationNo || 'Not provided'}
+                          </Text>
+                        </View>
+                      ))
+                    ) : (
+                      <View style={styles.linkedRecordBox}>
+                        <Text style={styles.linkedRecordMeta}>No linked partner organization record yet.</Text>
+                      </View>
+                    )
+                  ) : null}
+                </View>
+                <View style={styles.roleBadge}>
+                  <Text style={styles.roleBadgeText}>{item.role}</Text>
+                </View>
+              </View>
+
+              <View style={styles.actionsRow}>
+                <TouchableOpacity style={styles.editButton} onPress={() => openEditModal(item)}>
+                  <MaterialIcons name="edit" size={16} color="#166534" />
+                  <Text style={styles.editButtonText}>Edit</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.deleteButton} onPress={() => handleDeleteUser(item)}>
+                  <MaterialIcons name="delete-outline" size={16} color="#b91c1c" />
+                  <Text style={styles.deleteButtonText}>Delete</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          );
+        }}
       />
 
       <Modal visible={showEditModal} animationType="slide" onRequestClose={closeEditModal}>
@@ -389,6 +653,161 @@ export default function UserManagementScreen() {
               ))}
             </View>
           </View>
+        </View>
+      </Modal>
+
+      <Modal visible={Boolean(reviewTarget)} animationType="slide" onRequestClose={closeReviewModal}>
+        <View style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <TouchableOpacity onPress={closeReviewModal}>
+              <Text style={styles.modalCancel}>Close</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>
+              {reviewTarget?.type === 'partner' ? 'Partner Application' : 'Volunteer Form'}
+            </Text>
+            <View style={styles.modalHeaderSpacer} />
+          </View>
+
+          <ScrollView style={styles.modalBody} contentContainerStyle={styles.reviewContent}>
+            {reviewTarget?.type === 'partner' ? (
+              <>
+                <Text style={styles.reviewSectionTitle}>Organization Details</Text>
+                <Text style={styles.reviewRowLabel}>Organization Name</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.name}</Text>
+                <Text style={styles.reviewRowLabel}>Sector Type</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.sectorType}</Text>
+                <Text style={styles.reviewRowLabel}>DSWD Accreditation No.</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.dswdAccreditationNo || 'Not provided'}</Text>
+                <Text style={styles.reviewRowLabel}>SEC Registration No.</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.secRegistrationNo || 'Not provided'}</Text>
+                <Text style={styles.reviewRowLabel}>Advocacy Focus</Text>
+                <Text style={styles.reviewRowValue}>
+                  {reviewTarget.record.advocacyFocus.length > 0
+                    ? reviewTarget.record.advocacyFocus.join(', ')
+                    : 'Not provided'}
+                </Text>
+                <Text style={styles.reviewRowLabel}>Description</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.description || 'Not provided'}</Text>
+
+                <Text style={styles.reviewSectionTitle}>Contact Information</Text>
+                <Text style={styles.reviewRowLabel}>Email</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.contactEmail || 'Not provided'}</Text>
+                <Text style={styles.reviewRowLabel}>Phone</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.contactPhone || 'Not provided'}</Text>
+                <Text style={styles.reviewRowLabel}>Address</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.address || 'Not provided'}</Text>
+
+                <Text style={styles.reviewSectionTitle}>Verification</Text>
+                <Text style={styles.reviewRowLabel}>Status</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.status}</Text>
+                <Text style={styles.reviewRowLabel}>Verification Status</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.verificationStatus || 'Pending'}</Text>
+                <Text style={styles.reviewRowLabel}>Verification Notes</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.verificationNotes || 'No verification notes yet.'}</Text>
+                <Text style={styles.reviewRowLabel}>Registration Documents</Text>
+                <Text style={styles.reviewRowValue}>
+                  {reviewTarget.record.registrationDocuments?.length
+                    ? reviewTarget.record.registrationDocuments.join('\n')
+                    : 'No uploaded registration documents.'}
+                </Text>
+              </>
+            ) : reviewTarget?.type === 'volunteer' ? (
+              <>
+                <Text style={styles.reviewSectionTitle}>Personal Information</Text>
+                <Text style={styles.reviewRowLabel}>Full Name</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.name}</Text>
+                <Text style={styles.reviewRowLabel}>Email</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.email || 'Not provided'}</Text>
+                <Text style={styles.reviewRowLabel}>Phone</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.phone || 'Not provided'}</Text>
+                <Text style={styles.reviewRowLabel}>Gender</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.gender || 'Not provided'}</Text>
+                <Text style={styles.reviewRowLabel}>Date of Birth</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.dateOfBirth || 'Not provided'}</Text>
+                <Text style={styles.reviewRowLabel}>Civil Status</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.civilStatus || 'Not provided'}</Text>
+
+                <Text style={styles.reviewSectionTitle}>Home Address</Text>
+                <Text style={styles.reviewRowLabel}>Full Address</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.homeAddress || 'Not provided'}</Text>
+                <Text style={styles.reviewRowLabel}>Region</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.homeAddressRegion || 'Not provided'}</Text>
+                <Text style={styles.reviewRowLabel}>City / Municipality</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.homeAddressCityMunicipality || 'Not provided'}</Text>
+                <Text style={styles.reviewRowLabel}>Barangay</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.homeAddressBarangay || 'Not provided'}</Text>
+
+                <Text style={styles.reviewSectionTitle}>Professional Information</Text>
+                <Text style={styles.reviewRowLabel}>Occupation</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.occupation || 'Not provided'}</Text>
+                <Text style={styles.reviewRowLabel}>Workplace or School</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.workplaceOrSchool || 'Not provided'}</Text>
+                <Text style={styles.reviewRowLabel}>College Course</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.collegeCourse || 'Not provided'}</Text>
+                <Text style={styles.reviewRowLabel}>Certifications or Trainings</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.certificationsOrTrainings || 'Not provided'}</Text>
+                <Text style={styles.reviewRowLabel}>Hobbies and Interests</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.hobbiesAndInterests || 'Not provided'}</Text>
+                <Text style={styles.reviewRowLabel}>Special Skills</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.specialSkills || 'Not provided'}</Text>
+                <Text style={styles.reviewRowLabel}>Video Briefing URL</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.videoBriefingUrl || 'Not provided'}</Text>
+
+                <Text style={styles.reviewSectionTitle}>Affiliations</Text>
+                <Text style={styles.reviewRowValue}>
+                  {reviewTarget.record.affiliations && reviewTarget.record.affiliations.length > 0
+                    ? reviewTarget.record.affiliations
+                        .map(affiliation => `${affiliation.organization || 'Organization not provided'} - ${affiliation.position || 'Position not provided'}`)
+                        .join('\n')
+                    : 'No affiliations provided.'}
+                </Text>
+              </>
+            ) : null}
+          </ScrollView>
+
+          {reviewTarget ? (
+            <View style={styles.reviewActionFooter}>
+              {reviewTarget.type === 'partner' ? (
+                <>
+                  {reviewTarget.record.verificationStatus !== 'Verified' ? (
+                    <TouchableOpacity
+                      style={[styles.requestActionButton, styles.verifyActionButton]}
+                      onPress={() => handleVerifyPartner(reviewTarget.record.id)}
+                    >
+                      <Text style={styles.requestActionButtonText}>Verify</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                  <TouchableOpacity
+                    style={[styles.requestActionButton, styles.approveActionButton]}
+                    onPress={() => handleReviewPartner(reviewTarget.record.id, 'Approved')}
+                  >
+                    <Text style={styles.requestActionButtonText}>Approve</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.requestActionButton, styles.rejectActionButton]}
+                    onPress={() => handleReviewPartner(reviewTarget.record.id, 'Rejected')}
+                  >
+                    <Text style={styles.requestActionButtonText}>Reject</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <>
+                  <TouchableOpacity
+                    style={[styles.requestActionButton, styles.approveActionButton]}
+                    onPress={() => handleReviewVolunteer(reviewTarget.record.id, 'Approved')}
+                  >
+                    <Text style={styles.requestActionButtonText}>Approve</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.requestActionButton, styles.rejectActionButton]}
+                    onPress={() => handleReviewVolunteer(reviewTarget.record.id, 'Rejected')}
+                  >
+                    <Text style={styles.requestActionButtonText}>Reject</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+          ) : null}
         </View>
       </Modal>
     </View>
@@ -520,9 +939,30 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   userMeta: {
-    marginTop: 3,
     fontSize: 12,
     color: '#64748b',
+    marginTop: 4,
+    lineHeight: 18,
+  },
+  linkedRecordBox: {
+    marginTop: 8,
+    backgroundColor: '#f8fafc',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  linkedRecordTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  linkedRecordMeta: {
+    marginTop: 4,
+    fontSize: 11,
+    color: '#475569',
+    lineHeight: 16,
   },
   roleBadge: {
     backgroundColor: '#ecfdf5',
@@ -647,5 +1087,139 @@ const styles = StyleSheet.create({
   },
   roleOptionTextActive: {
     color: '#fff',
+  },
+  requestSection: {
+    marginTop: 16,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    marginHorizontal: 16,
+    marginBottom: 8,
+  },
+  requestSectionTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginBottom: 4,
+  },
+  requestSectionSubtitle: {
+    fontSize: 14,
+    color: '#64748b',
+    marginBottom: 16,
+  },
+  requestEmptyText: {
+    fontSize: 14,
+    color: '#64748b',
+    fontStyle: 'italic',
+  },
+  requestCard: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  requestHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 12,
+  },
+  requestName: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginBottom: 4,
+  },
+  requestMeta: {
+    fontSize: 12,
+    color: '#64748b',
+    lineHeight: 18,
+  },
+  requestBadge: {
+    marginLeft: 'auto',
+    backgroundColor: '#fef3c7',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  requestBadgePending: {
+    backgroundColor: '#fef3c7',
+  },
+  requestBadgeRejected: {
+    backgroundColor: '#fee2e2',
+  },
+  requestBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#92400e',
+    textTransform: 'uppercase',
+  },
+  requestBadgeTextRejected: {
+    color: '#b91c1c',
+  },
+  requestActionRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  requestActionButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  verifyActionButton: {
+    backgroundColor: '#dbeafe',
+  },
+  approveActionButton: {
+    backgroundColor: '#dcfce7',
+  },
+  rejectActionButton: {
+    backgroundColor: '#fee2e2',
+  },
+  reviewActionButton: {
+    backgroundColor: '#e0f2fe',
+  },
+  requestActionButtonText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  modalHeaderSpacer: {
+    width: 48,
+  },
+  reviewContent: {
+    paddingBottom: 24,
+  },
+  reviewSectionTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginTop: 8,
+    marginBottom: 10,
+  },
+  reviewRowLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#475569',
+    marginTop: 8,
+  },
+  reviewRowValue: {
+    fontSize: 14,
+    color: '#0f172a',
+    lineHeight: 20,
+    marginTop: 4,
+  },
+  reviewActionFooter: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+    paddingTop: 8,
+    backgroundColor: '#fff',
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
   },
 });

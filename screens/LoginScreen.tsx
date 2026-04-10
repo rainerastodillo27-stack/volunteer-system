@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { View, TextInput, TouchableOpacity, Text, StyleSheet, Alert, ActivityIndicator, Platform, ScrollView, Modal } from 'react-native';
+import { Picker } from '@react-native-picker/picker';
 import { MaterialIcons } from '@expo/vector-icons';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import {
   createUserAccount,
   getAllUsers,
@@ -15,6 +17,14 @@ import AppLogo from '../components/AppLogo';
 import InlineLoadError from '../components/InlineLoadError';
 import { AdvocacyFocus, NVCSector, PartnerSectorType, User, UserRole, UserType } from '../models/types';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
+import {
+  composePhilippineAddress,
+  getBarangaysByCity,
+  getCitiesByRegion,
+  PHBarangay,
+  PHCityMunicipality,
+  PHRegions,
+} from '../utils/philippineAddressData';
 
 const BACKEND_HEALTH_TIMEOUT_MS = 20000;
 const BACKEND_HEALTH_POLL_MS = 10000;
@@ -24,10 +34,14 @@ type SignupVolunteerSheetState = {
   dateOfBirth: string;
   civilStatus: string;
   homeAddress: string;
+  homeAddressRegion: string;
+  homeAddressCityMunicipality: string;
+  homeAddressBarangay: string;
   occupation: string;
   workplaceOrSchool: string;
   collegeCourse: string;
   certificationsOrTrainings: string;
+  videoBriefingUrl: string;
   hobbiesAndInterests: string;
   specialSkills: string;
   affiliationOrg1: string;
@@ -40,6 +54,7 @@ type SignupPartnerApplicationState = {
   organizationName: string;
   sectorType: PartnerSectorType;
   dswdAccreditationNo: string;
+  secRegistrationNo: string;
   advocacyFocus: AdvocacyFocus[];
 };
 
@@ -50,10 +65,14 @@ function createEmptySignupVolunteerSheet(): SignupVolunteerSheetState {
     dateOfBirth: '',
     civilStatus: '',
     homeAddress: '',
+    homeAddressRegion: '',
+    homeAddressCityMunicipality: '',
+    homeAddressBarangay: '',
     occupation: '',
     workplaceOrSchool: '',
     collegeCourse: '',
     certificationsOrTrainings: '',
+    videoBriefingUrl: '',
     hobbiesAndInterests: '',
     specialSkills: '',
     affiliationOrg1: '',
@@ -69,6 +88,7 @@ function createEmptySignupPartnerApplication(): SignupPartnerApplicationState {
     organizationName: '',
     sectorType: 'NGO',
     dswdAccreditationNo: '',
+    secRegistrationNo: '',
     advocacyFocus: [],
   };
 }
@@ -113,6 +133,12 @@ export default function LoginScreen() {
   const [backendStatus, setBackendStatus] = useState<'checking' | 'online' | 'offline'>('checking');
   const [backendMessage, setBackendMessage] = useState('Checking backend connection...');
   const [savedAccounts, setSavedAccounts] = useState<User[]>([]);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [selectedRegionCode, setSelectedRegionCode] = useState('');
+  const [selectedCityCode, setSelectedCityCode] = useState('');
+  const [filteredCities, setFilteredCities] = useState<PHCityMunicipality[]>([]);
+  const [filteredBarangays, setFilteredBarangays] = useState<PHBarangay[]>([]);
   const { login } = useAuth();
   const mountedRef = useRef(true);
 
@@ -124,6 +150,24 @@ export default function LoginScreen() {
       mountedRef.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    const composedHomeAddress = composePhilippineAddress(
+      signupVolunteerSheet.homeAddressRegion,
+      signupVolunteerSheet.homeAddressCityMunicipality,
+      signupVolunteerSheet.homeAddressBarangay
+    );
+
+    setSignupVolunteerSheet(current =>
+      current.homeAddress === composedHomeAddress
+        ? current
+        : { ...current, homeAddress: composedHomeAddress }
+    );
+  }, [
+    signupVolunteerSheet.homeAddressBarangay,
+    signupVolunteerSheet.homeAddressCityMunicipality,
+    signupVolunteerSheet.homeAddressRegion,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -156,7 +200,7 @@ export default function LoginScreen() {
         }
       } catch (error) {
         if (!cancelled && mountedRef.current) {
-          const defaultMessage = `Database backend unavailable at ${getApiBaseUrl()}. Check the backend process and Supabase connection.`;
+          const defaultMessage = `Database backend unavailable at ${getApiBaseUrl()}. Check the backend process and Supabase connection, then run npm run all:bg or npm run all.`;
           const fallbackMessage = getRequestErrorMessage(error, defaultMessage, {
             backendUrl: getApiBaseUrl(),
           });
@@ -282,7 +326,10 @@ export default function LoginScreen() {
           ? 'Database Unavailable'
           : message.includes('rejected')
           ? 'Application Rejected'
-          : message.includes('organization application') || message.includes('partner account')
+          : message.includes('pending admin approval') ||
+            message.includes('organization application') ||
+            message.includes('partner account') ||
+            message.includes('volunteer account')
           ? 'Application Pending'
           : 'Login Error';
       showLoginError(title, message);
@@ -304,6 +351,10 @@ export default function LoginScreen() {
     setSignupRole('volunteer');
     setSignupPartnerApplication(createEmptySignupPartnerApplication());
     setSignupVolunteerSheet(createEmptySignupVolunteerSheet());
+    setSelectedRegionCode('');
+    setSelectedCityCode('');
+    setFilteredCities([]);
+    setFilteredBarangays([]);
     setSignupAcceptedCommitment(false);
   };
 
@@ -367,6 +418,9 @@ export default function LoginScreen() {
         !signupVolunteerSheet.gender.trim() ||
         !signupVolunteerSheet.dateOfBirth.trim() ||
         !signupVolunteerSheet.civilStatus.trim() ||
+        !signupVolunteerSheet.homeAddressRegion.trim() ||
+        !signupVolunteerSheet.homeAddressCityMunicipality.trim() ||
+        !signupVolunteerSheet.homeAddressBarangay.trim() ||
         !signupVolunteerSheet.homeAddress.trim() ||
         !signupVolunteerSheet.occupation.trim() ||
         !signupVolunteerSheet.workplaceOrSchool.trim()
@@ -408,6 +462,7 @@ export default function LoginScreen() {
                 organizationName: signupPartnerApplication.organizationName.trim(),
                 sectorType: signupPartnerApplication.sectorType,
                 dswdAccreditationNo: signupPartnerApplication.dswdAccreditationNo.trim(),
+                secRegistrationNo: signupPartnerApplication.secRegistrationNo.trim(),
                 advocacyFocus: signupPartnerApplication.advocacyFocus,
               }
             : undefined,
@@ -418,6 +473,9 @@ export default function LoginScreen() {
                 dateOfBirth: signupVolunteerSheet.dateOfBirth.trim(),
                 civilStatus: signupVolunteerSheet.civilStatus.trim(),
                 homeAddress: signupVolunteerSheet.homeAddress.trim(),
+                homeAddressRegion: signupVolunteerSheet.homeAddressRegion.trim(),
+                homeAddressCityMunicipality: signupVolunteerSheet.homeAddressCityMunicipality.trim(),
+                homeAddressBarangay: signupVolunteerSheet.homeAddressBarangay.trim(),
                 occupation: signupVolunteerSheet.occupation.trim(),
                 workplaceOrSchool: signupVolunteerSheet.workplaceOrSchool.trim(),
                 collegeCourse: signupVolunteerSheet.collegeCourse.trim(),
@@ -425,6 +483,7 @@ export default function LoginScreen() {
                   signupVolunteerSheet.certificationsOrTrainings.trim(),
                 hobbiesAndInterests: signupVolunteerSheet.hobbiesAndInterests.trim(),
                 specialSkills: signupVolunteerSheet.specialSkills.trim(),
+                videoBriefingUrl: signupVolunteerSheet.videoBriefingUrl.trim(),
                 affiliations: [
                   {
                     organization: signupVolunteerSheet.affiliationOrg1.trim(),
@@ -444,10 +503,10 @@ export default function LoginScreen() {
       setShowSignupModal(false);
       resetSignupForm();
       Alert.alert(
-        signupRole === 'partner' ? 'Application Submitted' : 'Account Created',
+        signupRole === 'partner' ? 'Application Submitted' : 'Application Submitted',
         signupRole === 'partner'
           ? 'Your partner application was submitted. An admin must verify and approve it before partner login is unlocked.'
-          : 'Your account has been registered and will appear in admin user management.'
+          : 'Your volunteer account was submitted. An admin must approve it before volunteer login is unlocked.'
       );
     } catch (error) {
       Alert.alert(
@@ -790,10 +849,20 @@ export default function LoginScreen() {
 
                   <TextInput
                     style={styles.input}
-                    placeholder="DSWD Accreditation No."
+                    placeholder="DSWD Registration No. e.g. DSWD-SB-SP-00001-2026"
                     placeholderTextColor="#999"
                     value={signupPartnerApplication.dswdAccreditationNo}
                     onChangeText={value => updateSignupPartnerApplication('dswdAccreditationNo', value)}
+                    autoCapitalize="characters"
+                    editable={!signupLoading}
+                  />
+
+                  <TextInput
+                    style={styles.input}
+                    placeholder="SEC Registration No. e.g. CN201234567"
+                    placeholderTextColor="#999"
+                    value={signupPartnerApplication.secRegistrationNo}
+                    onChangeText={value => updateSignupPartnerApplication('secRegistrationNo', value)}
                     autoCapitalize="characters"
                     editable={!signupLoading}
                   />
@@ -836,38 +905,128 @@ export default function LoginScreen() {
               {signupRole === 'volunteer' && (
                 <>
                   <Text style={styles.modalSectionLabel}>NVC Membership Information Sheet</Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Gender"
-                    placeholderTextColor="#999"
-                    value={signupVolunteerSheet.gender}
-                    onChangeText={value => updateSignupVolunteerSheet('gender', value)}
-                    editable={!signupLoading}
-                  />
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Date of Birth"
-                    placeholderTextColor="#999"
-                    value={signupVolunteerSheet.dateOfBirth}
-                    onChangeText={value => updateSignupVolunteerSheet('dateOfBirth', value)}
-                    editable={!signupLoading}
-                  />
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Civil Status"
-                    placeholderTextColor="#999"
-                    value={signupVolunteerSheet.civilStatus}
-                    onChangeText={value => updateSignupVolunteerSheet('civilStatus', value)}
-                    editable={!signupLoading}
-                  />
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Home Address"
-                    placeholderTextColor="#999"
-                    value={signupVolunteerSheet.homeAddress}
-                    onChangeText={value => updateSignupVolunteerSheet('homeAddress', value)}
-                    editable={!signupLoading}
-                  />
+                  
+                  <Text style={styles.modalSectionSubLabel}>Gender</Text>
+                  <View style={styles.genderGrid}>
+                    {['Male', 'Female', 'Other'].map(gender => (
+                      <TouchableOpacity
+                        key={gender}
+                        style={[styles.genderChip, signupVolunteerSheet.gender === gender && styles.genderChipActive]}
+                        onPress={() => updateSignupVolunteerSheet('gender', gender)}
+                        disabled={signupLoading}
+                      >
+                        <Text style={[styles.genderChipText, signupVolunteerSheet.gender === gender && styles.genderChipTextActive]}>
+                          {gender}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+
+                  <Text style={styles.modalSectionSubLabel}>Date of Birth</Text>
+                  <TouchableOpacity
+                    style={[styles.button, styles.datePickerButton]}
+                    onPress={() => setShowDatePicker(true)}
+                    disabled={signupLoading}
+                  >
+                    <MaterialIcons name="calendar-today" size={20} color="#fff" />
+                    <Text style={styles.datePickerButtonText}>
+                      {signupVolunteerSheet.dateOfBirth
+                        ? new Date(signupVolunteerSheet.dateOfBirth).toLocaleDateString('en-US', {
+                          year: 'numeric',
+                          month: 'long',
+                          day: 'numeric',
+                        })
+                        : 'Select Date of Birth'}
+                    </Text>
+                  </TouchableOpacity>
+
+                  <Text style={styles.modalSectionSubLabel}>Civil Status</Text>
+                  <View style={styles.statusGrid}>
+                    {['Single', 'Married', 'Widowed', 'Separated', 'Domestic Partnership'].map(status => (
+                      <TouchableOpacity
+                        key={status}
+                        style={[styles.statusChip, signupVolunteerSheet.civilStatus === status && styles.statusChipActive]}
+                        onPress={() => updateSignupVolunteerSheet('civilStatus', status)}
+                        disabled={signupLoading}
+                      >
+                        <Text style={[styles.statusChipText, signupVolunteerSheet.civilStatus === status && styles.statusChipTextActive]}>
+                          {status}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+
+                  <Text style={styles.modalSectionLabel}>Home Address (Philippines)</Text>
+
+                  <Text style={styles.modalSectionSubLabel}>Region</Text>
+                  <View style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={selectedRegionCode}
+                      onValueChange={(itemValue: string) => {
+                        const selectedRegion = PHRegions.find(region => region.code === itemValue);
+                        updateSignupVolunteerSheet('homeAddressRegion', selectedRegion?.name || '');
+                        updateSignupVolunteerSheet('homeAddressCityMunicipality', '');
+                        updateSignupVolunteerSheet('homeAddressBarangay', '');
+                        setSelectedRegionCode(itemValue);
+                        setSelectedCityCode('');
+                        setFilteredCities(getCitiesByRegion(itemValue));
+                        setFilteredBarangays([]);
+                      }}
+                      enabled={!signupLoading}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Select Region..." value="" />
+                      {PHRegions.map(region => (
+                        <Picker.Item key={region.code} label={region.name} value={region.code} />
+                      ))}
+                    </Picker>
+                  </View>
+
+                  <Text style={styles.modalSectionSubLabel}>City / Municipality</Text>
+                  <View style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={selectedCityCode}
+                      onValueChange={(itemValue: string) => {
+                        const selectedCity = filteredCities.find(city => city.code === itemValue);
+                        updateSignupVolunteerSheet(
+                          'homeAddressCityMunicipality',
+                          selectedCity?.displayName || ''
+                        );
+                        updateSignupVolunteerSheet('homeAddressBarangay', '');
+                        setSelectedCityCode(itemValue);
+                        setFilteredBarangays(getBarangaysByCity(itemValue));
+                      }}
+                      enabled={!signupLoading && selectedRegionCode !== ''}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Select City/Municipality..." value="" />
+                      {filteredCities.map(city => (
+                        <Picker.Item key={city.code} label={city.displayName} value={city.code} />
+                      ))}
+                    </Picker>
+                  </View>
+
+                  <Text style={styles.modalSectionSubLabel}>Barangay</Text>
+                  <View style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={signupVolunteerSheet.homeAddressBarangay}
+                      onValueChange={(itemValue: string) => updateSignupVolunteerSheet('homeAddressBarangay', itemValue)}
+                      enabled={!signupLoading && selectedCityCode !== ''}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Select Barangay..." value="" />
+                      {filteredBarangays.map(barangay => (
+                        <Picker.Item
+                          key={barangay.code}
+                          label={barangay.displayName}
+                          value={barangay.name}
+                        />
+                      ))}
+                    </Picker>
+                  </View>
+
+
+                  <Text style={styles.modalSectionLabel}>Professional Information</Text>
                   <TextInput
                     style={styles.input}
                     placeholder="Occupation"
@@ -914,6 +1073,29 @@ export default function LoginScreen() {
                     placeholderTextColor="#999"
                     value={signupVolunteerSheet.specialSkills}
                     onChangeText={value => updateSignupVolunteerSheet('specialSkills', value)}
+                    editable={!signupLoading}
+                  />
+
+                  <Text style={styles.modalSectionLabel}>Certifications & Media</Text>
+                  
+                  <TouchableOpacity
+                    style={[styles.button, styles.uploadButton, signupLoading && { opacity: 0.6 }]}
+                    onPress={() => {
+                      // TODO: Integrate with expo-image-picker for certificate uploads
+                      Alert.alert('Certificate Upload', 'File picker to be implemented with expo-image-picker');
+                    }}
+                    disabled={signupLoading}
+                  >
+                    <Text style={styles.uploadButtonText}>📎 Upload Certificates</Text>
+                  </TouchableOpacity>
+
+                  <Text style={styles.modalSectionSubLabel}>Video Briefing</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Video or audio briefing link (URL)"
+                    placeholderTextColor="#999"
+                    value={signupVolunteerSheet.videoBriefingUrl}
+                    onChangeText={value => updateSignupVolunteerSheet('videoBriefingUrl', value)}
                     editable={!signupLoading}
                   />
 
@@ -1030,6 +1212,37 @@ export default function LoginScreen() {
             </View>
           </View>
         </View>
+        
+        {/* Date Picker Modal */}
+        {showDatePicker && (
+          <DateTimePicker
+            value={selectedDate}
+            mode="date"
+            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+            onChange={(event, date) => {
+              if (Platform.OS === 'android') {
+                setShowDatePicker(false);
+              }
+              if (date) {
+                setSelectedDate(date);
+                const year = date.getFullYear();
+                const month = String(date.getMonth() + 1).padStart(2, '0');
+                const day = String(date.getDate()).padStart(2, '0');
+                updateSignupVolunteerSheet('dateOfBirth', `${year}-${month}-${day}`);
+              }
+            }}
+            maximumDate={new Date()}
+          />
+        )}
+        
+        {/* iOS Date Picker Close Button */}
+        {Platform.OS === 'ios' && showDatePicker && (
+          <View style={styles.iosDatePickerActions}>
+            <TouchableOpacity onPress={() => setShowDatePicker(false)}>
+              <Text style={styles.iosDatePickerButton}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </Modal>
     </ScrollView>
   );
@@ -1429,5 +1642,125 @@ const styles = StyleSheet.create({
     marginTop: 16,
     textAlign: 'center',
   },
+  textArea: {
+    minHeight: 80,
+    paddingVertical: 10,
+    textAlignVertical: 'top',
+  },
+  uploadButton: {
+    backgroundColor: '#dbeafe',
+    borderWidth: 1,
+    borderColor: '#0ea5e9',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  uploadButtonText: {
+    color: '#0369a1',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  locationField: {
+    marginBottom: 0,
+  },
+  phLocationInput: {
+    marginBottom: 12,
+  },
+  genderGrid: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 12,
+  },
+  genderChip: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: '#e2e8f0',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
+  genderChipActive: {
+    backgroundColor: '#4CAF50',
+    borderColor: '#2e7d32',
+  },
+  genderChipText: {
+    color: '#475569',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  genderChipTextActive: {
+    color: '#fff',
+  },
+  statusGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 12,
+  },
+  statusChip: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    backgroundColor: '#e2e8f0',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
+  statusChipActive: {
+    backgroundColor: '#4CAF50',
+    borderColor: '#2e7d32',
+  },
+  statusChipText: {
+    color: '#475569',
+    fontWeight: '600',
+    fontSize: 13,
+  },
+  statusChipTextActive: {
+    color: '#fff',
+  },
+  datePickerButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    backgroundColor: '#3b82f6',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    marginBottom: 12,
+  },
+  datePickerButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  pickerContainer: {
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 10,
+    overflow: 'hidden',
+    marginBottom: 12,
+    backgroundColor: '#f8fafc',
+  },
+  picker: {
+    height: 50,
+    color: '#334155',
+  },
+  iosDatePickerActions: {
+    backgroundColor: '#e2e8f0',
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  iosDatePickerButton: {
+    color: '#4CAF50',
+    fontWeight: '600',
+    fontSize: 16,
+    paddingHorizontal: 16,
+  },
 });
+
 

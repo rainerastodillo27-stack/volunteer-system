@@ -10,17 +10,17 @@ import PartnerDashboardScreen from '../screens/PartnerDashboardScreen';
 import ProjectsScreen from '../screens/ProjectsScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import SystemSettingsScreen from '../screens/SystemSettingsScreen';
-import PartnerOnboardingScreen from '../screens/PartnerOnboardingScreen';
 import ProjectLifecycleScreen from '../screens/ProjectLifecycleScreen';
 import MappingScreen from '../screens/MappingScreen';
 import CommunicationHubScreen from '../screens/CommunicationHubScreen';
 import UserManagementScreen from '../screens/UserManagementScreen';
 import VolunteerManagementScreen from '../screens/VolunteerManagementScreen';
+import PartnerManagementScreen from '../screens/PartnerManagementScreen';
 import { getMessagesForUser, subscribeToMessages } from '../models/storage';
 
 export type TabParamList = {
   Dashboard: undefined;
-  Partners: undefined;
+  Partners: { partnerId?: string } | undefined;
   Projects: { projectId?: string } | undefined;
   Lifecycle: { projectId?: string } | undefined;
   Volunteers: { volunteerId?: string } | undefined;
@@ -98,6 +98,7 @@ function SidebarCapture({ onPropsChange, ...tabBarProps }: SidebarCaptureProps) 
 function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle }: SidebarProps) {
   const systemsRoutes = state.routes.filter(
     route =>
+      route.name !== 'Partners' &&
       route.name !== 'Volunteers' &&
       route.name !== 'Users' &&
       route.name !== 'Settings' &&
@@ -105,6 +106,7 @@ function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle }: 
   );
   const settingsRoutes = state.routes.filter(
     route =>
+      route.name === 'Partners' ||
       route.name === 'Volunteers' ||
       route.name === 'Users' ||
       route.name === 'Settings' ||
@@ -333,14 +335,6 @@ export default function TabNavigator() {
         options={{ title: dashboardTitle, tabBarLabel: dashboardTitle }}
       />
 
-      {showPartnersTab && (
-        <Tab.Screen
-          name="Partners"
-          component={PartnerOnboardingScreen}
-          options={{ title: 'Partners' }}
-        />
-      )}
-
       <Tab.Screen
         name="Projects"
         component={ProjectsScreen}
@@ -352,6 +346,14 @@ export default function TabNavigator() {
           name="Lifecycle"
           component={ProjectLifecycleScreen}
           options={{ title: 'Lifecycle' }}
+        />
+      )}
+
+      {showPartnersTab && (
+        <Tab.Screen
+          name="Partners"
+          component={PartnerManagementScreen}
+          options={{ title: 'Partner Management' }}
         />
       )}
 

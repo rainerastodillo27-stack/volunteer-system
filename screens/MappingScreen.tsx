@@ -8,6 +8,7 @@ import {
   Modal,
   ActivityIndicator,
   Platform,
+  Image,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
@@ -18,11 +19,11 @@ import { PartnerEventCheckIn, PartnerReport, Project } from '../models/types';
 import {
   getAllPartnerEventCheckIns,
   getAllPartnerReports,
-  getAllProjects,
+  getProjectsScreenSnapshot,
   subscribeToStorageChanges,
 } from '../models/storage';
 import { navigateToAvailableRoute } from '../utils/navigation';
-import { getInitialProjectRegion, getProjectMarkerColor } from '../utils/projectMap';
+import { getInitialProjectRegion, getProjectMarkerColor, getPrimaryProjectImageSource } from '../utils/projectMap';
 import { getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
@@ -40,23 +41,55 @@ export default function MappingScreen({ navigation }: any) {
 
   useEffect(() => {
     void loadProjects();
-  }, []);
+  }, [user]);
 
   useEffect(() => {
-    return subscribeToStorageChanges(['projects', 'partnerEventCheckIns', 'partnerReports'], () => {
-      void loadProjects();
-    });
-  }, []);
+    return subscribeToStorageChanges(
+      ['projects', 'partnerEventCheckIns', 'partnerReports', 'partnerProjectApplications', 'volunteerProjectJoins'],
+      () => {
+        void loadProjects();
+      }
+    );
+  }, [user]);
 
-  // Loads all projects so they can be plotted on the map.
+  // Loads map data and narrows project visibility to records the current user joined.
   const loadProjects = async () => {
     try {
-      const allProjects = await getAllProjects();
-      const allCheckIns = await getAllPartnerEventCheckIns();
-      const allReports = await getAllPartnerReports();
-      setProjects(allProjects);
-      setPartnerCheckIns(allCheckIns);
-      setPartnerReports(allReports);
+      const [snapshot, allCheckIns, allReports] = await Promise.all([
+        getProjectsScreenSnapshot(user),
+        getAllPartnerEventCheckIns(),
+        getAllPartnerReports(),
+      ]);
+
+      const approvedPartnerProjectIds = new Set(
+        snapshot.partnerApplications
+          .filter(application => application.status === 'Approved')
+          .map(application => application.projectId)
+      );
+      const joinedVolunteerProjectIds = new Set(
+        snapshot.volunteerJoinRecords.map(record => record.projectId)
+      );
+
+      const visibleProjects =
+        user?.role === 'partner'
+          ? snapshot.projects.filter(
+              project =>
+                (project.joinedUserIds || []).includes(user.id) ||
+                approvedPartnerProjectIds.has(project.id)
+            )
+          : user?.role === 'volunteer'
+          ? snapshot.projects.filter(
+              project =>
+                (project.joinedUserIds || []).includes(user.id) ||
+                joinedVolunteerProjectIds.has(project.id)
+            )
+          : snapshot.projects;
+
+      const visibleProjectIds = new Set(visibleProjects.map(project => project.id));
+
+      setProjects(visibleProjects);
+      setPartnerCheckIns(allCheckIns.filter(checkIn => visibleProjectIds.has(checkIn.projectId)));
+      setPartnerReports(allReports.filter(report => visibleProjectIds.has(report.projectId)));
       setLoadError(null);
       setLoading(false);
     } catch (error) {
@@ -115,7 +148,9 @@ export default function MappingScreen({ navigation }: any) {
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Live Command Center</Text>
         <Text style={styles.headerSubtitle}>
-          Projects, partner GPS check-ins, and field uploads in Negros Occidental
+          {user?.role === 'admin'
+            ? 'Projects, partner GPS check-ins, and field uploads in Negros Occidental'
+            : 'Pins are limited to projects you joined in Negros Occidental'}
         </Text>
       </View>
 
@@ -264,6 +299,22 @@ export default function MappingScreen({ navigation }: any) {
                   </View>
                 </View>
 
+                {(() => {
+                  const matchedPhotoReport = partnerReports.find(
+                    report => report.projectId === selectedProject.id && report.mediaFile && isImageMediaUri(report.mediaFile)
+                  );
+                  if (!matchedPhotoReport?.mediaFile) {
+                    return null;
+                  }
+                  return (
+                    <Image
+                      source={{ uri: matchedPhotoReport.mediaFile }}
+                      style={styles.projectPhoto}
+                      resizeMode="cover"
+                    />
+                  );
+                })()}
+
                 <TouchableOpacity style={styles.viewDetailsButton} onPress={handleOpenProjectDetails}>
                   <Text style={styles.viewDetailsButtonText}>View Full Details</Text>
                 </TouchableOpacity>
@@ -383,6 +434,13 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#333',
     marginBottom: 12,
+  },
+  projectPhoto: {
+    width: '100%',
+    height: 180,
+    borderRadius: 14,
+    marginBottom: 20,
+    backgroundColor: '#e5e7eb',
   },
   description: {
     fontSize: 14,

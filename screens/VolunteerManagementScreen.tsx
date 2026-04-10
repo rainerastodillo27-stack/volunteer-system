@@ -20,8 +20,8 @@ import {
   getAllProjects,
   getVolunteerCompletedProjectIds,
   getAllVolunteerTimeLogs,
-  saveVolunteer,
   getVolunteerProjectMatches,
+  saveVolunteer,
   subscribeToStorageChanges,
 } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
@@ -517,6 +517,20 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                   {log.note ? (
                     <Text style={styles.timeLogNote}>Note: {log.note}</Text>
                   ) : null}
+                  {log.completionPhoto || log.completionReport ? (
+                    <>
+                      <Text style={styles.timeLogMeta}>
+                        Completion Proof: {log.completionPhoto ? 'Photo uploaded' : ''}
+                        {log.completionPhoto && log.completionReport ? ' and ' : ''}
+                        {log.completionReport ? 'Report submitted' : ''}
+                      </Text>
+                      {log.completionReport ? (
+                        <Text style={styles.timeLogProofText}>
+                          Report: {log.completionReport}
+                        </Text>
+                      ) : null}
+                    </>
+                  ) : null}
                 </View>
               );
             })
@@ -728,6 +742,8 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     );
   }
 
+  const sortedVolunteers = [...volunteers].sort((left, right) => left.name.localeCompare(right.name));
+
   return (
     <View style={styles.container}>
       <View style={styles.titleRow}>
@@ -758,7 +774,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
         ) : null}
       </View>
       <FlatList
-        data={volunteers}
+        data={sortedVolunteers}
         keyExtractor={vol => vol.id}
         renderItem={({ item: volunteer }) => (
           <TouchableOpacity
@@ -836,6 +852,24 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
+  registrationSummaryCard: {
+    backgroundColor: '#fff7ed',
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#fed7aa',
+  },
+  registrationSummaryTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#9a3412',
+  },
+  registrationSummaryText: {
+    marginTop: 4,
+    fontSize: 12,
+    color: '#7c2d12',
+    lineHeight: 18,
+  },
   listContent: {
     paddingHorizontal: 16,
     paddingVertical: 8,
@@ -903,6 +937,27 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#1f2937',
   },
+  registrationBadge: {
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    marginTop: 8,
+  },
+  registrationBadgePending: {
+    backgroundColor: '#fef3c7',
+  },
+  registrationBadgeApproved: {
+    backgroundColor: '#dcfce7',
+  },
+  registrationBadgeRejected: {
+    backgroundColor: '#fee2e2',
+  },
+  registrationBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#1f2937',
+  },
   statsGrid: {
     flexDirection: 'row',
     gap: 12,
@@ -950,6 +1005,31 @@ const styles = StyleSheet.create({
   },
   editButton: {
     padding: 8,
+  },
+  reviewActionRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 14,
+  },
+  reviewActionButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderRadius: 10,
+    paddingVertical: 12,
+  },
+  reviewApproveButton: {
+    backgroundColor: '#16a34a',
+  },
+  reviewRejectButton: {
+    backgroundColor: '#dc2626',
+  },
+  reviewActionButtonText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
   },
   availabilityInfo: {
     gap: 12,
@@ -1045,6 +1125,12 @@ const styles = StyleSheet.create({
     color: '#475569',
     marginTop: 6,
     fontStyle: 'italic',
+  },
+  timeLogProofText: {
+    fontSize: 12,
+    color: '#334155',
+    marginTop: 6,
+    lineHeight: 18,
   },
   projectItem: {
     flexDirection: 'row',
@@ -1196,6 +1282,24 @@ const styles = StyleSheet.create({
   },
   volunteerCardStatus: {
     marginTop: 6,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  listRegistrationBadge: {
+    marginTop: 8,
+  },
+  inlineReviewActions: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 10,
+  },
+  inlineReviewButton: {
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  inlineReviewButtonText: {
+    color: '#fff',
     fontSize: 11,
     fontWeight: '700',
   },

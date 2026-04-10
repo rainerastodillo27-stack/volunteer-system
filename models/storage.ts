@@ -10,6 +10,7 @@ import {
   UserType,
   Partner,
   Project,
+  ProjectInternalTask,
   Volunteer,
   Message,
   ProjectGroupMessage,
@@ -44,18 +45,20 @@ const STORAGE_KEYS = {
 
 const WEB_MESSAGE_SYNC_KEY = 'volcre:messages:updatedAt';
 const memoryStorageCache = new Map<string, unknown>();
+const sharedStorageCacheTimestamps = new Map<string, number>();
 let mockDataInitializationPromise: Promise<void> | null = null;
-// Supabase-backed storage reads can exceed 2.5s on some networks.
-// Keep this comfortably above the observed backend round-trip so web/mobile
-// prefer shared storage instead of silently falling back to stale local cache.
-const REMOTE_STORAGE_TIMEOUT_MS = 90000;
-const API_HEALTH_TIMEOUT_MS = 20000;
-const API_READY_RETRY_MS = 1500;
-const API_READY_MAX_ATTEMPTS = 8;
-const API_READY_CACHE_MS = 10000;
+// Shared reads should fail fast enough to keep the UI responsive when the
+// backend is slow or unavailable.
+const REMOTE_STORAGE_TIMEOUT_MS = 20000;
+const API_HEALTH_TIMEOUT_MS = 5000;
+const API_READY_RETRY_MS = 1000;
+const API_READY_MAX_ATTEMPTS = 4;
+const API_READY_CACHE_MS = 5000;
 const API_REQUEST_MAX_ATTEMPTS = 3;
 const API_REQUEST_RETRY_BASE_MS = 1500;
 const API_REQUEST_RETRY_MAX_MS = 6000;
+const SHARED_STORAGE_CACHE_TTL_MS = 3000;
+const STORAGE_CHANGE_POLL_INTERVAL_MS = 3000;
 const LOCAL_ONLY_STORAGE_KEYS = new Set([STORAGE_KEYS.CURRENT_USER]);
 const NEGROS_OCCIDENTAL_BOUNDS = {
   minLatitude: 9.85,
@@ -325,7 +328,9 @@ export function getApiBaseUrl(): string {
       return configuredWebBaseUrl.trim().replace(/\/$/, '');
     }
 
-    return 'http://127.0.0.1:8000';
+    const protocol = document.location.protocol || 'http:';
+    const host = document.location.hostname || '127.0.0.1';
+    return `${protocol}//${host}:8000`;
   }
 
   const configuredNativeBaseUrl = getExpoExtraValue('apiBaseUrl');
@@ -555,6 +560,45 @@ function isLocalOnlyStorageKey(key: string): boolean {
   return LOCAL_ONLY_STORAGE_KEYS.has(key);
 }
 
+function getFreshSharedStorageCacheValue<T>(
+  key: string
+): { hit: boolean; value: T | null } {
+  const cachedAt = sharedStorageCacheTimestamps.get(key);
+  if (cachedAt === undefined) {
+    return { hit: false, value: null };
+  }
+
+  if (Date.now() - cachedAt > SHARED_STORAGE_CACHE_TTL_MS) {
+    sharedStorageCacheTimestamps.delete(key);
+    memoryStorageCache.delete(key);
+    return { hit: false, value: null };
+  }
+
+  return {
+    hit: true,
+    value: (memoryStorageCache.get(key) as T | null) ?? null,
+  };
+}
+
+function setSharedStorageCacheValue<T>(key: string, value: T | null): void {
+  memoryStorageCache.set(key, value);
+  sharedStorageCacheTimestamps.set(key, Date.now());
+}
+
+function invalidateSharedStorageCache(keys?: string[]): void {
+  if (!keys) {
+    sharedStorageCacheTimestamps.clear();
+    return;
+  }
+
+  for (const key of keys) {
+    sharedStorageCacheTimestamps.delete(key);
+    if (!isLocalOnlyStorageKey(key)) {
+      memoryStorageCache.delete(key);
+    }
+  }
+}
+
 async function saveRemoteStorageItem<T>(key: string, value: T): Promise<void> {
   await fetchApiResponse(`/storage/${encodeURIComponent(key)}`, {
     method: 'PUT',
@@ -607,7 +651,14 @@ export async function getStorageItem<T>(key: string): Promise<T | null> {
   }
 
   try {
-    return await fetchRemoteStorageItem<T>(key);
+    const cachedValue = getFreshSharedStorageCacheValue<T>(key);
+    if (cachedValue.hit) {
+      return cachedValue.value;
+    }
+
+    const remoteValue = await fetchRemoteStorageItem<T>(key);
+    setSharedStorageCacheValue(key, remoteValue);
+    return remoteValue;
   } catch (error) {
     console.error(`Error reading shared ${key} from backend:`, error);
     throw error;
@@ -636,9 +687,26 @@ export async function getStorageItems(
   }
 
   try {
-    const remoteResults = await fetchRemoteStorageItems(sharedKeys);
+    const missingSharedKeys: string[] = [];
+
     for (const key of sharedKeys) {
-      results[key] = remoteResults[key] ?? null;
+      const cachedValue = getFreshSharedStorageCacheValue(key);
+      if (cachedValue.hit) {
+        results[key] = cachedValue.value;
+      } else {
+        missingSharedKeys.push(key);
+      }
+    }
+
+    if (missingSharedKeys.length === 0) {
+      return results;
+    }
+
+    const remoteResults = await fetchRemoteStorageItems(missingSharedKeys);
+    for (const key of missingSharedKeys) {
+      const value = remoteResults[key] ?? null;
+      setSharedStorageCacheValue(key, value);
+      results[key] = value;
     }
     return results;
   } catch (error) {
@@ -748,6 +816,7 @@ export async function setStorageItem<T>(key: string, value: T): Promise<void> {
 
   try {
     await saveRemoteStorageItem(key, value);
+    setSharedStorageCacheValue(key, value);
   } catch (error) {
     console.error(`Error saving shared ${key} to backend:`, error);
     throw error;
@@ -775,6 +844,9 @@ export function isValidDswdAccreditationNo(value: string): boolean {
 
 // Maps one advocacy focus into the existing project/partner category taxonomy.
 function getCategoryFromAdvocacyFocus(focuses: AdvocacyFocus[]): Partner['category'] {
+  if (focuses.includes('Disaster')) {
+    return 'Disaster';
+  }
   if (focuses.includes('Education')) {
     return 'Education';
   }
@@ -784,7 +856,7 @@ function getCategoryFromAdvocacyFocus(focuses: AdvocacyFocus[]): Partner['catego
   if (focuses.includes('Nutrition')) {
     return 'Nutrition';
   }
-  return 'Other';
+  return 'Disaster';
 }
 
 // Upgrades older partner records so the newer workflow can rely on required fields.
@@ -799,6 +871,7 @@ function normalizePartnerRecord(partner: Partner): Partner {
     category: derivedCategory,
     sectorType: partner.sectorType || 'NGO',
     dswdAccreditationNo: partner.dswdAccreditationNo?.trim().toUpperCase() || '',
+    secRegistrationNo: partner.secRegistrationNo?.trim().toUpperCase() || '',
     advocacyFocus,
     contactEmail: partner.contactEmail?.trim().toLowerCase() || '',
     contactPhone: partner.contactPhone?.trim() || '',
@@ -806,6 +879,173 @@ function normalizePartnerRecord(partner: Partner): Partner {
     verificationStatus:
       partner.verificationStatus ||
       (partner.status === 'Approved' ? 'Verified' : 'Pending'),
+  };
+}
+
+function buildSampleProjectTasks(project: Project): ProjectInternalTask[] {
+  const now = new Date().toISOString();
+  const createTask = (
+    idSuffix: string,
+    title: string,
+    description: string,
+    category: string,
+    priority: ProjectInternalTask['priority']
+  ): ProjectInternalTask => ({
+    id: `${project.id}-task-${idSuffix}`,
+    title,
+    description,
+    category,
+    priority,
+    status: 'Unassigned',
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const normalizedTitle = project.title.trim().toLowerCase();
+
+  if (normalizedTitle.includes('mingo for nutritional support')) {
+    return [
+      createTask(
+        'registration',
+        'Registration of the Kids',
+        'Handle child registration when the children are gathered in the common area before services begin.',
+        'Front Desk',
+        'High'
+      ),
+      createTask(
+        'assessment',
+        'Rapid Assessment Interviews',
+        'Conduct condensed caregiver interviews using the shortened assessment tool. Best assigned to senior volunteers who can follow the questionnaire closely.',
+        'Assessment',
+        'High'
+      ),
+      createTask(
+        'measurement',
+        'Measurement',
+        'Measure each child\'s height and weight accurately and prepare the values for encoding.',
+        'Health Screening',
+        'High'
+      ),
+      createTask(
+        'encoding',
+        'Encoding',
+        'Encode all assessment and measurement data into the project records for reporting and monitoring.',
+        'Data Encoding',
+        'Medium'
+      ),
+      createTask(
+        'photo-documentation',
+        'Photo Documentation',
+        'Manage the photo booth and capture child photos for growth tracking and enrollment validation.',
+        'Documentation',
+        'Medium'
+      ),
+      createTask(
+        'wellness-counseling',
+        'Wellness Counseling',
+        'Advise mothers or caregivers using previous data and follow-through questions about the child\'s progress. Best assigned to senior volunteers.',
+        'Counseling',
+        'High'
+      ),
+      createTask(
+        'entertainment',
+        'Entertainment',
+        'Lead child-friendly engagement activities while families wait and keep the common area organized.',
+        'Youth Engagement',
+        'Low'
+      ),
+      createTask(
+        'packing',
+        'Packing Activities',
+        'Assist with packing nutrition materials, supplies, or take-home items before and after distribution.',
+        'Operations',
+        'Medium'
+      ),
+    ];
+  }
+
+  if (project.programModule === 'Nutrition') {
+    return [
+      createTask('registration', 'Beneficiary Registration', 'Register participants and confirm attendance before the nutrition activity starts.', 'Front Desk', 'High'),
+      createTask('preparation', 'Nutrition Pack Preparation', 'Prepare food packs, supplements, or feeding materials for the service area.', 'Operations', 'High'),
+      createTask('monitoring', 'Growth Monitoring Support', 'Support measurements, queue management, and beneficiary monitoring during the activity.', 'Field Support', 'Medium'),
+      createTask('documentation', 'Documentation and Photos', 'Capture photos and activity notes for reporting and monitoring.', 'Documentation', 'Medium'),
+      createTask('cleanup', 'Site Wrap-Up', 'Help consolidate materials, clean the area, and verify remaining inventory.', 'Operations', 'Low'),
+    ];
+  }
+
+  if (project.programModule === 'Education') {
+    return [
+      createTask('registration', 'Learner Registration', 'Check in learners and guardians, confirm attendance, and guide them to the proper station.', 'Front Desk', 'High'),
+      createTask('materials', 'Learning Materials Setup', 'Prepare handouts, kits, and learning materials before the session begins.', 'Operations', 'Medium'),
+      createTask('facilitation', 'Facilitation Support', 'Assist the lead facilitator, manage transitions, and support small-group learning.', 'Program Support', 'High'),
+      createTask('attendance', 'Attendance and Notes Encoding', 'Encode attendance, outputs, and key observations after the session.', 'Data Encoding', 'Medium'),
+      createTask('documentation', 'Photo and Story Capture', 'Capture session highlights and beneficiary stories for reporting.', 'Documentation', 'Low'),
+    ];
+  }
+
+  if (project.programModule === 'Livelihood') {
+    return [
+      createTask('registration', 'Participant Sign-In', 'Manage participant sign-in and orient arrivals to the workshop flow.', 'Front Desk', 'High'),
+      createTask('materials', 'Workshop Materials Preparation', 'Prepare tools, consumables, and handouts required for the livelihood session.', 'Operations', 'High'),
+      createTask('support', 'Workshop Support', 'Assist facilitators during demonstrations, breakout work, or production activities.', 'Program Support', 'Medium'),
+      createTask('inventory', 'Inventory and Output Tracking', 'Track distributed materials and completed outputs from participants.', 'Inventory', 'Medium'),
+      createTask('documentation', 'Photo Documentation', 'Capture workshop activities and outputs for monitoring and reporting.', 'Documentation', 'Low'),
+    ];
+  }
+
+  return [
+    createTask('coordination', 'Field Coordination', 'Support the project lead with on-site coordination and participant flow.', 'Operations', 'High'),
+    createTask('logistics', 'Logistics Support', 'Prepare supplies, manage equipment, and keep the work area organized.', 'Operations', 'Medium'),
+    createTask('beneficiary', 'Beneficiary Assistance', 'Assist attendees, answer questions, and route them to the proper station.', 'Field Support', 'Medium'),
+    createTask('documentation', 'Documentation', 'Capture activity notes and photos for project monitoring.', 'Documentation', 'Low'),
+  ];
+}
+
+function normalizeProjectInternalTask(
+  task: ProjectInternalTask,
+  projectId: string
+): ProjectInternalTask {
+  const now = new Date().toISOString();
+  return {
+    ...task,
+    id: task.id || `${projectId}-task-${Date.now()}`,
+    title: task.title?.trim() || 'Untitled Task',
+    description: task.description?.trim() || '',
+    category: task.category?.trim() || 'General',
+    priority: task.priority || 'Medium',
+    status: task.status || (task.assignedVolunteerId ? 'Assigned' : 'Unassigned'),
+    assignedVolunteerId: task.assignedVolunteerId?.trim() || undefined,
+    assignedVolunteerName: task.assignedVolunteerName?.trim() || undefined,
+    createdAt: task.createdAt || now,
+    updatedAt: task.updatedAt || now,
+  };
+}
+
+function normalizeProjectRecord(project: Project): Project {
+  const normalizedTasks =
+    project.internalTasks && project.internalTasks.length > 0
+      ? project.internalTasks.map(task => normalizeProjectInternalTask(task, project.id))
+      : buildSampleProjectTasks(project);
+  const normalizedCategory =
+    (project.category as string) === 'Other'
+      ? 'Disaster'
+      : project.category || (project.programModule || 'Disaster');
+  const normalizedProgramModule =
+    project.programModule ||
+    ((project.category as string) === 'Other'
+      ? 'Disaster'
+      : (project.category as AdvocacyFocus | undefined)) ||
+    'Disaster';
+
+  return {
+    ...project,
+    category: normalizedCategory,
+    programModule: normalizedProgramModule,
+    joinedUserIds: project.joinedUserIds || [],
+    volunteers: project.volunteers || [],
+    statusUpdates: project.statusUpdates || [],
+    internalTasks: normalizedTasks,
   };
 }
 
@@ -822,6 +1062,7 @@ export async function createUserAccount(input: {
     organizationName: string;
     sectorType: PartnerSectorType;
     dswdAccreditationNo: string;
+    secRegistrationNo?: string;
     advocacyFocus: AdvocacyFocus[];
   };
   volunteerMembershipSheet?: {
@@ -829,12 +1070,16 @@ export async function createUserAccount(input: {
     dateOfBirth: string;
     civilStatus: string;
     homeAddress: string;
+    homeAddressRegion?: string;
+    homeAddressCityMunicipality?: string;
+    homeAddressBarangay?: string;
     occupation: string;
     workplaceOrSchool: string;
     collegeCourse?: string;
     certificationsOrTrainings?: string;
     hobbiesAndInterests?: string;
     specialSkills?: string;
+    videoBriefingUrl?: string;
     affiliations?: Array<{
       organization: string;
       position: string;
@@ -917,6 +1162,9 @@ export async function createUserAccount(input: {
       dateOfBirth: input.volunteerMembershipSheet?.dateOfBirth || '',
       civilStatus: input.volunteerMembershipSheet?.civilStatus || '',
       homeAddress: input.volunteerMembershipSheet?.homeAddress || '',
+      homeAddressRegion: input.volunteerMembershipSheet?.homeAddressRegion || '',
+      homeAddressCityMunicipality: input.volunteerMembershipSheet?.homeAddressCityMunicipality || '',
+      homeAddressBarangay: input.volunteerMembershipSheet?.homeAddressBarangay || '',
       occupation: input.volunteerMembershipSheet?.occupation || '',
       workplaceOrSchool: input.volunteerMembershipSheet?.workplaceOrSchool || '',
       collegeCourse: input.volunteerMembershipSheet?.collegeCourse || '',
@@ -924,7 +1172,9 @@ export async function createUserAccount(input: {
         input.volunteerMembershipSheet?.certificationsOrTrainings || '',
       hobbiesAndInterests: input.volunteerMembershipSheet?.hobbiesAndInterests || '',
       specialSkills: input.volunteerMembershipSheet?.specialSkills || '',
+      videoBriefingUrl: input.volunteerMembershipSheet?.videoBriefingUrl || '',
       affiliations: input.volunteerMembershipSheet?.affiliations || [],
+      registrationStatus: 'Pending',
       createdAt,
     });
   }
@@ -938,6 +1188,7 @@ export async function createUserAccount(input: {
       category: getCategoryFromAdvocacyFocus(input.partnerRegistration.advocacyFocus),
       sectorType: input.partnerRegistration.sectorType,
       dswdAccreditationNo: input.partnerRegistration.dswdAccreditationNo.trim().toUpperCase(),
+      secRegistrationNo: input.partnerRegistration.secRegistrationNo?.trim().toUpperCase() || '',
       advocacyFocus: input.partnerRegistration.advocacyFocus,
       contactEmail: createdUser.email,
       contactPhone: createdUser.phone,
@@ -1173,10 +1424,11 @@ export async function getPartnersByStatus(status: string): Promise<Partner[]> {
 export async function saveProject(project: Project): Promise<void> {
   const projects = await getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS) || [];
   const existingIndex = projects.findIndex(p => p.id === project.id);
+  const normalizedProject = normalizeProjectRecord(project);
   if (existingIndex >= 0) {
-    projects[existingIndex] = project;
+    projects[existingIndex] = normalizedProject;
   } else {
-    projects.push(project);
+    projects.push(normalizedProject);
   }
   await setStorageItem(STORAGE_KEYS.PROJECTS, projects);
 }
@@ -1254,7 +1506,9 @@ export async function getProject(id: string): Promise<Project | null> {
 
 // Returns all projects and events from shared storage.
 export async function getAllProjects(): Promise<Project[]> {
-  return (await getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS)) || [];
+  return ((await getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS)) || []).map(
+    normalizeProjectRecord
+  );
 }
 
 // Checks whether a project's coordinates fall inside Negros Occidental bounds.
@@ -1291,14 +1545,27 @@ export async function getProjectsByPartner(partnerId: string): Promise<Project[]
 }
 
 // Volunteer Storage
+function normalizeVolunteerRecord(volunteer: Volunteer): Volunteer {
+  const registrationStatus = volunteer.registrationStatus || 'Approved';
+
+  return {
+    ...volunteer,
+    registrationStatus,
+    credentialsUnlockedAt:
+      volunteer.credentialsUnlockedAt ||
+      (registrationStatus === 'Approved' ? volunteer.reviewedAt || volunteer.createdAt : undefined),
+  };
+}
+
 // Inserts or updates a volunteer profile record.
 export async function saveVolunteer(volunteer: Volunteer): Promise<void> {
   const volunteers = await getStorageItem<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS) || [];
   const existingIndex = volunteers.findIndex(v => v.id === volunteer.id);
+  const normalizedVolunteer = normalizeVolunteerRecord(volunteer);
   if (existingIndex >= 0) {
-    volunteers[existingIndex] = volunteer;
+    volunteers[existingIndex] = normalizedVolunteer;
   } else {
-    volunteers.push(volunteer);
+    volunteers.push(normalizedVolunteer);
   }
   await setStorageItem(STORAGE_KEYS.VOLUNTEERS, volunteers);
 }
@@ -1306,12 +1573,15 @@ export async function saveVolunteer(volunteer: Volunteer): Promise<void> {
 // Looks up a single volunteer profile by id.
 export async function getVolunteer(id: string): Promise<Volunteer | null> {
   const volunteers = await getStorageItem<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS) || [];
-  return volunteers.find(v => v.id === id) || null;
+  const volunteer = volunteers.find(v => v.id === id) || null;
+  return volunteer ? normalizeVolunteerRecord(volunteer) : null;
 }
 
 // Returns all volunteer profiles from shared storage.
 export async function getAllVolunteers(): Promise<Volunteer[]> {
-  return (await getStorageItem<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS)) || [];
+  return ((await getStorageItem<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS)) || []).map(
+    normalizeVolunteerRecord
+  );
 }
 
 // Looks up the volunteer profile linked to a specific user account.
@@ -1319,7 +1589,7 @@ export async function getVolunteerByUserId(userId: string): Promise<Volunteer | 
   const payload = await requestApiJson<{ volunteer?: Volunteer | null }>(
     `/volunteers/by-user/${encodeURIComponent(userId)}`
   );
-  return payload.volunteer || null;
+  return payload.volunteer ? normalizeVolunteerRecord(payload.volunteer) : null;
 }
 
 // Computes recognition metrics such as joined programs and top-volunteer status.
@@ -1334,6 +1604,34 @@ export async function getVolunteerRecognitionStatus(
     joinedProgramCount: payload.recognition?.joinedProgramCount || 0,
     isTopVolunteer: Boolean(payload.recognition?.isTopVolunteer),
   };
+}
+
+// Approves or rejects a volunteer registration and unlocks login access when approved.
+export async function reviewVolunteerRegistration(
+  volunteerId: string,
+  status: NonNullable<Volunteer['registrationStatus']>,
+  reviewedBy: string
+): Promise<Volunteer> {
+  const volunteer = await getVolunteer(volunteerId);
+  if (!volunteer) {
+    throw new Error('Volunteer registration not found.');
+  }
+
+  if (status === 'Pending') {
+    throw new Error('Volunteer registration review must approve or reject the account.');
+  }
+
+  const now = new Date().toISOString();
+  const updatedVolunteer: Volunteer = {
+    ...volunteer,
+    registrationStatus: status,
+    reviewedBy,
+    reviewedAt: now,
+    credentialsUnlockedAt: status === 'Approved' ? now : undefined,
+  };
+
+  await saveVolunteer(updatedVolunteer);
+  return updatedVolunteer;
 }
 
 // Volunteer Time Logs
@@ -1393,7 +1691,9 @@ export async function startVolunteerTimeLog(
 // Ends an active volunteer time log and updates contributed hours.
 export async function endVolunteerTimeLog(
   volunteerId: string,
-  projectId: string
+  projectId: string,
+  completionReport?: string,
+  completionPhoto?: string
 ): Promise<VolunteerTimeLogMutationResult> {
   const payload = await requestApiJson<Partial<VolunteerTimeLogMutationResult>>(
     `/volunteers/${encodeURIComponent(volunteerId)}/time-logs/end`,
@@ -1402,7 +1702,11 @@ export async function endVolunteerTimeLog(
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ projectId }),
+      body: JSON.stringify({
+        projectId,
+        completionReport,
+        completionPhoto,
+      }),
     }
   );
 
@@ -1589,7 +1893,7 @@ export function subscribeToMessages(
 export function subscribeToStorageChanges(
   keys: string[],
   onChange: (event: { type: string; keys: string[] }) => void,
-  pollIntervalMs = 1000
+  pollIntervalMs = STORAGE_CHANGE_POLL_INTERVAL_MS
 ): () => void {
   let socket: WebSocket | null = null;
   let heartbeat: ReturnType<typeof setInterval> | null = null;
@@ -1612,6 +1916,7 @@ export function subscribeToStorageChanges(
     }
 
     pollTimer = setInterval(() => {
+      invalidateSharedStorageCache(watchedKeyList);
       onChange({ type: 'storage.poll', keys: watchedKeyList });
     }, pollIntervalMs);
   };
@@ -1654,6 +1959,7 @@ export function subscribeToStorageChanges(
           return;
         }
         if (changedKeys.some(key => watchedKeys.has(key))) {
+          invalidateSharedStorageCache(changedKeys);
           onChange({ type: payload.type, keys: changedKeys });
         }
       } catch (error) {
@@ -2477,6 +2783,7 @@ export async function clearAllStorage(): Promise<void> {
     } catch (error) {
         console.error('Error clearing remote storage:', error);
       }
+      sharedStorageCacheTimestamps.clear();
       memoryStorageCache.clear();
     } catch (error) {
       console.error('Error clearing storage:', error);

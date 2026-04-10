@@ -3,6 +3,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .db import get_postgres_connection
+from .relational_mirror import (
+    ensure_relational_mirror_tables,
+    sync_all_relational_mirror_tables,
+    sync_relational_mirror_collection,
+)
 
 
 HOT_STORAGE_TABLES = {
@@ -144,7 +149,32 @@ def build_demo_app_storage() -> dict[str, Any]:
             },
         ],
         "projects": [],
-        "volunteers": [],
+        "volunteers": [
+            {
+                "id": "volunteer-profile-1",
+                "userId": "volunteer-1",
+                "name": "Volunteer Account",
+                "email": "volunteer@example.com",
+                "phone": "+0987654321",
+                "skills": [],
+                "skillsDescription": "Education, Nutrition",
+                "availability": {
+                    "daysPerWeek": 2,
+                    "hoursPerWeek": 8,
+                    "availableDays": ["Saturday", "Sunday"],
+                },
+                "pastProjects": [],
+                "totalHoursContributed": 0,
+                "rating": 0,
+                "engagementStatus": "Open to Volunteer",
+                "background": "",
+                "registrationStatus": "Approved",
+                "reviewedBy": "admin-1",
+                "reviewedAt": now_iso,
+                "credentialsUnlockedAt": now_iso,
+                "createdAt": now_iso,
+            },
+        ],
         "messages": [],
         "projectGroupMessages": [],
         "statusUpdates": [],
@@ -180,6 +210,7 @@ def is_hot_storage_key(key: str) -> bool:
 
 # Ensures all hot-storage tables exist with the expected schema.
 def ensure_postgres_hot_storage_tables(connection: Any) -> None:
+    ensure_relational_mirror_tables(connection)
     with connection.cursor() as cursor:
         for table_name in HOT_STORAGE_TABLES.values():
             cursor.execute(
@@ -309,6 +340,7 @@ def replace_postgres_hot_storage_collection(
             )
 
     _upsert_app_storage_value(connection, key, normalized_items)
+    sync_relational_mirror_collection(connection, key, normalized_items)
 
 
 # Deletes all rows for one hot-storage collection.
@@ -318,6 +350,7 @@ def clear_postgres_hot_storage_collection(connection: Any, key: str) -> None:
         cursor.execute(f"delete from {table_name}")
 
     _upsert_app_storage_value(connection, key, [])
+    sync_relational_mirror_collection(connection, key, [])
 
 
 # Deletes all rows from every hot-storage collection.
@@ -328,6 +361,7 @@ def clear_all_postgres_hot_storage(connection: Any) -> None:
 
     for key in HOT_STORAGE_TABLES:
         _upsert_app_storage_value(connection, key, [])
+        sync_relational_mirror_collection(connection, key, [])
 
 
 # Reads a batch of generic app-storage items from Postgres.
@@ -380,6 +414,12 @@ def ensure_postgres_hot_storage_seeded(connection: Any, demo_storage: dict[str, 
         source_items = existing_storage.get(key, demo_storage.get(key, []))
         if isinstance(source_items, list):
             replace_postgres_hot_storage_collection(connection, key, source_items)
+
+    synced_collections = {
+        key: get_postgres_hot_storage_collection(connection, key)
+        for key in HOT_STORAGE_TABLES
+    }
+    sync_all_relational_mirror_tables(connection, synced_collections)
 
 
 # Seeds both app storage and hot-storage tables with demo data.

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -108,24 +108,17 @@ export default function DashboardScreen({ navigation }: any) {
     }
   }, []);
 
-  useEffect(() => {
-    void loadDashboardData();
-  }, [loadDashboardData]);
-
   useFocusEffect(
     React.useCallback(() => {
       void loadDashboardData();
+      return subscribeToStorageChanges(
+        ['users', 'projects', 'partners', 'volunteers', 'statusUpdates', 'volunteerProjectJoins', 'volunteerTimeLogs', 'partnerReports', 'publishedImpactReports'],
+        () => {
+          void loadDashboardData();
+        }
+      );
     }, [loadDashboardData])
   );
-
-  useEffect(() => {
-    return subscribeToStorageChanges(
-      ['users', 'projects', 'partners', 'volunteers', 'statusUpdates', 'volunteerProjectJoins', 'volunteerTimeLogs', 'partnerReports', 'publishedImpactReports'],
-      () => {
-        void loadDashboardData();
-      }
-    );
-  }, [loadDashboardData]);
 
   // Confirms logout before clearing the current authenticated session.
   const handleLogout = async () => {

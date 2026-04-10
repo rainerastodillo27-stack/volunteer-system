@@ -7,16 +7,18 @@ import {
   Alert,
   Modal,
   ActivityIndicator,
+  Image,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { useAuth } from '../contexts/AuthContext';
 import { Project } from '../models/types';
-import { getAllProjects } from '../models/storage';
+import { getProjectsScreenSnapshot, subscribeToStorageChanges } from '../models/storage';
 import { navigateToAvailableRoute } from '../utils/navigation';
 import {
   PHILIPPINES_BOUNDS,
   PHILIPPINES_WEB_CENTER,
+  getPrimaryProjectImageSource,
   getProjectMarkerColor,
 } from '../utils/projectMap';
 import { getProjectStatusColor } from '../utils/projectStatus';
@@ -118,7 +120,16 @@ export default function MappingScreen({ navigation }: any) {
 
   useEffect(() => {
     void loadProjects();
-  }, []);
+  }, [user]);
+
+  useEffect(() => {
+    return subscribeToStorageChanges(
+      ['projects', 'partnerProjectApplications', 'volunteerProjectJoins'],
+      () => {
+        void loadProjects();
+      }
+    );
+  }, [user]);
 
   useEffect(() => {
     if (!googleMapsApiKey) {
@@ -194,8 +205,10 @@ export default function MappingScreen({ navigation }: any) {
           bounds.extend(marker.getPosition());
 
           marker.addListener('click', () => {
+            const projectImageHtml = '';
             infoWindow.setContent(`
               <div style="width:220px;padding:14px;font-family:Arial,sans-serif;">
+                ${projectImageHtml}
                 <div style="margin-bottom:8px;font-size:16px;font-weight:700;color:#111827;">
                   ${escapeHtml(project.title)}
                 </div>
@@ -233,11 +246,35 @@ export default function MappingScreen({ navigation }: any) {
     };
   }, [googleMapsApiKey, projects]);
 
-  // Loads all projects so they can be rendered as web map markers.
+  // Loads map projects and narrows visibility to projects the current user joined.
   const loadProjects = async () => {
     try {
-      const allProjects = await getAllProjects();
-      setProjects(allProjects);
+      const snapshot = await getProjectsScreenSnapshot(user);
+      const approvedPartnerProjectIds = new Set(
+        snapshot.partnerApplications
+          .filter(application => application.status === 'Approved')
+          .map(application => application.projectId)
+      );
+      const joinedVolunteerProjectIds = new Set(
+        snapshot.volunteerJoinRecords.map(record => record.projectId)
+      );
+
+      const visibleProjects =
+        user?.role === 'partner'
+          ? snapshot.projects.filter(
+              project =>
+                (project.joinedUserIds || []).includes(user.id) ||
+                approvedPartnerProjectIds.has(project.id)
+            )
+          : user?.role === 'volunteer'
+          ? snapshot.projects.filter(
+              project =>
+                (project.joinedUserIds || []).includes(user.id) ||
+                joinedVolunteerProjectIds.has(project.id)
+            )
+          : snapshot.projects;
+
+      setProjects(visibleProjects);
       setLoading(false);
     } catch (error) {
       console.error('Error loading projects for map:', error);
@@ -281,7 +318,11 @@ export default function MappingScreen({ navigation }: any) {
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Negros Programs and Events</Text>
-        <Text style={styles.headerSubtitle}>Marker map for Negros Occidental, Philippines</Text>
+        <Text style={styles.headerSubtitle}>
+          {user?.role === 'admin'
+            ? 'Marker map for Negros Occidental, Philippines'
+            : 'Only projects you joined appear as pins'}
+        </Text>
       </View>
 
       <View style={styles.webMapContainer}>
@@ -316,6 +357,20 @@ export default function MappingScreen({ navigation }: any) {
 
                 <Text style={styles.projectTitle}>{selectedProject.title}</Text>
                 <Text style={styles.description}>{selectedProject.description}</Text>
+
+            {(() => {
+              const projectImageSource = getPrimaryProjectImageSource(selectedProject);
+              if (!projectImageSource) {
+                return null;
+              }
+              return (
+                <Image
+                  source={projectImageSource}
+                  style={styles.projectPhoto}
+                  resizeMode="cover"
+                />
+              );
+            })()}
 
                 <View style={styles.infoGrid}>
                   <View style={styles.infoItem}>
@@ -481,6 +536,13 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#333',
     marginBottom: 12,
+  },
+  projectPhoto: {
+    width: '100%',
+    height: 180,
+    borderRadius: 14,
+    marginBottom: 20,
+    backgroundColor: '#e5e7eb',
   },
   description: {
     fontSize: 14,
