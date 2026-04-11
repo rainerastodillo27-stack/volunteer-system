@@ -271,6 +271,59 @@ function ProjectCardImage({
   );
 }
 
+// Category header component for collapsible categories
+function CategoryHeader({
+  category,
+  projectCount,
+  isExpanded,
+  onToggle,
+}: {
+  category: Project['category'];
+  projectCount: number;
+  isExpanded: boolean;
+  onToggle: () => void;
+}) {
+  const categoryColors: Record<Project['category'], string> = {
+    Education: '#1D4ED8',
+    Livelihood: '#9333EA',
+    Nutrition: '#DC2626',
+    Disaster: '#F97316',
+  };
+
+  const categoryIcons: Record<Project['category'], keyof typeof MaterialIcons.glyphMap> = {
+    Education: 'school',
+    Livelihood: 'work',
+    Nutrition: 'restaurant',
+    Disaster: 'warning',
+  };
+
+  return (
+    <TouchableOpacity
+      onPress={onToggle}
+      style={[styles.categoryHeader, { backgroundColor: categoryColors[category] }]}
+      activeOpacity={0.7}
+    >
+      <View style={styles.categoryHeaderContent}>
+        <MaterialIcons
+          name={categoryIcons[category]}
+          size={24}
+          color="#fff"
+          style={styles.categoryIcon}
+        />
+        <View style={styles.categoryHeaderText}>
+          <Text style={styles.categoryTitle}>{category}</Text>
+          <Text style={styles.categoryCount}>{projectCount} program{projectCount !== 1 ? 's' : ''}</Text>
+        </View>
+      </View>
+      <MaterialIcons
+        name={isExpanded ? 'expand-less' : 'expand-more'}
+        size={28}
+        color="#fff"
+      />
+    </TouchableOpacity>
+  );
+}
+
 // Lists projects and actions for volunteers, partners, and admins.
 export default function ProjectsScreen({ navigation, route }: any) {
   const { user } = useAuth();
@@ -292,6 +345,9 @@ export default function ProjectsScreen({ navigation, route }: any) {
     title: string;
     source: ImageSourcePropType;
   } | null>(null);
+  const [expandedCategories, setExpandedCategories] = useState<Set<Project['category']>>(
+    new Set(['Education', 'Livelihood', 'Nutrition', 'Disaster'])
+  );
 
   // Applies the latest project snapshot to local screen state.
   const applySnapshot = useCallback((snapshot: {
@@ -478,6 +534,41 @@ export default function ProjectsScreen({ navigation, route }: any) {
     () => projects.find(project => project.id === timeOutProjectId) || null,
     [projects, timeOutProjectId]
   );
+
+  // Groups projects by category
+  const projectsByCategory = useMemo(() => {
+    const categories: Project['category'][] = ['Education', 'Livelihood', 'Nutrition', 'Disaster'];
+    const grouped: Record<Project['category'], Project[]> = {
+      Education: [],
+      Livelihood: [],
+      Nutrition: [],
+      Disaster: [],
+    };
+
+    projects.forEach(project => {
+      if (grouped[project.category]) {
+        grouped[project.category].push(project);
+      }
+    });
+
+    return categories.map(category => ({
+      category,
+      projects: grouped[category],
+    })).filter(group => group.projects.length > 0);
+  }, [projects]);
+
+  // Toggle category expansion
+  const toggleCategory = useCallback((category: Project['category']) => {
+    setExpandedCategories(prev => {
+      const next = new Set(prev);
+      if (next.has(category)) {
+        next.delete(category);
+      } else {
+        next.add(category);
+      }
+      return next;
+    });
+  }, []);
 
   // Checks whether the current volunteer is already part of a project.
   const isJoined = useCallback((project: Project) => {
@@ -1000,16 +1091,32 @@ export default function ProjectsScreen({ navigation, route }: any) {
 
       <FlatList
         ref={projectListRef}
-        data={projects}
-        keyExtractor={(item) => item.id}
-        renderItem={renderProjectItem}
+        data={projectsByCategory}
+        keyExtractor={(item, index) => `category-${item.category}-${index}`}
+        renderItem={({ item: categoryGroup }) => (
+          <View key={categoryGroup.category}>
+            <CategoryHeader
+              category={categoryGroup.category}
+              projectCount={categoryGroup.projects.length}
+              isExpanded={expandedCategories.has(categoryGroup.category)}
+              onToggle={() => toggleCategory(categoryGroup.category)}
+            />
+            {expandedCategories.has(categoryGroup.category) && (
+              <View>
+                {categoryGroup.projects.map((project) => (
+                  renderProjectItem({ item: project, index: 0 })
+                ))}
+              </View>
+            )}
+          </View>
+        )}
         initialNumToRender={6}
         maxToRenderPerBatch={8}
         windowSize={7}
         updateCellsBatchingPeriod={50}
         removeClippedSubviews
         onScrollToIndexFailed={({ index }) => {
-          const safeIndex = Math.max(0, Math.min(index, projects.length - 1));
+          const safeIndex = Math.max(0, Math.min(index, projectsByCategory.length - 1));
           projectListRef.current?.scrollToOffset({
             offset: safeIndex * 280,
             animated: true,
@@ -1823,5 +1930,39 @@ const styles = StyleSheet.create({
   volunteers: {
     fontSize: 12,
     color: '#999',
+  },
+  categoryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    marginHorizontal: 15,
+    marginBottom: 12,
+    marginTop: 8,
+    borderRadius: 12,
+  },
+  categoryHeaderContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
+  },
+  categoryIcon: {
+    marginRight: 4,
+  },
+  categoryHeaderText: {
+    flex: 1,
+  },
+  categoryTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  categoryCount: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: 'rgba(255, 255, 255, 0.9)',
+    marginTop: 2,
   },
 });

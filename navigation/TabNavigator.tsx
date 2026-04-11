@@ -17,6 +17,7 @@ import UserManagementScreen from '../screens/UserManagementScreen';
 import VolunteerManagementScreen from '../screens/VolunteerManagementScreen';
 import PartnerManagementScreen from '../screens/PartnerManagementScreen';
 import VolunteerTasksScreen from '../screens/VolunteerTasksScreen';
+import ReportsScreen from '../screens/ReportsScreen';
 import { getMessagesForUser, subscribeToMessages } from '../models/storage';
 
 export type TabParamList = {
@@ -28,6 +29,7 @@ export type TabParamList = {
   Volunteers: { volunteerId?: string } | undefined;
   Map: undefined;
   Messages: { projectId?: string } | undefined;
+  Reports: undefined;
   Users: undefined;
   Settings: undefined;
   Profile: undefined;
@@ -59,6 +61,8 @@ const getIconName = (routeName: keyof TabParamList) => {
       return 'map';
     case 'Messages':
       return 'mail';
+    case 'Reports':
+      return 'insert-chart';
     case 'Users':
       return 'manage-accounts';
     case 'Settings':
@@ -391,6 +395,12 @@ export default function TabNavigator() {
           title: 'Messages',
           tabBarBadge: messageUnreadCount > 0 ? messageUnreadCount : undefined,
         }}
+      />
+
+      <Tab.Screen
+        name="Reports"
+        component={ReportsScreen}
+        options={{ title: 'Reports' }}
       />
 
       {showUsersTab && (
