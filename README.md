@@ -2,6 +2,28 @@
 
 Expo and React Native app for managing volunteer programs, partner organizations, project coordination, and admin review workflows. The app reads and writes through a Python API backed by Supabase Postgres.
 
+## Public HTTPS Backend
+
+Recommended production-style setup:
+
+```text
+phone / browser -> HTTPS backend -> Supabase Postgres
+```
+
+This avoids depending on your laptop's raw Postgres connectivity on every Wi-Fi network.
+
+The repo now includes [../render.yaml](/c:/Users/ACER/OneDrive/Desktop/volunteer system2/render.yaml) for deploying the FastAPI backend on Render in Singapore, plus [../DEPLOYMENT.md](/c:/Users/ACER/OneDrive/Desktop/volunteer system2/DEPLOYMENT.md) with the exact steps.
+
+After deployment, set:
+
+```text
+VOLCRE_API_BASE_URL=https://your-service.onrender.com
+VOLCRE_WEB_API_BASE_URL=https://your-service.onrender.com
+VOLCRE_AUTO_START_BACKEND=false
+```
+
+Then restart Expo so the app uses the hosted backend instead of a local one.
+
 ## Current Scope
 
 - Admin web experience with sidebar navigation and project oversight

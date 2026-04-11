@@ -50,6 +50,42 @@ function getLanIp() {
   return '127.0.0.1';
 }
 
+// Returns whether an address points at the local machine or a private LAN host.
+function isLocalBackendUrl(value) {
+  try {
+    const parsed = new URL(value);
+    const hostname = parsed.hostname;
+
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0') {
+      return true;
+    }
+
+    if (/^10\./.test(hostname) || /^192\.168\./.test(hostname)) {
+      return true;
+    }
+
+    const match = hostname.match(/^172\.(\d{1,3})\./);
+    if (match) {
+      const secondOctet = Number.parseInt(match[1], 10);
+      return secondOctet >= 16 && secondOctet <= 31;
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+// Checks whether the app has been pointed at a hosted backend instead of a local one.
+function hasRemoteBackendOverride() {
+  const configuredUrls = [
+    process.env.VOLCRE_API_BASE_URL,
+    process.env.VOLCRE_WEB_API_BASE_URL,
+  ].filter(Boolean);
+
+  return configuredUrls.some((value) => !isLocalBackendUrl(value));
+}
+
 // Detects whether the backend is already listening on port 8000.
 function isBackendRunning() {
   try {
@@ -78,6 +114,10 @@ function ensureBackendStarted() {
     return;
   }
 
+  if (hasRemoteBackendOverride()) {
+    return;
+  }
+
   if (isBackendRunning()) {
     return;
   }
@@ -102,8 +142,10 @@ module.exports = () => {
   loadLocalEnv();
   ensureBackendStarted();
 
-  const lanApiBaseUrl = process.env.VOLCRE_API_BASE_URL || `http://${getLanIp()}:8000`;
-  const webApiBaseUrl = process.env.VOLCRE_WEB_API_BASE_URL || 'http://127.0.0.1:8000';
+  const configuredApiBaseUrl = process.env.VOLCRE_API_BASE_URL || '';
+  const lanApiBaseUrl = configuredApiBaseUrl || `http://${getLanIp()}:8000`;
+  const webApiBaseUrl =
+    process.env.VOLCRE_WEB_API_BASE_URL || configuredApiBaseUrl || 'http://127.0.0.1:8000';
   const androidGoogleMapsApiKey = process.env.GOOGLE_MAPS_ANDROID_API_KEY || '';
   const webGoogleMapsApiKey = process.env.GOOGLE_MAPS_WEB_API_KEY || '';
 
