@@ -1,20 +1,11 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  Platform,
-  TouchableOpacity,
-  ScrollView,
-  RefreshControl,
-  Modal,
-  FlatList,
-  Dimensions,
-  Alert,
-} from 'react-native';
-import { MaterialIcons } from '@expo/vector-icons';
+import { Alert } from 'react-native';
 import { useAuth } from '../contexts/AuthContext';
-import { getProjects, getVolunteers, getMessages } from '../models/storage';
+import {
+  getAllProjects,
+  getAllVolunteers,
+  getMessagesForUser,
+} from '../models/storage';
 import type { Project, Volunteer, UserRole } from '../models/types';
 import ReportUploadModal from '../components/ReportUploadModal';
 import ReportDetailsModal from '../components/ReportDetailsModal';
@@ -63,7 +54,6 @@ export default function ReportsScreen({ navigation }: any) {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [selectedReport, setSelectedReport] = useState<SubmittedReport | null>(null);
-  const [filterType, setFilterType] = useState<SubmittedReport['reportType'] | 'all'>('all');
   const [projects, setProjects] = useState<Project[]>([]);
   const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
 
@@ -78,8 +68,7 @@ export default function ReportsScreen({ navigation }: any) {
     if (!user?.id) return;
     setLoading(true);
     try {
-      // In a real app, fetch from API
-      const cachedReports = await getMessages(user.id);
+      const syncedMessages = await getMessagesForUser(user.id);
       // Transform messages to reports (placeholder - would need actual report API)
       const mockReports: SubmittedReport[] = [
         {
@@ -97,7 +86,7 @@ export default function ReportsScreen({ navigation }: any) {
           },
           status: 'Submitted',
           submittedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-          viewedBy: ['admin1'],
+          viewedBy: syncedMessages.length > 0 ? ['admin1'] : [],
         },
       ];
       setReports(mockReports);
@@ -111,7 +100,7 @@ export default function ReportsScreen({ navigation }: any) {
 
   const loadProjects = useCallback(async () => {
     try {
-      const allProjects = await getProjects();
+      const allProjects = await getAllProjects();
       setProjects(allProjects);
     } catch (error) {
       console.error('Error loading projects:', error);
@@ -120,7 +109,7 @@ export default function ReportsScreen({ navigation }: any) {
 
   const loadVolunteers = useCallback(async () => {
     try {
-      const allVolunteers = await getVolunteers();
+      const allVolunteers = await getAllVolunteers();
       setVolunteers(allVolunteers);
     } catch (error) {
       console.error('Error loading volunteers:', error);
@@ -164,92 +153,38 @@ export default function ReportsScreen({ navigation }: any) {
     setShowDetailsModal(true);
   }, []);
 
-  const filteredReports = useMemo(() => {
-    if (filterType === 'all') return reports;
-    return reports.filter(r => r.reportType === filterType);
-  }, [reports, filterType]);
+  const handleCloseDetails = useCallback(() => {
+    setShowDetailsModal(false);
+    setSelectedReport(null);
+  }, []);
+
+  const handleReviewReport = useCallback(
+    (reportId: string, nextStatus: 'Approved' | 'Rejected', notes: string) => {
+      setReports(current =>
+        current.map(report =>
+          report.id === reportId
+            ? {
+                ...report,
+                status: nextStatus,
+                approvalNotes: notes || undefined,
+                approvedBy: user?.name || user?.id || 'Admin',
+                approvedAt: new Date().toISOString(),
+              }
+            : report
+        )
+      );
+      handleCloseDetails();
+    },
+    [handleCloseDetails, user?.id, user?.name]
+  );
 
   const userReports = useMemo(() => {
-    if (user?.role === 'admin') return filteredReports;
-    return filteredReports.filter(r => r.submittedBy === user?.id);
-  }, [filteredReports, user?.id, user?.role]);
+    if (user?.role === 'admin') return reports;
+    return reports.filter(r => r.submittedBy === user?.id);
+  }, [reports, user?.id, user?.role]);
 
-  const renderReportCard = useCallback(
-    ({ item }: { item: SubmittedReport }) => (
-      <TouchableOpacity
-        style={styles.reportCard}
-        onPress={() => handleViewReport(item)}
-        activeOpacity={0.7}
-      >
-        <View style={styles.reportCardHeader}>
-          <View style={styles.reportCardTitle}>
-            <Text style={styles.reportTitle}>{item.title}</Text>
-            <Text style={styles.reportSubtitle}>{item.submitterName}</Text>
-          </View>
-          <View
-            style={[
-              styles.reportStatusBadge,
-              item.status === 'Approved' && styles.statusApproved,
-              item.status === 'Rejected' && styles.statusRejected,
-              item.status === 'Draft' && styles.statusDraft,
-              item.status === 'Submitted' && styles.statusSubmitted,
-            ]}
-          >
-            <Text style={styles.reportStatusText}>{item.status}</Text>
-          </View>
-        </View>
-
-        <Text style={styles.reportDescription}>{item.description}</Text>
-
-        <View style={styles.reportMetrics}>
-          {item.metrics.volunteerHours && (
-            <View style={styles.metricBadge}>
-              <MaterialIcons name="schedule" size={14} color="#666" />
-              <Text style={styles.metricText}>{item.metrics.volunteerHours}h</Text>
-            </View>
-          )}
-          {item.metrics.beneficiariesServed && (
-            <View style={styles.metricBadge}>
-              <MaterialIcons name="people" size={14} color="#666" />
-              <Text style={styles.metricText}>{item.metrics.beneficiariesServed} served</Text>
-            </View>
-          )}
-          {item.metrics.eventsCount && (
-            <View style={styles.metricBadge}>
-              <MaterialIcons name="event" size={14} color="#666" />
-              <Text style={styles.metricText}>{item.metrics.eventsCount} events</Text>
-            </View>
-          )}
-        </View>
-
-        <View style={styles.reportFooter}>
-          <Text style={styles.reportDate}>
-            {new Date(item.submittedAt).toLocaleDateString()}
-          </Text>
-          {item.viewedBy && item.viewedBy.length > 0 && (
-            <Text style={styles.viewCount}>Viewed by {item.viewedBy.length}</Text>
-          )}
-        </View>
-      </TouchableOpacity>
-    ),
-    [handleViewReport]
-  );
-
-  const renderFilterButton = (type: SubmittedReport['reportType'] | 'all', label: string) => (
-    <TouchableOpacity
-      key={type}
-      style={[styles.filterButton, filterType === type && styles.filterButtonActive]}
-      onPress={() => setFilterType(type)}
-    >
-      <Text style={[styles.filterButtonText, filterType === type && styles.filterButtonTextActive]}>
-        {label}
-      </Text>
-    </TouchableOpacity>
-  );
-
-  // Show role-specific dashboard
-  if (user?.role === 'admin') {
-    return (
+  const dashboard =
+    user?.role === 'admin' ? (
       <AdminReportsDashboard
         reports={userReports}
         projects={projects}
@@ -260,11 +195,7 @@ export default function ReportsScreen({ navigation }: any) {
         onRefresh={onRefresh}
         refreshing={refreshing}
       />
-    );
-  }
-
-  if (user?.role === 'partner') {
-    return (
+    ) : user?.role === 'partner' ? (
       <PartnerReportsDashboard
         reports={userReports}
         projects={projects}
@@ -274,10 +205,7 @@ export default function ReportsScreen({ navigation }: any) {
         onRefresh={onRefresh}
         refreshing={refreshing}
       />
-    );
-  }
-
-  return (
+    ) : (
     <VolunteerReportsDashboard
       reports={userReports}
       projects={projects}
@@ -288,178 +216,24 @@ export default function ReportsScreen({ navigation }: any) {
       refreshing={refreshing}
     />
   );
-}
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    padding: Platform.select({ web: 8, default: 15 }),
-    backgroundColor: '#f5f5f5',
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  uploadButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#166534',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 10,
-  },
-  uploadButtonText: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 13,
-  },
-  filterContainer: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 16,
-    overflow: 'hidden',
-  },
-  filterButton: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: '#e2e8f0',
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-  },
-  filterButtonActive: {
-    backgroundColor: '#166534',
-    borderColor: '#166534',
-  },
-  filterButtonText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#475569',
-  },
-  filterButtonTextActive: {
-    color: '#fff',
-  },
-  reportCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-    borderLeftWidth: 4,
-    borderLeftColor: '#4CAF50',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  reportCardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 12,
-  },
-  reportCardTitle: {
-    flex: 1,
-  },
-  reportTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#0f172a',
-    marginBottom: 4,
-  },
-  reportSubtitle: {
-    fontSize: 12,
-    color: '#64748b',
-  },
-  reportStatusBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 6,
-    backgroundColor: '#fef3c7',
-  },
-  statusApproved: {
-    backgroundColor: '#dcfce7',
-  },
-  statusRejected: {
-    backgroundColor: '#fee2e2',
-  },
-  statusDraft: {
-    backgroundColor: '#f3f4f6',
-  },
-  statusSubmitted: {
-    backgroundColor: '#dbeafe',
-  },
-  reportStatusText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#92400e',
-  },
-  reportDescription: {
-    fontSize: 13,
-    color: '#475569',
-    lineHeight: 18,
-    marginBottom: 12,
-  },
-  reportMetrics: {
-    flexDirection: 'row',
-    gap: 10,
-    flexWrap: 'wrap',
-    marginBottom: 12,
-  },
-  metricBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#f1f5f9',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 6,
-  },
-  metricText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#475569',
-  },
-  reportFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#e2e8f0',
-  },
-  reportDate: {
-    fontSize: 11,
-    color: '#94a3b8',
-  },
-  viewCount: {
-    fontSize: 11,
-    color: '#94a3b8',
-  },
-  emptyState: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 60,
-  },
-  emptyIcon: {
-    marginBottom: 12,
-  },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#0f172a',
-    marginBottom: 6,
-  },
-  emptyText: {
-    fontSize: 13,
-    color: '#64748b',
-  },
-});
+  return (
+    <>
+      {dashboard}
+      <ReportUploadModal
+        visible={showUploadModal}
+        onClose={() => setShowUploadModal(false)}
+        onSubmit={handleUploadReport}
+        projects={projects}
+      />
+      <ReportDetailsModal
+        visible={showDetailsModal}
+        report={selectedReport}
+        onClose={handleCloseDetails}
+        onApprove={(reportId, notes) => handleReviewReport(reportId, 'Approved', notes)}
+        onReject={(reportId, notes) => handleReviewReport(reportId, 'Rejected', notes)}
+        userRole={user?.role}
+      />
+    </>
+  );
+}

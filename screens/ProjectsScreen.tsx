@@ -54,6 +54,11 @@ const FALLBACK_ICON_BY_CATEGORY: Record<Project['category'], keyof typeof Materi
   Disaster: 'warning',
 };
 
+type ProjectCategoryGroup = {
+  category: Project['category'];
+  projects: Project[];
+};
+
 type Recommendation = {
   label: 'Good Skill Fit' | 'Suggested for You' | 'Open Program';
   reasons: string[];
@@ -327,7 +332,7 @@ function CategoryHeader({
 // Lists projects and actions for volunteers, partners, and admins.
 export default function ProjectsScreen({ navigation, route }: any) {
   const { user } = useAuth();
-  const projectListRef = useRef<FlatList<Project> | null>(null);
+  const projectListRef = useRef<FlatList<ProjectCategoryGroup> | null>(null);
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
@@ -536,7 +541,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
   );
 
   // Groups projects by category
-  const projectsByCategory = useMemo(() => {
+  const projectsByCategory = useMemo<ProjectCategoryGroup[]>(() => {
     const categories: Project['category'][] = ['Education', 'Livelihood', 'Nutrition', 'Disaster'];
     const grouped: Record<Project['category'], Project[]> = {
       Education: [],
@@ -1089,12 +1094,12 @@ export default function ProjectsScreen({ navigation, route }: any) {
         />
       ) : null}
 
-      <FlatList
+      <FlatList<ProjectCategoryGroup>
         ref={projectListRef}
         data={projectsByCategory}
         keyExtractor={(item, index) => `category-${item.category}-${index}`}
         renderItem={({ item: categoryGroup }) => (
-          <View key={categoryGroup.category}>
+          <View>
             <CategoryHeader
               category={categoryGroup.category}
               projectCount={categoryGroup.projects.length}
@@ -1104,7 +1109,9 @@ export default function ProjectsScreen({ navigation, route }: any) {
             {expandedCategories.has(categoryGroup.category) && (
               <View>
                 {categoryGroup.projects.map((project) => (
-                  renderProjectItem({ item: project, index: 0 })
+                  <React.Fragment key={project.id}>
+                    {renderProjectItem({ item: project })}
+                  </React.Fragment>
                 ))}
               </View>
             )}

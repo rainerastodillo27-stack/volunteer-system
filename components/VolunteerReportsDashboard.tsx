@@ -14,6 +14,8 @@ import { MaterialIcons } from '@expo/vector-icons';
 import type { SubmittedReport } from '../screens/ReportsScreen';
 import type { Project } from '../models/types';
 
+type MaterialIconName = keyof typeof MaterialIcons.glyphMap;
+
 interface VolunteerReportsDashboardProps {
   reports: SubmittedReport[];
   projects: Project[];
@@ -299,8 +301,6 @@ export function PartnerReportsDashboard({
 
 export default VolunteerReportsDashboard;
 
-export { PartnerReportsDashboard };
-
 function formatReportType(type: string): string {
   const types: Record<string, string> = {
     volunteer_engagement: 'Volunteer Engagement',
@@ -312,12 +312,12 @@ function formatReportType(type: string): string {
   return types[type] || type;
 }
 
-function getReportIcon(type: string): string {
-  const icons: Record<string, string> = {
+function getReportIcon(type: string): MaterialIconName {
+  const icons: Record<string, MaterialIconName> = {
     volunteer_engagement: 'people',
     program_impact: 'trending-up',
     event_performance: 'event',
-    partner_collaboration: 'handshake',
+    partner_collaboration: 'groups',
     system_metrics: 'analytics',
   };
   return icons[type] || 'description';

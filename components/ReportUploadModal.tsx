@@ -14,6 +14,8 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import type { SubmittedReport } from '../screens/ReportsScreen';
 
+type MaterialIconName = keyof typeof MaterialIcons.glyphMap;
+
 interface ReportUploadModalProps {
   visible: boolean;
   onClose: () => void;
@@ -38,11 +40,11 @@ export default function ReportUploadModal({ visible, onClose, onSubmit, projects
   const [showProjectPicker, setShowProjectPicker] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  const reportTypeOptions: { value: SubmittedReport['reportType']; label: string; icon: string }[] = [
+  const reportTypeOptions: { value: SubmittedReport['reportType']; label: string; icon: MaterialIconName }[] = [
     { value: 'volunteer_engagement', label: 'Volunteer Engagement', icon: 'people' },
     { value: 'program_impact', label: 'Program Impact', icon: 'trending-up' },
     { value: 'event_performance', label: 'Event Performance', icon: 'event' },
-    { value: 'partner_collaboration', label: 'Partner Collaboration', icon: 'handshake' },
+    { value: 'partner_collaboration', label: 'Partner Collaboration', icon: 'groups' },
     { value: 'system_metrics', label: 'System Metrics', icon: 'analytics' },
   ];
 
@@ -160,7 +162,7 @@ export default function ReportUploadModal({ visible, onClose, onSubmit, projects
                   onPress={() => setReportType(option.value)}
                 >
                   <MaterialIcons
-                    name={option.icon as any}
+                    name={option.icon}
                     size={20}
                     color={reportType === option.value ? '#fff' : '#166534'}
                   />
@@ -340,7 +342,7 @@ const styles = StyleSheet.create({
   },
   typeButton: {
     flex: Platform.select({ web: 0, default: 1 }),
-    minWidth: Platform.select({ web: 140, default: '30%' }),
+    minWidth: Platform.select({ web: 140, default: 110 }),
     alignItems: 'center',
     gap: 8,
     paddingHorizontal: 12,
