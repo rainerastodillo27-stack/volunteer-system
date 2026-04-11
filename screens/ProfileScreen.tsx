@@ -10,6 +10,7 @@ import {
   Modal,
   TextInput,
   Switch,
+  Image,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -31,6 +32,7 @@ import {
 } from '../models/storage';
 import { VolunteerRecognitionStatus } from '../models/storage';
 import { NVCSector, Partner, Project, User, UserType, Volunteer } from '../models/types';
+import { isImageMediaUri, pickImageFromDevice } from '../utils/media';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 const USER_TYPES: UserType[] = ['Student', 'Adult', 'Senior'];
@@ -62,6 +64,7 @@ export default function ProfileScreen() {
   const [skillsDescriptionDraft, setSkillsDescriptionDraft] = useState('');
   const [backgroundDraft, setBackgroundDraft] = useState('');
   const [isBusyDraft, setIsBusyDraft] = useState(false);
+  const [profilePhotoDraft, setProfilePhotoDraft] = useState('');
 
   // Loads the volunteer profile plus recognition details for volunteer accounts.
   const loadVolunteerProfile = useCallback(async () => {
@@ -172,6 +175,7 @@ export default function ProfileScreen() {
     setSkillsDescriptionDraft(volunteerProfile?.skillsDescription || '');
     setBackgroundDraft(volunteerProfile?.background || '');
     setIsBusyDraft(volunteerProfile?.engagementStatus === 'Busy');
+    setProfilePhotoDraft(user.profilePhoto || '');
   }, [user, volunteerProfile]);
 
   useEffect(() => {
@@ -211,8 +215,15 @@ export default function ProfileScreen() {
   };
 
   // Closes the profile editor once saving or cancellation is complete.
-  const closeEditModal = () => {
+  const closeEditModal = (resetDrafts = true) => {
+    if (resetDrafts) {
+      populateDrafts();
+    }
     setShowEditModal(false);
+  };
+
+  const handleCancelEdit = () => {
+    closeEditModal();
   };
 
   // Adds or removes a pillar-of-interest selection from the draft profile.
@@ -222,6 +233,26 @@ export default function ProfileScreen() {
         ? current.filter(item => item !== pillar)
         : [...current, pillar]
     );
+  };
+
+  // Opens the device photo picker and stores the selected image in the edit draft.
+  const handlePickProfilePhoto = async () => {
+    try {
+      const selectedImage = await pickImageFromDevice();
+      if (selectedImage) {
+        setProfilePhotoDraft(selectedImage);
+      }
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to select a profile picture.')
+      );
+    }
+  };
+
+  // Removes the profile picture from the current draft.
+  const handleRemoveProfilePhoto = () => {
+    setProfilePhotoDraft('');
   };
 
   // Waits for updated credentials to be readable from shared storage before closing save flow.
@@ -298,6 +329,7 @@ export default function ProfileScreen() {
         email: normalizedEmail || undefined,
         phone: normalizedPhone || undefined,
         password: normalizedPassword,
+        profilePhoto: profilePhotoDraft || undefined,
         userType: userTypeDraft,
         pillarsOfInterest: pillarsDraft,
       };
@@ -366,7 +398,7 @@ export default function ProfileScreen() {
       );
 
       await updateUserProfile(syncedUser);
-      closeEditModal();
+      closeEditModal(false);
       Alert.alert(
         'Saved',
         `Profile updated successfully. Use ${loginIdentifier} the next time you log in.`
@@ -391,6 +423,8 @@ export default function ProfileScreen() {
   const joinedProgramCount = recognitionStatus.joinedProgramCount;
   const isTopVolunteer = recognitionStatus.isTopVolunteer;
   const primaryPartnerProfile = partnerProfiles[0] || null;
+  const profilePhotoUri = isImageMediaUri(user?.profilePhoto) ? user?.profilePhoto : null;
+  const draftProfilePhotoUri = isImageMediaUri(profilePhotoDraft) ? profilePhotoDraft : null;
   const projectById: Record<string, Project> = Object.fromEntries(
     projects.map(project => [project.id, project])
   );
@@ -413,9 +447,13 @@ export default function ProfileScreen() {
         </View>
       ) : null}
       <View style={styles.profileCard}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>{initials}</Text>
-        </View>
+        {profilePhotoUri ? (
+          <Image source={{ uri: profilePhotoUri }} style={styles.avatarImage} />
+        ) : (
+          <View style={styles.avatar}>
+            <Text style={styles.avatarText}>{initials}</Text>
+          </View>
+        )}
 
         <Text style={styles.name}>{user?.name ?? 'User'}</Text>
         <Text style={styles.email}>{user?.email ?? user?.phone ?? 'No contact info'}</Text>
@@ -689,10 +727,10 @@ export default function ProfileScreen() {
         </TouchableOpacity>
       </View>
 
-      <Modal visible={showEditModal} animationType="slide" onRequestClose={closeEditModal}>
+      <Modal visible={showEditModal} animationType="slide" onRequestClose={handleCancelEdit}>
         <View style={styles.modalContainer}>
           <View style={styles.modalHeader}>
-            <TouchableOpacity onPress={closeEditModal} disabled={saveLoading}>
+            <TouchableOpacity onPress={handleCancelEdit} disabled={saveLoading}>
               <Text style={styles.modalCancel}>Cancel</Text>
             </TouchableOpacity>
             <Text style={styles.modalTitle}>Edit Profile</Text>
@@ -703,6 +741,36 @@ export default function ProfileScreen() {
 
           <ScrollView contentContainerStyle={styles.modalBody}>
             <Text style={styles.modalLabel}>Update your account details below.</Text>
+
+            <View style={styles.photoSection}>
+              {draftProfilePhotoUri ? (
+                <Image source={{ uri: draftProfilePhotoUri }} style={styles.modalAvatarImage} />
+              ) : (
+                <View style={styles.modalAvatarFallback}>
+                  <Text style={styles.modalAvatarFallbackText}>{initials}</Text>
+                </View>
+              )}
+              <View style={styles.photoButtonRow}>
+                <TouchableOpacity
+                  style={styles.photoButton}
+                  onPress={handlePickProfilePhoto}
+                  disabled={saveLoading}
+                >
+                  <Text style={styles.photoButtonText}>
+                    {draftProfilePhotoUri ? 'Change Picture' : 'Add Picture'}
+                  </Text>
+                </TouchableOpacity>
+                {draftProfilePhotoUri ? (
+                  <TouchableOpacity
+                    style={styles.photoButtonSecondary}
+                    onPress={handleRemoveProfilePhoto}
+                    disabled={saveLoading}
+                  >
+                    <Text style={styles.photoButtonSecondaryText}>Remove</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            </View>
 
             <TextInput
               style={styles.input}
@@ -868,6 +936,13 @@ const styles = StyleSheet.create({
     fontSize: 32,
     fontWeight: 'bold',
     color: '#fff',
+  },
+  avatarImage: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    marginBottom: 15,
+    backgroundColor: '#dbeafe',
   },
   name: {
     fontSize: 22,
@@ -1121,6 +1196,59 @@ const styles = StyleSheet.create({
     color: '#475569',
     marginBottom: 12,
     lineHeight: 20,
+  },
+  photoSection: {
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  modalAvatarImage: {
+    width: 112,
+    height: 112,
+    borderRadius: 56,
+    backgroundColor: '#dbeafe',
+    marginBottom: 12,
+  },
+  modalAvatarFallback: {
+    width: 112,
+    height: 112,
+    borderRadius: 56,
+    backgroundColor: '#4CAF50',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  modalAvatarFallbackText: {
+    fontSize: 36,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  photoButtonRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  photoButton: {
+    backgroundColor: '#166534',
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  photoButtonText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  photoButtonSecondary: {
+    backgroundColor: '#e2e8f0',
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  photoButtonSecondaryText: {
+    color: '#475569',
+    fontSize: 13,
+    fontWeight: '700',
   },
   input: {
     backgroundColor: '#fff',

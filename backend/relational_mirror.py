@@ -507,6 +507,10 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("hobbiesAndInterests"),
             item.get("specialSkills"),
             _json_dump(item.get("affiliations"), []),
+            item.get("registrationStatus"),
+            item.get("reviewedBy"),
+            item.get("reviewedAt"),
+            item.get("credentialsUnlockedAt"),
             item.get("createdAt"),
         )
 

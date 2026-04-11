@@ -427,19 +427,37 @@ def ensure_app_storage_seeded() -> None:
     ensure_app_storage_table()
     demo_storage = build_demo_app_storage()
 
-    with get_postgres_connection() as connection:
-        with connection.cursor() as cursor:
-            for key, value in demo_storage.items():
-                cursor.execute(
-                    """
-                    insert into app_storage (key, value, updated_at)
-                    values (%s, %s::jsonb, now())
-                    on conflict (key) do nothing
-                    """,
-                    (key, json.dumps(value)),
-                )
-        ensure_postgres_hot_storage_seeded(connection, demo_storage)
-        connection.commit()
+    max_retries = 3
+    retry_count = 0
+    
+    while retry_count < max_retries:
+        try:
+            with get_postgres_connection() as connection:
+                with connection.cursor() as cursor:
+                    for key, value in demo_storage.items():
+                        cursor.execute(
+                            """
+                            insert into app_storage (key, value, updated_at)
+                            values (%s, %s::jsonb, now())
+                            on conflict (key) do nothing
+                            """,
+                            (key, json.dumps(value)),
+                        )
+                ensure_postgres_hot_storage_seeded(connection, demo_storage)
+                connection.commit()
+            break  # Success
+        except Exception as e:
+            retry_count += 1
+            error_msg = str(e).lower()
+            is_deadlock = "deadlock" in error_msg
+            
+            if is_deadlock and retry_count < max_retries:
+                import time
+                wait_time = 1 + retry_count  # Exponential backoff: 2s, 3s, etc.
+                print(f"Database deadlock detected. Retrying in {wait_time} seconds... (attempt {retry_count}/{max_retries})")
+                time.sleep(wait_time)
+            else:
+                raise
 
 
 # CLI entry point for seeding demo app-storage data into Postgres.

@@ -2072,7 +2072,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             </View>
 
             <ScrollView style={styles.modalContent}>
-              <View style={styles.formRow}>
+              <View style={[styles.formRow, styles.formRowReverse]}>
                 <TextInput
                   style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
                   placeholder="Task title"
@@ -2083,7 +2083,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                 <Text style={styles.labelRight}>Title</Text>
               </View>
 
-              <View style={[styles.formRow, styles.formRowTop]}>
+              <View style={[styles.formRow, styles.formRowReverse, styles.formRowTop]}>
                 <TextInput
                   style={[styles.textArea, styles.inputWithLabel]}
                   placeholder="Describe what needs to be done"
@@ -2096,7 +2096,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                 <Text style={[styles.labelRight, styles.labelTop]}>Description</Text>
               </View>
 
-              <View style={styles.formRow}>
+              <View style={[styles.formRow, styles.formRowReverse]}>
                 <TextInput
                   style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
                   placeholder="Task category"
@@ -2107,7 +2107,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                 <Text style={styles.labelRight}>Category</Text>
               </View>
 
-              <View style={[styles.formRow, styles.formRowTop]}>
+              <View style={[styles.formRow, styles.formRowReverse, styles.formRowTop]}>
                 <View style={[styles.statusOptions, styles.statusOptionsCard]}>
                   {(['High', 'Medium', 'Low'] as const).map(priority => (
                     <TouchableOpacity
@@ -2132,7 +2132,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                 <Text style={[styles.labelRight, styles.labelTop]}>Priority</Text>
               </View>
 
-              <View style={[styles.formRow, styles.formRowTop]}>
+              <View style={[styles.formRow, styles.formRowReverse, styles.formRowTop]}>
                 <View style={[styles.statusOptions, styles.statusOptionsCard]}>
                   {(['Unassigned', 'Assigned', 'In Progress', 'Completed'] as const).map(status => (
                     <TouchableOpacity
@@ -2157,7 +2157,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                 <Text style={[styles.labelRight, styles.labelTop]}>Status</Text>
               </View>
 
-              <View style={[styles.formRow, styles.formRowTop]}>
+              <View style={[styles.formRow, styles.formRowReverse, styles.formRowTop]}>
                 <View style={[styles.statusOptions, styles.statusOptionsCard]}>
                   <TouchableOpacity
                     style={[

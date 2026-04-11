@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Platform,
   Image,
+  ScrollView,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
@@ -22,6 +23,7 @@ import {
   getProjectsScreenSnapshot,
   subscribeToStorageChanges,
 } from '../models/storage';
+import { isImageMediaUri } from '../utils/media';
 import { navigateToAvailableRoute } from '../utils/navigation';
 import { getInitialProjectRegion, getProjectMarkerColor, getPrimaryProjectImageSource } from '../utils/projectMap';
 import { getProjectStatusColor } from '../utils/projectStatus';
@@ -225,7 +227,7 @@ export default function MappingScreen({ navigation }: any) {
             </TouchableOpacity>
 
             {selectedProject && (
-              <View style={styles.modalContent}>
+              <ScrollView style={styles.modalContent}>
                 <View style={styles.statusBadge}>
                   <View
                     style={[
@@ -310,7 +312,7 @@ export default function MappingScreen({ navigation }: any) {
                     <Image
                       source={{ uri: matchedPhotoReport.mediaFile }}
                       style={styles.projectPhoto}
-                      resizeMode="cover"
+                      resizeMode="contain"
                     />
                   );
                 })()}
@@ -318,7 +320,7 @@ export default function MappingScreen({ navigation }: any) {
                 <TouchableOpacity style={styles.viewDetailsButton} onPress={handleOpenProjectDetails}>
                   <Text style={styles.viewDetailsButtonText}>View Full Details</Text>
                 </TouchableOpacity>
-              </View>
+              </ScrollView>
             )}
           </View>
         </View>
@@ -437,7 +439,7 @@ const styles = StyleSheet.create({
   },
   projectPhoto: {
     width: '100%',
-    height: 180,
+    minHeight: 250,
     borderRadius: 14,
     marginBottom: 20,
     backgroundColor: '#e5e7eb',

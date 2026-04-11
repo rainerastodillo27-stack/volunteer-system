@@ -4,13 +4,32 @@
 
 ### 1. Install Dependencies
 ```bash
-cd volcre
+cd volunteer-system
 npm install
 ```
 
 ### 2. Start the Development Server
+
+**Recommended (Safe startup with automatic cleanup):**
 ```bash
 npm start
+```
+
+This uses `npm run start:fresh` which:
+- ✅ Stops any existing processes automatically
+- ✅ Waits for backend to initialize
+- ✅ Retries on database deadlocks
+- ✅ Validates all connections before starting
+- ✅ Prevents port conflicts
+
+**Alternative (Manual):**
+```bash
+npm run all
+```
+
+**Stop All Services:**
+```bash
+npm run all:stop
 ```
 
 ### 3. Choose Your Platform

@@ -16,12 +16,14 @@ import CommunicationHubScreen from '../screens/CommunicationHubScreen';
 import UserManagementScreen from '../screens/UserManagementScreen';
 import VolunteerManagementScreen from '../screens/VolunteerManagementScreen';
 import PartnerManagementScreen from '../screens/PartnerManagementScreen';
+import VolunteerTasksScreen from '../screens/VolunteerTasksScreen';
 import { getMessagesForUser, subscribeToMessages } from '../models/storage';
 
 export type TabParamList = {
   Dashboard: undefined;
   Partners: { partnerId?: string } | undefined;
   Projects: { projectId?: string } | undefined;
+  Tasks: undefined;
   Lifecycle: { projectId?: string } | undefined;
   Volunteers: { volunteerId?: string } | undefined;
   Map: undefined;
@@ -47,6 +49,8 @@ const getIconName = (routeName: keyof TabParamList) => {
       return 'business';
     case 'Projects':
       return 'folder';
+    case 'Tasks':
+      return 'assignment';
     case 'Lifecycle':
       return 'timeline';
     case 'Volunteers':
@@ -224,6 +228,7 @@ export default function TabNavigator() {
   const { user, isAdmin } = useAuth();
   const [messageUnreadCount, setMessageUnreadCount] = useState(0);
   const showPartnersTab = isAdmin;
+  const showTasksTab = user?.role === 'volunteer';
   const showLifecycleTab = isAdmin;
   const showVolunteersTab = isAdmin;
   const showUsersTab = isAdmin;
@@ -340,6 +345,14 @@ export default function TabNavigator() {
         component={ProjectsScreen}
         options={{ title: 'Projects' }}
       />
+
+      {showTasksTab && (
+        <Tab.Screen
+          name="Tasks"
+          component={VolunteerTasksScreen}
+          options={{ title: 'My Tasks' }}
+        />
+      )}
 
       {showLifecycleTab && (
         <Tab.Screen
