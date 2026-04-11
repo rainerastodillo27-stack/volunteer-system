@@ -1825,6 +1825,7 @@ export function subscribeToMessages(
   userId: string,
   onChange: (event: MessageSubscriptionEvent) => void
 ): () => void {
+
   let socket: WebSocket | null = null;
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;

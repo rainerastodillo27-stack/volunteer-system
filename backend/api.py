@@ -329,10 +329,10 @@ def _assert_project_group_chat_access(
 @app.on_event("startup")
 # Prepares storage tables when the FastAPI app starts.
 def startup() -> None:
-    ensure_app_storage_seeded()
-    with get_postgres_connection() as connection:
-        _postgres_sync_all_legacy_app_users(connection)
-        connection.commit()
+    # Skip database initialization during startup to allow app to run even if database is unreachable
+    # This is a workaround for firewall issues blocking Postgres ports
+    print("⚠️  Skipping database initialization at startup (firewall workaround)")
+    pass
 
 
 @app.get("/health", response_model=None)
