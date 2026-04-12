@@ -129,7 +129,11 @@ export default function PartnerDashboardScreen({ navigation }: any) {
       );
       setPartnerReports(
         snapshot.partnerReports
-          .filter(report => report.partnerUserId === user.id)
+          .filter(
+            report =>
+              report.submitterUserId === user.id ||
+              report.partnerUserId === user.id
+          )
           .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       );
       setPublishedImpactReports(visibleImpactReports);

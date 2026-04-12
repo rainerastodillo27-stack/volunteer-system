@@ -303,6 +303,9 @@ export default VolunteerReportsDashboard;
 
 function formatReportType(type: string): string {
   const types: Record<string, string> = {
+    General: 'General Report',
+    Medical: 'Medical Report',
+    Logistics: 'Logistics Report',
     volunteer_engagement: 'Volunteer Engagement',
     program_impact: 'Program Impact',
     event_performance: 'Event Performance',
@@ -314,6 +317,9 @@ function formatReportType(type: string): string {
 
 function getReportIcon(type: string): MaterialIconName {
   const icons: Record<string, MaterialIconName> = {
+    General: 'description',
+    Medical: 'local-hospital',
+    Logistics: 'local-shipping',
     volunteer_engagement: 'people',
     program_impact: 'trending-up',
     event_performance: 'event',

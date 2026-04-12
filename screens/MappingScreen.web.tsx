@@ -387,7 +387,9 @@ export default function MappingScreen({ navigation }: any) {
                   style={styles.viewDetailsButton}
                   onPress={handleOpenProjectDetails}
                 >
-                  <Text style={styles.viewDetailsButtonText}>View Full Details</Text>
+                  <Text style={styles.viewDetailsButtonText}>
+                    {user?.role === 'admin' ? 'Open Project Suite' : 'View Full Details'}
+                  </Text>
                 </TouchableOpacity>
               </View>
             )}

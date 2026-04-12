@@ -149,6 +149,7 @@ export default function DashboardScreen({ navigation }: any) {
         ? 'NVC Admin Account'
         : 'Administrator'
       : 'Volunteer Account';
+  const projectWorkspaceLabel = isAdmin ? 'Project Suite' : 'Projects';
   const openProjects = React.useCallback(
     (projectId?: string) => {
       navigateToAvailableRoute(
@@ -245,7 +246,7 @@ export default function DashboardScreen({ navigation }: any) {
             >
               <MaterialIcons name="folder" size={32} color="#4CAF50" />
               <Text style={styles.metricValue}>{projectStats.total}</Text>
-              <Text style={styles.metricLabel}>Projects</Text>
+              <Text style={styles.metricLabel}>{isAdmin ? 'Portfolio' : 'Projects'}</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -286,7 +287,7 @@ export default function DashboardScreen({ navigation }: any) {
 
       {isAdmin && (
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Admin Workflow</Text>
+          <Text style={styles.sectionTitle}>Operations Workflow</Text>
           <View style={styles.metricsGrid}>
             <TouchableOpacity
               style={styles.metricCard}
@@ -344,7 +345,7 @@ export default function DashboardScreen({ navigation }: any) {
       {/* Project Overview */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Project Overview</Text>
+          <Text style={styles.sectionTitle}>{isAdmin ? 'Project Portfolio' : 'Project Overview'}</Text>
           <TouchableOpacity onPress={() => openProjects()}>
             <Text style={styles.viewAll}>View All</Text>
           </TouchableOpacity>
@@ -466,7 +467,7 @@ export default function DashboardScreen({ navigation }: any) {
               onPress={() => openLifecycle()}
             >
               <MaterialIcons name="timeline" size={24} color="#2563eb" />
-              <Text style={styles.actionButtonText}>Lifecycle</Text>
+              <Text style={styles.actionButtonText}>{projectWorkspaceLabel}</Text>
             </TouchableOpacity>
           )}
 

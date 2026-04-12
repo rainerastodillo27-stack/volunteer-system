@@ -2,11 +2,15 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Alert } from 'react-native';
 import { useAuth } from '../contexts/AuthContext';
 import {
+  getAllPartnerReports,
   getAllProjects,
   getAllVolunteers,
-  getMessagesForUser,
+  getImpactHubReportsByUser,
+  reviewPartnerReport,
+  submitImpactHubReport,
+  subscribeToStorageChanges,
 } from '../models/storage';
-import type { Project, Volunteer, UserRole } from '../models/types';
+import type { ImpactHubReportType, PartnerReport, Project, Volunteer, UserRole } from '../models/types';
 import ReportUploadModal from '../components/ReportUploadModal';
 import ReportDetailsModal from '../components/ReportDetailsModal';
 import AdminReportsDashboard from '../components/AdminReportsDashboard';
@@ -17,7 +21,7 @@ export interface SubmittedReport {
   submittedBy: string;
   submitterName: string;
   submitterRole: UserRole;
-  reportType: 'volunteer_engagement' | 'program_impact' | 'event_performance' | 'partner_collaboration' | 'system_metrics';
+  reportType: string;
   title: string;
   description: string;
   projectId?: string;
@@ -32,6 +36,7 @@ export interface SubmittedReport {
     eventsCount?: number;
     geofenceCompliance?: number;
     dataStorageVolume?: number;
+    [key: string]: number | undefined;
   };
   attachments?: {
     url: string;
@@ -46,7 +51,34 @@ export interface SubmittedReport {
   viewedBy?: string[];
 }
 
-export default function ReportsScreen({ navigation }: any) {
+function normalizeImpactHubReport(
+  report: PartnerReport,
+  projects: Project[]
+): SubmittedReport {
+  const linkedProject = projects.find(project => project.id === report.projectId);
+
+  return {
+    id: report.id,
+    submittedBy: report.submitterUserId || report.partnerUserId || '',
+    submitterName: report.submitterName || report.partnerName || 'User',
+    submitterRole: report.submitterRole || 'partner',
+    reportType: report.reportType || 'program_impact',
+    title: report.title || `${report.submitterName || report.partnerName || 'User'} Report`,
+    description: report.description || '',
+    projectId: report.projectId,
+    projectTitle: linkedProject?.title,
+    category: linkedProject?.category,
+    metrics: report.metrics || {},
+    attachments: report.attachments || [],
+    status: report.status === 'Reviewed' ? 'Approved' : 'Submitted',
+    submittedAt: report.createdAt,
+    approvedBy: report.reviewedBy,
+    approvedAt: report.reviewedAt,
+    viewedBy: [],
+  };
+}
+
+export default function ReportsScreen() {
   const { user } = useAuth();
   const [reports, setReports] = useState<SubmittedReport[]>([]);
   const [loading, setLoading] = useState(false);
@@ -57,95 +89,98 @@ export default function ReportsScreen({ navigation }: any) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
 
-  // Load reports and supporting data
-  useEffect(() => {
-    void loadReports();
-    void loadProjects();
-    void loadVolunteers();
-  }, [user?.id]);
+  const loadProjects = useCallback(async () => {
+    const allProjects = await getAllProjects();
+    setProjects(allProjects);
+    return allProjects;
+  }, []);
+
+  const loadVolunteers = useCallback(async () => {
+    const allVolunteers = await getAllVolunteers();
+    setVolunteers(allVolunteers);
+  }, []);
 
   const loadReports = useCallback(async () => {
-    if (!user?.id) return;
+    if (!user?.id) {
+      return;
+    }
+
     setLoading(true);
     try {
-      const syncedMessages = await getMessagesForUser(user.id);
-      // Transform messages to reports (placeholder - would need actual report API)
-      const mockReports: SubmittedReport[] = [
-        {
-          id: 'rpt1',
-          submittedBy: user.id,
-          submitterName: user.name,
-          submitterRole: user.role,
-          reportType: 'volunteer_engagement',
-          title: 'Weekly Volunteer Hours Report',
-          description: 'Summary of volunteer engagement for this week',
-          metrics: {
-            volunteerHours: 156,
-            verifiedAttendance: 45,
-            activeVolunteers: 23,
-          },
-          status: 'Submitted',
-          submittedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-          viewedBy: syncedMessages.length > 0 ? ['admin1'] : [],
-        },
-      ];
-      setReports(mockReports);
+      const allProjects = await loadProjects();
+      const impactReports =
+        user.role === 'admin'
+          ? await getAllPartnerReports()
+          : await getImpactHubReportsByUser(user.id);
+
+      setReports(impactReports.map(report => normalizeImpactHubReport(report, allProjects)));
     } catch (error) {
       console.error('Error loading reports:', error);
       Alert.alert('Error', 'Failed to load reports');
     } finally {
       setLoading(false);
     }
-  }, [user?.id, user?.name, user?.role]);
+  }, [loadProjects, user?.id, user?.role]);
 
-  const loadProjects = useCallback(async () => {
-    try {
-      const allProjects = await getAllProjects();
-      setProjects(allProjects);
-    } catch (error) {
-      console.error('Error loading projects:', error);
-    }
-  }, []);
+  useEffect(() => {
+    void loadReports();
+    void loadVolunteers();
+  }, [loadReports, loadVolunteers]);
 
-  const loadVolunteers = useCallback(async () => {
-    try {
-      const allVolunteers = await getAllVolunteers();
-      setVolunteers(allVolunteers);
-    } catch (error) {
-      console.error('Error loading volunteers:', error);
-    }
-  }, []);
+  useEffect(() => {
+    return subscribeToStorageChanges(['partnerReports', 'projects'], () => {
+      void loadReports();
+    });
+  }, [loadReports]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await loadReports();
+    await Promise.all([loadReports(), loadVolunteers()]);
     setRefreshing(false);
-  }, [loadReports]);
+  }, [loadReports, loadVolunteers]);
 
   const handleUploadReport = useCallback(
-    async (reportData: Omit<SubmittedReport, 'id' | 'submittedAt' | 'submittedBy' | 'submitterName' | 'submitterRole' | 'viewedBy'>) => {
-      if (!user?.id) return;
+    async (
+      reportData: Omit<
+        SubmittedReport,
+        'id' | 'submittedAt' | 'submittedBy' | 'submitterName' | 'submitterRole' | 'viewedBy'
+      >
+    ) => {
+      if (!user?.id) {
+        return;
+      }
 
-      const newReport: SubmittedReport = {
-        ...reportData,
-        id: `rpt_${Date.now()}`,
-        submittedBy: user.id,
-        submitterName: user.name,
-        submitterRole: user.role,
-        submittedAt: new Date().toISOString(),
-        viewedBy: [],
-      };
+      const targetProjectId = reportData.projectId || projects[0]?.id;
+      if (!targetProjectId) {
+        Alert.alert('Validation Error', 'Select a project before submitting a report.');
+        return;
+      }
 
       try {
-        // In production: POST to API
-        setReports(prev => [newReport, ...prev]);
+        await submitImpactHubReport({
+          projectId: targetProjectId,
+          submitterUserId: user.id,
+          submitterName: user.name,
+          submitterRole: user.role,
+          partnerUserId: user.role === 'partner' ? user.id : undefined,
+          partnerName: user.role === 'partner' ? user.name : undefined,
+          reportType: reportData.reportType as ImpactHubReportType,
+          title: reportData.title,
+          description: reportData.description,
+          metrics: Object.fromEntries(
+            Object.entries(reportData.metrics).filter(([, value]) => typeof value === 'number')
+          ) as Record<string, number>,
+          attachments: reportData.attachments,
+        });
         setShowUploadModal(false);
-        Alert.alert('Success', 'Report submitted successfully');
+        await loadReports();
+        Alert.alert('Success', 'Your report was submitted to the impact hub.');
       } catch (error) {
+        console.error('Error submitting report:', error);
         Alert.alert('Error', 'Failed to submit report');
       }
     },
-    [user?.id, user?.name, user?.role]
+    [loadReports, projects, user?.id, user?.name, user?.role]
   );
 
   const handleViewReport = useCallback((report: SubmittedReport) => {
@@ -159,28 +194,30 @@ export default function ReportsScreen({ navigation }: any) {
   }, []);
 
   const handleReviewReport = useCallback(
-    (reportId: string, nextStatus: 'Approved' | 'Rejected', notes: string) => {
-      setReports(current =>
-        current.map(report =>
-          report.id === reportId
-            ? {
-                ...report,
-                status: nextStatus,
-                approvalNotes: notes || undefined,
-                approvedBy: user?.name || user?.id || 'Admin',
-                approvedAt: new Date().toISOString(),
-              }
-            : report
-        )
-      );
-      handleCloseDetails();
+    async (reportId: string, nextStatus: 'Approved' | 'Rejected') => {
+      if (nextStatus === 'Rejected') {
+        Alert.alert('Not Available', 'Impact hub reports currently support review approval only.');
+        return;
+      }
+
+      try {
+        await reviewPartnerReport(reportId, user?.id || '');
+        await loadReports();
+        handleCloseDetails();
+      } catch (error) {
+        console.error('Error reviewing report:', error);
+        Alert.alert('Error', 'Failed to review report');
+      }
     },
-    [handleCloseDetails, user?.id, user?.name]
+    [handleCloseDetails, loadReports, user?.id]
   );
 
   const userReports = useMemo(() => {
-    if (user?.role === 'admin') return reports;
-    return reports.filter(r => r.submittedBy === user?.id);
+    if (user?.role === 'admin') {
+      return reports;
+    }
+
+    return reports.filter(report => report.submittedBy === user?.id);
   }, [reports, user?.id, user?.role]);
 
   const dashboard =
@@ -206,16 +243,16 @@ export default function ReportsScreen({ navigation }: any) {
         refreshing={refreshing}
       />
     ) : (
-    <VolunteerReportsDashboard
-      reports={userReports}
-      projects={projects}
-      onUploadReport={() => setShowUploadModal(true)}
-      onViewReport={handleViewReport}
-      loading={loading}
-      onRefresh={onRefresh}
-      refreshing={refreshing}
-    />
-  );
+      <VolunteerReportsDashboard
+        reports={userReports}
+        projects={projects}
+        onUploadReport={() => setShowUploadModal(true)}
+        onViewReport={handleViewReport}
+        loading={loading}
+        onRefresh={onRefresh}
+        refreshing={refreshing}
+      />
+    );
 
   return (
     <>
@@ -230,8 +267,12 @@ export default function ReportsScreen({ navigation }: any) {
         visible={showDetailsModal}
         report={selectedReport}
         onClose={handleCloseDetails}
-        onApprove={(reportId, notes) => handleReviewReport(reportId, 'Approved', notes)}
-        onReject={(reportId, notes) => handleReviewReport(reportId, 'Rejected', notes)}
+        onApprove={(reportId) => {
+          void handleReviewReport(reportId, 'Approved');
+        }}
+        onReject={(reportId) => {
+          void handleReviewReport(reportId, 'Rejected');
+        }}
         userRole={user?.role}
       />
     </>

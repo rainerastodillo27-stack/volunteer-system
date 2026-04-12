@@ -7,6 +7,13 @@ export type NVCSector = 'Education' | 'Livelihood' | 'Nutrition';
 export type PartnerSectorType = 'NGO' | 'Hospital' | 'Institution' | 'Private';
 export type AdvocacyFocus = 'Nutrition' | 'Education' | 'Livelihood' | 'Disaster';
 export type PartnerReportType = 'General' | 'Medical' | 'Logistics';
+export type ImpactHubReportType =
+  | PartnerReportType
+  | 'volunteer_engagement'
+  | 'program_impact'
+  | 'event_performance'
+  | 'partner_collaboration'
+  | 'system_metrics';
 
 // Represents an application account that can sign in to the system.
 export interface User {
@@ -182,7 +189,10 @@ export interface VolunteerProjectMatch {
   volunteerId: string;
   projectId: string;
   status: 'Requested' | 'Matched' | 'Completed' | 'Cancelled' | 'Rejected';
+  requestedAt?: string;
   matchedAt: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
   hoursContributed: number;
 }
 
@@ -231,12 +241,22 @@ export interface PartnerEventCheckIn {
 export interface PartnerReport {
   id: string;
   projectId: string;
-  partnerId: string;
-  partnerUserId: string;
-  partnerName: string;
-  reportType: PartnerReportType;
+  partnerId?: string;
+  partnerUserId?: string;
+  partnerName?: string;
+  submitterUserId: string;
+  submitterName: string;
+  submitterRole: UserRole;
+  title?: string;
+  reportType: ImpactHubReportType;
   description: string;
   impactCount: number;
+  metrics?: Record<string, number>;
+  attachments?: {
+    url: string;
+    type: 'image' | 'video' | 'document' | 'media';
+    description?: string;
+  }[];
   mediaFile?: string;
   createdAt: string;
   status: 'Submitted' | 'Reviewed';

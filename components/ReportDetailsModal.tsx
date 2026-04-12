@@ -286,6 +286,9 @@ export default function ReportDetailsModal({
 
 function formatReportType(type: string): string {
   const types: Record<string, string> = {
+    General: 'General Report',
+    Medical: 'Medical Report',
+    Logistics: 'Logistics Report',
     volunteer_engagement: 'Volunteer Engagement',
     program_impact: 'Program Impact',
     event_performance: 'Event Performance',

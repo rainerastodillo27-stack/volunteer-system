@@ -351,7 +351,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
     source: ImageSourcePropType;
   } | null>(null);
   const [expandedCategories, setExpandedCategories] = useState<Set<Project['category']>>(
-    new Set(['Education', 'Livelihood', 'Nutrition', 'Disaster'])
+    new Set()
   );
 
   // Applies the latest project snapshot to local screen state.

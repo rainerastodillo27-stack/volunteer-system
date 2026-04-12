@@ -74,6 +74,18 @@ class PartnerProjectJoinRequestPayload(BaseModel):
     partnerEmail: str = ""
 
 
+# Request payload for reviewing a partner join request.
+class PartnerProjectApplicationReviewPayload(BaseModel):
+    status: str
+    reviewedBy: str
+
+
+# Request payload for reviewing a volunteer join request.
+class VolunteerMatchReviewPayload(BaseModel):
+    status: str
+    reviewedBy: str
+
+
 # Request payload for direct chat messages.
 class MessagePayload(BaseModel):
     id: str
@@ -1049,6 +1061,127 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
         connection.commit()
     await connection_manager.broadcast_storage_event(["partnerProjectApplications"])
     return {"application": application}
+
+
+@app.post("/partner-project-applications/{application_id}/review")
+# API endpoint that approves or rejects a partner join request.
+async def review_partner_project_application(
+    application_id: str, payload: PartnerProjectApplicationReviewPayload
+) -> dict[str, Any]:
+    _require_postgres()
+    next_status = str(payload.status or "").strip()
+    if next_status not in {"Approved", "Rejected"}:
+        raise HTTPException(status_code=400, detail="Partner application review must approve or reject the request.")
+
+    reviewed_by = str(payload.reviewedBy or "").strip()
+    if not reviewed_by:
+        raise HTTPException(status_code=400, detail="A reviewer id is required.")
+
+    broadcast_keys = ["partnerProjectApplications"]
+    with get_postgres_connection() as connection:
+        application = _postgres_get_hot_item_by_id(connection, "partnerProjectApplications", application_id)
+        if application is None:
+            raise HTTPException(status_code=404, detail="Application not found.")
+
+        updated_application = {
+            **application,
+            "status": next_status,
+            "reviewedAt": datetime.now(timezone.utc).isoformat(),
+            "reviewedBy": reviewed_by,
+        }
+        _postgres_upsert_hot_item(connection, "partnerProjectApplications", updated_application)
+
+        if next_status == "Approved":
+            project = _postgres_get_hot_item_by_id(connection, "projects", str(application.get("projectId") or ""))
+            if project is not None:
+                partner_user_id = str(application.get("partnerUserId") or "")
+                joined_user_ids = list(project.get("joinedUserIds") or [])
+                if partner_user_id and partner_user_id not in joined_user_ids:
+                    _postgres_upsert_hot_item(
+                        connection,
+                        "projects",
+                        {
+                            **project,
+                            "joinedUserIds": [*joined_user_ids, partner_user_id],
+                            "updatedAt": datetime.now(timezone.utc).isoformat(),
+                        },
+                    )
+                    broadcast_keys.append("projects")
+
+        connection.commit()
+
+    await connection_manager.broadcast_storage_event(broadcast_keys)
+    return {"application": updated_application}
+
+
+@app.post("/volunteer-matches/{match_id}/review")
+# API endpoint that approves or rejects a volunteer join request.
+async def review_volunteer_match(match_id: str, payload: VolunteerMatchReviewPayload) -> dict[str, Any]:
+    _require_postgres()
+    next_status = str(payload.status or "").strip()
+    if next_status not in {"Matched", "Rejected"}:
+        raise HTTPException(status_code=400, detail="Volunteer request review must match or reject the request.")
+
+    reviewed_by = str(payload.reviewedBy or "").strip()
+    if not reviewed_by:
+        raise HTTPException(status_code=400, detail="A reviewer id is required.")
+
+    broadcast_keys = ["volunteerMatches"]
+    with get_postgres_connection() as connection:
+        match = _postgres_get_hot_item_by_id(connection, "volunteerMatches", match_id)
+        if match is None:
+            raise HTTPException(status_code=404, detail="Volunteer request not found.")
+
+        volunteer_id = str(match.get("volunteerId") or "")
+        volunteer = _postgres_get_hot_item_by_id(connection, "volunteers", volunteer_id)
+        if volunteer is None:
+            raise HTTPException(status_code=404, detail="Volunteer not found.")
+
+        project_id = str(match.get("projectId") or "")
+        project = _postgres_get_hot_item_by_id(connection, "projects", project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found.")
+
+        updated_match = {
+            **match,
+            "status": next_status,
+            "requestedAt": str(match.get("requestedAt") or match.get("matchedAt") or ""),
+            "matchedAt": datetime.now(timezone.utc).isoformat(),
+            "reviewedAt": datetime.now(timezone.utc).isoformat(),
+            "reviewedBy": reviewed_by,
+        }
+        _postgres_upsert_hot_item(connection, "volunteerMatches", updated_match)
+
+        if next_status == "Matched":
+            joined_user_ids = list(project.get("joinedUserIds") or [])
+            volunteer_ids = list(project.get("volunteers") or [])
+            volunteer_user_id = str(volunteer.get("userId") or "")
+
+            _postgres_upsert_hot_item(
+                connection,
+                "projects",
+                {
+                    **project,
+                    "joinedUserIds": joined_user_ids
+                    if volunteer_user_id in joined_user_ids
+                    else [*joined_user_ids, volunteer_user_id],
+                    "volunteers": volunteer_ids
+                    if volunteer_id in volunteer_ids
+                    else [*volunteer_ids, volunteer_id],
+                    "updatedAt": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            _postgres_ensure_volunteer_project_join_record(connection, project_id, volunteer, "VolunteerJoin")
+            broadcast_keys.extend(["projects", "volunteerProjectJoins"])
+
+        updated_volunteer = _postgres_sync_volunteer_engagement_status(connection, volunteer_id)
+        if updated_volunteer is not None:
+            broadcast_keys.append("volunteers")
+
+        connection.commit()
+
+    await connection_manager.broadcast_storage_event(list(dict.fromkeys(broadcast_keys)))
+    return {"match": updated_match}
 
 
 @app.post("/projects/{project_id}/join")

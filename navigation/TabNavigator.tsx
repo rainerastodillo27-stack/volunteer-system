@@ -50,7 +50,7 @@ const getIconName = (routeName: keyof TabParamList) => {
     case 'Partners':
       return 'business';
     case 'Projects':
-      return 'folder';
+      return 'business-center';
     case 'Tasks':
       return 'assignment';
     case 'Lifecycle':
@@ -233,7 +233,6 @@ export default function TabNavigator() {
   const [messageUnreadCount, setMessageUnreadCount] = useState(0);
   const showPartnersTab = isAdmin;
   const showTasksTab = user?.role === 'volunteer';
-  const showLifecycleTab = isAdmin;
   const showVolunteersTab = isAdmin;
   const showUsersTab = isAdmin;
   const dashboardTitle =
@@ -243,6 +242,8 @@ export default function TabNavigator() {
       ? 'Volunteer Dashboard'
       : 'Admin Dashboard';
   const dashboardComponent = user?.role === 'partner' ? PartnerDashboardScreen : DashboardScreen;
+  const projectWorkspaceComponent = isAdmin ? ProjectLifecycleScreen : ProjectsScreen;
+  const projectWorkspaceTitle = isAdmin ? 'Project Suite' : 'Projects';
   const isWeb = Platform.OS === 'web';
   const useSidebar = isWeb && isAdmin;
   const [collapsed, setCollapsed] = useState(true);
@@ -346,8 +347,8 @@ export default function TabNavigator() {
 
       <Tab.Screen
         name="Projects"
-        component={ProjectsScreen}
-        options={{ title: 'Projects' }}
+        component={projectWorkspaceComponent}
+        options={{ title: projectWorkspaceTitle, tabBarLabel: projectWorkspaceTitle }}
       />
 
       {showTasksTab && (
@@ -355,14 +356,6 @@ export default function TabNavigator() {
           name="Tasks"
           component={VolunteerTasksScreen}
           options={{ title: 'My Tasks' }}
-        />
-      )}
-
-      {showLifecycleTab && (
-        <Tab.Screen
-          name="Lifecycle"
-          component={ProjectLifecycleScreen}
-          options={{ title: 'Lifecycle' }}
         />
       )}
 

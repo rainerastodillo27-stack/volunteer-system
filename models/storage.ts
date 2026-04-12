@@ -2,6 +2,7 @@ import Constants from 'expo-constants';
 import { NativeModules, Platform } from 'react-native';
 import {
   AdvocacyFocus,
+  ImpactHubReportType,
   PartnerEventCheckIn,
   PartnerReport,
   PartnerReportType,
@@ -144,7 +145,7 @@ async function notifyAdminAboutPartnerProjectJoin(
   await sendSystemMessage(
     partnerUser.id,
     adminUser.id,
-    `${partnerUser.name}${partnerEmail} requested to join "${project.title}". Review it in Program Lifecycle to approve or reject.`
+    `${partnerUser.name}${partnerEmail} requested to join "${project.title}". Review it in the Project Management Suite to approve or reject.`
   );
 }
 
@@ -189,7 +190,7 @@ async function notifyAdminAboutVolunteerProjectJoinRequest(
   await sendSystemMessage(
     volunteer.userId,
     adminUser.id,
-    `${volunteer.name}${volunteerEmail} requested to join "${project.title}". Review it in Program Lifecycle to approve or reject.`
+    `${volunteer.name}${volunteerEmail} requested to join "${project.title}". Review it in the Project Management Suite to approve or reject.`
   );
 }
 
@@ -2093,7 +2094,10 @@ export async function requestVolunteerProjectJoin(
     volunteerId: volunteer.id,
     projectId,
     status: 'Requested',
+    requestedAt: existingMatch?.requestedAt || new Date().toISOString(),
     matchedAt: new Date().toISOString(),
+    reviewedAt: undefined,
+    reviewedBy: undefined,
     hoursContributed: existingMatch?.hoursContributed || 0,
   };
 
@@ -2114,33 +2118,29 @@ export async function reviewVolunteerProjectMatch(
   nextStatus: 'Matched' | 'Rejected',
   reviewedBy: string
 ): Promise<VolunteerProjectMatch> {
-  const matches = await getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES) || [];
-  const existingMatch = matches.find(match => match.id === matchId) || null;
+  const payload = await requestApiJson<{ match?: VolunteerProjectMatch | null }>(
+    `/volunteer-matches/${encodeURIComponent(matchId)}/review`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        status: nextStatus,
+        reviewedBy,
+      }),
+    }
+  );
 
-  if (!existingMatch) {
-    throw new Error('Volunteer request not found.');
-  }
-
-  const volunteer = await getVolunteer(existingMatch.volunteerId);
-  if (!volunteer) {
-    throw new Error('Volunteer not found.');
-  }
-
-  const updatedMatch: VolunteerProjectMatch = {
-    ...existingMatch,
-    status: nextStatus,
-    matchedAt: new Date().toISOString(),
-  };
-
-  await saveVolunteerProjectMatch(updatedMatch);
-  if (nextStatus === 'Matched') {
-    await ensureVolunteerProjectJoinRecord(updatedMatch.projectId, updatedMatch.volunteerId, 'VolunteerJoin');
+  if (!payload.match) {
+    throw new Error('Volunteer request review did not complete.');
   }
 
   try {
+    const volunteer = await getVolunteer(payload.match.volunteerId);
     await notifyVolunteerAboutProjectMatchDecision(
-      updatedMatch.projectId,
-      volunteer.userId,
+      payload.match.projectId,
+      volunteer?.userId || '',
       reviewedBy,
       nextStatus,
       'request'
@@ -2149,7 +2149,7 @@ export async function reviewVolunteerProjectMatch(
     console.error('Error notifying volunteer about request review:', error);
   }
 
-  return updatedMatch;
+  return payload.match;
 }
 
 // Immediately assigns a volunteer to a project on behalf of an admin.
@@ -2186,7 +2186,10 @@ export async function assignVolunteerToProject(
     volunteerId,
     projectId,
     status: 'Matched',
+    requestedAt: existingMatch?.requestedAt,
     matchedAt: new Date().toISOString(),
+    reviewedAt: new Date().toISOString(),
+    reviewedBy: assignedBy,
     hoursContributed: existingMatch?.hoursContributed || 0,
   };
 
@@ -2381,39 +2384,26 @@ export async function reviewPartnerProjectApplication(
   status: 'Approved' | 'Rejected',
   reviewedBy: string
 ): Promise<void> {
-  const applications =
-    await getStorageItem<PartnerProjectApplication[]>(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS) || [];
-  const applicationIndex = applications.findIndex(app => app.id === applicationId);
-  if (applicationIndex === -1) {
-    throw new Error('Application not found');
-  }
-
-  const application = applications[applicationIndex];
-  const updatedApplication: PartnerProjectApplication = {
-    ...application,
-    status,
-    reviewedAt: new Date().toISOString(),
-    reviewedBy,
-  };
-  applications[applicationIndex] = updatedApplication;
-  await setStorageItem(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS, applications);
-
-  if (status === 'Approved') {
-    const project = await getProject(application.projectId);
-    if (!project) return;
-
-    const joinedUserIds = project.joinedUserIds || [];
-    if (!joinedUserIds.includes(application.partnerUserId)) {
-      await saveProject({
-        ...project,
-        joinedUserIds: [...joinedUserIds, application.partnerUserId],
-        updatedAt: new Date().toISOString(),
-      });
+  const payload = await requestApiJson<{ application?: PartnerProjectApplication | null }>(
+    `/partner-project-applications/${encodeURIComponent(applicationId)}/review`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        status,
+        reviewedBy,
+      }),
     }
+  );
+
+  if (!payload.application) {
+    throw new Error('Application review did not complete.');
   }
 
   try {
-    await notifyPartnerAboutProjectJoinReview(updatedApplication, reviewedBy);
+    await notifyPartnerAboutProjectJoinReview(payload.application, reviewedBy);
   } catch (error) {
     console.error('Error notifying partner about application review:', error);
   }
@@ -2559,7 +2549,11 @@ export async function getPartnerReportsByProject(projectId: string): Promise<Par
 export async function getPartnerReportsByUser(partnerUserId: string): Promise<PartnerReport[]> {
   const reports = await getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [];
   return reports
-    .filter(report => report.partnerUserId === partnerUserId)
+    .filter(
+      report =>
+        report.submitterUserId === partnerUserId ||
+        report.partnerUserId === partnerUserId
+    )
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 
@@ -2567,6 +2561,74 @@ export async function getPartnerReportsByUser(partnerUserId: string): Promise<Pa
 export async function getAllPartnerReports(): Promise<PartnerReport[]> {
   const reports = await getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [];
   return reports.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+// Returns every impact-hub report submitted by one user regardless of role.
+export async function getImpactHubReportsByUser(userId: string): Promise<PartnerReport[]> {
+  const reports = await getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [];
+  return reports
+    .filter(report => report.submitterUserId === userId || report.partnerUserId === userId)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+function calculateImpactCountFromMetrics(metrics?: Record<string, number>): number {
+  if (!metrics) {
+    return 0;
+  }
+
+  return Object.values(metrics).reduce(
+    (sum, value) => sum + (Number.isFinite(value) ? value : 0),
+    0
+  );
+}
+
+// Submits one report into the shared impact hub for any supported role.
+export async function submitImpactHubReport(input: {
+  projectId: string;
+  submitterUserId: string;
+  submitterName: string;
+  submitterRole: UserRole;
+  reportType: ImpactHubReportType;
+  title?: string;
+  description: string;
+  impactCount?: number;
+  metrics?: Record<string, number>;
+  attachments?: {
+    url: string;
+    type: 'image' | 'video' | 'document' | 'media';
+    description?: string;
+  }[];
+  mediaFile?: string;
+  partnerId?: string;
+  partnerUserId?: string;
+  partnerName?: string;
+}): Promise<PartnerReport> {
+  const normalizedMetrics = input.metrics || {};
+  const report: PartnerReport = {
+    id: `impact-report-${Date.now()}`,
+    projectId: input.projectId,
+    partnerId: input.partnerId,
+    partnerUserId: input.partnerUserId,
+    partnerName: input.partnerName,
+    submitterUserId: input.submitterUserId,
+    submitterName: input.submitterName,
+    submitterRole: input.submitterRole,
+    title: input.title?.trim() || undefined,
+    reportType: input.reportType,
+    description: input.description.trim(),
+    impactCount:
+      input.impactCount !== undefined
+        ? input.impactCount
+        : calculateImpactCountFromMetrics(normalizedMetrics),
+    metrics: normalizedMetrics,
+    attachments: input.attachments || [],
+    mediaFile: input.mediaFile?.trim() || undefined,
+    createdAt: new Date().toISOString(),
+    status: 'Submitted',
+  };
+
+  await savePartnerReport(report);
+  return report;
 }
 
 // Submits a partner impact or operations report.
@@ -2580,22 +2642,19 @@ export async function submitPartnerReport(input: {
   impactCount: number;
   mediaFile?: string;
 }): Promise<PartnerReport> {
-  const report: PartnerReport = {
-    id: `partner-report-${Date.now()}`,
+  return submitImpactHubReport({
     projectId: input.projectId,
+    submitterUserId: input.partnerUserId,
+    submitterName: input.partnerName,
+    submitterRole: 'partner',
     partnerId: input.partnerId,
     partnerUserId: input.partnerUserId,
     partnerName: input.partnerName,
     reportType: input.reportType,
-    description: input.description.trim(),
+    description: input.description,
     impactCount: input.impactCount,
-    mediaFile: input.mediaFile?.trim() || undefined,
-    createdAt: new Date().toISOString(),
-    status: 'Submitted',
-  };
-
-  await savePartnerReport(report);
-  return report;
+    mediaFile: input.mediaFile,
+  });
 }
 
 // Marks a submitted partner report as reviewed by admin.

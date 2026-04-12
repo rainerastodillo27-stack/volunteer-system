@@ -10,6 +10,7 @@ import {
   TextInput,
   Image,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -95,6 +96,8 @@ type ProjectVolunteerRequestEntry = {
   volunteerName: string;
   volunteerEmail: string;
   requestedAt: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
   status: VolunteerProjectMatch['status'];
 };
 
@@ -163,7 +166,7 @@ function getProjectDraftModule(project: Project): AdvocacyFocus {
     : (project.category as AdvocacyFocus);
 }
 
-// Gives admins a project lifecycle workspace for projects, updates, and approvals.
+// Gives admins a unified project operations workspace for planning, delivery, and approvals.
 export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const { user, isAdmin } = useAuth();
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
@@ -835,6 +838,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         ? `Allow ${requestEntry.volunteerName} to join this program? The volunteer will be notified.`
         : `Reject ${requestEntry.volunteerName}'s join request? The volunteer will be notified.`;
 
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof window.confirm === 'function') {
+      if (window.confirm(message)) {
+        void handleReviewVolunteerRequest(requestEntry.id, nextStatus);
+      }
+      return;
+    }
+
     Alert.alert(
       `${actionLabel} Volunteer Request`,
       message,
@@ -932,7 +942,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           volunteerUserId: volunteer.userId,
           volunteerName: volunteer.name,
           volunteerEmail: volunteer.email,
-          requestedAt: match.matchedAt,
+          requestedAt: match.requestedAt || match.matchedAt,
+          reviewedAt: match.reviewedAt,
+          reviewedBy: match.reviewedBy,
           status: match.status,
         };
       })
@@ -1361,8 +1373,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     const approvedPartnerApplications = partnerApplications.filter(
       application => application.status === 'Approved',
     );
+    const rejectedPartnerApplications = partnerApplications.filter(
+      application => application.status === 'Rejected',
+    );
     const pendingVolunteerRequestEntries = volunteerRequestEntries.filter(
       requestEntry => requestEntry.status === 'Requested',
+    );
+    const rejectedVolunteerRequestEntries = volunteerRequestEntries.filter(
+      requestEntry => requestEntry.status === 'Rejected',
     );
     const projectTimeLogEntries: ProjectTimeLogEntry[] = volunteerTimeLogs
       .filter(log => log.projectId === selectedProject.id)
@@ -1694,6 +1712,43 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           </View>
 
           <View style={styles.detailsSection}>
+            <Text style={styles.sectionTitle}>Rejected Partner Requests</Text>
+
+            {rejectedPartnerApplications.length === 0 ? (
+              <Text style={styles.emptyText}>No rejected partner requests</Text>
+            ) : (
+              <View style={styles.updatesList}>
+                {rejectedPartnerApplications.map(application => (
+                  <View key={application.id} style={styles.applicationCard}>
+                    <View style={styles.applicationHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.applicationName}>{application.partnerName}</Text>
+                        <Text style={styles.applicationMeta}>{application.partnerEmail}</Text>
+                        <Text style={styles.applicationMeta}>
+                          Requested {format(new Date(application.requestedAt), 'PPpp')}
+                        </Text>
+                        {application.reviewedAt ? (
+                          <Text style={styles.applicationMeta}>
+                            Rejected {format(new Date(application.reviewedAt), 'PPpp')}
+                          </Text>
+                        ) : null}
+                      </View>
+                      <View
+                        style={[
+                          styles.applicationStatusBadge,
+                          styles.applicationStatusRejected,
+                        ]}
+                      >
+                        <Text style={styles.applicationStatusText}>Rejected</Text>
+                      </View>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            )}
+          </View>
+
+          <View style={styles.detailsSection}>
             <Text style={styles.sectionTitle}>Project Time Tracking</Text>
             <View style={styles.timelineDetails}>
               <Text style={styles.timelineLabel}>Time Ins:</Text>
@@ -1814,6 +1869,58 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
           <View style={styles.detailsSection}>
             <Text style={styles.sectionTitle}>
+              Rejected Volunteer Join Requests ({rejectedVolunteerRequestEntries.length})
+            </Text>
+
+            {rejectedVolunteerRequestEntries.length === 0 ? (
+              <Text style={styles.emptyText}>No rejected volunteer join requests</Text>
+            ) : (
+              <View style={styles.updatesList}>
+                {rejectedVolunteerRequestEntries.map(requestEntry => (
+                  <View key={requestEntry.id} style={styles.applicationCard}>
+                    <View style={styles.applicationHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.applicationName}>{requestEntry.volunteerName}</Text>
+                        <Text style={styles.applicationMeta}>{requestEntry.volunteerEmail}</Text>
+                        <Text style={styles.applicationMeta}>
+                          Requested {format(new Date(requestEntry.requestedAt), 'PPpp')}
+                        </Text>
+                        {requestEntry.reviewedAt ? (
+                          <Text style={styles.applicationMeta}>
+                            Rejected {format(new Date(requestEntry.reviewedAt), 'PPpp')}
+                          </Text>
+                        ) : null}
+                        {requestEntry.reviewedBy ? (
+                          <Text style={styles.applicationMeta}>
+                            Reviewed by {requestEntry.reviewedBy}
+                          </Text>
+                        ) : null}
+                      </View>
+                      <View
+                        style={[
+                          styles.applicationStatusBadge,
+                          styles.applicationStatusRejected,
+                        ]}
+                      >
+                        <Text style={styles.applicationStatusText}>Rejected</Text>
+                      </View>
+                    </View>
+
+                    <TouchableOpacity
+                      style={styles.viewVolunteerProfileButton}
+                      onPress={() => openVolunteerProfile(requestEntry.volunteerId)}
+                    >
+                      <MaterialIcons name="person-search" size={16} color="#2563eb" />
+                      <Text style={styles.viewVolunteerProfileText}>Open Volunteer Profile</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            )}
+          </View>
+
+          <View style={styles.detailsSection}>
+            <Text style={styles.sectionTitle}>
               Volunteer Participants ({volunteerEntries.length})
             </Text>
 
@@ -1912,18 +2019,23 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               )}
             </View>
 
-            <Text style={styles.timelineLabel}>Partner Reports</Text>
+            <Text style={styles.timelineLabel}>Submitted Reports</Text>
             {partnerReports.length === 0 ? (
-              <Text style={styles.emptyText}>No partner reports uploaded yet</Text>
+              <Text style={styles.emptyText}>No impact hub reports uploaded yet</Text>
             ) : (
               <View style={styles.updatesList}>
                 {partnerReports.map(report => (
                   <View key={report.id} style={styles.applicationCard}>
                     <View style={styles.applicationHeader}>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.applicationName}>{report.partnerName}</Text>
+                        <Text style={styles.applicationName}>
+                          {report.title || report.submitterName || report.partnerName || 'Report'}
+                        </Text>
                         <Text style={styles.applicationMeta}>
                           {report.reportType} • Impact {report.impactCount}
+                        </Text>
+                        <Text style={styles.applicationMeta}>
+                          Submitted by {report.submitterName || report.partnerName || 'User'}
                         </Text>
                         <Text style={styles.applicationMeta}>{report.description}</Text>
                         <Text style={styles.applicationMeta}>
@@ -2290,11 +2402,16 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   return (
     <ScrollView style={styles.container}>
       <View style={styles.listHeader}>
-        <Text style={styles.title}>Project Lifecycle Tracking</Text>
+        <View style={styles.listHeaderCopy}>
+          <Text style={styles.title}>Project Management Suite</Text>
+          <Text style={styles.listSubtitle}>
+            Centralize planning, approvals, delivery tracking, and reporting in one business-ready workspace.
+          </Text>
+        </View>
         {isAdmin && (
           <TouchableOpacity style={styles.createProjectButton} onPress={openCreateProjectModal}>
             <MaterialIcons name="add" size={18} color="#fff" />
-            <Text style={styles.createProjectButtonText}>New Program</Text>
+            <Text style={styles.createProjectButtonText}>New Initiative</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -2318,7 +2435,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       {!loadError && projects.length === 0 ? (
         <View style={styles.emptyState}>
           <MaterialIcons name="folder-open" size={48} color="#ccc" />
-          <Text style={styles.emptyText}>No projects found</Text>
+          <Text style={styles.emptyText}>No initiatives found</Text>
         </View>
       ) : (
         <View style={styles.list}>{projects.map(renderProjectCard)}</View>
@@ -2347,10 +2464,13 @@ const styles = StyleSheet.create({
   },
   listHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
     marginBottom: 16,
     gap: 12,
+  },
+  listHeaderCopy: {
+    flex: 1,
   },
   inlineErrorWrap: {
     marginBottom: 16,
@@ -2359,8 +2479,12 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: 'bold',
     color: '#333',
-    textAlign: 'center',
-    flex: 1,
+  },
+  listSubtitle: {
+    marginTop: 6,
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#64748b',
   },
   createProjectButton: {
     flexDirection: 'row',
