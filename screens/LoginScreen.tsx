@@ -58,6 +58,8 @@ type SignupPartnerApplicationState = {
   advocacyFocus: AdvocacyFocus[];
 };
 
+type SignupStep = 'role' | 'details';
+
 // Returns a clean volunteer membership form state for the signup modal.
 function createEmptySignupVolunteerSheet(): SignupVolunteerSheetState {
   return {
@@ -116,6 +118,7 @@ export default function LoginScreen() {
   const [initialized, setInitialized] = useState(false);
   const [loginError, setLoginError] = useState<{ title: string; message: string } | null>(null);
   const [showSignupModal, setShowSignupModal] = useState(false);
+  const [signupStep, setSignupStep] = useState<SignupStep>('role');
   const [signupLoading, setSignupLoading] = useState(false);
   const [signupName, setSignupName] = useState('');
   const [signupEmail, setSignupEmail] = useState('');
@@ -356,6 +359,25 @@ export default function LoginScreen() {
     setFilteredCities([]);
     setFilteredBarangays([]);
     setSignupAcceptedCommitment(false);
+    setSignupStep('role');
+  };
+
+  const openSignupModal = () => {
+    resetSignupForm();
+    setShowSignupModal(true);
+  };
+
+  const closeSignupModal = () => {
+    setShowSignupModal(false);
+    resetSignupForm();
+  };
+
+  const handleSelectSignupRole = (role: Exclude<UserRole, 'admin'>) => {
+    setSignupRole(role);
+    if (role === 'partner') {
+      setSignupUserType('Adult');
+    }
+    setSignupStep('details');
   };
 
   // Updates one field in the volunteer membership form without replacing the whole object.
@@ -693,8 +715,8 @@ export default function LoginScreen() {
           </View>
         )}
 
-        <TouchableOpacity onPress={() => setShowSignupModal(true)}>
-          <Text style={styles.signupText}>Don't have an account? Register</Text>
+        <TouchableOpacity onPress={openSignupModal}>
+          <Text style={styles.signupText}>Sign up as Volunteer or Partner</Text>
         </TouchableOpacity>
       </View>
 
@@ -702,225 +724,249 @@ export default function LoginScreen() {
         visible={showSignupModal}
         animationType="slide"
         transparent
-        onRequestClose={() => setShowSignupModal(false)}
+        onRequestClose={closeSignupModal}
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>
-              {signupRole === 'partner' ? 'Partner Registration' : 'Create Account'}
+              {signupStep === 'role'
+                ? 'Choose Account Type'
+                : signupRole === 'partner'
+                ? 'Partner Registration'
+                : 'Volunteer Registration'}
             </Text>
             <Text style={styles.modalSubtitle}>
-              {signupRole === 'volunteer'
+              {signupStep === 'role'
+                ? 'Choose how you want to sign up. Access after registration will follow the selected role.'
+                : signupRole === 'volunteer'
                 ? 'Register with email or phone, choose a profile type, and complete the volunteer membership information sheet.'
                 : 'Submit your organization application with DSWD details. Partner login is unlocked after admin approval.'}
             </Text>
 
-            <ScrollView
-              style={styles.modalForm}
-              contentContainerStyle={styles.modalFormContent}
-              showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
-            >
-              <TextInput
-                style={styles.input}
-                placeholder={signupRole === 'partner' ? 'Primary Contact Name' : 'Full Name'}
-                placeholderTextColor="#999"
-                value={signupName}
-                onChangeText={setSignupName}
-                editable={!signupLoading}
-              />
-              <TextInput
-                style={styles.input}
-                placeholder="Email Address"
-                placeholderTextColor="#999"
-                value={signupEmail}
-                onChangeText={setSignupEmail}
-                keyboardType="email-address"
-                autoCapitalize="none"
-                editable={!signupLoading}
-              />
-              <TextInput
-                style={styles.input}
-                placeholder="Phone Number"
-                placeholderTextColor="#999"
-                value={signupAccountPhone}
-                onChangeText={setSignupAccountPhone}
-                keyboardType="phone-pad"
-                editable={!signupLoading}
-              />
-              <TextInput
-                style={styles.input}
-                placeholder="Password"
-                placeholderTextColor="#999"
-                value={signupPassword}
-                onChangeText={setSignupPassword}
-                secureTextEntry
-                editable={!signupLoading}
-              />
-
-              <View style={styles.roleSelector}>
-                {(['volunteer', 'partner'] as const).map(role => (
+            {signupStep === 'role' ? (
+              <View style={styles.signupRoleChoiceGrid}>
+                {([
+                  {
+                    role: 'volunteer' as const,
+                    icon: 'volunteer-activism' as const,
+                    title: 'Volunteer',
+                    description: 'Join projects, log hours, and access volunteer-only screens after approval.',
+                  },
+                  {
+                    role: 'partner' as const,
+                    icon: 'business' as const,
+                    title: 'Partner Organization',
+                    description: 'Submit an organization application and access partner tools after approval.',
+                  },
+                ]).map(option => (
                   <TouchableOpacity
-                    key={role}
-                    style={[styles.roleChip, signupRole === role && styles.roleChipActive]}
-                    onPress={() => setSignupRole(role)}
-                    disabled={signupLoading}
+                    key={option.role}
+                    style={styles.signupRoleCard}
+                    onPress={() => handleSelectSignupRole(option.role)}
                   >
-                    <Text style={[styles.roleChipText, signupRole === role && styles.roleChipTextActive]}>
-                      {role === 'volunteer' ? 'Volunteer' : 'Partner'}
+                    <View style={styles.signupRoleCardHeader}>
+                      <MaterialIcons name={option.icon} size={22} color="#166534" />
+                      <Text style={styles.signupRoleCardTitle}>{option.title}</Text>
+                    </View>
+                    <Text style={styles.signupRoleCardDescription}>{option.description}</Text>
+                    <Text style={styles.signupRoleCardAction}>
+                      {option.role === 'volunteer' ? 'Continue as Volunteer' : 'Continue as Partner'}
                     </Text>
                   </TouchableOpacity>
                 ))}
               </View>
+            ) : (
+              <ScrollView
+                style={styles.modalForm}
+                contentContainerStyle={styles.modalFormContent}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+              >
+                <TextInput
+                  style={styles.input}
+                  placeholder={signupRole === 'partner' ? 'Primary Contact Name' : 'Full Name'}
+                  placeholderTextColor="#999"
+                  value={signupName}
+                  onChangeText={setSignupName}
+                  editable={!signupLoading}
+                />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Email Address"
+                  placeholderTextColor="#999"
+                  value={signupEmail}
+                  onChangeText={setSignupEmail}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  editable={!signupLoading}
+                />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Phone Number"
+                  placeholderTextColor="#999"
+                  value={signupAccountPhone}
+                  onChangeText={setSignupAccountPhone}
+                  keyboardType="phone-pad"
+                  editable={!signupLoading}
+                />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Password"
+                  placeholderTextColor="#999"
+                  value={signupPassword}
+                  onChangeText={setSignupPassword}
+                  secureTextEntry
+                  editable={!signupLoading}
+                />
 
-              {signupRole === 'volunteer' ? (
-                <>
-                  <Text style={styles.modalSectionLabel}>Profile Creation</Text>
-                  <View style={styles.roleSelector}>
-                    {(['Student', 'Adult', 'Senior'] as const).map(userType => (
-                      <TouchableOpacity
-                        key={userType}
-                        style={[styles.roleChip, signupUserType === userType && styles.roleChipActive]}
-                        onPress={() => setSignupUserType(userType)}
-                        disabled={signupLoading}
-                      >
-                        <Text style={[styles.roleChipText, signupUserType === userType && styles.roleChipTextActive]}>
-                          {userType}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-
-                  <Text style={styles.modalSectionLabel}>Preferences</Text>
-                  <View style={styles.pillarGrid}>
-                    {(['Nutrition', 'Education', 'Livelihood'] as const).map(pillar => {
-                      const selected = signupPillars.includes(pillar);
-                      return (
+                {signupRole === 'volunteer' ? (
+                  <>
+                    <Text style={styles.modalSectionLabel}>Profile Creation</Text>
+                    <View style={styles.roleSelector}>
+                      {(['Student', 'Adult', 'Senior'] as const).map(userType => (
                         <TouchableOpacity
-                          key={pillar}
-                          style={[styles.pillarChip, selected && styles.pillarChipActive]}
-                          onPress={() =>
-                            setSignupPillars(current =>
-                              current.includes(pillar)
-                                ? current.filter(item => item !== pillar)
-                                : [...current, pillar]
-                            )
-                          }
+                          key={userType}
+                          style={[styles.roleChip, signupUserType === userType && styles.roleChipActive]}
+                          onPress={() => setSignupUserType(userType)}
                           disabled={signupLoading}
                         >
-                          <Text style={[styles.pillarChipText, selected && styles.pillarChipTextActive]}>
-                            {pillar}
+                          <Text style={[styles.roleChipText, signupUserType === userType && styles.roleChipTextActive]}>
+                            {userType}
                           </Text>
                         </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                </>
-              ) : (
-                <>
-                  <Text style={styles.modalSectionLabel}>Organization Application</Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Organization Name"
-                    placeholderTextColor="#999"
-                    value={signupPartnerApplication.organizationName}
-                    onChangeText={value => updateSignupPartnerApplication('organizationName', value)}
-                    editable={!signupLoading}
-                  />
+                      ))}
+                    </View>
 
-                  <Text style={styles.modalSectionSubLabel}>Sector Type</Text>
-                  <View style={styles.pillarGrid}>
-                    {(['NGO', 'Hospital', 'Institution', 'Private'] as const).map(sector => {
-                      const selected = signupPartnerApplication.sectorType === sector;
-                      return (
+                    <Text style={styles.modalSectionLabel}>Preferences</Text>
+                    <View style={styles.pillarGrid}>
+                      {(['Nutrition', 'Education', 'Livelihood'] as const).map(pillar => {
+                        const selected = signupPillars.includes(pillar);
+                        return (
+                          <TouchableOpacity
+                            key={pillar}
+                            style={[styles.pillarChip, selected && styles.pillarChipActive]}
+                            onPress={() =>
+                              setSignupPillars(current =>
+                                current.includes(pillar)
+                                  ? current.filter(item => item !== pillar)
+                                  : [...current, pillar]
+                              )
+                            }
+                            disabled={signupLoading}
+                          >
+                            <Text style={[styles.pillarChipText, selected && styles.pillarChipTextActive]}>
+                              {pillar}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  </>
+                ) : (
+                  <>
+                    <Text style={styles.modalSectionLabel}>Organization Application</Text>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Organization Name"
+                      placeholderTextColor="#999"
+                      value={signupPartnerApplication.organizationName}
+                      onChangeText={value => updateSignupPartnerApplication('organizationName', value)}
+                      editable={!signupLoading}
+                    />
+
+                    <Text style={styles.modalSectionSubLabel}>Sector Type</Text>
+                    <View style={styles.pillarGrid}>
+                      {(['NGO', 'Hospital', 'Institution', 'Private'] as const).map(sector => {
+                        const selected = signupPartnerApplication.sectorType === sector;
+                        return (
+                          <TouchableOpacity
+                            key={sector}
+                            style={[styles.pillarChip, selected && styles.pillarChipActive]}
+                            onPress={() => updateSignupPartnerApplication('sectorType', sector)}
+                            disabled={signupLoading}
+                          >
+                            <Text style={[styles.pillarChipText, selected && styles.pillarChipTextActive]}>
+                              {sector}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+
+                    <TextInput
+                      style={styles.input}
+                      placeholder="DSWD Registration No. e.g. DSWD-SB-SP-00001-2026"
+                      placeholderTextColor="#999"
+                      value={signupPartnerApplication.dswdAccreditationNo}
+                      onChangeText={value => updateSignupPartnerApplication('dswdAccreditationNo', value)}
+                      autoCapitalize="characters"
+                      editable={!signupLoading}
+                    />
+
+                    <TextInput
+                      style={styles.input}
+                      placeholder="SEC Registration No. e.g. CN201234567"
+                      placeholderTextColor="#999"
+                      value={signupPartnerApplication.secRegistrationNo}
+                      onChangeText={value => updateSignupPartnerApplication('secRegistrationNo', value)}
+                      autoCapitalize="characters"
+                      editable={!signupLoading}
+                    />
+
+                    <Text style={styles.modalSectionSubLabel}>Advocacy Focus</Text>
+                    <View style={styles.pillarGrid}>
+                      {(['Nutrition', 'Education', 'Livelihood', 'Disaster'] as const).map(focus => {
+                        const selected = signupPartnerApplication.advocacyFocus.includes(focus);
+                        return (
+                          <TouchableOpacity
+                            key={focus}
+                            style={[styles.pillarChip, selected && styles.pillarChipActive]}
+                            onPress={() =>
+                              updateSignupPartnerApplication(
+                                'advocacyFocus',
+                                selected
+                                  ? signupPartnerApplication.advocacyFocus.filter(item => item !== focus)
+                                  : [...signupPartnerApplication.advocacyFocus, focus]
+                              )
+                            }
+                            disabled={signupLoading}
+                          >
+                            <Text style={[styles.pillarChipText, selected && styles.pillarChipTextActive]}>
+                              {focus}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+
+                    <View style={styles.partnerLockNotice}>
+                      <MaterialIcons name="verified-user" size={18} color="#92400e" />
+                      <Text style={styles.partnerLockNoticeText}>
+                        Admin will review your DSWD accreditation number, verify the application, and unlock partner login after approval.
+                      </Text>
+                    </View>
+                  </>
+                )}
+
+                {signupRole === 'volunteer' && (
+                  <>
+                    <Text style={styles.modalSectionLabel}>NVC Membership Information Sheet</Text>
+                    
+                    <Text style={styles.modalSectionSubLabel}>Gender</Text>
+                    <View style={styles.genderGrid}>
+                      {['Male', 'Female', 'Other'].map(gender => (
                         <TouchableOpacity
-                          key={sector}
-                          style={[styles.pillarChip, selected && styles.pillarChipActive]}
-                          onPress={() => updateSignupPartnerApplication('sectorType', sector)}
+                          key={gender}
+                          style={[styles.genderChip, signupVolunteerSheet.gender === gender && styles.genderChipActive]}
+                          onPress={() => updateSignupVolunteerSheet('gender', gender)}
                           disabled={signupLoading}
                         >
-                          <Text style={[styles.pillarChipText, selected && styles.pillarChipTextActive]}>
-                            {sector}
+                          <Text style={[styles.genderChipText, signupVolunteerSheet.gender === gender && styles.genderChipTextActive]}>
+                            {gender}
                           </Text>
                         </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-
-                  <TextInput
-                    style={styles.input}
-                    placeholder="DSWD Registration No. e.g. DSWD-SB-SP-00001-2026"
-                    placeholderTextColor="#999"
-                    value={signupPartnerApplication.dswdAccreditationNo}
-                    onChangeText={value => updateSignupPartnerApplication('dswdAccreditationNo', value)}
-                    autoCapitalize="characters"
-                    editable={!signupLoading}
-                  />
-
-                  <TextInput
-                    style={styles.input}
-                    placeholder="SEC Registration No. e.g. CN201234567"
-                    placeholderTextColor="#999"
-                    value={signupPartnerApplication.secRegistrationNo}
-                    onChangeText={value => updateSignupPartnerApplication('secRegistrationNo', value)}
-                    autoCapitalize="characters"
-                    editable={!signupLoading}
-                  />
-
-                  <Text style={styles.modalSectionSubLabel}>Advocacy Focus</Text>
-                  <View style={styles.pillarGrid}>
-                    {(['Nutrition', 'Education', 'Livelihood', 'Disaster'] as const).map(focus => {
-                      const selected = signupPartnerApplication.advocacyFocus.includes(focus);
-                      return (
-                        <TouchableOpacity
-                          key={focus}
-                          style={[styles.pillarChip, selected && styles.pillarChipActive]}
-                          onPress={() =>
-                            updateSignupPartnerApplication(
-                              'advocacyFocus',
-                              selected
-                                ? signupPartnerApplication.advocacyFocus.filter(item => item !== focus)
-                                : [...signupPartnerApplication.advocacyFocus, focus]
-                            )
-                          }
-                          disabled={signupLoading}
-                        >
-                          <Text style={[styles.pillarChipText, selected && styles.pillarChipTextActive]}>
-                            {focus}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-
-                  <View style={styles.partnerLockNotice}>
-                    <MaterialIcons name="verified-user" size={18} color="#92400e" />
-                    <Text style={styles.partnerLockNoticeText}>
-                      Admin will review your DSWD accreditation number, verify the application, and unlock partner login after approval.
-                    </Text>
-                  </View>
-                </>
-              )}
-
-              {signupRole === 'volunteer' && (
-                <>
-                  <Text style={styles.modalSectionLabel}>NVC Membership Information Sheet</Text>
-                  
-                  <Text style={styles.modalSectionSubLabel}>Gender</Text>
-                  <View style={styles.genderGrid}>
-                    {['Male', 'Female', 'Other'].map(gender => (
-                      <TouchableOpacity
-                        key={gender}
-                        style={[styles.genderChip, signupVolunteerSheet.gender === gender && styles.genderChipActive]}
-                        onPress={() => updateSignupVolunteerSheet('gender', gender)}
-                        disabled={signupLoading}
-                      >
-                        <Text style={[styles.genderChipText, signupVolunteerSheet.gender === gender && styles.genderChipTextActive]}>
-                          {gender}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
+                      ))}
+                    </View>
 
                   <Text style={styles.modalSectionSubLabel}>Date of Birth</Text>
                   <TouchableOpacity
@@ -1090,6 +1136,17 @@ export default function LoginScreen() {
                   </TouchableOpacity>
 
                   <Text style={styles.modalSectionSubLabel}>Video Briefing</Text>
+                  <View style={styles.briefingVideoCard}>
+                    <View style={styles.briefingVideoPreview}>
+                      <MaterialIcons name="play-circle-filled" size={58} color="#ffffff" />
+                      <Text style={styles.briefingVideoPreviewText}>Placeholder video</Text>
+                    </View>
+                    <Text style={styles.briefingVideoTitle}>Volunteer orientation briefing</Text>
+                    <Text style={styles.briefingVideoDescription}>
+                      Volunteers should finish watching the orientation video before submitting
+                      registration. This placeholder can be replaced with the final video later.
+                    </Text>
+                  </View>
                   <TextInput
                     style={styles.input}
                     placeholder="Video or audio briefing link (URL)"
@@ -1181,35 +1238,44 @@ export default function LoginScreen() {
                       I have read and accept the NVC volunteer commitment.
                     </Text>
                   </TouchableOpacity>
-                </>
-              )}
-            </ScrollView>
-
-            <View style={styles.modalActions}>
-              <TouchableOpacity
-                style={styles.modalSecondaryButton}
-                onPress={() => {
-                  setShowSignupModal(false);
-                  resetSignupForm();
-                }}
-                disabled={signupLoading}
-              >
-                <Text style={styles.modalSecondaryText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalPrimaryButton, signupLoading && styles.buttonDisabled]}
-                onPress={handleSignup}
-                disabled={signupLoading}
-              >
-                {signupLoading ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Text style={styles.modalPrimaryText}>
-                    {signupRole === 'partner' ? 'Submit Application' : 'Create'}
-                  </Text>
+                  </>
                 )}
-              </TouchableOpacity>
-            </View>
+              </ScrollView>
+            )}
+
+            {signupStep === 'role' ? (
+              <View style={styles.modalActions}>
+                <TouchableOpacity
+                  style={styles.modalSecondaryButton}
+                  onPress={closeSignupModal}
+                >
+                  <Text style={styles.modalSecondaryText}>Cancel</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={styles.modalActions}>
+                <TouchableOpacity
+                  style={styles.modalSecondaryButton}
+                  onPress={() => setSignupStep('role')}
+                  disabled={signupLoading}
+                >
+                  <Text style={styles.modalSecondaryText}>Back</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalPrimaryButton, signupLoading && styles.buttonDisabled]}
+                  onPress={handleSignup}
+                  disabled={signupLoading}
+                >
+                  {signupLoading ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.modalPrimaryText}>
+                      {signupRole === 'partner' ? 'Submit Application' : 'Create Volunteer Account'}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            )}
           </View>
         </View>
         
@@ -1510,6 +1576,39 @@ const styles = StyleSheet.create({
     marginTop: 4,
     marginBottom: 16,
   },
+  signupRoleChoiceGrid: {
+    gap: 14,
+    marginBottom: 16,
+  },
+  signupRoleCard: {
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    backgroundColor: '#f8fafc',
+    borderRadius: 14,
+    padding: 16,
+  },
+  signupRoleCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 10,
+  },
+  signupRoleCardTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  signupRoleCardDescription: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: '#475569',
+  },
+  signupRoleCardAction: {
+    marginTop: 12,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#166534',
+  },
   pillarGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1661,6 +1760,39 @@ const styles = StyleSheet.create({
     color: '#0369a1',
     fontWeight: '600',
     fontSize: 14,
+  },
+  briefingVideoCard: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 12,
+  },
+  briefingVideoPreview: {
+    height: 180,
+    borderRadius: 12,
+    backgroundColor: '#1e293b',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  briefingVideoPreviewText: {
+    marginTop: 8,
+    color: '#e2e8f0',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  briefingVideoTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginBottom: 6,
+  },
+  briefingVideoDescription: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#475569',
   },
   locationField: {
     marginBottom: 0,

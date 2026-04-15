@@ -76,8 +76,15 @@ copy .env.example .env
 Put your real password in `.env`:
 
 ```text
-SUPABASE_DB_URL=postgresql://postgres:YOUR_REAL_PASSWORD@db.zargqwmmibyxwwidzucv.supabase.co:5432/postgres
+SUPABASE_DB_URL=postgresql://postgres.zargqwmmibyxwwidzucv:YOUR_REAL_PASSWORD@aws-1-ap-northeast-2.pooler.supabase.com:5432/postgres
 ```
+
+Notes:
+
+- Prefer the Supabase session pooler on port `5432` for the backend.
+- The backend can fail over between multiple database endpoints automatically.
+- You can set `SUPABASE_DB_URL_FALLBACK` in `.env` if you want an explicit backup DSN.
+- `GET /db-health` now includes endpoint diagnostics for failover troubleshooting.
 
 Then create the schema and seed demo records:
 

@@ -23,6 +23,7 @@ from .db import (
     get_configured_db_mode,
     get_db_mode,
     get_postgres_connection,
+    get_postgres_diagnostics,
     get_postgres_status,
 )
 
@@ -861,6 +862,7 @@ def db_health() -> dict[str, Any]:
         "configured_mode": configured_mode,
         "mode": mode,
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "diagnostics": get_postgres_diagnostics(),
     }
 
     try:

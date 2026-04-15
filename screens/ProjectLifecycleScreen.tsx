@@ -55,6 +55,7 @@ import { Volunteer, VolunteerProjectJoinRecord, VolunteerProjectMatch } from '..
 import { useAuth } from '../contexts/AuthContext';
 import { format } from 'date-fns';
 import { navigateToAvailableRoute } from '../utils/navigation';
+import { getPrimaryProjectImageSource } from '../utils/projectMap';
 import { getProjectStatusColor } from '../utils/projectStatus';
 import { isImageMediaUri } from '../utils/media';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
@@ -1058,6 +1059,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   // Renders one project card in the lifecycle list.
   const renderProjectCard = (project: Project) => {
     const pendingRequestCount = pendingVolunteerRequestCountByProjectId.get(project.id) || 0;
+    const projectImageSource = getPrimaryProjectImageSource(project);
+    const projectCategoryLabel = project.programModule || project.category;
+    const projectDateLabel = `${format(new Date(project.startDate), 'EEE, dd MMM yyyy')} - ${format(
+      new Date(project.endDate),
+      'EEE, dd MMM yyyy'
+    )}`;
 
     return (
       <TouchableOpacity
@@ -1065,60 +1072,81 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         style={styles.card}
         onPress={() => handleSelectProject(project)}
       >
-        <View style={styles.cardHeader}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.cardTitle}>{project.title}</Text>
-            <Text style={styles.cardSubtitle}>{project.programModule || project.category}</Text>
-          </View>
-          <View style={styles.cardHeaderBadges}>
-            {pendingRequestCount > 0 && (
-              <View style={styles.requestNotificationBadge}>
-                <MaterialIcons name="notifications-active" size={14} color="#92400e" />
-                <Text style={styles.requestNotificationBadgeText}>
-                  {pendingRequestCount} request{pendingRequestCount === 1 ? '' : 's'}
+        {projectImageSource ? (
+          <Image
+            source={projectImageSource}
+            style={styles.cardImage}
+            resizeMode="cover"
+          />
+        ) : null}
+
+        <View style={styles.cardBody}>
+          <View style={styles.cardHeader}>
+            <View style={styles.cardHeaderCopy}>
+              <Text style={styles.cardTitle}>{project.title}</Text>
+              <Text style={styles.cardSubtitle}>{projectCategoryLabel}</Text>
+            </View>
+            <View style={styles.cardHeaderBadges}>
+              <View
+                style={[
+                  styles.statusBadge,
+                  { backgroundColor: getProjectStatusColor(project.status) },
+                ]}
+              >
+                <Text style={styles.statusText}>{project.status}</Text>
+              </View>
+              <View style={styles.pointsBadge}>
+                <MaterialIcons name="groups" size={15} color="#f59e0b" />
+                <Text style={styles.pointsBadgeText}>
+                  {project.volunteers.length}/{project.volunteersNeeded}
                 </Text>
               </View>
-            )}
-            <View style={[styles.statusDot, { backgroundColor: getProjectStatusColor(project.status) }]} />
+            </View>
           </View>
-        </View>
 
-        <Text style={styles.description}>{project.description}</Text>
+          {pendingRequestCount > 0 && (
+            <View style={styles.requestNotificationBadge}>
+              <MaterialIcons name="notifications-active" size={14} color="#92400e" />
+              <Text style={styles.requestNotificationBadgeText}>
+                {pendingRequestCount} pending request{pendingRequestCount === 1 ? '' : 's'}
+              </Text>
+            </View>
+          )}
 
-        <View style={styles.timeline}>
-          <View style={styles.timelineItem}>
-            <MaterialIcons name="calendar-today" size={16} color="#666" />
-            <Text style={styles.timelineText}>
-              {format(new Date(project.startDate), 'MMM dd, yyyy')}
+          <View style={styles.infoCard}>
+            <View style={styles.infoRow}>
+              <View style={styles.infoRowLeading}>
+                <View style={styles.infoIconWrap}>
+                  <MaterialIcons name="calendar-today" size={16} color="#ef4444" />
+                </View>
+                <View style={styles.infoRowCopy}>
+                  <Text style={styles.infoRowTitle}>{projectDateLabel}</Text>
+                  <Text style={styles.infoRowSubtitle}>Project schedule</Text>
+                </View>
+              </View>
+              <MaterialIcons name="chevron-right" size={22} color="#cbd5e1" />
+            </View>
+            <View style={styles.infoDivider} />
+            <View style={styles.infoRow}>
+              <View style={styles.infoRowLeading}>
+                <View style={styles.infoIconWrap}>
+                  <MaterialIcons name="location-on" size={18} color="#ef4444" />
+                </View>
+                <View style={styles.infoRowCopy}>
+                  <Text style={styles.infoRowTitle}>{project.location.address}</Text>
+                  <Text style={styles.infoRowSubtitle}>Program location</Text>
+                </View>
+              </View>
+              <MaterialIcons name="chevron-right" size={22} color="#cbd5e1" />
+            </View>
+          </View>
+
+          <View style={styles.aboutSection}>
+            <Text style={styles.aboutLabel}>About Project</Text>
+            <Text style={styles.description} numberOfLines={4}>
+              {project.description}
             </Text>
           </View>
-          <MaterialIcons name="arrow-forward" size={16} color="#ccc" />
-          <View style={styles.timelineItem}>
-            <MaterialIcons name="calendar-today" size={16} color="#666" />
-            <Text style={styles.timelineText}>
-              {format(new Date(project.endDate), 'MMM dd, yyyy')}
-            </Text>
-          </View>
-        </View>
-
-        <View style={styles.stats}>
-          <View style={styles.stat}>
-            <MaterialIcons name="people" size={16} color="#4CAF50" />
-            <Text style={styles.statText}>{project.volunteers.length}/{project.volunteersNeeded}</Text>
-          </View>
-          <View style={styles.stat}>
-            <MaterialIcons name="location-on" size={16} color="#2196F3" />
-            <Text style={styles.statText}>{project.location.address}</Text>
-          </View>
-        </View>
-
-        <View
-          style={[
-            styles.statusBadge,
-            { backgroundColor: getProjectStatusColor(project.status) },
-          ]}
-        >
-          <Text style={styles.statusText}>{project.status}</Text>
         </View>
       </TouchableOpacity>
     );
@@ -2502,76 +2530,127 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
+    borderRadius: 22,
+    marginBottom: 16,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    elevation: 6,
+    overflow: 'hidden',
+  },
+  cardImage: {
+    width: '100%',
+    height: 220,
+    backgroundColor: '#dbe4ea',
+  },
+  cardBody: {
+    paddingHorizontal: 18,
+    paddingTop: 18,
+    paddingBottom: 20,
   },
   cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    marginBottom: 12,
+    gap: 12,
+    marginBottom: 14,
+  },
+  cardHeaderCopy: {
+    flex: 1,
   },
   cardHeaderBadges: {
     alignItems: 'flex-end',
-    gap: 8,
+    gap: 10,
   },
   cardTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
+    fontSize: 27,
+    lineHeight: 32,
+    fontWeight: '800',
+    color: '#1f2544',
   },
   cardSubtitle: {
-    fontSize: 13,
-    color: '#666',
-    marginTop: 4,
-  },
-  statusDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
+    fontSize: 14,
+    color: '#64748b',
+    marginTop: 6,
+    fontWeight: '600',
   },
   description: {
-    color: '#666',
+    color: '#5b647f',
+    fontSize: 14,
+    lineHeight: 24,
+  },
+  infoCard: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#eef2f7',
+    borderRadius: 18,
+    marginBottom: 18,
+  },
+  infoRow: {
+    minHeight: 74,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  infoRowLeading: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  infoIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#fff5f5',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  infoRowCopy: {
+    flex: 1,
+  },
+  infoRowTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#2b2f42',
+    lineHeight: 21,
+  },
+  infoRowSubtitle: {
+    marginTop: 3,
     fontSize: 13,
-    marginBottom: 12,
-    lineHeight: 18,
+    color: '#7b859f',
   },
-  timeline: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-    gap: 8,
+  infoDivider: {
+    height: 1,
+    backgroundColor: '#eef2f7',
+    marginHorizontal: 14,
   },
-  timelineItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    flex: 1,
-  },
-  timelineText: {
-    fontSize: 12,
-    color: '#666',
-  },
-  stats: {
-    flexDirection: 'row',
-    gap: 16,
+  aboutSection: {
     marginBottom: 12,
   },
-  stat: {
+  aboutLabel: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#1f2544',
+    marginBottom: 10,
+  },
+  pointsBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    flex: 1,
+    backgroundColor: '#fff7ed',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
   },
-  statText: {
-    fontSize: 12,
-    color: '#666',
+  pointsBadgeText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#f59e0b',
   },
   requestNotificationBadge: {
     flexDirection: 'row',
@@ -2583,6 +2662,8 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: 8,
     paddingVertical: 5,
+    alignSelf: 'flex-start',
+    marginBottom: 14,
   },
   requestNotificationBadgeText: {
     color: '#92400e',
@@ -2591,14 +2672,13 @@ const styles = StyleSheet.create({
   },
   statusBadge: {
     paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-    alignSelf: 'flex-start',
+    paddingVertical: 7,
+    borderRadius: 999,
   },
   statusText: {
     color: '#fff',
     fontSize: 12,
-    fontWeight: 'bold',
+    fontWeight: '800',
   },
   list: {
     marginBottom: 20,
