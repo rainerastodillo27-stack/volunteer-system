@@ -827,12 +827,27 @@ export async function setStorageItem<T>(key: string, value: T): Promise<void> {
 // User Storage
 // Inserts or updates a user record inside shared storage.
 export async function saveUser(user: User): Promise<void> {
+  const normalizedEmail = user.email?.trim().toLowerCase() || undefined;
+  const normalizedPhone = normalizeAccountPhone(user.phone);
+  if (normalizedEmail && !isValidEmailAddress(normalizedEmail)) {
+    throw new Error('Please enter a valid email address.');
+  }
+  if (user.phone?.trim() && !normalizedPhone) {
+    throw new Error('Use a valid Philippine mobile number in 11-digit or +63 format.');
+  }
+
+  const normalizedUser: User = {
+    ...user,
+    name: user.name.trim(),
+    email: normalizedEmail,
+    phone: normalizedPhone || undefined,
+  };
   const users = await getStorageItem<User[]>(STORAGE_KEYS.USERS) || [];
-  const existingIndex = users.findIndex(u => u.id === user.id);
+  const existingIndex = users.findIndex(u => u.id === normalizedUser.id);
   if (existingIndex >= 0) {
-    users[existingIndex] = user;
+    users[existingIndex] = normalizedUser;
   } else {
-    users.push(user);
+    users.push(normalizedUser);
   }
   await setStorageItem(STORAGE_KEYS.USERS, users);
 }
@@ -841,6 +856,37 @@ export async function saveUser(user: User): Promise<void> {
 export function isValidDswdAccreditationNo(value: string): boolean {
   const normalizedValue = value.trim().toUpperCase();
   return /^[A-Z0-9][A-Z0-9\-\/]{5,}$/.test(normalizedValue);
+}
+
+function isValidEmailAddress(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
+function normalizeAccountPhone(value?: string): string | undefined {
+  const digits = (value || '').replace(/\D/g, '');
+  if (/^09\d{9}$/.test(digits)) {
+    return digits;
+  }
+  if (/^639\d{9}$/.test(digits)) {
+    return `0${digits.slice(2)}`;
+  }
+  return undefined;
+}
+
+function normalizePartnerContactPhone(value?: string): string | undefined {
+  const normalizedAccountPhone = normalizeAccountPhone(value);
+  if (normalizedAccountPhone) {
+    return normalizedAccountPhone;
+  }
+
+  const digits = (value || '').replace(/\D/g, '');
+  if (/^63\d{9,11}$/.test(digits)) {
+    return `+${digits}`;
+  }
+  if (/^0\d{9,11}$/.test(digits)) {
+    return `+63${digits.slice(1)}`;
+  }
+  return undefined;
 }
 
 // Maps one advocacy focus into the existing project/partner category taxonomy.
@@ -863,8 +909,11 @@ function getCategoryFromAdvocacyFocus(focuses: AdvocacyFocus[]): Partner['catego
 // Upgrades older partner records so the newer workflow can rely on required fields.
 function normalizePartnerRecord(partner: Partner): Partner {
   const advocacyFocus = (partner.advocacyFocus || []).filter(Boolean);
+  const rawCategory = partner.category as string | undefined;
   const derivedCategory =
-    partner.category || getCategoryFromAdvocacyFocus(advocacyFocus);
+    !rawCategory || rawCategory === 'Other'
+      ? getCategoryFromAdvocacyFocus(advocacyFocus)
+      : partner.category;
 
   return {
     ...partner,
@@ -875,7 +924,7 @@ function normalizePartnerRecord(partner: Partner): Partner {
     secRegistrationNo: partner.secRegistrationNo?.trim().toUpperCase() || '',
     advocacyFocus,
     contactEmail: partner.contactEmail?.trim().toLowerCase() || '',
-    contactPhone: partner.contactPhone?.trim() || '',
+    contactPhone: normalizePartnerContactPhone(partner.contactPhone) || '',
     address: partner.address?.trim() || '',
     verificationStatus:
       partner.verificationStatus ||
@@ -1090,14 +1139,22 @@ export async function createUserAccount(input: {
   const normalizedEmail = input.email?.trim().toLowerCase();
   const normalizedName = input.name.trim();
   const normalizedPassword = input.password.trim();
-  const normalizedPhone = input.phone?.trim();
+  const normalizedPhone = normalizeAccountPhone(input.phone);
 
   if (!normalizedName || !normalizedPassword) {
     throw new Error('Name and password are required.');
   }
 
+  if (normalizedEmail && !isValidEmailAddress(normalizedEmail)) {
+    throw new Error('Please enter a valid email address.');
+  }
+
   if (!normalizedEmail && !normalizedPhone) {
     throw new Error('Email or phone is required.');
+  }
+
+  if (input.phone?.trim() && !normalizedPhone) {
+    throw new Error('Use a valid Philippine mobile number in 11-digit or +63 format.');
   }
 
   if (
@@ -1333,6 +1390,13 @@ export async function getCurrentUser(): Promise<User | null> {
 // Partner Storage
 // Inserts or updates a partner organization record.
 export async function savePartner(partner: Partner): Promise<void> {
+  if (partner.contactEmail?.trim() && !isValidEmailAddress(partner.contactEmail.trim().toLowerCase())) {
+    throw new Error('Please enter a valid partner email address.');
+  }
+  if (partner.contactPhone?.trim() && !normalizePartnerContactPhone(partner.contactPhone)) {
+    throw new Error('Use a valid Philippine contact number for the partner record.');
+  }
+
   const partners = await getStorageItem<Partner[]>(STORAGE_KEYS.PARTNERS) || [];
   const existingIndex = partners.findIndex(p => p.id === partner.id);
   const existingPartner = existingIndex >= 0 ? partners[existingIndex] : null;
@@ -1551,6 +1615,9 @@ function normalizeVolunteerRecord(volunteer: Volunteer): Volunteer {
 
   return {
     ...volunteer,
+    name: volunteer.name.trim(),
+    email: volunteer.email?.trim().toLowerCase() || '',
+    phone: normalizeAccountPhone(volunteer.phone) || '',
     registrationStatus,
     credentialsUnlockedAt:
       volunteer.credentialsUnlockedAt ||
@@ -1560,6 +1627,13 @@ function normalizeVolunteerRecord(volunteer: Volunteer): Volunteer {
 
 // Inserts or updates a volunteer profile record.
 export async function saveVolunteer(volunteer: Volunteer): Promise<void> {
+  if (volunteer.email?.trim() && !isValidEmailAddress(volunteer.email.trim().toLowerCase())) {
+    throw new Error('Please enter a valid volunteer email address.');
+  }
+  if (volunteer.phone?.trim() && !normalizeAccountPhone(volunteer.phone)) {
+    throw new Error('Use a valid Philippine mobile number for the volunteer profile.');
+  }
+
   const volunteers = await getStorageItem<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS) || [];
   const existingIndex = volunteers.findIndex(v => v.id === volunteer.id);
   const normalizedVolunteer = normalizeVolunteerRecord(volunteer);
@@ -2998,7 +3072,20 @@ async function syncVolunteerEngagementStatus(volunteerId: string): Promise<void>
 
 // Normalizes phone numbers so credentials can be compared consistently.
 function normalizeComparablePhone(value?: string): string {
-  return (value || '').replace(/\D/g, '');
+  const digits = (value || '').replace(/\D/g, '');
+  if (/^09\d{9}$/.test(digits)) {
+    return `63${digits.slice(1)}`;
+  }
+  if (/^639\d{9}$/.test(digits)) {
+    return digits;
+  }
+  if (/^0\d{9,11}$/.test(digits)) {
+    return `63${digits.slice(1)}`;
+  }
+  if (/^63\d{9,11}$/.test(digits)) {
+    return digits;
+  }
+  return digits;
 }
 
 async function ensurePartnerOwnershipLinks(): Promise<void> {

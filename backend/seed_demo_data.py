@@ -12,7 +12,7 @@ USERS = [
         "password": "admin123",
         "role": "admin",
         "name": "NVC Admin Account",
-        "phone": "+63 917 000 0001",
+        "phone": "09170000001",
         "created_at": NOW,
     },
     {
@@ -21,7 +21,7 @@ USERS = [
         "password": "volunteer123",
         "role": "volunteer",
         "name": "Volunteer Account",
-        "phone": "+0987654321",
+        "phone": "09123456789",
         "created_at": NOW,
     },
     {
@@ -30,7 +30,7 @@ USERS = [
         "password": "partner123",
         "role": "partner",
         "name": "Partner Org Account",
-        "phone": "+919876543211",
+        "phone": "09198765432",
         "created_at": NOW,
     },
     {
@@ -39,7 +39,7 @@ USERS = [
         "password": "partner123",
         "role": "partner",
         "name": "PBSP Account",
-        "phone": "+63 2 8818 8678",
+        "phone": "09188188678",
         "created_at": NOW,
     },
     {
@@ -48,7 +48,7 @@ USERS = [
         "password": "partner123",
         "role": "partner",
         "name": "Jollibee Foundation Account",
-        "phone": "+63 2 8634 1111",
+        "phone": "09186341111",
         "created_at": NOW,
     },
 ]

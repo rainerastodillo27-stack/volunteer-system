@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .db import get_postgres_connection
+from .field_rules import normalize_comparable_phone, normalize_email, sanitize_hot_storage_item
 from .relational_mirror import (
     ensure_relational_mirror_tables,
     sync_all_relational_mirror_tables,
@@ -25,6 +26,7 @@ HOT_STORAGE_TABLES = {
     "publishedImpactReports": "app_published_impact_reports_store",
 }
 EXPECTED_HOT_STORAGE_COLUMNS = {"id", "data", "sort_order", "updated_at"}
+REQUIRED_DEMO_COLLECTION_KEYS = {"users", "partners", "volunteers"}
 
 
 # Builds the demo JSON collections used by the app storage layer.
@@ -39,7 +41,7 @@ def build_demo_app_storage() -> dict[str, Any]:
                 "password": "admin123",
                 "role": "admin",
                 "name": "NVC Admin Account",
-                "phone": "+63 917 000 0001",
+                "phone": "09170000001",
                 "userType": "Adult",
                 "pillarsOfInterest": ["Education", "Livelihood", "Nutrition"],
                 "createdAt": now_iso,
@@ -50,7 +52,7 @@ def build_demo_app_storage() -> dict[str, Any]:
                 "password": "volunteer123",
                 "role": "volunteer",
                 "name": "Volunteer Account",
-                "phone": "+0987654321",
+                "phone": "09123456789",
                 "userType": "Student",
                 "pillarsOfInterest": ["Education", "Nutrition"],
                 "createdAt": now_iso,
@@ -61,7 +63,7 @@ def build_demo_app_storage() -> dict[str, Any]:
                 "password": "partner123",
                 "role": "partner",
                 "name": "Partner Org Account",
-                "phone": "+919876543211",
+                "phone": "09198765432",
                 "userType": "Adult",
                 "pillarsOfInterest": ["Livelihood"],
                 "createdAt": now_iso,
@@ -72,7 +74,7 @@ def build_demo_app_storage() -> dict[str, Any]:
                 "password": "partner123",
                 "role": "partner",
                 "name": "PBSP Account",
-                "phone": "+63 2 8818 8678",
+                "phone": "09188188678",
                 "userType": "Adult",
                 "pillarsOfInterest": ["Education", "Livelihood", "Nutrition"],
                 "createdAt": now_iso,
@@ -83,7 +85,7 @@ def build_demo_app_storage() -> dict[str, Any]:
                 "password": "partner123",
                 "role": "partner",
                 "name": "Jollibee Foundation Account",
-                "phone": "+63 2 8634 1111",
+                "phone": "09186341111",
                 "userType": "Adult",
                 "pillarsOfInterest": ["Nutrition", "Livelihood"],
                 "createdAt": now_iso,
@@ -100,7 +102,7 @@ def build_demo_app_storage() -> dict[str, Any]:
                 "dswdAccreditationNo": "DSWD-NEG-2026-001",
                 "advocacyFocus": ["Livelihood"],
                 "contactEmail": "partner@livelihoods.org",
-                "contactPhone": "+919876543211",
+                "contactPhone": "09198765432",
                 "address": "Kabankalan City, Negros Occidental",
                 "status": "Approved",
                 "verificationStatus": "Verified",
@@ -155,7 +157,7 @@ def build_demo_app_storage() -> dict[str, Any]:
                 "userId": "volunteer-1",
                 "name": "Volunteer Account",
                 "email": "volunteer@example.com",
-                "phone": "+0987654321",
+                "phone": "09123456789",
                 "skills": [],
                 "skillsDescription": "Education, Nutrition",
                 "availability": {
@@ -299,6 +301,80 @@ def _upsert_app_storage_value(connection: Any, key: str, value: Any) -> None:
         )
 
 
+def _items_match_same_identity(key: str, left: dict[str, Any], right: dict[str, Any]) -> bool:
+    left_id = str(left.get("id") or "").strip()
+    right_id = str(right.get("id") or "").strip()
+    if left_id and right_id and left_id == right_id:
+        return True
+
+    if key == "users":
+        left_email = normalize_email(left.get("email"))
+        right_email = normalize_email(right.get("email"))
+        if left_email and right_email and left_email == right_email:
+            return True
+
+        left_phone = normalize_comparable_phone(left.get("phone"))
+        right_phone = normalize_comparable_phone(right.get("phone"))
+        return bool(left_phone and right_phone and left_phone == right_phone)
+
+    if key == "volunteers":
+        left_user_id = str(left.get("userId") or "").strip()
+        right_user_id = str(right.get("userId") or "").strip()
+        if left_user_id and right_user_id and left_user_id == right_user_id:
+            return True
+
+        left_email = normalize_email(left.get("email"))
+        right_email = normalize_email(right.get("email"))
+        if left_email and right_email and left_email == right_email:
+            return True
+
+        left_phone = normalize_comparable_phone(left.get("phone"))
+        right_phone = normalize_comparable_phone(right.get("phone"))
+        return bool(left_phone and right_phone and left_phone == right_phone)
+
+    if key == "partners":
+        left_owner_user_id = str(left.get("ownerUserId") or "").strip()
+        right_owner_user_id = str(right.get("ownerUserId") or "").strip()
+        if left_owner_user_id and right_owner_user_id and left_owner_user_id == right_owner_user_id:
+            return True
+
+        left_email = normalize_email(left.get("contactEmail"))
+        right_email = normalize_email(right.get("contactEmail"))
+        if left_email and right_email and left_email == right_email:
+            return True
+
+        left_phone = normalize_comparable_phone(left.get("contactPhone"))
+        right_phone = normalize_comparable_phone(right.get("contactPhone"))
+        return bool(left_phone and right_phone and left_phone == right_phone)
+
+    return False
+
+
+def _merge_required_demo_items(
+    key: str,
+    existing_items: list[Any],
+    required_items: list[Any],
+) -> list[dict[str, Any]]:
+    merged_items: list[dict[str, Any]] = []
+    remaining_existing_items = [
+        item for item in existing_items if isinstance(item, dict)
+    ]
+
+    for item in required_items:
+        if isinstance(item, dict) and isinstance(item.get("id"), str) and item.get("id"):
+            merged_items.append(item)
+            remaining_existing_items = [
+                existing_item
+                for existing_item in remaining_existing_items
+                if not _items_match_same_identity(key, existing_item, item)
+            ]
+
+    for item in remaining_existing_items:
+        merged_items.append(item)
+
+    return merged_items
+
+
 # Replaces all rows in a hot-storage collection with a normalized item list.
 def replace_postgres_hot_storage_collection(
     connection: Any,
@@ -316,7 +392,7 @@ def replace_postgres_hot_storage_collection(
         item_id = item.get("id")
         if not isinstance(item_id, str) or not item_id:
             raise ValueError(f"Hot storage key '{key}' contains an item without a valid id.")
-        normalized_items.append(item)
+        normalized_items.append(sanitize_hot_storage_item(key, item))
         item_ids.append(item_id)
 
     table_name = HOT_STORAGE_TABLES[key]
@@ -414,6 +490,16 @@ def ensure_postgres_hot_storage_seeded(connection: Any, demo_storage: dict[str, 
         source_items = existing_storage.get(key, demo_storage.get(key, []))
         if isinstance(source_items, list):
             replace_postgres_hot_storage_collection(connection, key, source_items)
+
+    for key in REQUIRED_DEMO_COLLECTION_KEYS:
+        current_items = get_postgres_hot_storage_collection(connection, key)
+        required_items = demo_storage.get(key, [])
+        if not isinstance(required_items, list):
+            continue
+
+        merged_items = _merge_required_demo_items(key, current_items, required_items)
+        if merged_items != current_items:
+            replace_postgres_hot_storage_collection(connection, key, merged_items)
 
     synced_collections = {
         key: get_postgres_hot_storage_collection(connection, key)

@@ -21,6 +21,7 @@ import {
   getPrimaryProjectImageSource,
   getProjectMarkerColor,
 } from '../utils/projectMap';
+import { createWebMapMarkerIcon, getMarkerInitials, resolveMarkerImageUri } from '../utils/mapMarkerVisuals';
 import { getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
@@ -179,6 +180,7 @@ export default function MappingScreen({ navigation }: any) {
         const infoWindow = new browserWindow.google.maps.InfoWindow();
 
         projects.forEach((project, index) => {
+          const projectImageUri = resolveMarkerImageUri(getPrimaryProjectImageSource(project));
           const marker = new browserWindow.google.maps.Marker({
             map,
             position: {
@@ -186,26 +188,23 @@ export default function MappingScreen({ navigation }: any) {
               lng: project.location.longitude,
             },
             title: project.title,
-            label: {
-              text: String(index + 1),
-              color: '#ffffff',
-              fontWeight: '700',
-            },
             icon: {
-              path: browserWindow.google.maps.SymbolPath.CIRCLE,
-              fillColor: getProjectMarkerColor(project),
-              fillOpacity: 1,
-              strokeColor: '#ffffff',
-              strokeOpacity: 1,
-              strokeWeight: 2,
-              scale: 12,
+              url: createWebMapMarkerIcon({
+                accentColor: getProjectMarkerColor(project),
+                imageUri: projectImageUri,
+                initials: getMarkerInitials(project.title, String(index + 1)),
+              }),
+              scaledSize: new browserWindow.google.maps.Size(48, 57),
+              anchor: new browserWindow.google.maps.Point(24, 54),
             },
           });
 
           bounds.extend(marker.getPosition());
 
           marker.addListener('click', () => {
-            const projectImageHtml = '';
+            const projectImageHtml = projectImageUri
+              ? `<img src="${escapeHtml(projectImageUri)}" alt="${escapeHtml(project.title)}" style="width:100%;height:110px;object-fit:cover;border-radius:12px;margin-bottom:10px;" />`
+              : '';
             infoWindow.setContent(`
               <div style="width:220px;padding:14px;font-family:Arial,sans-serif;">
                 ${projectImageHtml}

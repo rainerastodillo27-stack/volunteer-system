@@ -2,10 +2,12 @@ try:
     from .app_storage_seed import ensure_app_storage_table, ensure_postgres_hot_storage_tables
     from .db import get_connection
     from .relational_mirror import ensure_relational_mirror_tables
+    from .schema_maintenance import maintain_schema_health
 except ImportError:
     from app_storage_seed import ensure_app_storage_table, ensure_postgres_hot_storage_tables
     from db import get_connection
     from relational_mirror import ensure_relational_mirror_tables
+    from schema_maintenance import maintain_schema_health
 
 
 BASE_DDL = [
@@ -58,9 +60,19 @@ def main() -> None:
 
         ensure_postgres_hot_storage_tables(connection)
         ensure_relational_mirror_tables(connection)
+        maintenance_summary = maintain_schema_health(connection)
         connection.commit()
 
+    dropped_tables = maintenance_summary["dropped_rogue_tables"]
+    cleaned_hot_storage = maintenance_summary["cleaned_hot_storage"]
+    pruned_users = maintenance_summary["pruned_stale_app_users"]
     print("Supabase Postgres schema created or updated.")
+    if dropped_tables:
+        print(f"Dropped rogue tables: {', '.join(dropped_tables)}")
+    if cleaned_hot_storage:
+        print(f"Sanitized collections: {', '.join(cleaned_hot_storage)}")
+    if pruned_users:
+        print(f"Pruned stale legacy app users: {', '.join(pruned_users)}")
 
 
 if __name__ == "__main__":

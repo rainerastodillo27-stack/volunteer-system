@@ -493,7 +493,7 @@ export default function DashboardScreen({ navigation }: any) {
 
       {/* Footer */}
       <View style={styles.footer}>
-        <Text style={styles.footerText}>Volcre v1.0</Text>
+        <Text style={styles.footerText}>NVC CONNECT v1.0</Text>
       </View>
     </ScrollView>
   );

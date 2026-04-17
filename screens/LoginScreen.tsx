@@ -568,7 +568,7 @@ export default function LoginScreen() {
       <View style={[styles.contentShell, isWeb && styles.webContentShell, !isWeb && styles.mobileContentShell]}>
         <View style={styles.brandSection}>
           <AppLogo width={isWeb ? 126 : 138} />
-          <Text style={styles.title}>Volcre</Text>
+          <Text style={styles.title}>NVC CONNECT</Text>
           <Text style={styles.subtitle}>Volunteer coordination platform</Text>
         </View>
 

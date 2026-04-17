@@ -2,8 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Platform } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
+import PhotoMapMarker from './PhotoMapMarker';
 import { Project } from '../models/types';
 import { getInitialProjectRegion, getProjectMarkerColor } from '../utils/projectMap';
+import { getMarkerInitials } from '../utils/mapMarkerVisuals';
+import { getPrimaryProjectImageSource } from '../utils/projectMap';
 
 type VolunteerImpactMapProps = {
   projects: Project[];
@@ -50,11 +53,17 @@ export default function VolunteerImpactMap({ projects }: VolunteerImpactMapProps
                 latitude: project.location.latitude,
                 longitude: project.location.longitude,
               }}
-              pinColor={getProjectMarkerColor(project)}
+              anchor={{ x: 0.5, y: 1 }}
               title={project.title}
               description={project.location.address}
               onPress={() => setSelectedProject(project)}
-            />
+            >
+              <PhotoMapMarker
+                imageSource={getPrimaryProjectImageSource(project)}
+                initials={getMarkerInitials(project.title)}
+                accentColor={getProjectMarkerColor(project)}
+              />
+            </Marker>
           ))}
         </MapView>
       </View>

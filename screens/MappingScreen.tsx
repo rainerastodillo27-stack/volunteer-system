@@ -14,16 +14,19 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
+import PhotoMapMarker from '../components/PhotoMapMarker';
 import InlineLoadError from '../components/InlineLoadError';
 import { useAuth } from '../contexts/AuthContext';
-import { PartnerEventCheckIn, PartnerReport, Project } from '../models/types';
+import { PartnerEventCheckIn, PartnerReport, Project, User } from '../models/types';
 import {
   getAllPartnerEventCheckIns,
   getAllPartnerReports,
+  getAllUsers,
   getProjectsScreenSnapshot,
   subscribeToStorageChanges,
 } from '../models/storage';
 import { isImageMediaUri } from '../utils/media';
+import { getMarkerInitials } from '../utils/mapMarkerVisuals';
 import { navigateToAvailableRoute } from '../utils/navigation';
 import { getInitialProjectRegion, getProjectMarkerColor, getPrimaryProjectImageSource } from '../utils/projectMap';
 import { getProjectStatusColor } from '../utils/projectStatus';
@@ -36,6 +39,7 @@ export default function MappingScreen({ navigation }: any) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [partnerCheckIns, setPartnerCheckIns] = useState<PartnerEventCheckIn[]>([]);
   const [partnerReports, setPartnerReports] = useState<PartnerReport[]>([]);
+  const [usersById, setUsersById] = useState<Record<string, User>>({});
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [showDetails, setShowDetails] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -57,10 +61,11 @@ export default function MappingScreen({ navigation }: any) {
   // Loads map data and narrows project visibility to records the current user joined.
   const loadProjects = async () => {
     try {
-      const [snapshot, allCheckIns, allReports] = await Promise.all([
+      const [snapshot, allCheckIns, allReports, allUsers] = await Promise.all([
         getProjectsScreenSnapshot(user),
         getAllPartnerEventCheckIns(),
         getAllPartnerReports(),
+        getAllUsers(),
       ]);
 
       const approvedPartnerProjectIds = new Set(
@@ -92,6 +97,9 @@ export default function MappingScreen({ navigation }: any) {
       setProjects(visibleProjects);
       setPartnerCheckIns(allCheckIns.filter(checkIn => visibleProjectIds.has(checkIn.projectId)));
       setPartnerReports(allReports.filter(report => visibleProjectIds.has(report.projectId)));
+      setUsersById(
+        Object.fromEntries(allUsers.map(account => [account.id, account]))
+      );
       setLoadError(null);
       setLoading(false);
     } catch (error) {
@@ -99,6 +107,7 @@ export default function MappingScreen({ navigation }: any) {
       setProjects([]);
       setPartnerCheckIns([]);
       setPartnerReports([]);
+      setUsersById({});
       setLoadError({
         title: getRequestErrorTitle(error, 'Database Unavailable'),
         message: getRequestErrorMessage(error, 'Failed to load projects from Postgres.'),
@@ -182,11 +191,17 @@ export default function MappingScreen({ navigation }: any) {
                 latitude: project.location.latitude,
                 longitude: project.location.longitude,
               }}
-              pinColor={getProjectMarkerColor(project)}
+              anchor={{ x: 0.5, y: 1 }}
               title={`${index + 1}. ${project.title}`}
               description={`${project.isEvent ? 'Event' : 'Program'} | ${project.status}`}
               onPress={() => handleProjectSelection(project.id)}
-            />
+            >
+              <PhotoMapMarker
+                imageSource={getPrimaryProjectImageSource(project)}
+                initials={getMarkerInitials(project.title, String(index + 1))}
+                accentColor={getProjectMarkerColor(project)}
+              />
+            </Marker>
           ))}
           {partnerCheckIns.map(checkIn => (
             <Marker
@@ -195,10 +210,20 @@ export default function MappingScreen({ navigation }: any) {
                 latitude: checkIn.gpsCoordinates.latitude,
                 longitude: checkIn.gpsCoordinates.longitude,
               }}
-              pinColor="#2563eb"
+              anchor={{ x: 0.5, y: 1 }}
               title={`Partner Check-In: ${checkIn.projectId}`}
               description={new Date(checkIn.checkInTime).toLocaleString()}
-            />
+            >
+              <PhotoMapMarker
+                imageSource={
+                  isImageMediaUri(usersById[checkIn.partnerUserId]?.profilePhoto)
+                    ? { uri: usersById[checkIn.partnerUserId]!.profilePhoto as string }
+                    : undefined
+                }
+                initials={getMarkerInitials(usersById[checkIn.partnerUserId]?.name || 'Partner', 'P')}
+                accentColor="#2563eb"
+              />
+            </Marker>
           ))}
         </MapView>
       </View>

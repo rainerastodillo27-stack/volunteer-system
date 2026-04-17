@@ -61,7 +61,7 @@ export default function SystemSettingsScreen() {
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>Application</Text>
         <Text style={styles.infoLabel}>App Name</Text>
-        <Text style={styles.infoText}>{Constants.expoConfig?.name || 'Volcre'}</Text>
+        <Text style={styles.infoText}>{Constants.expoConfig?.name || 'NVC CONNECT'}</Text>
         <Text style={styles.infoLabel}>Version</Text>
         <Text style={styles.infoText}>{Constants.expoConfig?.version || '1.0.0'}</Text>
         <Text style={styles.infoLabel}>Environment</Text>

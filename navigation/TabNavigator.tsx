@@ -200,7 +200,7 @@ function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle }: 
             <AppLogo width={36} />
           </View>
           <View style={styles.sidebarBrandCopy}>
-            <Text style={styles.sidebarBrandName}>Volcre</Text>
+            <Text style={styles.sidebarBrandName}>NVC CONNECT</Text>
             <Text style={styles.sidebarBrandTag}>Volunteer coordination</Text>
           </View>
         </View>

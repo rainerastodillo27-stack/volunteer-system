@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Volcre",
+    "name": "NVC CONNECT",
     "slug": "volcre",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -21,7 +21,7 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Allow Volcre to access your photos so partners and volunteers can upload real project images."
+          "photosPermission": "Allow NVC CONNECT to access your photos so partners and volunteers can upload real project images."
         }
       ]
     ]

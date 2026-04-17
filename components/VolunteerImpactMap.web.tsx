@@ -6,8 +6,10 @@ import { Project } from '../models/types';
 import {
   PHILIPPINES_BOUNDS,
   PHILIPPINES_WEB_CENTER,
+  getPrimaryProjectImageSource,
   getProjectMarkerColor,
 } from '../utils/projectMap';
+import { createWebMapMarkerIcon, getMarkerInitials, resolveMarkerImageUri } from '../utils/mapMarkerVisuals';
 
 const MapHost = 'div' as any;
 
@@ -144,6 +146,7 @@ export default function VolunteerImpactMap({ projects }: VolunteerImpactMapProps
         const bounds = new browserWindow.google.maps.LatLngBounds();
 
         projects.forEach((project, index) => {
+          const projectImageUri = resolveMarkerImageUri(getPrimaryProjectImageSource(project));
           const marker = new browserWindow.google.maps.Marker({
             map,
             position: {
@@ -151,19 +154,14 @@ export default function VolunteerImpactMap({ projects }: VolunteerImpactMapProps
               lng: project.location.longitude,
             },
             title: project.title,
-            label: {
-              text: String(index + 1),
-              color: '#ffffff',
-              fontWeight: '700',
-            },
             icon: {
-              path: browserWindow.google.maps.SymbolPath.CIRCLE,
-              fillColor: getProjectMarkerColor(project),
-              fillOpacity: 1,
-              strokeColor: '#ffffff',
-              strokeOpacity: 1,
-              strokeWeight: 2,
-              scale: 12,
+              url: createWebMapMarkerIcon({
+                accentColor: getProjectMarkerColor(project),
+                imageUri: projectImageUri,
+                initials: getMarkerInitials(project.title, String(index + 1)),
+              }),
+              scaledSize: new browserWindow.google.maps.Size(48, 57),
+              anchor: new browserWindow.google.maps.Point(24, 54),
             },
           });
 

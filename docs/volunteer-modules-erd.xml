@@ -1,0 +1,150 @@
+<mxfile host="app.diagrams.net" modified="2026-04-16T14:30:00.000Z" agent="Codex" version="24.7.17">
+  <diagram id="volunteer-modules-erd" name="Volunteer Modules ERD">
+    <mxGraphModel dx="1800" dy="1200" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2400" pageHeight="1600" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="10" value="Volunteer Management Module" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#2563eb;fontStyle=1;align=left;verticalAlign=top;spacing=10;" vertex="1" parent="1">
+          <mxGeometry x="20" y="20" width="700" height="610" as="geometry" />
+        </mxCell>
+        <mxCell id="11" value="Communication Hub" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#16a34a;fontStyle=1;align=left;verticalAlign=top;spacing=10;" vertex="1" parent="1">
+          <mxGeometry x="760" y="20" width="640" height="360" as="geometry" />
+        </mxCell>
+        <mxCell id="12" value="Partner Verification and Onboarding" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fee2e2;strokeColor=#dc2626;fontStyle=1;align=left;verticalAlign=top;spacing=10;" vertex="1" parent="1">
+          <mxGeometry x="1440" y="20" width="700" height="380" as="geometry" />
+        </mxCell>
+        <mxCell id="13" value="Event and Program Management Suite" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fef3c7;strokeColor=#d97706;fontStyle=1;align=left;verticalAlign=top;spacing=10;" vertex="1" parent="1">
+          <mxGeometry x="760" y="420" width="980" height="620" as="geometry" />
+        </mxCell>
+        <mxCell id="14" value="Analytics, Reports, and Dashboard" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e9d5ff;strokeColor=#7c3aed;fontStyle=1;align=left;verticalAlign=top;spacing=10;" vertex="1" parent="1">
+          <mxGeometry x="1760" y="440" width="380" height="600" as="geometry" />
+        </mxCell>
+
+        <mxCell id="100" value="&lt;b&gt;users&lt;/b&gt;&lt;hr/&gt;PK id&lt;br&gt;email&lt;br&gt;password&lt;br&gt;role&lt;br&gt;name&lt;br&gt;phone&lt;br&gt;user_type&lt;br&gt;created_at" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=6;fillColor=#ffffff;strokeColor=#1f2937;" vertex="1" parent="1">
+          <mxGeometry x="60" y="80" width="220" height="200" as="geometry" />
+        </mxCell>
+        <mxCell id="101" value="&lt;b&gt;volunteers&lt;/b&gt;&lt;hr/&gt;PK id&lt;br&gt;FK user_id&lt;br&gt;name&lt;br&gt;email&lt;br&gt;phone&lt;br&gt;skills (jsonb)&lt;br&gt;availability (jsonb)&lt;br&gt;registration_status&lt;br&gt;total_hours_contributed&lt;br&gt;rating" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=6;fillColor=#ffffff;strokeColor=#1f2937;" vertex="1" parent="1">
+          <mxGeometry x="320" y="80" width="260" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="102" value="&lt;b&gt;volunteer_matches&lt;/b&gt;&lt;hr/&gt;PK id&lt;br&gt;FK volunteer_id&lt;br&gt;FK project_id&lt;br&gt;status&lt;br&gt;requested_at&lt;br&gt;matched_at&lt;br&gt;reviewed_at&lt;br&gt;reviewed_by&lt;br&gt;hours_contributed" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=6;fillColor=#ffffff;strokeColor=#1f2937;" vertex="1" parent="1">
+          <mxGeometry x="60" y="340" width="240" height="220" as="geometry" />
+        </mxCell>
+        <mxCell id="103" value="&lt;b&gt;volunteer_time_logs&lt;/b&gt;&lt;hr/&gt;PK id&lt;br&gt;FK volunteer_id&lt;br&gt;FK project_id&lt;br&gt;time_in&lt;br&gt;time_out&lt;br&gt;note&lt;br&gt;completion_photo&lt;br&gt;completion_report" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=6;fillColor=#ffffff;strokeColor=#1f2937;" vertex="1" parent="1">
+          <mxGeometry x="320" y="350" width="260" height="200" as="geometry" />
+        </mxCell>
+        <mxCell id="104" value="&lt;b&gt;volunteer_project_joins&lt;/b&gt;&lt;hr/&gt;PK id&lt;br&gt;FK project_id&lt;br&gt;FK volunteer_id&lt;br&gt;FK volunteer_user_id&lt;br&gt;joined_at&lt;br&gt;source&lt;br&gt;participation_status&lt;br&gt;completed_at&lt;br&gt;completed_by" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=6;fillColor=#ffffff;strokeColor=#1f2937;" vertex="1" parent="1">
+          <mxGeometry x="600" y="220" width="220" height="220" as="geometry" />
+        </mxCell>
+
+        <mxCell id="110" value="&lt;b&gt;messages&lt;/b&gt;&lt;hr/&gt;PK messages_id&lt;br&gt;FK sender_id&lt;br&gt;FK recipient_id&lt;br&gt;FK project_id (optional)&lt;br&gt;content&lt;br&gt;timestamp&lt;br&gt;read&lt;br&gt;attachments (jsonb)" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=6;fillColor=#ffffff;strokeColor=#1f2937;" vertex="1" parent="1">
+          <mxGeometry x="810" y="90" width="250" height="200" as="geometry" />
+        </mxCell>
+        <mxCell id="111" value="&lt;b&gt;project_group_messages&lt;/b&gt;&lt;hr/&gt;PK project_group_messages_id&lt;br&gt;FK project_id&lt;br&gt;FK sender_id&lt;br&gt;content&lt;br&gt;timestamp&lt;br&gt;attachments (jsonb)" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=6;fillColor=#ffffff;strokeColor=#1f2937;" vertex="1" parent="1">
+          <mxGeometry x="1090" y="110" width="260" height="180" as="geometry" />
+        </mxCell>
+
+        <mxCell id="120" value="&lt;b&gt;partners&lt;/b&gt;&lt;hr/&gt;PK id&lt;br&gt;FK owner_user_id&lt;br&gt;name&lt;br&gt;category&lt;br&gt;sector_type&lt;br&gt;dswd_accreditation_no&lt;br&gt;sec_registration_no&lt;br&gt;verification_status&lt;br&gt;status&lt;br&gt;created_at" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=6;fillColor=#ffffff;strokeColor=#1f2937;" vertex="1" parent="1">
+          <mxGeometry x="1490" y="90" width="270" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="121" value="&lt;b&gt;partner_project_applications&lt;/b&gt;&lt;hr/&gt;PK id&lt;br&gt;FK project_id&lt;br&gt;FK partner_user_id&lt;br&gt;partner_name&lt;br&gt;partner_email&lt;br&gt;status&lt;br&gt;requested_at&lt;br&gt;reviewed_at&lt;br&gt;reviewed_by" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=6;fillColor=#ffffff;strokeColor=#1f2937;" vertex="1" parent="1">
+          <mxGeometry x="1790" y="120" width="300" height="220" as="geometry" />
+        </mxCell>
+
+        <mxCell id="130" value="&lt;b&gt;projects&lt;/b&gt;&lt;hr/&gt;PK id&lt;br&gt;FK partner_id&lt;br&gt;title&lt;br&gt;program_module&lt;br&gt;is_event&lt;br&gt;status&lt;br&gt;category&lt;br&gt;start_date&lt;br&gt;end_date&lt;br&gt;volunteers_needed" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=6;fillColor=#ffffff;strokeColor=#1f2937;" vertex="1" parent="1">
+          <mxGeometry x="820" y="500" width="250" height="220" as="geometry" />
+        </mxCell>
+        <mxCell id="131" value="&lt;b&gt;status_updates&lt;/b&gt;&lt;hr/&gt;PK id&lt;br&gt;FK project_id&lt;br&gt;status&lt;br&gt;description&lt;br&gt;updated_by&lt;br&gt;updated_at" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=6;fillColor=#ffffff;strokeColor=#1f2937;" vertex="1" parent="1">
+          <mxGeometry x="1110" y="500" width="220" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="132" value="&lt;b&gt;partner_event_check_ins&lt;/b&gt;&lt;hr/&gt;PK id&lt;br&gt;FK project_id&lt;br&gt;FK partner_id&lt;br&gt;FK partner_user_id&lt;br&gt;gps_coordinates (jsonb)&lt;br&gt;check_in_time" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=6;fillColor=#ffffff;strokeColor=#1f2937;" vertex="1" parent="1">
+          <mxGeometry x="1360" y="500" width="260" height="180" as="geometry" />
+        </mxCell>
+
+        <mxCell id="140" value="&lt;b&gt;partner_reports&lt;/b&gt;&lt;hr/&gt;PK id&lt;br&gt;FK project_id&lt;br&gt;FK partner_id&lt;br&gt;FK submitter_user_id&lt;br&gt;report_type&lt;br&gt;impact_count&lt;br&gt;metrics (jsonb)&lt;br&gt;status&lt;br&gt;created_at" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=6;fillColor=#ffffff;strokeColor=#1f2937;" vertex="1" parent="1">
+          <mxGeometry x="1800" y="540" width="280" height="210" as="geometry" />
+        </mxCell>
+        <mxCell id="141" value="&lt;b&gt;published_impact_reports&lt;/b&gt;&lt;hr/&gt;PK id&lt;br&gt;FK project_id&lt;br&gt;FK generated_by&lt;br&gt;generated_at&lt;br&gt;report_file&lt;br&gt;format&lt;br&gt;published_at" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=6;fillColor=#ffffff;strokeColor=#1f2937;" vertex="1" parent="1">
+          <mxGeometry x="1800" y="790" width="280" height="180" as="geometry" />
+        </mxCell>
+
+        <mxCell id="150" value="Canonical business ERD. Key columns only.&lt;br&gt;Hot-storage mirror tables (`app_*_store`) and `app_storage` are intentionally excluded to keep the module model readable." style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=8;fillColor=#f9fafb;strokeColor=#6b7280;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="1490" y="980" width="590" height="90" as="geometry" />
+        </mxCell>
+
+        <mxCell id="200" value="user_id" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#6b7280;fontSize=10;" edge="1" parent="1" source="100" target="101">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="201" value="owner_user_id" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#6b7280;fontSize=10;" edge="1" parent="1" source="100" target="120">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="202" value="sender_id / recipient_id" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#6b7280;fontSize=10;" edge="1" parent="1" source="100" target="110">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="203" value="sender_id" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#6b7280;fontSize=10;" edge="1" parent="1" source="100" target="111">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="204" value="partner_user_id" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#6b7280;fontSize=10;" edge="1" parent="1" source="100" target="121">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="205" value="submitter_user_id / generated_by" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#6b7280;fontSize=10;" edge="1" parent="1" source="100" target="140">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="206" value="generated_by" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#6b7280;fontSize=10;" edge="1" parent="1" source="100" target="141">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="210" value="volunteer_id" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#6b7280;fontSize=10;" edge="1" parent="1" source="101" target="102">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="211" value="volunteer_id" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#6b7280;fontSize=10;" edge="1" parent="1" source="101" target="103">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="212" value="volunteer_id" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#6b7280;fontSize=10;" edge="1" parent="1" source="101" target="104">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="220" value="partner_id" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#6b7280;fontSize=10;" edge="1" parent="1" source="120" target="130">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="221" value="partner_id" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#6b7280;fontSize=10;" edge="1" parent="1" source="120" target="132">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="222" value="partner_id" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#6b7280;fontSize=10;" edge="1" parent="1" source="120" target="140">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="230" value="project_id" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#6b7280;fontSize=10;" edge="1" parent="1" source="130" target="102">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="231" value="project_id" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#6b7280;fontSize=10;" edge="1" parent="1" source="130" target="103">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="232" value="project_id" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#6b7280;fontSize=10;" edge="1" parent="1" source="130" target="104">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="233" value="project_id" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#6b7280;fontSize=10;" edge="1" parent="1" source="130" target="111">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="234" value="project_id" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#6b7280;fontSize=10;" edge="1" parent="1" source="130" target="121">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="235" value="project_id" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#6b7280;fontSize=10;" edge="1" parent="1" source="130" target="131">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="236" value="project_id" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#6b7280;fontSize=10;" edge="1" parent="1" source="130" target="132">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="237" value="project_id" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#6b7280;fontSize=10;" edge="1" parent="1" source="130" target="140">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="238" value="project_id" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#6b7280;fontSize=10;" edge="1" parent="1" source="130" target="141">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="239" value="project_id (optional)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#6b7280;fontSize=10;dashed=1;" edge="1" parent="1" source="130" target="110">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

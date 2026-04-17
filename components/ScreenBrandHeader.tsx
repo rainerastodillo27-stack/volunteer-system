@@ -15,7 +15,7 @@ export default function ScreenBrandHeader({ title }: ScreenBrandHeaderProps) {
           <AppLogo width={78} />
         </View>
         <View style={styles.copyBlock}>
-          <Text style={styles.brandName}>Volcre</Text>
+          <Text style={styles.brandName}>NVC CONNECT</Text>
           <Text style={styles.screenTitle}>{title}</Text>
         </View>
       </View>

@@ -496,6 +496,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     setTaskDraft(createEmptyProjectTaskDraft());
   };
 
+  const getCurrentSelectedProject = (): Project | null => {
+    if (!selectedProject) {
+      return null;
+    }
+
+    return projects.find(project => project.id === selectedProject.id) || selectedProject;
+  };
+
   // Opens the volunteer management route for one volunteer when available.
   const openVolunteerProfile = (volunteerId: string) => {
     navigateToAvailableRoute(navigation, 'Volunteers', { volunteerId }, {
@@ -643,25 +651,27 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       return;
     }
 
-    if (!selectedProject || !updateDescription.trim()) {
+    const currentSelectedProject = getCurrentSelectedProject();
+    if (!currentSelectedProject || !updateDescription.trim()) {
       Alert.alert('Error', 'Please enter a description');
       return;
     }
 
     try {
+      const now = new Date().toISOString();
       const updatedProject = {
-        ...selectedProject,
+        ...currentSelectedProject,
         status: newStatus,
-        updatedAt: new Date().toISOString(),
+        updatedAt: now,
       };
 
       const statusUpdate: StatusUpdate = {
         id: `status-${Date.now()}`,
-        projectId: selectedProject.id,
+        projectId: currentSelectedProject.id,
         status: newStatus,
         description: updateDescription,
         updatedBy: user?.id || '',
-        updatedAt: new Date().toISOString(),
+        updatedAt: now,
       };
 
       await saveProject(updatedProject);
@@ -672,8 +682,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       setUpdateDescription('');
       setNewStatus('Planning');
       setSelectedProject(updatedProject);
-      await loadStatusUpdates(selectedProject.id);
-      loadProjects();
+      await Promise.all([
+        loadStatusUpdates(currentSelectedProject.id),
+        loadProjects(),
+      ]);
     } catch (error) {
       Alert.alert(
         getRequestErrorTitle(error),
@@ -764,13 +776,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   };
 
   const handleRefreshProjectDetails = async () => {
-    if (!selectedProject) {
+    const currentSelectedProject = getCurrentSelectedProject();
+    if (!currentSelectedProject) {
       return;
     }
 
     try {
       setActionLoadingKey('refresh-project');
-      await handleSelectProject(selectedProject);
+      await handleSelectProject(currentSelectedProject);
     } finally {
       setActionLoadingKey(null);
     }
@@ -959,7 +972,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       return;
     }
 
-    if (!selectedProject) {
+    const currentSelectedProject = getCurrentSelectedProject();
+    if (!currentSelectedProject) {
       return;
     }
 
@@ -968,7 +982,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       return;
     }
 
-    const assignableVolunteers = getAssignableVolunteerOptions(selectedProject);
+    const assignableVolunteers = getAssignableVolunteerOptions(currentSelectedProject);
     const assignedVolunteer = assignableVolunteers.find(
       volunteer => volunteer.id === taskDraft.assignedVolunteerId
     );
@@ -979,7 +993,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         : taskDraft.status;
 
     const nextTask: ProjectInternalTask = {
-      id: editingTaskId || `${selectedProject.id}-task-${Date.now()}`,
+      id: editingTaskId || `${currentSelectedProject.id}-task-${Date.now()}`,
       title: taskDraft.title.trim(),
       description: taskDraft.description.trim(),
       category: taskDraft.category.trim(),
@@ -988,18 +1002,18 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       assignedVolunteerId: taskDraft.assignedVolunteerId || undefined,
       assignedVolunteerName: assignedVolunteer?.name,
       createdAt:
-        selectedProject.internalTasks?.find(task => task.id === editingTaskId)?.createdAt || now,
+        currentSelectedProject.internalTasks?.find(task => task.id === editingTaskId)?.createdAt || now,
       updatedAt: now,
     };
 
     const nextInternalTasks = editingTaskId
-      ? (selectedProject.internalTasks || []).map(task =>
+      ? (currentSelectedProject.internalTasks || []).map(task =>
           task.id === editingTaskId ? nextTask : task
         )
-      : [...(selectedProject.internalTasks || []), nextTask];
+      : [...(currentSelectedProject.internalTasks || []), nextTask];
 
     const updatedProject: Project = {
-      ...selectedProject,
+      ...currentSelectedProject,
       internalTasks: nextInternalTasks,
       updatedAt: now,
     };
@@ -1018,7 +1032,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   };
 
   const handleDeleteInternalTask = (taskId: string) => {
-    if (!isAdmin || !selectedProject) {
+    const currentSelectedProject = getCurrentSelectedProject();
+    if (!isAdmin || !currentSelectedProject) {
       return;
     }
 
@@ -1032,8 +1047,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           style: 'destructive',
           onPress: async () => {
             const updatedProject: Project = {
-              ...selectedProject,
-              internalTasks: (selectedProject.internalTasks || []).filter(task => task.id !== taskId),
+              ...currentSelectedProject,
+              internalTasks: (currentSelectedProject.internalTasks || []).filter(task => task.id !== taskId),
               updatedAt: new Date().toISOString(),
             };
 
@@ -1391,9 +1406,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     </Modal>
   );
 
-  if (selectedProject) {
-    const volunteerEntries = getProjectVolunteerEntries(selectedProject);
-    const assignableVolunteerOptions = getAssignableVolunteerOptions(selectedProject);
+  const activeSelectedProject = getCurrentSelectedProject();
+
+  if (activeSelectedProject) {
+    const volunteerEntries = getProjectVolunteerEntries(activeSelectedProject);
+    const assignableVolunteerOptions = getAssignableVolunteerOptions(activeSelectedProject);
     const volunteerRequestEntries = getProjectVolunteerRequestEntries();
     const pendingPartnerApplications = partnerApplications.filter(
       application => application.status === 'Pending',
@@ -1411,7 +1428,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       requestEntry => requestEntry.status === 'Rejected',
     );
     const projectTimeLogEntries: ProjectTimeLogEntry[] = volunteerTimeLogs
-      .filter(log => log.projectId === selectedProject.id)
+      .filter(log => log.projectId === activeSelectedProject.id)
       .map(log => {
         const volunteer = volunteers.find(entry => entry.id === log.volunteerId);
         return {
@@ -1423,9 +1440,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     const projectTimeInCount = projectTimeLogEntries.length;
     const projectTimeOutCount = projectTimeLogEntries.filter(log => Boolean(log.timeOut)).length;
     const selectedPartnerName =
-      partners.find(partner => partner.id === selectedProject.partnerId)?.name || selectedProject.partnerId;
+      partners.find(partner => partner.id === activeSelectedProject.partnerId)?.name || activeSelectedProject.partnerId;
     const pendingPartnerRequests = pendingPartnerApplications.length;
-    const internalTasks = selectedProject.internalTasks || [];
+    const internalTasks = activeSelectedProject.internalTasks || [];
 
     return (
       <ScrollView style={styles.container}>
@@ -1442,18 +1459,18 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             <View style={styles.detailsHeroHeader}>
               <View style={styles.detailsHeroCopy}>
                 <Text style={styles.detailsEyebrow}>
-                  {selectedProject.isEvent ? 'Event Workspace' : 'Program Workspace'}
+                  {activeSelectedProject.isEvent ? 'Event Workspace' : 'Program Workspace'}
                 </Text>
-                <Text style={styles.detailsTitle}>{selectedProject.title}</Text>
-                <Text style={styles.detailsSubtitle}>{selectedProject.description}</Text>
+                <Text style={styles.detailsTitle}>{activeSelectedProject.title}</Text>
+                <Text style={styles.detailsSubtitle}>{activeSelectedProject.description}</Text>
               </View>
               <View
                 style={[
                   styles.detailsHeroStatus,
-                  { backgroundColor: getProjectStatusColor(selectedProject.status) },
+                  { backgroundColor: getProjectStatusColor(activeSelectedProject.status) },
                 ]}
               >
-                <Text style={styles.statusText}>{selectedProject.status}</Text>
+                <Text style={styles.statusText}>{activeSelectedProject.status}</Text>
               </View>
             </View>
 
@@ -1461,7 +1478,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               <View style={styles.detailsQuickCard}>
                 <Text style={styles.detailsQuickLabel}>Program Module</Text>
                 <Text style={styles.detailsQuickValue}>
-                  {selectedProject.programModule || selectedProject.category}
+                  {activeSelectedProject.programModule || activeSelectedProject.category}
                 </Text>
               </View>
               <View style={styles.detailsQuickCard}>
@@ -1471,7 +1488,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               <View style={styles.detailsQuickCard}>
                 <Text style={styles.detailsQuickLabel}>Volunteer Slots</Text>
                 <Text style={styles.detailsQuickValue}>
-                  {selectedProject.volunteers.length}/{selectedProject.volunteersNeeded}
+                  {activeSelectedProject.volunteers.length}/{activeSelectedProject.volunteersNeeded}
                 </Text>
               </View>
               <View style={styles.detailsQuickCard}>
@@ -1481,13 +1498,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               <View style={styles.detailsQuickCard}>
                 <Text style={styles.detailsQuickLabel}>Start Date</Text>
                 <Text style={styles.detailsQuickValue}>
-                  {format(new Date(selectedProject.startDate), 'PPP')}
+                  {format(new Date(activeSelectedProject.startDate), 'PPP')}
                 </Text>
               </View>
               <View style={styles.detailsQuickCard}>
                 <Text style={styles.detailsQuickLabel}>End Date</Text>
                 <Text style={styles.detailsQuickValue}>
-                  {format(new Date(selectedProject.endDate), 'PPP')}
+                  {format(new Date(activeSelectedProject.endDate), 'PPP')}
                 </Text>
               </View>
             </View>
@@ -1497,7 +1514,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             <View style={styles.detailsActionRow}>
               <TouchableOpacity
                 style={[styles.detailsActionButton, Boolean(actionLoadingKey) && styles.detailsActionButtonDisabled]}
-                onPress={() => openEditProjectModal(selectedProject)}
+                onPress={() => openEditProjectModal(activeSelectedProject)}
                 disabled={Boolean(actionLoadingKey)}
               >
                 <MaterialIcons name="edit" size={18} color="#166534" />
@@ -1547,12 +1564,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             <Text style={styles.sectionHint}>Core project information for admin review.</Text>
             <View style={styles.detailField}>
               <Text style={styles.detailFieldLabel}>Project Type</Text>
-              <Text style={styles.detailFieldValue}>{selectedProject.isEvent ? 'Event' : 'Program'}</Text>
+              <Text style={styles.detailFieldValue}>{activeSelectedProject.isEvent ? 'Event' : 'Program'}</Text>
             </View>
             <View style={styles.detailField}>
               <Text style={styles.detailFieldLabel}>Program Module</Text>
               <Text style={styles.detailFieldValue}>
-                {selectedProject.programModule || selectedProject.category}
+                {activeSelectedProject.programModule || activeSelectedProject.category}
               </Text>
             </View>
             <View style={styles.detailField}>
@@ -1567,19 +1584,19 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             <View style={styles.detailField}>
               <Text style={styles.detailFieldLabel}>Start Date</Text>
               <Text style={styles.detailFieldValue}>
-                {format(new Date(selectedProject.startDate), 'PPP')}
+                {format(new Date(activeSelectedProject.startDate), 'PPP')}
               </Text>
             </View>
             <View style={styles.detailField}>
               <Text style={styles.detailFieldLabel}>End Date</Text>
               <Text style={styles.detailFieldValue}>
-                {format(new Date(selectedProject.endDate), 'PPP')}
+                {format(new Date(activeSelectedProject.endDate), 'PPP')}
               </Text>
             </View>
             <View style={styles.detailField}>
               <Text style={styles.detailFieldLabel}>Volunteer Slots</Text>
               <Text style={styles.detailFieldValue}>
-                {selectedProject.volunteers.length}/{selectedProject.volunteersNeeded}
+                {activeSelectedProject.volunteers.length}/{activeSelectedProject.volunteersNeeded}
               </Text>
             </View>
           </View>
@@ -1629,6 +1646,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                     <Text style={styles.taskDescription}>{task.description}</Text>
                     <Text style={styles.taskAssignmentText}>
                       Assigned to: {task.assignedVolunteerName || 'Unassigned'}
+                    </Text>
+                    <Text style={styles.taskUpdatedText}>
+                      Last updated: {format(new Date(task.updatedAt), 'PPp')}
                     </Text>
 
                     {isAdmin && (
@@ -3010,6 +3030,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#0f172a',
     marginTop: 10,
+  },
+  taskUpdatedText: {
+    fontSize: 12,
+    color: '#64748b',
+    marginTop: 6,
   },
   taskActionRow: {
     flexDirection: 'row',

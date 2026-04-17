@@ -26,6 +26,8 @@ from .db import (
     get_postgres_diagnostics,
     get_postgres_status,
 )
+from .field_rules import normalize_comparable_phone
+from .schema_maintenance import prune_stale_legacy_app_users
 
 
 load_dotenv()
@@ -109,7 +111,7 @@ class ProjectGroupMessagePayload(BaseModel):
     attachments: list[str] | None = None
 
 
-app = FastAPI(title="Volcre Storage API")
+app = FastAPI(title="NVC CONNECT Storage API")
 
 allowed_origins = [origin.strip() for origin in os.getenv("ALLOWED_ORIGINS", "*").split(",") if origin.strip()]
 app.add_middleware(
@@ -342,9 +344,13 @@ def _assert_project_group_chat_access(
 @app.on_event("startup")
 # Prepares storage tables when the FastAPI app starts.
 def startup() -> None:
-    # Don't wait forever at startup - just start the server
-    # Database connection issues are handled per-endpoint
-    print("[OK] Backend started (database will be checked on first use)")
+    # Keep demo credentials and seed data available whenever the backend starts.
+    try:
+        ensure_app_storage_seeded()
+        print("[OK] Backend started and demo storage was ensured")
+    except Exception as error:
+        # Don't block startup on database reachability; endpoints still report health.
+        print(f"[WARN] Backend started without ensuring demo storage: {error}")
 
 
 @app.get("/health", response_model=None)
@@ -385,10 +391,11 @@ def health():
     }
 
 
-# Finds a user by email or normalized phone identifier.
-def _get_user_by_identifier(identifier: str) -> dict[str, Any] | None:
+# Finds all users that match an email or normalized phone identifier.
+def _get_users_by_identifier(identifier: str) -> list[dict[str, Any]]:
     normalized_identifier = identifier.strip().lower()
-    raw_identifier = identifier.strip()
+    comparable_phone = normalize_comparable_phone(identifier)
+    raw_digits = "".join(character for character in str(identifier or "") if character.isdigit())
     _require_postgres()
     with get_postgres_connection() as connection:
         with connection.cursor() as cursor:
@@ -397,18 +404,24 @@ def _get_user_by_identifier(identifier: str) -> dict[str, Any] | None:
                 select data
                 from app_users_store
                 where lower(coalesce(data->>'email', '')) = %s
-                   or coalesce(data->>'phone', '') = %s
+                   or regexp_replace(coalesce(data->>'phone', ''), '[^0-9]', '', 'g') = %s
+                   or regexp_replace(coalesce(data->>'phone', ''), '[^0-9]', '', 'g') = %s
                 order by sort_order asc
-                limit 1
                 """,
-                (normalized_identifier, raw_identifier),
+                (normalized_identifier, comparable_phone, raw_digits),
             )
-            row = cursor.fetchone()
-    return None if row is None else row[0]
+            rows = cursor.fetchall()
+    return [row[0] for row in rows]
+
+
+# Finds the first user that matches an email or normalized phone identifier.
+def _get_user_by_identifier(identifier: str) -> dict[str, Any] | None:
+    matches = _get_users_by_identifier(identifier)
+    return matches[0] if matches else None
 
 
 def _normalize_comparable_phone(value: Any) -> str:
-    return "".join(character for character in str(value or "") if character.isdigit())
+    return normalize_comparable_phone(value)
 
 
 # Returns the login restriction message for partner accounts that are not yet approved.
@@ -586,6 +599,7 @@ def _postgres_sync_all_legacy_app_users(connection: Any) -> None:
         user_id = user.get("id")
         if isinstance(user_id, str) and user_id:
             _postgres_upsert_legacy_app_user(connection, user_id, user)
+    prune_stale_legacy_app_users(connection)
 
 
 # Reads hot-storage items filtered by one field value.
@@ -845,7 +859,7 @@ def _build_projects_snapshot(
 def root() -> dict[str, Any]:
     return {
         "status": "ok",
-        "message": "Volcre backend is running.",
+        "message": "NVC CONNECT backend is running.",
         "docs": "/docs",
         "health": "/health",
         "db_health": "/db-health",
@@ -894,8 +908,17 @@ def lookup_user(identifier: str) -> dict[str, Any]:
 @app.post("/auth/login")
 # API endpoint that validates login credentials.
 def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
-    user = _get_user_by_identifier(payload.identifier)
-    if user is None or user.get("password") != payload.password:
+    matching_users = _get_users_by_identifier(payload.identifier)
+    normalized_password = str(payload.password or "").strip()
+    user = next(
+        (
+            candidate
+            for candidate in matching_users
+            if str(candidate.get("password") or "").strip() == normalized_password
+        ),
+        None,
+    )
+    if user is None:
         raise HTTPException(status_code=401, detail="Invalid email/phone or password.")
 
     with get_postgres_connection() as connection:
