@@ -26,8 +26,8 @@ import {
   PHRegions,
 } from '../utils/philippineAddressData';
 
-const BACKEND_HEALTH_TIMEOUT_MS = 20000;
-const BACKEND_HEALTH_POLL_MS = 10000;
+const BACKEND_HEALTH_TIMEOUT_MS = 4000;
+const BACKEND_HEALTH_POLL_MS = 5000;
 
 type SignupVolunteerSheetState = {
   gender: string;

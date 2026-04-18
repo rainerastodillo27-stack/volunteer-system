@@ -48,16 +48,16 @@ const WEB_MESSAGE_SYNC_KEY = 'volcre:messages:updatedAt';
 const memoryStorageCache = new Map<string, unknown>();
 const sharedStorageCacheTimestamps = new Map<string, number>();
 let mockDataInitializationPromise: Promise<void> | null = null;
-// Shared reads should fail fast enough to keep the UI responsive when the
-// backend is slow or unavailable.
-const REMOTE_STORAGE_TIMEOUT_MS = 20000;
-const API_HEALTH_TIMEOUT_MS = 5000;
-const API_READY_RETRY_MS = 1000;
-const API_READY_MAX_ATTEMPTS = 4;
-const API_READY_CACHE_MS = 5000;
-const API_REQUEST_MAX_ATTEMPTS = 3;
-const API_REQUEST_RETRY_BASE_MS = 1500;
-const API_REQUEST_RETRY_MAX_MS = 6000;
+// Shared reads should fail fast enough to keep startup responsive when the
+// backend is booting or temporarily unavailable.
+const REMOTE_STORAGE_TIMEOUT_MS = 8000;
+const API_HEALTH_TIMEOUT_MS = 1500;
+const API_READY_RETRY_MS = 350;
+const API_READY_MAX_ATTEMPTS = 2;
+const API_READY_CACHE_MS = 15000;
+const API_REQUEST_MAX_ATTEMPTS = 2;
+const API_REQUEST_RETRY_BASE_MS = 500;
+const API_REQUEST_RETRY_MAX_MS = 1500;
 const SHARED_STORAGE_CACHE_TTL_MS = 3000;
 const STORAGE_CHANGE_POLL_INTERVAL_MS = 3000;
 const LOCAL_ONLY_STORAGE_KEYS = new Set([STORAGE_KEYS.CURRENT_USER]);

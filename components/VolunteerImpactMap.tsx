@@ -5,8 +5,6 @@ import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import PhotoMapMarker from './PhotoMapMarker';
 import { Project } from '../models/types';
 import { getInitialProjectRegion, getProjectMarkerColor } from '../utils/projectMap';
-import { getMarkerInitials } from '../utils/mapMarkerVisuals';
-import { getPrimaryProjectImageSource } from '../utils/projectMap';
 
 type VolunteerImpactMapProps = {
   projects: Project[];
@@ -58,11 +56,7 @@ export default function VolunteerImpactMap({ projects }: VolunteerImpactMapProps
               description={project.location.address}
               onPress={() => setSelectedProject(project)}
             >
-              <PhotoMapMarker
-                imageSource={getPrimaryProjectImageSource(project)}
-                initials={getMarkerInitials(project.title)}
-                accentColor={getProjectMarkerColor(project)}
-              />
+              <PhotoMapMarker accentColor={getProjectMarkerColor(project)} />
             </Marker>
           ))}
         </MapView>

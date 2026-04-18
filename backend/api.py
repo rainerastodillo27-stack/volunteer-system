@@ -370,7 +370,8 @@ def health():
             },
         )
 
-    postgres_available, postgres_error = get_postgres_status(force_refresh=True)
+    # Reuse the short-lived database probe cache so frontend startup checks stay fast.
+    postgres_available, postgres_error = get_postgres_status(force_refresh=False)
     if not postgres_available:
         return JSONResponse(
             status_code=503,
