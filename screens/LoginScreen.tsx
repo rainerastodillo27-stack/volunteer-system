@@ -58,7 +58,79 @@ type SignupPartnerApplicationState = {
   advocacyFocus: AdvocacyFocus[];
 };
 
+type MobileEntryRole = Exclude<UserRole, 'admin'>;
 type SignupStep = 'role' | 'details';
+type DemoLoginAccount = {
+  id: string;
+  name: string;
+  identifier: string;
+  password: string;
+  badge: string;
+  mobileRole?: MobileEntryRole;
+};
+
+const ADMIN_DEMO_ACCOUNT: DemoLoginAccount = {
+  id: 'demo-admin',
+  name: 'Admin Account',
+  identifier: 'admin@nvc.org',
+  password: 'admin123',
+  badge: 'ADMIN',
+};
+
+const VOLUNTEER_DEMO_ACCOUNT: DemoLoginAccount = {
+  id: 'demo-volunteer',
+  name: 'Volunteer Account',
+  identifier: 'volunteer@example.com',
+  password: 'volunteer123',
+  badge: 'VOLUNTEER',
+  mobileRole: 'volunteer',
+};
+
+const PARTNER_DEMO_ACCOUNTS: DemoLoginAccount[] = [
+  {
+    id: 'demo-partner-pbsp',
+    name: 'PBSP',
+    identifier: 'partnerships@pbsp.org.ph',
+    password: 'partner123',
+    badge: 'PARTNER',
+    mobileRole: 'partner',
+  },
+  {
+    id: 'demo-partner-jollibee',
+    name: 'Jollibee Foundation',
+    identifier: 'partnerships@jollibeefoundation.org',
+    password: 'partner123',
+    badge: 'PARTNER',
+    mobileRole: 'partner',
+  },
+  {
+    id: 'demo-partner-kabankalan',
+    name: 'Kabankalan LGU',
+    identifier: 'partner@livelihoods.org',
+    password: 'partner123',
+    badge: 'PARTNER',
+    mobileRole: 'partner',
+  },
+];
+
+function getVisibleDemoAccounts(
+  isWeb: boolean,
+  selectedMobileRole: MobileEntryRole | null
+): DemoLoginAccount[] {
+  if (isWeb) {
+    return [ADMIN_DEMO_ACCOUNT];
+  }
+
+  if (selectedMobileRole === 'volunteer') {
+    return [VOLUNTEER_DEMO_ACCOUNT];
+  }
+
+  if (selectedMobileRole === 'partner') {
+    return PARTNER_DEMO_ACCOUNTS;
+  }
+
+  return [VOLUNTEER_DEMO_ACCOUNT, ...PARTNER_DEMO_ACCOUNTS];
+}
 
 // Returns a clean volunteer membership form state for the signup modal.
 function createEmptySignupVolunteerSheet(): SignupVolunteerSheetState {
@@ -109,6 +181,30 @@ function getIncorrectLoginMessage(
   return passwordExists ? 'Wrong user.' : 'Wrong user and password.';
 }
 
+function getMobileRoleLabel(role: MobileEntryRole): string {
+  return role === 'partner' ? 'Partner Organization' : 'Volunteer';
+}
+
+function getMobileRoleLoginTitle(role: MobileEntryRole): string {
+  return role === 'partner' ? 'Partner Organization Sign In' : 'Volunteer Sign In';
+}
+
+function getMobileRoleLoginHint(role: MobileEntryRole): string {
+  return role === 'partner'
+    ? 'Use your approved organization account to open the partner portal.'
+    : 'Use your approved volunteer account to open the volunteer portal.';
+}
+
+function getMobileRoleMismatchMessage(selectedRole: MobileEntryRole, actualRole: UserRole): string {
+  if (actualRole === 'admin') {
+    return 'This account is registered as an admin account. Please use the web portal for admin access.';
+  }
+
+  return selectedRole === 'partner'
+    ? 'This account is registered as a volunteer. Go back and choose Volunteer before signing in.'
+    : 'This account is registered as a partner organization. Go back and choose Partner Organization before signing in.';
+}
+
 // Handles account login and volunteer or partner self-registration.
 export default function LoginScreen() {
   const isWeb = Platform.OS === 'web';
@@ -136,6 +232,7 @@ export default function LoginScreen() {
   const [backendStatus, setBackendStatus] = useState<'checking' | 'online' | 'offline'>('checking');
   const [backendMessage, setBackendMessage] = useState('Checking backend connection...');
   const [savedAccounts, setSavedAccounts] = useState<User[]>([]);
+  const [selectedMobileRole, setSelectedMobileRole] = useState<MobileEntryRole | null>(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [selectedRegionCode, setSelectedRegionCode] = useState('');
@@ -144,6 +241,7 @@ export default function LoginScreen() {
   const [filteredBarangays, setFilteredBarangays] = useState<PHBarangay[]>([]);
   const { login } = useAuth();
   const mountedRef = useRef(true);
+  const visibleDemoAccounts = getVisibleDemoAccounts(isWeb, selectedMobileRole);
 
   useEffect(() => {
     setInitialized(true);
@@ -259,10 +357,14 @@ export default function LoginScreen() {
   }, [backendStatus, isWeb]);
 
   // Authenticates the user with an email or phone identifier and password.
-  const handleLogin = async () => {
-    const trimmedIdentifier = identifier.trim();
-    const trimmedPassword = password.trim();
-
+  const performLogin = async (
+    rawIdentifier: string,
+    rawPassword: string,
+    roleOverride?: MobileEntryRole | null
+  ) => {
+    const trimmedIdentifier = rawIdentifier.trim();
+    const trimmedPassword = rawPassword.trim();
+    const activeMobileRole = roleOverride ?? selectedMobileRole;
     const showLoginError = (title: string, message: string) => {
       if (isWeb) {
         setLoginError({ title, message });
@@ -273,6 +375,14 @@ export default function LoginScreen() {
     };
 
     setLoginError(null);
+
+    if (!isWeb && !activeMobileRole) {
+      Alert.alert(
+        'Select Account Type',
+        'Choose whether you are signing in as a volunteer or partner organization first.'
+      );
+      return;
+    }
 
     if (!trimmedIdentifier || !trimmedPassword) {
       Alert.alert('Validation Error', 'Please enter email or phone and password');
@@ -297,6 +407,12 @@ export default function LoginScreen() {
           'Authentication Failed',
           getIncorrectLoginMessage(matchedUser, allUsers, trimmedPassword)
         );
+        setLoading(false);
+        return;
+      }
+
+      if (!isWeb && activeMobileRole && user.role !== activeMobileRole) {
+        showLoginError('Role Mismatch', getMobileRoleMismatchMessage(activeMobileRole, user.role));
         setLoading(false);
         return;
       }
@@ -343,6 +459,19 @@ export default function LoginScreen() {
     }
   };
 
+  const handleLogin = async () => {
+    await performLogin(identifier, password);
+  };
+
+  const handleQuickLogin = async (account: DemoLoginAccount) => {
+    setIdentifier(account.identifier);
+    setPassword(account.password);
+    if (!isWeb && account.mobileRole) {
+      setSelectedMobileRole(account.mobileRole);
+    }
+    await performLogin(account.identifier, account.password, account.mobileRole ?? null);
+  };
+
   // Clears all signup fields after registration or when the modal is closed.
   const resetSignupForm = () => {
     setSignupName('');
@@ -364,6 +493,11 @@ export default function LoginScreen() {
 
   const openSignupModal = () => {
     resetSignupForm();
+    if (!isWeb && selectedMobileRole) {
+      setSignupRole(selectedMobileRole);
+      setSignupUserType(selectedMobileRole === 'partner' ? 'Adult' : 'Student');
+      setSignupStep('details');
+    }
     setShowSignupModal(true);
   };
 
@@ -372,12 +506,31 @@ export default function LoginScreen() {
     resetSignupForm();
   };
 
-  const handleSelectSignupRole = (role: Exclude<UserRole, 'admin'>) => {
+  const handleSelectSignupRole = (role: MobileEntryRole) => {
     setSignupRole(role);
     if (role === 'partner') {
       setSignupUserType('Adult');
     }
     setSignupStep('details');
+  };
+
+  const handleSelectMobileRole = (
+    role: MobileEntryRole,
+    options?: { preserveCredentials?: boolean }
+  ) => {
+    setSelectedMobileRole(role);
+    setLoginError(null);
+    if (!options?.preserveCredentials) {
+      setIdentifier('');
+      setPassword('');
+    }
+  };
+
+  const handleBackToRoleSelection = () => {
+    setSelectedMobileRole(null);
+    setIdentifier('');
+    setPassword('');
+    setLoginError(null);
   };
 
   // Updates one field in the volunteer membership form without replacing the whole object.
@@ -522,6 +675,9 @@ export default function LoginScreen() {
 
       setIdentifier(createdUser.email || createdUser.phone || '');
       setPassword(createdUser.password);
+      if (!isWeb) {
+        handleSelectMobileRole(signupRole, { preserveCredentials: true });
+      }
       setShowSignupModal(false);
       resetSignupForm();
       Alert.alert(
@@ -542,12 +698,70 @@ export default function LoginScreen() {
     }
   };
 
-  // Prefills the login form with a saved account for faster access.
-  const handleUseSavedAccount = (account: User) => {
+  // Signs in immediately with a saved account shown on this device.
+  const handleUseSavedAccount = async (account: User) => {
+    const nextIdentifier = account.email || account.phone || '';
+    if (!nextIdentifier) {
+      Alert.alert('Login Unavailable', 'This saved account does not have an email or phone number.');
+      return;
+    }
+
     setLoginError(null);
-    setIdentifier(account.email || account.phone || '');
+    setIdentifier(nextIdentifier);
     setPassword(account.password);
+    if (!isWeb && account.role !== 'admin') {
+      setSelectedMobileRole(account.role);
+    }
+    await performLogin(
+      nextIdentifier,
+      account.password,
+      account.role === 'admin' ? null : account.role
+    );
   };
+
+  const visibleSavedAccounts =
+    isWeb || !selectedMobileRole
+      ? savedAccounts
+      : savedAccounts.filter(account => account.role === selectedMobileRole);
+  const selectedMobileRoleLabel = selectedMobileRole
+    ? getMobileRoleLabel(selectedMobileRole)
+    : '';
+  const selectedMobileRoleTitle = selectedMobileRole
+    ? getMobileRoleLoginTitle(selectedMobileRole)
+    : '';
+  const selectedMobileRoleHint = selectedMobileRole
+    ? getMobileRoleLoginHint(selectedMobileRole)
+    : '';
+  const quickLoginTitle = isWeb
+    ? 'Quick Admin Sign In'
+    : selectedMobileRole
+    ? `${selectedMobileRoleLabel} Quick Sign In`
+    : 'Quick Demo Sign In';
+
+  const renderQuickLoginSection = () => (
+    <View style={styles.demoSection}>
+      <Text style={styles.demoTitle}>{quickLoginTitle}</Text>
+      {visibleDemoAccounts.map(account => (
+        <TouchableOpacity
+          key={account.id}
+          style={[styles.savedAccountCard, loading && styles.accountCardDisabled]}
+          onPress={() => {
+            void handleQuickLogin(account);
+          }}
+          activeOpacity={0.85}
+          disabled={loading}
+        >
+          <View style={styles.savedAccountHeader}>
+            <Text style={styles.savedAccountName}>{account.name}</Text>
+            <Text style={styles.savedAccountRole}>{account.badge}</Text>
+          </View>
+          <Text style={styles.savedAccountCredential}>{account.identifier}</Text>
+          <Text style={styles.savedAccountPassword}>{account.password}</Text>
+          <Text style={styles.savedAccountHint}>Tap to sign in instantly</Text>
+        </TouchableOpacity>
+      ))}
+    </View>
+  );
 
   if (loading && !initialized) {
     return (
@@ -569,8 +783,19 @@ export default function LoginScreen() {
         <View style={styles.brandSection}>
           <AppLogo width={isWeb ? 126 : 138} />
           <Text style={styles.title}>NVC CONNECT</Text>
-          <Text style={styles.subtitle}>Volunteer coordination platform</Text>
+          <Text style={styles.subtitle}>
+            {isWeb ? 'Admin web portal' : 'Volunteer coordination platform'}
+          </Text>
         </View>
+
+        {isWeb ? (
+          <View style={styles.webAccessNotice}>
+            <Text style={styles.webAccessNoticeTitle}>Web access is for admin only</Text>
+            <Text style={styles.webAccessNoticeText}>
+              Volunteer and partner accounts can sign in through the mobile app.
+            </Text>
+          </View>
+        ) : null}
 
         <View
           style={[
@@ -604,120 +829,173 @@ export default function LoginScreen() {
           <Text style={styles.backendStatusText}>{backendMessage}</Text>
         </View>
 
-        <TextInput
-          style={styles.input}
-          placeholder="Email or Phone"
-          placeholderTextColor="#999"
-          value={identifier}
-          onChangeText={value => {
-            setIdentifier(value);
-            if (loginError) {
-              setLoginError(null);
-            }
-          }}
-          editable={!loading}
-        />
+        {!isWeb && !selectedMobileRole ? (
+          <>
+            <View style={styles.selectionDashboard}>
+              <Text style={styles.selectionTitle}>Choose Your Mobile Portal</Text>
+              <Text style={styles.selectionSubtitle}>
+                Select whether you are signing in as a volunteer or a partner organization
+                before continuing.
+              </Text>
 
-        <TextInput
-          style={styles.input}
-          placeholder="Password"
-          placeholderTextColor="#999"
-          value={password}
-          onChangeText={value => {
-            setPassword(value);
-            if (loginError) {
-              setLoginError(null);
-            }
-          }}
-          secureTextEntry
-          editable={!loading}
-        />
-
-        {isWeb && loginError ? (
-          <InlineLoadError title={loginError.title} message={loginError.message} />
-        ) : null}
-
-        <TouchableOpacity 
-          style={[styles.button, loading ? styles.buttonDisabled : null]} 
-          onPress={handleLogin} 
-          disabled={loading || !identifier || !password}
-        >
-          {loading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.buttonText}>Log In</Text>
-          )}
-        </TouchableOpacity>
-
-        <View style={styles.demoSection}>
-          <Text style={styles.demoTitle}>Demo Credentials:</Text>
-          {isWeb ? (
-            <>
-              <View style={styles.demoItem}>
-                <Text style={styles.demoLabel}>Admin Account (Web Only):</Text>
-                <Text style={styles.demoEmail}>admin@nvc.org</Text>
-                <Text style={styles.demoPassword}>admin123</Text>
-              </View>
-              <View style={[styles.demoItem, styles.mobileOnlyCard]}>
-                <Text style={styles.demoLabel}>Partner Accounts (Mobile App Only):</Text>
-                <Text style={styles.demoEmail}>PBSP: partnerships@pbsp.org.ph</Text>
-                <Text style={styles.demoPassword}>partner123</Text>
-                <Text style={styles.demoEmail}>Jollibee Foundation: partnerships@jollibeefoundation.org</Text>
-                <Text style={styles.demoPassword}>partner123</Text>
-                <Text style={styles.demoEmail}>Kabankalan LGU: partner@livelihoods.org</Text>
-                <Text style={styles.demoPassword}>partner123</Text>
-                <Text style={styles.mobileOnlyBadge}>Use via the mobile app</Text>
-              </View>
-            </>
-          ) : (
-            <>
-              <View style={styles.demoItem}>
-                <Text style={styles.demoLabel}>Volunteer Account (Mobile):</Text>
-                <Text style={styles.demoEmail}>volunteer@example.com</Text>
-                <Text style={styles.demoPassword}>volunteer123</Text>
-              </View>
-              <View style={styles.demoItem}>
-                <Text style={styles.demoLabel}>Partner Accounts (Mobile):</Text>
-                <Text style={styles.demoEmail}>PBSP: partnerships@pbsp.org.ph</Text>
-                <Text style={styles.demoPassword}>partner123</Text>
-                <Text style={styles.demoEmail}>Jollibee Foundation: partnerships@jollibeefoundation.org</Text>
-                <Text style={styles.demoPassword}>partner123</Text>
-                <Text style={styles.demoEmail}>Kabankalan LGU: partner@livelihoods.org</Text>
-                <Text style={styles.demoPassword}>partner123</Text>
-              </View>
-            </>
-          )}
-        </View>
-
-        {savedAccounts.length > 0 && (
-          <View style={styles.demoSection}>
-            <Text style={styles.demoTitle}>
-              {isWeb ? 'Saved Admin Accounts:' : 'Saved Mobile Accounts:'}
-            </Text>
-            {savedAccounts.map(account => (
               <TouchableOpacity
-                key={account.id}
-                style={styles.savedAccountCard}
-                onPress={() => handleUseSavedAccount(account)}
-                activeOpacity={0.85}
+                style={styles.selectionCard}
+                onPress={() => handleSelectMobileRole('volunteer')}
+                activeOpacity={0.9}
               >
-                <View style={styles.savedAccountHeader}>
-                  <Text style={styles.savedAccountName}>{account.name}</Text>
-                  <Text style={styles.savedAccountRole}>{account.role}</Text>
+                <View style={styles.selectionIconWrap}>
+                  <MaterialIcons name="volunteer-activism" size={28} color="#166534" />
                 </View>
-                <Text style={styles.savedAccountCredential}>
-                  {account.email || account.phone || 'No login identifier'}
-                </Text>
-                <Text style={styles.savedAccountPassword}>{account.password}</Text>
-                <Text style={styles.savedAccountHint}>Tap to use these credentials</Text>
+                <View style={styles.selectionCopy}>
+                  <Text style={styles.selectionCardTitle}>Volunteer</Text>
+                  <Text style={styles.selectionCardDescription}>
+                    Join projects, track your hours, and manage your volunteer activities.
+                  </Text>
+                  <Text style={styles.selectionCardAction}>Continue as Volunteer</Text>
+                </View>
               </TouchableOpacity>
-            ))}
-          </View>
-        )}
 
-        <TouchableOpacity onPress={openSignupModal}>
-          <Text style={styles.signupText}>Sign up as Volunteer or Partner</Text>
-        </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.selectionCard, styles.selectionCardPartner]}
+                onPress={() => handleSelectMobileRole('partner')}
+                activeOpacity={0.9}
+              >
+                <View style={[styles.selectionIconWrap, styles.selectionIconWrapPartner]}>
+                  <MaterialIcons name="business" size={28} color="#92400e" />
+                </View>
+                <View style={styles.selectionCopy}>
+                  <Text style={styles.selectionCardTitle}>Partner Organization</Text>
+                  <Text style={styles.selectionCardDescription}>
+                    Coordinate organization projects, submit reports, and collaborate with NVC.
+                  </Text>
+                  <Text style={[styles.selectionCardAction, styles.selectionCardActionPartner]}>
+                    Continue as Partner Organization
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+
+            {renderQuickLoginSection()}
+
+            <TouchableOpacity onPress={openSignupModal}>
+              <Text style={styles.signupText}>Sign up as Volunteer or Partner</Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <>
+            {!isWeb && selectedMobileRole ? (
+              <View style={styles.mobileRoleBanner}>
+                <TouchableOpacity
+                  style={styles.backToRoleButton}
+                  onPress={handleBackToRoleSelection}
+                  activeOpacity={0.85}
+                >
+                  <MaterialIcons name="arrow-back" size={18} color="#166534" />
+                  <Text style={styles.backToRoleText}>Change account type</Text>
+                </TouchableOpacity>
+                <View style={styles.mobileRoleBannerHeader}>
+                  <MaterialIcons
+                    name={selectedMobileRole === 'partner' ? 'business' : 'volunteer-activism'}
+                    size={22}
+                    color={selectedMobileRole === 'partner' ? '#92400e' : '#166534'}
+                  />
+                  <Text style={styles.mobileRoleBannerTitle}>{selectedMobileRoleTitle}</Text>
+                </View>
+                <Text style={styles.mobileRoleBannerText}>{selectedMobileRoleHint}</Text>
+              </View>
+            ) : null}
+
+            <TextInput
+              style={styles.input}
+              placeholder="Email or Phone"
+              placeholderTextColor="#999"
+              value={identifier}
+              onChangeText={value => {
+                setIdentifier(value);
+                if (loginError) {
+                  setLoginError(null);
+                }
+              }}
+              editable={!loading}
+            />
+
+            <TextInput
+              style={styles.input}
+              placeholder="Password"
+              placeholderTextColor="#999"
+              value={password}
+              onChangeText={value => {
+                setPassword(value);
+                if (loginError) {
+                  setLoginError(null);
+                }
+              }}
+              secureTextEntry
+              editable={!loading}
+            />
+
+            {isWeb && loginError ? (
+              <InlineLoadError title={loginError.title} message={loginError.message} />
+            ) : null}
+
+            <TouchableOpacity
+              style={[styles.button, loading ? styles.buttonDisabled : null]}
+              onPress={() => {
+                void handleLogin();
+              }}
+              disabled={loading || !identifier || !password}
+            >
+              {loading ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.buttonText}>Log In</Text>
+              )}
+            </TouchableOpacity>
+
+            {renderQuickLoginSection()}
+
+            {visibleSavedAccounts.length > 0 && (
+              <View style={styles.demoSection}>
+                <Text style={styles.demoTitle}>
+                  {isWeb
+                    ? 'Saved Admin Accounts:'
+                    : `Saved ${selectedMobileRoleLabel} Accounts:`}
+                </Text>
+                {visibleSavedAccounts.map(account => (
+                  <TouchableOpacity
+                    key={account.id}
+                    style={[styles.savedAccountCard, loading && styles.accountCardDisabled]}
+                    onPress={() => {
+                      void handleUseSavedAccount(account);
+                    }}
+                    activeOpacity={0.85}
+                    disabled={loading}
+                  >
+                    <View style={styles.savedAccountHeader}>
+                      <Text style={styles.savedAccountName}>{account.name}</Text>
+                      <Text style={styles.savedAccountRole}>{account.role}</Text>
+                    </View>
+                    <Text style={styles.savedAccountCredential}>
+                      {account.email || account.phone || 'No login identifier'}
+                    </Text>
+                    <Text style={styles.savedAccountPassword}>{account.password}</Text>
+                    <Text style={styles.savedAccountHint}>Tap to sign in instantly</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+
+            {!isWeb ? (
+              <TouchableOpacity onPress={openSignupModal}>
+                <Text style={styles.signupText}>
+                  {!selectedMobileRole
+                    ? 'Sign up as Volunteer or Partner'
+                    : `Sign up as ${selectedMobileRoleLabel}`}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+          </>
+        )}
       </View>
 
       <Modal
@@ -1359,6 +1637,89 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 30,
   },
+  webAccessNotice: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 16,
+  },
+  webAccessNoticeTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginBottom: 4,
+  },
+  webAccessNoticeText: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: '#475569',
+  },
+  selectionDashboard: {
+    gap: 14,
+    marginBottom: 20,
+  },
+  selectionTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#0f172a',
+    textAlign: 'center',
+  },
+  selectionSubtitle: {
+    fontSize: 14,
+    lineHeight: 22,
+    color: '#475569',
+    textAlign: 'center',
+  },
+  selectionCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 14,
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    borderRadius: 18,
+    padding: 18,
+  },
+  selectionCardPartner: {
+    backgroundColor: '#fffbeb',
+    borderColor: '#fcd34d',
+  },
+  selectionIconWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    backgroundColor: '#dcfce7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  selectionIconWrapPartner: {
+    backgroundColor: '#fef3c7',
+  },
+  selectionCopy: {
+    flex: 1,
+  },
+  selectionCardTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginBottom: 6,
+  },
+  selectionCardDescription: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: '#475569',
+  },
+  selectionCardAction: {
+    marginTop: 12,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#166534',
+  },
+  selectionCardActionPartner: {
+    color: '#92400e',
+  },
   backendStatusCard: {
     borderRadius: 10,
     padding: 14,
@@ -1481,6 +1842,42 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#64748b',
   },
+  mobileRoleBanner: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    padding: 14,
+    marginBottom: 16,
+  },
+  backToRoleButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+    marginBottom: 10,
+  },
+  backToRoleText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#166534',
+  },
+  mobileRoleBannerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 8,
+  },
+  mobileRoleBannerTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  mobileRoleBannerText: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: '#475569',
+  },
   savedAccountCard: {
     backgroundColor: '#f8fafc',
     borderColor: '#e2e8f0',
@@ -1488,6 +1885,9 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     padding: 12,
     marginBottom: 10,
+  },
+  accountCardDisabled: {
+    opacity: 0.65,
   },
   savedAccountHeader: {
     flexDirection: 'row',

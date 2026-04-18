@@ -2,6 +2,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync, spawn } = require('child_process');
+const { resolvePythonCommand } = require('./scripts/python-command');
 
 // Loads local environment variables from app-level `.env` files before Expo starts.
 function loadLocalEnv() {
@@ -123,8 +124,7 @@ function ensureBackendStarted() {
   }
 
   const appDir = __dirname;
-  const isWindows = process.platform === 'win32';
-  const command = isWindows ? 'py' : 'python3';
+  const command = resolvePythonCommand(appDir);
   const args = ['-m', 'uvicorn', 'backend.api:app', '--host', '0.0.0.0', '--port', '8000', '--ws', 'websockets'];
 
   const child = spawn(command, args, {
