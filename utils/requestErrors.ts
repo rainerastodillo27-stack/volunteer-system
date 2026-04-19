@@ -44,7 +44,7 @@ export function getRequestErrorMessage(
       normalizedMessage.includes('timeout') ||
       normalizedMessage.includes('aborted')
     ) {
-      return 'The connection is very slow right now. Please wait a moment and try again.';
+      return 'The backend is taking longer than usual. Please wait a moment and try again.';
     }
 
     if (
@@ -78,6 +78,18 @@ export function getRequestErrorTitle(error: unknown, fallback = 'Error'): string
       : error instanceof Error
       ? error.message
       : '';
+
+  if (rawMessage) {
+    const normalizedMessage = rawMessage.toLowerCase();
+    if (
+      normalizedMessage.includes('timed out') ||
+      normalizedMessage.includes('timeout') ||
+      normalizedMessage.includes('aborted') ||
+      (error instanceof Error && error.name === 'AbortError')
+    ) {
+      return 'Request Timed Out';
+    }
+  }
 
   if (rawMessage && isDatabaseUnavailableMessage(rawMessage)) {
     return 'Database Unavailable';

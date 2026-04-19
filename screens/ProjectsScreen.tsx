@@ -354,6 +354,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
     new Set()
   );
 
+  const [statusFilter, setStatusFilter] = useState<'All' | Project['status']>('All');
   // Applies the latest project snapshot to local screen state.
   const applySnapshot = useCallback((snapshot: {
     projects: Project[];
@@ -540,6 +541,10 @@ export default function ProjectsScreen({ navigation, route }: any) {
     [projects, timeOutProjectId]
   );
 
+  const visibleProjects = useMemo(() => {
+    return statusFilter === 'All' ? projects : projects.filter(project => project.status === statusFilter);
+  }, [projects, statusFilter]);
+
   // Groups projects by category
   const projectsByCategory = useMemo<ProjectCategoryGroup[]>(() => {
     const categories: Project['category'][] = ['Education', 'Livelihood', 'Nutrition', 'Disaster'];
@@ -550,7 +555,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
       Disaster: [],
     };
 
-    projects.forEach(project => {
+    visibleProjects.forEach(project => {
       if (grouped[project.category]) {
         grouped[project.category].push(project);
       }
@@ -560,7 +565,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
       category,
       projects: grouped[category],
     })).filter(group => group.projects.length > 0);
-  }, [projects]);
+  }, [visibleProjects]);
 
   // Toggle category expansion
   const toggleCategory = useCallback((category: Project['category']) => {
@@ -1085,6 +1090,21 @@ export default function ProjectsScreen({ navigation, route }: any) {
           ? 'Partner organizations can express interest and collaborate on any listed program.'
           : 'Current program list and participation needs.'}
       </Text>
+
+      <View style={styles.statusFilterBar}>
+        {(['All', 'Planning', 'In Progress', 'On Hold', 'Completed', 'Cancelled'] as const).map(option => (
+          <TouchableOpacity
+            key={option}
+            style={[styles.statusFilterButton, statusFilter === option && styles.statusFilterButtonActive]}
+            onPress={() => setStatusFilter(option)}
+            activeOpacity={0.85}
+          >
+            <Text style={[styles.statusFilterButtonText, statusFilter === option && styles.statusFilterButtonTextActive]}>
+              {option}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
 
       {loadError ? (
         <InlineLoadError
@@ -1972,4 +1992,31 @@ const styles = StyleSheet.create({
     color: 'rgba(255, 255, 255, 0.9)',
     marginTop: 2,
   },
-});
+  statusFilterBar: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 16,
+  },
+  statusFilterButton: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#dbe2ea',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  statusFilterButtonActive: {
+    backgroundColor: '#166534',
+    borderColor: '#166534',
+  },
+  statusFilterButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  statusFilterButtonTextActive: {
+    color: '#fff',
+  },});
+
+

@@ -26,8 +26,7 @@ import {
   PHRegions,
 } from '../utils/philippineAddressData';
 
-const BACKEND_HEALTH_TIMEOUT_MS = 4000;
-const BACKEND_HEALTH_POLL_MS = 5000;
+const BACKEND_HEALTH_TIMEOUT_MS = 5000;
 
 type SignupVolunteerSheetState = {
   gender: string;
@@ -315,13 +314,8 @@ export default function LoginScreen() {
     };
 
     void checkBackend();
-    const intervalId = setInterval(() => {
-      void checkBackend();
-    }, BACKEND_HEALTH_POLL_MS);
-
     return () => {
       cancelled = true;
-      clearInterval(intervalId);
     };
   }, []);
 
@@ -2294,5 +2288,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
 });
+
 
 

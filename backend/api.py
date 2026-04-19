@@ -341,168 +341,6 @@ def _assert_project_group_chat_access(
     return project
 
 
-@app.on_event("startup")
-# Prepares storage tables when the FastAPI app starts.
-def startup() -> None:
-    # Keep demo credentials and seed data available whenever the backend starts.
-    try:
-        ensure_app_storage_seeded()
-        print("[OK] Backend started and demo storage was ensured")
-    except Exception as error:
-        # Don't block startup on database reachability; endpoints still report health.
-        print(f"[WARN] Backend started without ensuring demo storage: {error}")
-
-
-@app.get("/health", response_model=None)
-# Returns a lightweight service summary.
-def health():
-    configured_mode = get_configured_db_mode()
-    timestamp = datetime.now(timezone.utc).isoformat()
-
-    if configured_mode != "postgres":
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "error",
-                "configured_mode": configured_mode,
-                "detail": "Supabase Postgres is not configured for this backend.",
-                "timestamp": timestamp,
-            },
-        )
-
-    # Reuse the short-lived database probe cache so frontend startup checks stay fast.
-    postgres_available, postgres_error = get_postgres_status(force_refresh=False)
-    if not postgres_available:
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "error",
-                "configured_mode": configured_mode,
-                "mode": "unavailable",
-                "detail": postgres_error or "Supabase Postgres is unavailable.",
-                "timestamp": timestamp,
-            },
-        )
-
-    return {
-        "status": "ok",
-        "configured_mode": configured_mode,
-        "mode": "postgres",
-        "timestamp": timestamp,
-    }
-
-
-# Finds all users that match an email or normalized phone identifier.
-def _get_users_by_identifier(identifier: str) -> list[dict[str, Any]]:
-    normalized_identifier = identifier.strip().lower()
-    comparable_phone = normalize_comparable_phone(identifier)
-    raw_digits = "".join(character for character in str(identifier or "") if character.isdigit())
-    _require_postgres()
-    with get_postgres_connection() as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                select data
-                from app_users_store
-                where lower(coalesce(data->>'email', '')) = %s
-                   or regexp_replace(coalesce(data->>'phone', ''), '[^0-9]', '', 'g') = %s
-                   or regexp_replace(coalesce(data->>'phone', ''), '[^0-9]', '', 'g') = %s
-                order by sort_order asc
-                """,
-                (normalized_identifier, comparable_phone, raw_digits),
-            )
-            rows = cursor.fetchall()
-    return [row[0] for row in rows]
-
-
-# Finds the first user that matches an email or normalized phone identifier.
-def _get_user_by_identifier(identifier: str) -> dict[str, Any] | None:
-    matches = _get_users_by_identifier(identifier)
-    return matches[0] if matches else None
-
-
-def _normalize_comparable_phone(value: Any) -> str:
-    return normalize_comparable_phone(value)
-
-
-# Returns the login restriction message for partner accounts that are not yet approved.
-def _get_partner_login_block_reason(connection: Any, user: dict[str, Any]) -> str | None:
-    if str(user.get("role") or "") != "partner":
-        return None
-
-    user_id = str(user.get("id") or "").strip()
-    user_email = str(user.get("email") or "").strip().lower()
-    user_phone = _normalize_comparable_phone(user.get("phone"))
-    partners = get_postgres_hot_storage_collection(connection, "partners")
-
-    owned_partners: list[dict[str, Any]] = []
-    for partner in partners:
-        owner_user_id = str(partner.get("ownerUserId") or "").strip()
-        partner_email = str(partner.get("contactEmail") or "").strip().lower()
-        partner_phone = _normalize_comparable_phone(partner.get("contactPhone"))
-
-        if owner_user_id and user_id and owner_user_id == user_id:
-            owned_partners.append(partner)
-            continue
-
-        if user_email and partner_email and partner_email == user_email:
-            owned_partners.append(partner)
-            continue
-
-        if user_phone and partner_phone and partner_phone == user_phone:
-            owned_partners.append(partner)
-
-    if any(str(partner.get("status") or "") == "Approved" for partner in owned_partners):
-        return None
-
-    if any(str(partner.get("status") or "") == "Rejected" for partner in owned_partners):
-        return "Your organization application was rejected. Please contact the admin team."
-
-    if owned_partners:
-        return "Your organization application is still pending admin approval."
-
-    return "No organization application is linked to this partner account yet."
-
-
-# Returns the login restriction message for volunteer accounts that are not yet approved.
-def _get_volunteer_login_block_reason(connection: Any, user: dict[str, Any]) -> str | None:
-    if str(user.get("role") or "") != "volunteer":
-        return None
-
-    user_id = str(user.get("id") or "").strip()
-    user_email = str(user.get("email") or "").strip().lower()
-    user_phone = _normalize_comparable_phone(user.get("phone"))
-    volunteers = get_postgres_hot_storage_collection(connection, "volunteers")
-
-    owned_volunteers: list[dict[str, Any]] = []
-    for volunteer in volunteers:
-        volunteer_user_id = str(volunteer.get("userId") or "").strip()
-        volunteer_email = str(volunteer.get("email") or "").strip().lower()
-        volunteer_phone = _normalize_comparable_phone(volunteer.get("phone"))
-
-        if volunteer_user_id and user_id and volunteer_user_id == user_id:
-            owned_volunteers.append(volunteer)
-            continue
-
-        if user_email and volunteer_email and volunteer_email == user_email:
-            owned_volunteers.append(volunteer)
-            continue
-
-        if user_phone and volunteer_phone and volunteer_phone == user_phone:
-            owned_volunteers.append(volunteer)
-
-    if any(str(volunteer.get("registrationStatus") or "Approved") == "Approved" for volunteer in owned_volunteers):
-        return None
-
-    if any(str(volunteer.get("registrationStatus") or "") == "Rejected" for volunteer in owned_volunteers):
-        return "Your volunteer account was rejected. Please contact the admin team."
-
-    if owned_volunteers:
-        return "Your volunteer account is still pending admin approval."
-
-    return None
-
-
 # Blocks routes when Postgres is not available.
 def _require_postgres() -> None:
     if get_db_mode() != "postgres":
@@ -854,50 +692,156 @@ def _build_projects_snapshot(
 
     return snapshot
 
+@app.on_event("startup")
+# Prepares storage tables when the FastAPI app starts.
+def startup() -> None:
+    # Keep demo credentials and seed data available whenever the backend starts.
+    try:
+        ensure_app_storage_seeded()
+        print("[OK] Backend started and demo storage was ensured")
+    except Exception as error:
+        # Don't block startup on database reachability; endpoints still report health.
+        print(f"[WARN] Backend started without ensuring demo storage: {error}")
 
-@app.get("/")
-# Root endpoint used as a simple service presence check.
-def root() -> dict[str, Any]:
+
+@app.get("/health", response_model=None)
+# Returns a lightweight service summary.
+def health():
+    configured_mode = get_configured_db_mode()
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    if configured_mode != "postgres":
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "error",
+                "configured_mode": configured_mode,
+                "detail": "Supabase Postgres is not configured for this backend.",
+                "timestamp": timestamp,
+            },
+        )
+
+    # Keep the health check fast so login/startup probes don't hang.
+    # Detailed live DB diagnostics remain available at /db-health.
+
     return {
         "status": "ok",
-        "message": "NVC CONNECT backend is running.",
-        "docs": "/docs",
-        "health": "/health",
-        "db_health": "/db-health",
-    }
-
-
-@app.get("/db-health")
-# Database health endpoint used by the frontend startup checks.
-def db_health() -> dict[str, Any]:
-    configured_mode = get_configured_db_mode()
-    mode = get_db_mode()
-    result: dict[str, Any] = {
-        "status": "ok" if mode == "postgres" else "error",
         "configured_mode": configured_mode,
-        "mode": mode,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "diagnostics": get_postgres_diagnostics(),
+        "mode": "postgres",
+        "timestamp": timestamp,
     }
 
-    try:
-        postgres_available, postgres_error = get_postgres_status(force_refresh=True)
-        result["postgres_available"] = postgres_available
-        if postgres_error:
-            result["postgres_error"] = postgres_error
 
-        if postgres_available:
-            with get_postgres_connection() as connection:
-                with connection.cursor() as cursor:
-                    cursor.execute("select current_database(), current_user")
-                    database, user = cursor.fetchone()
-            result["database"] = database
-            result["user"] = user
-    except Exception as exc:
-        result["status"] = "error"
-        result["error"] = str(exc)
+# Finds a user by email or normalized phone identifier.
+def _get_user_by_identifier(identifier: str, connection: Any | None = None) -> dict[str, Any] | None:
+    normalized_identifier = identifier.strip().lower()
+    comparable_phone = normalize_comparable_phone(identifier)
+    raw_digits = "".join(character for character in str(identifier or "") if character.isdigit())
+    _require_postgres()
 
-    return result
+    def query_user(active_connection: Any) -> dict[str, Any] | None:
+        with active_connection.cursor() as cursor:
+            cursor.execute(
+                """
+                select data
+                from app_users_store
+                where lower(coalesce(data->>'email', '')) = %s
+                   or regexp_replace(coalesce(data->>'phone', ''), '[^0-9]', '', 'g') = %s
+                   or regexp_replace(coalesce(data->>'phone', ''), '[^0-9]', '', 'g') = %s
+                order by sort_order asc
+                """,
+                (normalized_identifier, comparable_phone, raw_digits),
+            )
+            row = cursor.fetchone()
+        return None if row is None else row[0]
+
+    if connection is not None:
+        return query_user(connection)
+
+    with get_postgres_connection() as active_connection:
+        return query_user(active_connection)
+
+
+def _normalize_comparable_phone(value: Any) -> str:
+    return normalize_comparable_phone(value)
+
+
+# Returns the login restriction message for partner accounts that are not yet approved.
+def _get_partner_login_block_reason(connection: Any, user: dict[str, Any]) -> str | None:
+    if str(user.get("role") or "") != "partner":
+        return None
+
+    user_id = str(user.get("id") or "").strip()
+    user_email = str(user.get("email") or "").strip().lower()
+    user_phone = _normalize_comparable_phone(user.get("phone"))
+    partners = get_postgres_hot_storage_collection(connection, "partners")
+
+    owned_partners: list[dict[str, Any]] = []
+    for partner in partners:
+        owner_user_id = str(partner.get("ownerUserId") or "").strip()
+        partner_email = str(partner.get("contactEmail") or "").strip().lower()
+        partner_phone = _normalize_comparable_phone(partner.get("contactPhone"))
+
+        if owner_user_id and user_id and owner_user_id == user_id:
+            owned_partners.append(partner)
+            continue
+
+        if user_email and partner_email and partner_email == user_email:
+            owned_partners.append(partner)
+            continue
+
+        if user_phone and partner_phone and partner_phone == user_phone:
+            owned_partners.append(partner)
+
+    if any(str(partner.get("status") or "") == "Approved" for partner in owned_partners):
+        return None
+
+    if any(str(partner.get("status") or "") == "Rejected" for partner in owned_partners):
+        return "Your organization application was rejected. Please contact the admin team."
+
+    if owned_partners:
+        return "Your organization application is still pending admin approval."
+
+    return "No organization application is linked to this partner account yet."
+
+
+# Returns the login restriction message for volunteer accounts that are not yet approved.
+def _get_volunteer_login_block_reason(connection: Any, user: dict[str, Any]) -> str | None:
+    if str(user.get("role") or "") != "volunteer":
+        return None
+
+    user_id = str(user.get("id") or "").strip()
+    user_email = str(user.get("email") or "").strip().lower()
+    user_phone = _normalize_comparable_phone(user.get("phone"))
+    volunteers = get_postgres_hot_storage_collection(connection, "volunteers")
+
+    owned_volunteers: list[dict[str, Any]] = []
+    for volunteer in volunteers:
+        volunteer_user_id = str(volunteer.get("userId") or "").strip()
+        volunteer_email = str(volunteer.get("email") or "").strip().lower()
+        volunteer_phone = _normalize_comparable_phone(volunteer.get("phone"))
+
+        if volunteer_user_id and user_id and volunteer_user_id == user_id:
+            owned_volunteers.append(volunteer)
+            continue
+
+        if user_email and volunteer_email and volunteer_email == user_email:
+            owned_volunteers.append(volunteer)
+            continue
+
+        if user_phone and volunteer_phone and volunteer_phone == user_phone:
+            owned_volunteers.append(volunteer)
+
+    if any(str(volunteer.get("registrationStatus") or "Approved") == "Approved" for volunteer in owned_volunteers):
+        return None
+
+    if any(str(volunteer.get("registrationStatus") or "") == "Rejected" for volunteer in owned_volunteers):
+        return "Your volunteer account was rejected. Please contact the admin team."
+
+    if owned_volunteers:
+        return "Your volunteer account is still pending approval."
+
+    return "No volunteer profile is linked to this account yet."
 
 
 @app.get("/users/lookup")
@@ -909,30 +853,20 @@ def lookup_user(identifier: str) -> dict[str, Any]:
 @app.post("/auth/login")
 # API endpoint that validates login credentials.
 def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
-    matching_users = _get_users_by_identifier(payload.identifier)
-    normalized_password = str(payload.password or "").strip()
-    user = next(
-        (
-            candidate
-            for candidate in matching_users
-            if str(candidate.get("password") or "").strip() == normalized_password
-        ),
-        None,
-    )
-    if user is None:
-        raise HTTPException(status_code=401, detail="Invalid email/phone or password.")
-
     with get_postgres_connection() as connection:
+        user = _get_user_by_identifier(payload.identifier, connection)
+        if user is None or user.get("password") != payload.password:
+            raise HTTPException(status_code=401, detail="Invalid email/phone or password.")
+
         partner_block_reason = _get_partner_login_block_reason(connection, user)
-    if partner_block_reason:
-        raise HTTPException(status_code=403, detail=partner_block_reason)
+        if partner_block_reason:
+            raise HTTPException(status_code=403, detail=partner_block_reason)
 
-    with get_postgres_connection() as connection:
         volunteer_block_reason = _get_volunteer_login_block_reason(connection, user)
-    if volunteer_block_reason:
-        raise HTTPException(status_code=403, detail=volunteer_block_reason)
+        if volunteer_block_reason:
+            raise HTTPException(status_code=403, detail=volunteer_block_reason)
 
-    return {"user": user}
+        return {"user": user}
 
 
 @app.get("/projects/snapshot")
@@ -1568,3 +1502,4 @@ async def clear_storage() -> dict[str, str]:
 def bootstrap_storage() -> dict[str, str]:
     ensure_app_storage_seeded()
     return {"status": "ok"}
+

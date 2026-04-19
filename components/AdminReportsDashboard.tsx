@@ -6,9 +6,9 @@ import {
   Platform,
   TouchableOpacity,
   ScrollView,
-  FlatList,
   RefreshControl,
   ActivityIndicator,
+  useWindowDimensions,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import type { SubmittedReport } from '../screens/ReportsScreen';
@@ -25,6 +25,36 @@ interface AdminReportsDashboardProps {
   refreshing: boolean;
 }
 
+type StatusColumn = {
+  key: 'Approved' | 'Submitted' | 'Rejected';
+  label: string;
+  subtitle: string;
+  count: number;
+  accent: string;
+  panel: string;
+  card: string;
+  chips: string[];
+  reports: SubmittedReport[];
+};
+
+function formatShortDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return 'Unknown date';
+  }
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function getProgressPercent(report: SubmittedReport): number {
+  const metricValues = Object.values(report.metrics).filter((value): value is number => typeof value === 'number');
+  if (!metricValues.length) {
+    return report.status === 'Approved' ? 100 : report.status === 'Submitted' ? 55 : 35;
+  }
+
+  const scaled = metricValues.slice(0, 4).reduce((sum, value) => sum + Math.min(value, 100), 0);
+  return Math.max(8, Math.min(100, Math.round(scaled / Math.min(metricValues.length, 4))));
+}
+
 export default function AdminReportsDashboard({
   reports,
   projects,
@@ -35,76 +65,75 @@ export default function AdminReportsDashboard({
   onRefresh,
   refreshing,
 }: AdminReportsDashboardProps) {
-  // Calculate dashboard metrics
-  const metrics = useMemo(() => {
-    const totalHours = reports.reduce((sum, r) => sum + (r.metrics.volunteerHours || 0), 0);
-    const totalAttendance = reports.reduce((sum, r) => sum + (r.metrics.verifiedAttendance || 0), 0);
-    const activeVolunteers = new Set(reports.flatMap(r => r.submittedBy)).size;
-    const totalBeneficiaries = reports.reduce((sum, r) => sum + (r.metrics.beneficiariesServed || 0), 0);
-    const approvedReports = reports.filter(r => r.status === 'Approved').length;
-    const pendingReports = reports.filter(r => r.status === 'Submitted').length;
+  const { width } = useWindowDimensions();
+  const isDesktop = Platform.OS === 'web' || width >= 1100;
+
+  const summary = useMemo(() => {
+    const totalHours = reports.reduce((sum, report) => sum + (report.metrics.volunteerHours || 0), 0);
+    const verifiedAttendance = reports.reduce((sum, report) => sum + (report.metrics.verifiedAttendance || 0), 0);
+    const beneficiariesServed = reports.reduce((sum, report) => sum + (report.metrics.beneficiariesServed || 0), 0);
 
     return {
       totalHours,
-      totalAttendance,
-      activeVolunteers,
-      totalBeneficiaries,
-      approvedReports,
-      pendingReports,
+      verifiedAttendance,
+      beneficiariesServed,
     };
   }, [reports]);
 
-  // Group reports by status
-  const reportsByStatus = useMemo(() => {
-    return {
-      submitted: reports.filter(r => r.status === 'Submitted'),
-      approved: reports.filter(r => r.status === 'Approved'),
-      rejected: reports.filter(r => r.status === 'Rejected'),
-    };
+  const columns = useMemo<StatusColumn[]>(() => {
+    const approved = reports
+      .filter(report => report.status === 'Approved')
+      .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
+
+    const submitted = reports
+      .filter(report => report.status === 'Submitted')
+      .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
+
+    const rejected = reports
+      .filter(report => report.status === 'Rejected')
+      .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
+
+    return [
+      {
+        key: 'Approved',
+        label: 'Volunteer Hours',
+        subtitle: 'Green lane',
+        count: approved.length,
+        accent: '#d9f2de',
+        panel: '#2f8f45',
+        card: '#4aa764',
+        chips: ['A-Z', 'Recent first', 'Hours'],
+        reports: approved,
+      },
+      {
+        key: 'Submitted',
+        label: 'Approved Collaborations',
+        subtitle: 'Yellow lane',
+        count: submitted.length,
+        accent: '#fff6d9',
+        panel: '#d1a120',
+        card: '#dfb33f',
+        chips: ['A-Z', 'Pending', 'Partner'],
+        reports: submitted,
+      },
+      {
+        key: 'Rejected',
+        label: 'Field Reports',
+        subtitle: 'Red lane',
+        count: rejected.length,
+        accent: '#ffdfe4',
+        panel: '#bd3c4f',
+        card: '#cd5a6d',
+        chips: ['A-Z', 'Rejected', 'Program'],
+        reports: rejected,
+      },
+    ];
   }, [reports]);
-
-  const renderMetricCard = (icon: string, label: string, value: string | number, color: string) => (
-    <View style={[styles.metricCard, { borderLeftColor: color }]}>
-      <View style={[styles.metricIconBox, { backgroundColor: color }]}>
-        <MaterialIcons name={icon as any} size={20} color="#fff" />
-      </View>
-      <View style={styles.metricContent}>
-        <Text style={styles.metricLabel}>{label}</Text>
-        <Text style={[styles.metricValue, { color }]}>{value}</Text>
-      </View>
-    </View>
-  );
-
-  const renderReportCard = ({ item }: { item: SubmittedReport }) => (
-    <TouchableOpacity
-      style={styles.reportCard}
-      onPress={() => onViewReport(item)}
-      activeOpacity={0.7}
-    >
-      <View style={styles.reportCardHeader}>
-        <View style={styles.reportInfo}>
-          <Text style={styles.reportTitle}>{item.title}</Text>
-          <Text style={styles.reportSubmitter}>{item.submitterName}</Text>
-        </View>
-        <View
-          style={[
-            styles.statusBadge,
-            item.status === 'Approved' && styles.statusApproved,
-            item.status === 'Rejected' && styles.statusRejected,
-          ]}
-        >
-          <Text style={styles.statusLabel}>{item.status}</Text>
-        </View>
-      </View>
-      <Text style={styles.reportDescription}>{item.description}</Text>
-      <Text style={styles.reportDate}>{new Date(item.submittedAt).toLocaleDateString()}</Text>
-    </TouchableOpacity>
-  );
 
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#166534" />
+        <ActivityIndicator size="large" color="#4067d9" />
       </View>
     );
   }
@@ -113,91 +142,98 @@ export default function AdminReportsDashboard({
     <View style={styles.container}>
       <ScrollView
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        showsVerticalScrollIndicator
+        showsVerticalScrollIndicator={false}
       >
-        {/* Header */}
-        <View style={styles.header}>
-          <View>
-            <Text style={styles.title}>Reports Dashboard</Text>
-            <Text style={styles.subtitle}>Manage and review all submitted reports</Text>
+        <View style={styles.frame}>
+          <View style={styles.masthead}>
+            <View style={styles.logoTile}>
+              <MaterialIcons name="assessment" size={28} color="#4d5cd6" />
+            </View>
+            <View style={styles.mastheadText}>
+              <Text style={styles.title}>Analytics Report</Text>
+              <Text style={styles.subtitle}>Keep report content unchanged, monitor progress by review status</Text>
+            </View>
+            <TouchableOpacity style={styles.uploadButton} onPress={onUploadReport} activeOpacity={0.85}>
+              <MaterialIcons name="add" size={18} color="#fff" />
+              <Text style={styles.uploadButtonText}>Upload report</Text>
+            </TouchableOpacity>
           </View>
-          <TouchableOpacity style={styles.uploadButton} onPress={onUploadReport}>
-            <MaterialIcons name="add-circle" size={18} color="#fff" />
-            <Text style={styles.uploadButtonText}>Upload</Text>
-          </TouchableOpacity>
-        </View>
 
-        {/* Key Metrics */}
-        <View style={styles.metricsSection}>
-          <Text style={styles.sectionTitle}>Key Performance Indicators</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.metricsScroll}>
-            {renderMetricCard('schedule', 'Total Hours', metrics.totalHours, '#1D4ED8')}
-            {renderMetricCard('people', 'Active Volunteers', metrics.activeVolunteers, '#9333EA')}
-            {renderMetricCard('verified', 'Verified Attendance', metrics.totalAttendance, '#DC2626')}
-            {renderMetricCard('favorite', 'Beneficiaries Served', metrics.totalBeneficiaries, '#F97316')}
-          </ScrollView>
-        </View>
-
-        {/* Report Status Overview */}
-        <View style={styles.statusOverviewSection}>
-          <Text style={styles.sectionTitle}>Report Status Overview</Text>
-          <View style={styles.statusGrid}>
-            <View style={[styles.statusCard, styles.pendingStatus]}>
-              <Text style={styles.statusCardLabel}>Pending Review</Text>
-              <Text style={styles.statusCardValue}>{metrics.pendingReports}</Text>
-              <Text style={styles.statusCardAction}>Action Required</Text>
-            </View>
-            <View style={[styles.statusCard, styles.approvedStatus]}>
-              <Text style={styles.statusCardLabel}>Approved</Text>
-              <Text style={styles.statusCardValue}>{metrics.approvedReports}</Text>
-              <Text style={styles.statusCardAction}>Confirmed</Text>
-            </View>
-            <View style={[styles.statusCard, styles.rejectedStatus]}>
-              <Text style={styles.statusCardLabel}>Rejected</Text>
-              <Text style={styles.statusCardValue}>{reportsByStatus.rejected.length}</Text>
-              <Text style={styles.statusCardAction}>Revisions Needed</Text>
-            </View>
+          <View style={styles.tabBar}>
+            <Text style={styles.tabItem}>Reports</Text>
+            <Text style={styles.tabDivider}>|</Text>
+            <Text style={styles.tabDivider}>+</Text>
           </View>
-        </View>
 
-        {/* Pending Reports Section */}
-        {reportsByStatus.submitted.length > 0 && (
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <MaterialIcons name="hourglass-empty" size={20} color="#F97316" />
-              <Text style={styles.sectionTitle}>Pending Review ({reportsByStatus.submitted.length})</Text>
-            </View>
-            <FlatList
-              data={reportsByStatus.submitted}
-              renderItem={renderReportCard}
-              keyExtractor={item => item.id}
-              scrollEnabled={false}
-              ItemSeparatorComponent={() => <View style={styles.separator} />}
-            />
+          <View style={styles.kpiRow}>
+            <Text style={styles.kpiText}>Volunteer Hours: {summary.totalHours}</Text>
+            <Text style={styles.kpiText}>Approved Collaborations: {summary.verifiedAttendance}</Text>
+            <Text style={styles.kpiText}>Field Reports: {summary.beneficiariesServed}</Text>
+            <Text style={styles.kpiText}>Projects: {projects.length}</Text>
+            <Text style={styles.kpiText}>Volunteers: {volunteers.length}</Text>
           </View>
-        )}
 
-        {/* Recent Reports */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <MaterialIcons name="list" size={20} color="#166534" />
-            <Text style={styles.sectionTitle}>Recent Reports</Text>
+          <View style={[styles.board, !isDesktop && styles.boardStacked]}>
+            {columns.map(column => (
+              <View key={column.key} style={[styles.columnPanel, { backgroundColor: column.panel }]}> 
+                <View style={styles.columnHeader}>
+                  <Text style={styles.bigCount}>{column.count}</Text>
+                  <View style={styles.headerMeta}>
+                    <Text style={styles.columnLabel}>{column.label}</Text>
+                    <Text style={styles.columnSubLabel}>{column.subtitle}</Text>
+                    <TouchableOpacity style={[styles.viewAllButton, { backgroundColor: column.card }]} activeOpacity={0.85}>
+                      <Text style={styles.viewAllText}>View all</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                <View style={styles.filterRow}>
+                  <Text style={styles.filterHeading}>Show reports by</Text>
+                  <View style={styles.chipRow}>
+                    {column.chips.map(chip => (
+                      <View key={chip} style={[styles.chip, { backgroundColor: column.card }]}>
+                        <Text style={styles.chipText}>{chip}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+
+                <ScrollView style={styles.cardList} showsVerticalScrollIndicator={false}>
+                  {column.reports.length === 0 ? (
+                    <View style={[styles.emptyCard, { backgroundColor: column.card }]}> 
+                      <MaterialIcons name="inbox" size={24} color="rgba(255,255,255,0.85)" />
+                      <Text style={styles.emptyCardTitle}>No reports in this lane</Text>
+                      <Text style={styles.emptyCardText}>Submitted reports will appear automatically.</Text>
+                    </View>
+                  ) : (
+                    column.reports.slice(0, 8).map(report => {
+                      const progress = getProgressPercent(report);
+                      return (
+                        <TouchableOpacity
+                          key={report.id}
+                          style={[styles.reportCard, { backgroundColor: column.card }]}
+                          onPress={() => onViewReport(report)}
+                          activeOpacity={0.85}
+                        >
+                          <View style={styles.reportTopRow}>
+                            <Text style={styles.reportTitle} numberOfLines={1}>{report.title}</Text>
+                            <Text style={styles.reportDate}>{formatShortDate(report.submittedAt)}</Text>
+                          </View>
+                          <Text style={styles.reportMeta} numberOfLines={1}>
+                            {report.submitterName} • {report.projectTitle || 'No linked project'}
+                          </Text>
+                          <View style={styles.progressTrack}>
+                            <View style={[styles.progressFill, { width: `${progress}%`, backgroundColor: column.accent }]} />
+                          </View>
+                          <Text style={styles.progressText}>{progress}% metrics captured</Text>
+                        </TouchableOpacity>
+                      );
+                    })
+                  )}
+                </ScrollView>
+              </View>
+            ))}
           </View>
-          {reports.length === 0 ? (
-            <View style={styles.emptyState}>
-              <MaterialIcons name="folder-open" size={48} color="#cbd5e1" />
-              <Text style={styles.emptyTitle}>No reports yet</Text>
-              <Text style={styles.emptyText}>Reports submitted by volunteers and partners will appear here</Text>
-            </View>
-          ) : (
-            <FlatList
-              data={reports.slice(0, 10)}
-              renderItem={renderReportCard}
-              keyExtractor={item => item.id}
-              scrollEnabled={false}
-              ItemSeparatorComponent={() => <View style={styles.separator} />}
-            />
-          )}
         </View>
       </ScrollView>
     </View>
@@ -207,227 +243,250 @@ export default function AdminReportsDashboard({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#eceff6',
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#eceff6',
   },
-  header: {
+  frame: {
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  masthead: {
+    backgroundColor: '#f2f4fa',
+    borderWidth: 1,
+    borderColor: '#d6dbea',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    paddingHorizontal: Platform.select({ web: 8, default: 15 }),
-    paddingVertical: 16,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
+    alignItems: 'center',
+    gap: 12,
+  },
+  logoTile: {
+    width: 42,
+    height: 42,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#e6e9ff',
+  },
+  mastheadText: {
+    flex: 1,
   },
   title: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: '#0f172a',
-    marginBottom: 4,
+    fontSize: 44,
+    lineHeight: 46,
+    fontWeight: '700',
+    color: '#2d333f',
   },
   subtitle: {
-    fontSize: 13,
-    color: '#64748b',
+    marginTop: 4,
+    fontSize: 12,
+    color: '#5f687a',
   },
   uploadButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#166534',
-    paddingHorizontal: 14,
+    gap: 6,
+    backgroundColor: '#4067d9',
+    paddingHorizontal: 12,
     paddingVertical: 10,
-    borderRadius: 10,
+    borderRadius: 8,
   },
   uploadButtonText: {
     color: '#fff',
+    fontSize: 12,
     fontWeight: '700',
-    fontSize: 13,
   },
-  metricsSection: {
-    paddingHorizontal: Platform.select({ web: 8, default: 15 }),
-    paddingVertical: 16,
-    backgroundColor: '#fff',
+  tabBar: {
+    marginTop: 10,
     borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
-    marginBottom: 12,
-  },
-  sectionTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#0f172a',
-    marginBottom: 12,
-  },
-  metricsScroll: {
-    paddingHorizontal: 0,
-  },
-  metricCard: {
-    width: 160,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    marginRight: 10,
-    borderRadius: 12,
-    borderLeftWidth: 4,
-    backgroundColor: '#f8fafc',
-  },
-  metricIconBox: {
-    width: 44,
-    height: 44,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  metricContent: {
-    flex: 1,
-  },
-  metricLabel: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: '#64748b',
-    marginBottom: 2,
-  },
-  metricValue: {
-    fontSize: 16,
-    fontWeight: '800',
-  },
-  statusOverviewSection: {
-    paddingHorizontal: Platform.select({ web: 8, default: 15 }),
-    paddingVertical: 16,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
-    marginBottom: 12,
-  },
-  statusGrid: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  statusCard: {
-    flex: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 14,
-    borderRadius: 10,
-    alignItems: 'center',
-  },
-  pendingStatus: {
-    backgroundColor: '#fef3c7',
-  },
-  approvedStatus: {
-    backgroundColor: '#dcfce7',
-  },
-  rejectedStatus: {
-    backgroundColor: '#fee2e2',
-  },
-  statusCardLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: 'rgba(0, 0, 0, 0.6)',
-    marginBottom: 4,
-  },
-  statusCardValue: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: '#0f172a',
-    marginBottom: 4,
-  },
-  statusCardAction: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: 'rgba(0, 0, 0, 0.5)',
-  },
-  section: {
-    paddingHorizontal: Platform.select({ web: 8, default: 15 }),
-    paddingVertical: 12,
-    backgroundColor: '#fff',
-    marginBottom: 12,
-  },
-  sectionHeader: {
+    borderBottomColor: '#c9cfde',
+    paddingBottom: 8,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    marginBottom: 12,
   },
-  reportCard: {
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    borderRadius: 10,
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
+  tabItem: {
+    fontSize: 32,
+    color: '#3f4655',
+    fontWeight: '500',
   },
-  reportCardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 8,
+  tabItemActive: {
+    color: '#4067d9',
+    borderBottomWidth: 3,
+    borderBottomColor: '#4067d9',
+    paddingBottom: 4,
   },
-  reportInfo: {
-    flex: 1,
-  },
-  reportTitle: {
-    fontSize: 14,
+  tabDivider: {
+    fontSize: 24,
+    color: '#9aa2b1',
     fontWeight: '700',
-    color: '#0f172a',
-    marginBottom: 2,
   },
-  reportSubmitter: {
-    fontSize: 11,
-    color: '#64748b',
+  kpiRow: {
+    marginTop: 12,
+    marginBottom: 10,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
   },
-  statusBadge: {
+  kpiText: {
+    fontSize: 12,
+    color: '#475069',
+    fontWeight: '600',
+    backgroundColor: '#dde3f2',
     paddingHorizontal: 8,
     paddingVertical: 4,
-    borderRadius: 4,
-    backgroundColor: '#dbeafe',
+    borderRadius: 999,
   },
-  statusApproved: {
-    backgroundColor: '#dcfce7',
+  board: {
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'flex-start',
   },
-  statusRejected: {
-    backgroundColor: '#fee2e2',
+  boardStacked: {
+    flexDirection: 'column',
   },
-  statusLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#0c4a6e',
+  columnPanel: {
+    flex: 1,
+    borderRadius: 8,
+    minHeight: 520,
+    padding: 12,
   },
-  reportDescription: {
-    fontSize: 12,
-    color: '#475569',
-    lineHeight: 16,
-    marginBottom: 8,
-  },
-  reportDate: {
-    fontSize: 10,
-    color: '#94a3b8',
-  },
-  separator: {
-    height: 8,
-  },
-  emptyState: {
+  columnHeader: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 40,
+    gap: 8,
   },
-  emptyTitle: {
+  bigCount: {
+    fontSize: 78,
+    lineHeight: 78,
+    color: '#fff',
+    fontWeight: '800',
+  },
+  headerMeta: {
+    flex: 1,
+    alignSelf: 'flex-start',
+    marginTop: 10,
+  },
+  columnLabel: {
+    fontSize: 32,
+    lineHeight: 34,
+    color: '#fff',
+    fontWeight: '700',
+  },
+  columnSubLabel: {
+    marginTop: 2,
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  viewAllButton: {
+    marginTop: 8,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
+  viewAllText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  filterRow: {
+    marginTop: 12,
+  },
+  filterHeading: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+  chipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  chip: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+  },
+  chipText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  cardList: {
+    marginTop: 10,
+    maxHeight: 460,
+  },
+  reportCard: {
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    borderRadius: 10,
+    marginBottom: 10,
+  },
+  reportTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+  },
+  reportTitle: {
+    flex: 1,
+    color: '#fff',
     fontSize: 16,
     fontWeight: '700',
-    color: '#0f172a',
-    marginTop: 12,
-    marginBottom: 4,
   },
-  emptyText: {
-    fontSize: 12,
-    color: '#64748b',
+  reportDate: {
+    color: 'rgba(255,255,255,0.86)',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  reportMeta: {
+    color: 'rgba(255,255,255,0.88)',
+    marginTop: 4,
+    fontSize: 11,
+  },
+  progressTrack: {
+    marginTop: 8,
+    height: 10,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.38)',
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 999,
+  },
+  progressText: {
+    marginTop: 6,
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  emptyCard: {
+    paddingVertical: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    paddingHorizontal: 12,
+  },
+  emptyCardTitle: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '700',
+    marginTop: 8,
+  },
+  emptyCardText: {
+    marginTop: 4,
+    color: 'rgba(255,255,255,0.9)',
+    fontSize: 11,
     textAlign: 'center',
-    maxWidth: 200,
   },
 });
+
+
