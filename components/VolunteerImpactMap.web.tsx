@@ -8,7 +8,7 @@ import {
   PHILIPPINES_WEB_CENTER,
   getProjectMarkerColor,
 } from '../utils/projectMap';
-import { createWebMapMarkerIcon } from '../utils/mapMarkerVisuals';
+import { createGoogleMapsMarkerIcon, loadGoogleMaps } from '../utils/webGoogleMaps';
 
 const MapHost = 'div' as any;
 
@@ -16,164 +16,119 @@ type VolunteerImpactMapProps = {
   projects: Project[];
 };
 
-// Resolves the Google Maps web API key from Expo config or environment variables.
-function getWebGoogleMapsApiKey(): string | undefined {
-  const constantsAny = Constants as typeof Constants & {
-    manifest?: { extra?: Record<string, unknown> };
-    manifest2?: { extra?: { expoClient?: { extra?: Record<string, unknown> } } };
-  };
-
-  const fromExpoConfig = Constants.expoConfig?.extra?.webGoogleMapsApiKey;
-  const fromManifest = constantsAny.manifest?.extra?.webGoogleMapsApiKey;
-  const fromManifest2 = constantsAny.manifest2?.extra?.expoClient?.extra?.webGoogleMapsApiKey;
-  const fromPublicEnv = process.env.EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY;
-
-  const resolvedKey = fromExpoConfig ?? fromManifest ?? fromManifest2 ?? fromPublicEnv;
-
-  return typeof resolvedKey === 'string' && resolvedKey.trim().length > 0
-    ? resolvedKey.trim()
-    : undefined;
+function getWebGoogleMapsApiKey() {
+  const expoExtra = Constants.expoConfig?.extra as { webGoogleMapsApiKey?: string } | undefined;
+  return expoExtra?.webGoogleMapsApiKey || process.env.EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY || '';
 }
 
-// Loads the Google Maps browser script once and reuses the shared promise.
-function loadGoogleMapsScript(apiKey: string) {
-  const browserWindow = window as Window & {
-    google?: any;
-    __googleMapsScriptPromise?: Promise<void>;
-  };
-
-  if (browserWindow.google?.maps) {
-    return Promise.resolve();
+function getCurrentWebOrigin() {
+  if (typeof window === 'undefined' || !window.location?.origin) {
+    return 'http://localhost:8081';
   }
 
-  if (browserWindow.__googleMapsScriptPromise) {
-    return browserWindow.__googleMapsScriptPromise;
-  }
-
-  browserWindow.__googleMapsScriptPromise = new Promise<void>((resolve, reject) => {
-    const existingScript = document.getElementById('google-maps-js-api') as HTMLScriptElement | null;
-
-    const handleLoad = () => {
-      if (browserWindow.google?.maps) {
-        resolve();
-        return;
-      }
-
-      reject(new Error('Google Maps JavaScript API did not initialize.'));
-    };
-
-    const handleError = () => reject(new Error('Failed to load Google Maps JavaScript API.'));
-
-    if (existingScript) {
-      existingScript.addEventListener('load', handleLoad, { once: true });
-      existingScript.addEventListener('error', handleError, { once: true });
-      return;
-    }
-
-    const script = document.createElement('script');
-    script.id = 'google-maps-js-api';
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}`;
-    script.async = true;
-    script.defer = true;
-    script.addEventListener('load', handleLoad, { once: true });
-    script.addEventListener('error', handleError, { once: true });
-    document.head.appendChild(script);
-  });
-
-  return browserWindow.__googleMapsScriptPromise;
+  return window.location.origin;
 }
 
-// Displays the volunteer impact map using Google Maps on web.
+function getGoogleMapsErrorMessage(apiKey: string) {
+  const currentOrigin = getCurrentWebOrigin();
+
+  if (!apiKey.trim()) {
+    return 'Google Maps web key is missing. Add GOOGLE_MAPS_WEB_API_KEY to volunteer-system/.env and restart Expo.';
+  }
+
+  return `Google Maps could not load for the profile view. Allow ${currentOrigin} in your Google Maps web key referrers and make sure the Maps JavaScript API is enabled.`;
+}
+
+// Displays the volunteer impact map using the Google Maps JavaScript API on web.
 export default function VolunteerImpactMap({ projects }: VolunteerImpactMapProps) {
   const [selectedProject, setSelectedProject] = useState<Project | null>(projects[0] || null);
   const [mapError, setMapError] = useState<string | null>(null);
-  const googleMapsApiKey = getWebGoogleMapsApiKey();
   const mapElementRef = useRef<HTMLDivElement | null>(null);
+  const mapInstanceRef = useRef<any>(null);
+  const markerRefs = useRef<Array<{ marker: any; listener: { remove: () => void } }>>([]);
+  const webGoogleMapsApiKey = getWebGoogleMapsApiKey();
 
   useEffect(() => {
     setSelectedProject(projects[0] || null);
   }, [projects]);
 
+  const clearMarkers = () => {
+    markerRefs.current.forEach(({ marker, listener }) => {
+      listener.remove();
+      marker.setMap(null);
+    });
+    markerRefs.current = [];
+  };
+
   useEffect(() => {
-    if (projects.length === 0) {
-      return;
-    }
-
-    if (!googleMapsApiKey) {
-      setMapError('Google Maps web key is missing, so the profile map cannot render on web.');
-      return;
-    }
-
     if (!mapElementRef.current) {
       return;
     }
 
     let cancelled = false;
-    const browserWindow = window as Window & {
-      google?: any;
-      gm_authFailure?: () => void;
-    };
-
-    browserWindow.gm_authFailure = () => {
-      if (!cancelled) {
-        setMapError('Google Maps rejected the web key for this profile map.');
-      }
-    };
 
     const renderMap = async () => {
       try {
-        await loadGoogleMapsScript(googleMapsApiKey);
-        if (cancelled || !mapElementRef.current || !browserWindow.google?.maps) {
+        const googleMaps = await loadGoogleMaps(webGoogleMapsApiKey);
+        if (cancelled || !mapElementRef.current) {
           return;
         }
 
+        if (!mapInstanceRef.current) {
+          mapInstanceRef.current = new googleMaps.maps.Map(mapElementRef.current, {
+            center: PHILIPPINES_WEB_CENTER,
+            zoom: 6,
+            minZoom: 5,
+            mapTypeControl: false,
+            streetViewControl: false,
+            fullscreenControl: false,
+            zoomControl: true,
+            restriction: {
+              latLngBounds: PHILIPPINES_BOUNDS,
+              strictBounds: false,
+            },
+          });
+        }
+
+        const map = mapInstanceRef.current;
+        clearMarkers();
         setMapError(null);
 
-        const map = new browserWindow.google.maps.Map(mapElementRef.current, {
-          center: PHILIPPINES_WEB_CENTER,
-          zoom: 6,
-          minZoom: 5,
-          mapTypeControl: false,
-          streetViewControl: false,
-          fullscreenControl: false,
-          restriction: {
-            latLngBounds: PHILIPPINES_BOUNDS,
-            strictBounds: false,
-          },
-        });
+        if (projects.length === 0) {
+          map.setCenter(PHILIPPINES_WEB_CENTER);
+          map.setZoom(6);
+          return;
+        }
 
-        const bounds = new browserWindow.google.maps.LatLngBounds();
+        const bounds = new googleMaps.maps.LatLngBounds();
 
         projects.forEach(project => {
-          const marker = new browserWindow.google.maps.Marker({
-            map,
+          const marker = new googleMaps.maps.Marker({
             position: {
               lat: project.location.latitude,
               lng: project.location.longitude,
             },
+            map,
             title: project.title,
-            icon: {
-              url: createWebMapMarkerIcon({
-                accentColor: getProjectMarkerColor(project),
-              }),
-              scaledSize: new browserWindow.google.maps.Size(48, 57),
-              anchor: new browserWindow.google.maps.Point(24, 54),
-            },
+            icon: createGoogleMapsMarkerIcon(googleMaps, getProjectMarkerColor(project)),
           });
 
-          bounds.extend(marker.getPosition());
-
-          marker.addListener('click', () => {
+          const listener = marker.addListener('click', () => {
             setSelectedProject(project);
+          });
+
+          markerRefs.current.push({ marker, listener });
+          bounds.extend({
+            lat: project.location.latitude,
+            lng: project.location.longitude,
           });
         });
 
-        if (projects.length > 0) {
-          map.fitBounds(bounds, 48);
-        }
+        map.fitBounds(bounds, 56);
       } catch {
         if (!cancelled) {
-          setMapError('Google Maps could not load for the profile map.');
+          clearMarkers();
+          setMapError(getGoogleMapsErrorMessage(webGoogleMapsApiKey));
         }
       }
     };
@@ -182,11 +137,9 @@ export default function VolunteerImpactMap({ projects }: VolunteerImpactMapProps
 
     return () => {
       cancelled = true;
-      if (browserWindow.gm_authFailure) {
-        delete browserWindow.gm_authFailure;
-      }
+      clearMarkers();
     };
-  }, [googleMapsApiKey, projects]);
+  }, [projects, webGoogleMapsApiKey]);
 
   if (projects.length === 0) {
     return null;
@@ -209,7 +162,7 @@ export default function VolunteerImpactMap({ projects }: VolunteerImpactMapProps
         {mapError ? (
           <View style={styles.errorOverlay}>
             <View style={styles.errorCard}>
-              <Text style={styles.errorTitle}>Map unavailable on web</Text>
+              <Text style={styles.errorTitle}>Google Maps unavailable</Text>
               <Text style={styles.errorText}>{mapError}</Text>
             </View>
           </View>
