@@ -199,6 +199,19 @@ export interface Message {
   attachments?: string[]; // File URLs
 }
 
+export type ProjectGroupMessageKind = 'message' | 'need-post';
+
+export interface ProjectGroupNeedPost {
+  title: string;
+  category: string;
+  details: string;
+  priority: 'Low' | 'Medium' | 'High';
+  status: 'Open' | 'In Progress' | 'Fulfilled';
+  quantityLabel?: string;
+  targetDate?: string;
+  requestedByRole: 'admin' | 'partner';
+}
+
 // Represents a message posted inside a project group chat.
 export interface ProjectGroupMessage {
   id: string;
@@ -206,6 +219,8 @@ export interface ProjectGroupMessage {
   senderId: string;
   content: string;
   timestamp: string;
+  kind?: ProjectGroupMessageKind;
+  needPost?: ProjectGroupNeedPost;
   attachments?: string[]; // File URLs
 }
 

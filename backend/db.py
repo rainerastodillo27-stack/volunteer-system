@@ -1,7 +1,7 @@
 import os
 import time
 from typing import Any
-from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from dotenv import load_dotenv
 
@@ -96,6 +96,12 @@ def _get_raw_database_url() -> str:
     return os.getenv("SUPABASE_DB_URL", "").strip()
 
 
+# Reads an optional fallback Supabase Postgres URL from the environment.
+def _get_raw_fallback_database_url() -> str:
+    load_environment()
+    return os.getenv("SUPABASE_DB_URL_FALLBACK", "").strip()
+
+
 # Returns true when the Supabase Postgres URL points at the pooler endpoint.
 def _is_pooler_database_url(database_url: str) -> bool:
     try:
@@ -114,6 +120,79 @@ def _normalize_database_url(database_url: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, normalized_query, parsed.fragment))
 
 
+# Builds a session-pooler variant from a Supabase transaction-pooler URL when possible.
+def _to_session_pooler_database_url(database_url: str) -> str | None:
+    try:
+        parsed = urlsplit(database_url)
+    except Exception:
+        return None
+
+    hostname = parsed.hostname or ""
+    if not hostname.endswith(".pooler.supabase.com"):
+        return None
+
+    if parsed.port != 6543:
+        return None
+
+    username = parsed.username or ""
+    password = parsed.password or ""
+    auth = username
+    if password:
+        auth = f"{auth}:{password}"
+    if auth:
+        auth = f"{auth}@"
+
+    netloc = f"{auth}{hostname}:5432"
+    return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+
+
+# Returns prioritized candidate Postgres endpoints for local failover.
+def _get_database_url_candidates() -> list[str]:
+    primary_url = _get_raw_database_url()
+    fallback_url = _get_raw_fallback_database_url()
+    candidates: list[str] = []
+
+    def add_candidate(value: str) -> None:
+        normalized_value = _normalize_database_url(value)
+        if normalized_value and normalized_value not in candidates:
+            candidates.append(normalized_value)
+
+    if primary_url:
+        session_pooler_url = _to_session_pooler_database_url(primary_url)
+        if session_pooler_url:
+            add_candidate(session_pooler_url)
+        add_candidate(primary_url)
+
+    if fallback_url:
+        add_candidate(fallback_url)
+
+    return candidates
+
+
+# Returns whether one candidate should stay in cooldown before another retry.
+def _is_candidate_in_cooldown(candidate_url: str) -> bool:
+    failure_info = _POSTGRES_CANDIDATE_FAILURES.get(candidate_url)
+    if not failure_info:
+        return False
+
+    failed_at = float(failure_info.get("failed_at") or 0.0)
+    cooldown_seconds = _get_failover_cooldown_seconds()
+    return (time.monotonic() - failed_at) < cooldown_seconds
+
+
+# Records one failed database candidate and the last observed error.
+def _record_candidate_failure(candidate_url: str, error: Exception) -> None:
+    _POSTGRES_CANDIDATE_FAILURES[candidate_url] = {
+        "failed_at": time.monotonic(),
+        "error": str(error),
+    }
+
+
+# Clears any recorded failure cooldown for a database candidate.
+def _clear_candidate_failure(candidate_url: str) -> None:
+    _POSTGRES_CANDIDATE_FAILURES.pop(candidate_url, None)
+
+
 # Returns true when an exception looks like a transient connection-drop issue.
 def _is_retryable_connection_error(error: Exception) -> bool:
     normalized = str(error).lower()
@@ -126,6 +205,9 @@ def _is_retryable_connection_error(error: Exception) -> bool:
         "could not receive data from server",
         "ssl syscall error",
         "broken pipe",
+        "echeckouttimeout",
+        "unable to check out connection from the pool",
+        "transaction mode",
     ]
     return any(marker in normalized for marker in retryable_markers)
 
@@ -185,63 +267,87 @@ def get_db_mode() -> str:
 # Returns runtime diagnostics about connection settings and recent health state.
 def get_postgres_diagnostics() -> dict[str, Any]:
     return {
+        "database_url_candidates": _get_database_url_candidates(),
         "connect_timeout_seconds": _get_connect_timeout(),
+        "candidate_connect_timeout_seconds": _get_candidate_connect_timeout(),
         "connect_attempts": _get_connect_attempts(),
         "retry_base_ms": _get_connect_retry_base_ms(),
+        "failover_cooldown_seconds": _get_failover_cooldown_seconds(),
         "probe_cache_ttl_seconds": _get_probe_cache_ttl(),
         "last_probe_checked_at": _POSTGRES_PROBE_CACHE["checked_at"],
         "last_probe_available": _POSTGRES_PROBE_CACHE["available"],
         "last_probe_error": _POSTGRES_PROBE_CACHE["error"],
+        "last_successful_database_url": _POSTGRES_LAST_SUCCESSFUL_URL,
+        "candidate_failures": _POSTGRES_CANDIDATE_FAILURES,
     }
 
 
 # Creates a direct Psycopg connection to Supabase Postgres.
 def get_postgres_connection():
-    database_url = _get_raw_database_url()
+    global _POSTGRES_LAST_SUCCESSFUL_URL
+    database_urls = _get_database_url_candidates()
     connect_timeout = _get_connect_timeout()
+    candidate_connect_timeout = _get_candidate_connect_timeout()
     connect_attempts = _get_connect_attempts()
     retry_base_ms = _get_connect_retry_base_ms()
 
-    if not database_url:
+    if not database_urls:
         raise RuntimeError("SUPABASE_DB_URL is not set.")
     if psycopg is None:
         raise RuntimeError("psycopg is not installed.")
 
-    normalized_url = _normalize_database_url(database_url)
-    pooler_mode = _is_pooler_database_url(normalized_url)
+    candidate_urls = list(database_urls)
+    if _POSTGRES_LAST_SUCCESSFUL_URL in candidate_urls:
+        candidate_urls.remove(_POSTGRES_LAST_SUCCESSFUL_URL)
+        candidate_urls.insert(0, _POSTGRES_LAST_SUCCESSFUL_URL)
 
     last_error: Exception | None = None
     for attempt in range(connect_attempts):
-        connection = None
-        try:
-            connect_kwargs: dict[str, Any] = {
-                "connect_timeout": connect_timeout,
-                "application_name": "volcre-backend",
-            }
+        available_candidates = [
+            candidate_url
+            for candidate_url in candidate_urls
+            if not _is_candidate_in_cooldown(candidate_url)
+        ]
+        if not available_candidates:
+            available_candidates = candidate_urls
 
-            # Supabase pooler is PgBouncer-like; prepared statements can fail there.
-            if pooler_mode:
-                connect_kwargs["prepare_threshold"] = None
+        for candidate_url in available_candidates:
+            connection = None
+            pooler_mode = _is_pooler_database_url(candidate_url)
+            timeout_to_use = candidate_connect_timeout if len(candidate_urls) > 1 else connect_timeout
 
-            connection = psycopg.connect(normalized_url, **connect_kwargs)
-            with connection.cursor() as cursor:
-                cursor.execute("select 1")
-                cursor.fetchone()
-            return connection
-        except Exception as exc:
-            last_error = exc
-            if connection is not None:
-                try:
-                    connection.close()
-                except Exception:
-                    pass
+            try:
+                connect_kwargs: dict[str, Any] = {
+                    "connect_timeout": timeout_to_use,
+                    "application_name": "volcre-backend",
+                }
 
-            should_retry = attempt < connect_attempts - 1 and _is_retryable_connection_error(exc)
-            if not should_retry:
-                raise
+                # Supabase pooler is PgBouncer-like; prepared statements can fail there.
+                if pooler_mode:
+                    connect_kwargs["prepare_threshold"] = None
 
-            delay_seconds = (retry_base_ms * (2 ** attempt)) / 1000.0
-            time.sleep(delay_seconds)
+                connection = psycopg.connect(candidate_url, **connect_kwargs)
+                with connection.cursor() as cursor:
+                    cursor.execute("select 1")
+                    cursor.fetchone()
+                _POSTGRES_LAST_SUCCESSFUL_URL = candidate_url
+                _clear_candidate_failure(candidate_url)
+                return connection
+            except Exception as exc:
+                last_error = exc
+                _record_candidate_failure(candidate_url, exc)
+                if connection is not None:
+                    try:
+                        connection.close()
+                    except Exception:
+                        pass
+
+        should_retry = attempt < connect_attempts - 1 and last_error is not None and _is_retryable_connection_error(last_error)
+        if not should_retry:
+            break
+
+        delay_seconds = (retry_base_ms * (2 ** attempt)) / 1000.0
+        time.sleep(delay_seconds)
 
     if last_error is not None:
         raise last_error

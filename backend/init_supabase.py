@@ -41,6 +41,8 @@ BASE_DDL = [
       sender_id text not null references app_users(app_users_id) on delete cascade,
       content text not null,
       timestamp timestamptz not null,
+      kind text not null default 'message',
+      need_post jsonb,
       attachments jsonb not null default '[]'::jsonb
     )
     """,

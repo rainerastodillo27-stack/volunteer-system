@@ -108,6 +108,8 @@ class ProjectGroupMessagePayload(BaseModel):
     senderId: str
     content: str
     timestamp: str
+    kind: str | None = None
+    needPost: dict[str, Any] | None = None
     attachments: list[str] | None = None
 
 
@@ -238,9 +240,20 @@ def ensure_project_group_message_storage() -> None:
                   sender_id text not null references app_users(app_users_id) on delete cascade,
                   content text not null,
                   timestamp timestamptz not null,
+                  kind text not null default 'message',
+                  need_post jsonb,
                   attachments jsonb not null default '[]'::jsonb
                 )
                 """
+            )
+            cursor.execute(
+                "alter table project_group_messages add column if not exists kind text not null default 'message'"
+            )
+            cursor.execute(
+                "alter table project_group_messages add column if not exists need_post jsonb"
+            )
+            cursor.execute(
+                "update project_group_messages set kind = 'message' where kind is null"
             )
         connection.commit()
 
@@ -278,6 +291,9 @@ def serialize_project_group_message_row(row: Any) -> dict[str, Any]:
         attachments = json.loads(attachments)
     if attachments is None:
         attachments = []
+    need_post = row.get("need_post")
+    if isinstance(need_post, str):
+        need_post = json.loads(need_post)
 
     return {
         "id": row["project_group_messages_id"],
@@ -285,6 +301,8 @@ def serialize_project_group_message_row(row: Any) -> dict[str, Any]:
         "senderId": row["sender_id"],
         "content": row["content"],
         "timestamp": row["timestamp"].isoformat() if hasattr(row["timestamp"], "isoformat") else row["timestamp"],
+        "kind": row.get("kind") or "message",
+        "needPost": need_post,
         "attachments": attachments,
     }
 
@@ -332,10 +350,10 @@ def _assert_project_group_chat_access(
         return project
 
     participant_user_ids = _get_project_chat_participant_user_ids(connection, project_id)
-    if role != "volunteer" or user_id not in participant_user_ids:
+    if role not in {"volunteer", "partner"} or user_id not in participant_user_ids:
         raise HTTPException(
             status_code=403,
-            detail="Only volunteers who joined this program can open its group chat.",
+            detail="Only admins, approved partner organizations, and joined volunteers can open this group chat.",
         )
 
     return project
@@ -730,6 +748,28 @@ def health():
         "mode": "postgres",
         "timestamp": timestamp,
     }
+
+
+@app.get("/db-health", response_model=None)
+# Returns detailed database diagnostics for troubleshooting.
+def db_health():
+    configured_mode = get_configured_db_mode()
+    available, error = get_postgres_status(force_refresh=True)
+    diagnostics = get_postgres_diagnostics()
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    status_code = 200 if available else 503
+    payload = {
+        "status": "ok" if available else "error",
+        "configured_mode": configured_mode,
+        "mode": get_db_mode(),
+        "available": available,
+        "error": error,
+        "diagnostics": diagnostics,
+        "timestamp": timestamp,
+    }
+
+    return JSONResponse(status_code=status_code, content=payload)
 
 
 # Finds a user by email or normalized phone identifier.
@@ -1236,7 +1276,7 @@ def get_project_group_messages(project_id: str, user_id: str) -> dict[str, list[
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 """
-                select project_group_messages_id, project_id, sender_id, content, timestamp, attachments
+                select project_group_messages_id, project_id, sender_id, content, timestamp, kind, need_post, attachments
                 from project_group_messages
                 where project_id = %s
                 order by timestamp asc
@@ -1292,6 +1332,9 @@ async def create_project_group_message(
 ) -> dict[str, Any]:
     ensure_project_group_message_storage()
     attachments = payload.attachments or []
+    message_kind = str(payload.kind or "message").strip() or "message"
+    if message_kind not in {"message", "need-post"}:
+        raise HTTPException(status_code=400, detail="Unsupported project group message type.")
     from psycopg.rows import dict_row
 
     if payload.projectId != project_id:
@@ -1299,15 +1342,28 @@ async def create_project_group_message(
 
     with get_postgres_connection() as connection:
         _assert_project_group_chat_access(connection, project_id, payload.senderId)
+        sender_user = _postgres_get_hot_item_by_id(connection, "users", payload.senderId)
+        sender_role = str(sender_user.get("role") or "") if sender_user else ""
+        if message_kind == "need-post":
+            if sender_role not in {"admin", "partner"}:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Only admin and partner accounts can post customized needs in group chats.",
+                )
+            if payload.needPost is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="A structured need post is required for need-post messages.",
+                )
         _postgres_ensure_legacy_app_user(connection, payload.senderId)
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 """
                 insert into project_group_messages (
-                  project_group_messages_id, project_id, sender_id, content, timestamp, attachments
+                  project_group_messages_id, project_id, sender_id, content, timestamp, kind, need_post, attachments
                 )
-                values (%s, %s, %s, %s, %s, %s::jsonb)
-                returning project_group_messages_id, project_id, sender_id, content, timestamp, attachments
+                values (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb)
+                returning project_group_messages_id, project_id, sender_id, content, timestamp, kind, need_post, attachments
                 """,
                 (
                     payload.id,
@@ -1315,6 +1371,8 @@ async def create_project_group_message(
                     payload.senderId,
                     payload.content,
                     payload.timestamp,
+                    message_kind,
+                    json.dumps(payload.needPost) if payload.needPost is not None else None,
                     json.dumps(attachments),
                 ),
             )

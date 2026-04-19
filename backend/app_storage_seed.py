@@ -27,6 +27,7 @@ HOT_STORAGE_TABLES = {
 }
 EXPECTED_HOT_STORAGE_COLUMNS = {"id", "data", "sort_order", "updated_at"}
 REQUIRED_DEMO_COLLECTION_KEYS = {"users", "partners", "volunteers"}
+_APP_STORAGE_SEED_CONFIRMED = False
 
 
 # Builds the demo JSON collections used by the app storage layer.
@@ -508,8 +509,38 @@ def ensure_postgres_hot_storage_seeded(connection: Any, demo_storage: dict[str, 
     sync_all_relational_mirror_tables(connection, synced_collections)
 
 
+# Returns whether the minimum demo collections already exist in hot storage.
+def _has_required_demo_seed(connection: Any) -> bool:
+    for key in REQUIRED_DEMO_COLLECTION_KEYS:
+        table_name = HOT_STORAGE_TABLES[key]
+        with connection.cursor() as cursor:
+            cursor.execute(f"select exists (select 1 from {table_name} limit 1)")
+            row = cursor.fetchone()
+        if not row or not bool(row[0]):
+            return False
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            select exists (
+              select 1
+              from app_users_store
+              where lower(coalesce(data->>'email', '')) = 'admin@nvc.org'
+            )
+            """
+        )
+        row = cursor.fetchone()
+
+    return bool(row and row[0])
+
+
 # Seeds both app storage and hot-storage tables with demo data.
 def ensure_app_storage_seeded() -> None:
+    global _APP_STORAGE_SEED_CONFIRMED
+
+    if _APP_STORAGE_SEED_CONFIRMED:
+        return
+
     ensure_app_storage_table()
     demo_storage = build_demo_app_storage()
 
@@ -519,6 +550,12 @@ def ensure_app_storage_seeded() -> None:
     while retry_count < max_retries:
         try:
             with get_postgres_connection() as connection:
+                ensure_postgres_hot_storage_tables(connection)
+                if _has_required_demo_seed(connection):
+                    connection.commit()
+                    _APP_STORAGE_SEED_CONFIRMED = True
+                    break
+
                 with connection.cursor() as cursor:
                     for key, value in demo_storage.items():
                         cursor.execute(
@@ -531,6 +568,7 @@ def ensure_app_storage_seeded() -> None:
                         )
                 ensure_postgres_hot_storage_seeded(connection, demo_storage)
                 connection.commit()
+                _APP_STORAGE_SEED_CONFIRMED = True
             break  # Success
         except Exception as e:
             retry_count += 1

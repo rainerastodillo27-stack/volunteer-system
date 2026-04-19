@@ -11,7 +11,6 @@ import ProjectsScreen from '../screens/ProjectsScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import SystemSettingsScreen from '../screens/SystemSettingsScreen';
 import ProjectLifecycleScreen from '../screens/ProjectLifecycleScreen';
-import AdminPlanningCalendarScreen from '../screens/AdminPlanningCalendarScreen';
 import MappingScreen from '../screens/MappingScreen';
 import CommunicationHubScreen from '../screens/CommunicationHubScreen';
 import UserManagementScreen from '../screens/UserManagementScreen';
@@ -27,7 +26,6 @@ export type TabParamList = {
   Projects: { projectId?: string } | undefined;
   Tasks: undefined;
   Lifecycle: { projectId?: string } | undefined;
-  Calendar: undefined;
   Volunteers: { volunteerId?: string } | undefined;
   Map: undefined;
   Messages: { projectId?: string } | undefined;
@@ -57,8 +55,6 @@ const getIconName = (routeName: keyof TabParamList) => {
       return 'assignment';
     case 'Lifecycle':
       return 'timeline';
-    case 'Calendar':
-      return 'calendar-month';
     case 'Volunteers':
       return 'groups';
     case 'Map':
@@ -354,15 +350,6 @@ export default function TabNavigator() {
         component={projectWorkspaceComponent}
         options={{ title: projectWorkspaceTitle, tabBarLabel: projectWorkspaceTitle }}
       />
-
-      {isAdmin && (
-        <Tab.Screen
-          name="Calendar"
-          component={AdminPlanningCalendarScreen}
-          options={{ title: 'Calendar Planner' }}
-        />
-      )}
-
       {showTasksTab && (
         <Tab.Screen
           name="Tasks"
