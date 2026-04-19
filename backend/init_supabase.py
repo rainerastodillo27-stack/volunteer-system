@@ -43,6 +43,9 @@ BASE_DDL = [
       timestamp timestamptz not null,
       kind text not null default 'message',
       need_post jsonb,
+      response_to_message_id text,
+      response_action text,
+      response_to_title text,
       attachments jsonb not null default '[]'::jsonb
     )
     """,

@@ -97,6 +97,12 @@ export type VolunteerRecognitionStatus = {
   isTopVolunteer: boolean;
 };
 
+export type DashboardTimelineSnapshot = {
+  projects: Project[];
+  planningCalendars: AdminPlanningCalendar[];
+  planningItems: AdminPlanningItem[];
+};
+
 const DEFAULT_ADMIN_PLANNING_CALENDARS: AdminPlanningCalendar[] = [
   {
     id: 'planner-projects',
@@ -825,6 +831,32 @@ export async function getPartnerDashboardSnapshot(): Promise<{
     publishedImpactReports:
       (items[STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS] as PublishedImpactReport[] | null) || [],
     sectorNeeds: [],
+  };
+}
+
+// Loads the shared planning calendar data used by volunteer and partner dashboards.
+export async function getDashboardTimelineSnapshot(): Promise<DashboardTimelineSnapshot> {
+  const planningCalendars = await ensureAdminPlanningCalendarsSeeded();
+  const items = await getStorageItems([
+    STORAGE_KEYS.PROJECTS,
+    STORAGE_KEYS.ADMIN_PLANNING_ITEMS,
+  ]);
+
+  const projects = ((items[STORAGE_KEYS.PROJECTS] as Project[] | null) || []).map(
+    normalizeProjectRecord
+  );
+  const planningItems = ((items[STORAGE_KEYS.ADMIN_PLANNING_ITEMS] as AdminPlanningItem[] | null) || [])
+    .map(normalizeAdminPlanningItemRecord)
+    .sort(
+      (a, b) =>
+        new Date(a.startDate).getTime() - new Date(b.startDate).getTime() ||
+        new Date(a.endDate).getTime() - new Date(b.endDate).getTime()
+    );
+
+  return {
+    projects,
+    planningCalendars,
+    planningItems,
   };
 }
 

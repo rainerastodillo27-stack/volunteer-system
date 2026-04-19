@@ -14,16 +14,19 @@ import { MaterialIcons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useFocusEffect } from '@react-navigation/native';
 import InlineLoadError from '../components/InlineLoadError';
+import ProjectTimelineCalendarCard from '../components/ProjectTimelineCalendarCard';
 import { useAuth } from '../contexts/AuthContext';
 import {
   createPartnerEventCheckIn,
+  getDashboardTimelineSnapshot,
   getPartnerDashboardSnapshot,
-  getPublishedImpactReportsByPartnerUser,
   requestPartnerProjectJoin,
   submitPartnerReport,
   subscribeToStorageChanges,
 } from '../models/storage';
 import {
+  AdminPlanningCalendar,
+  AdminPlanningItem,
   Partner,
   PartnerProjectApplication,
   PartnerReport,
@@ -81,9 +84,36 @@ function getProjectStatusColor(status: ReturnType<typeof getDisplayProjectStatus
   }
 }
 
+function getVisibleImpactReportsForPartner(
+  partnerUserId: string,
+  projects: Project[],
+  partnerApplications: PartnerProjectApplication[],
+  reports: PublishedImpactReport[]
+) {
+  const approvedProjectIds = new Set(
+    partnerApplications
+      .filter(application => application.partnerUserId === partnerUserId && application.status === 'Approved')
+      .map(application => application.projectId)
+  );
+
+  const allowedProjectIds = new Set(
+    projects
+      .filter(
+        project =>
+          (project.joinedUserIds || []).includes(partnerUserId) || approvedProjectIds.has(project.id)
+      )
+      .map(project => project.id)
+  );
+
+  return reports
+    .filter(report => Boolean(report.publishedAt) && allowedProjectIds.has(report.projectId))
+    .sort((a, b) => new Date(b.generatedAt).getTime() - new Date(a.generatedAt).getTime());
+}
+
 // Shows the partner workspace for RSVP, field check-in, report uploads, and published impact files.
 export default function PartnerDashboardScreen({ navigation }: any) {
   const { user, logout } = useAuth();
+  const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [partners, setPartners] = useState<Partner[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -93,6 +123,8 @@ export default function PartnerDashboardScreen({ navigation }: any) {
   const [partnerCheckInProjectId, setPartnerCheckInProjectId] = useState<string | null>(null);
   const [actionProjectId, setActionProjectId] = useState<string | null>(null);
   const [reportForm, setReportForm] = useState<ReportFormState>(createEmptyReportForm());
+  const [planningCalendars, setPlanningCalendars] = useState<AdminPlanningCalendar[]>([]);
+  const [planningItems, setPlanningItems] = useState<AdminPlanningItem[]>([]);
 
   const isOwnedByCurrentPartner = React.useCallback(
     (partner: Partner) => {
@@ -115,11 +147,17 @@ export default function PartnerDashboardScreen({ navigation }: any) {
         return;
       }
 
-      const [snapshot, visibleImpactReports] = await Promise.all([
+      const [snapshot, timelineSnapshot] = await Promise.all([
         getPartnerDashboardSnapshot(),
-        getPublishedImpactReportsByPartnerUser(user.id),
+        getDashboardTimelineSnapshot(),
       ]);
       const ownedPartners = snapshot.partners.filter(isOwnedByCurrentPartner);
+      const visibleImpactReports = getVisibleImpactReportsForPartner(
+        user.id,
+        snapshot.projects,
+        snapshot.partnerApplications,
+        snapshot.publishedImpactReports
+      );
       setPartners(ownedPartners);
       setProjects(snapshot.projects);
       setPartnerApplications(
@@ -137,6 +175,8 @@ export default function PartnerDashboardScreen({ navigation }: any) {
           .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       );
       setPublishedImpactReports(visibleImpactReports);
+      setPlanningCalendars(timelineSnapshot.planningCalendars);
+      setPlanningItems(timelineSnapshot.planningItems);
       setLoadError(null);
 
       setReportForm(current =>
@@ -147,6 +187,8 @@ export default function PartnerDashboardScreen({ navigation }: any) {
         title: getRequestErrorTitle(error),
         message: getRequestErrorMessage(error, 'Failed to load the partner dashboard.'),
       });
+    } finally {
+      setLoading(false);
     }
   }, [isOwnedByCurrentPartner, user?.id]);
 
@@ -161,6 +203,8 @@ export default function PartnerDashboardScreen({ navigation }: any) {
           'partnerEventCheckIns',
           'partnerReports',
           'publishedImpactReports',
+          'adminPlanningCalendars',
+          'adminPlanningItems',
         ],
         () => {
           void loadDashboardData();
@@ -194,6 +238,10 @@ export default function PartnerDashboardScreen({ navigation }: any) {
   const activeProjects = useMemo(
     () => projects.filter(project => getDisplayProjectStatus(project.status) !== 'Cancelled'),
     [projects]
+  );
+  const timelineProjectIds = useMemo(
+    () => (attendingProjects.length ? attendingProjects.map(project => project.id) : undefined),
+    [attendingProjects]
   );
 
   const openReportForm = (projectId: string) => {
@@ -378,6 +426,18 @@ export default function PartnerDashboardScreen({ navigation }: any) {
     );
   };
 
+  if (loading && projects.length === 0 && partners.length === 0) {
+    return (
+      <View style={styles.loadingContainer}>
+        <View style={styles.loadingCard}>
+          <MaterialIcons name="event-note" size={34} color="#166534" />
+          <Text style={styles.loadingTitle}>Preparing partner workspace</Text>
+          <Text style={styles.loadingText}>Loading your project requests, reports, and timeline.</Text>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.header}>
@@ -400,6 +460,26 @@ export default function PartnerDashboardScreen({ navigation }: any) {
           onRetry={() => void loadDashboardData()}
         />
       ) : null}
+
+      <ProjectTimelineCalendarCard
+        title="Partner Project Calendar"
+        subtitle={
+          timelineProjectIds?.length
+            ? 'Your approved and joined projects are aligned with the admin planning calendar.'
+            : 'Review the shared project schedule and admin planning dates in one timeline.'
+        }
+        projects={projects}
+        planningCalendars={planningCalendars}
+        planningItems={planningItems}
+        projectFilterIds={timelineProjectIds}
+        accentColor="#166534"
+        emptyText="No partner timeline items yet."
+        onOpenProject={projectId =>
+          navigateToAvailableRoute(navigation, 'Projects', {
+            projectId,
+          })
+        }
+      />
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Registration Status</Text>
@@ -640,6 +720,36 @@ const styles = StyleSheet.create({
   content: {
     padding: 16,
     paddingBottom: 32,
+  },
+  loadingContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f5f5f5',
+    padding: 24,
+  },
+  loadingCard: {
+    width: '100%',
+    maxWidth: 360,
+    borderRadius: 24,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 28,
+    borderWidth: 1,
+    borderColor: '#dbe2ea',
+    gap: 10,
+  },
+  loadingTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  loadingText: {
+    textAlign: 'center',
+    fontSize: 13,
+    lineHeight: 20,
+    color: '#64748b',
   },
   header: {
     flexDirection: 'row',

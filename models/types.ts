@@ -199,7 +199,8 @@ export interface Message {
   attachments?: string[]; // File URLs
 }
 
-export type ProjectGroupMessageKind = 'message' | 'need-post';
+export type ProjectGroupMessageKind = 'message' | 'need-post' | 'scope-proposal';
+export type NeedResponseAction = 'Can Help' | 'Working On It' | 'Delivered' | 'Need More Info';
 
 export interface ProjectGroupNeedPost {
   title: string;
@@ -209,7 +210,24 @@ export interface ProjectGroupNeedPost {
   status: 'Open' | 'In Progress' | 'Fulfilled';
   quantityLabel?: string;
   targetDate?: string;
-  requestedByRole: 'admin' | 'partner';
+  requestedByRole: 'admin' | 'partner' | 'volunteer';
+}
+
+export interface ProjectGroupScopeProposal {
+  title: string;
+  description: string;
+  included: string[]; // Included in scope
+  excluded: string[]; // Excluded from scope
+  timeline: string; // e.g., "Q1 2024" or "3 months"
+  resources: string; // Brief resource requirements
+  successCriteria: string; // How success will be measured
+  proposedByRole: 'admin' | 'partner';
+  proposedById: string; // User ID of proposer
+  status: 'Draft' | 'Proposed' | 'Under Review' | 'Approved' | 'Rejected';
+  approvalNotes?: string;
+  approvedBy?: string; // Admin ID who approved
+  approvedAt?: string; // When approved
+  rejectionReason?: string; // Reason for rejection
 }
 
 // Represents a message posted inside a project group chat.
@@ -219,8 +237,12 @@ export interface ProjectGroupMessage {
   senderId: string;
   content: string;
   timestamp: string;
-  kind?: ProjectGroupMessageKind;
+  kind?: ProjectGroupMessageKind | 'need-response';
   needPost?: ProjectGroupNeedPost;
+  scopeProposal?: ProjectGroupScopeProposal;
+  responseToMessageId?: string;
+  responseAction?: NeedResponseAction;
+  responseToTitle?: string;
   attachments?: string[]; // File URLs
 }
 

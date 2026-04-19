@@ -32,9 +32,11 @@ import {
 } from '../models/storage';
 import {
   Message,
+  NeedResponseAction,
   Project,
   ProjectGroupMessage,
   ProjectGroupNeedPost,
+  ProjectGroupScopeProposal,
   User,
   VolunteerProjectJoinRecord,
 } from '../models/types';
@@ -54,6 +56,14 @@ const NEED_CATEGORIES = [
 ] as const;
 const NEED_PRIORITIES: ProjectGroupNeedPost['priority'][] = ['High', 'Medium', 'Low'];
 const NEED_STATUSES: ProjectGroupNeedPost['status'][] = ['Open', 'In Progress', 'Fulfilled'];
+const NEED_RESPONSE_ACTIONS: NeedResponseAction[] = [
+  'Can Help',
+  'Working On It',
+  'Delivered',
+  'Need More Info',
+];
+
+const SCOPE_PROPOSAL_STATUSES = ['Draft', 'Proposed', 'Under Review', 'Approved', 'Rejected'] as const;
 
 type ConversationItem = {
   user: User;
@@ -76,6 +86,17 @@ type NeedPostDraft = {
   status: ProjectGroupNeedPost['status'];
   quantityLabel: string;
   targetDate: string;
+};
+
+type ScopeProposalDraft = {
+  title: string;
+  description: string;
+  included: string;
+  excluded: string;
+  timeline: string;
+  resources: string;
+  successCriteria: string;
+  status: 'Draft' | 'Proposed';
 };
 
 // Converts a user role into a label that is easier to read in chat lists.
@@ -215,6 +236,72 @@ function getPriorityPalette(priority: ProjectGroupNeedPost['priority']) {
   return { backgroundColor: '#dcfce7', textColor: '#166534' };
 }
 
+function getNeedResponsePalette(action: NeedResponseAction) {
+  switch (action) {
+    case 'Delivered':
+      return { backgroundColor: '#dcfce7', textColor: '#166534', icon: 'inventory-2' as const };
+    case 'Working On It':
+      return { backgroundColor: '#dbeafe', textColor: '#1d4ed8', icon: 'engineering' as const };
+    case 'Need More Info':
+      return { backgroundColor: '#fef3c7', textColor: '#b45309', icon: 'help-outline' as const };
+    default:
+      return { backgroundColor: '#ede9fe', textColor: '#6d28d9', icon: 'volunteer-activism' as const };
+  }
+}
+
+function buildNeedResponseSummary(
+  action: NeedResponseAction,
+  needTitle: string,
+  note: string
+): string {
+  const trimmedNote = note.trim();
+  const baseText =
+    action === 'Can Help'
+      ? `can help with "${needTitle}".`
+      : action === 'Working On It'
+      ? `is already working on "${needTitle}".`
+      : action === 'Delivered'
+      ? `marked "${needTitle}" as delivered.`
+      : `needs more information about "${needTitle}".`;
+
+  return trimmedNote ? `${baseText} ${trimmedNote}` : baseText;
+}
+
+// Creates the blank draft used by the scope proposal composer.
+function createScopeProposalDraft(): ScopeProposalDraft {
+  return {
+    title: '',
+    description: '',
+    included: '',
+    excluded: '',
+    timeline: '',
+    resources: '',
+    successCriteria: '',
+    status: 'Proposed',
+  };
+}
+
+// Summarizes a scope proposal into plain content for storage.
+function buildScopeProposalSummary(draft: ScopeProposalDraft): string {
+  return `Scope Proposal: ${draft.title.trim()} - Timeline: ${draft.timeline.trim()}`;
+}
+
+// Returns the status color palette for scope proposals.
+function getScopeProposalStatusPalette(status: string) {
+  switch (status) {
+    case 'Approved':
+      return { backgroundColor: '#dcfce7', textColor: '#166534', icon: 'check-circle' as const };
+    case 'Rejected':
+      return { backgroundColor: '#fee2e2', textColor: '#b91c1c', icon: 'cancel' as const };
+    case 'Under Review':
+      return { backgroundColor: '#fef3c7', textColor: '#b45309', icon: 'schedule' as const };
+    case 'Proposed':
+      return { backgroundColor: '#dbeafe', textColor: '#1d4ed8', icon: 'lightbulb' as const };
+    default:
+      return { backgroundColor: '#f3f4f6', textColor: '#6b7280', icon: 'edit' as const };
+  }
+}
+
 // Manages direct messages and project coordination group chats.
 export default function CommunicationHubScreen({ navigation, route }: any) {
   const { user } = useAuth();
@@ -232,8 +319,12 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   const [messageText, setMessageText] = useState('');
   const [searchText, setSearchText] = useState('');
   const [selectedAttachmentUri, setSelectedAttachmentUri] = useState<string | null>(null);
-  const [composerMode, setComposerMode] = useState<'message' | 'need-post'>('message');
+  const [composerMode, setComposerMode] = useState<'message' | 'need-post' | 'scope-proposal'>('message');
   const [needDraft, setNeedDraft] = useState<NeedPostDraft>(createNeedPostDraft);
+  const [selectedNeedMessageId, setSelectedNeedMessageId] = useState<string | null>(null);
+  const [selectedNeedResponseAction, setSelectedNeedResponseAction] = useState<NeedResponseAction>('Can Help');
+  const [scopeProposalDraft, setScopeProposalDraft] = useState<ScopeProposalDraft>(createScopeProposalDraft);
+  const [selectedScopeProposalId, setSelectedScopeProposalId] = useState<string | null>(null);
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
 
@@ -264,6 +355,9 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     setSelectedAttachmentUri(null);
     setComposerMode('message');
     setNeedDraft(createNeedPostDraft());
+    setScopeProposalDraft(createScopeProposalDraft());
+    setSelectedNeedMessageId(null);
+    setSelectedNeedResponseAction('Can Help');
   }, []);
 
   const showRequestAlert = useCallback(
@@ -646,6 +740,16 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     }
   };
 
+  const handleReplyToNeed = useCallback(
+    (needMessage: ProjectGroupMessage, action: NeedResponseAction = 'Can Help') => {
+      setComposerMode('message');
+      setSelectedNeedMessageId(needMessage.id);
+      setSelectedNeedResponseAction(action);
+      setMessageText('');
+    },
+    []
+  );
+
   // Sends a direct message, normal group message, or structured need post.
   const handleSendMessage = async () => {
     if (!user) {
@@ -693,9 +797,62 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         return;
       }
 
+      if (composerMode === 'scope-proposal') {
+        if (!selectedProjectChat) {
+          return;
+        }
+
+        // Only admins and partners can post scope proposals
+        if (!['admin', 'partner'].includes(user.role)) {
+          Alert.alert('Permission Denied', 'Only admins and partners can post scope proposals.');
+          return;
+        }
+
+        const title = scopeProposalDraft.title.trim();
+        const description = scopeProposalDraft.description.trim();
+        const included = scopeProposalDraft.included.trim();
+        const excluded = scopeProposalDraft.excluded.trim();
+        const timeline = scopeProposalDraft.timeline.trim();
+        const resources = scopeProposalDraft.resources.trim();
+        const successCriteria = scopeProposalDraft.successCriteria.trim();
+
+        if (!title || !description) {
+          Alert.alert('Scope details required', 'Add a title and description before posting this proposal.');
+          return;
+        }
+
+        const scopeProposal: ProjectGroupScopeProposal = {
+          title,
+          description,
+          included: included ? included.split('\n').filter(d => d.trim()) : [],
+          excluded: excluded ? excluded.split('\n').filter(d => d.trim()) : [],
+          timeline,
+          resources,
+          successCriteria,
+          proposedByRole: user.role as 'admin' | 'partner',
+          proposedById: user.id,
+          status: scopeProposalDraft.status as 'Draft' | 'Proposed',
+        };
+
+        const newMessage: ProjectGroupMessage = {
+          id: createMessageId(),
+          projectId: selectedProjectChat.project.id,
+          senderId: user.id,
+          content: buildScopeProposalSummary(scopeProposalDraft),
+          timestamp: new Date().toISOString(),
+          kind: 'scope-proposal',
+          scopeProposal,
+          attachments: selectedAttachmentUri ? [selectedAttachmentUri] : undefined,
+        };
+
+        setMessages(current => upsertChatMessage(current, newMessage));
+        await saveProjectGroupMessage(newMessage);
+        resetComposer();
+        return;
+      }
+
       if (composerMode === 'need-post') {
-        if (user.role !== 'admin' && user.role !== 'partner') {
-          Alert.alert('Not allowed', 'Only admin and partner accounts can post customized needs.');
+        if (!selectedProjectChat) {
           return;
         }
 
@@ -725,6 +882,37 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
           timestamp: new Date().toISOString(),
           kind: 'need-post',
           needPost,
+          attachments: selectedAttachmentUri ? [selectedAttachmentUri] : undefined,
+        };
+
+        setMessages(current => upsertChatMessage(current, newMessage));
+        await saveProjectGroupMessage(newMessage);
+        resetComposer();
+        return;
+      }
+
+      if (selectedNeedMessage) {
+        const linkedNeed = selectedNeedMessage.needPost;
+        if (!linkedNeed) {
+          Alert.alert('Need unavailable', 'This need no longer exists in the planning chat.');
+          setSelectedNeedMessageId(null);
+          return;
+        }
+
+        const newMessage: ProjectGroupMessage = {
+          id: createMessageId(),
+          projectId: selectedProjectChat.project.id,
+          senderId: user.id,
+          content: buildNeedResponseSummary(
+            selectedNeedResponseAction,
+            linkedNeed.title,
+            messageText
+          ),
+          timestamp: new Date().toISOString(),
+          kind: 'need-response',
+          responseToMessageId: selectedNeedMessage.id,
+          responseAction: selectedNeedResponseAction,
+          responseToTitle: linkedNeed.title,
           attachments: selectedAttachmentUri ? [selectedAttachmentUri] : undefined,
         };
 
@@ -789,9 +977,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     return allUsersRef.current.find(chatUser => chatUser.id === senderId)?.name || 'Community member';
   };
 
-  const detailCanPostNeeds = Boolean(
-    selectedProjectChat && (user?.role === 'admin' || user?.role === 'partner')
-  );
+  const detailCanPostNeeds = Boolean(selectedProjectChat);
 
   const selectedChatTitle = selectedUser?.name || selectedProjectChat?.project.title || '';
   const selectedChatSubtitle = selectedUser
@@ -863,8 +1049,66 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     user?.role === 'admin'
       ? 'Monitor every project and event conversation from one place.'
       : user?.role === 'partner'
-      ? 'Coordinate approved projects with admin and volunteers, then post your current needs in the group.'
-      : 'Stay updated with the programs you joined and coordinate with your team.';
+      ? 'Coordinate approved projects with admin and volunteers, then manage needs in one planning group chat.'
+      : 'Stay updated with the programs you joined, post needs, and coordinate with your team.';
+
+  const needPosts = useMemo(
+    () =>
+      selectedProjectChat
+        ? messages.filter(
+            message => (message as ProjectGroupMessage).kind === 'need-post'
+          ) as ProjectGroupMessage[]
+        : [],
+    [messages, selectedProjectChat]
+  );
+
+  const needResponses = useMemo(
+    () =>
+      selectedProjectChat
+        ? messages.filter(
+            message => (message as ProjectGroupMessage).kind === 'need-response'
+          ) as ProjectGroupMessage[]
+        : [],
+    [messages, selectedProjectChat]
+  );
+
+  const responsesByNeedId = useMemo(() => {
+    const map = new Map<string, ProjectGroupMessage[]>();
+
+    needResponses.forEach(message => {
+      const needId = message.responseToMessageId;
+      if (!needId) {
+        return;
+      }
+
+      const current = map.get(needId) || [];
+      current.push(message);
+      map.set(needId, current);
+    });
+
+    return map;
+  }, [needResponses]);
+
+  const activeNeedPosts = useMemo(
+    () =>
+      [...needPosts].sort(
+        (left, right) => new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime()
+      ),
+    [needPosts]
+  );
+
+  const planningMetrics = useMemo(() => {
+    const open = activeNeedPosts.filter(message => message.needPost?.status === 'Open').length;
+    const inProgress = activeNeedPosts.filter(message => message.needPost?.status === 'In Progress').length;
+    const fulfilled = activeNeedPosts.filter(message => message.needPost?.status === 'Fulfilled').length;
+
+    return { open, inProgress, fulfilled };
+  }, [activeNeedPosts]);
+
+  const selectedNeedMessage = useMemo(
+    () => activeNeedPosts.find(message => message.id === selectedNeedMessageId) || null,
+    [activeNeedPosts, selectedNeedMessageId]
+  );
 
   const showEmptyState =
     filteredProjectChats.length === 0 &&
@@ -941,6 +1185,86 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
             contentContainerStyle={styles.messagesContent}
             showsVerticalScrollIndicator={false}
           >
+            {selectedProjectChat ? (
+              <View style={styles.planningBoardCard}>
+                <View style={styles.planningBoardHeader}>
+                  <View style={styles.planningBoardCopy}>
+                    <Text style={styles.planningBoardTitle}>Planning Board</Text>
+                    <Text style={styles.planningBoardSubtitle}>
+                      Track open needs and respond without leaving the group chat.
+                    </Text>
+                  </View>
+                  <View style={styles.planningBoardBadge}>
+                    <MaterialIcons name="device-hub" size={16} color="#166534" />
+                    <Text style={styles.planningBoardBadgeText}>Shared with all joined users</Text>
+                  </View>
+                </View>
+
+                <View style={[styles.planningMetricsRow, !isMedium && styles.metricsRowStacked]}>
+                  <View style={styles.planningMetricCard}>
+                    <Text style={styles.planningMetricValue}>{planningMetrics.open}</Text>
+                    <Text style={styles.planningMetricLabel}>Open</Text>
+                  </View>
+                  <View style={styles.planningMetricCard}>
+                    <Text style={styles.planningMetricValue}>{planningMetrics.inProgress}</Text>
+                    <Text style={styles.planningMetricLabel}>In Progress</Text>
+                  </View>
+                  <View style={styles.planningMetricCard}>
+                    <Text style={styles.planningMetricValue}>{planningMetrics.fulfilled}</Text>
+                    <Text style={styles.planningMetricLabel}>Fulfilled</Text>
+                  </View>
+                </View>
+
+                {activeNeedPosts.length ? (
+                  <View style={styles.planningNeedList}>
+                    {activeNeedPosts.slice(0, 3).map(needMessage => {
+                      const linkedNeed = needMessage.needPost;
+                      if (!linkedNeed) {
+                        return null;
+                      }
+
+                      const responseCount = responsesByNeedId.get(needMessage.id)?.length || 0;
+                      const selected = selectedNeedMessageId === needMessage.id;
+
+                      return (
+                        <TouchableOpacity
+                          key={`planning-${needMessage.id}`}
+                          style={[styles.planningNeedCard, selected && styles.planningNeedCardActive]}
+                          activeOpacity={0.9}
+                          onPress={() => handleReplyToNeed(needMessage)}
+                        >
+                          <View style={styles.planningNeedTopRow}>
+                            <Text style={styles.planningNeedTitle} numberOfLines={1}>
+                              {linkedNeed.title}
+                            </Text>
+                            <Text style={styles.planningNeedStatus}>{linkedNeed.status}</Text>
+                          </View>
+                          <Text style={styles.planningNeedMeta}>
+                            {linkedNeed.category} • {linkedNeed.priority} priority
+                          </Text>
+                          <Text style={styles.planningNeedSummary} numberOfLines={2}>
+                            {linkedNeed.details}
+                          </Text>
+                          <View style={styles.planningNeedFooter}>
+                            <Text style={styles.planningNeedResponses}>
+                              {responseCount} response{responseCount === 1 ? '' : 's'}
+                            </Text>
+                            <Text style={styles.planningNeedAction}>
+                              {selected ? 'Ready to reply' : 'Tap to respond'}
+                            </Text>
+                          </View>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                ) : (
+                  <Text style={styles.planningEmptyText}>
+                    No planning needs have been posted yet. Start one from the composer below.
+                  </Text>
+                )}
+              </View>
+            ) : null}
+
             {messages.length === 0 ? (
               <View style={styles.emptyStateCard}>
                 <MaterialIcons
@@ -953,7 +1277,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                 </Text>
                 <Text style={styles.emptyStateText}>
                   {selectedProjectChat
-                    ? 'Start with a quick update or post a customized need card.'
+                    ? 'Start with a quick update, post a planning need, or respond to one already in the board.'
                     : 'Start the conversation with a short message.'}
                 </Text>
               </View>
@@ -964,6 +1288,12 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                 const senderLabel = getSenderLabel(message.senderId);
                 const imageAttachments = (message.attachments || []).filter(isImageMediaUri);
                 const needPost = groupMessage?.kind === 'need-post' ? groupMessage.needPost : undefined;
+                const scopeProposal = groupMessage?.kind === 'scope-proposal' ? groupMessage.scopeProposal : undefined;
+                const linkedResponses = groupMessage ? responsesByNeedId.get(groupMessage.id) || [] : [];
+                const responseTargetNeed =
+                  groupMessage?.kind === 'need-response' && groupMessage.responseToMessageId
+                    ? needPosts.find(needMessage => needMessage.id === groupMessage.responseToMessageId)?.needPost
+                    : null;
 
                 if (selectedProjectChat && needPost) {
                   const priorityPalette = getPriorityPalette(needPost.priority);
@@ -1011,9 +1341,20 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                         </View>
                         <View style={styles.needMetaPill}>
                           <Text style={styles.needMetaPillText}>
-                            {needPost.requestedByRole === 'admin' ? 'Admin request' : 'Partner request'}
+                            {needPost.requestedByRole === 'admin'
+                              ? 'Admin request'
+                              : needPost.requestedByRole === 'partner'
+                              ? 'Partner request'
+                              : 'Volunteer request'}
                           </Text>
                         </View>
+                        {linkedResponses.length ? (
+                          <View style={styles.needMetaPill}>
+                            <Text style={styles.needMetaPillText}>
+                              {linkedResponses.length} response{linkedResponses.length === 1 ? '' : 's'}
+                            </Text>
+                          </View>
+                        ) : null}
                       </View>
 
                       <Text style={[styles.needDetails, isOwnMessage && styles.needDetailsOwn]}>
@@ -1041,7 +1382,301 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                         />
                       ))}
 
+                      {linkedResponses.length ? (
+                        <View style={styles.needResponsePreviewWrap}>
+                          {linkedResponses.slice(0, 3).map(responseMessage => {
+                            const action = responseMessage.responseAction || 'Can Help';
+                            const palette = getNeedResponsePalette(action);
+                            return (
+                              <View key={responseMessage.id} style={styles.needResponsePreviewRow}>
+                                <View
+                                  style={[
+                                    styles.needResponsePreviewChip,
+                                    { backgroundColor: palette.backgroundColor },
+                                  ]}
+                                >
+                                  <MaterialIcons name={palette.icon} size={12} color={palette.textColor} />
+                                  <Text
+                                    style={[
+                                      styles.needResponsePreviewChipText,
+                                      { color: palette.textColor },
+                                    ]}
+                                  >
+                                    {action}
+                                  </Text>
+                                </View>
+                                <Text
+                                  numberOfLines={1}
+                                  style={[styles.needResponsePreviewText, isOwnMessage && styles.needResponsePreviewTextOwn]}
+                                >
+                                  {getSenderLabel(responseMessage.senderId)}
+                                </Text>
+                              </View>
+                            );
+                          })}
+                        </View>
+                      ) : null}
+
+                      <View style={styles.needActionRow}>
+                        {NEED_RESPONSE_ACTIONS.map(action => {
+                          const palette = getNeedResponsePalette(action);
+                          const actionSelected =
+                            selectedNeedMessageId === message.id && selectedNeedResponseAction === action;
+
+                          return (
+                            <TouchableOpacity
+                              key={`${message.id}-${action}`}
+                              style={[
+                                styles.needActionChip,
+                                { backgroundColor: actionSelected ? palette.backgroundColor : '#ffffff' },
+                              ]}
+                              onPress={() => {
+                                handleReplyToNeed(message as ProjectGroupMessage, action);
+                              }}
+                            >
+                              <MaterialIcons name={palette.icon} size={13} color={palette.textColor} />
+                              <Text style={[styles.needActionChipText, { color: palette.textColor }]}>
+                                {action}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+
                       <Text style={[styles.needTimestamp, isOwnMessage && styles.needTimestampOwn]}>
+                        {formatMessageTime(message.timestamp)}
+                      </Text>
+                    </View>
+                  );
+                }
+
+                if (selectedProjectChat && scopeProposal) {
+                  const statusPalette = getScopeProposalStatusPalette(scopeProposal.status);
+                  const isAdmin = user?.role === 'admin';
+                  const isProposer = message.senderId === user?.id;
+                  const canApprove = isAdmin && !isProposer && scopeProposal.status === 'Proposed';
+
+                  return (
+                    <View
+                      key={message.id}
+                      style={[
+                        styles.scopeProposalCard,
+                        isOwnMessage ? styles.scopeProposalCardOwn : styles.scopeProposalCardOther,
+                      ]}
+                    >
+                      <View style={styles.scopeProposalHeader}>
+                        <View style={styles.scopeProposalIconBg}>
+                          <MaterialIcons name="description" size={20} color="#ffffff" />
+                        </View>
+                        <View style={styles.scopeProposalHeaderCopy}>
+                          <Text style={styles.scopeProposalTitle}>
+                            {scopeProposal.title}
+                          </Text>
+                          <Text style={styles.scopeProposalSender}>
+                            {senderLabel}
+                          </Text>
+                        </View>
+
+                        <View
+                          style={[
+                            styles.scopeProposalStatusChip,
+                            { backgroundColor: statusPalette.backgroundColor },
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.scopeProposalStatusText,
+                              { color: statusPalette.textColor },
+                            ]}
+                          >
+                            {scopeProposal.status}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <Text style={styles.scopeProposalDescription}>
+                        {scopeProposal.description}
+                      </Text>
+
+                      {scopeProposal.included && scopeProposal.included.length > 0 ? (
+                        <View style={styles.scopeProposalSection}>
+                          <Text style={styles.scopeProposalSectionLabel}>Included:</Text>
+                          <View style={styles.scopeItemsList}>
+                            {scopeProposal.included.map((item, index) => (
+                              <View key={`included-${index}`} style={styles.scopeItem}>
+                                <MaterialIcons name="check-circle" size={18} color="#16a34a" />
+                                <Text style={styles.scopeItemText}>{item}</Text>
+                              </View>
+                            ))}
+                          </View>
+                        </View>
+                      ) : null}
+
+                      {scopeProposal.excluded && scopeProposal.excluded.length > 0 ? (
+                        <View style={styles.scopeProposalSection}>
+                          <Text style={styles.scopeProposalSectionLabel}>Excluded:</Text>
+                          <View style={styles.scopeItemsList}>
+                            {scopeProposal.excluded.map((item, index) => (
+                              <View key={`excluded-${index}`} style={styles.scopeItem}>
+                                <MaterialIcons name="cancel" size={18} color="#dc2626" />
+                                <Text style={styles.scopeItemTextExcluded}>{item}</Text>
+                              </View>
+                            ))}
+                          </View>
+                        </View>
+                      ) : null}
+
+                      {scopeProposal.timeline || scopeProposal.resources ? (
+                        <View style={styles.scopeMetaSection}>
+                          {scopeProposal.timeline ? (
+                            <View style={styles.scopeMetaItem}>
+                              <Text style={styles.scopeMetaLabel}>Timeline:</Text>
+                              <Text style={styles.scopeMetaValue}>{scopeProposal.timeline}</Text>
+                            </View>
+                          ) : null}
+                          {scopeProposal.resources ? (
+                            <View style={styles.scopeMetaItem}>
+                              <Text style={styles.scopeMetaLabel}>Resources:</Text>
+                              <Text style={styles.scopeMetaValue}>{scopeProposal.resources}</Text>
+                            </View>
+                          ) : null}
+                        </View>
+                      ) : null}
+
+                      {scopeProposal.successCriteria ? (
+                        <View style={styles.scopeProposalSection}>
+                          <Text style={styles.scopeProposalSectionLabel}>Success Criteria:</Text>
+                          <Text style={styles.scopeProposalDescription}>{scopeProposal.successCriteria}</Text>
+                        </View>
+                      ) : null}
+
+                      {scopeProposal.approvedBy && scopeProposal.approvedAt ? (
+                        <View style={styles.approvalBadge}>
+                          <MaterialIcons name="check-circle" size={16} color="#16a34a" />
+                          <Text style={styles.approvalBadgeText}>
+                            Approved on {formatDateLabel(scopeProposal.approvedAt)}
+                          </Text>
+                        </View>
+                      ) : null}
+
+                      {canApprove ? (
+                        <View style={styles.scopeProposalActions}>
+                          <TouchableOpacity 
+                            style={styles.approveButton}
+                            onPress={() => {
+                              const updatedMessage: ProjectGroupMessage = {
+                                ...message,
+                                scopeProposal: {
+                                  ...scopeProposal,
+                                  status: 'Approved',
+                                  approvedBy: user?.id,
+                                  approvedAt: new Date().toISOString(),
+                                },
+                              };
+                              setMessages(current => upsertChatMessage(current, updatedMessage));
+                              void saveProjectGroupMessage(updatedMessage);
+                            }}
+                          >
+                            <MaterialIcons name="check-circle" size={16} color="#ffffff" />
+                            <Text style={styles.approveButtonText}>Approve Scope</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity 
+                            style={styles.editButton}
+                            onPress={() => {
+                              Alert.alert('Edit Proposal', 'Partners can edit and repost their proposal.');
+                            }}
+                          >
+                            <MaterialIcons name="edit" size={16} color="#1d4ed8" />
+                            <Text style={styles.editButtonText}>Edit</Text>
+                          </TouchableOpacity>
+                        </View>
+                      ) : null}
+
+                      {imageAttachments.map((attachmentUri, index) => (
+                        <Image
+                          key={`${message.id}-attachment-${index}`}
+                          source={{ uri: attachmentUri }}
+                          style={styles.messageAttachment}
+                          resizeMode="cover"
+                        />
+                      ))}
+
+                      <Text style={styles.scopeProposalTimestamp}>
+                        {formatMessageTime(message.timestamp)}
+                      </Text>
+                    </View>
+                  );
+                }
+
+                if (selectedProjectChat && groupMessage?.kind === 'need-response') {
+                  const action = groupMessage.responseAction || 'Can Help';
+                  const palette = getNeedResponsePalette(action);
+
+                  return (
+                    <View
+                      key={message.id}
+                      style={[
+                        styles.responseCard,
+                        isOwnMessage ? styles.responseCardOwn : styles.responseCardOther,
+                      ]}
+                    >
+                      <View style={styles.responseTopRow}>
+                        <Text style={[styles.messageSender, isOwnMessage && styles.messageSenderOwn]}>
+                          {senderLabel}
+                        </Text>
+                        <View
+                          style={[
+                            styles.responseActionChip,
+                            { backgroundColor: palette.backgroundColor },
+                          ]}
+                        >
+                          <MaterialIcons name={palette.icon} size={12} color={palette.textColor} />
+                          <Text style={[styles.responseActionChipText, { color: palette.textColor }]}>
+                            {action}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <View
+                        style={[
+                          styles.responseLinkedCard,
+                          isOwnMessage ? styles.responseLinkedCardOwn : styles.responseLinkedCardOther,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.responseLinkedLabel,
+                            isOwnMessage ? styles.responseLinkedLabelOwn : styles.responseLinkedLabelOther,
+                          ]}
+                        >
+                          Linked need
+                        </Text>
+                        <Text
+                          style={[
+                            styles.responseLinkedTitle,
+                            isOwnMessage ? styles.responseLinkedTitleOwn : styles.responseLinkedTitleOther,
+                          ]}
+                        >
+                          {groupMessage.responseToTitle || responseTargetNeed?.title || 'Planning need'}
+                        </Text>
+                      </View>
+
+                      {imageAttachments.map((attachmentUri, index) => (
+                        <Image
+                          key={`${message.id}-attachment-${index}`}
+                          source={{ uri: attachmentUri }}
+                          style={styles.messageAttachment}
+                          resizeMode="cover"
+                        />
+                      ))}
+
+                      {message.content?.trim() ? (
+                        <Text style={[styles.messageText, isOwnMessage && styles.messageTextOwn]}>
+                          {message.content}
+                        </Text>
+                      ) : null}
+
+                      <Text style={[styles.messageTime, isOwnMessage && styles.messageTimeOwn]}>
                         {formatMessageTime(message.timestamp)}
                       </Text>
                     </View>
@@ -1132,14 +1767,38 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                     Needs card
                   </Text>
                 </TouchableOpacity>
+
+                {['admin', 'partner'].includes(user?.role || '') ? (
+                  <TouchableOpacity
+                    style={[
+                      styles.modeToggleButton,
+                      composerMode === 'scope-proposal' && styles.modeToggleButtonActive,
+                    ]}
+                    onPress={() => setComposerMode('scope-proposal')}
+                  >
+                    <MaterialIcons
+                      name="description"
+                      size={16}
+                      color={composerMode === 'scope-proposal' ? '#ffffff' : '#166534'}
+                    />
+                    <Text
+                      style={[
+                        styles.modeToggleText,
+                        composerMode === 'scope-proposal' && styles.modeToggleTextActive,
+                      ]}
+                    >
+                      Scope proposal
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
               </View>
             ) : null}
 
             {detailCanPostNeeds && composerMode === 'need-post' ? (
               <View style={styles.needComposerCard}>
-                <Text style={styles.needComposerTitle}>Post a customized need in this group</Text>
+                <Text style={styles.needComposerTitle}>Post a planning need in this group</Text>
                 <Text style={styles.needComposerSubtitle}>
-                  Share exactly what the admin office or partner organization needs so everyone in the chat can respond quickly.
+                  Share exactly what the team needs so volunteers, partners, and admins can coordinate around one clear request.
                 </Text>
 
                 <TextInput
@@ -1247,6 +1906,106 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
               </View>
             ) : null}
 
+            {detailCanPostNeeds && composerMode === 'scope-proposal' && ['admin', 'partner'].includes(user?.role || '') ? (
+              <ScrollView style={styles.scopeProposalComposerCard} showsVerticalScrollIndicator={false} contentContainerStyle={styles.scopeProposalComposerContent}>
+                <View style={styles.scopeProposalComposerHeader}>
+                  <View style={styles.scopeProposalComposerHeaderIcon}>
+                    <MaterialIcons name="edit-note" size={20} color="#1d4ed8" />
+                  </View>
+                  <View style={styles.scopeProposalComposerHeaderCopy}>
+                    <Text style={styles.scopeProposalComposerTitle}>Propose a project scope</Text>
+                    <Text style={styles.scopeProposalComposerSubtitle}>
+                      Define goals, deliverables, and success criteria for this project.
+                    </Text>
+                  </View>
+                </View>
+
+                <TextInput
+                  value={scopeProposalDraft.title}
+                  onChangeText={value => setScopeProposalDraft(current => ({ ...current, title: value }))}
+                  placeholder="Proposal title"
+                  placeholderTextColor="#94a3b8"
+                  style={styles.composerInput}
+                />
+
+                <TextInput
+                  value={scopeProposalDraft.description}
+                  onChangeText={value => setScopeProposalDraft(current => ({ ...current, description: value }))}
+                  placeholder="Describe the scope and project overview"
+                  placeholderTextColor="#94a3b8"
+                  style={[styles.composerInput, styles.composerTextArea]}
+                  multiline
+                />
+
+                <TextInput
+                  value={scopeProposalDraft.included}
+                  onChangeText={value => setScopeProposalDraft(current => ({ ...current, included: value }))}
+                  placeholder="Included in scope (one item per line)"
+                  placeholderTextColor="#94a3b8"
+                  style={[styles.composerInput, styles.composerTextArea]}
+                  multiline
+                />
+
+                <TextInput
+                  value={scopeProposalDraft.excluded}
+                  onChangeText={value => setScopeProposalDraft(current => ({ ...current, excluded: value }))}
+                  placeholder="Excluded from scope (one item per line)"
+                  placeholderTextColor="#94a3b8"
+                  style={[styles.composerInput, styles.composerTextArea]}
+                  multiline
+                />
+
+                <View style={[styles.dualInputRow, !isMedium && styles.dualInputRowStacked]}>
+                  <TextInput
+                    value={scopeProposalDraft.timeline}
+                    onChangeText={value => setScopeProposalDraft(current => ({ ...current, timeline: value }))}
+                    placeholder="Timeline (e.g., 3 months, Q1 2024)"
+                    placeholderTextColor="#94a3b8"
+                    style={[styles.composerInput, styles.dualInputField]}
+                  />
+                  <TextInput
+                    value={scopeProposalDraft.resources}
+                    onChangeText={value => setScopeProposalDraft(current => ({ ...current, resources: value }))}
+                    placeholder="Resource requirements"
+                    placeholderTextColor="#94a3b8"
+                    style={[styles.composerInput, styles.dualInputField]}
+                  />
+                </View>
+
+                <TextInput
+                  value={scopeProposalDraft.successCriteria}
+                  onChangeText={value => setScopeProposalDraft(current => ({ ...current, successCriteria: value }))}
+                  placeholder="How will success be measured?"
+                  placeholderTextColor="#94a3b8"
+                  style={[styles.composerInput, styles.composerTextArea]}
+                  multiline
+                />
+
+                <Text style={styles.chipGroupLabel}>Status</Text>
+                <View style={styles.chipWrap}>
+                  {(['Draft', 'Proposed'] as const).map(status => (
+                    <TouchableOpacity
+                      key={status}
+                      style={[
+                        styles.choiceChip,
+                        scopeProposalDraft.status === status && styles.choiceChipActive,
+                      ]}
+                      onPress={() => setScopeProposalDraft(current => ({ ...current, status }))}
+                    >
+                      <Text
+                        style={[
+                          styles.choiceChipText,
+                          scopeProposalDraft.status === status && styles.choiceChipTextActive,
+                        ]}
+                      >
+                        {status}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </ScrollView>
+            ) : null}
+
             {selectedAttachmentUri ? (
               <View style={styles.attachmentPreviewCard}>
                 <Image source={{ uri: selectedAttachmentUri }} style={styles.attachmentPreviewImage} />
@@ -1259,23 +2018,76 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
               </View>
             ) : null}
 
+            {selectedNeedMessage && composerMode === 'message' ? (
+              <View style={styles.replyBanner}>
+                <View style={styles.replyBannerTopRow}>
+                  <View style={styles.replyBannerCopy}>
+                    <Text style={styles.replyBannerLabel}>Responding to need</Text>
+                    <Text style={styles.replyBannerTitle} numberOfLines={1}>
+                      {selectedNeedMessage.needPost?.title || selectedNeedMessage.responseToTitle || 'Planning need'}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.replyBannerDismiss}
+                    onPress={() => {
+                      setSelectedNeedMessageId(null);
+                      setSelectedNeedResponseAction('Can Help');
+                    }}
+                  >
+                    <MaterialIcons name="close" size={16} color="#166534" />
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.replyActionRow}>
+                  {NEED_RESPONSE_ACTIONS.map(action => {
+                    const palette = getNeedResponsePalette(action);
+                    const selected = selectedNeedResponseAction === action;
+
+                    return (
+                      <TouchableOpacity
+                        key={`reply-${action}`}
+                        style={[
+                          styles.replyActionChip,
+                          selected && { backgroundColor: palette.backgroundColor, borderColor: palette.backgroundColor },
+                        ]}
+                        onPress={() => setSelectedNeedResponseAction(action)}
+                      >
+                        <MaterialIcons name={palette.icon} size={13} color={palette.textColor} />
+                        <Text style={[styles.replyActionChipText, { color: palette.textColor }]}>
+                          {action}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            ) : null}
+
             <View style={[styles.inputRow, !isMedium && styles.inputRowStacked]}>
               <TouchableOpacity style={styles.attachmentButton} onPress={handlePickAttachment}>
                 <MaterialIcons name="photo-library" size={18} color="#166534" />
               </TouchableOpacity>
 
-              {composerMode === 'need-post' && detailCanPostNeeds ? (
+              {(composerMode === 'need-post' || composerMode === 'scope-proposal') && detailCanPostNeeds ? (
                 <View style={styles.inlineHintBox}>
-                  <Text style={styles.inlineHintTitle}>Needs card ready</Text>
+                  <Text style={styles.inlineHintTitle}>
+                    {composerMode === 'scope-proposal' ? 'Scope proposal ready' : 'Needs card ready'}
+                  </Text>
                   <Text style={styles.inlineHintText}>
-                    Post this as a structured request so admins and partner orgs can coordinate around one clear need.
+                    {composerMode === 'scope-proposal'
+                      ? 'Post this proposal so the team can review and align on project goals.'
+                      : 'Post this as a structured request so everyone in the group can coordinate around one clear need.'}
                   </Text>
                 </View>
               ) : (
                 <TextInput
                   style={styles.messageInput}
                   placeholder={
-                    selectedProjectChat ? 'Share an update with this group...' : 'Type a message...'
+                    selectedNeedMessage
+                      ? 'Add a short update or note for this need...'
+                      : selectedProjectChat
+                      ? 'Share an update with this group...'
+                      : 'Type a message...'
                   }
                   placeholderTextColor="#94a3b8"
                   value={messageText}
@@ -1286,12 +2098,12 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
               <TouchableOpacity style={styles.sendButton} onPress={handleSendMessage}>
                 <MaterialIcons
-                  name={composerMode === 'need-post' ? 'campaign' : 'send'}
+                  name={composerMode === 'scope-proposal' ? 'description' : composerMode === 'need-post' ? 'campaign' : selectedNeedMessage ? 'assignment-turned-in' : 'send'}
                   size={18}
                   color="#ffffff"
                 />
                 <Text style={styles.sendButtonText}>
-                  {composerMode === 'need-post' ? 'Post Need' : 'Send'}
+                  {composerMode === 'scope-proposal' ? 'Post Proposal' : composerMode === 'need-post' ? 'Post Need' : selectedNeedMessage ? 'Post Response' : 'Send'}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -1515,21 +2327,21 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                     <View>
                       <Text style={styles.sectionTitle}>Hub tips</Text>
                       <Text style={styles.sectionDescription}>
-                        Keep project coordination clear for admins, partners, and volunteers.
+                        Use project group chats, respond to needs, and keep conversations moving.
                       </Text>
                     </View>
                   </View>
 
                   <View style={styles.tipCard}>
                     <MaterialIcons name="campaign" size={18} color="#166534" />
-                    <Text style={styles.tipText}>
-                      Admin and partner users can post structured needs cards inside project group chats.
+                      <Text style={styles.tipText}>
+                      Use project group chats like planning rooms: admins, partners, and joined volunteers can all post structured needs.
                     </Text>
                   </View>
                   <View style={styles.tipCard}>
                     <MaterialIcons name="forum" size={18} color="#166534" />
                     <Text style={styles.tipText}>
-                      Use direct conversations for approvals and private follow-ups, then move shared needs back into the group.
+                      Respond to a need directly from the planning board so the whole team can see who is helping.
                     </Text>
                   </View>
                   <View style={styles.tipCard}>
@@ -1889,26 +2701,31 @@ const styles = StyleSheet.create({
   },
   detailShell: {
     flex: 1,
-    padding: 20,
-    gap: 16,
+    padding: 16,
+    gap: 14,
+    backgroundColor: '#f8fafc',
   },
   detailHero: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 16,
-    backgroundColor: '#ffffff',
-    borderRadius: 26,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: '#dbe7d5',
+    backgroundColor: '#1e3a8a',
+    borderRadius: 16,
+    padding: 24,
+    borderWidth: 0,
+    shadowColor: '#1e3a8a',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 4,
   },
   backButton: {
     width: 44,
     height: 44,
-    borderRadius: 14,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#f1f5f9',
+    backgroundColor: '#3b82f6',
   },
   detailHeroCopy: {
     flex: 1,
@@ -1916,42 +2733,170 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   detailEyebrow: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
-    letterSpacing: 1,
+    letterSpacing: 1.2,
     textTransform: 'uppercase',
-    color: '#0f766e',
+    color: '#93c5fd',
   },
   detailTitle: {
-    fontSize: 24,
+    fontSize: 26,
     fontWeight: '800',
-    color: '#0f172a',
+    color: '#ffffff',
   },
   detailSubtitle: {
     fontSize: 14,
     lineHeight: 20,
-    color: '#64748b',
+    color: '#dbeafe',
   },
   detailBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 999,
-    backgroundColor: '#dcfce7',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#dbeafe',
   },
   detailBadgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#1e3a8a',
+  },
+  planningBoardCard: {
+    borderRadius: 16,
+    padding: 20,
+    backgroundColor: '#f0f9ff',
+    borderWidth: 2,
+    borderColor: '#bfdbfe',
+    gap: 16,
+  },
+  planningBoardHeader: {
+    gap: 12,
+  },
+  planningBoardCopy: {
+    gap: 4,
+  },
+  planningBoardTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#1e3a8a',
+  },
+  planningBoardSubtitle: {
     fontSize: 13,
+    lineHeight: 19,
+    color: '#1e40af',
+    fontWeight: '500',
+  },
+  planningBoardBadge: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: '#2563eb',
+  },
+  planningBoardBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  planningMetricsRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  planningMetricCard: {
+    flex: 1,
+    borderRadius: 18,
+    padding: 14,
+    backgroundColor: '#f8fff7',
+    borderWidth: 1,
+    borderColor: '#d7ead8',
+  },
+  planningMetricValue: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  planningMetricLabel: {
+    marginTop: 4,
+    fontSize: 12,
     fontWeight: '700',
     color: '#166534',
   },
+  planningNeedList: {
+    gap: 10,
+  },
+  planningNeedCard: {
+    borderRadius: 18,
+    padding: 14,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#dbe7d5',
+    gap: 8,
+  },
+  planningNeedCardActive: {
+    borderColor: '#166534',
+    backgroundColor: '#effcf3',
+  },
+  planningNeedTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  planningNeedTitle: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  planningNeedStatus: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#166534',
+    textTransform: 'uppercase',
+  },
+  planningNeedMeta: {
+    fontSize: 12,
+    color: '#166534',
+    fontWeight: '700',
+  },
+  planningNeedSummary: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#475569',
+  },
+  planningNeedFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  planningNeedResponses: {
+    fontSize: 12,
+    color: '#64748b',
+  },
+  planningNeedAction: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#166534',
+  },
+  planningEmptyText: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#64748b',
+  },
   messagesScroll: {
     flex: 1,
+    backgroundColor: '#f8fafc',
   },
   messagesContent: {
-    paddingBottom: 12,
-    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    paddingBottom: 24,
+    gap: 14,
   },
   messageBubble: {
     maxWidth: '86%',
@@ -2096,18 +3041,137 @@ const styles = StyleSheet.create({
   needTimestampOwn: {
     color: '#99f6e4',
   },
-  composerShell: {
-    backgroundColor: '#ffffff',
-    borderRadius: 26,
+  needResponsePreviewWrap: {
+    gap: 6,
+  },
+  needResponsePreviewRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  needResponsePreviewChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  needResponsePreviewChipText: {
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  needResponsePreviewText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#475569',
+  },
+  needResponsePreviewTextOwn: {
+    color: '#d5f5ef',
+  },
+  needActionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  needActionChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
     borderWidth: 1,
     borderColor: '#dbe7d5',
-    padding: 18,
-    gap: 14,
+  },
+  needActionChipText: {
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  responseCard: {
+    maxWidth: '88%',
+    borderRadius: 20,
+    padding: 16,
+    gap: 10,
+  },
+  responseCardOther: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#d8e7d7',
+  },
+  responseCardOwn: {
+    alignSelf: 'flex-end',
+    backgroundColor: '#14532d',
+  },
+  responseTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  responseActionChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  responseActionChipText: {
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  responseLinkedCard: {
+    borderRadius: 14,
+    padding: 12,
+  },
+  responseLinkedCardOther: {
+    backgroundColor: '#effcf3',
+  },
+  responseLinkedCardOwn: {
+    backgroundColor: 'rgba(255,255,255,0.16)',
+  },
+  responseLinkedLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  responseLinkedLabelOther: {
+    color: '#166534',
+  },
+  responseLinkedLabelOwn: {
+    color: '#bbf7d0',
+  },
+  responseLinkedTitle: {
+    marginTop: 4,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  responseLinkedTitleOther: {
+    color: '#0f172a',
+  },
+  responseLinkedTitleOwn: {
+    color: '#ffffff',
+  },
+  composerShell: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: '#bfdbfe',
+    padding: 20,
+    gap: 16,
+    shadowColor: '#1e3a8a',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 2,
   },
   modeToggleRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 10,
+    gap: 12,
   },
   modeToggleButton: {
     flexDirection: 'row',
@@ -2115,54 +3179,55 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingHorizontal: 14,
     paddingVertical: 10,
-    borderRadius: 999,
-    backgroundColor: '#ecfdf5',
-    borderWidth: 1,
-    borderColor: '#bbf7d0',
+    borderRadius: 8,
+    backgroundColor: '#f0f9ff',
+    borderWidth: 2,
+    borderColor: '#bfdbfe',
   },
   modeToggleButtonActive: {
-    backgroundColor: '#166534',
-    borderColor: '#166534',
+    backgroundColor: '#2563eb',
+    borderColor: '#2563eb',
   },
   modeToggleText: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#166534',
+    color: '#1e40af',
   },
   modeToggleTextActive: {
     color: '#ffffff',
   },
   needComposerCard: {
-    borderRadius: 22,
-    backgroundColor: '#f8fff7',
-    borderWidth: 1,
-    borderColor: '#d7ead8',
-    padding: 16,
-    gap: 12,
+    borderRadius: 14,
+    backgroundColor: '#f0f9ff',
+    borderWidth: 2,
+    borderColor: '#bfdbfe',
+    padding: 18,
+    gap: 14,
   },
   needComposerTitle: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '800',
-    color: '#0f172a',
+    color: '#1e3a8a',
   },
   needComposerSubtitle: {
     fontSize: 13,
     lineHeight: 19,
-    color: '#64748b',
+    color: '#1e40af',
+    fontWeight: '500',
   },
   composerInput: {
     width: '100%',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#d4ddd7',
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: '#dbeafe',
     backgroundColor: '#ffffff',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 13,
     color: '#0f172a',
   },
   composerTextArea: {
-    minHeight: 96,
+    minHeight: 60,
     textAlignVertical: 'top',
   },
   dualInputRow: {
@@ -2176,11 +3241,11 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   chipGroupLabel: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
     letterSpacing: 0.8,
     textTransform: 'uppercase',
-    color: '#166534',
+    color: '#1e3a8a',
   },
   chipWrap: {
     flexDirection: 'row',
@@ -2190,14 +3255,14 @@ const styles = StyleSheet.create({
   choiceChip: {
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#cbd5cf',
+    borderRadius: 6,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1.5,
+    borderColor: '#bfdbfe',
   },
   choiceChipActive: {
-    backgroundColor: '#166534',
-    borderColor: '#166534',
+    backgroundColor: '#2563eb',
+    borderColor: '#2563eb',
   },
   choiceChipText: {
     fontSize: 13,
@@ -2281,6 +3346,64 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     color: '#475569',
   },
+  replyBanner: {
+    borderRadius: 18,
+    padding: 14,
+    backgroundColor: '#f8fff7',
+    borderWidth: 1,
+    borderColor: '#d7ead8',
+    gap: 12,
+  },
+  replyBannerTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  replyBannerCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  replyBannerLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    color: '#166534',
+  },
+  replyBannerTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  replyBannerDismiss: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#dcfce7',
+  },
+  replyActionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  replyActionChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#cbd5cf',
+    backgroundColor: '#ffffff',
+  },
+  replyActionChipText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
   sendButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2295,5 +3418,322 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
     color: '#ffffff',
+  },
+  scopeProposalComposerCard: {
+    borderRadius: 14,
+    backgroundColor: '#f0f9ff',
+    borderWidth: 2,
+    borderColor: '#bfdbfe',
+    maxHeight: 280,
+  },
+  scopeProposalComposerContent: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 10,
+  },
+  scopeProposalComposerHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  scopeProposalComposerHeaderIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#dbeafe',
+  },
+  scopeProposalComposerHeaderCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  scopeProposalComposerTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  scopeProposalComposerSubtitle: {
+    fontSize: 11,
+    lineHeight: 16,
+    color: '#64748b',
+  },
+  scopeProposalCard: {
+    maxWidth: '92%',
+    borderRadius: 22,
+    padding: 16,
+    gap: 12,
+  },
+  scopeProposalCardOther: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#f0f9ff',
+    borderWidth: 1,
+    borderColor: '#cfe2f3',
+  },
+  scopeProposalCardOwn: {
+    alignSelf: 'flex-end',
+    backgroundColor: '#1e3a8a',
+  },
+  scopeProposalHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  scopeProposalHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  scopeProposalSender: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#1d4ed8',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  scopeProposalSenderOwn: {
+    color: '#93c5fd',
+  },
+  scopeProposalTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  scopeProposalTitleOwn: {
+    color: '#ffffff',
+  },
+  scopeProposalStatusChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+  },
+  scopeProposalStatusText: {
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  scopeProposalDescription: {
+    fontSize: 14,
+    lineHeight: 21,
+    color: '#1e293b',
+  },
+  scopeProposalDescriptionOwn: {
+    color: '#ecfdf5',
+  },
+  scopeProposalSection: {
+    gap: 8,
+  },
+  scopeProposalSectionTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  scopeProposalSectionTitleOwn: {
+    color: '#ffffff',
+  },
+  deliverablesList: {
+    gap: 8,
+  },
+  deliverableItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  deliverableBullet: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#3b82f6',
+    marginTop: 8,
+    flexShrink: 0,
+  },
+  deliverableText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 20,
+    color: '#334155',
+  },
+  deliverableTextOwn: {
+    color: '#e0e7ff',
+  },
+  scopeProposalMetaRow: {
+    flexDirection: 'row',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  scopeProposalMetaRowStacked: {
+    flexDirection: 'column',
+  },
+  scopeProposalMetaPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.8)',
+  },
+  scopeProposalMetaPillText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  scopeProposalLinkedCard: {
+    borderRadius: 14,
+    padding: 12,
+  },
+  scopeProposalLinkedCardOther: {
+    backgroundColor: '#dbeafe',
+  },
+  scopeProposalLinkedCardOwn: {
+    backgroundColor: 'rgba(255,255,255,0.16)',
+  },
+  scopeProposalLinkedLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  scopeProposalLinkedLabelOther: {
+    color: '#1d4ed8',
+  },
+  scopeProposalLinkedLabelOwn: {
+    color: '#93c5fd',
+  },
+  scopeProposalLinkedText: {
+    marginTop: 4,
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: '600',
+  },
+  scopeProposalLinkedTextOther: {
+    color: '#0f172a',
+  },
+  scopeProposalLinkedTextOwn: {
+    color: '#ffffff',
+  },
+  scopeProposalTimestamp: {
+    fontSize: 11,
+    color: '#64748b',
+  },
+  scopeProposalTimestampOwn: {
+    color: '#93c5fd',
+  },
+  scopeProposalIconBg: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: '#a78bfa',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  scopeItemsList: {
+    gap: 8,
+    marginTop: 8,
+  },
+  scopeItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  scopeItemText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#0f172a',
+    fontWeight: '500',
+  },
+  scopeItemTextExcluded: {
+    flex: 1,
+    fontSize: 14,
+    color: '#dc2626',
+    fontWeight: '500',
+    textDecorationLine: 'line-through',
+  },
+  scopeProposalSectionLabel: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#0f172a',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  scopeMetaSection: {
+    gap: 8,
+    paddingTop: 8,
+  },
+  scopeMetaItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+  },
+  scopeMetaLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#64748b',
+  },
+  scopeMetaValue: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#0f172a',
+  },
+  scopeProposalActions: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+  },
+  approveButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    backgroundColor: '#2563eb',
+  },
+  approveButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  editButton: {
+    flex: 0.5,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: '#f3f4f6',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  editButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#1d4ed8',
+  },
+  approvalBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#dcfce7',
+    marginTop: 8,
+  },
+  approvalBadgeText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#166534',
   },
 });

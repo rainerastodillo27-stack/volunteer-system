@@ -7,6 +7,7 @@ import AppLogo from '../components/AppLogo';
 import ScreenBrandHeader from '../components/ScreenBrandHeader';
 import DashboardScreen from '../screens/DashboardScreen';
 import PartnerDashboardScreen from '../screens/PartnerDashboardScreen';
+import VolunteerDashboardScreen from '../screens/VolunteerDashboardScreen';
 import ProjectsScreen from '../screens/ProjectsScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import SystemSettingsScreen from '../screens/SystemSettingsScreen';
@@ -241,7 +242,12 @@ export default function TabNavigator() {
       : user?.role === 'volunteer'
       ? 'Volunteer Dashboard'
       : 'Admin Dashboard';
-  const dashboardComponent = user?.role === 'partner' ? PartnerDashboardScreen : DashboardScreen;
+  const dashboardComponent =
+    user?.role === 'partner'
+      ? PartnerDashboardScreen
+      : user?.role === 'volunteer'
+      ? VolunteerDashboardScreen
+      : DashboardScreen;
   const projectWorkspaceComponent = isAdmin ? ProjectLifecycleScreen : ProjectsScreen;
   const projectWorkspaceTitle = isAdmin ? 'Project Suite' : 'Projects';
   const isWeb = Platform.OS === 'web';

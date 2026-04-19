@@ -110,6 +110,9 @@ class ProjectGroupMessagePayload(BaseModel):
     timestamp: str
     kind: str | None = None
     needPost: dict[str, Any] | None = None
+    responseToMessageId: str | None = None
+    responseAction: str | None = None
+    responseToTitle: str | None = None
     attachments: list[str] | None = None
 
 
@@ -242,6 +245,9 @@ def ensure_project_group_message_storage() -> None:
                   timestamp timestamptz not null,
                   kind text not null default 'message',
                   need_post jsonb,
+                  response_to_message_id text,
+                  response_action text,
+                  response_to_title text,
                   attachments jsonb not null default '[]'::jsonb
                 )
                 """
@@ -251,6 +257,15 @@ def ensure_project_group_message_storage() -> None:
             )
             cursor.execute(
                 "alter table project_group_messages add column if not exists need_post jsonb"
+            )
+            cursor.execute(
+                "alter table project_group_messages add column if not exists response_to_message_id text"
+            )
+            cursor.execute(
+                "alter table project_group_messages add column if not exists response_action text"
+            )
+            cursor.execute(
+                "alter table project_group_messages add column if not exists response_to_title text"
             )
             cursor.execute(
                 "update project_group_messages set kind = 'message' where kind is null"
@@ -303,6 +318,9 @@ def serialize_project_group_message_row(row: Any) -> dict[str, Any]:
         "timestamp": row["timestamp"].isoformat() if hasattr(row["timestamp"], "isoformat") else row["timestamp"],
         "kind": row.get("kind") or "message",
         "needPost": need_post,
+        "responseToMessageId": row.get("response_to_message_id"),
+        "responseAction": row.get("response_action"),
+        "responseToTitle": row.get("response_to_title"),
         "attachments": attachments,
     }
 
@@ -1276,7 +1294,18 @@ def get_project_group_messages(project_id: str, user_id: str) -> dict[str, list[
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 """
-                select project_group_messages_id, project_id, sender_id, content, timestamp, kind, need_post, attachments
+                select
+                  project_group_messages_id,
+                  project_id,
+                  sender_id,
+                  content,
+                  timestamp,
+                  kind,
+                  need_post,
+                  response_to_message_id,
+                  response_action,
+                  response_to_title,
+                  attachments
                 from project_group_messages
                 where project_id = %s
                 order by timestamp asc
@@ -1333,7 +1362,7 @@ async def create_project_group_message(
     ensure_project_group_message_storage()
     attachments = payload.attachments or []
     message_kind = str(payload.kind or "message").strip() or "message"
-    if message_kind not in {"message", "need-post"}:
+    if message_kind not in {"message", "need-post", "need-response"}:
         raise HTTPException(status_code=400, detail="Unsupported project group message type.")
     from psycopg.rows import dict_row
 
@@ -1345,25 +1374,57 @@ async def create_project_group_message(
         sender_user = _postgres_get_hot_item_by_id(connection, "users", payload.senderId)
         sender_role = str(sender_user.get("role") or "") if sender_user else ""
         if message_kind == "need-post":
-            if sender_role not in {"admin", "partner"}:
+            if sender_role not in {"admin", "partner", "volunteer"}:
                 raise HTTPException(
                     status_code=403,
-                    detail="Only admin and partner accounts can post customized needs in group chats.",
+                    detail="Only joined project participants can post structured needs in group chats.",
                 )
             if payload.needPost is None:
                 raise HTTPException(
                     status_code=400,
                     detail="A structured need post is required for need-post messages.",
                 )
+        if message_kind == "need-response":
+            if not str(payload.responseToMessageId or "").strip():
+                raise HTTPException(
+                    status_code=400,
+                    detail="A linked need is required for need responses.",
+                )
+            if not str(payload.responseAction or "").strip():
+                raise HTTPException(
+                    status_code=400,
+                    detail="A response action is required for need responses.",
+                )
         _postgres_ensure_legacy_app_user(connection, payload.senderId)
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 """
                 insert into project_group_messages (
-                  project_group_messages_id, project_id, sender_id, content, timestamp, kind, need_post, attachments
+                  project_group_messages_id,
+                  project_id,
+                  sender_id,
+                  content,
+                  timestamp,
+                  kind,
+                  need_post,
+                  response_to_message_id,
+                  response_action,
+                  response_to_title,
+                  attachments
                 )
-                values (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb)
-                returning project_group_messages_id, project_id, sender_id, content, timestamp, kind, need_post, attachments
+                values (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb)
+                returning
+                  project_group_messages_id,
+                  project_id,
+                  sender_id,
+                  content,
+                  timestamp,
+                  kind,
+                  need_post,
+                  response_to_message_id,
+                  response_action,
+                  response_to_title,
+                  attachments
                 """,
                 (
                     payload.id,
@@ -1373,6 +1434,9 @@ async def create_project_group_message(
                     payload.timestamp,
                     message_kind,
                     json.dumps(payload.needPost) if payload.needPost is not None else None,
+                    payload.responseToMessageId,
+                    payload.responseAction,
+                    payload.responseToTitle,
                     json.dumps(attachments),
                 ),
             )
