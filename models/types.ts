@@ -66,6 +66,32 @@ export interface ProjectInternalTask {
   updatedAt: string;
 }
 
+// Represents one customizable planning calendar available to admins.
+export interface AdminPlanningCalendar {
+  id: string;
+  name: string;
+  color: string;
+  description?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Represents one scheduled planner entry shown inside the admin calendar.
+export interface AdminPlanningItem {
+  id: string;
+  title: string;
+  description?: string;
+  calendarId: string;
+  linkedProjectId?: string;
+  startDate: string;
+  endDate: string;
+  location?: string;
+  participantsLabel?: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // Represents a project or event managed inside the volunteer system.
 export interface Project {
   id: string;

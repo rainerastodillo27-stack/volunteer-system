@@ -1,6 +1,8 @@
 import Constants from 'expo-constants';
 import { NativeModules, Platform } from 'react-native';
 import {
+  AdminPlanningCalendar,
+  AdminPlanningItem,
   AdvocacyFocus,
   ImpactHubReportType,
   PartnerEventCheckIn,
@@ -42,6 +44,8 @@ const STORAGE_KEYS = {
   PARTNER_EVENT_CHECK_INS: 'partnerEventCheckIns',
   PARTNER_REPORTS: 'partnerReports',
   PUBLISHED_IMPACT_REPORTS: 'publishedImpactReports',
+  ADMIN_PLANNING_CALENDARS: 'adminPlanningCalendars',
+  ADMIN_PLANNING_ITEMS: 'adminPlanningItems',
 };
 
 const WEB_MESSAGE_SYNC_KEY = 'volcre:messages:updatedAt';
@@ -92,6 +96,49 @@ export type VolunteerRecognitionStatus = {
   joinedProgramCount: number;
   isTopVolunteer: boolean;
 };
+
+const DEFAULT_ADMIN_PLANNING_CALENDARS: AdminPlanningCalendar[] = [
+  {
+    id: 'planner-projects',
+    name: 'Project Plans',
+    color: '#0F766E',
+    description: 'Project scheduling blocks and delivery windows.',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  },
+  {
+    id: 'planner-meetings',
+    name: 'Meetings',
+    color: '#3B82F6',
+    description: 'Coordination meetings, reviews, and check-ins.',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  },
+  {
+    id: 'planner-training',
+    name: 'Training',
+    color: '#65A30D',
+    description: 'Volunteer onboarding, safety briefings, and workshops.',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  },
+  {
+    id: 'planner-fieldwork',
+    name: 'Field Work',
+    color: '#F97316',
+    description: 'Community visits, deployment, and field coordination.',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  },
+  {
+    id: 'planner-deadlines',
+    name: 'Deadlines',
+    color: '#DC2626',
+    description: 'Submission deadlines, approvals, and milestone cutoffs.',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  },
+];
 
 // Broadcasts a local storage timestamp so web tabs refresh message state.
 function notifyWebMessageUpdate(): void {
@@ -1482,6 +1529,122 @@ export async function canPartnerLogin(user: User): Promise<{
 export async function getPartnersByStatus(status: string): Promise<Partner[]> {
   const partners = await getAllPartners();
   return partners.filter(p => p.status === status);
+}
+
+function normalizeAdminPlanningCalendarRecord(
+  calendar: AdminPlanningCalendar
+): AdminPlanningCalendar {
+  return {
+    ...calendar,
+    name: calendar.name.trim(),
+    color: calendar.color.trim() || '#0F766E',
+    description: calendar.description?.trim() || undefined,
+  };
+}
+
+function normalizeAdminPlanningItemRecord(item: AdminPlanningItem): AdminPlanningItem {
+  return {
+    ...item,
+    title: item.title.trim(),
+    description: item.description?.trim() || undefined,
+    location: item.location?.trim() || undefined,
+    participantsLabel: item.participantsLabel?.trim() || undefined,
+    linkedProjectId: item.linkedProjectId?.trim() || undefined,
+  };
+}
+
+async function ensureAdminPlanningCalendarsSeeded(): Promise<AdminPlanningCalendar[]> {
+  const existingCalendars =
+    (await getStorageItem<AdminPlanningCalendar[]>(STORAGE_KEYS.ADMIN_PLANNING_CALENDARS)) || [];
+
+  if (existingCalendars.length > 0) {
+    return existingCalendars.map(normalizeAdminPlanningCalendarRecord);
+  }
+
+  const seededCalendars = DEFAULT_ADMIN_PLANNING_CALENDARS.map(calendar => ({ ...calendar }));
+  await setStorageItem(STORAGE_KEYS.ADMIN_PLANNING_CALENDARS, seededCalendars);
+  return seededCalendars;
+}
+
+// Returns all admin planning calendars, seeding a default set on first load.
+export async function getAllAdminPlanningCalendars(): Promise<AdminPlanningCalendar[]> {
+  const calendars = await ensureAdminPlanningCalendarsSeeded();
+  return calendars.map(normalizeAdminPlanningCalendarRecord);
+}
+
+// Inserts or updates one admin planning calendar.
+export async function saveAdminPlanningCalendar(
+  calendar: AdminPlanningCalendar
+): Promise<void> {
+  const calendars = await getAllAdminPlanningCalendars();
+  const existingIndex = calendars.findIndex(entry => entry.id === calendar.id);
+  const normalizedCalendar = normalizeAdminPlanningCalendarRecord(calendar);
+
+  if (existingIndex >= 0) {
+    calendars[existingIndex] = normalizedCalendar;
+  } else {
+    calendars.push(normalizedCalendar);
+  }
+
+  await setStorageItem(STORAGE_KEYS.ADMIN_PLANNING_CALENDARS, calendars);
+}
+
+// Deletes one admin planning calendar when it has no scheduled items.
+export async function deleteAdminPlanningCalendar(calendarId: string): Promise<void> {
+  const [calendars, items] = await Promise.all([
+    getAllAdminPlanningCalendars(),
+    getAllAdminPlanningItems(),
+  ]);
+
+  if (DEFAULT_ADMIN_PLANNING_CALENDARS.some(calendar => calendar.id === calendarId)) {
+    throw new Error('Default planning calendars cannot be deleted, but you can rename or recolor them.');
+  }
+
+  if (items.some(item => item.calendarId === calendarId)) {
+    throw new Error('Move or delete planner entries before removing this calendar.');
+  }
+
+  await setStorageItem(
+    STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
+    calendars.filter(calendar => calendar.id !== calendarId)
+  );
+}
+
+// Returns every admin planner item sorted by start date.
+export async function getAllAdminPlanningItems(): Promise<AdminPlanningItem[]> {
+  const items =
+    (await getStorageItem<AdminPlanningItem[]>(STORAGE_KEYS.ADMIN_PLANNING_ITEMS)) || [];
+  return items
+    .map(normalizeAdminPlanningItemRecord)
+    .sort(
+      (a, b) =>
+        new Date(a.startDate).getTime() - new Date(b.startDate).getTime() ||
+        new Date(a.endDate).getTime() - new Date(b.endDate).getTime()
+    );
+}
+
+// Inserts or updates one scheduled planner entry.
+export async function saveAdminPlanningItem(item: AdminPlanningItem): Promise<void> {
+  const items = await getAllAdminPlanningItems();
+  const existingIndex = items.findIndex(entry => entry.id === item.id);
+  const normalizedItem = normalizeAdminPlanningItemRecord(item);
+
+  if (existingIndex >= 0) {
+    items[existingIndex] = normalizedItem;
+  } else {
+    items.push(normalizedItem);
+  }
+
+  await setStorageItem(STORAGE_KEYS.ADMIN_PLANNING_ITEMS, items);
+}
+
+// Deletes one scheduled planner entry.
+export async function deleteAdminPlanningItem(itemId: string): Promise<void> {
+  const items = await getAllAdminPlanningItems();
+  await setStorageItem(
+    STORAGE_KEYS.ADMIN_PLANNING_ITEMS,
+    items.filter(item => item.id !== itemId)
+  );
 }
 
 // Project Storage
