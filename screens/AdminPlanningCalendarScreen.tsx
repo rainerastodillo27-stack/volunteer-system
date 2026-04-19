@@ -10,6 +10,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -235,6 +236,7 @@ function formatPlannerItemDateLabel(item: PlannerDisplayItem): string {
 
 export default function AdminPlanningCalendarScreen({ navigation }: any) {
   const { user, isAdmin } = useAuth();
+  const { width: viewportWidth } = useWindowDimensions();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
@@ -373,6 +375,9 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
   const projectTimelineCount = projectTimelineItems.filter(item =>
     itemTouchesRange(item, activeRange.startDate, activeRange.endDate)
   ).length;
+  const useStackedLayout = Platform.OS !== 'web' || viewportWidth < 1280;
+  const useStackedSummaryCards = Platform.OS !== 'web' || viewportWidth < 1100;
+  const useCompactScheduler = viewportWidth < 1180;
 
   const openPlannerItemModal = (date = selectedDate, project?: Project) => {
     const defaultCalendarId = project ? projectPlanningCalendar.id : planningCalendars[0]?.id || 'planner-projects';
@@ -628,7 +633,11 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
   }
 
   return (
-    <View style={styles.container}>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.contentContainer}
+      showsVerticalScrollIndicator
+    >
       {loadError ? (
         <InlineLoadError
           title={loadError.title}
@@ -707,8 +716,13 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
         </View>
       </View>
 
-      <View style={styles.dashboardGrid}>
-        <View style={styles.sidebarColumn}>
+      <View style={[styles.dashboardGrid, useStackedLayout ? styles.dashboardGridStacked : styles.dashboardGridWide]}>
+        <View
+          style={[
+            styles.sidebarColumn,
+            useStackedLayout ? styles.sidebarColumnStacked : styles.sidebarColumnWide,
+          ]}
+        >
           <View style={styles.sidebarCard}>
             <Text style={styles.sidebarTitle}>Mini calendar</Text>
             <View style={styles.weekdayRow}>
@@ -840,7 +854,12 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
         </View>
 
         <View style={styles.mainColumn}>
-          <View style={styles.summaryRow}>
+          <View
+            style={[
+              styles.summaryRow,
+              useStackedSummaryCards ? styles.summaryRowStacked : styles.summaryRowWide,
+            ]}
+          >
             <View style={[styles.summaryCard, styles.summaryCardTeal]}>
               <Text style={styles.summaryLabel}>Visible schedule items</Text>
               <Text style={styles.summaryValue}>{scheduledThisRange}</Text>
@@ -930,8 +949,17 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
                 </View>
               </View>
 
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                <View style={styles.schedulerBoard}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={useCompactScheduler}
+                contentContainerStyle={styles.schedulerScrollContent}
+              >
+                <View
+                  style={[
+                    styles.schedulerBoard,
+                    useCompactScheduler && styles.schedulerBoardCompact,
+                  ]}
+                >
                   <View style={styles.schedulerWeekdayRow}>
                     {WEEKDAY_LABELS.map(label => (
                       <View key={label} style={styles.schedulerWeekdayCell}>
@@ -1294,7 +1322,7 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
           </View>
         </View>
       </Modal>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -1302,6 +1330,8 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F5F7F3',
+  },
+  contentContainer: {
     gap: 18,
     paddingBottom: 18,
   },
@@ -1476,17 +1506,29 @@ const styles = StyleSheet.create({
     color: '#166534',
   },
   dashboardGrid: {
-    flex: 1,
-    flexDirection: Platform.OS === 'web' ? 'row' : 'column',
     gap: 18,
   },
+  dashboardGridWide: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  dashboardGridStacked: {
+    flexDirection: 'column',
+  },
   sidebarColumn: {
-    width: Platform.OS === 'web' ? 300 : '100%',
     gap: 16,
+  },
+  sidebarColumnWide: {
+    width: 300,
+    flexShrink: 0,
+  },
+  sidebarColumnStacked: {
+    width: '100%',
   },
   mainColumn: {
     flex: 1,
     gap: 16,
+    minWidth: 0,
   },
   sidebarCard: {
     backgroundColor: '#FFFFFF',
@@ -1647,14 +1689,20 @@ const styles = StyleSheet.create({
     color: '#64748B',
   },
   summaryRow: {
-    flexDirection: Platform.OS === 'web' ? 'row' : 'column',
     gap: 14,
+  },
+  summaryRowWide: {
+    flexDirection: 'row',
+  },
+  summaryRowStacked: {
+    flexDirection: 'column',
   },
   summaryCard: {
     flex: 1,
     borderRadius: 22,
     paddingHorizontal: 18,
     paddingVertical: 18,
+    minWidth: 0,
   },
   summaryCardTeal: {
     backgroundColor: '#CCFBF1',
@@ -1695,6 +1743,7 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 2 },
     elevation: 1,
+    minWidth: 0,
   },
   schedulerHeaderRow: {
     marginBottom: 14,
@@ -1710,13 +1759,21 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     color: '#64748B',
   },
+  schedulerScrollContent: {
+    flexGrow: 1,
+    width: '100%',
+  },
   schedulerBoard: {
-    width: Platform.OS === 'web' ? 980 : 980,
+    width: '100%',
     borderWidth: 1,
     borderColor: '#E2E8F0',
     borderRadius: 22,
     overflow: 'hidden',
     backgroundColor: '#FFFFFF',
+    minWidth: 0,
+  },
+  schedulerBoardCompact: {
+    minWidth: 860,
   },
   schedulerWeekdayRow: {
     flexDirection: 'row',
