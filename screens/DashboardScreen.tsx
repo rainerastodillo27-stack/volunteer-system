@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   Alert,
   Platform,
+  useWindowDimensions,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -17,13 +18,55 @@ import {
   getDashboardSnapshot,
   subscribeToStorageChanges,
 } from '../models/storage';
+import type { Project, Volunteer } from '../models/types';
 import { useAuth } from '../contexts/AuthContext';
 import { navigateToAvailableRoute } from '../utils/navigation';
-import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
+import VolunteerImpactMap from '../components/VolunteerImpactMap';
+import { getRequestErrorMessage } from '../utils/requestErrors';
+
+function formatShortDate(value?: string) {
+  if (!value) {
+    return 'TBD';
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return 'TBD';
+  }
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function getMonthLabel(date: Date) {
+  return date.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+}
+
+function getMonthGrid(date: Date): Array<number | null> {
+  const year = date.getFullYear();
+  const month = date.getMonth();
+  const firstDay = new Date(year, month, 1).getDay();
+  const totalDays = new Date(year, month + 1, 0).getDate();
+  const cells: Array<number | null> = [];
+
+  for (let i = 0; i < firstDay; i += 1) {
+    cells.push(null);
+  }
+
+  for (let day = 1; day <= totalDays; day += 1) {
+    cells.push(day);
+  }
+
+  while (cells.length < 42) {
+    cells.push(null);
+  }
+
+  return cells;
+}
 
 // Shows the latest dashboard metrics and shortcuts for the logged-in user.
 export default function DashboardScreen({ navigation }: any) {
   const { user, isAdmin, logout } = useAuth();
+  const { width } = useWindowDimensions();
+  const isDesktop = Platform.OS === 'web' || width >= 1100;
+
   const [projectStats, setProjectStats] = useState({ total: 0, active: 0, completed: 0 });
   const [partnerStats, setPartnerStats] = useState({ total: 0, approved: 0, pending: 0 });
   const [userStats, setUserStats] = useState({ total: 0 });
@@ -39,12 +82,14 @@ export default function DashboardScreen({ navigation }: any) {
     latestTimeOutProjectId: undefined as string | undefined,
   });
   const [recentUpdates, setRecentUpdates] = useState<any[]>([]);
+  const [projectsData, setProjectsData] = useState<Project[]>([]);
+  const [volunteersData, setVolunteersData] = useState<Volunteer[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   // Loads dashboard totals and recent status updates from storage.
   const loadDashboardData = React.useCallback(async () => {
     try {
-      const [{ projects, partners, users, statusUpdates }, volunteerTimeLogs, partnerReports, impactReports] =
+      const [{ projects, partners, users, volunteers, statusUpdates }, volunteerTimeLogs, partnerReports, impactReports] =
         await Promise.all([
           getDashboardSnapshot(),
           getAllVolunteerTimeLogs(),
@@ -53,6 +98,8 @@ export default function DashboardScreen({ navigation }: any) {
         ]);
 
       setLoadError(null);
+      setProjectsData(projects);
+      setVolunteersData(volunteers);
 
       setProjectStats({
         total: projects.length,
@@ -79,25 +126,21 @@ export default function DashboardScreen({ navigation }: any) {
       });
 
       const latestTimeInLog = volunteerTimeLogs[0];
-      const latestTimeOutLog =
-        volunteerTimeLogs.find(log => Boolean(log.timeOut)) || null;
+      const latestTimeOutLog = volunteerTimeLogs.find(log => Boolean(log.timeOut)) || null;
       setTimeTrackingTarget({
         latestTimeInProjectId: latestTimeInLog?.projectId,
         latestTimeOutProjectId: latestTimeOutLog?.projectId,
       });
 
-      // Get recent updates
       const projectNamesById = new Map(projects.map(project => [project.id, project.title]));
       const allUpdates = statusUpdates
         .map(update => ({
           ...update,
           projectName: projectNamesById.get(update.projectId) || 'Unknown Project',
         }))
-        .sort(
-          (a, b) =>
-            new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-        );
-      setRecentUpdates(allUpdates.slice(0, 5));
+        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+
+      setRecentUpdates(allUpdates.slice(0, 6));
     } catch (error) {
       const errorMessage = getRequestErrorMessage(
         error,
@@ -105,6 +148,8 @@ export default function DashboardScreen({ navigation }: any) {
       );
       setLoadError(errorMessage);
       setRecentUpdates([]);
+      setProjectsData([]);
+      setVolunteersData([]);
     }
   }, []);
 
@@ -112,7 +157,17 @@ export default function DashboardScreen({ navigation }: any) {
     React.useCallback(() => {
       void loadDashboardData();
       return subscribeToStorageChanges(
-        ['users', 'projects', 'partners', 'volunteers', 'statusUpdates', 'volunteerProjectJoins', 'volunteerTimeLogs', 'partnerReports', 'publishedImpactReports'],
+        [
+          'users',
+          'projects',
+          'partners',
+          'volunteers',
+          'statusUpdates',
+          'volunteerProjectJoins',
+          'volunteerTimeLogs',
+          'partnerReports',
+          'publishedImpactReports',
+        ],
         () => {
           void loadDashboardData();
         }
@@ -141,35 +196,29 @@ export default function DashboardScreen({ navigation }: any) {
     ]);
   };
 
-  const displayName =
-    Platform.OS === 'web' && user?.role === 'admin' ? 'NVC Admin Account' : user?.name;
+  const displayName = Platform.OS === 'web' && user?.role === 'admin' ? 'NVC Admin Account' : user?.name;
   const roleLabel =
     user?.role === 'admin'
       ? Platform.OS === 'web'
         ? 'NVC Admin Account'
         : 'Administrator'
       : 'Volunteer Account';
-  const projectWorkspaceLabel = isAdmin ? 'Project Suite' : 'Projects';
+
   const openProjects = React.useCallback(
     (projectId?: string) => {
-      navigateToAvailableRoute(
-        navigation,
-        'Projects',
-        projectId ? { projectId } : undefined
-      );
+      navigateToAvailableRoute(navigation, 'Projects', projectId ? { projectId } : undefined);
     },
     [navigation]
   );
+
   const openPartners = React.useCallback(() => {
-    navigateToAvailableRoute(navigation, 'Partners', undefined, {
-      routeName: 'Dashboard',
-    });
+    navigateToAvailableRoute(navigation, 'Partners', undefined, { routeName: 'Dashboard' });
   }, [navigation]);
+
   const openUsers = React.useCallback(() => {
-    navigateToAvailableRoute(navigation, 'Users', undefined, {
-      routeName: 'Dashboard',
-    });
+    navigateToAvailableRoute(navigation, 'Users', undefined, { routeName: 'Dashboard' });
   }, [navigation]);
+
   const openLifecycle = React.useCallback(
     (projectId?: string) => {
       navigateToAvailableRoute(
@@ -184,552 +233,704 @@ export default function DashboardScreen({ navigation }: any) {
     },
     [navigation]
   );
+
   const openMessages = React.useCallback(
     (projectId?: string) => {
-      navigateToAvailableRoute(
-        navigation,
-        'Messages',
-        projectId ? { projectId } : undefined,
-        { routeName: 'Dashboard' }
-      );
+      navigateToAvailableRoute(navigation, 'Messages', projectId ? { projectId } : undefined, {
+        routeName: 'Dashboard',
+      });
     },
     [navigation]
   );
-  const openMap = React.useCallback(() => {
-    navigateToAvailableRoute(navigation, 'Map', undefined, {
-      routeName: 'Dashboard',
+
+  const mapProjects = useMemo(
+    () =>
+      projectsData.filter(
+        project =>
+          Number.isFinite(project.location?.latitude) &&
+          Number.isFinite(project.location?.longitude)
+      ),
+    [projectsData]
+  );
+
+  const upcomingPrograms = useMemo(() => {
+    return [...projectsData]
+      .filter(project => project.status === 'Planning' || project.status === 'In Progress')
+      .sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime())
+      .slice(0, 4);
+  }, [projectsData]);
+
+  const activeVolunteers = useMemo(
+    () =>
+      [...volunteersData]
+        .sort((a, b) => (b.totalHoursContributed || 0) - (a.totalHoursContributed || 0))
+        .slice(0, 3),
+    [volunteersData]
+  );
+
+  const calendarDate = useMemo(() => new Date(), []);
+  const monthGrid = useMemo(() => getMonthGrid(calendarDate), [calendarDate]);
+  const monthLabel = useMemo(() => getMonthLabel(calendarDate), [calendarDate]);
+  const currentDay = calendarDate.getDate();
+
+  const eventCountByDay = useMemo(() => {
+    const map = new Map<number, number>();
+    projectsData.forEach(project => {
+      const startDate = new Date(project.startDate);
+      if (Number.isNaN(startDate.getTime())) {
+        return;
+      }
+      if (
+        startDate.getMonth() !== calendarDate.getMonth() ||
+        startDate.getFullYear() !== calendarDate.getFullYear()
+      ) {
+        return;
+      }
+      map.set(startDate.getDate(), (map.get(startDate.getDate()) || 0) + 1);
     });
-  }, [navigation]);
+    return map;
+  }, [projectsData, calendarDate]);
+
+  const messagesCount = workflowStats.timeIns + workflowStats.pendingReports;
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-      {/* Header with User Info */}
+    <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
       <View style={styles.header}>
         <View style={styles.userSection}>
           <View style={styles.avatar}>
             <Text style={styles.avatarText}>{displayName?.charAt(0) ?? 'N'}</Text>
           </View>
-          <View style={{ flex: 1 }}>
+          <View style={styles.userCopy}>
             <Text style={styles.greeting}>Welcome, {displayName}</Text>
             <Text style={styles.role}>{roleLabel}</Text>
           </View>
           <TouchableOpacity onPress={handleLogout}>
-            <MaterialIcons name="logout" size={24} color="#666" />
+            <MaterialIcons name="logout" size={22} color="#335a42" />
           </TouchableOpacity>
         </View>
       </View>
 
-      {loadError && (
+      {loadError ? (
         <View style={styles.errorBanner}>
-          <MaterialIcons name="error-outline" size={20} color="#991b1b" />
-          <View style={styles.errorBannerContent}>
-            <Text style={styles.errorBannerTitle}>Database Unavailable</Text>
-            <Text style={styles.errorBannerText}>{loadError}</Text>
-          </View>
+          <MaterialIcons name="error-outline" size={20} color="#8f2222" />
+          <Text style={styles.errorBannerText}>{loadError}</Text>
           <TouchableOpacity onPress={loadDashboardData}>
             <Text style={styles.errorBannerAction}>Retry</Text>
           </TouchableOpacity>
         </View>
-      )}
+      ) : null}
 
-      {/* Key Metrics */}
-      {isAdmin && (
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Key Metrics</Text>
-
-          <View style={styles.metricsGrid}>
-            <TouchableOpacity
-              style={styles.metricCard}
-              onPress={() => openProjects()}
-              activeOpacity={0.8}
-              accessibilityRole="button"
-            >
-              <MaterialIcons name="folder" size={32} color="#4CAF50" />
-              <Text style={styles.metricValue}>{projectStats.total}</Text>
-              <Text style={styles.metricLabel}>{isAdmin ? 'Portfolio' : 'Projects'}</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.metricCard}
-              onPress={openPartners}
-              activeOpacity={0.8}
-              accessibilityRole="button"
-            >
-              <MaterialIcons name="business" size={32} color="#66BB6A" />
-              <Text style={styles.metricValue}>{partnerStats.total}</Text>
-              <Text style={styles.metricLabel}>Partners</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.metricCard}
-              onPress={openUsers}
-              activeOpacity={0.8}
-              accessibilityRole="button"
-            >
-              <MaterialIcons name="group" size={32} color="#4CAF50" />
-              <Text style={styles.metricValue}>{userStats.total}</Text>
-              <Text style={styles.metricLabel}>Users</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.metricCard}
-              onPress={() => openProjects()}
-              activeOpacity={0.8}
-              accessibilityRole="button"
-            >
-              <MaterialIcons name="trending-up" size={32} color="#2E7D32" />
-              <Text style={styles.metricValue}>{projectStats.active}</Text>
-              <Text style={styles.metricLabel}>Active</Text>
+      <View style={[styles.topGrid, !isDesktop && styles.stackGrid]}>
+        <View style={styles.trendCard}>
+          <View style={styles.cardHeaderRow}>
+            <Text style={styles.cardTitle}>Volunteer Applications</Text>
+            <TouchableOpacity onPress={() => openProjects()}>
+              <Text style={styles.cardMeta}>View all projects</Text>
             </TouchableOpacity>
           </View>
-        </View>
-      )}
 
-      {isAdmin && (
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Operations Workflow</Text>
-          <View style={styles.metricsGrid}>
-            <TouchableOpacity
-              style={styles.metricCard}
-              onPress={openPartners}
-              activeOpacity={0.8}
-            >
-              <MaterialIcons name="mark-email-unread" size={32} color="#f59e0b" />
-              <Text style={styles.metricValue}>{workflowStats.inboundInquiries}</Text>
-              <Text style={styles.metricLabel}>Inbound Inquiries</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.metricCard}
-              onPress={() => openLifecycle(timeTrackingTarget.latestTimeInProjectId)}
-              activeOpacity={0.8}
-            >
-              <MaterialIcons name="login" size={32} color="#2563eb" />
-              <Text style={styles.metricValue}>{workflowStats.timeIns}</Text>
-              <Text style={styles.metricLabel}>Time Ins</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.metricCard}
-              onPress={() => openLifecycle(timeTrackingTarget.latestTimeOutProjectId)}
-              activeOpacity={0.8}
-            >
-              <MaterialIcons name="logout" size={32} color="#0f766e" />
-              <Text style={styles.metricValue}>{workflowStats.timeOuts}</Text>
-              <Text style={styles.metricLabel}>Time Outs</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.metricCard}
-              onPress={() => openLifecycle()}
-              activeOpacity={0.8}
-            >
-              <MaterialIcons name="assignment-late" size={32} color="#dc2626" />
-              <Text style={styles.metricValue}>{workflowStats.pendingReports}</Text>
-              <Text style={styles.metricLabel}>Pending Reports</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.metricCard}
-              onPress={() => openLifecycle()}
-              activeOpacity={0.8}
-            >
-              <MaterialIcons name="published-with-changes" size={32} color="#16a34a" />
-              <Text style={styles.metricValue}>{workflowStats.publishedReports}</Text>
-              <Text style={styles.metricLabel}>Published Files</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      )}
-
-      {/* Project Overview */}
-      <View style={styles.section}>
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>{isAdmin ? 'Project Portfolio' : 'Project Overview'}</Text>
-          <TouchableOpacity onPress={() => openProjects()}>
-            <Text style={styles.viewAll}>View All</Text>
-          </TouchableOpacity>
-        </View>
-
-        <TouchableOpacity
-          style={styles.card}
-          onPress={() => openProjects()}
-          activeOpacity={0.85}
-          accessibilityRole="button"
-        >
-          <View style={styles.statRow}>
-            <View style={styles.statItem}>
-              <MaterialIcons name="av-timer" size={20} color="#66BB6A" />
-              <Text style={styles.statText}>
-                <Text style={styles.statValue}>In Progress</Text>
-                <Text style={styles.statCount}>{'\n'}{projectStats.active}</Text>
-              </Text>
+          {mapProjects.length ? (
+            <VolunteerImpactMap projects={mapProjects} />
+          ) : (
+            <View style={styles.mapFallback}>
+              <MaterialIcons name="map" size={28} color="#2f8f45" />
+              <Text style={styles.mapFallbackText}>No mapped projects available yet.</Text>
             </View>
-            <View style={styles.divider} />
-            <View style={styles.statItem}>
-              <MaterialIcons name="check-circle" size={20} color="#4CAF50" />
-              <Text style={styles.statText}>
-                <Text style={styles.statValue}>Completed</Text>
-                <Text style={styles.statCount}>{'\n'}{projectStats.completed}</Text>
-              </Text>
+          )}
+        </View>
+
+        <View style={styles.calendarCard}>
+          <View style={styles.upcomingPane}>
+            <Text style={styles.upcomingTitle}>Upcoming Programs</Text>
+            {upcomingPrograms.length ? (
+              upcomingPrograms.map(program => (
+                <TouchableOpacity
+                  key={program.id}
+                  style={styles.upcomingRow}
+                  onPress={() => openProjects(program.id)}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.upcomingName} numberOfLines={1}>{program.title}</Text>
+                  <Text style={styles.upcomingDate}>{formatShortDate(program.startDate)}</Text>
+                </TouchableOpacity>
+              ))
+            ) : (
+              <Text style={styles.upcomingEmpty}>No upcoming programs yet.</Text>
+            )}
+          </View>
+
+          <View style={styles.monthPane}>
+            <View style={styles.monthTopRow}>
+              <View>
+                <Text style={styles.todayLabel}>{calendarDate.toLocaleDateString(undefined, { weekday: 'long' })}</Text>
+                <Text style={styles.todayDate}>{calendarDate.toLocaleDateString(undefined, { month: 'long', day: 'numeric' })}</Text>
+              </View>
+              <Text style={styles.yearLabel}>{calendarDate.getFullYear()}</Text>
+            </View>
+
+            <Text style={styles.monthHeading}>{monthLabel}</Text>
+
+            <View style={styles.weekLabelRow}>
+              {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(day => (
+                <Text key={day} style={styles.weekLabel}>{day}</Text>
+              ))}
+            </View>
+
+            <View style={styles.calendarGrid}>
+              {monthGrid.map((day, index) => {
+                const hasEvent = typeof day === 'number' && eventCountByDay.has(day);
+                const isToday = day === currentDay;
+
+                return (
+                  <TouchableOpacity
+                    key={`${day || 'empty'}-${index}`}
+                    style={[
+                      styles.dayCell,
+                      day === null && styles.dayCellEmpty,
+                      hasEvent && styles.dayCellEvent,
+                      isToday && styles.dayCellToday,
+                    ]}
+                    onPress={() => {
+                      if (hasEvent) {
+                        openLifecycle();
+                      }
+                    }}
+                    activeOpacity={0.85}
+                    disabled={day === null}
+                  >
+                    <Text style={[styles.dayText, day === null && styles.dayTextEmpty, hasEvent && styles.dayTextEvent]}>
+                      {day ?? ''}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
           </View>
+        </View>
+      </View>
+
+      <View style={[styles.bottomGrid, !isDesktop && styles.stackGrid]}>
+        <View style={styles.cardBase}>
+          <View style={styles.cardHeaderRow}>
+            <Text style={styles.cardTitle}>Active Volunteers</Text>
+            <TouchableOpacity onPress={openUsers}>
+              <Text style={styles.cardMeta}>View users</Text>
+            </TouchableOpacity>
+          </View>
+
+          {activeVolunteers.length ? (
+            activeVolunteers.map(volunteer => {
+              const progress = Math.min(100, Math.max(8, (volunteer.totalHoursContributed || 0) * 3));
+              return (
+                <View key={volunteer.id} style={styles.volunteerRow}>
+                  <View style={styles.volunteerAvatar}>
+                    <Text style={styles.volunteerAvatarText}>{String(volunteer.name || 'V').charAt(0)}</Text>
+                  </View>
+                  <View style={styles.volunteerBody}>
+                    <Text style={styles.volunteerName} numberOfLines={1}>{volunteer.name}</Text>
+                    <View style={styles.volunteerTrack}>
+                      <View style={[styles.volunteerFill, { width: `${progress}%` }]} />
+                    </View>
+                    <Text style={styles.volunteerMeta}>{(volunteer.pastProjects || []).length} programs joined</Text>
+                  </View>
+                </View>
+              );
+            })
+          ) : (
+            <Text style={styles.newsEmpty}>No active volunteer records yet.</Text>
+          )}
+        </View>
+
+        <TouchableOpacity style={styles.messagesCard} onPress={() => openMessages()} activeOpacity={0.85}>
+          <MaterialIcons name="chat-bubble-outline" size={30} color="#f1fff4" />
+          <Text style={styles.messagesValue}>{messagesCount}</Text>
+          <Text style={styles.messagesTitle}>Messages</Text>
+          <Text style={styles.messagesSub}>Posted by our users</Text>
         </TouchableOpacity>
-      </View>
 
-      {/* Partner Overview (Admin Only) */}
-      {isAdmin && (
-        <View style={styles.section}>
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Partner Overview</Text>
-            <TouchableOpacity onPress={openPartners}>
-              <Text style={styles.viewAll}>View All</Text>
-            </TouchableOpacity>
-          </View>
-
-          <TouchableOpacity
-            style={styles.card}
-            onPress={openPartners}
-            activeOpacity={0.85}
-            accessibilityRole="button"
-          >
-            <View style={styles.statRow}>
-              <View style={styles.statItem}>
-                <MaterialIcons name="check" size={20} color="#4CAF50" />
-                <Text style={styles.statText}>
-                  <Text style={styles.statValue}>Approved</Text>
-                  <Text style={styles.statCount}>{'\n'}{partnerStats.approved}</Text>
-                </Text>
-              </View>
-              <View style={styles.divider} />
-              <View style={styles.statItem}>
-                <MaterialIcons name="schedule" size={20} color="#66BB6A" />
-                <Text style={styles.statText}>
-                  <Text style={styles.statValue}>Pending</Text>
-                  <Text style={styles.statCount}>{'\n'}{partnerStats.pending}</Text>
-                </Text>
-              </View>
-            </View>
-          </TouchableOpacity>
+        <View style={styles.statisticsCard}>
+          <Text style={styles.statisticsTitle}>Statistics</Text>
+          <View style={styles.statLine}><Text style={styles.statKey}>Total Users</Text><Text style={styles.statNumber}>{userStats.total}</Text></View>
+          <View style={styles.statLine}><Text style={styles.statKey}>New Applicants</Text><Text style={styles.statNumber}>{partnerStats.pending}</Text></View>
+          <View style={styles.statLine}><Text style={styles.statKey}>Upcoming Programs</Text><Text style={styles.statNumber}>{upcomingPrograms.length}</Text></View>
+          <View style={[styles.statLine, styles.statLineLast]}><Text style={styles.statKey}>Total Programs</Text><Text style={styles.statNumber}>{projectStats.total}</Text></View>
         </View>
-      )}
 
-      {/* Recent Updates */}
-      {isAdmin && recentUpdates.length > 0 && (
-        <View style={styles.section}>
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Recent Updates</Text>
-            <TouchableOpacity onPress={() => openLifecycle()}>
-              <Text style={styles.viewAll}>View All</Text>
-            </TouchableOpacity>
-          </View>
-
-          {recentUpdates.map((update, index) => (
-            <TouchableOpacity
-              key={index}
-              style={styles.updateItem}
-              onPress={() => openLifecycle(update.projectId)}
-              activeOpacity={0.85}
-              accessibilityRole="button"
-            >
-              <View style={styles.updateTimeline}>
-                <View style={styles.updateDot} />
-                {index < recentUpdates.length - 1 && <View style={styles.updateLine} />}
-              </View>
-              <View style={styles.updateContent}>
-                <Text style={styles.updateProject}>{update.projectName}</Text>
-                <Text style={styles.updateStatus}>{update.status}</Text>
-                <Text style={styles.updateDescription} numberOfLines={2}>
-                  {update.description}
-                </Text>
-              </View>
-            </TouchableOpacity>
-          ))}
-        </View>
-      )}
-
-      {/* Quick Actions */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Quick Actions</Text>
-
-      <View style={styles.actionsGrid}>
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={() => openMessages()}
-          >
-            <MaterialIcons name="mail" size={24} color="#4CAF50" />
-            <Text style={styles.actionButtonText}>Messages</Text>
-          </TouchableOpacity>
-
-          {isAdmin && (
-            <TouchableOpacity
-              style={styles.actionButton}
-              onPress={() => openLifecycle()}
-            >
-              <MaterialIcons name="timeline" size={24} color="#2563eb" />
-              <Text style={styles.actionButtonText}>{projectWorkspaceLabel}</Text>
-            </TouchableOpacity>
-          )}
-
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={openMap}
-          >
-            <MaterialIcons name="map" size={24} color="#FF6B6B" />
-            <Text style={styles.actionButtonText}>Map</Text>
-          </TouchableOpacity>
-
-          {isAdmin && (
-            <TouchableOpacity
-              style={styles.actionButton}
-              onPress={openUsers}
-            >
-              <MaterialIcons name="group" size={24} color="#2E7D32" />
-              <Text style={styles.actionButtonText}>Users</Text>
-            </TouchableOpacity>
+        <View style={styles.newsCard}>
+          <Text style={styles.newsTitle}>News & Announcements</Text>
+          {recentUpdates.length ? (
+            recentUpdates.slice(0, 3).map((update, index) => (
+              <TouchableOpacity
+                key={update.id || index}
+                style={[styles.newsRow, index === 2 && styles.newsRowLast]}
+                onPress={() => openLifecycle(update.projectId)}
+                activeOpacity={0.85}
+              >
+                <View style={styles.newsThumb}>
+                  <MaterialIcons name={index === 0 ? 'event' : index === 1 ? 'campaign' : 'photo'} size={18} color="#e8ffe9" />
+                </View>
+                <View style={styles.newsCopy}>
+                  <Text style={styles.newsDate}>{formatShortDate(update.updatedAt)}</Text>
+                  <Text style={styles.newsProject} numberOfLines={1}>{update.projectName || 'Project update'}</Text>
+                  <Text style={styles.newsBody} numberOfLines={2}>{update.description || 'Status update posted.'}</Text>
+                </View>
+              </TouchableOpacity>
+            ))
+          ) : (
+            <Text style={styles.newsEmpty}>No announcements yet.</Text>
           )}
         </View>
       </View>
 
-      {/* Footer */}
       <View style={styles.footer}>
-        <Text style={styles.footerText}>Volcre v1.0</Text>
+        <Text style={styles.footerText}>NVC CONNECT v1.0</Text>
       </View>
     </ScrollView>
   );
 }
 
+const green = {
+  page: '#eef5ef',
+  card: '#ffffff',
+  cardBorder: '#d8e8db',
+  ink: '#203a2a',
+  muted: '#5e7b65',
+  strong: '#2f8f45',
+  strongDark: '#236d35',
+};
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: green.page,
+  },
+  content: {
+    paddingBottom: 20,
   },
   header: {
-    backgroundColor: '#fff',
-    padding: 16,
+    backgroundColor: green.card,
     borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-  },
-  errorBanner: {
-    margin: 16,
-    marginBottom: 0,
-    backgroundColor: '#fee2e2',
-    borderRadius: 12,
-    padding: 14,
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 12,
-  },
-  errorBannerContent: {
-    flex: 1,
-  },
-  errorBannerTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#991b1b',
-  },
-  errorBannerText: {
-    fontSize: 12,
-    color: '#7f1d1d',
-    marginTop: 4,
-    lineHeight: 18,
-  },
-  errorBannerAction: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#991b1b',
+    borderBottomColor: green.cardBorder,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
   },
   userSection: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
   },
+  userCopy: {
+    flex: 1,
+  },
   avatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#4CAF50',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: green.strong,
     justifyContent: 'center',
     alignItems: 'center',
   },
   avatarText: {
     color: '#fff',
-    fontWeight: 'bold',
-    fontSize: 20,
+    fontWeight: '700',
+    fontSize: 18,
   },
   greeting: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
+    fontSize: 15,
+    fontWeight: '700',
+    color: green.ink,
   },
   role: {
-    fontSize: 12,
-    color: '#666',
     marginTop: 2,
+    fontSize: 12,
+    color: green.muted,
   },
-  section: {
-    padding: 16,
+  errorBanner: {
+    marginHorizontal: 14,
+    marginTop: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: '#fee2e2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
   },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 12,
+  errorBannerText: {
+    flex: 1,
+    color: '#8f2222',
+    fontSize: 12,
+    lineHeight: 18,
   },
-  sectionHeader: {
+  errorBannerAction: {
+    color: '#8f2222',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  topGrid: {
+    flexDirection: 'row',
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    gap: 14,
+  },
+  bottomGrid: {
+    flexDirection: 'row',
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    gap: 14,
+    alignItems: 'stretch',
+  },
+  stackGrid: {
+    flexDirection: 'column',
+  },
+  trendCard: {
+    flex: 1.45,
+    backgroundColor: green.card,
+    borderWidth: 1,
+    borderColor: green.cardBorder,
+    borderRadius: 14,
+    padding: 12,
+  },
+  cardHeaderRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 8,
+    gap: 8,
   },
-  viewAll: {
-    color: '#4CAF50',
+  cardTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: green.ink,
+  },
+  cardMeta: {
+    fontSize: 11,
+    color: green.muted,
+    fontWeight: '600',
+  },
+  mapFallback: {
+    minHeight: 220,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#d9e7dc',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#f8fcf8',
+  },
+  mapFallbackText: {
+    color: green.muted,
     fontSize: 12,
     fontWeight: '600',
   },
-  metricsGrid: {
+  calendarCard: {
+    flex: 1.2,
+    borderRadius: 14,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#bde0c6',
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
+    minHeight: 320,
   },
-  metricCard: {
-    width: '48%',
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
+  upcomingPane: {
+    width: '40%',
+    backgroundColor: green.strong,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
   },
-  metricValue: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#333',
-    marginTop: 8,
+  upcomingTitle: {
+    color: '#f1fff4',
+    fontSize: 17,
+    fontWeight: '700',
+    marginBottom: 8,
   },
-  metricLabel: {
+  upcomingRow: {
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.25)',
+  },
+  upcomingName: {
+    color: '#f7fff8',
     fontSize: 12,
-    color: '#666',
-    marginTop: 4,
-  },
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  statRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-  },
-  statItem: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  statText: {
-    flex: 1,
-  },
-  statValue: {
-    fontSize: 13,
-    color: '#666',
     fontWeight: '600',
   },
-  statCount: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#333',
+  upcomingDate: {
+    marginTop: 2,
+    color: '#d6f8de',
+    fontSize: 11,
+    fontWeight: '700',
   },
-  divider: {
-    width: 1,
-    height: 40,
-    backgroundColor: '#eee',
+  upcomingEmpty: {
+    marginTop: 10,
+    color: '#d9f7df',
+    fontSize: 12,
   },
-  updateItem: {
-    flexDirection: 'row',
-    marginBottom: 16,
-    gap: 12,
-  },
-  updateTimeline: {
-    alignItems: 'center',
-    width: 40,
-  },
-  updateDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#4CAF50',
-  },
-  updateLine: {
-    width: 2,
-    height: 40,
-    backgroundColor: '#e0e0e0',
-    marginTop: 4,
-  },
-  updateContent: {
+  monthPane: {
     flex: 1,
-    backgroundColor: '#fff',
-    borderRadius: 8,
+    backgroundColor: green.card,
     padding: 12,
   },
-  updateProject: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#333',
+  monthTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
   },
-  updateStatus: {
-    fontSize: 11,
-    color: '#4CAF50',
+  todayLabel: {
+    fontSize: 30,
+    lineHeight: 32,
+    fontWeight: '400',
+    color: green.ink,
+  },
+  todayDate: {
     marginTop: 2,
-    fontWeight: '600',
+    fontSize: 13,
+    color: green.ink,
+    fontWeight: '700',
   },
-  updateDescription: {
+  yearLabel: {
+    fontSize: 36,
+    lineHeight: 38,
+    fontWeight: '400',
+    color: green.ink,
+  },
+  monthHeading: {
+    marginTop: 8,
+    marginBottom: 8,
+    textAlign: 'center',
+    color: green.muted,
     fontSize: 12,
-    color: '#666',
-    marginTop: 4,
-    lineHeight: 16,
+    fontWeight: '700',
   },
-  actionsGrid: {
+  weekLabelRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  weekLabel: {
+    width: '14.28%',
+    textAlign: 'center',
+    color: '#7a9181',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  calendarGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 12,
   },
-  actionButton: {
-    width: '48%',
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
+  dayCell: {
+    width: '14.28%',
+    aspectRatio: 1,
     alignItems: 'center',
-    gap: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
+    justifyContent: 'center',
+    borderRadius: 7,
   },
-  actionButtonText: {
-    fontSize: 12,
-    color: '#333',
+  dayCellEmpty: {
+    backgroundColor: 'transparent',
+  },
+  dayCellEvent: {
+    backgroundColor: '#3cae58',
+  },
+  dayCellToday: {
+    borderWidth: 1,
+    borderColor: green.strong,
+  },
+  dayText: {
+    fontSize: 11,
+    color: '#647f6c',
     fontWeight: '600',
+  },
+  dayTextEmpty: {
+    color: 'transparent',
+  },
+  dayTextEvent: {
+    color: '#f5fff7',
+    fontWeight: '700',
+  },
+  cardBase: {
+    flex: 1,
+    backgroundColor: green.card,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: green.cardBorder,
+    padding: 12,
+    minHeight: 250,
+  },
+  volunteerRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 12,
+  },
+  volunteerAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#dff2e2',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  volunteerAvatarText: {
+    color: green.strongDark,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  volunteerBody: {
+    flex: 1,
+  },
+  volunteerName: {
+    color: green.ink,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  volunteerTrack: {
+    marginTop: 6,
+    height: 4,
+    borderRadius: 999,
+    overflow: 'hidden',
+    backgroundColor: '#dbe9df',
+  },
+  volunteerFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: green.strong,
+  },
+  volunteerMeta: {
+    marginTop: 4,
+    fontSize: 10,
+    color: green.muted,
+  },
+  messagesCard: {
+    flex: 0.75,
+    backgroundColor: green.strong,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: green.strongDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 250,
+    padding: 12,
+  },
+  messagesValue: {
+    marginTop: 6,
+    fontSize: 40,
+    lineHeight: 44,
+    color: '#effff2',
+    fontWeight: '700',
+  },
+  messagesTitle: {
+    marginTop: 4,
+    fontSize: 13,
+    color: '#f1fff4',
+    fontWeight: '700',
+  },
+  messagesSub: {
+    marginTop: 2,
+    color: '#d9f5df',
+    fontSize: 11,
+  },
+  statisticsCard: {
+    flex: 0.85,
+    backgroundColor: '#dff3e3',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#b5dcbf',
+    minHeight: 250,
+    padding: 12,
+  },
+  statisticsTitle: {
     textAlign: 'center',
+    fontSize: 21,
+    fontWeight: '700',
+    color: green.ink,
+    marginBottom: 8,
+  },
+  statLine: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(32,58,42,0.12)',
+    paddingVertical: 9,
+  },
+  statLineLast: {
+    borderBottomWidth: 0,
+  },
+  statKey: {
+    color: '#315844',
+    fontSize: 12,
+  },
+  statNumber: {
+    color: '#1f3f2d',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  newsCard: {
+    flex: 1.4,
+    backgroundColor: green.strong,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: green.strongDark,
+    minHeight: 250,
+    padding: 12,
+  },
+  newsTitle: {
+    textAlign: 'center',
+    color: '#f4fff6',
+    fontSize: 22,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  newsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingVertical: 9,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.24)',
+  },
+  newsRowLast: {
+    borderBottomWidth: 0,
+  },
+  newsThumb: {
+    width: 58,
+    height: 38,
+    borderRadius: 6,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  newsCopy: {
+    flex: 1,
+  },
+  newsDate: {
+    color: '#d7f2dd',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  newsProject: {
+    marginTop: 1,
+    color: '#f4fff6',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  newsBody: {
+    marginTop: 2,
+    color: '#e9f8eb',
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  newsEmpty: {
+    color: '#d7f2dd',
+    fontSize: 12,
+    marginTop: 8,
   },
   footer: {
-    paddingVertical: 20,
+    paddingTop: 18,
+    paddingBottom: 20,
     alignItems: 'center',
-    borderTopWidth: 1,
-    borderTopColor: '#eee',
   },
   footerText: {
     fontSize: 12,
-    color: '#999',
+    color: '#7f9987',
   },
 });

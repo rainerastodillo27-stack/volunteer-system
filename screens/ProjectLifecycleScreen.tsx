@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,7 @@ import {
   Image,
   ActivityIndicator,
   Platform,
+  useWindowDimensions,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -117,6 +118,36 @@ type ProjectTimeLogEntry = VolunteerTimeLog & {
   volunteerEmail: string;
 };
 
+type LifecycleBoardView = 'scheduler' | 'timeline';
+
+function getStartOfWeekMonday(sourceDate: Date): Date {
+  const date = new Date(sourceDate);
+  const dayIndex = (date.getDay() + 6) % 7;
+  date.setDate(date.getDate() - dayIndex);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function getCalendarDayDifference(start: Date, end: Date): number {
+  const utcStart = Date.UTC(start.getFullYear(), start.getMonth(), start.getDate());
+  const utcEnd = Date.UTC(end.getFullYear(), end.getMonth(), end.getDate());
+  return Math.floor((utcEnd - utcStart) / (1000 * 60 * 60 * 24));
+}
+
+function isDateOverlappingRange(target: Date, rangeStart: Date, rangeEnd: Date): boolean {
+  return target.getTime() >= rangeStart.getTime() && target.getTime() <= rangeEnd.getTime();
+}
+
+function addDays(sourceDate: Date, days: number): Date {
+  const date = new Date(sourceDate);
+  date.setDate(date.getDate() + days);
+  return date;
+}
+
+function getDateKey(sourceDate: Date): string {
+  return sourceDate.toISOString().slice(0, 10);
+}
+
 // Returns the default project form used for create and edit flows.
 const createEmptyProjectDraft = (partnerId = ''): ProjectDraft => ({
   title: '',
@@ -170,6 +201,8 @@ function getProjectDraftModule(project: Project): AdvocacyFocus {
 // Gives admins a unified project operations workspace for planning, delivery, and approvals.
 export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const { user, isAdmin } = useAuth();
+  const { width } = useWindowDimensions();
+  const isDesktop = Platform.OS === 'web' || width >= 1100;
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [partners, setPartners] = useState<Partner[]>([]);
@@ -194,6 +227,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [updateDescription, setUpdateDescription] = useState('');
   const [projectDraft, setProjectDraft] = useState<ProjectDraft>(createEmptyProjectDraft());
   const [taskDraft, setTaskDraft] = useState<ProjectTaskDraft>(createEmptyProjectTaskDraft());
+  const [lifecycleView, setLifecycleView] = useState<LifecycleBoardView>('scheduler');
 
   useFocusEffect(
     React.useCallback(() => {
@@ -1084,7 +1118,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     return (
       <TouchableOpacity
         key={project.id}
-        style={styles.card}
+        style={[styles.card, isDesktop ? styles.cardDesktop : styles.cardMobile]}
         onPress={() => handleSelectProject(project)}
       >
         {projectImageSource ? (
@@ -1406,6 +1440,107 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     </Modal>
   );
 
+  const schedulerAnchorDate = useMemo(() => {
+    const requestedProjectId = route?.params?.projectId;
+    const requestedProject = requestedProjectId
+      ? projects.find(project => project.id === requestedProjectId)
+      : null;
+    const candidateDate = selectedProject?.startDate || requestedProject?.startDate || projects[0]?.startDate;
+    const parsedDate = candidateDate ? new Date(candidateDate) : new Date();
+    return Number.isNaN(parsedDate.getTime()) ? new Date() : parsedDate;
+  }, [projects, route?.params?.projectId, selectedProject?.startDate]);
+
+  const schedulerDays = useMemo(() => {
+    const monday = getStartOfWeekMonday(schedulerAnchorDate);
+    return Array.from({ length: 7 }, (_, index) => {
+      return addDays(monday, index);
+    });
+  }, [schedulerAnchorDate]);
+
+  const schedulerCalendarDays = useMemo(() => {
+    const monday = getStartOfWeekMonday(schedulerAnchorDate);
+    return Array.from({ length: 21 }, (_, index) => addDays(monday, index));
+  }, [schedulerAnchorDate]);
+
+  const schedulerCalendarWeeks = useMemo(
+    () => [0, 1, 2].map(weekIndex => schedulerCalendarDays.slice(weekIndex * 7, weekIndex * 7 + 7)),
+    [schedulerCalendarDays]
+  );
+
+  const schedulerCalendarWindow = useMemo(() => {
+    const start = schedulerCalendarDays[0] || getStartOfWeekMonday(new Date());
+    const end = schedulerCalendarDays[20] || start;
+    return { start, end };
+  }, [schedulerCalendarDays]);
+
+  const schedulerWindow = useMemo(() => {
+    const start = schedulerDays[0] || getStartOfWeekMonday(new Date());
+    const end = schedulerDays[6] || start;
+    return { start, end };
+  }, [schedulerDays]);
+
+  const visibleBoardProjects = useMemo(
+    () =>
+      projects
+        .filter(project => {
+          const startDate = new Date(project.startDate);
+          const endDate = new Date(project.endDate);
+          if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+            return false;
+          }
+
+          return isDateOverlappingRange(schedulerWindow.start, startDate, endDate)
+            || isDateOverlappingRange(schedulerWindow.end, startDate, endDate)
+            || isDateOverlappingRange(startDate, schedulerWindow.start, schedulerWindow.end);
+        })
+        .sort((left, right) => new Date(left.startDate).getTime() - new Date(right.startDate).getTime()),
+    [projects, schedulerWindow.end, schedulerWindow.start]
+  );
+
+  const schedulerCalendarProjects = useMemo(
+    () =>
+      projects
+        .filter(project => {
+          const startDate = new Date(project.startDate);
+          const endDate = new Date(project.endDate);
+          if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+            return false;
+          }
+
+          return (
+            isDateOverlappingRange(schedulerCalendarWindow.start, startDate, endDate) ||
+            isDateOverlappingRange(schedulerCalendarWindow.end, startDate, endDate) ||
+            isDateOverlappingRange(startDate, schedulerCalendarWindow.start, schedulerCalendarWindow.end)
+          );
+        })
+        .sort((left, right) => new Date(left.startDate).getTime() - new Date(right.startDate).getTime()),
+    [projects, schedulerCalendarWindow.end, schedulerCalendarWindow.start]
+  );
+
+  const schedulerCalendarEventsByDate = useMemo(() => {
+    const eventsByDate = new Map<string, Project[]>();
+
+    schedulerCalendarDays.forEach(day => {
+      const dayEvents = schedulerCalendarProjects.filter(project => {
+        const startDate = new Date(project.startDate);
+        const endDate = new Date(project.endDate);
+        return isDateOverlappingRange(day, startDate, endDate);
+      });
+
+      eventsByDate.set(getDateKey(day), dayEvents);
+    });
+
+    return eventsByDate;
+  }, [schedulerCalendarDays, schedulerCalendarProjects]);
+
+  const schedulerRangeLabel = useMemo(() => {
+    const rangeStart = schedulerCalendarDays[0] || schedulerAnchorDate;
+    const rangeEnd = schedulerCalendarDays[schedulerCalendarDays.length - 1] || schedulerAnchorDate;
+    return `${format(rangeStart, 'MMM d')} - ${format(rangeEnd, 'MMM d, yyyy')}`;
+  }, [schedulerAnchorDate, schedulerCalendarDays]);
+
+  const timelineCellWidth = 64;
+
   const activeSelectedProject = getCurrentSelectedProject();
 
   if (activeSelectedProject) {
@@ -1624,7 +1759,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                       <View style={{ flex: 1 }}>
                         <Text style={styles.taskTitle}>{task.title}</Text>
                         <Text style={styles.taskMeta}>
-                          {task.category} • {task.priority} Priority
+                          {task.category} â€¢ {task.priority} Priority
                         </Text>
                       </View>
                       <View
@@ -2080,7 +2215,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                           {report.title || report.submitterName || report.partnerName || 'Report'}
                         </Text>
                         <Text style={styles.applicationMeta}>
-                          {report.reportType} • Impact {report.impactCount}
+                          {report.reportType} â€¢ Impact {report.impactCount}
                         </Text>
                         <Text style={styles.applicationMeta}>
                           Submitted by {report.submitterName || report.partnerName || 'User'}
@@ -2139,7 +2274,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                       <View style={{ flex: 1 }}>
                         <Text style={styles.applicationName}>{report.reportFile}</Text>
                         <Text style={styles.applicationMeta}>
-                          {report.format} • Generated {format(new Date(report.generatedAt), 'PPpp')}
+                          {report.format} â€¢ Generated {format(new Date(report.generatedAt), 'PPpp')}
                         </Text>
                         <Text style={styles.applicationMeta}>
                           {report.publishedAt
@@ -2449,11 +2584,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   return (
     <ScrollView style={styles.container}>
-      <View style={styles.listHeader}>
-        <View style={styles.listHeaderCopy}>
+      <View style={styles.lifecycleHero}>
+        <View style={styles.lifecycleHeroCopy}>
+          <Text style={styles.lifecycleEyebrow}>Lifecycle workspace</Text>
           <Text style={styles.title}>Project Management Suite</Text>
           <Text style={styles.listSubtitle}>
-            Centralize planning, approvals, delivery tracking, and reporting in one business-ready workspace.
+            Track programs, events, volunteers, and approvals in one responsive command center.
           </Text>
         </View>
         {isAdmin && (
@@ -2462,6 +2598,25 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             <Text style={styles.createProjectButtonText}>New Initiative</Text>
           </TouchableOpacity>
         )}
+      </View>
+
+      <View style={styles.lifecycleStatsRow}>
+        <View style={styles.lifecycleStatPill}>
+          <Text style={styles.lifecycleStatValue}>{projects.length}</Text>
+          <Text style={styles.lifecycleStatLabel}>Programs</Text>
+        </View>
+        <View style={styles.lifecycleStatPill}>
+          <Text style={styles.lifecycleStatValue}>{projects.filter(project => project.status === 'In Progress').length}</Text>
+          <Text style={styles.lifecycleStatLabel}>In progress</Text>
+        </View>
+        <View style={styles.lifecycleStatPill}>
+          <Text style={styles.lifecycleStatValue}>{projects.filter(project => project.status === 'Planning').length}</Text>
+          <Text style={styles.lifecycleStatLabel}>Planning</Text>
+        </View>
+        <View style={styles.lifecycleStatPill}>
+          <Text style={styles.lifecycleStatValue}>{projects.filter(project => project.isEvent).length}</Text>
+          <Text style={styles.lifecycleStatLabel}>Events</Text>
+        </View>
       </View>
 
       {loadError ? (
@@ -2480,6 +2635,108 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         </View>
       ) : null}
 
+
+      {!loadError ? (
+        <View style={styles.lifecycleBoardCard}>
+          <View style={styles.lifecycleBoardHeader}>
+            <View>
+              <Text style={styles.lifecycleBoardTitle}>Project Scheduler</Text>
+              <Text style={styles.lifecycleBoardMeta}>Tap a program or event to open its lifecycle view.</Text>
+            </View>
+            <View style={styles.lifecycleBoardTabs}>
+              <TouchableOpacity
+                style={[styles.lifecycleBoardTab, lifecycleView === 'scheduler' && styles.lifecycleBoardTabActive]}
+                onPress={() => setLifecycleView('scheduler')}
+                activeOpacity={0.85}
+              >
+                <Text style={[styles.lifecycleBoardTabText, lifecycleView === 'scheduler' && styles.lifecycleBoardTabTextActive]}>Scheduler</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.lifecycleBoardTab, lifecycleView === 'timeline' && styles.lifecycleBoardTabActive]}
+                onPress={() => setLifecycleView('timeline')}
+                activeOpacity={0.85}
+              >
+                <Text style={[styles.lifecycleBoardTabText, lifecycleView === 'timeline' && styles.lifecycleBoardTabTextActive]}>Timeline</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {lifecycleView === 'scheduler' ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <View style={styles.schedulerCalendarWrap}>
+                <View style={styles.schedulerCalendarTopRow}>
+                  <Text style={styles.schedulerCalendarRange}>{schedulerRangeLabel}</Text>
+                  <Text style={styles.schedulerCalendarHint}>3-week view</Text>
+                </View>
+
+                <View style={styles.schedulerCalendarHeaderRow}>
+                  {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(dayLabel => (
+                    <Text key={dayLabel} style={styles.schedulerCalendarHeaderCell}>{dayLabel}</Text>
+                  ))}
+                </View>
+
+                {schedulerCalendarWeeks.map((week, weekIndex) => (
+                  <View key={`scheduler-week-${weekIndex}`} style={styles.schedulerCalendarWeekRow}>
+                    {week.map(day => {
+                      const dayProjects = schedulerCalendarEventsByDate.get(getDateKey(day)) || [];
+                      return (
+                        <View key={day.toISOString()} style={styles.schedulerCalendarDayCell}>
+                          <Text style={styles.schedulerCalendarDayDate}>{format(day, 'd')}</Text>
+
+                          {dayProjects.length ? (
+                            <>
+                              {dayProjects.slice(0, 3).map(project => (
+                                <TouchableOpacity
+                                  key={`${project.id}-${day.toISOString()}`}
+                                  style={[
+                                    styles.schedulerCalendarEvent,
+                                    { backgroundColor: getProjectStatusColor(project.status) },
+                                  ]}
+                                  onPress={() => {
+                                    void handleSelectProject(project);
+                                  }}
+                                  activeOpacity={0.85}
+                                >
+                                  <Text style={styles.schedulerCalendarEventText} numberOfLines={1}>
+                                    {project.title}
+                                  </Text>
+                                </TouchableOpacity>
+                              ))}
+
+                              {dayProjects.length > 3 ? (
+                                <Text style={styles.schedulerCalendarMoreText}>+{dayProjects.length - 3} more</Text>
+                              ) : null}
+                            </>
+                          ) : (
+                            <Text style={styles.schedulerCalendarEmpty}>No events</Text>
+                          )}
+                        </View>
+                      );
+                    })}
+                  </View>
+                ))}
+              </View>
+            </ScrollView>
+          ) : (
+            <View style={styles.timelineBoard}>
+              {visibleBoardProjects.length ? visibleBoardProjects.slice(0, 8).map(project => (
+                <TouchableOpacity
+                  key={`timeline-${project.id}`}
+                  style={styles.timelineProjectRow}
+                  onPress={() => { void handleSelectProject(project); }}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.timelineProjectName} numberOfLines={1}>{project.title}</Text>
+                  <View style={styles.timelineTrack}>
+                    <View style={[styles.timelineBar, { backgroundColor: getProjectStatusColor(project.status) }]} />
+                  </View>
+                  <Text style={styles.timelineDateRange}>{format(new Date(project.startDate), 'MMM d')} - {format(new Date(project.endDate), 'MMM d')}</Text>
+                </TouchableOpacity>
+              )) : <Text style={styles.schedulerEmptyText}>No projects scheduled in this week.</Text>}
+            </View>
+          )}
+        </View>
+      ) : null}
       {!loadError && projects.length === 0 ? (
         <View style={styles.emptyState}>
           <MaterialIcons name="folder-open" size={48} color="#ccc" />
@@ -2509,16 +2766,57 @@ const styles = StyleSheet.create({
   headerSpacer: {
     width: 24,
     height: 24,
-  },
-  listHeader: {
+  },  lifecycleHero: {
+    marginBottom: 14,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    borderRadius: 6,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
     flexDirection: 'row',
-    alignItems: 'flex-start',
     justifyContent: 'space-between',
-    marginBottom: 16,
+    alignItems: 'center',
     gap: 12,
   },
-  listHeaderCopy: {
+  lifecycleHeroCopy: {
     flex: 1,
+    gap: 6,
+  },
+  lifecycleEyebrow: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#166534',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  lifecycleStatsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginBottom: 16,
+  },
+  lifecycleStatPill: {
+    minWidth: 102,
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  lifecycleStatValue: {
+    fontSize: 24,
+    lineHeight: 28,
+    fontWeight: '800',
+    color: '#14532d',
+  },
+  lifecycleStatLabel: {
+    marginTop: 2,
+    fontSize: 11,
+    color: '#166534',
+    fontWeight: '700',
   },
   inlineErrorWrap: {
     marginBottom: 16,
@@ -2539,7 +2837,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     backgroundColor: '#166534',
-    borderRadius: 10,
+    borderRadius: 6,
     paddingHorizontal: 14,
     paddingVertical: 10,
   },
@@ -2549,32 +2847,42 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   card: {
-    backgroundColor: '#fff',
-    borderRadius: 22,
-    marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.12,
-    shadowRadius: 18,
-    elevation: 6,
+    backgroundColor: '#ffffff',
+    borderRadius: 4,
+    marginBottom: 0,
+    borderWidth: 1,
+    borderColor: '#dbe2ea',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.05,
+    shadowRadius: 12,
+    elevation: 2,
     overflow: 'hidden',
+  },
+  cardDesktop: {
+    flexBasis: '31.7%',
+    maxWidth: '31.7%',
+  },
+  cardMobile: {
+    flexBasis: '100%',
+    maxWidth: '100%',
   },
   cardImage: {
     width: '100%',
-    height: 220,
+    height: 160,
     backgroundColor: '#dbe4ea',
   },
   cardBody: {
-    paddingHorizontal: 18,
-    paddingTop: 18,
-    paddingBottom: 20,
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 14,
   },
   cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    gap: 12,
-    marginBottom: 14,
+    gap: 10,
+    marginBottom: 12,
   },
   cardHeaderCopy: {
     flex: 1,
@@ -2584,35 +2892,41 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   cardTitle: {
-    fontSize: 27,
-    lineHeight: 32,
+    fontSize: 20,
+    lineHeight: 24,
     fontWeight: '800',
     color: '#1f2544',
   },
   cardSubtitle: {
-    fontSize: 14,
+    fontSize: 12,
     color: '#64748b',
-    marginTop: 6,
+    marginTop: 4,
     fontWeight: '600',
   },
   description: {
     color: '#5b647f',
-    fontSize: 14,
-    lineHeight: 24,
+    fontSize: 13,
+    lineHeight: 20,
   },
   infoCard: {
-    backgroundColor: '#fff',
+    backgroundColor: '#ffffff',
     borderWidth: 1,
-    borderColor: '#eef2f7',
-    borderRadius: 18,
-    marginBottom: 18,
+    borderColor: '#dbeafe',
+    borderRadius: 4,
+    marginBottom: 14,
+    overflow: 'hidden',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 1,
   },
   infoRow: {
-    minHeight: 74,
+    minHeight: 66,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 12,
+    gap: 10,
     paddingHorizontal: 14,
     paddingVertical: 12,
   },
@@ -2626,7 +2940,7 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: '#fff5f5',
+    backgroundColor: '#ecfdf5',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -2650,20 +2964,22 @@ const styles = StyleSheet.create({
     marginHorizontal: 14,
   },
   aboutSection: {
-    marginBottom: 12,
+    marginBottom: 2,
   },
   aboutLabel: {
-    fontSize: 15,
+    fontSize: 12,
     fontWeight: '800',
     color: '#1f2544',
-    marginBottom: 10,
+    marginBottom: 8,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
   pointsBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
     backgroundColor: '#fff7ed',
-    borderRadius: 999,
+    borderRadius: 4,
     paddingHorizontal: 10,
     paddingVertical: 7,
   },
@@ -2679,7 +2995,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#fef3c7',
     borderColor: '#fcd34d',
     borderWidth: 1,
-    borderRadius: 999,
+    borderRadius: 6,
     paddingHorizontal: 8,
     paddingVertical: 5,
     alignSelf: 'flex-start',
@@ -2693,7 +3009,7 @@ const styles = StyleSheet.create({
   statusBadge: {
     paddingHorizontal: 12,
     paddingVertical: 7,
-    borderRadius: 999,
+    borderRadius: 4,
   },
   statusText: {
     color: '#fff',
@@ -2702,6 +3018,10 @@ const styles = StyleSheet.create({
   },
   list: {
     marginBottom: 20,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 16,
+    alignItems: 'stretch',
   },
   emptyState: {
     alignItems: 'center',
@@ -2715,14 +3035,21 @@ const styles = StyleSheet.create({
   },
   detailsCard: {
     backgroundColor: '#fff',
-    borderRadius: 18,
+    borderRadius: 6,
     padding: 20,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.06,
+    shadowRadius: 18,
+    elevation: 3,
   },
   detailsHero: {
     backgroundColor: '#f8fff9',
     borderWidth: 1,
     borderColor: '#d1fae5',
-    borderRadius: 16,
+    borderRadius: 6,
     padding: 18,
     marginBottom: 22,
   },
@@ -2753,7 +3080,7 @@ const styles = StyleSheet.create({
   detailsHeroStatus: {
     paddingHorizontal: 14,
     paddingVertical: 10,
-    borderRadius: 999,
+    borderRadius: 6,
     alignSelf: 'flex-start',
   },
   detailsQuickGrid: {
@@ -2766,11 +3093,16 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     flexShrink: 1,
     backgroundColor: '#ffffff',
-    borderRadius: 14,
+    borderRadius: 6,
     borderWidth: 1,
-    borderColor: '#dcfce7',
+    borderColor: '#dbeafe',
     paddingHorizontal: 14,
     paddingVertical: 14,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 1,
   },
   detailsQuickLabel: {
     fontSize: 12,
@@ -2798,7 +3130,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#ecfdf5',
     borderWidth: 1,
     borderColor: '#86efac',
-    borderRadius: 10,
+    borderRadius: 6,
     paddingHorizontal: 12,
     paddingVertical: 10,
   },
@@ -2826,7 +3158,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#fef3c7',
     borderWidth: 1,
     borderColor: '#fcd34d',
-    borderRadius: 10,
+    borderRadius: 6,
     paddingHorizontal: 12,
     paddingVertical: 10,
     marginBottom: 20,
@@ -2847,10 +3179,15 @@ const styles = StyleSheet.create({
   detailsSectionCard: {
     backgroundColor: '#f8fafc',
     borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 16,
+    borderColor: '#dbeafe',
+    borderRadius: 6,
     padding: 18,
     marginVertical: 12,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 1,
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -2871,7 +3208,7 @@ const styles = StyleSheet.create({
   },
   detailField: {
     backgroundColor: '#fff',
-    borderRadius: 12,
+    borderRadius: 6,
     borderWidth: 1,
     borderColor: '#e2e8f0',
     paddingHorizontal: 14,
@@ -2908,7 +3245,7 @@ const styles = StyleSheet.create({
   currentStatusBadge: {
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 8,
+    borderRadius: 6,
     alignSelf: 'flex-start',
   },
   updatesList: {
@@ -2943,12 +3280,17 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   applicationCard: {
-    backgroundColor: '#f8fafc',
-    borderRadius: 10,
+    backgroundColor: '#ffffff',
+    borderRadius: 6,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: '#dbeafe',
     padding: 14,
     marginBottom: 14,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 2,
   },
   applicationHeader: {
     flexDirection: 'row',
@@ -2968,14 +3310,14 @@ const styles = StyleSheet.create({
   reportImagePreview: {
     width: '100%',
     height: 180,
-    borderRadius: 10,
+    borderRadius: 6,
     marginTop: 10,
     backgroundColor: '#e2e8f0',
   },
   applicationStatusBadge: {
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 999,
+    borderRadius: 6,
   },
   applicationStatusPending: {
     backgroundColor: '#fef3c7',
@@ -2997,12 +3339,17 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   taskCard: {
-    backgroundColor: '#f8fafc',
-    borderRadius: 12,
+    backgroundColor: '#ffffff',
+    borderRadius: 6,
     borderWidth: 1,
     borderColor: '#dbeafe',
     padding: 14,
     marginBottom: 14,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 2,
   },
   taskCardHeader: {
     flexDirection: 'row',
@@ -3044,7 +3391,7 @@ const styles = StyleSheet.create({
   taskStatusBadge: {
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 999,
+    borderRadius: 6,
   },
   taskStatusUnassigned: {
     backgroundColor: '#e5e7eb',
@@ -3064,12 +3411,17 @@ const styles = StyleSheet.create({
     color: '#0f172a',
   },
   volunteerCard: {
-    backgroundColor: '#f8fafc',
-    borderRadius: 10,
+    backgroundColor: '#ffffff',
+    borderRadius: 6,
     borderWidth: 1,
     borderColor: '#dbeafe',
     padding: 12,
     marginBottom: 12,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 1,
   },
   volunteerCardHeader: {
     flexDirection: 'row',
@@ -3093,7 +3445,7 @@ const styles = StyleSheet.create({
   volunteerParticipationBadge: {
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 999,
+    borderRadius: 6,
   },
   volunteerParticipationActiveBadge: {
     backgroundColor: '#dbeafe',
@@ -3110,7 +3462,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#dcfce7',
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 999,
+    borderRadius: 6,
   },
   volunteerSourceBadgeText: {
     fontSize: 12,
@@ -3121,7 +3473,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#e0f2fe',
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 999,
+    borderRadius: 6,
   },
   volunteerStatusBadgeText: {
     fontSize: 12,
@@ -3137,7 +3489,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#166534',
     paddingHorizontal: 12,
     paddingVertical: 10,
-    borderRadius: 8,
+    borderRadius: 6,
   },
   completeVolunteerButtonText: {
     color: '#fff',
@@ -3159,7 +3511,7 @@ const styles = StyleSheet.create({
   applicationButton: {
     flex: 1,
     paddingVertical: 10,
-    borderRadius: 8,
+    borderRadius: 6,
     alignItems: 'center',
     justifyContent: 'center',
     minHeight: 42,
@@ -3178,11 +3530,259 @@ const styles = StyleSheet.create({
   rejectButton: {
     backgroundColor: '#dc2626',
   },
+  lifecycleBoardCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    padding: 16,
+    marginBottom: 16,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    elevation: 3,
+  },
+  lifecycleBoardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+    marginBottom: 14,
+  },
+  lifecycleBoardTitle: {
+    fontSize: 30,
+    fontWeight: '800',
+    color: '#1e3a8a',
+  },
+  lifecycleBoardMeta: {
+    marginTop: 4,
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#475569',
+  },
+  lifecycleBoardTabs: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  lifecycleBoardTab: {
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    backgroundColor: '#f8fafc',
+  },
+  lifecycleBoardTabActive: {
+    backgroundColor: '#166534',
+    borderColor: '#166534',
+  },
+  lifecycleBoardTabText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  lifecycleBoardTabTextActive: {
+    color: '#ffffff',
+  },
+  schedulerCalendarWrap: {
+    minWidth: 980,
+  },
+  schedulerCalendarTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  schedulerCalendarRange: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#1f2937',
+  },
+  schedulerCalendarHint: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#64748b',
+  },
+  schedulerCalendarHeaderRow: {
+    flexDirection: 'row',
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    borderBottomWidth: 0,
+  },
+  schedulerCalendarHeaderCell: {
+    flex: 1,
+    textAlign: 'center',
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#334155',
+    paddingVertical: 8,
+    backgroundColor: '#f8fafc',
+    borderRightWidth: 1,
+    borderRightColor: '#dbeafe',
+  },
+  schedulerCalendarWeekRow: {
+    flexDirection: 'row',
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    borderTopWidth: 0,
+  },
+  schedulerCalendarDayCell: {
+    flex: 1,
+    minHeight: 160,
+    paddingHorizontal: 8,
+    paddingTop: 8,
+    paddingBottom: 6,
+    borderRightWidth: 1,
+    borderRightColor: '#dbeafe',
+    backgroundColor: '#ffffff',
+  },
+  schedulerCalendarDayDate: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#334155',
+    marginBottom: 6,
+  },
+  schedulerCalendarEvent: {
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 5,
+    marginBottom: 6,
+  },
+  schedulerCalendarEventText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  schedulerCalendarMoreText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#475569',
+    marginTop: 2,
+  },
+  schedulerCalendarEmpty: {
+    fontSize: 11,
+    color: '#94a3b8',
+    marginTop: 4,
+  },
+  schedulerWeekRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  schedulerDayColumn: {
+    width: 170,
+    minHeight: 220,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 6,
+    padding: 10,
+    backgroundColor: '#f8fafc',
+  },
+  schedulerDayName: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  schedulerDayDate: {
+    marginTop: 2,
+    marginBottom: 8,
+    fontSize: 12,
+    color: '#64748b',
+    fontWeight: '600',
+  },
+  schedulerEventPill: {
+    borderLeftWidth: 4,
+    borderRadius: 6,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+    marginBottom: 8,
+  },
+  schedulerEventTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  schedulerEventMeta: {
+    marginTop: 2,
+    fontSize: 11,
+    color: '#64748b',
+  },
+  schedulerEmptyText: {
+    fontSize: 12,
+    color: '#94a3b8',
+    marginTop: 6,
+  },
+  timelineBoard: {
+    minWidth: 880,
+  },
+  timelineHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  timelineHeaderProject: {
+    width: 220,
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#334155',
+  },
+  timelineHeaderDays: {
+    flexDirection: 'row',
+    width: 448,
+    justifyContent: 'space-between',
+  },
+  timelineHeaderDay: {
+    width: 64,
+    fontSize: 11,
+    color: '#64748b',
+    textAlign: 'center',
+    fontWeight: '700',
+  },
+  timelineProjectRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  timelineProjectName: {
+    width: 220,
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#0f172a',
+    paddingRight: 10,
+  },
+  timelineTrack: {
+    width: 448,
+    height: 34,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    backgroundColor: '#eff6ff',
+    position: 'relative',
+    justifyContent: 'center',
+  },
+  timelineBar: {
+    position: 'absolute',
+    top: 5,
+    height: 24,
+    borderRadius: 6,
+  },
+  timelineDateRange: {
+    paddingLeft: 8,
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
   addButton: {
     backgroundColor: '#4CAF50',
     width: 36,
     height: 36,
-    borderRadius: 18,
+    borderRadius: 6,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -3230,7 +3830,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#e0f2fe',
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 12,
+    borderRadius: 6,
     fontSize: 13,
     fontWeight: '700',
     color: '#0f172a',
@@ -3260,14 +3860,14 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#fff',
     padding: 12,
-    borderRadius: 12,
+    borderRadius: 6,
     borderWidth: 1,
     borderColor: '#e5e7eb',
   },
   statusOption: {
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 8,
+    borderRadius: 6,
     backgroundColor: '#f0f0f0',
     borderWidth: 2,
     borderColor: 'transparent',
@@ -3286,7 +3886,7 @@ const styles = StyleSheet.create({
   },
   textArea: {
     backgroundColor: '#fff',
-    borderRadius: 8,
+    borderRadius: 6,
     padding: 12,
     borderWidth: 1,
     borderColor: '#ddd',
@@ -3316,7 +3916,7 @@ const styles = StyleSheet.create({
   submitButton: {
     backgroundColor: '#4CAF50',
     paddingVertical: 14,
-    borderRadius: 8,
+    borderRadius: 6,
     alignItems: 'center',
     marginBottom: 20,
   },
@@ -3326,3 +3926,9 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
 });
+
+
+
+
+
+
