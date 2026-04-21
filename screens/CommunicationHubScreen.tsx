@@ -10,6 +10,7 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  Share,
   useWindowDimensions,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -283,7 +284,75 @@ function createScopeProposalDraft(): ScopeProposalDraft {
 
 // Summarizes a scope proposal into plain content for storage.
 function buildScopeProposalSummary(draft: ScopeProposalDraft): string {
-  return `Scope Proposal: ${draft.title.trim()} - Timeline: ${draft.timeline.trim()}`;
+  return `Project Proposal: ${draft.title.trim()} - Timeline: ${draft.timeline.trim()}`;
+}
+
+function buildScopeProposalExport(scopeProposal: ProjectGroupScopeProposal, senderLabel: string): string {
+  const lines = [
+    'Project Proposal',
+    `Title: ${scopeProposal.title}`,
+    `Submitted by: ${senderLabel}`,
+    `Status: ${scopeProposal.status}`,
+    '',
+    'Description:',
+    scopeProposal.description,
+    '',
+  ];
+
+  if (scopeProposal.included.length > 0) {
+    lines.push('Included:');
+    scopeProposal.included.forEach(item => lines.push(`- ${item}`));
+    lines.push('');
+  }
+
+  if (scopeProposal.excluded.length > 0) {
+    lines.push('Excluded:');
+    scopeProposal.excluded.forEach(item => lines.push(`- ${item}`));
+    lines.push('');
+  }
+
+  if (scopeProposal.timeline) {
+    lines.push(`Timeline: ${scopeProposal.timeline}`);
+  }
+
+  if (scopeProposal.resources) {
+    lines.push(`Resources: ${scopeProposal.resources}`);
+  }
+
+  if (scopeProposal.successCriteria) {
+    lines.push('', 'Success Criteria:', scopeProposal.successCriteria);
+  }
+
+  if (scopeProposal.approvedBy && scopeProposal.approvedAt) {
+    lines.push('', `Approved on: ${formatDateLabel(scopeProposal.approvedAt)}`);
+  }
+
+  return lines.join('\n').trim();
+}
+
+async function exportScopeProposalFile(scopeProposal: ProjectGroupScopeProposal, senderLabel: string) {
+  const content = buildScopeProposalExport(scopeProposal, senderLabel);
+  const fileName = `project-proposal-${scopeProposal.title
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '') || 'proposal'}.txt`;
+
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8;' });
+    const url = window.URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = fileName;
+    anchor.click();
+    window.URL.revokeObjectURL(url);
+    return;
+  }
+
+  await Share.share({
+    title: 'Project Proposal',
+    message: content,
+  });
 }
 
 // Returns the status color palette for scope proposals.
@@ -1561,6 +1630,15 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                       {canApprove ? (
                         <View style={styles.scopeProposalActions}>
+                          <TouchableOpacity
+                            style={styles.downloadButton}
+                            onPress={() => {
+                              void exportScopeProposalFile(scopeProposal, senderLabel);
+                            }}
+                          >
+                            <MaterialIcons name="download" size={16} color="#1d4ed8" />
+                            <Text style={styles.downloadButtonText}>Download File</Text>
+                          </TouchableOpacity>
                           <TouchableOpacity 
                             style={styles.approveButton}
                             onPress={() => {
@@ -1578,7 +1656,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                             }}
                           >
                             <MaterialIcons name="check-circle" size={16} color="#ffffff" />
-                            <Text style={styles.approveButtonText}>Approve Scope</Text>
+                            <Text style={styles.approveButtonText}>Approve Project Proposal</Text>
                           </TouchableOpacity>
                           <TouchableOpacity 
                             style={styles.editButton}
@@ -1913,9 +1991,9 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                     <MaterialIcons name="edit-note" size={20} color="#1d4ed8" />
                   </View>
                   <View style={styles.scopeProposalComposerHeaderCopy}>
-                    <Text style={styles.scopeProposalComposerTitle}>Propose a project scope</Text>
+                    <Text style={styles.scopeProposalComposerTitle}>Propose a program</Text>
                     <Text style={styles.scopeProposalComposerSubtitle}>
-                      Define goals, deliverables, and success criteria for this project.
+                      Define goals, deliverables, and success criteria for this program.
                     </Text>
                   </View>
                 </View>
@@ -3702,6 +3780,24 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     color: '#ffffff',
+  },
+  downloadButton: {
+    flex: 0.9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+  },
+  downloadButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#1d4ed8',
   },
   editButton: {
     flex: 0.5,

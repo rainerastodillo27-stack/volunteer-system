@@ -1155,7 +1155,7 @@ def get_partner_applications_by_user(partner_user_id: str) -> dict[str, Any]:
 
 
 @app.post("/partner-project-applications/request")
-# API endpoint that creates a partner join request for a project.
+# API endpoint that creates a partner program proposal for admin review.
 async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload) -> dict[str, Any]:
     _require_postgres()
     with get_postgres_connection() as connection:
@@ -1219,23 +1219,6 @@ async def review_partner_project_application(
             "reviewedBy": reviewed_by,
         }
         _postgres_upsert_hot_item(connection, "partnerProjectApplications", updated_application)
-
-        if next_status == "Approved":
-            project = _postgres_get_hot_item_by_id(connection, "projects", str(application.get("projectId") or ""))
-            if project is not None:
-                partner_user_id = str(application.get("partnerUserId") or "")
-                joined_user_ids = list(project.get("joinedUserIds") or [])
-                if partner_user_id and partner_user_id not in joined_user_ids:
-                    _postgres_upsert_hot_item(
-                        connection,
-                        "projects",
-                        {
-                            **project,
-                            "joinedUserIds": [*joined_user_ids, partner_user_id],
-                            "updatedAt": datetime.now(timezone.utc).isoformat(),
-                        },
-                    )
-                    broadcast_keys.append("projects")
 
         connection.commit()
 

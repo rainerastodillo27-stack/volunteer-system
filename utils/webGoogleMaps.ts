@@ -16,6 +16,7 @@ type GoogleMapOptions = {
   center: GoogleLatLngLiteral;
   zoom: number;
   minZoom?: number;
+  mapTypeId?: 'roadmap' | 'satellite' | 'hybrid' | 'terrain';
   mapTypeControl?: boolean;
   streetViewControl?: boolean;
   fullscreenControl?: boolean;
@@ -45,6 +46,7 @@ type GoogleMapInstance = {
   fitBounds: (bounds: GoogleLatLngBounds, padding?: number) => void;
   setCenter: (center: GoogleLatLngLiteral) => void;
   setZoom: (zoom: number) => void;
+  setOptions: (options: Partial<GoogleMapOptions>) => void;
 };
 
 type GoogleMarkerInstance = {

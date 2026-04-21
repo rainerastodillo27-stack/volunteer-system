@@ -10,7 +10,7 @@ import {
   getProjectsScreenSnapshot,
   getVolunteerProjectMatches,
   requestVolunteerProjectJoin,
-  requestPartnerProjectJoin,
+  submitPartnerProgramProposal,
   startVolunteerTimeLog,
   endVolunteerTimeLog,
   subscribeToStorageChanges,
@@ -424,29 +424,37 @@ export default function ProjectsScreen({ navigation, route }: any) {
       return;
     }
 
-    const targetIndex = projects.findIndex(project => project.id === requestedProjectId);
-    if (targetIndex === -1) {
+    const targetCategoryIndex = projectsByCategory.findIndex(categoryGroup =>
+      categoryGroup.projects.some(project => project.id === requestedProjectId)
+    );
+    if (targetCategoryIndex === -1) {
+      return;
+    }
+
+    const targetCategory = projectsByCategory[targetCategoryIndex];
+    if (!targetCategory) {
       return;
     }
 
     setExpandedProjectId(requestedProjectId);
+    setExpandedCategories(prev => new Set(prev).add(targetCategory.category));
     requestAnimationFrame(() => {
       projectListRef.current?.scrollToIndex({
-        index: targetIndex,
+        index: targetCategoryIndex,
         animated: true,
         viewPosition: 0.15,
       });
     });
     navigation.setParams({ projectId: undefined });
-  }, [navigation, projects, route?.params?.projectId]);
+  }, [navigation, projects, projectsByCategory, route?.params?.projectId]);
 
-  // Sends a join request for the active project based on the current user role.
+  // Handles the active project action based on the current user role.
   const handleJoinProject = async (projectId: string) => {
     if (!user?.id) return;
     try {
       setLoadingProjectId(projectId);
       if (user.role === 'partner') {
-        const application = await requestPartnerProjectJoin(projectId, user);
+        const application = await submitPartnerProgramProposal(projectId, user);
         startTransition(() => {
           setPartnerApplications(prev => {
             const withoutCurrent = prev.filter(existing => existing.id !== application.id);
@@ -455,7 +463,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
             );
           });
         });
-        Alert.alert('Submitted', 'Admin has been notified and your request is waiting for approval.');
+        Alert.alert('Submitted', 'Your project proposal has been sent to the admin for approval.');
         return;
       }
 
@@ -475,7 +483,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
     } catch (error) {
       Alert.alert(
         getRequestErrorTitle(error),
-        getRequestErrorMessage(error, 'Failed to request this program. Please try again.')
+        getRequestErrorMessage(error, 'Failed to submit this project proposal. Please try again.')
       );
     } finally {
       setLoadingProjectId(null);
@@ -667,8 +675,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
           const canViewProjectFiles =
             user?.role === 'admin' ||
             (user?.role === 'volunteer' && (joined || Boolean(joinRecord))) ||
-            (user?.role === 'partner' &&
-              (joined || partnerApplication?.status === 'Approved'));
+            (user?.role === 'partner' && partnerApplication?.status === 'Approved');
           const isPendingApproval = volunteerMatch?.status === 'Requested';
           const wasRejected = volunteerMatch?.status === 'Rejected';
           const joinButtonLabel = completedParticipation
@@ -914,45 +921,45 @@ export default function ProjectsScreen({ navigation, route }: any) {
               {user?.role === 'partner' && (
                 <View style={styles.partnerActions}>
                   <Text style={styles.matchReason}>
-                    Partner orgs can join any program to coordinate with NVC.
+                    Partner orgs can submit a project proposal for admin approval.
                   </Text>
                   <TouchableOpacity
                     style={[
                       styles.joinButton,
-                      (joined || partnerApplication) && styles.joinButtonJoined,
+                      partnerApplication && styles.joinButtonJoined,
                       loadingProjectId === item.id && styles.joinButtonLoading,
                     ]}
-                    disabled={joined || !!partnerApplication || loadingProjectId === item.id}
+                    disabled={!!partnerApplication || loadingProjectId === item.id}
                     onPress={() => handleJoinProject(item.id)}
                   >
                     <MaterialIcons
-                      name={joined ? 'check-circle' : partnerApplication ? 'hourglass-empty' : 'group-add'}
+                      name={partnerApplication ? 'hourglass-empty' : 'campaign'}
                       size={18}
-                      color={joined || partnerApplication ? '#155724' : '#fff'}
+                      color={partnerApplication ? '#155724' : '#fff'}
                     />
                     <Text
                       style={[
                         styles.joinButtonText,
-                        (joined || partnerApplication) && styles.joinButtonTextJoined,
+                        partnerApplication && styles.joinButtonTextJoined,
                       ]}
                     >
-                      {joined
-                        ? 'Approved as Partner'
-                        : partnerApplication?.status === 'Pending'
-                        ? 'Waiting for Approval'
+                      {partnerApplication?.status === 'Pending'
+                        ? 'Proposal Pending'
                         : partnerApplication?.status === 'Rejected'
-                        ? 'Request Rejected'
-                        : 'Join as Partner'}
+                        ? 'Proposal Rejected'
+                        : partnerApplication?.status === 'Approved'
+                        ? 'Proposal Approved'
+                        : 'Submit Proposal'}
                     </Text>
                   </TouchableOpacity>
-                  {(joined || partnerApplication) && (
+                  {partnerApplication && (
                     <>
                       <Text style={styles.partnerNote}>
-                        {joined
-                          ? 'Your org is approved as a collaborator for this program.'
-                          : partnerApplication?.status === 'Pending'
-                          ? 'Your request is pending admin approval.'
-                          : 'This request was rejected by the admin.'}
+                        {partnerApplication?.status === 'Pending'
+                          ? 'Your project proposal is pending admin approval.'
+                          : partnerApplication?.status === 'Approved'
+                          ? 'Your project proposal was approved by the admin.'
+                          : 'This proposal was rejected by the admin.'}
                       </Text>
 
                       {canViewProjectFiles && (
