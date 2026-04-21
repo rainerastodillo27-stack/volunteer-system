@@ -1,7 +1,11 @@
 from typing import Any
 
-from .field_rules import normalize_email, sanitize_hot_storage_item
-from .relational_mirror import sync_relational_mirror_collection
+try:
+    from .field_rules import normalize_email, sanitize_hot_storage_item
+    from .relational_mirror import sync_relational_mirror_collection
+except ImportError:
+    from field_rules import normalize_email, sanitize_hot_storage_item
+    from relational_mirror import sync_relational_mirror_collection
 
 ROGUE_TABLES = ['Volunteer management System']
 HOT_STORAGE_TABLES = {

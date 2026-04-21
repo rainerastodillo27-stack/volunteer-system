@@ -20,7 +20,7 @@ import {
   createPartnerEventCheckIn,
   getDashboardTimelineSnapshot,
   getPartnerDashboardSnapshot,
-  requestPartnerProjectJoin,
+  submitPartnerProgramProposal,
   submitPartnerReport,
   subscribeToStorageChanges,
 } from '../models/storage';
@@ -98,10 +98,7 @@ function getVisibleImpactReportsForPartner(
 
   const allowedProjectIds = new Set(
     projects
-      .filter(
-        project =>
-          (project.joinedUserIds || []).includes(partnerUserId) || approvedProjectIds.has(project.id)
-      )
+      .filter(project => approvedProjectIds.has(project.id))
       .map(project => project.id)
   );
 
@@ -227,10 +224,7 @@ export default function PartnerDashboardScreen({ navigation }: any) {
     () =>
       projects.filter(project => {
         const application = applicationByProjectId.get(project.id);
-        return (
-          project.joinedUserIds?.includes(user?.id || '') ||
-          application?.status === 'Approved'
-        );
+        return application?.status === 'Approved';
       }),
     [applicationByProjectId, projects, user?.id]
   );
@@ -288,13 +282,13 @@ export default function PartnerDashboardScreen({ navigation }: any) {
 
     try {
       setActionProjectId(projectId);
-      await requestPartnerProjectJoin(projectId, user);
-      Alert.alert('Request Sent', 'Your RSVP has been sent to the admin for approval.');
+      await submitPartnerProgramProposal(projectId, user);
+      Alert.alert('Proposal Sent', 'Your project proposal has been sent to the admin for approval.');
       void loadDashboardData();
     } catch (error) {
       Alert.alert(
         getRequestErrorTitle(error),
-        getRequestErrorMessage(error, 'Failed to send the RSVP request.')
+        getRequestErrorMessage(error, 'Failed to send the project proposal.')
       );
     } finally {
       setActionProjectId(null);
@@ -303,7 +297,7 @@ export default function PartnerDashboardScreen({ navigation }: any) {
 
   const handleCheckIn = async (project: Project) => {
     if (!user || !approvedPartner) {
-      Alert.alert('Approval Required', 'You need an approved partner application before checking in.');
+      Alert.alert('Approval Required', 'You need an approved project proposal before checking in.');
       return;
     }
 
@@ -345,7 +339,7 @@ export default function PartnerDashboardScreen({ navigation }: any) {
 
   const handleUploadReport = async (projectId: string) => {
     if (!user || !approvedPartner) {
-      Alert.alert('Approval Required', 'You need an approved partner application before uploading a report.');
+      Alert.alert('Approval Required', 'You need an approved project proposal before uploading a report.');
       return;
     }
 
@@ -515,26 +509,21 @@ export default function PartnerDashboardScreen({ navigation }: any) {
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Project Management</Text>
+        <Text style={styles.sectionTitle}>Project Proposals</Text>
         {activeProjects.map(project => {
           const displayStatus = getDisplayProjectStatus(project.status);
           const application = applicationByProjectId.get(project.id);
           const projectReportsForCard = partnerReports.filter(report => report.projectId === project.id);
           const latestProjectReport = projectReportsForCard[0];
           const reportFormOpen = reportForm.projectId === project.id;
-          const attending =
-            project.joinedUserIds?.includes(user?.id || '') || application?.status === 'Approved';
+          const attending = application?.status === 'Approved';
           const buttonLabel = attending
-            ? project.isEvent
-              ? 'Joined Event'
-              : 'Joined Project'
+            ? 'Proposal Approved'
             : application?.status === 'Pending'
-            ? 'Pending Approval'
+            ? 'Proposal Pending'
             : application?.status === 'Rejected'
-            ? 'Request Again'
-            : project.isEvent
-            ? 'Join Event'
-            : 'Join Project';
+            ? 'Submit Again'
+            : 'Submit Project Proposal';
 
           return (
             <View key={project.id} style={styles.projectCard}>
@@ -551,7 +540,7 @@ export default function PartnerDashboardScreen({ navigation }: any) {
               <TouchableOpacity
                 style={[styles.primaryButton, attending && styles.secondaryButton]}
                 onPress={() => handleJoinProject(project.id)}
-                disabled={attending || application?.status === 'Pending' || actionProjectId === project.id}
+                disabled={application?.status === 'Pending' || application?.status === 'Approved' || actionProjectId === project.id}
               >
                 <Text style={[styles.primaryButtonText, attending && styles.secondaryButtonText]}>
                   {actionProjectId === project.id ? 'Sending...' : buttonLabel}
@@ -577,7 +566,7 @@ export default function PartnerDashboardScreen({ navigation }: any) {
                         <Text style={styles.inlineReportTitle}>Data Submission Form</Text>
                         <Text style={styles.inlineReportMeta}>
                           {projectReportsForCard.length === 0
-                            ? `Upload a report inside this ${project.isEvent ? 'event' : 'project'}.`
+                            ? `Upload a report inside this ${project.isEvent ? 'event' : 'project'} after your proposal is approved.`
                             : `${projectReportsForCard.length} submitted report${
                                 projectReportsForCard.length === 1 ? '' : 's'
                               } for this ${project.isEvent ? 'event' : 'project'}.`}

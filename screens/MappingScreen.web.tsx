@@ -28,6 +28,64 @@ import { createGoogleMapsMarkerIcon, loadGoogleMaps } from '../utils/webGoogleMa
 
 const MapHost = 'div' as any;
 
+type MapStylePresetKey = 'admin-overview' | 'volunteer-view' | 'partner-view';
+
+type MapStylePreset = {
+  key: MapStylePresetKey;
+  label: string;
+  description: string;
+  mapTypeId: 'roadmap' | 'terrain' | 'hybrid';
+  accentColor: string;
+  chipBg: string;
+  chipBorder: string;
+  shellBg: string;
+  shellBorder: string;
+  errorBg: string;
+  errorBorder: string;
+};
+
+const MAP_STYLE_PRESETS: MapStylePreset[] = [
+  {
+    key: 'admin-overview',
+    label: 'Admin overview',
+    description: 'Neutral roadmap for command-center use.',
+    mapTypeId: 'roadmap',
+    accentColor: '#1d4ed8',
+    chipBg: '#eff6ff',
+    chipBorder: '#bfdbfe',
+    shellBg: '#dbeafe',
+    shellBorder: '#bfdbfe',
+    errorBg: 'rgba(219, 234, 254, 0.92)',
+    errorBorder: '#bfdbfe',
+  },
+  {
+    key: 'volunteer-view',
+    label: 'Volunteer view',
+    description: 'Green terrain styling like the volunteer side.',
+    mapTypeId: 'terrain',
+    accentColor: '#166534',
+    chipBg: '#f0fdf4',
+    chipBorder: '#bbf7d0',
+    shellBg: '#dcfce7',
+    shellBorder: '#bbf7d0',
+    errorBg: 'rgba(220, 252, 231, 0.92)',
+    errorBorder: '#bbf7d0',
+  },
+  {
+    key: 'partner-view',
+    label: 'Partner view',
+    description: 'Blue hybrid styling for partner planning.',
+    mapTypeId: 'hybrid',
+    accentColor: '#0f766e',
+    chipBg: '#ecfeff',
+    chipBorder: '#a5f3fc',
+    shellBg: '#e0f2fe',
+    shellBorder: '#bae6fd',
+    errorBg: 'rgba(224, 242, 254, 0.92)',
+    errorBorder: '#bae6fd',
+  },
+];
+
 function getWebGoogleMapsApiKey() {
   const expoExtra = Constants.expoConfig?.extra as { webGoogleMapsApiKey?: string } | undefined;
   return expoExtra?.webGoogleMapsApiKey || process.env.EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY || '';
@@ -62,12 +120,16 @@ export default function MappingScreen({ navigation }: any) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [showDetails, setShowDetails] = useState(false);
+  const [showMapStyleMenu, setShowMapStyleMenu] = useState(false);
+  const [selectedMapStyleKey, setSelectedMapStyleKey] = useState<MapStylePresetKey>('admin-overview');
   const [loading, setLoading] = useState(true);
   const [mapError, setMapError] = useState<string | null>(null);
   const mapElementRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<any>(null);
   const markerRefs = useRef<Array<{ marker: any; listener: { remove: () => void } }>>([]);
   const webGoogleMapsApiKey = getWebGoogleMapsApiKey();
+  const selectedMapStyle =
+    MAP_STYLE_PRESETS.find(preset => preset.key === selectedMapStyleKey) || MAP_STYLE_PRESETS[0];
 
   useEffect(() => {
     void loadProjects();
@@ -109,6 +171,7 @@ export default function MappingScreen({ navigation }: any) {
             center: PHILIPPINES_WEB_CENTER,
             zoom: 6,
             minZoom: 5,
+            mapTypeId: selectedMapStyle.mapTypeId,
             mapTypeControl: false,
             streetViewControl: false,
             fullscreenControl: true,
@@ -118,6 +181,8 @@ export default function MappingScreen({ navigation }: any) {
               strictBounds: false,
             },
           });
+        } else {
+          mapInstanceRef.current.setOptions({ mapTypeId: selectedMapStyle.mapTypeId });
         }
 
         const map = mapInstanceRef.current;
@@ -170,7 +235,7 @@ export default function MappingScreen({ navigation }: any) {
       cancelled = true;
       clearMarkers();
     };
-  }, [projects, webGoogleMapsApiKey]);
+  }, [projects, selectedMapStyle.mapTypeId, webGoogleMapsApiKey]);
 
   // Loads map projects and narrows visibility to projects the current user joined.
   const loadProjects = async () => {
@@ -243,19 +308,48 @@ export default function MappingScreen({ navigation }: any) {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Negros Programs and Events</Text>
-        <Text style={styles.headerSubtitle}>
-          {user?.role === 'admin'
-            ? 'Google Maps view for Negros Occidental, Philippines'
-            : 'Only projects you joined appear as pins'}
-        </Text>
+        <View style={styles.headerTopRow}>
+          <View style={styles.headerTextBlock}>
+            <Text style={styles.headerTitle}>Negros Programs and Events</Text>
+            <Text style={styles.headerSubtitle}>
+              {user?.role === 'admin'
+                ? 'Google Maps view for Negros Occidental, Philippines'
+                : 'Only projects you joined appear as pins'}
+            </Text>
+          </View>
+
+          <TouchableOpacity
+            style={[
+              styles.mapStyleButton,
+              {
+                backgroundColor: selectedMapStyle.chipBg,
+                borderColor: selectedMapStyle.chipBorder,
+              },
+            ]}
+            onPress={() => setShowMapStyleMenu(true)}
+          >
+            <MaterialIcons name="tune" size={18} color={selectedMapStyle.accentColor} />
+            <Text style={[styles.mapStyleButtonText, { color: selectedMapStyle.accentColor }]}>
+              {selectedMapStyle.label}
+            </Text>
+            <MaterialIcons name="keyboard-arrow-down" size={22} color={selectedMapStyle.accentColor} />
+          </TouchableOpacity>
+        </View>
       </View>
 
-      <View style={styles.webMapContainer}>
+      <View
+        style={[
+          styles.webMapContainer,
+          {
+            backgroundColor: selectedMapStyle.shellBg,
+            borderBottomColor: selectedMapStyle.shellBorder,
+          },
+        ]}
+      >
         <MapHost ref={mapElementRef} style={styles.webMapFrame} />
         {mapError ? (
-          <View style={styles.mapErrorOverlay}>
-            <View style={styles.mapErrorCard}>
+          <View style={[styles.mapErrorOverlay, { backgroundColor: selectedMapStyle.errorBg }]}>
+            <View style={[styles.mapErrorCard, { borderColor: selectedMapStyle.errorBorder }]}>
               <Text style={styles.mapErrorTitle}>Google Maps unavailable</Text>
               <Text style={styles.mapErrorText}>{mapError}</Text>
             </View>
@@ -340,6 +434,43 @@ export default function MappingScreen({ navigation }: any) {
           </View>
         </View>
       </Modal>
+
+      <Modal
+        animationType="fade"
+        transparent
+        visible={showMapStyleMenu}
+        onRequestClose={() => setShowMapStyleMenu(false)}
+      >
+        <TouchableOpacity
+          style={styles.menuBackdrop}
+          activeOpacity={1}
+          onPress={() => setShowMapStyleMenu(false)}
+        >
+          <View style={styles.mapStyleMenu}>
+            <Text style={styles.mapStyleMenuTitle}>Choose map style</Text>
+            {MAP_STYLE_PRESETS.map(preset => {
+              const isActive = preset.key === selectedMapStyleKey;
+
+              return (
+                <TouchableOpacity
+                  key={preset.key}
+                  style={[styles.mapStyleMenuItem, isActive && styles.mapStyleMenuItemActive]}
+                  onPress={() => {
+                    setSelectedMapStyleKey(preset.key);
+                    setShowMapStyleMenu(false);
+                  }}
+                >
+                  <View style={styles.mapStyleMenuItemTextWrap}>
+                    <Text style={styles.mapStyleMenuItemTitle}>{preset.label}</Text>
+                    <Text style={styles.mapStyleMenuItemDescription}>{preset.description}</Text>
+                  </View>
+                  {isActive ? <MaterialIcons name="check" size={20} color="#2563eb" /> : null}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
@@ -408,6 +539,15 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#e0e0e0',
   },
+  headerTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  headerTextBlock: {
+    flex: 1,
+  },
   headerTitle: {
     fontSize: 20,
     fontWeight: 'bold',
@@ -417,6 +557,19 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#999',
     marginTop: 4,
+  },
+  mapStyleButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  mapStyleButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
   },
   projectListContainer: {
     backgroundColor: '#fff',
@@ -522,5 +675,56 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  menuBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.35)',
+    justifyContent: 'flex-start',
+    alignItems: 'flex-end',
+    paddingTop: 78,
+    paddingRight: 16,
+  },
+  mapStyleMenu: {
+    width: 290,
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    padding: 14,
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 10,
+  },
+  mapStyleMenuTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0f172a',
+    marginBottom: 10,
+  },
+  mapStyleMenuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+  },
+  mapStyleMenuItemActive: {
+    backgroundColor: '#eff6ff',
+  },
+  mapStyleMenuItemTextWrap: {
+    flex: 1,
+  },
+  mapStyleMenuItemTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  mapStyleMenuItemDescription: {
+    marginTop: 2,
+    fontSize: 12,
+    lineHeight: 16,
+    color: '#64748b',
   },
 });

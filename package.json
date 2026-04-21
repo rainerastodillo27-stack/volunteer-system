@@ -33,7 +33,9 @@
     "db:cleanup:batch": "node ./scripts/run-python.js -m backend.batch_cleanup",
     "db:maintenance": "node ./scripts/run-python.js -m backend.database_manager",
     "db:maintenance:report": "node ./scripts/run-python.js -m backend.database_manager --report",
-    "db:init": "node ./scripts/run-python.js -m backend.init_supabase"
+    "db:init": "node ./scripts/run-python.js -m backend.init_supabase",
+    "db:migrate": "node ./scripts/run-python.js -m backend.migrate_database",
+    "db:migrate:direct": "node ./scripts/run-python.js -m backend.migrate_database_direct"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",

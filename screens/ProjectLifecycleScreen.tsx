@@ -325,7 +325,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     }
   };
 
-  // Loads partner join requests for the selected project.
+  // Loads partner project proposals for the selected project.
   const loadPartnerApplicationsForProject = async (projectId: string) => {
     try {
       const applications = await getPartnerProjectApplications(projectId);
@@ -333,7 +333,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     } catch (error) {
       setLoadError({
         title: getRequestErrorTitle(error),
-        message: getRequestErrorMessage(error, 'Failed to load partner applications.'),
+        message: getRequestErrorMessage(error, 'Failed to load program proposals.'),
       });
     }
   };
@@ -743,11 +743,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       const refreshedProject = await getAllProjects();
       const nextSelectedProject = refreshedProject.find(project => project.id === selectedProject.id) || null;
       setSelectedProject(nextSelectedProject);
-      Alert.alert('Success', `Partner application ${nextStatus.toLowerCase()}. The partner has been notified.`);
+      Alert.alert('Success', `Project proposal ${nextStatus.toLowerCase()}. The partner has been notified.`);
     } catch (error) {
       Alert.alert(
         getRequestErrorTitle(error),
-        getRequestErrorMessage(error, 'Failed to review partner application.')
+        getRequestErrorMessage(error, 'Failed to review project proposal.')
       );
     }
   };
@@ -1627,7 +1627,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                 </Text>
               </View>
               <View style={styles.detailsQuickCard}>
-                <Text style={styles.detailsQuickLabel}>Pending Partner Requests</Text>
+                <Text style={styles.detailsQuickLabel}>Pending Program Proposals</Text>
                 <Text style={styles.detailsQuickValue}>{pendingPartnerRequests}</Text>
               </View>
               <View style={styles.detailsQuickCard}>
@@ -1809,10 +1809,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           </View>
 
           <View style={styles.detailsSection}>
-            <Text style={styles.sectionTitle}>Pending Partner Join Requests</Text>
+            <Text style={styles.sectionTitle}>Pending Program Proposals</Text>
 
             {pendingPartnerApplications.length === 0 ? (
-              <Text style={styles.emptyText}>No pending partner requests right now</Text>
+              <Text style={styles.emptyText}>No pending program proposals right now</Text>
             ) : (
               <View style={styles.updatesList}>
                 {pendingPartnerApplications.map(application => (
@@ -1858,10 +1858,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           </View>
 
           <View style={styles.detailsSection}>
-            <Text style={styles.sectionTitle}>Approved Partners</Text>
+            <Text style={styles.sectionTitle}>Approved Proposals</Text>
 
             {approvedPartnerApplications.length === 0 ? (
-              <Text style={styles.emptyText}>No approved partners yet</Text>
+              <Text style={styles.emptyText}>No approved proposals yet</Text>
             ) : (
               <View style={styles.updatesList}>
                 {approvedPartnerApplications.map(application => (
@@ -1895,10 +1895,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           </View>
 
           <View style={styles.detailsSection}>
-            <Text style={styles.sectionTitle}>Rejected Partner Requests</Text>
+            <Text style={styles.sectionTitle}>Rejected Proposals</Text>
 
             {rejectedPartnerApplications.length === 0 ? (
-              <Text style={styles.emptyText}>No rejected partner requests</Text>
+              <Text style={styles.emptyText}>No rejected proposals</Text>
             ) : (
               <View style={styles.updatesList}>
                 {rejectedPartnerApplications.map(application => (

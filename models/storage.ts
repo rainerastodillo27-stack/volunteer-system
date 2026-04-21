@@ -58,12 +58,13 @@ const REMOTE_STORAGE_TIMEOUT_MS = 45000;
 const API_HEALTH_TIMEOUT_MS = 10000;
 const API_READY_RETRY_MS = 1000;
 const API_READY_MAX_ATTEMPTS = 4;
-const API_READY_CACHE_MS = 5000;
 const API_REQUEST_MAX_ATTEMPTS = 4;
 const API_REQUEST_RETRY_BASE_MS = 1000;
 const API_REQUEST_RETRY_MAX_MS = 8000;
-const SHARED_STORAGE_CACHE_TTL_MS = 3000;
-const STORAGE_CHANGE_POLL_INTERVAL_MS = 3000;
+const API_READY_CACHE_MS = 60000;
+// Keep shared storage responses warm for longer so screens do not re-read the same
+// collections on every navigation or re-render.
+const SHARED_STORAGE_CACHE_TTL_MS = 300000;
 const LOCAL_ONLY_STORAGE_KEYS = new Set([STORAGE_KEYS.CURRENT_USER]);
 const NEGROS_OCCIDENTAL_BOUNDS = {
   minLatitude: 9.85,
@@ -2217,34 +2218,14 @@ export function subscribeToMessages(
 // Opens a realtime websocket subscription for shared storage changes.
 export function subscribeToStorageChanges(
   keys: string[],
-  onChange: (event: { type: string; keys: string[] }) => void,
-  pollIntervalMs = STORAGE_CHANGE_POLL_INTERVAL_MS
+  onChange: (event: { type: string; keys: string[] }) => void
 ): () => void {
   let socket: WebSocket | null = null;
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  let pollTimer: ReturnType<typeof setInterval> | null = null;
   let closed = false;
   const watchedKeys = new Set(keys);
   const watchedKeyList = Array.from(watchedKeys);
-
-  const stopPolling = () => {
-    if (pollTimer) {
-      clearInterval(pollTimer);
-      pollTimer = null;
-    }
-  };
-
-  const startPolling = () => {
-    if (pollTimer) {
-      return;
-    }
-
-    pollTimer = setInterval(() => {
-      invalidateSharedStorageCache(watchedKeyList);
-      onChange({ type: 'storage.poll', keys: watchedKeyList });
-    }, pollIntervalMs);
-  };
 
   const cleanupSocket = () => {
     if (heartbeat) {
@@ -2263,11 +2244,9 @@ export function subscribeToStorageChanges(
 
   const connect = () => {
     cleanupSocket();
-    startPolling();
     socket = new WebSocket(getStorageWebSocketUrl());
 
     socket.onopen = () => {
-      stopPolling();
       heartbeat = setInterval(() => {
         if (socket?.readyState === WebSocket.OPEN) {
           socket.send('ping');
@@ -2294,7 +2273,6 @@ export function subscribeToStorageChanges(
 
     socket.onclose = () => {
       cleanupSocket();
-      startPolling();
       if (!closed) {
         reconnectTimer = setTimeout(connect, 1500);
       }
@@ -2312,7 +2290,6 @@ export function subscribeToStorageChanges(
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
     }
-    stopPolling();
     cleanupSocket();
   };
 }
@@ -2667,8 +2644,8 @@ export async function getPartnerProjectApplicationsByUser(
   return payload.applications || [];
 }
 
-// Creates a partner join request for admin review.
-export async function requestPartnerProjectJoin(
+// Creates a partner program proposal for admin review.
+export async function submitPartnerProgramProposal(
   projectId: string,
   partnerUser: User
 ): Promise<PartnerProjectApplication> {
@@ -2689,7 +2666,7 @@ export async function requestPartnerProjectJoin(
   );
 
   if (!payload.application) {
-    throw new Error('Partner join request did not complete.');
+    throw new Error('Partner program proposal did not complete.');
   }
 
   try {
@@ -2699,6 +2676,14 @@ export async function requestPartnerProjectJoin(
   }
 
   return payload.application;
+}
+
+// Backwards-compatible alias used by older screens.
+export async function requestPartnerProjectJoin(
+  projectId: string,
+  partnerUser: User
+): Promise<PartnerProjectApplication> {
+  return submitPartnerProgramProposal(projectId, partnerUser);
 }
 
 // Approves or rejects a partner join request.
@@ -3050,11 +3035,7 @@ export async function getPublishedImpactReportsByPartnerUser(
   );
   const allowedProjectIds = new Set(
     projects
-      .filter(
-        project =>
-          (project.joinedUserIds || []).includes(partnerUserId) ||
-          approvedApplicationProjectIds.has(project.id)
-      )
+      .filter(project => approvedApplicationProjectIds.has(project.id))
       .map(project => project.id)
   );
 
