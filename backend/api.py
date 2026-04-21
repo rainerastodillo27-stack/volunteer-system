@@ -1,5 +1,6 @@
 import os
 import json
+import threading
 from datetime import datetime, timezone
 from typing import Any
 
@@ -49,6 +50,12 @@ class StorageBatchPayload(BaseModel):
 class AuthLoginPayload(BaseModel):
     identifier: str
     password: str
+
+
+# Request payload for approving/rejecting user accounts.
+class UserApprovalPayload(BaseModel):
+    status: str  # 'approved' or 'rejected'
+    rejectionReason: str | None = None
 
 
 # Request payload for direct project joins.
@@ -732,12 +739,17 @@ def _build_projects_snapshot(
 # Prepares storage tables when the FastAPI app starts.
 def startup() -> None:
     # Keep demo credentials and seed data available whenever the backend starts.
-    try:
-        ensure_app_storage_seeded()
-        print("[OK] Backend started and demo storage was ensured")
-    except Exception as error:
-        # Don't block startup on database reachability; endpoints still report health.
-        print(f"[WARN] Backend started without ensuring demo storage: {error}")
+    # Run in background thread to avoid blocking server startup
+    def seed_storage():
+        try:
+            ensure_app_storage_seeded()
+            print("[OK] Backend started and demo storage was ensured")
+        except Exception as error:
+            # Don't block startup on database reachability; endpoints still report health.
+            print(f"[WARN] Backend started without ensuring demo storage: {error}")
+    
+    seed_thread = threading.Thread(target=seed_storage, daemon=True)
+    seed_thread.start()
 
 
 @app.get("/health", response_model=None)
@@ -820,8 +832,57 @@ def _get_user_by_identifier(identifier: str, connection: Any | None = None) -> d
         return query_user(active_connection)
 
 
+# Retrieves a user by their ID.
+def _get_user_by_id(user_id: str, connection: Any) -> dict[str, Any] | None:
+    _require_postgres()
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            select data
+            from app_users_store
+            where data->>'id' = %s
+            """,
+            (user_id,),
+        )
+        row = cursor.fetchone()
+    return None if row is None else row[0]
+
+
+# Retrieves all users from storage.
+def _get_all_users_from_storage(connection: Any) -> list[dict[str, Any]]:
+    _require_postgres()
+    users: list[dict[str, Any]] = []
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            select data
+            from app_users_store
+            order by sort_order asc
+            """
+        )
+        for row in cursor.fetchall():
+            users.append(row[0])
+    return users
+
+
+# Saves a user to storage.
+def _save_user_to_storage(user: dict[str, Any], connection: Any) -> None:
+    _require_postgres()
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            update app_users_store
+            set data = %s
+            where data->>'id' = %s
+            """,
+            (json.dumps(user), user.get("id")),
+        )
+    connection.commit()
+
+
 def _normalize_comparable_phone(value: Any) -> str:
     return normalize_comparable_phone(value)
+
 
 
 # Returns the login restriction message for partner accounts that are not yet approved.
@@ -916,6 +977,16 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
         if user is None or user.get("password") != payload.password:
             raise HTTPException(status_code=401, detail="Invalid email/phone or password.")
 
+        # Check if user account is approved (skip for admins)
+        if user.get("role") != "admin":
+            approval_status = user.get("approvalStatus", "approved")
+            if approval_status == "pending":
+                raise HTTPException(status_code=403, detail="Your account is pending admin approval. Please check back later.")
+            elif approval_status == "rejected":
+                rejection_reason = user.get("rejectionReason", "")
+                detail = f"Your account has been rejected by admin.{f' Reason: {rejection_reason}' if rejection_reason else ''}"
+                raise HTTPException(status_code=403, detail=detail)
+
         partner_block_reason = _get_partner_login_block_reason(connection, user)
         if partner_block_reason:
             raise HTTPException(status_code=403, detail=partner_block_reason)
@@ -925,6 +996,46 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
             raise HTTPException(status_code=403, detail=volunteer_block_reason)
 
         return {"user": user}
+
+
+@app.post("/auth/users/{user_id}/approve")
+# API endpoint for admin to approve a pending user account.
+def approve_user(user_id: str, payload: UserApprovalPayload, admin_id: str) -> dict[str, Any]:
+    with get_postgres_connection() as connection:
+        user = _get_user_by_id(user_id, connection)
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found.")
+
+        if payload.status == "approved":
+            user["approvalStatus"] = "approved"
+            user["approvedBy"] = admin_id
+            user["approvedAt"] = datetime.now(timezone.utc).isoformat()
+            # Remove rejection reason if it was previously rejected
+            user.pop("rejectionReason", None)
+            _save_user_to_storage(user, connection)
+            return {"user": user, "message": "User account approved successfully."}
+        elif payload.status == "rejected":
+            user["approvalStatus"] = "rejected"
+            user["rejectionReason"] = payload.rejectionReason or "Account rejected by administrator."
+            _save_user_to_storage(user, connection)
+            return {"user": user, "message": "User account rejected."}
+        else:
+            raise HTTPException(status_code=400, detail="Invalid approval status. Use 'approved' or 'rejected'.")
+
+
+@app.get("/auth/users/pending")
+# API endpoint to get all pending user approvals (admin only).
+def get_pending_users() -> dict[str, Any]:
+    with get_postgres_connection() as connection:
+        all_users = _get_all_users_from_storage(connection)
+        pending_users = [
+            u for u in all_users 
+            if u.get("approvalStatus") == "pending" and u.get("role") != "admin"
+        ]
+        return {
+            "pendingUsers": pending_users,
+            "count": len(pending_users)
+        }
 
 
 @app.get("/projects/snapshot")

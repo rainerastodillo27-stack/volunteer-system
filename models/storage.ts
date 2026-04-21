@@ -1270,6 +1270,7 @@ export async function createUserAccount(input: {
     role: input.role,
     userType: input.userType,
     pillarsOfInterest: input.pillarsOfInterest,
+    approvalStatus: 'pending', // New accounts require admin approval
     createdAt,
   };
 
@@ -1463,6 +1464,60 @@ export async function setCurrentUser(user: User | null): Promise<void> {
 // Restores the currently signed-in user from local-only storage.
 export async function getCurrentUser(): Promise<User | null> {
   return (await getLocalStorageItem<User>(STORAGE_KEYS.CURRENT_USER)) || null;
+}
+
+// User Approval Management
+// Gets all pending user accounts that need admin approval.
+export async function getPendingUserApprovals(): Promise<User[]> {
+  const users = await getAllUsers();
+  return users.filter(
+    user => user.role !== 'admin' && user.approvalStatus === 'pending'
+  );
+}
+
+// Gets all approved users.
+export async function getApprovedUsers(): Promise<User[]> {
+  const users = await getAllUsers();
+  return users.filter(user => user.approvalStatus === 'approved' || !user.approvalStatus);
+}
+
+// Approves a pending user account.
+export async function approveUser(userId: string, adminId: string): Promise<User> {
+  const user = await getUser(userId);
+  if (!user) {
+    throw new Error('User not found.');
+  }
+
+  const updatedUser: User = {
+    ...user,
+    approvalStatus: 'approved',
+    approvedBy: adminId,
+    approvedAt: new Date().toISOString(),
+    rejectionReason: undefined,
+  };
+
+  await saveUser(updatedUser);
+  return updatedUser;
+}
+
+// Rejects a pending user account with an optional reason.
+export async function rejectUser(
+  userId: string,
+  rejectionReason: string = 'Account rejected by administrator.'
+): Promise<User> {
+  const user = await getUser(userId);
+  if (!user) {
+    throw new Error('User not found.');
+  }
+
+  const updatedUser: User = {
+    ...user,
+    approvalStatus: 'rejected',
+    rejectionReason,
+  };
+
+  await saveUser(updatedUser);
+  return updatedUser;
 }
 
 // Partner Storage

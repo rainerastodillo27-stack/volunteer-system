@@ -26,6 +26,10 @@ export interface User {
   profilePhoto?: string;
   userType?: UserType;
   pillarsOfInterest?: NVCSector[];
+  approvalStatus?: 'pending' | 'approved' | 'rejected'; // Admin approval for new users
+  approvedBy?: string; // Admin user ID who approved
+  approvedAt?: string; // When the account was approved
+  rejectionReason?: string; // Reason if rejected
   createdAt: string;
 }
 

@@ -25,6 +25,9 @@ import {
   saveUser,
   subscribeToStorageChanges,
   verifyPartnerRegistration,
+  getPendingUserApprovals,
+  approveUser,
+  rejectUser,
 } from '../models/storage';
 import { NVCSector, Partner, User, UserRole, UserType, Volunteer } from '../models/types';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
@@ -39,6 +42,7 @@ export default function UserManagementScreen() {
   const [users, setUsers] = useState<User[]>([]);
   const [partners, setPartners] = useState<Partner[]>([]);
   const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
+  const [pendingUserApprovals, setPendingUserApprovals] = useState<User[]>([]);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
@@ -58,10 +62,11 @@ export default function UserManagementScreen() {
   // Loads and sorts all user accounts for the admin management table.
   const loadUsers = useCallback(async () => {
     try {
-      const [allUsers, allPartners, allVolunteers] = await Promise.all([
+      const [allUsers, allPartners, allVolunteers, pending] = await Promise.all([
         getAllUsers(),
         getAllPartners(),
         getAllVolunteers(),
+        getPendingUserApprovals(),
       ]);
       const sortedUsers = [...allUsers].sort((a, b) => {
         const createdAtDiff =
@@ -74,6 +79,7 @@ export default function UserManagementScreen() {
       setUsers(sortedUsers);
       setPartners(allPartners);
       setVolunteers(allVolunteers);
+      setPendingUserApprovals(pending);
       setLastSyncedAt(new Date().toISOString());
       setLoadError(null);
     } catch (error) {
@@ -261,6 +267,66 @@ export default function UserManagementScreen() {
     }
   };
 
+  const handleApproveUser = async (targetUser: User) => {
+    if (!user?.id) {
+      return;
+    }
+
+    Alert.alert(
+      'Approve Account',
+      `Approve ${targetUser.name}'s account? They will be able to log in immediately.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Approve',
+          style: 'default',
+          onPress: async () => {
+            try {
+              await approveUser(targetUser.id, user.id);
+              Alert.alert('Approved', `${targetUser.name}'s account has been approved.`);
+              await loadUsers();
+            } catch (error) {
+              Alert.alert(
+                getRequestErrorTitle(error),
+                getRequestErrorMessage(error, 'Failed to approve user account.')
+              );
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleRejectUser = async (targetUser: User) => {
+    if (!user?.id) {
+      return;
+    }
+
+    Alert.alert(
+      'Reject Account',
+      `Reject ${targetUser.name}'s account? They will not be able to log in.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reject',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await rejectUser(targetUser.id, 'Account rejected by administrator.');
+              Alert.alert('Rejected', `${targetUser.name}'s account has been rejected.`);
+              await loadUsers();
+            } catch (error) {
+              Alert.alert(
+                getRequestErrorTitle(error),
+                getRequestErrorMessage(error, 'Failed to reject user account.')
+              );
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const openPartnerReview = (partner: Partner) => {
     setReviewTarget({ type: 'partner', record: partner });
   };
@@ -353,6 +419,49 @@ export default function UserManagementScreen() {
         contentContainerStyle={styles.listContent}
         ListHeaderComponent={
           <>
+            <View style={styles.requestSection}>
+              <Text style={styles.requestSectionTitle}>User Account Approvals</Text>
+              <Text style={styles.requestSectionSubtitle}>
+                New user accounts waiting for admin approval before they can log in.
+              </Text>
+              {pendingUserApprovals.length === 0 ? (
+                <Text style={styles.requestEmptyText}>No pending user account approvals.</Text>
+              ) : (
+                pendingUserApprovals.map(pendingUser => (
+                  <View key={pendingUser.id} style={styles.requestCard}>
+                    <View style={styles.requestHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.requestName}>{pendingUser.name}</Text>
+                        <Text style={styles.requestMeta}>{pendingUser.role}</Text>
+                        <Text style={styles.requestMeta}>{pendingUser.email || 'No email on file'}</Text>
+                        <Text style={styles.requestMeta}>{pendingUser.phone || 'No phone number on file'}</Text>
+                        <Text style={styles.requestMeta}>
+                          Submitted {format(new Date(pendingUser.createdAt), 'MMM dd, yyyy hh:mm a')}
+                        </Text>
+                      </View>
+                      <View style={[styles.requestBadge, styles.requestBadgePending]}>
+                        <Text style={styles.requestBadgeText}>Pending</Text>
+                      </View>
+                    </View>
+                    <View style={styles.requestActionRow}>
+                      <TouchableOpacity
+                        style={[styles.requestActionButton, styles.approveActionButton]}
+                        onPress={() => handleApproveUser(pendingUser)}
+                      >
+                        <Text style={styles.requestActionButtonText}>Approve</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.requestActionButton, styles.rejectActionButton]}
+                        onPress={() => handleRejectUser(pendingUser)}
+                      >
+                        <Text style={styles.requestActionButtonText}>Reject</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ))
+              )}
+            </View>
+
             <View style={styles.requestSection}>
               <Text style={styles.requestSectionTitle}>Partner Onboarding Requests</Text>
               <Text style={styles.requestSectionSubtitle}>

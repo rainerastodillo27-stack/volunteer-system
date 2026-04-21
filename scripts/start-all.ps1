@@ -89,7 +89,30 @@ function Start-ServiceProcess {
 }
 
 Start-ServiceProcess -Name 'backend' -Command 'npm run backend' -LogPath $backendLog -WaitForBackendHealth
-Start-ServiceProcess -Name 'expo' -Command 'npm start' -LogPath $expoLog
 
-Write-Host "Use 'npm run all:status' to check processes and 'npm run all:stop' to stop them."
+Write-Host ""
+Write-Host "==========================================="
+Write-Host "VOLUNTEER SYSTEM STARTED"
+Write-Host "==========================================="
+Write-Host ""
+Write-Host "BACKEND: http://127.0.0.1:8000"
+Write-Host "WEB APP: http://127.0.0.1:8081"
+Write-Host ""
+Write-Host "==========================================="
+Write-Host ""
+
+# Kill any process using port 8081 (in case it's still lingering)
+$port = 8081
+$process = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess
+if ($process) {
+  Stop-Process -Id $process -Force -ErrorAction SilentlyContinue
+  Start-Sleep -Seconds 1
+}
+
+# Give backend a moment to be ready
+Start-Sleep -Seconds 2
+
+# Run Expo in foreground with QR code display
+Set-Location $projectRoot
+npm run expo:start
 
