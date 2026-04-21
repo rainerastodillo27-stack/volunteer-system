@@ -345,12 +345,29 @@ def prune_stale_legacy_app_users(connection: Any) -> list[str]:
 
 
 def maintain_schema_health(connection: Any) -> dict[str, list[str]]:
+    try:
+        from .data_archival import apply_retention_policies, enforce_max_record_limits
+    except ImportError:
+        from data_archival import apply_retention_policies, enforce_max_record_limits
+    
     cleaned_collections = sanitize_hot_storage_collections(connection)
     sync_legacy_app_users_from_hot_storage(connection)
     applied_constraints = apply_data_quality_constraints(connection)
+    
+    # Apply data retention and archival policies
+    retention_cleanup = apply_retention_policies(connection)
+    max_limit_cleanup = enforce_max_record_limits(connection)
+    
+    archival_messages = []
+    for table, count in sorted(retention_cleanup.items()):
+        archival_messages.append(f"{table}:{count} (expired)")
+    for table, count in sorted(max_limit_cleanup.items()):
+        archival_messages.append(f"{table}:{count} (over-limit)")
+    
     return {
         "dropped_rogue_tables": drop_empty_rogue_tables(connection),
         "cleaned_hot_storage": [f"{key}:{count}" for key, count in sorted(cleaned_collections.items())],
         "pruned_stale_app_users": prune_stale_legacy_app_users(connection),
         "applied_constraints": applied_constraints,
+        "archived_records": archival_messages,
     }
