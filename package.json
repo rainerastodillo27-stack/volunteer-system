@@ -26,7 +26,14 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "backend": "node ./scripts/run-python.js -m uvicorn backend.api:app --host 0.0.0.0 --port 8000 --ws websockets",
-    "backend:seed-storage": "node ./scripts/run-python.js -m backend.app_storage_seed"
+    "backend:seed-storage": "node ./scripts/run-python.js -m backend.app_storage_seed",
+    "db:cleanup": "node ./scripts/run-python.js -m backend.database_cleanup",
+    "db:cleanup:aggressive": "node ./scripts/run-python.js -m backend.heavy_cleanup",
+    "db:cleanup:session": "node ./scripts/run-python.js -m backend.session_cleanup",
+    "db:cleanup:batch": "node ./scripts/run-python.js -m backend.batch_cleanup",
+    "db:maintenance": "node ./scripts/run-python.js -m backend.database_manager",
+    "db:maintenance:report": "node ./scripts/run-python.js -m backend.database_manager --report",
+    "db:init": "node ./scripts/run-python.js -m backend.init_supabase"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
