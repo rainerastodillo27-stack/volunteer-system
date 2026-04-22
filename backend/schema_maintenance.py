@@ -124,7 +124,25 @@ DATA_QUALITY_CONSTRAINT_SPECS = [
 ]
 
 
+def _public_table_exists(connection: Any, table_name: str) -> bool:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            select exists (
+              select 1
+              from information_schema.tables
+              where table_schema = 'public' and table_name = %s
+            )
+            """,
+            (table_name,),
+        )
+        row = cursor.fetchone()
+    return bool(row and row[0])
+
+
 def _upsert_app_storage_collection(connection: Any, key: str, items: list[dict[str, Any]]) -> None:
+    if not _public_table_exists(connection, "app_storage"):
+        return
     with connection.cursor() as cursor:
         cursor.execute(
             """
@@ -193,6 +211,9 @@ def sanitize_hot_storage_collections(connection: Any) -> dict[str, int]:
 
 
 def sync_legacy_app_users_from_hot_storage(connection: Any) -> int:
+    if not _public_table_exists(connection, "app_users_store") or not _public_table_exists(connection, "app_users"):
+        return 0
+
     with connection.cursor() as cursor:
         cursor.execute(
             """
@@ -268,8 +289,16 @@ def _add_check_constraint(cursor: Any, table_name: str, constraint_name: str, co
 def apply_data_quality_constraints(connection: Any) -> list[str]:
     applied: list[str] = []
 
+    existing_tables = {
+        table_name
+        for table_name, _, _ in DATA_QUALITY_CONSTRAINT_SPECS
+        if _public_table_exists(connection, table_name)
+    }
+
     with connection.cursor() as cursor:
         for table_name, constraint_name, condition in DATA_QUALITY_CONSTRAINT_SPECS:
+            if table_name not in existing_tables:
+                continue
             _add_check_constraint(cursor, table_name, constraint_name, condition)
             applied.append(constraint_name)
 

@@ -8,9 +8,11 @@ import {
   ScrollView,
   Platform,
   TextInput,
+  Image,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import type { SubmittedReport } from '../screens/ReportsScreen';
+import { isImageMediaUri } from '../utils/media';
 
 interface ReportDetailsModalProps {
   visible: boolean;
@@ -19,6 +21,7 @@ interface ReportDetailsModalProps {
   onApprove?: (reportId: string, notes: string) => void;
   onReject?: (reportId: string, notes: string) => void;
   userRole?: 'admin' | 'volunteer' | 'partner';
+  showModerationActions?: boolean;
 }
 
 export default function ReportDetailsModal({
@@ -28,6 +31,7 @@ export default function ReportDetailsModal({
   onApprove,
   onReject,
   userRole,
+  showModerationActions = false,
 }: ReportDetailsModalProps) {
   const [approvalNotes, setApprovalNotes] = useState('');
   const [showApprovalForm, setShowApprovalForm] = useState(false);
@@ -58,7 +62,11 @@ export default function ReportDetailsModal({
     onClose();
   };
 
-  const canApprove = userRole === 'admin' && report.status === 'Submitted';
+  const canApprove = showModerationActions && userRole === 'admin' && report.status === 'Submitted';
+  const attachmentPreviews = [
+    report.mediaFile,
+    ...(report.attachments || []).map(attachment => attachment.url),
+  ].filter((value, index, values): value is string => Boolean(value) && values.indexOf(value) === index);
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={handleClose}>
@@ -140,6 +148,29 @@ export default function ReportDetailsModal({
               <Text style={styles.sectionTitle}>Description</Text>
               <Text style={styles.descriptionText}>{report.description}</Text>
             </View>
+
+            {attachmentPreviews.length > 0 && (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Attachments</Text>
+                <View style={styles.attachmentsList}>
+                  {attachmentPreviews.map(uri =>
+                    isImageMediaUri(uri) ? (
+                      <Image
+                        key={uri}
+                        source={{ uri }}
+                        style={styles.attachmentPreview}
+                        resizeMode="cover"
+                      />
+                    ) : (
+                      <View key={uri} style={styles.attachmentFileCard}>
+                        <MaterialIcons name="attach-file" size={16} color="#166534" />
+                        <Text style={styles.attachmentFileText}>{uri}</Text>
+                      </View>
+                    )
+                  )}
+                </View>
+              </View>
+            )}
 
             {/* Metrics */}
             <View style={styles.section}>
@@ -440,6 +471,29 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 10,
+  },
+  attachmentsList: {
+    gap: 10,
+  },
+  attachmentPreview: {
+    width: '100%',
+    height: 180,
+    borderRadius: 12,
+    backgroundColor: '#e2e8f0',
+  },
+  attachmentFileCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: 10,
+    backgroundColor: '#f1f5f9',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  attachmentFileText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#475569',
   },
   metricCard: {
     flex: Platform.select({ web: 0, default: 1 }),

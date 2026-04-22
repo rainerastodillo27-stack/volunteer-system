@@ -1642,12 +1642,16 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                           <TouchableOpacity 
                             style={styles.approveButton}
                             onPress={() => {
+                              if (!user?.id || !message.projectId) {
+                                return;
+                              }
                               const updatedMessage: ProjectGroupMessage = {
                                 ...message,
+                                projectId: message.projectId,
                                 scopeProposal: {
                                   ...scopeProposal,
                                   status: 'Approved',
-                                  approvedBy: user?.id,
+                                  approvedBy: user.id,
                                   approvedAt: new Date().toISOString(),
                                 },
                               };

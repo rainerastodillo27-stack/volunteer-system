@@ -326,9 +326,10 @@ export interface PartnerReport {
   }[];
   mediaFile?: string;
   createdAt: string;
-  status: 'Submitted' | 'Reviewed';
+  status: 'Submitted' | 'Reviewed' | 'Rejected';
   reviewedAt?: string;
   reviewedBy?: string;
+  reviewNotes?: string;
 }
 
 // Represents a generated final impact file that can be published to partners.
@@ -339,6 +340,9 @@ export interface PublishedImpactReport {
   generatedAt: string;
   reportFile: string;
   format: 'PDF' | 'Excel';
+  downloadContent?: string;
+  downloadMimeType?: string;
+  sourceReportIds?: string[];
   publishedAt?: string;
 }
 

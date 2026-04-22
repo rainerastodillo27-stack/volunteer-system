@@ -312,7 +312,7 @@ export default function UserManagementScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              await rejectUser(targetUser.id, 'Account rejected by administrator.');
+              await rejectUser(targetUser.id, 'Account rejected by administrator.', user.id);
               Alert.alert('Rejected', `${targetUser.name}'s account has been rejected.`);
               await loadUsers();
             } catch (error) {

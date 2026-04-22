@@ -37,10 +37,10 @@ export function VolunteerReportsDashboard({
 }: VolunteerReportsDashboardProps) {
   const stats = useMemo(() => {
     const submitted = reports.filter(r => r.status === 'Submitted').length;
-    const approved = reports.filter(r => r.status === 'Approved').length;
     const totalHours = reports.reduce((sum, r) => sum + (r.metrics.volunteerHours || 0), 0);
+    const linkedProjects = new Set(reports.map(report => report.projectId).filter(Boolean)).size;
 
-    return { submitted, approved, totalHours };
+    return { submitted, totalHours, linkedProjects };
   }, [reports]);
 
   const renderReportItem = ({ item }: { item: SubmittedReport }) => (
@@ -110,14 +110,14 @@ export function VolunteerReportsDashboard({
             <Text style={styles.statLabel}>Total Reports</Text>
           </View>
           <View style={styles.statCard}>
-            <MaterialIcons name="check-circle" size={24} color="#16a34a" />
-            <Text style={styles.statValue}>{stats.approved}</Text>
-            <Text style={styles.statLabel}>Approved</Text>
+            <MaterialIcons name="send" size={24} color="#16a34a" />
+            <Text style={styles.statValue}>{stats.submitted}</Text>
+            <Text style={styles.statLabel}>Submitted</Text>
           </View>
           <View style={styles.statCard}>
             <MaterialIcons name="schedule" size={24} color="#F97316" />
-            <Text style={styles.statValue}>{stats.totalHours}</Text>
-            <Text style={styles.statLabel}>Total Hours</Text>
+            <Text style={styles.statValue}>{stats.linkedProjects}</Text>
+            <Text style={styles.statLabel}>Projects Linked</Text>
           </View>
         </View>
 
@@ -157,7 +157,7 @@ export function VolunteerReportsDashboard({
           <View style={styles.infoContent}>
             <Text style={styles.infoTitle}>Report Tips</Text>
             <Text style={styles.infoText}>
-              Include accurate metrics and clear descriptions to ensure faster approval. Admins review submitted reports regularly.
+              Include clear outcomes, correct hours, and a short summary so your submitted report is easy to read later.
             </Text>
           </View>
         </View>
@@ -177,10 +177,10 @@ export function PartnerReportsDashboard({
 }: VolunteerReportsDashboardProps) {
   const stats = useMemo(() => {
     const submitted = reports.filter(r => r.status === 'Submitted').length;
-    const approved = reports.filter(r => r.status === 'Approved').length;
     const beneficiaries = reports.reduce((sum, r) => sum + (r.metrics.beneficiariesServed || 0), 0);
+    const linkedProjects = new Set(reports.map(report => report.projectId).filter(Boolean)).size;
 
-    return { submitted, approved, beneficiaries };
+    return { submitted, beneficiaries, linkedProjects };
   }, [reports]);
 
   const reportsByType = useMemo(() => {
@@ -254,8 +254,8 @@ export function PartnerReportsDashboard({
             <Text style={styles.impactValue}>{reports.length}</Text>
           </View>
           <View style={[styles.impactCard, styles.impactCardGreen]}>
-            <Text style={styles.impactLabel}>Approved</Text>
-            <Text style={styles.impactValue}>{stats.approved}</Text>
+            <Text style={styles.impactLabel}>Projects Linked</Text>
+            <Text style={styles.impactValue}>{stats.linkedProjects}</Text>
           </View>
           <View style={[styles.impactCard, styles.impactCardOrange]}>
             <Text style={styles.impactLabel}>Beneficiaries</Text>

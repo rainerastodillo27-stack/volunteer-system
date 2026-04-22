@@ -66,9 +66,9 @@ def main() -> None:
             run_many(
                 cursor,
                 """
-                insert into app_users (app_users_id, email, password, role, name, phone, created_at)
+                insert into users (id, email, password, role, name, phone, created_at)
                 values (%s, %s, %s, %s, %s, %s, %s)
-                on conflict (app_users_id) do update set
+                on conflict (id) do update set
                   email = excluded.email,
                   password = excluded.password,
                   role = excluded.role,

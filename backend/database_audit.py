@@ -1,4 +1,7 @@
-from db import get_postgres_connection
+try:
+    from .db import get_postgres_connection
+except ImportError:
+    from db import get_postgres_connection
 
 
 CANONICAL_TABLES = [
@@ -16,24 +19,11 @@ CANONICAL_TABLES = [
     "published_impact_reports",
     "messages",
     "project_group_messages",
+    "admin_planning_calendars",
+    "admin_planning_items",
 ]
 
-EXPECTED_SUPPORT_TABLES = {
-    "app_storage",
-    "app_users",
-    "app_users_store",
-    "app_partners_store",
-    "app_projects_store",
-    "app_volunteers_store",
-    "app_status_updates_store",
-    "app_volunteer_matches_store",
-    "app_volunteer_time_logs_store",
-    "app_volunteer_project_joins_store",
-    "app_partner_project_applications_store",
-    "app_partner_event_check_ins_store",
-    "app_partner_reports_store",
-    "app_published_impact_reports_store",
-}
+EXPECTED_SUPPORT_TABLES: set[str] = set()
 
 EXPECTED_TABLES = set(CANONICAL_TABLES) | EXPECTED_SUPPORT_TABLES
 
@@ -132,12 +122,6 @@ def main() -> None:
                     from volunteer_matches m
                     left join volunteers v on v.id = m.volunteer_id
                     where coalesce(m.volunteer_id, '') <> '' and v.id is null
-                """,
-                "stale_app_users": """
-                    select a.app_users_id, a.email
-                    from app_users a
-                    where not exists (select 1 from users u where u.id = a.app_users_id)
-                    order by a.app_users_id
                 """,
             }
 

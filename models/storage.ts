@@ -1408,6 +1408,13 @@ export async function deleteUser(userId: string): Promise<void> {
   );
   await setStorageItem(STORAGE_KEYS.VOLUNTEERS, filteredVolunteers);
 
+  const partners = await getStorageItem<Partner[]>(STORAGE_KEYS.PARTNERS) || [];
+  const removedPartnerIds = partners
+    .filter(partner => partner.ownerUserId === userId)
+    .map(partner => partner.id);
+  const filteredPartners = partners.filter(partner => partner.ownerUserId !== userId);
+  await setStorageItem(STORAGE_KEYS.PARTNERS, filteredPartners);
+
   const messages = await getStorageItem<Message[]>(STORAGE_KEYS.MESSAGES) || [];
   const filteredMessages = messages.filter(
     message => message.senderId !== userId && message.recipientId !== userId
@@ -1428,6 +1435,25 @@ export async function deleteUser(userId: string): Promise<void> {
   );
   await setStorageItem(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS, filteredPartnerApplications);
 
+  const partnerCheckIns =
+    await getStorageItem<PartnerEventCheckIn[]>(STORAGE_KEYS.PARTNER_EVENT_CHECK_INS) || [];
+  const filteredPartnerCheckIns = partnerCheckIns.filter(
+    checkIn =>
+      checkIn.partnerUserId !== userId &&
+      !removedPartnerIds.includes(checkIn.partnerId)
+  );
+  await setStorageItem(STORAGE_KEYS.PARTNER_EVENT_CHECK_INS, filteredPartnerCheckIns);
+
+  const partnerReports =
+    await getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [];
+  const filteredPartnerReports = partnerReports.filter(
+    report =>
+      report.submitterUserId !== userId &&
+      report.partnerUserId !== userId &&
+      !removedPartnerIds.includes(report.partnerId || '')
+  );
+  await setStorageItem(STORAGE_KEYS.PARTNER_REPORTS, filteredPartnerReports);
+
   const volunteerJoinRecords =
     await getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS) || [];
   const filteredVolunteerJoinRecords = volunteerJoinRecords.filter(
@@ -1436,6 +1462,20 @@ export async function deleteUser(userId: string): Promise<void> {
       !removedVolunteerIds.includes(record.volunteerId)
   );
   await setStorageItem(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS, filteredVolunteerJoinRecords);
+
+  const volunteerMatches =
+    await getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES) || [];
+  const filteredVolunteerMatches = volunteerMatches.filter(
+    match => !removedVolunteerIds.includes(match.volunteerId)
+  );
+  await setStorageItem(STORAGE_KEYS.VOLUNTEER_MATCHES, filteredVolunteerMatches);
+
+  const volunteerTimeLogs =
+    await getStorageItem<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS) || [];
+  const filteredVolunteerTimeLogs = volunteerTimeLogs.filter(
+    log => !removedVolunteerIds.includes(log.volunteerId)
+  );
+  await setStorageItem(STORAGE_KEYS.VOLUNTEER_TIME_LOGS, filteredVolunteerTimeLogs);
 
   const projects = await getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS) || [];
   const updatedProjects = projects.map(project => ({
@@ -1467,6 +1507,101 @@ export async function getCurrentUser(): Promise<User | null> {
   return (await getLocalStorageItem<User>(STORAGE_KEYS.CURRENT_USER)) || null;
 }
 
+function userMatchesLinkedRecord(
+  user: Pick<User, 'id' | 'email' | 'phone'>,
+  linkedRecord: {
+    ownerUserId?: string;
+    userId?: string;
+    email?: string;
+    phone?: string;
+  }
+): boolean {
+  const userId = user.id.trim();
+  if (linkedRecord.ownerUserId?.trim() === userId || linkedRecord.userId?.trim() === userId) {
+    return true;
+  }
+
+  const normalizedUserEmail = user.email?.trim().toLowerCase();
+  if (
+    normalizedUserEmail &&
+    linkedRecord.email?.trim().toLowerCase() === normalizedUserEmail
+  ) {
+    return true;
+  }
+
+  const normalizedUserPhone = normalizeComparablePhone(user.phone);
+  return Boolean(
+    normalizedUserPhone &&
+    normalizeComparablePhone(linkedRecord.phone) === normalizedUserPhone
+  );
+}
+
+async function getLinkedVolunteersForUserAccount(user: User): Promise<Volunteer[]> {
+  const volunteers = await getAllVolunteers();
+  return volunteers.filter(volunteer =>
+    userMatchesLinkedRecord(user, {
+      userId: volunteer.userId,
+      email: volunteer.email,
+      phone: volunteer.phone,
+    })
+  );
+}
+
+async function getLinkedPartnerRecordsForUserAccount(user: User): Promise<Partner[]> {
+  const partners = await getAllPartners();
+  return partners.filter(partner =>
+    userMatchesLinkedRecord(user, {
+      ownerUserId: partner.ownerUserId,
+      email: partner.contactEmail,
+      phone: partner.contactPhone,
+    })
+  );
+}
+
+async function getLinkedUserAccountForVolunteer(volunteer: Volunteer): Promise<User | null> {
+  if (volunteer.userId?.trim()) {
+    const directUser = await getUser(volunteer.userId.trim());
+    if (directUser) {
+      return directUser;
+    }
+  }
+
+  const users = await getAllUsers();
+  return (
+    users.find(
+      user =>
+        user.role === 'volunteer' &&
+        userMatchesLinkedRecord(user, {
+          userId: volunteer.userId,
+          email: volunteer.email,
+          phone: volunteer.phone,
+        })
+    ) || null
+  );
+}
+
+async function getLinkedUserAccountForPartner(partner: Partner): Promise<User | null> {
+  if (partner.ownerUserId?.trim()) {
+    const directUser = await getUser(partner.ownerUserId.trim());
+    if (directUser) {
+      return directUser;
+    }
+  }
+
+  const users = await getAllUsers();
+  return (
+    users.find(
+      user =>
+        user.role === 'partner' &&
+        userMatchesLinkedRecord(user, {
+          ownerUserId: partner.ownerUserId,
+          email: partner.contactEmail,
+          phone: partner.contactPhone,
+        })
+    ) || null
+  );
+}
+
 // User Approval Management
 // Gets all pending user accounts that need admin approval.
 export async function getPendingUserApprovals(): Promise<User[]> {
@@ -1489,35 +1624,102 @@ export async function approveUser(userId: string, adminId: string): Promise<User
     throw new Error('User not found.');
   }
 
+  const approvedAt = new Date().toISOString();
   const updatedUser: User = {
     ...user,
     approvalStatus: 'approved',
     approvedBy: adminId,
-    approvedAt: new Date().toISOString(),
+    approvedAt,
     rejectionReason: undefined,
   };
 
   await saveUser(updatedUser);
+
+  if (updatedUser.role === 'volunteer') {
+    const linkedVolunteers = await getLinkedVolunteersForUserAccount(updatedUser);
+    await Promise.all(
+      linkedVolunteers.map(volunteer =>
+        saveVolunteer({
+          ...volunteer,
+          registrationStatus: 'Approved',
+          reviewedBy: adminId,
+          reviewedAt: approvedAt,
+          credentialsUnlockedAt: approvedAt,
+        })
+      )
+    );
+  }
+
+  if (updatedUser.role === 'partner') {
+    const linkedPartners = await getLinkedPartnerRecordsForUserAccount(updatedUser);
+    await Promise.all(
+      linkedPartners.map(partner =>
+        savePartner({
+          ...partner,
+          status: 'Approved',
+          validatedBy: adminId,
+          validatedAt: approvedAt,
+          credentialsUnlockedAt: approvedAt,
+        })
+      )
+    );
+  }
+
   return updatedUser;
 }
 
 // Rejects a pending user account with an optional reason.
 export async function rejectUser(
   userId: string,
-  rejectionReason: string = 'Account rejected by administrator.'
+  rejectionReason: string = 'Account rejected by administrator.',
+  adminId?: string
 ): Promise<User> {
   const user = await getUser(userId);
   if (!user) {
     throw new Error('User not found.');
   }
 
+  const reviewedAt = new Date().toISOString();
   const updatedUser: User = {
     ...user,
     approvalStatus: 'rejected',
+    approvedBy: undefined,
+    approvedAt: undefined,
     rejectionReason,
   };
 
   await saveUser(updatedUser);
+
+  if (updatedUser.role === 'volunteer') {
+    const linkedVolunteers = await getLinkedVolunteersForUserAccount(updatedUser);
+    await Promise.all(
+      linkedVolunteers.map(volunteer =>
+        saveVolunteer({
+          ...volunteer,
+          registrationStatus: 'Rejected',
+          reviewedBy: adminId,
+          reviewedAt,
+          credentialsUnlockedAt: undefined,
+        })
+      )
+    );
+  }
+
+  if (updatedUser.role === 'partner') {
+    const linkedPartners = await getLinkedPartnerRecordsForUserAccount(updatedUser);
+    await Promise.all(
+      linkedPartners.map(partner =>
+        savePartner({
+          ...partner,
+          status: 'Rejected',
+          validatedBy: adminId,
+          validatedAt: reviewedAt,
+          credentialsUnlockedAt: undefined,
+        })
+      )
+    );
+  }
+
   return updatedUser;
 }
 
@@ -1956,6 +2158,21 @@ export async function reviewVolunteerRegistration(
   };
 
   await saveVolunteer(updatedVolunteer);
+
+  const linkedUser = await getLinkedUserAccountForVolunteer(updatedVolunteer);
+  if (linkedUser) {
+    await saveUser({
+      ...linkedUser,
+      approvalStatus: status === 'Approved' ? 'approved' : 'rejected',
+      approvedBy: status === 'Approved' ? reviewedBy : undefined,
+      approvedAt: status === 'Approved' ? now : undefined,
+      rejectionReason:
+        status === 'Rejected'
+          ? 'Volunteer registration rejected by administrator.'
+          : undefined,
+    });
+  }
+
   return updatedVolunteer;
 }
 
@@ -2039,6 +2256,52 @@ export async function endVolunteerTimeLog(
     log: payload.log || null,
     volunteerProfile: payload.volunteerProfile || null,
   };
+}
+
+export async function submitVolunteerTimeOutReport(input: {
+  projectId: string;
+  projectTitle?: string;
+  volunteerUserId: string;
+  volunteerName: string;
+  completionLog: VolunteerTimeLog;
+}): Promise<PartnerReport> {
+  const completionReport = input.completionLog.completionReport?.trim() || '';
+  const completionPhoto = input.completionLog.completionPhoto?.trim() || '';
+  const durationHours =
+    input.completionLog.timeIn && input.completionLog.timeOut
+      ? Math.max(
+          0,
+          (new Date(input.completionLog.timeOut).getTime() -
+            new Date(input.completionLog.timeIn).getTime()) /
+            3_600_000
+        )
+      : 0;
+
+  const description = completionReport || 'Volunteer submitted completion proof during time out.';
+
+  return submitImpactHubReport({
+    projectId: input.projectId,
+    submitterUserId: input.volunteerUserId,
+    submitterName: input.volunteerName,
+    submitterRole: 'volunteer',
+    reportType: 'volunteer_engagement',
+    title: `${input.projectTitle || 'Volunteer Project'} Completion Report`,
+    description,
+    metrics: {
+      volunteerHours: Number(durationHours.toFixed(1)),
+      tasksCompleted: 1,
+    },
+    attachments: completionPhoto
+      ? [
+          {
+            url: completionPhoto,
+            type: 'image',
+            description: 'Volunteer completion photo',
+          },
+        ]
+      : [],
+    mediaFile: completionPhoto || undefined,
+  });
 }
 
 async function addLoggedHoursToVolunteer(
@@ -2765,6 +3028,21 @@ export async function reviewPartnerRegistration(
   };
 
   await savePartner(updatedPartner);
+
+  const linkedUser = await getLinkedUserAccountForPartner(updatedPartner);
+  if (linkedUser) {
+    await saveUser({
+      ...linkedUser,
+      approvalStatus: status === 'Approved' ? 'approved' : 'rejected',
+      approvedBy: status === 'Approved' ? reviewedBy : undefined,
+      approvedAt: status === 'Approved' ? now : undefined,
+      rejectionReason:
+        status === 'Rejected'
+          ? 'Partner registration rejected by administrator.'
+          : undefined,
+    });
+  }
+
   return updatedPartner;
 }
 
@@ -2968,7 +3246,9 @@ export async function submitPartnerReport(input: {
 // Marks a submitted partner report as reviewed by admin.
 export async function reviewPartnerReport(
   reportId: string,
-  reviewedBy: string
+  reviewedBy: string,
+  nextStatus: 'Reviewed' | 'Rejected' = 'Reviewed',
+  reviewNotes?: string
 ): Promise<PartnerReport> {
   const reports = await getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [];
   const reportIndex = reports.findIndex(report => report.id === reportId);
@@ -2978,9 +3258,10 @@ export async function reviewPartnerReport(
 
   const updatedReport: PartnerReport = {
     ...reports[reportIndex],
-    status: 'Reviewed',
+    status: nextStatus,
     reviewedAt: new Date().toISOString(),
     reviewedBy,
+    reviewNotes: reviewNotes?.trim() || undefined,
   };
   reports[reportIndex] = updatedReport;
   await setStorageItem(STORAGE_KEYS.PARTNER_REPORTS, reports);
@@ -3044,7 +3325,116 @@ export async function getPublishedImpactReportsByPartnerUser(
     .sort((a, b) => new Date(b.generatedAt).getTime() - new Date(a.generatedAt).getTime());
 }
 
-// Generates PDF and Excel impact files from reviewed partner reports.
+function formatMetricLabel(metricKey: string): string {
+  return metricKey
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, character => character.toUpperCase());
+}
+
+function escapeCsvValue(value: string | number | undefined): string {
+  const text = String(value ?? '').replace(/"/g, '""');
+  return `"${text}"`;
+}
+
+function buildGeneratedImpactTextReport(project: Project, reports: PartnerReport[]): string {
+  const totals = reports.reduce<Record<string, number>>((accumulator, report) => {
+    Object.entries(report.metrics || {}).forEach(([key, value]) => {
+      if (typeof value === 'number') {
+        accumulator[key] = (accumulator[key] || 0) + value;
+      }
+    });
+    return accumulator;
+  }, {});
+
+  const volunteerCount = reports.filter(report => report.submitterRole === 'volunteer').length;
+  const partnerCount = reports.filter(report => report.submitterRole === 'partner').length;
+  const totalImpact = reports.reduce((sum, report) => sum + (report.impactCount || 0), 0);
+  const metricLines = Object.entries(totals)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `- ${formatMetricLabel(key)}: ${value}`);
+
+  const reportDetails = reports.map((report, index) => {
+    const metricSummary = Object.entries(report.metrics || {})
+      .filter(([, value]) => typeof value === 'number')
+      .map(([key, value]) => `${formatMetricLabel(key)}=${value}`)
+      .join(', ');
+
+    return [
+      `${index + 1}. ${report.title || `${report.submitterName || report.partnerName || 'User'} Report`}`,
+      `   Submitted by: ${report.submitterName || report.partnerName || 'User'} (${report.submitterRole || 'partner'})`,
+      `   Type: ${report.reportType}`,
+      `   Date: ${new Date(report.createdAt).toLocaleString()}`,
+      `   Impact Count: ${report.impactCount || 0}`,
+      `   Description: ${report.description || 'No description provided.'}`,
+      `   Metrics: ${metricSummary || 'No numeric metrics submitted.'}`,
+      `   Media: ${report.mediaFile || 'No media attached.'}`,
+    ].join('\n');
+  });
+
+  return [
+    'Volunteer System Impact Summary',
+    `Project: ${project.title}`,
+    `Category: ${project.category}`,
+    `Status: ${project.status}`,
+    `Location: ${project.location}`,
+    `Schedule: ${project.startDate} to ${project.endDate}`,
+    `Generated: ${new Date().toLocaleString()}`,
+    '',
+    'Submission Summary',
+    `- Total Submitted Reports: ${reports.length}`,
+    `- Volunteer Reports: ${volunteerCount}`,
+    `- Partner Reports: ${partnerCount}`,
+    `- Total Impact Count: ${totalImpact}`,
+    ...(metricLines.length > 0 ? ['', 'Metric Totals', ...metricLines] : ['', 'Metric Totals', '- No numeric metrics submitted.']),
+    '',
+    'Submitted Report Details',
+    ...(reportDetails.length > 0 ? reportDetails : ['No reports have been submitted for this project yet.']),
+  ].join('\n');
+}
+
+function buildGeneratedImpactCsvReport(project: Project, reports: PartnerReport[]): string {
+  const headers = [
+    'Project',
+    'Project Status',
+    'Title',
+    'Submitter Name',
+    'Submitter Role',
+    'Report Type',
+    'Submitted At',
+    'Impact Count',
+    'Description',
+    'Metrics',
+    'Media File',
+  ];
+
+  const rows = reports.map(report => {
+    const metricSummary = Object.entries(report.metrics || {})
+      .filter(([, value]) => typeof value === 'number')
+      .map(([key, value]) => `${formatMetricLabel(key)}=${value}`)
+      .join('; ');
+
+    return [
+      project.title,
+      project.status,
+      report.title || `${report.submitterName || report.partnerName || 'User'} Report`,
+      report.submitterName || report.partnerName || 'User',
+      report.submitterRole || 'partner',
+      report.reportType,
+      report.createdAt,
+      report.impactCount || 0,
+      report.description || '',
+      metricSummary,
+      report.mediaFile || '',
+    ]
+      .map(escapeCsvValue)
+      .join(',');
+  });
+
+  return [headers.map(escapeCsvValue).join(','), ...rows].join('\n');
+}
+
+// Generates readable text and spreadsheet exports from submitted project reports.
 export async function generateFinalImpactReports(
   projectId: string,
   generatedBy: string
@@ -3053,6 +3443,11 @@ export async function generateFinalImpactReports(
   if (!project) {
     throw new Error('Project not found.');
   }
+
+  const submittedReports =
+    (await getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [])
+      .filter(report => report.projectId === projectId)
+      .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
 
   const timestamp = Date.now();
   const slug = project.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
@@ -3065,6 +3460,9 @@ export async function generateFinalImpactReports(
       generatedAt,
       reportFile: `${slug || 'project'}-impact-report-${timestamp}.pdf`,
       format: 'PDF',
+      downloadContent: buildGeneratedImpactTextReport(project, submittedReports),
+      downloadMimeType: 'text/plain;charset=utf-8;',
+      sourceReportIds: submittedReports.map(report => report.id),
     },
     {
       id: `impact-${projectId}-excel-${timestamp}`,
@@ -3073,6 +3471,9 @@ export async function generateFinalImpactReports(
       generatedAt,
       reportFile: `${slug || 'project'}-impact-report-${timestamp}.xlsx`,
       format: 'Excel',
+      downloadContent: buildGeneratedImpactCsvReport(project, submittedReports),
+      downloadMimeType: 'text/csv;charset=utf-8;',
+      sourceReportIds: submittedReports.map(report => report.id),
     },
   ];
 

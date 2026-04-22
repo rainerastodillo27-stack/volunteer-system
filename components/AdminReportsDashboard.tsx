@@ -26,7 +26,7 @@ interface AdminReportsDashboardProps {
 }
 
 type StatusColumn = {
-  key: 'Approved' | 'Submitted' | 'Rejected';
+  key: 'all' | 'volunteer' | 'partner';
   label: string;
   subtitle: string;
   count: number;
@@ -48,7 +48,7 @@ function formatShortDate(value: string): string {
 function getProgressPercent(report: SubmittedReport): number {
   const metricValues = Object.values(report.metrics).filter((value): value is number => typeof value === 'number');
   if (!metricValues.length) {
-    return report.status === 'Approved' ? 100 : report.status === 'Submitted' ? 55 : 35;
+    return 55;
   }
 
   const scaled = metricValues.slice(0, 4).reduce((sum, value) => sum + Math.min(value, 100), 0);
@@ -81,51 +81,50 @@ export default function AdminReportsDashboard({
   }, [reports]);
 
   const columns = useMemo<StatusColumn[]>(() => {
-    const approved = reports
-      .filter(report => report.status === 'Approved')
+    const allReports = [...reports]
       .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
 
-    const submitted = reports
-      .filter(report => report.status === 'Submitted')
+    const volunteerReports = [...reports]
+      .filter(report => report.submitterRole === 'volunteer')
       .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
 
-    const rejected = reports
-      .filter(report => report.status === 'Rejected')
+    const partnerReports = [...reports]
+      .filter(report => report.submitterRole === 'partner')
       .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
 
     return [
       {
-        key: 'Approved',
-        label: 'Volunteer Hours',
-        subtitle: 'Green lane',
-        count: approved.length,
+        key: 'all',
+        label: 'All Reports',
+        subtitle: 'Every submitted item',
+        count: allReports.length,
         accent: '#d9f2de',
         panel: '#2f8f45',
         card: '#4aa764',
-        chips: ['A-Z', 'Recent first', 'Hours'],
-        reports: approved,
+        chips: ['Newest', 'All roles', 'Metrics'],
+        reports: allReports,
       },
       {
-        key: 'Submitted',
-        label: 'Approved Collaborations',
-        subtitle: 'Yellow lane',
-        count: submitted.length,
+        key: 'volunteer',
+        label: 'Volunteer Reports',
+        subtitle: 'Timeout and field submissions',
+        count: volunteerReports.length,
         accent: '#fff6d9',
         panel: '#d1a120',
         card: '#dfb33f',
-        chips: ['A-Z', 'Pending', 'Partner'],
-        reports: submitted,
+        chips: ['Volunteer', 'Hours', 'Field'],
+        reports: volunteerReports,
       },
       {
-        key: 'Rejected',
-        label: 'Field Reports',
-        subtitle: 'Red lane',
-        count: rejected.length,
+        key: 'partner',
+        label: 'Partner Reports',
+        subtitle: 'Program and event submissions',
+        count: partnerReports.length,
         accent: '#ffdfe4',
         panel: '#bd3c4f',
         card: '#cd5a6d',
-        chips: ['A-Z', 'Rejected', 'Program'],
-        reports: rejected,
+        chips: ['Partner', 'Impact', 'Program'],
+        reports: partnerReports,
       },
     ];
   }, [reports]);
@@ -151,7 +150,7 @@ export default function AdminReportsDashboard({
             </View>
             <View style={styles.mastheadText}>
               <Text style={styles.title}>Analytics Report</Text>
-              <Text style={styles.subtitle}>Keep report content unchanged, monitor progress by review status</Text>
+              <Text style={styles.subtitle}>Monitor submitted reports and field metrics across volunteers and partners</Text>
             </View>
             <TouchableOpacity style={styles.uploadButton} onPress={onUploadReport} activeOpacity={0.85}>
               <MaterialIcons name="add" size={18} color="#fff" />
@@ -167,8 +166,8 @@ export default function AdminReportsDashboard({
 
           <View style={styles.kpiRow}>
             <Text style={styles.kpiText}>Volunteer Hours: {summary.totalHours}</Text>
-            <Text style={styles.kpiText}>Approved Collaborations: {summary.verifiedAttendance}</Text>
-            <Text style={styles.kpiText}>Field Reports: {summary.beneficiariesServed}</Text>
+            <Text style={styles.kpiText}>Attendance Metrics: {summary.verifiedAttendance}</Text>
+            <Text style={styles.kpiText}>Beneficiaries: {summary.beneficiariesServed}</Text>
             <Text style={styles.kpiText}>Projects: {projects.length}</Text>
             <Text style={styles.kpiText}>Volunteers: {volunteers.length}</Text>
           </View>
@@ -202,8 +201,8 @@ export default function AdminReportsDashboard({
                   {column.reports.length === 0 ? (
                     <View style={[styles.emptyCard, { backgroundColor: column.card }]}> 
                       <MaterialIcons name="inbox" size={24} color="rgba(255,255,255,0.85)" />
-                      <Text style={styles.emptyCardTitle}>No reports in this lane</Text>
-                      <Text style={styles.emptyCardText}>Submitted reports will appear automatically.</Text>
+                      <Text style={styles.emptyCardTitle}>No reports yet</Text>
+                      <Text style={styles.emptyCardText}>New submissions will appear here automatically.</Text>
                     </View>
                   ) : (
                     column.reports.slice(0, 8).map(report => {

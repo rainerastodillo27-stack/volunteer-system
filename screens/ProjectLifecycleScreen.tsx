@@ -46,7 +46,6 @@ import {
   getVolunteerProjectJoinRecords,
   publishImpactReport,
   reviewPartnerProjectApplication,
-  reviewPartnerReport,
   reviewVolunteerProjectMatch,
   saveProject,
   saveStatusUpdate,
@@ -748,23 +747,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       Alert.alert(
         getRequestErrorTitle(error),
         getRequestErrorMessage(error, 'Failed to review project proposal.')
-      );
-    }
-  };
-
-  const handleReviewPartnerReport = async (reportId: string) => {
-    if (!isAdmin || !user?.id || !selectedProject) {
-      return;
-    }
-
-    try {
-      await reviewPartnerReport(reportId, user.id);
-      await loadPartnerReportsForProject(selectedProject.id);
-      Alert.alert('Reviewed', 'Partner report marked as reviewed.');
-    } catch (error) {
-      Alert.alert(
-        getRequestErrorTitle(error),
-        getRequestErrorMessage(error, 'Failed to review the partner report.')
       );
     }
   };
@@ -2239,25 +2221,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                       <View
                         style={[
                           styles.applicationStatusBadge,
-                          report.status === 'Reviewed'
-                            ? styles.applicationStatusApproved
-                            : styles.applicationStatusPending,
+                          styles.applicationStatusPending,
                         ]}
                       >
-                        <Text style={styles.applicationStatusText}>{report.status}</Text>
+                        <Text style={styles.applicationStatusText}>Submitted</Text>
                       </View>
                     </View>
-
-                    {isAdmin && report.status !== 'Reviewed' ? (
-                      <View style={styles.applicationActions}>
-                        <TouchableOpacity
-                          style={[styles.applicationButton, styles.approveButton]}
-                          onPress={() => handleReviewPartnerReport(report.id)}
-                        >
-                          <Text style={styles.applicationButtonText}>Review</Text>
-                        </TouchableOpacity>
-                      </View>
-                    ) : null}
                   </View>
                 ))}
               </View>

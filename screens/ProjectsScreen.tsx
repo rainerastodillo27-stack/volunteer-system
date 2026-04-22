@@ -10,6 +10,7 @@ import {
   getProjectsScreenSnapshot,
   getVolunteerProjectMatches,
   requestVolunteerProjectJoin,
+  submitVolunteerTimeOutReport,
   submitPartnerProgramProposal,
   startVolunteerTimeLog,
   endVolunteerTimeLog,
@@ -424,14 +425,26 @@ export default function ProjectsScreen({ navigation, route }: any) {
       return;
     }
 
-    const targetCategoryIndex = projectsByCategory.findIndex(categoryGroup =>
+    const filteredProjects =
+      statusFilter === 'All'
+        ? projects
+        : projects.filter(project => project.status === statusFilter);
+
+    const targetCategoryGroups = (['Education', 'Livelihood', 'Nutrition', 'Disaster'] as const)
+      .map(category => ({
+        category,
+        projects: filteredProjects.filter(project => project.category === category),
+      }))
+      .filter(categoryGroup => categoryGroup.projects.length > 0);
+
+    const targetCategoryIndex = targetCategoryGroups.findIndex(categoryGroup =>
       categoryGroup.projects.some(project => project.id === requestedProjectId)
     );
     if (targetCategoryIndex === -1) {
       return;
     }
 
-    const targetCategory = projectsByCategory[targetCategoryIndex];
+    const targetCategory = targetCategoryGroups[targetCategoryIndex];
     if (!targetCategory) {
       return;
     }
@@ -446,7 +459,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
       });
     });
     navigation.setParams({ projectId: undefined });
-  }, [navigation, projects, projectsByCategory, route?.params?.projectId]);
+  }, [navigation, projects, route?.params?.projectId, statusFilter]);
 
   // Handles the active project action based on the current user role.
   const handleJoinProject = async (projectId: string) => {
@@ -1061,6 +1074,25 @@ export default function ProjectsScreen({ navigation, route }: any) {
         Alert.alert('No active log', 'Please tap Time In before timing out.');
         return;
       }
+
+      let autoSubmittedReport = false;
+      try {
+        if (user?.id) {
+          await submitVolunteerTimeOutReport({
+            projectId,
+            projectTitle:
+              projects.find(project => project.id === projectId)?.title ||
+              activeTimeOutProject?.title,
+            volunteerUserId: user.id,
+            volunteerName: user.name || volunteerProfile.name,
+            completionLog: result.log,
+          });
+          autoSubmittedReport = true;
+        }
+      } catch (reportError) {
+        console.error('Error auto-submitting volunteer timeout report:', reportError);
+      }
+
       startTransition(() => {
         setTimeLogs(prev =>
           prev
@@ -1074,7 +1106,12 @@ export default function ProjectsScreen({ navigation, route }: any) {
       setTimeOutProjectId(null);
       setTimeOutReportDraft('');
       setTimeOutPhotoDraft('');
-      Alert.alert('Time Out recorded', 'Hours added to your profile and proof of work saved.');
+      Alert.alert(
+        autoSubmittedReport ? 'Time Out recorded' : 'Time Out recorded with warning',
+        autoSubmittedReport
+          ? 'Hours were added to your profile and your completion proof was sent to Reports.'
+          : 'Hours were added to your profile and your time log was saved, but the report could not be sent to Reports automatically.'
+      );
     } catch (error) {
       Alert.alert(
         getRequestErrorTitle(error, 'Unable to time out'),

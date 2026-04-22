@@ -28,6 +28,7 @@ import {
   AdminPlanningCalendar,
   AdminPlanningItem,
   Partner,
+  PartnerEventCheckIn,
   PartnerProjectApplication,
   PartnerReport,
   PartnerReportType,
@@ -115,6 +116,7 @@ export default function PartnerDashboardScreen({ navigation }: any) {
   const [partners, setPartners] = useState<Partner[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [partnerApplications, setPartnerApplications] = useState<PartnerProjectApplication[]>([]);
+  const [partnerCheckIns, setPartnerCheckIns] = useState<PartnerEventCheckIn[]>([]);
   const [partnerReports, setPartnerReports] = useState<PartnerReport[]>([]);
   const [publishedImpactReports, setPublishedImpactReports] = useState<PublishedImpactReport[]>([]);
   const [partnerCheckInProjectId, setPartnerCheckInProjectId] = useState<string | null>(null);
@@ -161,6 +163,11 @@ export default function PartnerDashboardScreen({ navigation }: any) {
         snapshot.partnerApplications
           .filter(application => application.partnerUserId === user.id)
           .sort((a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime())
+      );
+      setPartnerCheckIns(
+        snapshot.partnerCheckIns
+          .filter(checkIn => checkIn.partnerUserId === user.id)
+          .sort((a, b) => new Date(b.checkInTime).getTime() - new Date(a.checkInTime).getTime())
       );
       setPartnerReports(
         snapshot.partnerReports
@@ -404,9 +411,41 @@ export default function PartnerDashboardScreen({ navigation }: any) {
 
   const handleDownloadReport = (report: PublishedImpactReport) => {
     const linkedProject = projects.find(project => project.id === report.projectId);
+    const summaryContent = [
+      `Published Report`,
+      `File: ${report.reportFile}`,
+      `Project: ${linkedProject?.title || 'Project'}`,
+      `Format: ${report.format}`,
+      `Generated: ${new Date(report.generatedAt).toLocaleString()}`,
+      `Published: ${report.publishedAt ? new Date(report.publishedAt).toLocaleString() : 'Not published yet'}`,
+    ].join('\n');
+    const downloadContent = report.downloadContent || summaryContent;
+    const downloadMimeType =
+      report.downloadMimeType ||
+      (report.format === 'Excel' ? 'text/csv;charset=utf-8;' : 'text/plain;charset=utf-8;');
+
+    if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      const fallbackName =
+        report.format === 'Excel'
+          ? report.reportFile.replace(/\.xlsx$/i, '.csv')
+          : report.reportFile.replace(/\.pdf$/i, '.txt');
+      const blob = new Blob([downloadContent], {
+        type: downloadMimeType,
+      });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fallbackName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      return;
+    }
+
     Alert.alert(
-      'Open Project File',
-      `${report.reportFile}\n${linkedProject?.title || 'Project'}\nGenerated ${new Date(report.generatedAt).toLocaleString()}`,
+      'Report Ready',
+      downloadContent,
       [
         { text: 'Close', style: 'cancel' },
         {
@@ -697,6 +736,56 @@ export default function PartnerDashboardScreen({ navigation }: any) {
             ))
         )}
       </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Field Activity History</Text>
+        {partnerCheckIns.length === 0 && partnerReports.length === 0 ? (
+          <View style={styles.card}>
+            <Text style={styles.cardText}>No partner field activity yet. Approved projects will show check-ins and submitted reports here.</Text>
+          </View>
+        ) : (
+          <>
+            {partnerCheckIns.length > 0 ? (
+              <View style={styles.card}>
+                <Text style={styles.cardTitle}>Recent Check-Ins</Text>
+                {partnerCheckIns.slice(0, 5).map(checkIn => {
+                  const linkedProject = projects.find(project => project.id === checkIn.projectId);
+                  return (
+                    <View key={checkIn.id} style={styles.historyItem}>
+                      <Text style={styles.historyTitle}>{linkedProject?.title || 'Project check-in'}</Text>
+                      <Text style={styles.historyMeta}>
+                        {new Date(checkIn.checkInTime).toLocaleString()} • {checkIn.gpsCoordinates.latitude.toFixed(4)}, {checkIn.gpsCoordinates.longitude.toFixed(4)}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+            ) : null}
+
+            {partnerReports.length > 0 ? (
+              <View style={styles.card}>
+                <Text style={styles.cardTitle}>Submitted Reports</Text>
+                {partnerReports.slice(0, 5).map(report => {
+                  const linkedProject = projects.find(project => project.id === report.projectId);
+                  return (
+                    <View key={report.id} style={styles.historyItem}>
+                      <Text style={styles.historyTitle}>
+                        {report.title || linkedProject?.title || 'Project report'}
+                      </Text>
+                      <Text style={styles.historyMeta}>
+                        {report.reportType} • {report.status} • {new Date(report.createdAt).toLocaleDateString()}
+                      </Text>
+                      {report.reviewNotes ? (
+                        <Text style={styles.historyNotes}>Admin notes: {report.reviewNotes}</Text>
+                      ) : null}
+                    </View>
+                  );
+                })}
+              </View>
+            ) : null}
+          </>
+        )}
+      </View>
     </ScrollView>
   );
 }
@@ -974,5 +1063,28 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#dc2626',
     fontWeight: '700',
+  },
+  historyItem: {
+    paddingTop: 10,
+    paddingBottom: 4,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+  },
+  historyTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  historyMeta: {
+    marginTop: 4,
+    fontSize: 12,
+    color: '#64748b',
+    lineHeight: 18,
+  },
+  historyNotes: {
+    marginTop: 6,
+    fontSize: 12,
+    color: '#475569',
+    lineHeight: 18,
   },
 });

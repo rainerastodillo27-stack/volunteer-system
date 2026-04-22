@@ -6,7 +6,6 @@ import {
   getAllProjects,
   getAllVolunteers,
   getImpactHubReportsByUser,
-  reviewPartnerReport,
   submitImpactHubReport,
   subscribeToStorageChanges,
 } from '../models/storage';
@@ -43,6 +42,7 @@ export interface SubmittedReport {
     type: 'image' | 'video' | 'document' | 'media';
     description?: string;
   }[];
+  mediaFile?: string;
   status: 'Draft' | 'Submitted' | 'Approved' | 'Rejected';
   submittedAt: string;
   approvalNotes?: string;
@@ -70,10 +70,12 @@ function normalizeImpactHubReport(
     category: linkedProject?.category,
     metrics: report.metrics || {},
     attachments: report.attachments || [],
-    status: report.status === 'Reviewed' ? 'Approved' : 'Submitted',
+    mediaFile: report.mediaFile,
+    status: 'Submitted',
     submittedAt: report.createdAt,
-    approvedBy: report.reviewedBy,
-    approvedAt: report.reviewedAt,
+    approvalNotes: undefined,
+    approvedBy: undefined,
+    approvedAt: undefined,
     viewedBy: [],
   };
 }
@@ -193,25 +195,6 @@ export default function ReportsScreen() {
     setSelectedReport(null);
   }, []);
 
-  const handleReviewReport = useCallback(
-    async (reportId: string, nextStatus: 'Approved' | 'Rejected') => {
-      if (nextStatus === 'Rejected') {
-        Alert.alert('Not Available', 'Impact hub reports currently support review approval only.');
-        return;
-      }
-
-      try {
-        await reviewPartnerReport(reportId, user?.id || '');
-        await loadReports();
-        handleCloseDetails();
-      } catch (error) {
-        console.error('Error reviewing report:', error);
-        Alert.alert('Error', 'Failed to review report');
-      }
-    },
-    [handleCloseDetails, loadReports, user?.id]
-  );
-
   const userReports = useMemo(() => {
     if (user?.role === 'admin') {
       return reports;
@@ -267,13 +250,8 @@ export default function ReportsScreen() {
         visible={showDetailsModal}
         report={selectedReport}
         onClose={handleCloseDetails}
-        onApprove={(reportId) => {
-          void handleReviewReport(reportId, 'Approved');
-        }}
-        onReject={(reportId) => {
-          void handleReviewReport(reportId, 'Rejected');
-        }}
         userRole={user?.role}
+        showModerationActions={false}
       />
     </>
   );

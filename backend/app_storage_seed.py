@@ -7,6 +7,8 @@ try:
     from .field_rules import normalize_comparable_phone, normalize_email, sanitize_hot_storage_item
     from .relational_mirror import (
         ensure_relational_mirror_tables,
+        get_relational_collection,
+        replace_relational_collection,
         sync_all_relational_mirror_tables,
         sync_relational_mirror_collection,
     )
@@ -15,12 +17,30 @@ except ImportError:
     from field_rules import normalize_comparable_phone, normalize_email, sanitize_hot_storage_item
     from relational_mirror import (
         ensure_relational_mirror_tables,
+        get_relational_collection,
+        replace_relational_collection,
         sync_all_relational_mirror_tables,
         sync_relational_mirror_collection,
     )
 
 
 HOT_STORAGE_TABLES = {
+    "users": "users",
+    "partners": "partners",
+    "projects": "projects",
+    "volunteers": "volunteers",
+    "statusUpdates": "status_updates",
+    "volunteerMatches": "volunteer_matches",
+    "volunteerTimeLogs": "volunteer_time_logs",
+    "volunteerProjectJoins": "volunteer_project_joins",
+    "partnerProjectApplications": "partner_project_applications",
+    "partnerEventCheckIns": "partner_event_check_ins",
+    "partnerReports": "partner_reports",
+    "publishedImpactReports": "published_impact_reports",
+    "adminPlanningCalendars": "admin_planning_calendars",
+    "adminPlanningItems": "admin_planning_items",
+}
+LEGACY_HOT_STORAGE_TABLES = {
     "users": "app_users_store",
     "partners": "app_partners_store",
     "projects": "app_projects_store",
@@ -34,7 +54,6 @@ HOT_STORAGE_TABLES = {
     "partnerReports": "app_partner_reports_store",
     "publishedImpactReports": "app_published_impact_reports_store",
 }
-EXPECTED_HOT_STORAGE_COLUMNS = {"id", "data", "sort_order", "updated_at"}
 REQUIRED_DEMO_COLLECTION_KEYS = {"users", "partners", "volunteers"}
 _APP_STORAGE_SEED_CONFIRMED = False
 
@@ -293,21 +312,14 @@ def build_demo_app_storage() -> dict[str, Any]:
         "partnerEventCheckIns": [],
         "partnerReports": [],
         "publishedImpactReports": [],
+        "adminPlanningCalendars": [],
+        "adminPlanningItems": [],
     }
 
 
 def ensure_app_storage_table() -> None:
     with get_postgres_connection() as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                create table if not exists app_storage (
-                  key text primary key,
-                  value jsonb not null,
-                  updated_at timestamptz not null default now()
-                )
-                """
-            )
+        ensure_relational_mirror_tables(connection)
         connection.commit()
 
 
@@ -319,66 +331,34 @@ def is_hot_storage_key(key: str) -> bool:
 # Ensures all hot-storage tables exist with the expected schema.
 def ensure_postgres_hot_storage_tables(connection: Any) -> None:
     ensure_relational_mirror_tables(connection)
-    with connection.cursor() as cursor:
-        for table_name in HOT_STORAGE_TABLES.values():
-            cursor.execute(
-                """
-                select column_name
-                from information_schema.columns
-                where table_schema = 'public' and table_name = %s
-                """,
-                (table_name,),
-            )
-            existing_columns = {row[0] for row in cursor.fetchall()}
-            if existing_columns and existing_columns != EXPECTED_HOT_STORAGE_COLUMNS:
-                cursor.execute(f"drop table if exists {table_name}")
-
-            cursor.execute(
-                f"""
-                create table if not exists {table_name} (
-                  id text primary key,
-                  data jsonb not null,
-                  sort_order integer not null default 0,
-                  updated_at timestamptz not null default now()
-                )
-                """
-            )
-            cursor.execute(
-                f"""
-                alter table {table_name}
-                add column if not exists data jsonb default '{{}}'::jsonb
-                """
-            )
-            cursor.execute(
-                f"""
-                alter table {table_name}
-                add column if not exists sort_order integer not null default 0
-                """
-            )
-            cursor.execute(
-                f"""
-                alter table {table_name}
-                add column if not exists updated_at timestamptz not null default now()
-                """
-            )
-
-        cursor.execute(
-            """
-            create index if not exists app_users_store_email_idx
-            on app_users_store (lower(coalesce(data->>'email', '')))
-            """
-        )
-        cursor.execute(
-            """
-            create index if not exists app_users_store_phone_idx
-            on app_users_store ((coalesce(data->>'phone', '')))
-            """
-        )
 
 
 # Reads one hot-storage collection from its dedicated relational table.
 def get_postgres_hot_storage_collection(connection: Any, key: str) -> list[Any]:
-    table_name = HOT_STORAGE_TABLES[key]
+    return get_relational_collection(connection, key)
+
+
+def _table_exists(connection: Any, table_name: str) -> bool:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            select exists (
+              select 1
+              from information_schema.tables
+              where table_schema = 'public' and table_name = %s
+            )
+            """,
+            (table_name,),
+        )
+        row = cursor.fetchone()
+    return bool(row and row[0])
+
+
+def _get_legacy_hot_storage_collection(connection: Any, key: str) -> list[Any]:
+    table_name = LEGACY_HOT_STORAGE_TABLES.get(key)
+    if not table_name or not _table_exists(connection, table_name):
+        return []
+
     with connection.cursor() as cursor:
         cursor.execute(
             f"""
@@ -388,23 +368,19 @@ def get_postgres_hot_storage_collection(connection: Any, key: str) -> list[Any]:
             """
         )
         rows = cursor.fetchall()
+    return [row[0] for row in rows if isinstance(row[0], dict)]
 
-    return [row[0] for row in rows]
 
+def _get_legacy_app_storage_collection(connection: Any, key: str) -> list[Any]:
+    if not _table_exists(connection, "app_storage"):
+        return []
 
-# Keeps the generic app-storage mirror aligned with hot-storage collections.
-def _upsert_app_storage_value(connection: Any, key: str, value: Any) -> None:
     with connection.cursor() as cursor:
-        cursor.execute(
-            """
-            insert into app_storage (key, value, updated_at)
-            values (%s, %s::jsonb, now())
-            on conflict (key) do update set
-              value = excluded.value,
-              updated_at = excluded.updated_at
-            """,
-            (key, json.dumps(value)),
-        )
+        cursor.execute("select value from app_storage where key = %s", (key,))
+        row = cursor.fetchone()
+    if row is None or not isinstance(row[0], list):
+        return []
+    return [item for item in row[0] if isinstance(item, dict)]
 
 
 def _items_match_same_identity(key: str, left: dict[str, Any], right: dict[str, Any]) -> bool:
@@ -501,99 +477,37 @@ def replace_postgres_hot_storage_collection(
         normalized_items.append(sanitize_hot_storage_item(key, item))
         item_ids.append(item_id)
 
-    table_name = HOT_STORAGE_TABLES[key]
-    with connection.cursor() as cursor:
-        if item_ids:
-            cursor.execute(f"delete from {table_name} where id <> all(%s)", (item_ids,))
-        else:
-            cursor.execute(f"delete from {table_name}")
-
-        for sort_order, item in enumerate(normalized_items):
-            cursor.execute(
-                f"""
-                insert into {table_name} (id, data, sort_order, updated_at)
-                values (%s, %s::jsonb, %s, now())
-                on conflict (id) do update set
-                  data = excluded.data,
-                  sort_order = excluded.sort_order,
-                  updated_at = excluded.updated_at
-                """,
-                (item["id"], json.dumps(item), sort_order),
-            )
-
-    _upsert_app_storage_value(connection, key, normalized_items)
-    sync_relational_mirror_collection(connection, key, normalized_items)
+    replace_relational_collection(connection, key, normalized_items)
 
 
 # Deletes all rows for one hot-storage collection.
 def clear_postgres_hot_storage_collection(connection: Any, key: str) -> None:
-    table_name = HOT_STORAGE_TABLES[key]
-    with connection.cursor() as cursor:
-        cursor.execute(f"delete from {table_name}")
-
-    _upsert_app_storage_value(connection, key, [])
-    sync_relational_mirror_collection(connection, key, [])
+    replace_relational_collection(connection, key, [])
 
 
 # Deletes all rows from every hot-storage collection.
 def clear_all_postgres_hot_storage(connection: Any) -> None:
-    with connection.cursor() as cursor:
-        for table_name in HOT_STORAGE_TABLES.values():
-            cursor.execute(f"delete from {table_name}")
-
     for key in HOT_STORAGE_TABLES:
-        _upsert_app_storage_value(connection, key, [])
-        sync_relational_mirror_collection(connection, key, [])
+        replace_relational_collection(connection, key, [])
 
 
-# Reads a batch of generic app-storage items from Postgres.
-def _get_postgres_app_storage_items(connection: Any, keys: list[str]) -> dict[str, Any]:
-    if not keys:
-        return {}
-
-    with connection.cursor() as cursor:
-        cursor.execute(
-            "select key, value from app_storage where key = any(%s)",
-            (keys,),
-        )
-        rows = cursor.fetchall()
-
-    return {row[0]: row[1] for row in rows}
-
-
-# Checks whether a hot-storage collection needs to be backfilled from source data.
 def _postgres_hot_storage_needs_backfill(connection: Any, key: str) -> bool:
-    table_name = HOT_STORAGE_TABLES[key]
-    with connection.cursor() as cursor:
-        cursor.execute(f"select count(*) from {table_name}")
-        count_row = cursor.fetchone()
-
-        cursor.execute(
-            f"""
-            select exists (
-              select 1
-              from {table_name}
-              where coalesce(data->>'id', '') = ''
-            )
-            """
-        )
-        invalid_row = cursor.fetchone()
-
-    row_count = int(count_row[0]) if count_row else 0
-    has_invalid_rows = bool(invalid_row[0]) if invalid_row else False
-    return row_count == 0 or has_invalid_rows
+    return len(get_relational_collection(connection, key)) == 0
 
 
 # Ensures each hot-storage table has seed data when it is empty or invalid.
 def ensure_postgres_hot_storage_seeded(connection: Any, demo_storage: dict[str, Any]) -> None:
     ensure_postgres_hot_storage_tables(connection)
-    existing_storage = _get_postgres_app_storage_items(connection, list(HOT_STORAGE_TABLES.keys()))
 
     for key in HOT_STORAGE_TABLES:
         if not _postgres_hot_storage_needs_backfill(connection, key):
             continue
 
-        source_items = existing_storage.get(key, demo_storage.get(key, []))
+        source_items = _get_legacy_hot_storage_collection(connection, key)
+        if not source_items:
+            source_items = _get_legacy_app_storage_collection(connection, key)
+        if not source_items:
+            source_items = demo_storage.get(key, [])
         if isinstance(source_items, list):
             replace_postgres_hot_storage_collection(connection, key, source_items)
 
@@ -617,40 +531,19 @@ def ensure_postgres_hot_storage_seeded(connection: Any, demo_storage: dict[str, 
 
 # Refreshes app_storage so hot-storage keys reflect the current relational tables.
 def sync_hot_storage_app_storage(connection: Any, collections: dict[str, list[Any]] | None = None) -> None:
-    if collections is None:
-        collections = {
-            key: get_postgres_hot_storage_collection(connection, key)
-            for key in HOT_STORAGE_TABLES
-        }
-
-    for key, items in collections.items():
-        if key in HOT_STORAGE_TABLES:
-            _upsert_app_storage_value(connection, key, items)
+    return None
 
 
 # Returns whether the minimum demo collections already exist in hot storage.
 def _has_required_demo_seed(connection: Any) -> bool:
     for key in REQUIRED_DEMO_COLLECTION_KEYS:
-        table_name = HOT_STORAGE_TABLES[key]
-        with connection.cursor() as cursor:
-            cursor.execute(f"select exists (select 1 from {table_name} limit 1)")
-            row = cursor.fetchone()
-        if not row or not bool(row[0]):
+        if not get_postgres_hot_storage_collection(connection, key):
             return False
-
-    with connection.cursor() as cursor:
-        cursor.execute(
-            """
-            select exists (
-              select 1
-              from app_users_store
-              where lower(coalesce(data->>'email', '')) = 'admin@nvc.org'
-            )
-            """
-        )
-        row = cursor.fetchone()
-
-    return bool(row and row[0])
+    return any(
+        str(item.get("email") or "").strip().lower() == "admin@nvc.org"
+        for item in get_postgres_hot_storage_collection(connection, "users")
+        if isinstance(item, dict)
+    )
 
 
 # Seeds both app storage and hot-storage tables with demo data.
@@ -671,21 +564,9 @@ def ensure_app_storage_seeded() -> None:
             with get_postgres_connection() as connection:
                 ensure_postgres_hot_storage_tables(connection)
                 if _has_required_demo_seed(connection):
-                    sync_hot_storage_app_storage(connection)
                     connection.commit()
                     _APP_STORAGE_SEED_CONFIRMED = True
                     break
-
-                with connection.cursor() as cursor:
-                    for key, value in demo_storage.items():
-                        cursor.execute(
-                            """
-                            insert into app_storage (key, value, updated_at)
-                            values (%s, %s::jsonb, now())
-                            on conflict (key) do nothing
-                            """,
-                            (key, json.dumps(value)),
-                        )
                 ensure_postgres_hot_storage_seeded(connection, demo_storage)
                 connection.commit()
                 _APP_STORAGE_SEED_CONFIRMED = True

@@ -19,8 +19,6 @@ from .app_storage_seed import (
     get_postgres_hot_storage_collection,
     is_hot_storage_key,
     replace_postgres_hot_storage_collection,
-    sync_hot_storage_app_storage,
-    sync_relational_mirror_collection,
 )
 from .db import (
     get_configured_db_mode,
@@ -30,7 +28,11 @@ from .db import (
     get_postgres_status,
 )
 from .field_rules import normalize_comparable_phone
-from .schema_maintenance import prune_stale_legacy_app_users
+from .relational_mirror import (
+    get_relational_item_by_id,
+    get_relational_items_by_field,
+    upsert_relational_item,
+)
 
 
 load_dotenv()
@@ -119,6 +121,7 @@ class ProjectGroupMessagePayload(BaseModel):
     timestamp: str
     kind: str | None = None
     needPost: dict[str, Any] | None = None
+    scopeProposal: dict[str, Any] | None = None
     responseToMessageId: str | None = None
     responseAction: str | None = None
     responseToTitle: str | None = None
@@ -227,8 +230,8 @@ def ensure_message_storage() -> None:
                 """
                 create table if not exists messages (
                   messages_id text primary key,
-                  sender_id text not null references app_users(app_users_id) on delete cascade,
-                  recipient_id text not null references app_users(app_users_id) on delete cascade,
+                  sender_id text not null references users(id) on delete cascade,
+                  recipient_id text not null references users(id) on delete cascade,
                   project_id text,
                   content text not null,
                   timestamp timestamptz not null,
@@ -249,11 +252,12 @@ def ensure_project_group_message_storage() -> None:
                 create table if not exists project_group_messages (
                   project_group_messages_id text primary key,
                   project_id text not null,
-                  sender_id text not null references app_users(app_users_id) on delete cascade,
+                  sender_id text not null references users(id) on delete cascade,
                   content text not null,
                   timestamp timestamptz not null,
                   kind text not null default 'message',
                   need_post jsonb,
+                  scope_proposal jsonb,
                   response_to_message_id text,
                   response_action text,
                   response_to_title text,
@@ -266,6 +270,9 @@ def ensure_project_group_message_storage() -> None:
             )
             cursor.execute(
                 "alter table project_group_messages add column if not exists need_post jsonb"
+            )
+            cursor.execute(
+                "alter table project_group_messages add column if not exists scope_proposal jsonb"
             )
             cursor.execute(
                 "alter table project_group_messages add column if not exists response_to_message_id text"
@@ -318,6 +325,9 @@ def serialize_project_group_message_row(row: Any) -> dict[str, Any]:
     need_post = row.get("need_post")
     if isinstance(need_post, str):
         need_post = json.loads(need_post)
+    scope_proposal = row.get("scope_proposal")
+    if isinstance(scope_proposal, str):
+        scope_proposal = json.loads(scope_proposal)
 
     return {
         "id": row["project_group_messages_id"],
@@ -327,11 +337,152 @@ def serialize_project_group_message_row(row: Any) -> dict[str, Any]:
         "timestamp": row["timestamp"].isoformat() if hasattr(row["timestamp"], "isoformat") else row["timestamp"],
         "kind": row.get("kind") or "message",
         "needPost": need_post,
+        "scopeProposal": scope_proposal,
         "responseToMessageId": row.get("response_to_message_id"),
         "responseAction": row.get("response_action"),
         "responseToTitle": row.get("response_to_title"),
         "attachments": attachments,
     }
+
+
+SPECIAL_STORAGE_KEYS = {"messages", "projectGroupMessages"}
+
+
+def _validate_storage_items(key: str, value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise HTTPException(status_code=400, detail=f"Storage key '{key}' expects a list payload.")
+
+    normalized_items: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not item.get("id"):
+            raise HTTPException(status_code=400, detail=f"Storage key '{key}' expects object items with ids.")
+        normalized_items.append(item)
+    return normalized_items
+
+
+def _get_special_storage_collection(connection: Any, key: str) -> list[dict[str, Any]]:
+    ensure_message_storage()
+    ensure_project_group_message_storage()
+    from psycopg.rows import dict_row
+
+    with connection.cursor(row_factory=dict_row) as cursor:
+        if key == "messages":
+            cursor.execute(
+                """
+                select messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                from messages
+                order by timestamp asc, messages_id asc
+                """
+            )
+            return [serialize_message_row(row) for row in cursor.fetchall()]
+
+        if key == "projectGroupMessages":
+            cursor.execute(
+                """
+                select
+                  project_group_messages_id,
+                  project_id,
+                  sender_id,
+                  content,
+                  timestamp,
+                  kind,
+                  need_post,
+                  scope_proposal,
+                  response_to_message_id,
+                  response_action,
+                  response_to_title,
+                  attachments
+                from project_group_messages
+                order by timestamp asc, project_group_messages_id asc
+                """
+            )
+            return [serialize_project_group_message_row(row) for row in cursor.fetchall()]
+
+    raise HTTPException(status_code=400, detail=f"Unsupported storage key '{key}'.")
+
+
+def _replace_special_storage_collection(connection: Any, key: str, value: Any) -> None:
+    items = _validate_storage_items(key, value)
+    ensure_message_storage()
+    ensure_project_group_message_storage()
+
+    with connection.cursor() as cursor:
+        if key == "messages":
+            cursor.execute("delete from messages")
+            for item in items:
+                cursor.execute(
+                    """
+                    insert into messages (
+                      messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                    )
+                    values (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                    """,
+                    (
+                        item["id"],
+                        item.get("senderId"),
+                        item.get("recipientId"),
+                        item.get("projectId"),
+                        item.get("content") or "",
+                        item.get("timestamp"),
+                        bool(item.get("read")),
+                        json.dumps(item.get("attachments") or []),
+                    ),
+                )
+            return
+
+        if key == "projectGroupMessages":
+            cursor.execute("delete from project_group_messages")
+            for item in items:
+                cursor.execute(
+                    """
+                    insert into project_group_messages (
+                      project_group_messages_id,
+                      project_id,
+                      sender_id,
+                      content,
+                      timestamp,
+                      kind,
+                      need_post,
+                      scope_proposal,
+                      response_to_message_id,
+                      response_action,
+                      response_to_title,
+                      attachments
+                    )
+                    values (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s::jsonb)
+                    """,
+                    (
+                        item["id"],
+                        item.get("projectId"),
+                        item.get("senderId"),
+                        item.get("content") or "",
+                        item.get("timestamp"),
+                        item.get("kind") or "message",
+                        json.dumps(item.get("needPost")) if item.get("needPost") is not None else None,
+                        json.dumps(item.get("scopeProposal")) if item.get("scopeProposal") is not None else None,
+                        item.get("responseToMessageId"),
+                        item.get("responseAction"),
+                        item.get("responseToTitle"),
+                        json.dumps(item.get("attachments") or []),
+                    ),
+                )
+            return
+
+    raise HTTPException(status_code=400, detail=f"Unsupported storage key '{key}'.")
+
+
+def _clear_special_storage_collection(connection: Any, key: str) -> None:
+    ensure_message_storage()
+    ensure_project_group_message_storage()
+    with connection.cursor() as cursor:
+        if key == "messages":
+            cursor.execute("delete from messages")
+            return
+        if key == "projectGroupMessages":
+            cursor.execute("delete from project_group_messages")
+            return
+
+    raise HTTPException(status_code=400, detail=f"Unsupported storage key '{key}'.")
 
 
 # Returns the user ids that should have access to a project's group chat.
@@ -407,83 +558,10 @@ def _hot_table_name(key: str) -> str:
 
 # Fetches a single hot-storage row by item id.
 def _postgres_get_hot_item_by_id(connection: Any, key: str, item_id: str) -> dict[str, Any] | None:
-    table_name = _hot_table_name(key)
-    with connection.cursor() as cursor:
-        cursor.execute(f"select data from {table_name} where id = %s", (item_id,))
-        row = cursor.fetchone()
-    return None if row is None else row[0]
-
-
-# Builds a fallback email for legacy app-user backfills.
-def _legacy_app_user_email(user_id: str, user: dict[str, Any]) -> str:
-    email = str(user.get("email") or "").strip().lower()
-    if email:
-        return email
-
-    return f"{user_id}@volcre.local"
-
-
-# Mirrors a legacy user object into the `app_users` table.
-def _postgres_upsert_legacy_app_user(connection: Any, user_id: str, user: dict[str, Any]) -> None:
-    with connection.cursor() as cursor:
-        cursor.execute(
-            """
-            create table if not exists app_users (
-              app_users_id text primary key,
-              email text not null unique,
-              password text not null,
-              role text not null,
-              name text not null,
-              phone text,
-              created_at timestamptz not null
-            )
-            """
-        )
-        cursor.execute(
-            "delete from app_users where email = %s and app_users_id <> %s",
-            (_legacy_app_user_email(user_id, user), user_id),
-        )
-        cursor.execute(
-            """
-            insert into app_users (app_users_id, email, password, role, name, phone, created_at)
-            values (%s, %s, %s, %s, %s, %s, %s)
-            on conflict (app_users_id) do update set
-              email = excluded.email,
-              password = excluded.password,
-              role = excluded.role,
-              name = excluded.name,
-              phone = excluded.phone,
-              created_at = excluded.created_at
-            """,
-            (
-                user_id,
-                _legacy_app_user_email(user_id, user),
-                str(user.get("password") or ""),
-                str(user.get("role") or "volunteer"),
-                str(user.get("name") or user_id),
-                str(user.get("phone") or "") or None,
-                str(user.get("createdAt") or datetime.now(timezone.utc).isoformat()),
-            ),
-        )
-
-
-# Ensures one legacy app user has a matching `app_users` record.
-def _postgres_ensure_legacy_app_user(connection: Any, user_id: str) -> None:
-    user = _postgres_get_hot_item_by_id(connection, "users", user_id)
-    if user is None:
-        raise HTTPException(status_code=404, detail=f"User '{user_id}' was not found.")
-
-    _postgres_upsert_legacy_app_user(connection, user_id, user)
-
-
-# Backfills all legacy app users into the relational user table.
-def _postgres_sync_all_legacy_app_users(connection: Any) -> None:
-    users = get_postgres_hot_storage_collection(connection, "users")
-    for user in users:
-        user_id = user.get("id")
-        if isinstance(user_id, str) and user_id:
-            _postgres_upsert_legacy_app_user(connection, user_id, user)
-    prune_stale_legacy_app_users(connection)
+    try:
+        return get_relational_item_by_id(connection, key, item_id)
+    except KeyError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 # Reads hot-storage items filtered by one field value.
@@ -493,56 +571,20 @@ def _postgres_get_hot_items_by_field(
     field_name: str,
     field_value: str,
 ) -> list[dict[str, Any]]:
-    table_name = _hot_table_name(key)
-    with connection.cursor() as cursor:
-        cursor.execute(
-            f"""
-            select data
-            from {table_name}
-            where coalesce(data ->> %s, '') = %s
-            order by sort_order asc, updated_at asc, id asc
-            """,
-            (field_name, field_value),
-        )
-        rows = cursor.fetchall()
-    return [row[0] for row in rows]
+    try:
+        return get_relational_items_by_field(connection, key, field_name, field_value)
+    except KeyError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 # Inserts or updates one hot-storage item row.
 def _postgres_upsert_hot_item(connection: Any, key: str, item: dict[str, Any]) -> dict[str, Any]:
-    item_id = item.get("id")
-    if not isinstance(item_id, str) or not item_id:
-        raise HTTPException(status_code=400, detail=f"Hot storage key '{key}' expects an object with an id.")
-
-    table_name = _hot_table_name(key)
-    with connection.cursor() as cursor:
-        cursor.execute(f"select sort_order from {table_name} where id = %s", (item_id,))
-        row = cursor.fetchone()
-        if row is None:
-            cursor.execute(f"select coalesce(max(sort_order), -1) + 1 from {table_name}")
-            sort_order = int(cursor.fetchone()[0])
-        else:
-            sort_order = int(row[0])
-
-        cursor.execute(
-            f"""
-            insert into {table_name} (id, data, sort_order, updated_at)
-            values (%s, %s::jsonb, %s, now())
-            on conflict (id) do update set
-              data = excluded.data,
-              sort_order = excluded.sort_order,
-              updated_at = excluded.updated_at
-            """,
-            (item_id, json.dumps(item), sort_order),
-        )
-
-    sync_relational_mirror_collection(
-        connection,
-        key,
-        get_postgres_hot_storage_collection(connection, key),
-    )
-    sync_hot_storage_app_storage(connection, {key: get_postgres_hot_storage_collection(connection, key)})
-    return item
+    try:
+        return upsert_relational_item(connection, key, item)
+    except KeyError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 # Finds the volunteer profile tied to a specific user id.
@@ -560,23 +602,20 @@ def _postgres_get_volunteer_recognition_status(
     if volunteer is None:
         raise HTTPException(status_code=404, detail="Volunteer not found.")
 
-    join_table = HOT_STORAGE_TABLES["volunteerProjectJoins"]
-    volunteer_table = HOT_STORAGE_TABLES["volunteers"]
-
     with connection.cursor() as cursor:
         cursor.execute(
-            f"""
+            """
             with joined_projects as (
-                select distinct data->>'projectId' as project_id
-                from {join_table}
-                where coalesce(data->>'volunteerId', '') = %s
-                  and coalesce(data->>'projectId', '') <> ''
+                select distinct project_id
+                from volunteer_project_joins
+                where coalesce(volunteer_id, '') = %s
+                  and coalesce(project_id, '') <> ''
             ),
             past_projects as (
                 select distinct jsonb_array_elements_text(
-                    coalesce(data->'pastProjects', '[]'::jsonb)
+                    coalesce(past_projects, '[]'::jsonb)
                 ) as project_id
-                from {volunteer_table}
+                from volunteers
                 where id = %s
             )
             select count(distinct project_id)
@@ -816,17 +855,19 @@ def _get_user_by_identifier(identifier: str, connection: Any | None = None) -> d
         with active_connection.cursor() as cursor:
             cursor.execute(
                 """
-                select data
-                from app_users_store
-                where lower(coalesce(data->>'email', '')) = %s
-                   or regexp_replace(coalesce(data->>'phone', ''), '[^0-9]', '', 'g') = %s
-                   or regexp_replace(coalesce(data->>'phone', ''), '[^0-9]', '', 'g') = %s
-                order by sort_order asc
+                select id
+                from users
+                where lower(coalesce(email, '')) = %s
+                   or regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g') = %s
+                   or regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g') = %s
+                order by created_at asc nulls last, id asc
                 """,
                 (normalized_identifier, comparable_phone, raw_digits),
             )
             row = cursor.fetchone()
-        return None if row is None else row[0]
+        if row is None:
+            return None
+        return _postgres_get_hot_item_by_id(active_connection, "users", row[0])
 
     if connection is not None:
         return query_user(connection)
@@ -838,48 +879,19 @@ def _get_user_by_identifier(identifier: str, connection: Any | None = None) -> d
 # Retrieves a user by their ID.
 def _get_user_by_id(user_id: str, connection: Any) -> dict[str, Any] | None:
     _require_postgres()
-    with connection.cursor() as cursor:
-        cursor.execute(
-            """
-            select data
-            from app_users_store
-            where data->>'id' = %s
-            """,
-            (user_id,),
-        )
-        row = cursor.fetchone()
-    return None if row is None else row[0]
+    return _postgres_get_hot_item_by_id(connection, "users", user_id)
 
 
 # Retrieves all users from storage.
 def _get_all_users_from_storage(connection: Any) -> list[dict[str, Any]]:
     _require_postgres()
-    users: list[dict[str, Any]] = []
-    with connection.cursor() as cursor:
-        cursor.execute(
-            """
-            select data
-            from app_users_store
-            order by sort_order asc
-            """
-        )
-        for row in cursor.fetchall():
-            users.append(row[0])
-    return users
+    return get_postgres_hot_storage_collection(connection, "users")
 
 
 # Saves a user to storage.
 def _save_user_to_storage(user: dict[str, Any], connection: Any) -> None:
     _require_postgres()
-    with connection.cursor() as cursor:
-        cursor.execute(
-            """
-            update app_users_store
-            set data = %s
-            where data->>'id' = %s
-            """,
-            (json.dumps(user), user.get("id")),
-        )
+    _postgres_upsert_hot_item(connection, "users", user)
     connection.commit()
 
 
@@ -1517,8 +1529,10 @@ async def create_message(payload: MessagePayload) -> dict[str, Any]:
     from psycopg.rows import dict_row
 
     with get_postgres_connection() as connection:
-        _postgres_ensure_legacy_app_user(connection, payload.senderId)
-        _postgres_ensure_legacy_app_user(connection, payload.recipientId)
+        if _get_user_by_id(payload.senderId, connection) is None:
+            raise HTTPException(status_code=404, detail="Sender not found.")
+        if _get_user_by_id(payload.recipientId, connection) is None:
+            raise HTTPException(status_code=404, detail="Recipient not found.")
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 """
@@ -1555,7 +1569,7 @@ async def create_project_group_message(
     ensure_project_group_message_storage()
     attachments = payload.attachments or []
     message_kind = str(payload.kind or "message").strip() or "message"
-    if message_kind not in {"message", "need-post", "need-response"}:
+    if message_kind not in {"message", "need-post", "need-response", "scope-proposal"}:
         raise HTTPException(status_code=400, detail="Unsupported project group message type.")
     from psycopg.rows import dict_row
 
@@ -1588,7 +1602,13 @@ async def create_project_group_message(
                     status_code=400,
                     detail="A response action is required for need responses.",
                 )
-        _postgres_ensure_legacy_app_user(connection, payload.senderId)
+        if message_kind == "scope-proposal" and payload.scopeProposal is None:
+            raise HTTPException(
+                status_code=400,
+                detail="A structured scope proposal is required for scope-proposal messages.",
+            )
+        if _get_user_by_id(payload.senderId, connection) is None:
+            raise HTTPException(status_code=404, detail="Sender not found.")
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 """
@@ -1600,12 +1620,13 @@ async def create_project_group_message(
                   timestamp,
                   kind,
                   need_post,
+                  scope_proposal,
                   response_to_message_id,
                   response_action,
                   response_to_title,
                   attachments
                 )
-                values (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb)
+                values (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s::jsonb)
                 returning
                   project_group_messages_id,
                   project_id,
@@ -1614,6 +1635,7 @@ async def create_project_group_message(
                   timestamp,
                   kind,
                   need_post,
+                  scope_proposal,
                   response_to_message_id,
                   response_action,
                   response_to_title,
@@ -1627,6 +1649,7 @@ async def create_project_group_message(
                     payload.timestamp,
                     message_kind,
                     json.dumps(payload.needPost) if payload.needPost is not None else None,
+                    json.dumps(payload.scopeProposal) if payload.scopeProposal is not None else None,
                     payload.responseToMessageId,
                     payload.responseAction,
                     payload.responseToTitle,
@@ -1699,14 +1722,10 @@ def get_storage_item(key: str) -> dict[str, Any]:
     if is_hot_storage_key(key):
         with get_postgres_connection() as connection:
             return {"key": key, "value": get_postgres_hot_storage_collection(connection, key)}
-
-    from psycopg.rows import dict_row
-
-    with get_postgres_connection() as connection:
-        with connection.cursor(row_factory=dict_row) as cursor:
-            cursor.execute("select value from app_storage where key = %s", (key,))
-            row = cursor.fetchone()
-    return {"key": key, "value": None if row is None else row["value"]}
+    if key in SPECIAL_STORAGE_KEYS:
+        with get_postgres_connection() as connection:
+            return {"key": key, "value": _get_special_storage_collection(connection, key)}
+    return {"key": key, "value": None}
 
 
 @app.post("/storage/batch")
@@ -1718,26 +1737,17 @@ def get_storage_items_batch(payload: StorageBatchPayload) -> dict[str, dict[str,
     if not keys:
         return {"items": items}
 
-    _require_postgres()
-    from psycopg.rows import dict_row
-
     with get_postgres_connection() as connection:
         hot_keys = [key for key in keys if is_hot_storage_key(key)]
-        cold_keys = [key for key in keys if not is_hot_storage_key(key)]
+        special_keys = [key for key in keys if key in SPECIAL_STORAGE_KEYS]
+        cold_keys = [key for key in keys if not is_hot_storage_key(key) and key not in SPECIAL_STORAGE_KEYS]
 
         for key in hot_keys:
             items[key] = get_postgres_hot_storage_collection(connection, key)
-
-        if cold_keys:
-            with connection.cursor(row_factory=dict_row) as cursor:
-                cursor.execute(
-                    "select key, value from app_storage where key = any(%s)",
-                    (cold_keys,),
-                )
-                rows = cursor.fetchall()
-
-            for row in rows:
-                items[row["key"]] = row["value"]
+        for key in special_keys:
+            items[key] = _get_special_storage_collection(connection, key)
+        for key in cold_keys:
+            items[key] = None
 
     return {"items": items}
 
@@ -1752,30 +1762,16 @@ async def put_storage_item(key: str, payload: StoragePayload) -> dict[str, str]:
 
         with get_postgres_connection() as connection:
             replace_postgres_hot_storage_collection(connection, key, payload.value)
-            if key == "users":
-                _postgres_sync_all_legacy_app_users(connection)
             connection.commit()
         await connection_manager.broadcast_storage_event([key])
         return {"status": "ok"}
-
-    from psycopg.types.json import Jsonb
-
-    with get_postgres_connection() as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                insert into app_storage (key, value, updated_at)
-                values (%s, %s, now())
-                on conflict (key) do update set
-                  value = excluded.value,
-                  updated_at = excluded.updated_at
-                """,
-                (key, Jsonb(payload.value)),
-            )
-        connection.commit()
-
-    await connection_manager.broadcast_storage_event([key])
-    return {"status": "ok"}
+    if key in SPECIAL_STORAGE_KEYS:
+        with get_postgres_connection() as connection:
+            _replace_special_storage_collection(connection, key, payload.value)
+            connection.commit()
+        await connection_manager.broadcast_storage_event([key])
+        return {"status": "ok"}
+    raise HTTPException(status_code=400, detail=f"Unsupported storage key '{key}'.")
 
 
 @app.delete("/storage/{key}")
@@ -1788,14 +1784,13 @@ async def delete_storage_item(key: str) -> dict[str, str]:
             connection.commit()
         await connection_manager.broadcast_storage_event([key])
         return {"status": "ok"}
-
-    with get_postgres_connection() as connection:
-        with connection.cursor() as cursor:
-            cursor.execute("delete from app_storage where key = %s", (key,))
-        connection.commit()
-
-    await connection_manager.broadcast_storage_event([key])
-    return {"status": "ok"}
+    if key in SPECIAL_STORAGE_KEYS:
+        with get_postgres_connection() as connection:
+            _clear_special_storage_collection(connection, key)
+            connection.commit()
+        await connection_manager.broadcast_storage_event([key])
+        return {"status": "ok"}
+    raise HTTPException(status_code=400, detail=f"Unsupported storage key '{key}'.")
 
 
 @app.delete("/storage")
@@ -1803,12 +1798,12 @@ async def delete_storage_item(key: str) -> dict[str, str]:
 async def clear_storage() -> dict[str, str]:
     _require_postgres()
     with get_postgres_connection() as connection:
-        with connection.cursor() as cursor:
-            cursor.execute("delete from app_storage")
         clear_all_postgres_hot_storage(connection)
+        for key in SPECIAL_STORAGE_KEYS:
+            _clear_special_storage_collection(connection, key)
         connection.commit()
 
-    await connection_manager.broadcast_storage_event(list(HOT_STORAGE_TABLES.keys()))
+    await connection_manager.broadcast_storage_event(list(HOT_STORAGE_TABLES.keys()) + list(SPECIAL_STORAGE_KEYS))
     return {"status": "ok"}
 
 
