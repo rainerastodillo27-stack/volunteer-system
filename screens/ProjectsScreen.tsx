@@ -10,7 +10,10 @@ import {
   getProjectsScreenSnapshot,
   getVolunteerProjectMatches,
   requestVolunteerProjectJoin,
+<<<<<<< HEAD
   submitVolunteerTimeOutReport,
+=======
+>>>>>>> 037fab59f64e3dec7dffb08a79f446fc37a7fd82
   submitPartnerProgramProposal,
   startVolunteerTimeLog,
   endVolunteerTimeLog,
@@ -425,6 +428,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
       return;
     }
 
+<<<<<<< HEAD
     const filteredProjects =
       statusFilter === 'All'
         ? projects
@@ -438,13 +442,20 @@ export default function ProjectsScreen({ navigation, route }: any) {
       .filter(categoryGroup => categoryGroup.projects.length > 0);
 
     const targetCategoryIndex = targetCategoryGroups.findIndex(categoryGroup =>
+=======
+    const targetCategoryIndex = projectsByCategory.findIndex(categoryGroup =>
+>>>>>>> 037fab59f64e3dec7dffb08a79f446fc37a7fd82
       categoryGroup.projects.some(project => project.id === requestedProjectId)
     );
     if (targetCategoryIndex === -1) {
       return;
     }
 
+<<<<<<< HEAD
     const targetCategory = targetCategoryGroups[targetCategoryIndex];
+=======
+    const targetCategory = projectsByCategory[targetCategoryIndex];
+>>>>>>> 037fab59f64e3dec7dffb08a79f446fc37a7fd82
     if (!targetCategory) {
       return;
     }
@@ -459,7 +470,11 @@ export default function ProjectsScreen({ navigation, route }: any) {
       });
     });
     navigation.setParams({ projectId: undefined });
+<<<<<<< HEAD
   }, [navigation, projects, route?.params?.projectId, statusFilter]);
+=======
+  }, [navigation, projects, projectsByCategory, route?.params?.projectId]);
+>>>>>>> 037fab59f64e3dec7dffb08a79f446fc37a7fd82
 
   // Handles the active project action based on the current user role.
   const handleJoinProject = async (projectId: string) => {

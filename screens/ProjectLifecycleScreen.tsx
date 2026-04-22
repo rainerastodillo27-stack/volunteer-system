@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -746,7 +746,24 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     } catch (error) {
       Alert.alert(
         getRequestErrorTitle(error),
-        getRequestErrorMessage(error, 'Failed to review project proposal.')
+        getRequestErrorMessage(error, 'Failed to review partner application.')
+      );
+    }
+  };
+
+  const handleReviewPartnerReport = async (reportId: string) => {
+    if (!isAdmin || !user?.id || !selectedProject) {
+      return;
+    }
+
+    try {
+      await reviewPartnerReport(reportId, user.id);
+      await loadPartnerReportsForProject(selectedProject.id);
+      Alert.alert('Reviewed', 'Partner report marked as reviewed.');
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to review the partner report.')
       );
     }
   };

@@ -267,43 +267,6 @@ export default function VolunteerImpactMap({ projects }: VolunteerImpactMapProps
           <Text style={styles.detailAddress}>{selectedProject.location.address}</Text>
         </View>
       )}
-
-      <Modal
-        animationType="fade"
-        transparent
-        visible={showMapStyleMenu}
-        onRequestClose={() => setShowMapStyleMenu(false)}
-      >
-        <TouchableOpacity
-          style={styles.menuBackdrop}
-          activeOpacity={1}
-          onPress={() => setShowMapStyleMenu(false)}
-        >
-          <View style={styles.mapStyleMenu}>
-            <Text style={styles.mapStyleMenuTitle}>Choose map style</Text>
-            {MAP_STYLE_PRESETS.map(preset => {
-              const isActive = preset.key === selectedMapStyleKey;
-
-              return (
-                <TouchableOpacity
-                  key={preset.key}
-                  style={[styles.mapStyleMenuItem, isActive && styles.mapStyleMenuItemActive]}
-                  onPress={() => {
-                    setSelectedMapStyleKey(preset.key);
-                    setShowMapStyleMenu(false);
-                  }}
-                >
-                  <View style={styles.mapStyleMenuItemTextWrap}>
-                    <Text style={styles.mapStyleMenuItemTitle}>{preset.label}</Text>
-                    <Text style={styles.mapStyleMenuItemDescription}>{preset.description}</Text>
-                  </View>
-                  {isActive ? <MaterialIcons name="check" size={20} color="#2563eb" /> : null}
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </TouchableOpacity>
-      </Modal>
     </View>
   );
 }

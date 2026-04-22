@@ -58,13 +58,12 @@ const REMOTE_STORAGE_TIMEOUT_MS = 45000;
 const API_HEALTH_TIMEOUT_MS = 10000;
 const API_READY_RETRY_MS = 1000;
 const API_READY_MAX_ATTEMPTS = 4;
+const API_READY_CACHE_MS = 5000;
 const API_REQUEST_MAX_ATTEMPTS = 4;
 const API_REQUEST_RETRY_BASE_MS = 1000;
 const API_REQUEST_RETRY_MAX_MS = 8000;
-const API_READY_CACHE_MS = 60000;
-// Keep shared storage responses warm for longer so screens do not re-read the same
-// collections on every navigation or re-render.
-const SHARED_STORAGE_CACHE_TTL_MS = 300000;
+const SHARED_STORAGE_CACHE_TTL_MS = 3000;
+const STORAGE_CHANGE_POLL_INTERVAL_MS = 3000;
 const LOCAL_ONLY_STORAGE_KEYS = new Set([STORAGE_KEYS.CURRENT_USER]);
 const NEGROS_OCCIDENTAL_BOUNDS = {
   minLatitude: 9.85,
