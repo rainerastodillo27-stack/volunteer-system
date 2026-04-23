@@ -9,6 +9,7 @@ import {
   Modal,
   TextInput,
   ScrollView,
+  Platform,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -162,6 +163,25 @@ export default function UserManagementScreen() {
     }
   };
 
+  const performDeleteUser = async (targetUser: User) => {
+    try {
+      await deleteUser(targetUser.id);
+      if (reviewTarget?.type === 'user' && reviewTarget.record.id === targetUser.id) {
+        closeReviewModal();
+      }
+      if (selectedUser?.id === targetUser.id) {
+        closeEditModal();
+      }
+      await loadUsers();
+      Alert.alert('Deleted', 'Account removed successfully.');
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to delete user account.')
+      );
+    }
+  };
+
   // Confirms and deletes a user account that is not the active admin session.
   const handleDeleteUser = (targetUser: User) => {
     if (targetUser.id === user?.id) {
@@ -169,25 +189,29 @@ export default function UserManagementScreen() {
       return;
     }
 
+    const confirmationMessage = `Do you want to delete ${targetUser.name}'s account?`;
+
+    if (Platform.OS === 'web') {
+      const confirmed =
+        typeof window !== 'undefined'
+          ? window.confirm(`${confirmationMessage}\n\nChoose OK for Yes or Cancel to keep the account.`)
+          : true;
+      if (confirmed) {
+        void performDeleteUser(targetUser);
+      }
+      return;
+    }
+
     Alert.alert(
-      'Delete User',
-      `Delete ${targetUser.name}? This removes local user data for now.`,
+      'Delete Account',
+      confirmationMessage,
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Delete',
+          text: 'Yes',
           style: 'destructive',
           onPress: async () => {
-            try {
-              await deleteUser(targetUser.id);
-              await loadUsers();
-              Alert.alert('Deleted', 'User removed.');
-            } catch (error) {
-              Alert.alert(
-                getRequestErrorTitle(error),
-                getRequestErrorMessage(error, 'Failed to delete user.')
-              );
-            }
+            await performDeleteUser(targetUser);
           },
         },
       ]
@@ -510,6 +534,12 @@ export default function UserManagementScreen() {
                       >
                         <Text style={styles.requestActionButtonText}>Review Details</Text>
                       </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.requestActionButton, styles.rejectActionButton]}
+                        onPress={() => handleDeleteUser(pendingUser)}
+                      >
+                        <Text style={styles.requestActionButtonText}>Delete Account</Text>
+                      </TouchableOpacity>
                     </View>
                   </View>
                 ))
@@ -800,6 +830,12 @@ export default function UserManagementScreen() {
             <View style={styles.reviewActionFooter}>
               {reviewTarget.type === 'user' ? (
                 <>
+                  <TouchableOpacity
+                    style={[styles.requestActionButton, styles.rejectActionButton]}
+                    onPress={() => handleDeleteUser(reviewTarget.record)}
+                  >
+                    <Text style={styles.requestActionButtonText}>Delete Account</Text>
+                  </TouchableOpacity>
                   <TouchableOpacity
                     style={[styles.requestActionButton, styles.approveActionButton]}
                     onPress={() => handleApproveUser(reviewTarget.record)}

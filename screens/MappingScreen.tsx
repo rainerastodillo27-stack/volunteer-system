@@ -25,7 +25,12 @@ import {
 } from '../models/storage';
 import { isImageMediaUri } from '../utils/media';
 import { navigateToAvailableRoute } from '../utils/navigation';
-import { getInitialProjectRegion, getProjectMarkerColor, getPrimaryProjectImageSource } from '../utils/projectMap';
+import {
+  getInitialProjectRegion,
+  getMappedProjects,
+  getProjectMarkerColor,
+  getPrimaryProjectImageSource,
+} from '../utils/projectMap';
 import { getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
@@ -38,7 +43,10 @@ export default function MappingScreen({ navigation }: any) {
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [showDetails, setShowDetails] = useState(false);
   const [loading, setLoading] = useState(true);
-  const androidGoogleMapsApiKey = Constants.expoConfig?.extra?.androidGoogleMapsApiKey as string | undefined;
+  const mobileGoogleMapsApiKey =
+    (Constants.expoConfig?.extra?.mobileGoogleMapsApiKey as string | undefined) ||
+    (Constants.expoConfig?.extra?.androidGoogleMapsApiKey as string | undefined);
+  const mappedProjects = React.useMemo(() => getMappedProjects(projects), [projects]);
 
   useEffect(() => {
     void loadProjects();
@@ -168,13 +176,13 @@ export default function MappingScreen({ navigation }: any) {
       <View style={styles.mapContainer}>
         <MapView
           style={styles.mapView}
-          initialRegion={getInitialProjectRegion(projects) as Region}
+          initialRegion={getInitialProjectRegion(mappedProjects) as Region}
           provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
           showsCompass
           showsScale
           toolbarEnabled
         >
-          {projects.map((project, index) => (
+          {mappedProjects.map((project, index) => (
             <Marker
               key={project.id}
               coordinate={{
@@ -194,11 +202,16 @@ export default function MappingScreen({ navigation }: any) {
 
       <View style={styles.projectListContainer}>
         <Text style={styles.projectListTitle}>
-          {`${user?.role === 'volunteer' ? 'Events' : 'Projects'} ${projects.length} | Uploaded Impact ${partnerReports.reduce((sum, report) => sum + report.impactCount, 0)}`}
+          {`${user?.role === 'volunteer' ? 'Events' : 'Projects'} ${mappedProjects.length} mapped | Uploaded Impact ${partnerReports.reduce((sum, report) => sum + report.impactCount, 0)}`}
         </Text>
-        {Platform.OS === 'android' && !androidGoogleMapsApiKey ? (
+        {projects.length > mappedProjects.length ? (
           <Text style={styles.projectListWarning}>
-            Android Google Maps key is missing. Add `GOOGLE_MAPS_ANDROID_API_KEY` to `.env`.
+            {`${projects.length - mappedProjects.length} ${projects.length - mappedProjects.length === 1 ? 'item is' : 'items are'} missing coordinates and hidden from the map.`}
+          </Text>
+        ) : null}
+        {(Platform.OS === 'android' || Platform.OS === 'ios') && !mobileGoogleMapsApiKey ? (
+          <Text style={styles.projectListWarning}>
+            Google Maps mobile key is missing. Add `GOOGLE_MAPS_MOBILE_API_KEY` to `.env`.
           </Text>
         ) : null}
       </View>

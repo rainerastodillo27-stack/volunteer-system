@@ -6,27 +6,11 @@
  */
 
 const { spawn } = require('child_process');
-const os = require('os');
 const QRCode = require('qrcode');
 const path = require('path');
 const fs = require('fs');
-
-// Get LAN IP for Expo
-function getLanIp() {
-  const interfaces = os.networkInterfaces();
-
-  for (const addresses of Object.values(interfaces)) {
-    if (!addresses) continue;
-
-    for (const address of addresses) {
-      if (address.family === 'IPv4' && !address.internal) {
-        return address.address;
-      }
-    }
-  }
-
-  return '127.0.0.1';
-}
+const { getPreferredLanIp } = require('./lan-ip');
+const { loadLocalEnv } = require('./load-local-env');
 
 async function generateQRCode(url, outputPath) {
   try {
@@ -54,16 +38,16 @@ function displayBanner() {
   console.log('\n');
 }
 
-function displayLinks(expoUrl, webUrl, lanIp, qrAscii) {
+function displayLinks(expoUrl, lanIp, qrAscii) {
   console.log('\x1b[32m✅ SERVICES STATUS:\x1b[0m');
   console.log('   Backend:  \x1b[33mhttp://127.0.0.1:8000\x1b[0m');
-  console.log('   Web App:  \x1b[33mhttp://127.0.0.1:8081\x1b[0m');
+  console.log('   Web App:  \x1b[33mPress "w" after Expo starts\x1b[0m');
   console.log('   Expo:     \x1b[33m' + expoUrl + '\x1b[0m');
   console.log('\n');
   
   console.log('\x1b[35m📱 MOBILE DEVICE ACCESS (LAN):\x1b[0m');
   console.log('   API:      \x1b[33mhttp://' + lanIp + ':8000\x1b[0m');
-  console.log('   Expo:     \x1b[33mexp://' + lanIp + ':8081\x1b[0m');
+  console.log('   Expo:     \x1b[33m' + expoUrl + '\x1b[0m');
   console.log('\n');
   
   console.log('\x1b[36m📲 SCAN FOR EXPO GO (QR Code):\x1b[0m\n');
@@ -86,9 +70,9 @@ function displayLinks(expoUrl, webUrl, lanIp, qrAscii) {
 }
 
 async function startExpo() {
-  const lanIp = getLanIp();
-  const expoUrl = `exp://${lanIp}:8081`;
-  const webUrl = 'http://localhost:8081';
+  loadLocalEnv(path.join(__dirname, '..'));
+  const lanIp = getPreferredLanIp();
+  const expoUrl = `exp://${lanIp}:8081/--/`;
 
   // Create .dev-pids directory if it doesn't exist
   const devPidsDir = path.join(__dirname, '..', '.dev-pids');
@@ -101,15 +85,19 @@ async function startExpo() {
   const qrAscii = await generateQRCode(expoUrl, qrPath);
 
   displayBanner();
-  displayLinks(expoUrl, webUrl, lanIp, qrAscii);
+  displayLinks(expoUrl, lanIp, qrAscii);
 
   console.log('🔄 Starting Expo dev server with web support...\n');
 
-  // Start Expo with web enabled
-  const expoProcess = spawn('npx', ['expo', 'start', '--web'], {
+  // Start Expo in LAN mode so phones on the same network can open the app.
+  const expoProcess = spawn('npx', ['expo', 'start', '--host', 'lan'], {
     stdio: 'inherit',
     shell: true,
     cwd: path.join(__dirname, '..'),
+    env: {
+      ...process.env,
+      REACT_NATIVE_PACKAGER_HOSTNAME: lanIp,
+    },
   });
 
   expoProcess.on('exit', (code) => {

@@ -15,9 +15,10 @@ import {
   getAllVolunteerTimeLogs,
   getAllPartnerReports,
   getDashboardSnapshot,
+  getVolunteerCompletedProjectIds,
   subscribeToStorageChanges,
 } from '../models/storage';
-import type { Project, Volunteer } from '../models/types';
+import type { Partner, Project, Volunteer } from '../models/types';
 import { useAuth } from '../contexts/AuthContext';
 import { navigateToAvailableRoute } from '../utils/navigation';
 import VolunteerImpactMap from '../components/VolunteerImpactMap';
@@ -81,7 +82,10 @@ export default function DashboardScreen({ navigation }: any) {
   });
   const [recentUpdates, setRecentUpdates] = useState<any[]>([]);
   const [projectsData, setProjectsData] = useState<Project[]>([]);
+  const [partnersData, setPartnersData] = useState<Partner[]>([]);
   const [volunteersData, setVolunteersData] = useState<Volunteer[]>([]);
+  const [volunteerCompletedProjectIdsByVolunteerId, setVolunteerCompletedProjectIdsByVolunteerId] =
+    useState<Record<string, string[]>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
 
   // Loads dashboard totals and recent status updates from storage.
@@ -93,10 +97,20 @@ export default function DashboardScreen({ navigation }: any) {
           getAllVolunteerTimeLogs(),
           getAllPartnerReports(),
         ]);
+      const volunteerCompletedProjectEntries = await Promise.all(
+        volunteers.map(async volunteer => [
+          volunteer.id,
+          await getVolunteerCompletedProjectIds(volunteer.id),
+        ] as const)
+      );
 
       setLoadError(null);
       setProjectsData(projects);
+      setPartnersData(partners);
       setVolunteersData(volunteers);
+      setVolunteerCompletedProjectIdsByVolunteerId(
+        Object.fromEntries(volunteerCompletedProjectEntries)
+      );
 
       setProjectStats({
         total: projects.length,
@@ -145,7 +159,9 @@ export default function DashboardScreen({ navigation }: any) {
       setLoadError(errorMessage);
       setRecentUpdates([]);
       setProjectsData([]);
+      setPartnersData([]);
       setVolunteersData([]);
+      setVolunteerCompletedProjectIdsByVolunteerId({});
     }
   }, []);
 
@@ -248,6 +264,44 @@ export default function DashboardScreen({ navigation }: any) {
     [projectsData]
   );
 
+  const volunteerMapAccounts = useMemo(
+    () =>
+      [...volunteersData]
+        .sort((left, right) => left.name.localeCompare(right.name))
+        .map(volunteer => {
+          const completedProjectIds =
+            volunteerCompletedProjectIdsByVolunteerId[volunteer.id] || volunteer.pastProjects || [];
+          const linkedProjectIds = projectsData
+            .filter(
+              project =>
+                project.volunteers.includes(volunteer.id) ||
+                (project.joinedUserIds || []).includes(volunteer.userId)
+            )
+            .map(project => project.id);
+
+          return {
+            id: volunteer.id,
+            label: volunteer.name,
+            projectIds: Array.from(new Set([...completedProjectIds, ...linkedProjectIds])),
+          };
+        }),
+    [projectsData, volunteerCompletedProjectIdsByVolunteerId, volunteersData]
+  );
+
+  const partnerMapAccounts = useMemo(
+    () =>
+      [...partnersData]
+        .sort((left, right) => left.name.localeCompare(right.name))
+        .map(partner => ({
+          id: partner.id,
+          label: partner.name,
+          projectIds: projectsData
+            .filter(project => project.partnerId === partner.id)
+            .map(project => project.id),
+        })),
+    [partnersData, projectsData]
+  );
+
   const upcomingPrograms = useMemo(() => {
     return [...projectsData]
       .filter(project => project.status === 'Planning' || project.status === 'In Progress')
@@ -318,14 +372,21 @@ export default function DashboardScreen({ navigation }: any) {
       <View style={[styles.topGrid, !isDesktop && styles.stackGrid]}>
         <View style={styles.trendCard}>
           <View style={styles.cardHeaderRow}>
-            <Text style={styles.cardTitle}>Volunteer Applications</Text>
+            <Text style={styles.cardTitle}>Impact Explorer</Text>
             <TouchableOpacity onPress={() => openProjects()}>
               <Text style={styles.cardMeta}>View all projects</Text>
             </TouchableOpacity>
           </View>
 
           {mapProjects.length ? (
-            <VolunteerImpactMap projects={mapProjects} />
+            <VolunteerImpactMap
+              projects={mapProjects}
+              title="Community Impact Map"
+              subtitle="Switch between admin, volunteer, and partner views to inspect mapped project activity."
+              initialMapStyleKey="admin-overview"
+              volunteerAccounts={volunteerMapAccounts}
+              partnerAccounts={partnerMapAccounts}
+            />
           ) : (
             <View style={styles.mapFallback}>
               <MaterialIcons name="map" size={28} color="#2f8f45" />

@@ -88,15 +88,31 @@ function Start-ServiceProcess {
   Write-Host "Started $Name (PID $($process.Id))."
 }
 
-Start-ServiceProcess -Name 'backend' -Command 'npm run backend' -LogPath $backendLog -WaitForBackendHealth
+$backendStarted = $false
+$backendWarning = $null
+
+try {
+  Start-ServiceProcess -Name 'backend' -Command 'npm run backend' -LogPath $backendLog -WaitForBackendHealth
+  $backendStarted = $true
+} catch {
+  $backendWarning = $_.Exception.Message
+  Write-Warning "Backend failed to start cleanly. Expo will still start so the app can load, but API features may stay offline."
+  if ($backendWarning) {
+    Write-Warning $backendWarning
+  }
+}
 
 Write-Host ""
 Write-Host "==========================================="
 Write-Host "VOLUNTEER SYSTEM STARTED"
 Write-Host "==========================================="
 Write-Host ""
-Write-Host "BACKEND: http://127.0.0.1:8000"
-Write-Host "WEB APP: http://127.0.0.1:8081"
+if ($backendStarted) {
+  Write-Host "BACKEND: http://127.0.0.1:8000"
+} else {
+  Write-Host "BACKEND: unavailable (see .dev-pids\\backend.log)"
+}
+Write-Host "WEB APP: press 'w' in Expo after startup"
 Write-Host ""
 Write-Host "==========================================="
 Write-Host ""

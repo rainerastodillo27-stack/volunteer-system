@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Modal } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Modal, ScrollView } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { Project } from '../models/types';
@@ -28,11 +28,22 @@ type MapStylePreset = {
   errorBorder: string;
 };
 
+type MapAccountOption = {
+  id: string;
+  label: string;
+  projectIds: string[];
+};
+
+type AvailableMapAccountOption = MapAccountOption & {
+  mappedProjects: Project[];
+  projectCount: number;
+};
+
 const MAP_STYLE_PRESETS: MapStylePreset[] = [
   {
     key: 'admin-overview',
     label: 'Admin overview',
-    description: 'Neutral roadmap for command-center use.',
+    description: 'Shows all mapped projects across the system.',
     mapTypeId: 'roadmap',
     accentColor: '#1d4ed8',
     chipBg: '#eff6ff',
@@ -45,7 +56,7 @@ const MAP_STYLE_PRESETS: MapStylePreset[] = [
   {
     key: 'volunteer-view',
     label: 'Volunteer view',
-    description: 'Green terrain styling like the volunteer side.',
+    description: 'Choose a volunteer and inspect their mapped completed work.',
     mapTypeId: 'terrain',
     accentColor: '#166534',
     chipBg: '#f0fdf4',
@@ -58,7 +69,7 @@ const MAP_STYLE_PRESETS: MapStylePreset[] = [
   {
     key: 'partner-view',
     label: 'Partner view',
-    description: 'Blue hybrid styling for partner planning.',
+    description: 'Choose a partner and inspect their mapped project footprint.',
     mapTypeId: 'hybrid',
     accentColor: '#0f766e',
     chipBg: '#ecfeff',
@@ -72,6 +83,11 @@ const MAP_STYLE_PRESETS: MapStylePreset[] = [
 
 type VolunteerImpactMapProps = {
   projects: Project[];
+  title?: string;
+  subtitle?: string;
+  initialMapStyleKey?: MapStylePresetKey;
+  volunteerAccounts?: MapAccountOption[];
+  partnerAccounts?: MapAccountOption[];
 };
 
 function getWebGoogleMapsApiKey() {
@@ -91,18 +107,116 @@ function getGoogleMapsErrorMessage(apiKey: string) {
   const currentOrigin = getCurrentWebOrigin();
 
   if (!apiKey.trim()) {
-    return 'Google Maps web key is missing. Add GOOGLE_MAPS_WEB_API_KEY to volunteer-system/.env and restart Expo.';
+    return 'Google Maps web key is missing. Add GOOGLE_MAPS_WEB_API_KEY to .env and restart Expo.';
   }
 
-  return `Google Maps could not load for the profile view. Allow ${currentOrigin} in your Google Maps web key referrers and make sure the Maps JavaScript API is enabled.`;
+  return `Google Maps could not load for the impact map. Allow ${currentOrigin} in your Google Maps web key referrers and make sure the Maps JavaScript API is enabled.`;
 }
 
-// Displays the volunteer impact map using the Google Maps JavaScript API on web.
-export default function VolunteerImpactMap({ projects }: VolunteerImpactMapProps) {
-  const [selectedProject, setSelectedProject] = useState<Project | null>(projects[0] || null);
+function getMappedProjects(projects: Project[]) {
+  return projects.filter(
+    project =>
+      Number.isFinite(project.location?.latitude) &&
+      Number.isFinite(project.location?.longitude)
+  );
+}
+
+function buildAvailableAccountOptions(
+  accounts: MapAccountOption[],
+  mappedProjects: Project[]
+): AvailableMapAccountOption[] {
+  const projectById = new Map(mappedProjects.map(project => [project.id, project]));
+
+  return accounts
+    .map(account => {
+      const uniqueProjectIds = Array.from(new Set((account.projectIds || []).filter(Boolean)));
+      const accountProjects = uniqueProjectIds
+        .map(projectId => projectById.get(projectId))
+        .filter((project): project is Project => Boolean(project));
+
+      return {
+        ...account,
+        mappedProjects: accountProjects,
+        projectCount: accountProjects.length,
+      };
+    })
+    .filter(account => account.projectCount > 0)
+    .sort((left, right) => left.label.localeCompare(right.label));
+}
+
+function getMapEmptyStateMessage(
+  selectedMapStyleKey: MapStylePresetKey,
+  currentAccountOptions: AvailableMapAccountOption[],
+  selectedAccountOption: AvailableMapAccountOption | null
+) {
+  if (selectedMapStyleKey === 'admin-overview') {
+    return 'No mapped projects are available yet.';
+  }
+
+  const targetLabel = selectedMapStyleKey === 'volunteer-view' ? 'volunteer' : 'partner';
+
+  if (currentAccountOptions.length === 0) {
+    return `No ${targetLabel} accounts with mapped projects are available yet.`;
+  }
+
+  if (!selectedAccountOption) {
+    return `Pick a ${targetLabel} account to load its map.`;
+  }
+
+  return `No mapped projects were found for ${selectedAccountOption.label}.`;
+}
+
+function getAccountPickerLabel(
+  selectedMapStyleKey: MapStylePresetKey,
+  selectedAccountOption: AvailableMapAccountOption | null
+) {
+  if (selectedAccountOption) {
+    return selectedAccountOption.label;
+  }
+
+  return selectedMapStyleKey === 'volunteer-view' ? 'Choose volunteer' : 'Choose partner';
+}
+
+function getAccountPickerTitle(selectedMapStyleKey: MapStylePresetKey) {
+  return selectedMapStyleKey === 'volunteer-view' ? 'Choose volunteer' : 'Choose partner';
+}
+
+function getAccountIconName(selectedMapStyleKey: MapStylePresetKey): 'person-outline' | 'business' {
+  return selectedMapStyleKey === 'volunteer-view' ? 'person-outline' : 'business';
+}
+
+// Displays the project impact map using the Google Maps JavaScript API on web.
+export default function VolunteerImpactMap({
+  projects,
+  title = 'Personal Impact Map',
+  subtitle = 'Pinned places where you completed volunteer work.',
+  initialMapStyleKey = 'volunteer-view',
+  volunteerAccounts,
+  partnerAccounts,
+}: VolunteerImpactMapProps) {
+  const mappedProjects = useMemo(() => getMappedProjects(projects), [projects]);
+  const hasVolunteerScope = Array.isArray(volunteerAccounts);
+  const hasPartnerScope = Array.isArray(partnerAccounts);
+  const volunteerOptions = useMemo(
+    () => buildAvailableAccountOptions(volunteerAccounts || [], mappedProjects),
+    [volunteerAccounts, mappedProjects]
+  );
+  const partnerOptions = useMemo(
+    () => buildAvailableAccountOptions(partnerAccounts || [], mappedProjects),
+    [partnerAccounts, mappedProjects]
+  );
+  const [selectedProject, setSelectedProject] = useState<Project | null>(mappedProjects[0] || null);
   const [mapError, setMapError] = useState<string | null>(null);
   const [showMapStyleMenu, setShowMapStyleMenu] = useState(false);
-  const [selectedMapStyleKey, setSelectedMapStyleKey] = useState<MapStylePresetKey>('volunteer-view');
+  const [showAccountMenu, setShowAccountMenu] = useState(false);
+  const [selectedMapStyleKey, setSelectedMapStyleKey] =
+    useState<MapStylePresetKey>(initialMapStyleKey);
+  const [selectedVolunteerId, setSelectedVolunteerId] = useState<string | null>(
+    volunteerOptions[0]?.id || null
+  );
+  const [selectedPartnerId, setSelectedPartnerId] = useState<string | null>(
+    partnerOptions[0]?.id || null
+  );
   const mapElementRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<any>(null);
   const markerRefs = useRef<Array<{ marker: any; listener: { remove: () => void } }>>([]);
@@ -111,8 +225,53 @@ export default function VolunteerImpactMap({ projects }: VolunteerImpactMapProps
     MAP_STYLE_PRESETS.find(preset => preset.key === selectedMapStyleKey) || MAP_STYLE_PRESETS[1];
 
   useEffect(() => {
-    setSelectedProject(projects[0] || null);
-  }, [projects]);
+    setSelectedMapStyleKey(initialMapStyleKey);
+  }, [initialMapStyleKey]);
+
+  useEffect(() => {
+    setSelectedVolunteerId(current =>
+      current && volunteerOptions.some(option => option.id === current)
+        ? current
+        : volunteerOptions[0]?.id || null
+    );
+  }, [volunteerOptions]);
+
+  useEffect(() => {
+    setSelectedPartnerId(current =>
+      current && partnerOptions.some(option => option.id === current)
+        ? current
+        : partnerOptions[0]?.id || null
+    );
+  }, [partnerOptions]);
+
+  const currentAccountOptions =
+    selectedMapStyleKey === 'volunteer-view'
+      ? volunteerOptions
+      : selectedMapStyleKey === 'partner-view'
+      ? partnerOptions
+      : [];
+
+  const selectedAccountOption =
+    selectedMapStyleKey === 'volunteer-view'
+      ? volunteerOptions.find(option => option.id === selectedVolunteerId) || volunteerOptions[0] || null
+      : selectedMapStyleKey === 'partner-view'
+      ? partnerOptions.find(option => option.id === selectedPartnerId) || partnerOptions[0] || null
+      : null;
+
+  const displayProjects =
+    selectedMapStyleKey === 'admin-overview'
+      ? mappedProjects
+      : selectedMapStyleKey === 'volunteer-view'
+      ? hasVolunteerScope
+        ? selectedAccountOption?.mappedProjects || []
+        : mappedProjects
+      : hasPartnerScope
+      ? selectedAccountOption?.mappedProjects || []
+      : mappedProjects;
+
+  useEffect(() => {
+    setSelectedProject(displayProjects[0] || null);
+  }, [displayProjects]);
 
   const clearMarkers = () => {
     markerRefs.current.forEach(({ marker, listener }) => {
@@ -159,7 +318,7 @@ export default function VolunteerImpactMap({ projects }: VolunteerImpactMapProps
         clearMarkers();
         setMapError(null);
 
-        if (projects.length === 0) {
+        if (displayProjects.length === 0) {
           map.setCenter(PHILIPPINES_WEB_CENTER);
           map.setZoom(6);
           return;
@@ -167,7 +326,7 @@ export default function VolunteerImpactMap({ projects }: VolunteerImpactMapProps
 
         const bounds = new googleMaps.maps.LatLngBounds();
 
-        projects.forEach(project => {
+        displayProjects.forEach(project => {
           const marker = new googleMaps.maps.Marker({
             position: {
               lat: project.location.latitude,
@@ -204,38 +363,83 @@ export default function VolunteerImpactMap({ projects }: VolunteerImpactMapProps
       cancelled = true;
       clearMarkers();
     };
-  }, [projects, selectedMapStyle.mapTypeId, webGoogleMapsApiKey]);
+  }, [displayProjects, selectedMapStyle.mapTypeId, webGoogleMapsApiKey]);
 
-  if (projects.length === 0) {
+  const hasAnyMapData =
+    mappedProjects.length > 0 || volunteerOptions.length > 0 || partnerOptions.length > 0;
+
+  if (!hasAnyMapData) {
     return null;
   }
+
+  const emptyStateMessage = getMapEmptyStateMessage(
+    selectedMapStyleKey,
+    currentAccountOptions,
+    selectedAccountOption
+  );
+  const showAccountPicker = selectedMapStyleKey !== 'admin-overview' && currentAccountOptions.length > 0;
+  const selectedAccountLabel = getAccountPickerLabel(selectedMapStyleKey, selectedAccountOption);
+  const accountPickerTitle = getAccountPickerTitle(selectedMapStyleKey);
+  const accountIconName = getAccountIconName(selectedMapStyleKey);
 
   return (
     <View style={styles.section}>
       <View style={styles.headerRow}>
-        <View style={styles.headerIcon}>
-          <MaterialIcons name="place" size={18} color={selectedMapStyle.accentColor} />
+        <View style={styles.headerIdentity}>
+          <View style={styles.headerIcon}>
+            <MaterialIcons name="place" size={18} color={selectedMapStyle.accentColor} />
+          </View>
+          <View style={styles.headerCopy}>
+            <Text style={styles.title}>{title}</Text>
+            <Text style={styles.subtitle}>{subtitle}</Text>
+          </View>
         </View>
-        <View style={styles.headerCopy}>
-          <Text style={styles.title}>Personal Impact Map</Text>
-          <Text style={styles.subtitle}>Pinned places where you completed volunteer work.</Text>
+
+        <View style={styles.headerActions}>
+          {showAccountPicker ? (
+            <TouchableOpacity
+              style={[
+                styles.mapStyleButton,
+                styles.accountPickerButton,
+                {
+                  backgroundColor: selectedMapStyle.chipBg,
+                  borderColor: selectedMapStyle.chipBorder,
+                },
+              ]}
+              onPress={() => setShowAccountMenu(true)}
+            >
+              <MaterialIcons name={accountIconName} size={18} color={selectedMapStyle.accentColor} />
+              <Text
+                style={[styles.mapStyleButtonText, styles.accountPickerText, { color: selectedMapStyle.accentColor }]}
+                numberOfLines={1}
+              >
+                {selectedAccountLabel}
+              </Text>
+              <MaterialIcons
+                name="keyboard-arrow-down"
+                size={22}
+                color={selectedMapStyle.accentColor}
+              />
+            </TouchableOpacity>
+          ) : null}
+
+          <TouchableOpacity
+            style={[
+              styles.mapStyleButton,
+              {
+                backgroundColor: selectedMapStyle.chipBg,
+                borderColor: selectedMapStyle.chipBorder,
+              },
+            ]}
+            onPress={() => setShowMapStyleMenu(true)}
+          >
+            <MaterialIcons name="tune" size={18} color={selectedMapStyle.accentColor} />
+            <Text style={[styles.mapStyleButtonText, { color: selectedMapStyle.accentColor }]}>
+              {selectedMapStyle.label}
+            </Text>
+            <MaterialIcons name="keyboard-arrow-down" size={22} color={selectedMapStyle.accentColor} />
+          </TouchableOpacity>
         </View>
-        <TouchableOpacity
-          style={[
-            styles.mapStyleButton,
-            {
-              backgroundColor: selectedMapStyle.chipBg,
-              borderColor: selectedMapStyle.chipBorder,
-            },
-          ]}
-          onPress={() => setShowMapStyleMenu(true)}
-        >
-          <MaterialIcons name="tune" size={18} color={selectedMapStyle.accentColor} />
-          <Text style={[styles.mapStyleButtonText, { color: selectedMapStyle.accentColor }]}>
-            {selectedMapStyle.label}
-          </Text>
-          <MaterialIcons name="keyboard-arrow-down" size={22} color={selectedMapStyle.accentColor} />
-        </TouchableOpacity>
       </View>
 
       <View
@@ -256,9 +460,29 @@ export default function VolunteerImpactMap({ projects }: VolunteerImpactMapProps
             </View>
           </View>
         ) : null}
+        {!mapError && displayProjects.length === 0 ? (
+          <View style={[styles.errorOverlay, { backgroundColor: selectedMapStyle.errorBg }]}>
+            <View style={[styles.errorCard, { borderColor: selectedMapStyle.errorBorder }]}>
+              <Text style={styles.errorTitle}>No map data to show</Text>
+              <Text style={styles.errorText}>{emptyStateMessage}</Text>
+            </View>
+          </View>
+        ) : null}
       </View>
 
-      {selectedProject && (
+      {selectedAccountOption ? (
+        <View style={styles.selectionSummary}>
+          <Text style={styles.selectionSummaryTitle}>
+            {selectedAccountOption.label}
+          </Text>
+          <Text style={styles.selectionSummaryText}>
+            {selectedAccountOption.projectCount} mapped
+            {selectedAccountOption.projectCount === 1 ? ' project' : ' projects'}
+          </Text>
+        </View>
+      ) : null}
+
+      {selectedProject ? (
         <View style={styles.detailCard}>
           <Text style={styles.detailTitle}>{selectedProject.title}</Text>
           <Text style={styles.detailMeta}>
@@ -266,7 +490,90 @@ export default function VolunteerImpactMap({ projects }: VolunteerImpactMapProps
           </Text>
           <Text style={styles.detailAddress}>{selectedProject.location.address}</Text>
         </View>
-      )}
+      ) : null}
+
+      <Modal
+        animationType="fade"
+        transparent
+        visible={showMapStyleMenu}
+        onRequestClose={() => setShowMapStyleMenu(false)}
+      >
+        <TouchableOpacity
+          style={styles.menuBackdrop}
+          activeOpacity={1}
+          onPress={() => setShowMapStyleMenu(false)}
+        >
+          <View style={styles.mapStyleMenu}>
+            <Text style={styles.mapStyleMenuTitle}>Choose map mode</Text>
+            {MAP_STYLE_PRESETS.map(preset => {
+              const isActive = preset.key === selectedMapStyleKey;
+
+              return (
+                <TouchableOpacity
+                  key={preset.key}
+                  style={[styles.mapStyleMenuItem, isActive && styles.mapStyleMenuItemActive]}
+                  onPress={() => {
+                    setSelectedMapStyleKey(preset.key);
+                    setShowMapStyleMenu(false);
+                  }}
+                >
+                  <View style={styles.mapStyleMenuItemTextWrap}>
+                    <Text style={styles.mapStyleMenuItemTitle}>{preset.label}</Text>
+                    <Text style={styles.mapStyleMenuItemDescription}>{preset.description}</Text>
+                  </View>
+                  {isActive ? <MaterialIcons name="check" size={20} color="#2563eb" /> : null}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        transparent
+        visible={showAccountMenu}
+        onRequestClose={() => setShowAccountMenu(false)}
+      >
+        <TouchableOpacity
+          style={styles.menuBackdrop}
+          activeOpacity={1}
+          onPress={() => setShowAccountMenu(false)}
+        >
+          <View style={styles.mapStyleMenu}>
+            <Text style={styles.mapStyleMenuTitle}>{accountPickerTitle}</Text>
+            <ScrollView style={styles.accountList} showsVerticalScrollIndicator={false}>
+              {currentAccountOptions.map(option => {
+                const isActive = option.id === selectedAccountOption?.id;
+
+                return (
+                  <TouchableOpacity
+                    key={option.id}
+                    style={[styles.mapStyleMenuItem, isActive && styles.mapStyleMenuItemActive]}
+                    onPress={() => {
+                      if (selectedMapStyleKey === 'volunteer-view') {
+                        setSelectedVolunteerId(option.id);
+                      } else {
+                        setSelectedPartnerId(option.id);
+                      }
+                      setShowAccountMenu(false);
+                    }}
+                  >
+                    <View style={styles.mapStyleMenuItemTextWrap}>
+                      <Text style={styles.mapStyleMenuItemTitle}>{option.label}</Text>
+                      <Text style={styles.mapStyleMenuItemDescription}>
+                        {option.projectCount} mapped
+                        {option.projectCount === 1 ? ' project' : ' projects'}
+                      </Text>
+                    </View>
+                    {isActive ? <MaterialIcons name="check" size={20} color="#2563eb" /> : null}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
@@ -283,6 +590,12 @@ const styles = StyleSheet.create({
     gap: 12,
     marginBottom: 12,
   },
+  headerIdentity: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
   headerIcon: {
     width: 36,
     height: 36,
@@ -294,6 +607,14 @@ const styles = StyleSheet.create({
   headerCopy: {
     flex: 1,
   },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 8,
+    flexWrap: 'wrap',
+    maxWidth: '52%',
+  },
   mapStyleButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -302,6 +623,12 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 999,
     borderWidth: 1,
+  },
+  accountPickerButton: {
+    maxWidth: 220,
+  },
+  accountPickerText: {
+    flexShrink: 1,
   },
   mapStyleButtonText: {
     fontSize: 12,
@@ -358,6 +685,25 @@ const styles = StyleSheet.create({
     color: '#334155',
     textAlign: 'center',
   },
+  selectionSummary: {
+    marginTop: 12,
+    backgroundColor: '#f8fafc',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  selectionSummaryTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  selectionSummaryText: {
+    marginTop: 4,
+    fontSize: 12,
+    color: '#64748b',
+  },
   detailCard: {
     marginTop: 12,
     backgroundColor: '#f8fafc',
@@ -393,7 +739,8 @@ const styles = StyleSheet.create({
     paddingRight: 16,
   },
   mapStyleMenu: {
-    width: 290,
+    width: 310,
+    maxHeight: 420,
     backgroundColor: '#ffffff',
     borderRadius: 18,
     padding: 14,
@@ -408,6 +755,9 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#0f172a',
     marginBottom: 10,
+  },
+  accountList: {
+    maxHeight: 320,
   },
   mapStyleMenuItem: {
     flexDirection: 'row',

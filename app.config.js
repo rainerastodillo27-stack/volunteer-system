@@ -1,55 +1,8 @@
-const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const { execFileSync, spawn } = require('child_process');
 const { resolvePythonCommand } = require('./scripts/python-command');
-
-// Loads local environment variables from app-level `.env` files before Expo starts.
-function loadLocalEnv() {
-  for (const fileName of ['.env', '.env.local']) {
-    const envPath = path.join(__dirname, fileName);
-    if (!fs.existsSync(envPath)) {
-      continue;
-    }
-
-    const contents = fs.readFileSync(envPath, 'utf8');
-    for (const rawLine of contents.split(/\r?\n/)) {
-      const line = rawLine.trim();
-      if (!line || line.startsWith('#')) {
-        continue;
-      }
-
-      const separatorIndex = line.indexOf('=');
-      if (separatorIndex === -1) {
-        continue;
-      }
-
-      const key = line.slice(0, separatorIndex).trim();
-      const value = line.slice(separatorIndex + 1).trim();
-
-      if (!process.env[key]) {
-        process.env[key] = value;
-      }
-    }
-  }
-}
-
-// Returns the current machine's LAN IPv4 address for mobile device API access.
-function getLanIp() {
-  const interfaces = os.networkInterfaces();
-
-  for (const addresses of Object.values(interfaces)) {
-    if (!addresses) continue;
-
-    for (const address of addresses) {
-      if (address.family === 'IPv4' && !address.internal) {
-        return address.address;
-      }
-    }
-  }
-
-  return '127.0.0.1';
-}
+const { getPreferredLanIp } = require('./scripts/lan-ip');
+const { loadLocalEnv } = require('./scripts/load-local-env');
 
 // Returns whether an address points at the local machine or a private LAN host.
 function isLocalBackendUrl(value) {
@@ -139,14 +92,17 @@ function ensureBackendStarted() {
 
 // Exposes runtime Expo configuration for API URLs and native map keys.
 module.exports = () => {
-  loadLocalEnv();
+  loadLocalEnv(__dirname);
   ensureBackendStarted();
 
   const configuredApiBaseUrl = process.env.VOLCRE_API_BASE_URL || '';
-  const lanApiBaseUrl = configuredApiBaseUrl || `http://${getLanIp()}:8000`;
+  const lanApiBaseUrl = configuredApiBaseUrl || `http://${getPreferredLanIp()}:8000`;
   const webApiBaseUrl =
     process.env.VOLCRE_WEB_API_BASE_URL || configuredApiBaseUrl || 'http://127.0.0.1:8000';
-  const androidGoogleMapsApiKey = process.env.GOOGLE_MAPS_ANDROID_API_KEY || '';
+  const mobileGoogleMapsApiKey =
+    process.env.GOOGLE_MAPS_MOBILE_API_KEY ||
+    process.env.GOOGLE_MAPS_ANDROID_API_KEY ||
+    '';
   const webGoogleMapsApiKey = process.env.GOOGLE_MAPS_WEB_API_KEY || '';
 
   return {
@@ -158,9 +114,9 @@ module.exports = () => {
       assetBundlePatterns: ['**/*'],
       ios: {
         supportsTablet: true,
-        config: androidGoogleMapsApiKey
+        config: mobileGoogleMapsApiKey
           ? {
-              googleMapsApiKey: androidGoogleMapsApiKey,
+              googleMapsApiKey: mobileGoogleMapsApiKey,
             }
           : undefined,
       },
@@ -168,10 +124,10 @@ module.exports = () => {
         adaptiveIcon: {
           backgroundColor: '#ffffff',
         },
-        config: androidGoogleMapsApiKey
+        config: mobileGoogleMapsApiKey
           ? {
               googleMaps: {
-                apiKey: androidGoogleMapsApiKey,
+                apiKey: mobileGoogleMapsApiKey,
               },
             }
           : undefined,
@@ -180,7 +136,8 @@ module.exports = () => {
       extra: {
         apiBaseUrl: lanApiBaseUrl,
         webApiBaseUrl,
-        androidGoogleMapsApiKey,
+        mobileGoogleMapsApiKey,
+        androidGoogleMapsApiKey: mobileGoogleMapsApiKey,
         webGoogleMapsApiKey,
       },
       plugins: ['expo-font'],

@@ -138,14 +138,25 @@ export function getProjectMarkerColor(project: Pick<Project, 'isEvent' | 'status
   return project.isEvent ? EVENT_MARKER_COLOR : getProjectStatusColor(project.status);
 }
 
+// Returns only projects that have usable coordinates for native and web maps.
+export function getMappedProjects<T extends Pick<Project, 'location'>>(projects: T[]): T[] {
+  return projects.filter(
+    project =>
+      Number.isFinite(project.location?.latitude) &&
+      Number.isFinite(project.location?.longitude)
+  );
+}
+
 // Computes an initial map region that keeps all known projects in view.
 export function getInitialProjectRegion(projects: Project[]) {
-  if (projects.length === 0) {
+  const mappedProjects = getMappedProjects(projects);
+
+  if (mappedProjects.length === 0) {
     return PHILIPPINES_REGION;
   }
 
-  const latitudes = projects.map(project => project.location.latitude);
-  const longitudes = projects.map(project => project.location.longitude);
+  const latitudes = mappedProjects.map(project => project.location.latitude);
+  const longitudes = mappedProjects.map(project => project.location.longitude);
   const minLatitude = Math.min(...latitudes);
   const maxLatitude = Math.max(...latitudes);
   const minLongitude = Math.min(...longitudes);

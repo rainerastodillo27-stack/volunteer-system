@@ -19,6 +19,7 @@ import { navigateToAvailableRoute } from '../utils/navigation';
 import {
   PHILIPPINES_BOUNDS,
   PHILIPPINES_WEB_CENTER,
+  getMappedProjects,
   getPrimaryProjectImageSource,
   getProjectMarkerColor,
 } from '../utils/projectMap';
@@ -103,7 +104,7 @@ function getGoogleMapsErrorMessage(error: unknown, apiKey: string) {
   const currentOrigin = getCurrentWebOrigin();
 
   if (!apiKey.trim()) {
-    return 'Google Maps web key is missing. Add GOOGLE_MAPS_WEB_API_KEY to volunteer-system/.env and restart Expo.';
+    return 'Google Maps web key is missing. Add GOOGLE_MAPS_WEB_API_KEY to .env and restart Expo.';
   }
 
   const message = error instanceof Error ? error.message : '';
@@ -128,6 +129,7 @@ export default function MappingScreen({ navigation }: any) {
   const mapInstanceRef = useRef<any>(null);
   const markerRefs = useRef<Array<{ marker: any; listener: { remove: () => void } }>>([]);
   const webGoogleMapsApiKey = getWebGoogleMapsApiKey();
+  const mappedProjects = React.useMemo(() => getMappedProjects(projects), [projects]);
   const selectedMapStyle =
     MAP_STYLE_PRESETS.find(preset => preset.key === selectedMapStyleKey) || MAP_STYLE_PRESETS[0];
 
@@ -189,7 +191,7 @@ export default function MappingScreen({ navigation }: any) {
         clearMarkers();
         setMapError(null);
 
-        if (projects.length === 0) {
+        if (mappedProjects.length === 0) {
           map.setCenter(PHILIPPINES_WEB_CENTER);
           map.setZoom(6);
           return;
@@ -197,7 +199,7 @@ export default function MappingScreen({ navigation }: any) {
 
         const bounds = new googleMaps.maps.LatLngBounds();
 
-        projects.forEach(project => {
+        mappedProjects.forEach(project => {
           const marker = new googleMaps.maps.Marker({
             position: {
               lat: project.location.latitude,
@@ -235,7 +237,7 @@ export default function MappingScreen({ navigation }: any) {
       cancelled = true;
       clearMarkers();
     };
-  }, [projects, selectedMapStyle.mapTypeId, webGoogleMapsApiKey]);
+  }, [mappedProjects, selectedMapStyle.mapTypeId, webGoogleMapsApiKey]);
 
   // Loads map projects and narrows visibility based on the active role.
   const loadProjects = async () => {
@@ -361,7 +363,7 @@ export default function MappingScreen({ navigation }: any) {
       </View>
 
       <View style={styles.projectListContainer}>
-        <Text style={styles.projectListTitle}>Google Maps markers ({projects.length})</Text>
+        <Text style={styles.projectListTitle}>Google Maps markers ({mappedProjects.length})</Text>
       </View>
 
       <Modal animationType="slide" transparent visible={showDetails} onRequestClose={() => setShowDetails(false)}>

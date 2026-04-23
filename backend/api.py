@@ -1254,6 +1254,193 @@ def get_pending_users() -> dict[str, Any]:
         }
 
 
+@app.delete("/auth/users/{user_id}")
+# API endpoint that deletes one user and all related shared-storage records in one transaction.
+async def delete_user_account(user_id: str) -> dict[str, Any]:
+    _require_postgres()
+
+    changed_keys = [
+        "users",
+        "volunteers",
+        "partners",
+        "messages",
+        "projectGroupMessages",
+        "partnerProjectApplications",
+        "partnerReports",
+        "volunteerProjectJoins",
+        "volunteerMatches",
+        "volunteerTimeLogs",
+        "projects",
+        "events",
+    ]
+
+    with get_postgres_connection() as connection:
+        users = get_postgres_hot_storage_collection(connection, "users")
+        user = next((candidate for candidate in users if str(candidate.get("id") or "") == user_id), None)
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found.")
+
+        normalized_deleted_email = str(user.get("email") or "").strip().lower()
+        normalized_deleted_phone = _normalize_comparable_phone(user.get("phone"))
+
+        volunteers = get_postgres_hot_storage_collection(connection, "volunteers")
+        removed_volunteer_ids = {
+            str(volunteer.get("id") or "")
+            for volunteer in volunteers
+            if (
+                str(volunteer.get("id") or "") == user_id
+                or str(volunteer.get("userId") or "") == user_id
+                or (
+                    normalized_deleted_email
+                    and str(volunteer.get("email") or "").strip().lower() == normalized_deleted_email
+                )
+                or (
+                    normalized_deleted_phone
+                    and _normalize_comparable_phone(volunteer.get("phone")) == normalized_deleted_phone
+                )
+            )
+        }
+
+        partners = get_postgres_hot_storage_collection(connection, "partners")
+        removed_partner_ids = {
+            str(partner.get("id") or "")
+            for partner in partners
+            if (
+                str(partner.get("ownerUserId") or "") == user_id
+                or (
+                    normalized_deleted_email
+                    and str(partner.get("contactEmail") or "").strip().lower() == normalized_deleted_email
+                )
+                or (
+                    normalized_deleted_phone
+                    and _normalize_comparable_phone(partner.get("contactPhone")) == normalized_deleted_phone
+                )
+            )
+        }
+
+        filtered_users = [
+            candidate for candidate in users if str(candidate.get("id") or "") != user_id
+        ]
+        filtered_volunteers = [
+            volunteer
+            for volunteer in volunteers
+            if str(volunteer.get("id") or "") not in removed_volunteer_ids
+        ]
+        filtered_partners = [
+            partner
+            for partner in partners
+            if str(partner.get("id") or "") not in removed_partner_ids
+        ]
+
+        messages = _get_special_storage_collection(connection, "messages")
+        filtered_messages = [
+            message
+            for message in messages
+            if str(message.get("senderId") or "") != user_id
+            and str(message.get("recipientId") or "") != user_id
+        ]
+
+        project_group_messages = _get_special_storage_collection(connection, "projectGroupMessages")
+        filtered_project_group_messages = [
+            message
+            for message in project_group_messages
+            if str(message.get("senderId") or "") != user_id
+        ]
+
+        partner_applications = get_postgres_hot_storage_collection(connection, "partnerProjectApplications")
+        filtered_partner_applications = [
+            application
+            for application in partner_applications
+            if str(application.get("partnerUserId") or "") != user_id
+        ]
+
+        partner_reports = get_postgres_hot_storage_collection(connection, "partnerReports")
+        filtered_partner_reports = [
+            report
+            for report in partner_reports
+            if str(report.get("submitterUserId") or "") != user_id
+            and str(report.get("partnerUserId") or "") != user_id
+            and str(report.get("partnerId") or "") not in removed_partner_ids
+        ]
+
+        volunteer_join_records = get_postgres_hot_storage_collection(connection, "volunteerProjectJoins")
+        filtered_volunteer_join_records = [
+            record
+            for record in volunteer_join_records
+            if str(record.get("volunteerUserId") or "") != user_id
+            and str(record.get("volunteerId") or "") not in removed_volunteer_ids
+        ]
+
+        volunteer_matches = get_postgres_hot_storage_collection(connection, "volunteerMatches")
+        filtered_volunteer_matches = [
+            match
+            for match in volunteer_matches
+            if str(match.get("volunteerId") or "") not in removed_volunteer_ids
+        ]
+
+        volunteer_time_logs = get_postgres_hot_storage_collection(connection, "volunteerTimeLogs")
+        filtered_volunteer_time_logs = [
+            log
+            for log in volunteer_time_logs
+            if str(log.get("volunteerId") or "") not in removed_volunteer_ids
+        ]
+
+        projects = get_postgres_hot_storage_collection(connection, "projects")
+        updated_projects = []
+        for project in projects:
+            updated_project = dict(project)
+            updated_project["joinedUserIds"] = [
+                joined_id
+                for joined_id in (project.get("joinedUserIds") or [])
+                if str(joined_id or "") != user_id
+            ]
+            updated_project["volunteers"] = [
+                volunteer_id
+                for volunteer_id in (project.get("volunteers") or [])
+                if str(volunteer_id or "") not in removed_volunteer_ids
+            ]
+            updated_projects.append(updated_project)
+
+        events = get_postgres_hot_storage_collection(connection, "events")
+        updated_events = []
+        for event in events:
+            updated_event = dict(event)
+            updated_event["joinedUserIds"] = [
+                joined_id
+                for joined_id in (event.get("joinedUserIds") or [])
+                if str(joined_id or "") != user_id
+            ]
+            updated_event["volunteers"] = [
+                volunteer_id
+                for volunteer_id in (event.get("volunteers") or [])
+                if str(volunteer_id or "") not in removed_volunteer_ids
+            ]
+            updated_events.append(updated_event)
+
+        replace_postgres_hot_storage_collection(connection, "users", filtered_users)
+        replace_postgres_hot_storage_collection(connection, "volunteers", filtered_volunteers)
+        replace_postgres_hot_storage_collection(connection, "partners", filtered_partners)
+        replace_postgres_hot_storage_collection(
+            connection, "partnerProjectApplications", filtered_partner_applications
+        )
+        replace_postgres_hot_storage_collection(connection, "partnerReports", filtered_partner_reports)
+        replace_postgres_hot_storage_collection(
+            connection, "volunteerProjectJoins", filtered_volunteer_join_records
+        )
+        replace_postgres_hot_storage_collection(connection, "volunteerMatches", filtered_volunteer_matches)
+        replace_postgres_hot_storage_collection(connection, "volunteerTimeLogs", filtered_volunteer_time_logs)
+        replace_postgres_hot_storage_collection(connection, "projects", updated_projects)
+        replace_postgres_hot_storage_collection(connection, "events", updated_events)
+        _replace_special_storage_collection(connection, "messages", filtered_messages)
+        _replace_special_storage_collection(
+            connection, "projectGroupMessages", filtered_project_group_messages
+        )
+        connection.commit()
+
+    await connection_manager.broadcast_storage_event(changed_keys)
+    return {"status": "ok", "deletedUserId": user_id}
+
+
 @app.get("/projects/snapshot")
 # API endpoint that returns the projects screen snapshot.
 def get_projects_snapshot(user_id: str | None = None, role: str | None = None) -> dict[str, Any]:
