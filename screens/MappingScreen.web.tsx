@@ -21,11 +21,10 @@ import {
   PHILIPPINES_WEB_CENTER,
   getMappedProjects,
   getPrimaryProjectImageSource,
-  getProjectMarkerColor,
 } from '../utils/projectMap';
 import { getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
-import { createGoogleMapsMarkerIcon, loadGoogleMaps } from '../utils/webGoogleMaps';
+import { loadGoogleMaps } from '../utils/webGoogleMaps';
 
 const MapHost = 'div' as any;
 
@@ -207,7 +206,6 @@ export default function MappingScreen({ navigation }: any) {
             },
             map,
             title: project.title,
-            icon: createGoogleMapsMarkerIcon(googleMaps, getProjectMarkerColor(project)),
           });
 
           const listener = marker.addListener('click', () => {
@@ -261,10 +259,7 @@ export default function MappingScreen({ navigation }: any) {
           ? snapshot.projects.filter(
               project =>
                 project.isEvent &&
-                (
-                  (project.joinedUserIds || []).includes(user.id) ||
                 joinedVolunteerProjectIds.has(project.id)
-                )
             )
           : snapshot.projects;
 

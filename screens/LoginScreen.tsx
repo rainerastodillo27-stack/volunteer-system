@@ -190,8 +190,8 @@ function getMobileRoleLoginTitle(role: MobileEntryRole): string {
 
 function getMobileRoleLoginHint(role: MobileEntryRole): string {
   return role === 'partner'
-    ? 'Use your approved organization account to open the partner portal.'
-    : 'Use your approved volunteer account to open the volunteer portal.';
+    ? 'Use your approved organization email, email username, or phone number to open the partner portal.'
+    : 'Use your approved volunteer email, email username, or phone number to open the volunteer portal.';
 }
 
 function getMobileRoleMismatchMessage(selectedRole: MobileEntryRole, actualRole: UserRole): string {
@@ -350,7 +350,7 @@ export default function LoginScreen() {
     return unsubscribe;
   }, [backendStatus, isWeb]);
 
-  // Authenticates the user with an email or phone identifier and password.
+  // Authenticates the user with an email, email username, or phone identifier and password.
   const performLogin = async (
     rawIdentifier: string,
     rawPassword: string,
@@ -379,7 +379,7 @@ export default function LoginScreen() {
     }
 
     if (!trimmedIdentifier || !trimmedPassword) {
-      Alert.alert('Validation Error', 'Please enter email or phone and password');
+      Alert.alert('Validation Error', 'Please enter email, username, or phone and password.');
       return;
     }
 
@@ -901,7 +901,7 @@ export default function LoginScreen() {
 
             <TextInput
               style={styles.input}
-              placeholder="Email or Phone"
+              placeholder="Email, Username, or Phone"
               placeholderTextColor="#999"
               value={identifier}
               onChangeText={value => {

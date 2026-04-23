@@ -5,17 +5,24 @@ Uses direct host connection (port 5432) instead of pooler (port 6543)
 Bypasses the pooler when it's saturated due to quota limits
 """
 
+import os
 import psycopg2
 import psycopg2.extras
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 import sys
 import time
 from datetime import datetime
+from dotenv import load_dotenv
 
-# Old database - use direct host (port 5432) instead of pooler (port 6543)
-OLD_DB_DIRECT = "postgresql://postgres.zargqwmmibyxwwidzucv:CAPSTONE_ISCAP1@aws-1-ap-northeast-2.supabase.com:5432/postgres?sslmode=require"
-# New database - use direct host connection
-NEW_DB_DIRECT = "postgresql://postgres.oyvbknflgopiekwzwjgy:CAPSTONE_ISCAP1@aws-1-ap-south-1.supabase.com:5432/postgres?sslmode=require"
+try:
+    from .operation_guard import DB_MIGRATION_UNLOCK_ENV_VAR, require_shared_db_unlock
+except ImportError:
+    from operation_guard import DB_MIGRATION_UNLOCK_ENV_VAR, require_shared_db_unlock
+
+load_dotenv()
+
+OLD_DB_DIRECT = os.getenv("VOLCRE_OLD_DB_URL_DIRECT", "").strip()
+NEW_DB_DIRECT = os.getenv("VOLCRE_NEW_DB_URL_DIRECT", "").strip()
 
 
 class DirectDatabaseMigrator:
@@ -270,6 +277,13 @@ class DirectDatabaseMigrator:
 
 
 def main():
+    require_shared_db_unlock("direct database-to-database migration", DB_MIGRATION_UNLOCK_ENV_VAR)
+
+    if not OLD_DB_DIRECT or not NEW_DB_DIRECT:
+        print("Missing direct migration database URLs.")
+        print("Set VOLCRE_OLD_DB_URL_DIRECT and VOLCRE_NEW_DB_URL_DIRECT before running this script.")
+        sys.exit(1)
+
     migrator = DirectDatabaseMigrator()
     success = migrator.run_migration()
     sys.exit(0 if success else 1)

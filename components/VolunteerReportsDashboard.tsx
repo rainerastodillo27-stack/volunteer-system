@@ -35,6 +35,10 @@ export function VolunteerReportsDashboard({
   onRefresh,
   refreshing,
 }: VolunteerReportsDashboardProps) {
+  const eventCount = useMemo(
+    () => new Set(reports.map(report => report.projectId).filter(Boolean)).size,
+    [reports]
+  );
   const stats = useMemo(() => {
     const submitted = reports.filter(r => r.status === 'Submitted').length;
     const totalHours = reports.reduce((sum, r) => sum + (r.metrics.volunteerHours || 0), 0);
@@ -61,6 +65,9 @@ export function VolunteerReportsDashboard({
         <View style={styles.reportItemContent}>
           <Text style={styles.reportItemTitle}>{item.title}</Text>
           <Text style={styles.reportItemType}>{formatReportType(item.reportType)}</Text>
+          {item.projectTitle ? (
+            <Text style={styles.reportItemDate}>{item.projectTitle}</Text>
+          ) : null}
           <Text style={styles.reportItemDate}>{new Date(item.submittedAt).toLocaleDateString()}</Text>
         </View>
       </View>
@@ -94,8 +101,8 @@ export function VolunteerReportsDashboard({
         {/* Header */}
         <View style={styles.header}>
           <View>
-            <Text style={styles.title}>My Reports</Text>
-            <Text style={styles.subtitle}>Track your submitted reports</Text>
+            <Text style={styles.title}>My Event Reports</Text>
+            <Text style={styles.subtitle}>Track reports connected to your joined events</Text>
           </View>
           <TouchableOpacity style={styles.uploadButton} onPress={onUploadReport}>
             <MaterialIcons name="add" size={20} color="#fff" />
@@ -116,15 +123,15 @@ export function VolunteerReportsDashboard({
           </View>
           <View style={styles.statCard}>
             <MaterialIcons name="schedule" size={24} color="#F97316" />
-            <Text style={styles.statValue}>{stats.linkedProjects}</Text>
-            <Text style={styles.statLabel}>Projects Linked</Text>
+            <Text style={styles.statValue}>{eventCount}</Text>
+            <Text style={styles.statLabel}>Events Linked</Text>
           </View>
         </View>
 
         {/* Reports List */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Report History</Text>
+            <Text style={styles.sectionTitle}>Event Report History</Text>
             {reports.length > 0 && (
               <Text style={styles.sectionBadge}>{reports.length}</Text>
             )}
@@ -134,10 +141,12 @@ export function VolunteerReportsDashboard({
             <View style={styles.emptyState}>
               <MaterialIcons name="upload-file" size={48} color="#cbd5e1" />
               <Text style={styles.emptyTitle}>No reports yet</Text>
-              <Text style={styles.emptyText}>Start by uploading your first report</Text>
+              <Text style={styles.emptyText}>
+                Start by uploading your first report for a joined event
+              </Text>
               <TouchableOpacity style={styles.emptyButton} onPress={onUploadReport}>
                 <MaterialIcons name="add-circle" size={16} color="#fff" />
-                <Text style={styles.emptyButtonText}>Upload Report</Text>
+                <Text style={styles.emptyButtonText}>Upload Event Report</Text>
               </TouchableOpacity>
             </View>
           ) : (
@@ -157,7 +166,7 @@ export function VolunteerReportsDashboard({
           <View style={styles.infoContent}>
             <Text style={styles.infoTitle}>Report Tips</Text>
             <Text style={styles.infoText}>
-              Include clear outcomes, correct hours, and a short summary so your submitted report is easy to read later.
+              Link each report to the exact event you joined, add a short reflection, and upload a photo when you can so the admin side has complete event documentation.
             </Text>
           </View>
         </View>

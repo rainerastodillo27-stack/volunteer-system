@@ -1,7 +1,6 @@
 import os
 import json
 import threading
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from datetime import datetime, timezone
 from typing import Any
 
@@ -18,6 +17,7 @@ from .app_storage_seed import (
     ensure_app_storage_seeded,
     get_postgres_hot_storage_collection,
     is_demo_seed_enabled,
+    is_demo_seed_unlocked,
     is_hot_storage_key,
     replace_postgres_hot_storage_collection,
 )
@@ -51,7 +51,7 @@ class StorageBatchPayload(BaseModel):
     keys: list[str]
 
 
-# Request payload for username-or-phone login.
+# Request payload for email, username alias, or phone login.
 class AuthLoginPayload(BaseModel):
     identifier: str
     password: str
@@ -129,6 +129,36 @@ class ProjectGroupMessagePayload(BaseModel):
     responseAction: str | None = None
     responseToTitle: str | None = None
     attachments: list[str] | None = None
+
+
+# Request payload for one impact-hub or field report submission.
+class ReportAttachmentPayload(BaseModel):
+    url: str
+    type: str
+    description: str | None = None
+
+
+class ReportSubmitPayload(BaseModel):
+    id: str | None = None
+    projectId: str
+    partnerId: str | None = None
+    partnerUserId: str | None = None
+    partnerName: str | None = None
+    submitterUserId: str
+    submitterName: str
+    submitterRole: str
+    title: str | None = None
+    reportType: str
+    description: str
+    impactCount: int | None = None
+    metrics: dict[str, Any] | None = None
+    attachments: list[ReportAttachmentPayload] | None = None
+    mediaFile: str | None = None
+    createdAt: str | None = None
+    status: str | None = None
+
+
+REPORT_MEDIA_FILE_MAX_LENGTH = 500
 
 
 def _normalize_partner_proposal_date(value: Any, fallback: str) -> str:
@@ -886,6 +916,10 @@ def startup() -> None:
         print("[OK] Backend started in canonical-only mode; demo seed is disabled")
         return
 
+    if not is_demo_seed_unlocked():
+        print("[WARN] Demo seed is enabled but locked. Set VOLCRE_ALLOW_DEMO_SEED=true to seed shared storage intentionally.")
+        return
+
     # Run demo seeding in the background when it is explicitly enabled.
     def seed_storage():
         try:
@@ -949,9 +983,30 @@ def db_health():
     return JSONResponse(status_code=status_code, content=payload)
 
 
-# Finds a user by email or normalized phone identifier.
+# Returns the email username part when an identifier is not a full email or phone.
+def _get_email_username_alias(identifier: str) -> str:
+    normalized_identifier = str(identifier or "").strip().lower()
+    if not normalized_identifier or "@" in normalized_identifier:
+        return ""
+
+    phone_like_identifier = (
+        normalized_identifier
+        .replace("+", "")
+        .replace("-", "")
+        .replace("(", "")
+        .replace(")", "")
+        .replace(" ", "")
+    )
+    if phone_like_identifier.isdigit():
+        return ""
+
+    return normalized_identifier
+
+
+# Finds a user by email, email username alias, or normalized phone identifier.
 def _get_user_by_identifier(identifier: str, connection: Any | None = None) -> dict[str, Any] | None:
     normalized_identifier = identifier.strip().lower()
+    username_alias = _get_email_username_alias(identifier)
     comparable_phone = normalize_comparable_phone(identifier)
     raw_digits = "".join(character for character in str(identifier or "") if character.isdigit())
     _require_postgres()
@@ -963,11 +1018,12 @@ def _get_user_by_identifier(identifier: str, connection: Any | None = None) -> d
                 select id
                 from users
                 where lower(coalesce(email, '')) = %s
+                   or split_part(lower(coalesce(email, '')), '@', 1) = %s
                    or regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g') = %s
                    or regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g') = %s
                 order by created_at asc nulls last, id asc
                 """,
-                (normalized_identifier, comparable_phone, raw_digits),
+                (normalized_identifier, username_alias, comparable_phone, raw_digits),
             )
             row = cursor.fetchone()
         if row is None:
@@ -1148,13 +1204,18 @@ def _normalize_phone(phone: str) -> str:
     return "".join(c for c in str(phone or "") if c.isdigit())
 
 def _get_demo_account(identifier: str) -> dict[str, Any] | None:
-    """Find demo account by email or phone"""
+    """Find a demo account by email, email username alias, or phone."""
     normalized_identifier = identifier.strip().lower()
+    username_alias = _get_email_username_alias(identifier)
     normalized_phone = _normalize_phone(identifier)
     
     for account in DEMO_ACCOUNTS:
+        account_email = str(account.get("email") or "").lower()
         # Check email match
-        if account.get("email", "").lower() == normalized_identifier:
+        if account_email == normalized_identifier:
+            return account
+        # Check email username alias match
+        if username_alias and account_email.split("@", 1)[0] == username_alias:
             return account
         # Check phone match
         if _normalize_phone(account.get("phone", "")) == normalized_phone:
@@ -1169,20 +1230,18 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
     # Try demo account first (fast path)
     user = _get_demo_account(payload.identifier)
     
-    # If demo account not found and database is available, try database
+    # If demo account not found, try the shared database directly.
     if user is None:
         try:
             print("[DEBUG] Demo account not found, trying database...")
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                def get_from_db():
-                    with get_postgres_connection() as connection:
-                        return _get_user_by_identifier(payload.identifier, connection)
-                future = executor.submit(get_from_db)
-                user = future.result(timeout=2.0)
+            with get_postgres_connection() as connection:
+                user = _get_user_by_identifier(payload.identifier, connection)
         except Exception as db_error:
-            print(f"[DEBUG] Database not available: {db_error}")
-            # Return 401 if neither demo nor database has the user
-            raise HTTPException(status_code=401, detail="Invalid email/phone or password.")
+            print(f"[DEBUG] Database lookup failed: {db_error}")
+            raise HTTPException(
+                status_code=503,
+                detail="Database unavailable while checking your account. Please try again."
+            )
     
     print(f"[DEBUG] User found: {user.get('id') if user else 'None'}")
     
@@ -1198,14 +1257,13 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
     else:
         # Real account from database - do approval checks
         try:
-            if user.get("role") != "admin":
-                approval_status = user.get("approvalStatus", "approved")
-                if approval_status == "pending":
-                    raise HTTPException(status_code=403, detail="Your account is pending admin approval. Please check back later.")
-                elif approval_status == "rejected":
-                    rejection_reason = user.get("rejectionReason", "")
-                    detail = f"Your account has been rejected by admin.{f' Reason: {rejection_reason}' if rejection_reason else ''}"
-                    raise HTTPException(status_code=403, detail=detail)
+            with get_postgres_connection() as connection:
+                block_reason = (
+                    _get_volunteer_login_block_reason(connection, user)
+                    or _get_partner_login_block_reason(connection, user)
+                )
+            if block_reason:
+                raise HTTPException(status_code=403, detail=block_reason)
         except HTTPException:
             raise
         except Exception as e:
@@ -2158,6 +2216,76 @@ async def put_storage_item(key: str, payload: StoragePayload) -> dict[str, str]:
     raise HTTPException(status_code=400, detail=f"Unsupported storage key '{key}'.")
 
 
+@app.post("/reports")
+# API endpoint that inserts or updates one submitted report row directly.
+async def submit_report(payload: ReportSubmitPayload) -> dict[str, Any]:
+    _require_postgres()
+
+    now = datetime.now(timezone.utc).isoformat()
+    metrics = payload.metrics if isinstance(payload.metrics, dict) else {}
+    attachments = [
+        {
+            "url": str(attachment.url).strip(),
+            "type": str(attachment.type or "image").strip() or "image",
+            "description": str(attachment.description or "").strip() or None,
+        }
+        for attachment in (payload.attachments or [])
+        if str(attachment.url or "").strip()
+    ]
+    media_file = str(payload.mediaFile or "").strip() or None
+    if media_file and len(media_file) > REPORT_MEDIA_FILE_MAX_LENGTH:
+        if not any(str(attachment.get("url") or "") == media_file for attachment in attachments):
+            attachments.insert(
+                0,
+                {
+                    "url": media_file,
+                    "type": "image",
+                    "description": "Uploaded report photo",
+                },
+            )
+        media_file = None
+    impact_count = payload.impactCount
+    if impact_count is None:
+        impact_count = sum(
+            int(value)
+            for value in metrics.values()
+            if isinstance(value, (int, float))
+        )
+
+    report = {
+        "id": str(payload.id or f"impact-report-{int(datetime.now(timezone.utc).timestamp() * 1000)}"),
+        "projectId": str(payload.projectId).strip(),
+        "partnerId": str(payload.partnerId or "").strip() or None,
+        "partnerUserId": str(payload.partnerUserId or "").strip() or None,
+        "partnerName": str(payload.partnerName or "").strip() or None,
+        "submitterUserId": str(payload.submitterUserId).strip(),
+        "submitterName": str(payload.submitterName).strip(),
+        "submitterRole": str(payload.submitterRole).strip(),
+        "title": str(payload.title or "").strip() or None,
+        "reportType": str(payload.reportType).strip(),
+        "description": str(payload.description or "").strip(),
+        "impactCount": max(int(impact_count or 0), 0),
+        "metrics": metrics,
+        "attachments": attachments,
+        "mediaFile": media_file,
+        "createdAt": str(payload.createdAt or now).strip() or now,
+        "status": str(payload.status or "Submitted").strip() or "Submitted",
+        "reviewedAt": None,
+        "reviewedBy": None,
+    }
+
+    try:
+        with get_postgres_connection() as connection:
+            saved_report = _postgres_upsert_hot_item(connection, "partnerReports", report)
+            connection.commit()
+        await connection_manager.broadcast_storage_event(["partnerReports"])
+        return {"report": saved_report}
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"Report submission failed: {error}") from error
+
+
 @app.delete("/storage/{key}")
 # API endpoint that deletes one storage key and any backing hot-storage rows.
 async def delete_storage_item(key: str) -> dict[str, str]:
@@ -2198,6 +2326,11 @@ def bootstrap_storage() -> dict[str, str]:
         raise HTTPException(
             status_code=403,
             detail="Demo bootstrap is disabled in canonical-only mode.",
+        )
+    if not is_demo_seed_unlocked():
+        raise HTTPException(
+            status_code=403,
+            detail="Demo bootstrap is locked. Set VOLCRE_ALLOW_DEMO_SEED=true only for intentional shared-database seeding.",
         )
     ensure_app_storage_seeded()
     return {"status": "ok"}

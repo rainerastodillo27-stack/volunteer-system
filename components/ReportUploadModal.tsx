@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   Modal,
   View,
@@ -8,26 +8,45 @@ import {
   ScrollView,
   TextInput,
   Platform,
-  Switch,
   Alert,
+  Image,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import type { SubmittedReport } from '../screens/ReportsScreen';
+import { isImageMediaUri, pickImageFromDevice } from '../utils/media';
 
 type MaterialIconName = keyof typeof MaterialIcons.glyphMap;
 
 interface ReportUploadModalProps {
   visible: boolean;
   onClose: () => void;
-  onSubmit: (report: Omit<SubmittedReport, 'id' | 'submittedAt' | 'submittedBy' | 'submitterName' | 'submitterRole' | 'viewedBy'>) => void;
+  onSubmit: (
+    report: Omit<
+      SubmittedReport,
+      'id' | 'submittedAt' | 'submittedBy' | 'submitterName' | 'submitterRole' | 'viewedBy'
+    >
+  ) => void;
   projects?: any[];
+  userRole?: SubmittedReport['submitterRole'];
 }
 
-export default function ReportUploadModal({ visible, onClose, onSubmit, projects = [] }: ReportUploadModalProps) {
-  const [reportType, setReportType] = useState<SubmittedReport['reportType']>('volunteer_engagement');
+export default function ReportUploadModal({
+  visible,
+  onClose,
+  onSubmit,
+  projects = [],
+  userRole,
+}: ReportUploadModalProps) {
+  const [reportType, setReportType] =
+    useState<SubmittedReport['reportType']>('volunteer_engagement');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [selectedProject, setSelectedProject] = useState<string | undefined>();
+  const [selectedPhotoUri, setSelectedPhotoUri] = useState('');
+  const [volunteerSummary, setVolunteerSummary] = useState('');
+  const [volunteerContribution, setVolunteerContribution] = useState('');
+  const [volunteerExperience, setVolunteerExperience] = useState('');
+  const [volunteerFollowUp, setVolunteerFollowUp] = useState('');
   const [metrics, setMetrics] = useState({
     volunteerHours: '',
     verifiedAttendance: '',
@@ -40,7 +59,39 @@ export default function ReportUploadModal({ visible, onClose, onSubmit, projects
   const [showProjectPicker, setShowProjectPicker] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  const reportTypeOptions: { value: SubmittedReport['reportType']; label: string; icon: MaterialIconName }[] = [
+  const isVolunteer = userRole === 'volunteer';
+  const entityLabel = isVolunteer ? 'Event' : 'Project';
+  const entityLabelLower = entityLabel.toLowerCase();
+
+  useEffect(() => {
+    if (!visible) {
+      return;
+    }
+
+    if (isVolunteer) {
+      setReportType('event_performance');
+      setSelectedProject(current => current || projects[0]?.id);
+    }
+  }, [isVolunteer, projects, visible]);
+
+  useEffect(() => {
+    if (!visible || !isVolunteer || !selectedProject || title.trim()) {
+      return;
+    }
+
+    const selectedEvent = projects.find(project => project.id === selectedProject);
+    if (!selectedEvent) {
+      return;
+    }
+
+    setTitle(`${selectedEvent.title} Volunteer Reflection`);
+  }, [isVolunteer, projects, selectedProject, title, visible]);
+
+  const reportTypeOptions: {
+    value: SubmittedReport['reportType'];
+    label: string;
+    icon: MaterialIconName;
+  }[] = [
     { value: 'field_report', label: 'Field Report', icon: 'assignment' },
     { value: 'volunteer_engagement', label: 'Volunteer Engagement', icon: 'people' },
     { value: 'program_impact', label: 'Program Impact', icon: 'trending-up' },
@@ -50,8 +101,12 @@ export default function ReportUploadModal({ visible, onClose, onSubmit, projects
   ];
 
   const getMetricFieldsForType = () => {
+    if (isVolunteer) {
+      return ['volunteerHours', 'tasksCompleted', 'beneficiariesServed'];
+    }
+
     const baseFields = ['volunteerHours', 'verifiedAttendance', 'activeVolunteers'];
-    
+
     switch (reportType) {
       case 'field_report':
       case 'program_impact':
@@ -64,56 +119,70 @@ export default function ReportUploadModal({ visible, onClose, onSubmit, projects
   };
 
   const validateForm = () => {
-    const newErrors: Record<string, string> = {};
+    const nextErrors: Record<string, string> = {};
 
-    if (!title.trim()) newErrors.title = 'Title is required';
-    if (!description.trim()) newErrors.description = 'Description is required';
-
-    const relevantMetrics = getMetricFieldsForType();
-    const hasAnyMetric = relevantMetrics.some(field => metrics[field as keyof typeof metrics]);
-    
-    if (!hasAnyMetric) {
-      newErrors.metrics = 'At least one metric is required';
+    if (!title.trim()) {
+      nextErrors.title = 'Title is required';
     }
 
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+    if (isVolunteer && !selectedProject) {
+      nextErrors.project = `${entityLabel} is required`;
+    }
+
+    if (isVolunteer) {
+      if (!volunteerSummary.trim()) {
+        nextErrors.volunteerSummary = 'Tell the admin what happened during the event';
+      }
+      if (!volunteerExperience.trim()) {
+        nextErrors.volunteerExperience = 'Share your experience during the event';
+      }
+      if (!description.trim()) {
+        nextErrors.description = 'Add a short summary for the admin side';
+      }
+    } else {
+      if (!description.trim()) {
+        nextErrors.description = 'Description is required';
+      }
+
+      const relevantMetrics = getMetricFieldsForType();
+      const hasAnyMetric = relevantMetrics.some(
+        field => metrics[field as keyof typeof metrics]
+      );
+
+      if (!hasAnyMetric) {
+        nextErrors.metrics = 'At least one metric is required';
+      }
+    }
+
+    setErrors(nextErrors);
+    return Object.keys(nextErrors).length === 0;
   };
 
-  const handleSubmit = useCallback(() => {
-    if (!validateForm()) return;
+  const handlePickPhoto = useCallback(async () => {
+    try {
+      const pickedImage = await pickImageFromDevice();
+      if (!pickedImage) {
+        return;
+      }
 
-    const relevantMetrics = getMetricFieldsForType();
-    const metricsData = Object.fromEntries(
-      relevantMetrics
-        .filter(field => metrics[field as keyof typeof metrics])
-        .map(field => [field, parseInt(metrics[field as keyof typeof metrics], 10)])
-    );
+      setSelectedPhotoUri(pickedImage);
+    } catch (error: any) {
+      Alert.alert(
+        'Photo Access Needed',
+        error?.message || 'Unable to open your photo library.'
+      );
+    }
+  }, []);
 
-    const selectedProjectData = selectedProject
-      ? projects.find(p => p.id === selectedProject)
-      : undefined;
-
-    const reportData: Omit<SubmittedReport, 'id' | 'submittedAt' | 'submittedBy' | 'submitterName' | 'submitterRole' | 'viewedBy'> = {
-      reportType,
-      title,
-      description,
-      projectId: selectedProject,
-      projectTitle: selectedProjectData?.title,
-      category: selectedProjectData?.category,
-      metrics: metricsData,
-      status: 'Submitted',
-      attachments: [],
-    };
-
-    onSubmit(reportData);
-    handleReset();
-  }, [reportType, title, description, selectedProject, metrics, projects, onSubmit]);
-
-  const handleReset = () => {
+  const handleReset = useCallback(() => {
     setTitle('');
     setDescription('');
     setSelectedProject(undefined);
+    setSelectedPhotoUri('');
+    setVolunteerSummary('');
+    setVolunteerContribution('');
+    setVolunteerExperience('');
+    setVolunteerFollowUp('');
     setMetrics({
       volunteerHours: '',
       verifiedAttendance: '',
@@ -124,7 +193,9 @@ export default function ReportUploadModal({ visible, onClose, onSubmit, projects
       geofenceCompliance: '',
     });
     setErrors({});
-  };
+    setShowProjectPicker(false);
+    setReportType(isVolunteer ? 'event_performance' : 'volunteer_engagement');
+  }, [isVolunteer]);
 
   const handleClose = () => {
     handleReset();
@@ -132,145 +203,414 @@ export default function ReportUploadModal({ visible, onClose, onSubmit, projects
   };
 
   const handleMetricChange = (field: string, value: string) => {
-    const numValue = value.replace(/[^0-9]/g, '');
+    const numericValue = value.replace(/[^0-9]/g, '');
     setMetrics(prev => ({
       ...prev,
-      [field]: numValue,
+      [field]: numericValue,
     }));
   };
+
+  const handleSubmit = useCallback(() => {
+    if (!validateForm()) {
+      return;
+    }
+
+    const relevantMetrics = getMetricFieldsForType();
+    const metricsData = Object.fromEntries(
+      relevantMetrics
+        .filter(field => metrics[field as keyof typeof metrics])
+        .map(field => [
+          field,
+          Number.parseInt(metrics[field as keyof typeof metrics], 10),
+        ])
+    );
+
+    const selectedProjectData = selectedProject
+      ? projects.find(project => project.id === selectedProject)
+      : undefined;
+
+    const volunteerNarrative = isVolunteer
+      ? [
+          volunteerSummary.trim()
+            ? `What happened during the event:\n${volunteerSummary.trim()}`
+            : '',
+          volunteerContribution.trim()
+            ? `What I helped with:\n${volunteerContribution.trim()}`
+            : '',
+          volunteerExperience.trim()
+            ? `My experience:\n${volunteerExperience.trim()}`
+            : '',
+          volunteerFollowUp.trim()
+            ? `Suggestions or follow-up needs:\n${volunteerFollowUp.trim()}`
+            : '',
+          description.trim()
+            ? `Short admin summary:\n${description.trim()}`
+            : '',
+        ]
+          .filter(Boolean)
+          .join('\n\n')
+      : description.trim();
+
+    const reportData: Omit<
+      SubmittedReport,
+      'id' | 'submittedAt' | 'submittedBy' | 'submitterName' | 'submitterRole' | 'viewedBy'
+    > = {
+      reportType,
+      title: title.trim() || `${selectedProjectData?.title || 'Event'} Volunteer Reflection`,
+      description: volunteerNarrative,
+      projectId: selectedProject,
+      projectTitle: selectedProjectData?.title,
+      category: selectedProjectData?.category,
+      metrics: metricsData,
+      attachments: [],
+      mediaFile: selectedPhotoUri || undefined,
+      status: 'Submitted',
+    };
+
+    onSubmit(reportData);
+    handleReset();
+  }, [
+    description,
+    handleReset,
+    isVolunteer,
+    metrics,
+    onSubmit,
+    projects,
+    reportType,
+    selectedPhotoUri,
+    selectedProject,
+    title,
+    volunteerContribution,
+    volunteerExperience,
+    volunteerFollowUp,
+    volunteerSummary,
+  ]);
+
+  const renderVolunteerFields = () => (
+    <>
+      <View style={styles.volunteerIntroCard}>
+        <View style={styles.volunteerIntroIcon}>
+          <MaterialIcons name="volunteer-activism" size={20} color="#166534" />
+        </View>
+        <View style={styles.volunteerIntroContent}>
+          <Text style={styles.volunteerIntroTitle}>Share your event experience</Text>
+          <Text style={styles.volunteerIntroText}>
+            Tell the admin what happened, what you worked on, how the event felt on the
+            ground, and add a photo if you have one.
+          </Text>
+        </View>
+      </View>
+
+      <Text style={styles.label}>{entityLabel} *</Text>
+      <TouchableOpacity
+        style={[styles.projectSelector, errors.project && styles.inputError]}
+        onPress={() => setShowProjectPicker(!showProjectPicker)}
+      >
+        <Text style={styles.projectSelectorText}>
+          {selectedProject
+            ? projects.find(project => project.id === selectedProject)?.title ||
+              `Select ${entityLabelLower}`
+            : `Select ${entityLabelLower}`}
+        </Text>
+        <MaterialIcons
+          name={showProjectPicker ? 'expand-less' : 'expand-more'}
+          size={20}
+          color="#666"
+        />
+      </TouchableOpacity>
+      {errors.project ? <Text style={styles.errorText}>{errors.project}</Text> : null}
+
+      {showProjectPicker ? (
+        <View style={styles.projectList}>
+          {projects.map(project => (
+            <TouchableOpacity
+              key={project.id}
+              style={styles.projectOption}
+              onPress={() => {
+                setSelectedProject(project.id);
+                setShowProjectPicker(false);
+              }}
+            >
+              <Text style={styles.projectOptionText}>{project.title}</Text>
+              <Text style={styles.projectOptionCategory}>
+                {project.isEvent ? 'Event' : project.category}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      ) : null}
+
+      <Text style={styles.label}>Title *</Text>
+      <TextInput
+        style={[styles.input, errors.title && styles.inputError]}
+        placeholder="Event volunteer reflection"
+        value={title}
+        onChangeText={setTitle}
+        placeholderTextColor="#cbd5e1"
+      />
+      {errors.title ? <Text style={styles.errorText}>{errors.title}</Text> : null}
+
+      <Text style={styles.sectionTitle}>Volunteer Reflection</Text>
+
+      <Text style={styles.label}>What happened during the event? *</Text>
+      <TextInput
+        style={[styles.textArea, errors.volunteerSummary && styles.inputError]}
+        placeholder="Describe the activities, turnout, important moments, and how the event went."
+        value={volunteerSummary}
+        onChangeText={setVolunteerSummary}
+        multiline
+        numberOfLines={4}
+        placeholderTextColor="#cbd5e1"
+      />
+      {errors.volunteerSummary ? (
+        <Text style={styles.errorText}>{errors.volunteerSummary}</Text>
+      ) : null}
+
+      <Text style={styles.label}>What did you help with?</Text>
+      <TextInput
+        style={styles.textArea}
+        placeholder="Example: registration, setup, assisting participants, distribution, documentation, cleanup."
+        value={volunteerContribution}
+        onChangeText={setVolunteerContribution}
+        multiline
+        numberOfLines={3}
+        placeholderTextColor="#cbd5e1"
+      />
+
+      <Text style={styles.label}>How was your experience? *</Text>
+      <TextInput
+        style={[styles.textArea, errors.volunteerExperience && styles.inputError]}
+        placeholder="Share what you learned, what stood out, or how the event affected you and the community."
+        value={volunteerExperience}
+        onChangeText={setVolunteerExperience}
+        multiline
+        numberOfLines={4}
+        placeholderTextColor="#cbd5e1"
+      />
+      {errors.volunteerExperience ? (
+        <Text style={styles.errorText}>{errors.volunteerExperience}</Text>
+      ) : null}
+
+      <Text style={styles.label}>Any suggestions or follow-up needed?</Text>
+      <TextInput
+        style={styles.textArea}
+        placeholder="Optional: mention issues, supplies needed, or ideas to improve the next event."
+        value={volunteerFollowUp}
+        onChangeText={setVolunteerFollowUp}
+        multiline
+        numberOfLines={3}
+        placeholderTextColor="#cbd5e1"
+      />
+
+      <Text style={styles.sectionTitle}>Quick Numbers</Text>
+      <Text style={styles.sectionHelper}>
+        Add the numbers you know. These are optional but helpful for the admin report.
+      </Text>
+      <View style={styles.metricsGrid}>
+        {getMetricFieldsForType().map(field => (
+          <View key={field} style={styles.metricInput}>
+            <Text style={styles.metricLabel}>{formatMetricLabel(field, true)}</Text>
+            <TextInput
+              style={styles.metricInputField}
+              placeholder="0"
+              value={metrics[field as keyof typeof metrics]}
+              onChangeText={value => handleMetricChange(field, value)}
+              keyboardType="number-pad"
+              placeholderTextColor="#cbd5e1"
+            />
+          </View>
+        ))}
+      </View>
+
+      <Text style={styles.sectionTitle}>Photo Proof</Text>
+      <TouchableOpacity style={styles.photoButton} onPress={handlePickPhoto}>
+        <MaterialIcons name="photo-library" size={18} color="#166534" />
+        <Text style={styles.photoButtonText}>
+          {selectedPhotoUri ? 'Replace Photo' : 'Upload Event Photo'}
+        </Text>
+      </TouchableOpacity>
+      <Text style={styles.photoHint}>
+        Optional, but this helps admins verify the event story and keeps documentation in
+        one place.
+      </Text>
+
+      {selectedPhotoUri ? (
+        <View style={styles.photoPreviewCard}>
+          {isImageMediaUri(selectedPhotoUri) ? (
+            <Image
+              source={{ uri: selectedPhotoUri }}
+              style={styles.photoPreview}
+              resizeMode="cover"
+            />
+          ) : (
+            <View style={styles.photoFallbackCard}>
+              <MaterialIcons name="image" size={24} color="#166534" />
+            </View>
+          )}
+          <View style={styles.photoPreviewMeta}>
+            <Text style={styles.photoPreviewTitle}>Photo ready for this report</Text>
+            <TouchableOpacity onPress={() => setSelectedPhotoUri('')}>
+              <Text style={styles.photoRemoveText}>Remove Photo</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
+
+      <Text style={styles.sectionTitle}>Short Admin Summary</Text>
+      <Text style={styles.sectionHelper}>
+        Write one short summary an admin can scan quickly before opening the full report.
+      </Text>
+      <TextInput
+        style={[styles.textArea, errors.description && styles.inputError]}
+        placeholder="Example: We served 45 families, finished registration on time, and the event stayed organized throughout the day."
+        value={description}
+        onChangeText={setDescription}
+        multiline
+        numberOfLines={3}
+        placeholderTextColor="#cbd5e1"
+      />
+      {errors.description ? <Text style={styles.errorText}>{errors.description}</Text> : null}
+    </>
+  );
+
+  const renderStandardFields = () => (
+    <>
+      <Text style={styles.sectionTitle}>Report Type</Text>
+      <View style={styles.typeGrid}>
+        {reportTypeOptions.map(option => (
+          <TouchableOpacity
+            key={option.value}
+            style={[
+              styles.typeButton,
+              reportType === option.value && styles.typeButtonActive,
+            ]}
+            onPress={() => setReportType(option.value)}
+          >
+            <MaterialIcons
+              name={option.icon}
+              size={20}
+              color={reportType === option.value ? '#fff' : '#166534'}
+            />
+            <Text
+              style={[
+                styles.typeButtonText,
+                reportType === option.value && styles.typeButtonTextActive,
+              ]}
+            >
+              {option.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      <Text style={styles.label}>Title *</Text>
+      <TextInput
+        style={[styles.input, errors.title && styles.inputError]}
+        placeholder="Report title"
+        value={title}
+        onChangeText={setTitle}
+        placeholderTextColor="#cbd5e1"
+      />
+      {errors.title ? <Text style={styles.errorText}>{errors.title}</Text> : null}
+
+      <Text style={styles.label}>Description *</Text>
+      <TextInput
+        style={[styles.textArea, errors.description && styles.inputError]}
+        placeholder="Provide details about this report..."
+        value={description}
+        onChangeText={setDescription}
+        multiline
+        numberOfLines={4}
+        placeholderTextColor="#cbd5e1"
+      />
+      {errors.description ? <Text style={styles.errorText}>{errors.description}</Text> : null}
+
+      <Text style={styles.label}>{entityLabel} (Optional)</Text>
+      <TouchableOpacity
+        style={[styles.projectSelector, errors.project && styles.inputError]}
+        onPress={() => setShowProjectPicker(!showProjectPicker)}
+      >
+        <Text style={styles.projectSelectorText}>
+          {selectedProject
+            ? projects.find(project => project.id === selectedProject)?.title ||
+              `Select ${entityLabelLower}`
+            : `Select ${entityLabelLower}`}
+        </Text>
+        <MaterialIcons
+          name={showProjectPicker ? 'expand-less' : 'expand-more'}
+          size={20}
+          color="#666"
+        />
+      </TouchableOpacity>
+
+      {showProjectPicker ? (
+        <View style={styles.projectList}>
+          <TouchableOpacity
+            style={styles.projectOption}
+            onPress={() => {
+              setSelectedProject(undefined);
+              setShowProjectPicker(false);
+            }}
+          >
+            <Text style={styles.projectOptionText}>No project</Text>
+          </TouchableOpacity>
+          {projects.map(project => (
+            <TouchableOpacity
+              key={project.id}
+              style={styles.projectOption}
+              onPress={() => {
+                setSelectedProject(project.id);
+                setShowProjectPicker(false);
+              }}
+            >
+              <Text style={styles.projectOptionText}>{project.title}</Text>
+              <Text style={styles.projectOptionCategory}>
+                {project.isEvent ? 'Event' : project.category}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      ) : null}
+
+      <Text style={styles.sectionTitle}>
+        Metrics {errors.metrics ? <Text style={styles.errorBadge}>Required</Text> : null}
+      </Text>
+      {errors.metrics ? <Text style={styles.errorText}>{errors.metrics}</Text> : null}
+      <View style={styles.metricsGrid}>
+        {getMetricFieldsForType().map(field => (
+          <View key={field} style={styles.metricInput}>
+            <Text style={styles.metricLabel}>{formatMetricLabel(field)}</Text>
+            <TextInput
+              style={styles.metricInputField}
+              placeholder="0"
+              value={metrics[field as keyof typeof metrics]}
+              onChangeText={value => handleMetricChange(field, value)}
+              keyboardType="number-pad"
+              placeholderTextColor="#cbd5e1"
+            />
+          </View>
+        ))}
+      </View>
+    </>
+  );
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={handleClose}>
       <View style={styles.backdrop}>
         <View style={styles.container}>
           <View style={styles.header}>
-            <Text style={styles.title}>New Report</Text>
+            <Text style={styles.title}>
+              {isVolunteer ? 'Volunteer Event Report' : 'New Report'}
+            </Text>
             <TouchableOpacity onPress={handleClose} hitSlop={8}>
               <MaterialIcons name="close" size={24} color="#0f172a" />
             </TouchableOpacity>
           </View>
 
           <ScrollView style={styles.content} showsVerticalScrollIndicator>
-            {/* Report Type Selection */}
-            <Text style={styles.sectionTitle}>Report Type</Text>
-            <View style={styles.typeGrid}>
-              {reportTypeOptions.map(option => (
-                <TouchableOpacity
-                  key={option.value}
-                  style={[
-                    styles.typeButton,
-                    reportType === option.value && styles.typeButtonActive,
-                  ]}
-                  onPress={() => setReportType(option.value)}
-                >
-                  <MaterialIcons
-                    name={option.icon}
-                    size={20}
-                    color={reportType === option.value ? '#fff' : '#166534'}
-                  />
-                  <Text
-                    style={[
-                      styles.typeButtonText,
-                      reportType === option.value && styles.typeButtonTextActive,
-                    ]}
-                  >
-                    {option.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            {/* Title Input */}
-            <Text style={styles.label}>Title *</Text>
-            <TextInput
-              style={[styles.input, errors.title && styles.inputError]}
-              placeholder="Report title"
-              value={title}
-              onChangeText={setTitle}
-              placeholderTextColor="#cbd5e1"
-            />
-            {errors.title && <Text style={styles.errorText}>{errors.title}</Text>}
-
-            {/* Description Input */}
-            <Text style={styles.label}>Description *</Text>
-            <TextInput
-              style={[styles.textArea, errors.description && styles.inputError]}
-              placeholder="Provide details about this report..."
-              value={description}
-              onChangeText={setDescription}
-              multiline
-              numberOfLines={4}
-              placeholderTextColor="#cbd5e1"
-            />
-            {errors.description && <Text style={styles.errorText}>{errors.description}</Text>}
-
-            {/* Project Selection (Optional) */}
-            <Text style={styles.label}>Project (Optional)</Text>
-            <TouchableOpacity
-              style={styles.projectSelector}
-              onPress={() => setShowProjectPicker(!showProjectPicker)}
-            >
-              <Text style={styles.projectSelectorText}>
-                {selectedProject
-                  ? projects.find(p => p.id === selectedProject)?.title || 'Select project'
-                  : 'Select project'}
-              </Text>
-              <MaterialIcons
-                name={showProjectPicker ? 'expand-less' : 'expand-more'}
-                size={20}
-                color="#666"
-              />
-            </TouchableOpacity>
-
-            {showProjectPicker && (
-              <View style={styles.projectList}>
-                <TouchableOpacity
-                  style={styles.projectOption}
-                  onPress={() => {
-                    setSelectedProject(undefined);
-                    setShowProjectPicker(false);
-                  }}
-                >
-                  <Text style={styles.projectOptionText}>No project</Text>
-                </TouchableOpacity>
-                {projects.map(project => (
-                  <TouchableOpacity
-                    key={project.id}
-                    style={styles.projectOption}
-                    onPress={() => {
-                      setSelectedProject(project.id);
-                      setShowProjectPicker(false);
-                    }}
-                  >
-                    <Text style={styles.projectOptionText}>{project.title}</Text>
-                    <Text style={styles.projectOptionCategory}>{project.category}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
-
-            {/* Metrics Input */}
-            <Text style={styles.sectionTitle}>Metrics {errors.metrics && <Text style={styles.errorBadge}>Required</Text>}</Text>
-            {errors.metrics && <Text style={styles.errorText}>{errors.metrics}</Text>}
-
-            <View style={styles.metricsGrid}>
-              {getMetricFieldsForType().map(field => (
-                <View key={field} style={styles.metricInput}>
-                  <Text style={styles.metricLabel}>{formatMetricLabel(field)}</Text>
-                  <TextInput
-                    style={styles.metricInputField}
-                    placeholder="0"
-                    value={metrics[field as keyof typeof metrics]}
-                    onChangeText={value => handleMetricChange(field, value)}
-                    keyboardType="number-pad"
-                    placeholderTextColor="#cbd5e1"
-                  />
-                </View>
-              ))}
-            </View>
+            {isVolunteer ? renderVolunteerFields() : renderStandardFields()}
           </ScrollView>
 
-          {/* Action Buttons */}
           <View style={styles.footer}>
             <TouchableOpacity onPress={handleClose} style={styles.cancelButton}>
               <Text style={styles.cancelButtonText}>Cancel</Text>
@@ -286,16 +626,17 @@ export default function ReportUploadModal({ visible, onClose, onSubmit, projects
   );
 }
 
-function formatMetricLabel(field: string): string {
+function formatMetricLabel(field: string, isVolunteer = false): string {
   const labels: Record<string, string> = {
-    volunteerHours: 'Volunteer Hours',
+    volunteerHours: isVolunteer ? 'Hours You Volunteered' : 'Volunteer Hours',
     verifiedAttendance: 'Verified Attendance',
     activeVolunteers: 'Active Volunteers',
-    beneficiariesServed: 'Beneficiaries Served',
-    tasksCompleted: 'Tasks Completed',
+    beneficiariesServed: isVolunteer ? 'People You Helped' : 'Beneficiaries Served',
+    tasksCompleted: isVolunteer ? 'Tasks You Finished' : 'Tasks Completed',
     eventsCount: 'Events Count',
     geofenceCompliance: 'Geofence Compliance %',
   };
+
   return labels[field] || field;
 }
 
@@ -335,6 +676,46 @@ const styles = StyleSheet.create({
     color: '#0f172a',
     marginTop: 16,
     marginBottom: 12,
+  },
+  sectionHelper: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#64748b',
+    marginTop: -4,
+    marginBottom: 10,
+  },
+  volunteerIntroCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    borderRadius: 16,
+    backgroundColor: '#ecfdf3',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    padding: 14,
+    marginBottom: 4,
+  },
+  volunteerIntroIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#dcfce7',
+  },
+  volunteerIntroContent: {
+    flex: 1,
+    gap: 4,
+  },
+  volunteerIntroTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#14532d',
+  },
+  volunteerIntroText: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#166534',
   },
   typeGrid: {
     flexDirection: 'row',
@@ -474,6 +855,67 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#0f172a',
     backgroundColor: '#f8fafc',
+  },
+  photoButton: {
+    minHeight: 48,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#86efac',
+    backgroundColor: '#f0fdf4',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 14,
+  },
+  photoButtonText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#166534',
+  },
+  photoHint: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#64748b',
+    marginTop: 8,
+  },
+  photoPreviewCard: {
+    marginTop: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#dcfce7',
+    backgroundColor: '#f8fafc',
+    overflow: 'hidden',
+  },
+  photoPreview: {
+    width: '100%',
+    height: 180,
+    backgroundColor: '#e2e8f0',
+  },
+  photoFallbackCard: {
+    height: 140,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ecfdf3',
+  },
+  photoPreviewMeta: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+  },
+  photoPreviewTitle: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  photoRemoveText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#b91c1c',
   },
   footer: {
     flexDirection: 'row',

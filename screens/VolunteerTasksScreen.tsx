@@ -25,18 +25,93 @@ import {
 import { Project, ProjectInternalTask, Volunteer } from '../models/types';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
+type AssignedTask = ProjectInternalTask & { projectId: string; projectTitle: string };
+type FieldOfficerFilter = 'All' | 'Active' | 'Upcoming' | 'Completed';
+
+function formatEventDateLabel(startDate?: string, endDate?: string): string {
+  const start = startDate ? new Date(startDate) : null;
+  const end = endDate ? new Date(endDate) : null;
+
+  if (!start || Number.isNaN(start.getTime())) {
+    return 'Schedule to be announced';
+  }
+
+  const startLabel = start.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+
+  if (!end || Number.isNaN(end.getTime())) {
+    return startLabel;
+  }
+
+  const endLabel = end.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+
+  return startLabel === endLabel ? startLabel : `${startLabel} - ${endLabel}`;
+}
+
+function getFieldOfficerEventBucket(project: Project): Exclude<FieldOfficerFilter, 'All'> {
+  switch (project.status) {
+    case 'In Progress':
+    case 'On Hold':
+      return 'Active';
+    case 'Completed':
+    case 'Cancelled':
+      return 'Completed';
+    default:
+      return 'Upcoming';
+  }
+}
+
+function collectAssignedTasks(projects: Project[], volunteerProfile: Volunteer | null): AssignedTask[] {
+  if (!volunteerProfile) {
+    return [];
+  }
+
+  const assignedTasks: AssignedTask[] = [];
+
+  projects.forEach(project => {
+    if (!project.internalTasks || !Array.isArray(project.internalTasks)) {
+      return;
+    }
+
+    project.internalTasks.forEach(task => {
+      if (task.assignedVolunteerId === volunteerProfile.id) {
+        assignedTasks.push({
+          ...task,
+          projectId: project.id,
+          projectTitle: project.title,
+        });
+      }
+    });
+  });
+
+  return assignedTasks.sort(
+    (left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
+  );
+}
+
 // Displays volunteer's assigned tasks from projects.
 export default function VolunteerTasksScreen() {
   const { user } = useAuth();
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
-  const [tasks, setTasks] = useState<(ProjectInternalTask & { projectId: string; projectTitle: string })[]>([]);
+  const [tasks, setTasks] = useState<AssignedTask[]>([]);
   const [allProjects, setAllProjects] = useState<Project[]>([]);
   const [allVolunteers, setAllVolunteers] = useState<Volunteer[]>([]);
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
   const [loading, setLoading] = useState(true);
-  const [selectedTask, setSelectedTask] = useState<(ProjectInternalTask & { projectId: string; projectTitle: string }) | null>(null);
+  const [selectedTask, setSelectedTask] = useState<AssignedTask | null>(null);
   const [showDetails, setShowDetails] = useState(false);
+  const [selectedManagedEventId, setSelectedManagedEventId] = useState<string | null>(null);
+  const [showFieldOfficerBoard, setShowFieldOfficerBoard] = useState(false);
   const [filterStatus, setFilterStatus] = useState<'All' | 'Assigned' | 'In Progress' | 'Completed'>('All');
+  const [fieldOfficerFilter, setFieldOfficerFilter] = useState<FieldOfficerFilter>('All');
+  const [showAllFieldOfficerEvents, setShowAllFieldOfficerEvents] = useState(false);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -67,27 +142,10 @@ export default function VolunteerTasksScreen() {
         getVolunteerByUserId(user.id),
       ]);
 
-      // Find all tasks assigned to this volunteer
-      const assignedTasks: (ProjectInternalTask & { projectId: string; projectTitle: string })[] = [];
-
-      projects.forEach(project => {
-        if (project.internalTasks && Array.isArray(project.internalTasks)) {
-          project.internalTasks.forEach(task => {
-            if (currentVolunteerProfile && task.assignedVolunteerId === currentVolunteerProfile.id) {
-              assignedTasks.push({
-                ...task,
-                projectId: project.id,
-                projectTitle: project.title,
-              });
-            }
-          });
-        }
-      });
-
       setAllProjects(projects);
       setAllVolunteers(volunteers);
       setVolunteerProfile(currentVolunteerProfile);
-      setTasks(assignedTasks);
+      setTasks(collectAssignedTasks(projects, currentVolunteerProfile));
       setLoadError(null);
       setLoading(false);
     } catch (error) {
@@ -127,6 +185,20 @@ export default function VolunteerTasksScreen() {
       } else {
         await saveProject(updatedProject);
       }
+      const nextProjects = allProjects.map(existingProject =>
+        existingProject.id === updatedProject.id ? updatedProject : existingProject
+      );
+      setAllProjects(nextProjects);
+      setTasks(collectAssignedTasks(nextProjects, volunteerProfile));
+      setSelectedTask(current =>
+        current?.id === task.id
+          ? {
+              ...current,
+              status: newStatus as ProjectInternalTask['status'],
+              updatedAt: new Date().toISOString(),
+            }
+          : current
+      );
       setShowDetails(false);
       void loadVolunteerTasks();
       Alert.alert('Success', 'Task status updated');
@@ -139,6 +211,37 @@ export default function VolunteerTasksScreen() {
   const selectedEventProject = useMemo(
     () => allProjects.find(project => project.id === selectedTask?.projectId && project.isEvent) || null,
     [allProjects, selectedTask?.projectId]
+  );
+
+  const fieldOfficerEvents = useMemo(() => {
+    if (!volunteerProfile) {
+      return [];
+    }
+
+    return allProjects
+      .filter(
+        project =>
+          project.isEvent &&
+          (project.internalTasks || []).some(
+            task => task.isFieldOfficer && task.assignedVolunteerId === volunteerProfile.id
+          )
+      )
+      .sort((left, right) => new Date(left.startDate).getTime() - new Date(right.startDate).getTime());
+  }, [allProjects, volunteerProfile]);
+
+  const parentProjectTitleById = useMemo(
+    () =>
+      new Map(
+        allProjects
+          .filter(project => !project.isEvent)
+          .map(project => [project.id, project.title] as const)
+      ),
+    [allProjects]
+  );
+
+  const selectedManagedEvent = useMemo(
+    () => fieldOfficerEvents.find(project => project.id === selectedManagedEventId) || null,
+    [fieldOfficerEvents, selectedManagedEventId]
   );
 
   const isFieldOfficerForSelectedEvent = useMemo(() => {
@@ -162,17 +265,49 @@ export default function VolunteerTasksScreen() {
       .sort((left, right) => left.name.localeCompare(right.name));
   }, [allVolunteers, selectedEventProject]);
 
-  const handleAssignEventTask = async (taskId: string, volunteerId?: string) => {
-    if (!selectedEventProject || !isFieldOfficerForSelectedEvent) {
+  const managedEventVolunteerOptions = useMemo(() => {
+    if (!selectedManagedEvent) {
+      return [];
+    }
+
+    return selectedManagedEvent.volunteers
+      .map(volunteerId => allVolunteers.find(volunteer => volunteer.id === volunteerId) || null)
+      .filter((volunteer): volunteer is Volunteer => volunteer !== null)
+      .sort((left, right) => left.name.localeCompare(right.name));
+  }, [allVolunteers, selectedManagedEvent]);
+
+  const handleAssignEventTask = async (
+    eventProject: Project | null,
+    taskId: string,
+    volunteerId?: string
+  ) => {
+    if (!eventProject || !volunteerProfile) {
       return;
     }
 
     try {
+      const isFieldOfficerForEvent = (eventProject.internalTasks || []).some(
+        task => task.isFieldOfficer && task.assignedVolunteerId === volunteerProfile.id
+      );
+
+      if (!isFieldOfficerForEvent) {
+        Alert.alert('Access Restricted', 'Only the assigned field officer can manage event task assignments.');
+        return;
+      }
+
+      const assignableVolunteers = eventProject.volunteers
+        .map(joinedVolunteerId => allVolunteers.find(volunteer => volunteer.id === joinedVolunteerId) || null)
+        .filter((volunteer): volunteer is Volunteer => volunteer !== null);
       const assignedVolunteer = volunteerId
-        ? joinedVolunteerOptions.find(volunteer => volunteer.id === volunteerId) || null
+        ? assignableVolunteers.find(volunteer => volunteer.id === volunteerId) || null
         : null;
-      const updatedTasks = (selectedEventProject.internalTasks || []).map(task => {
+
+      const updatedTasks = (eventProject.internalTasks || []).map(task => {
         if (task.id !== taskId) {
+          return task;
+        }
+
+        if (task.isFieldOfficer) {
           return task;
         }
 
@@ -193,9 +328,33 @@ export default function VolunteerTasksScreen() {
       });
 
       await saveEvent({
-        ...selectedEventProject,
+        ...eventProject,
         internalTasks: updatedTasks,
         updatedAt: new Date().toISOString(),
+      });
+      const updatedProject: Project = {
+        ...eventProject,
+        internalTasks: updatedTasks,
+        updatedAt: new Date().toISOString(),
+      };
+      const nextProjects = allProjects.map(project =>
+        project.id === updatedProject.id ? updatedProject : project
+      );
+      setAllProjects(nextProjects);
+      setTasks(collectAssignedTasks(nextProjects, volunteerProfile));
+      setSelectedTask(current => {
+        if (!current || current.projectId !== updatedProject.id) {
+          return current;
+        }
+
+        const matchingTask = updatedTasks.find(task => task.id === current.id);
+        return matchingTask
+          ? {
+              ...matchingTask,
+              projectId: updatedProject.id,
+              projectTitle: updatedProject.title,
+            }
+          : current;
       });
       void loadVolunteerTasks();
       Alert.alert('Saved', 'Event task assignment updated.');
@@ -234,6 +393,70 @@ export default function VolunteerTasksScreen() {
   };
 
   const filteredTasks = filterStatus === 'All' ? tasks : tasks.filter(t => t.status === filterStatus);
+  const hasFieldOfficerAccess = fieldOfficerEvents.length > 0;
+  const fieldOfficerEventCounts = useMemo(
+    () => ({
+      All: fieldOfficerEvents.length,
+      Active: fieldOfficerEvents.filter(event => getFieldOfficerEventBucket(event) === 'Active').length,
+      Upcoming: fieldOfficerEvents.filter(event => getFieldOfficerEventBucket(event) === 'Upcoming').length,
+      Completed: fieldOfficerEvents.filter(event => getFieldOfficerEventBucket(event) === 'Completed').length,
+    }),
+    [fieldOfficerEvents]
+  );
+  const filteredFieldOfficerEvents = useMemo(() => {
+    const statusRank: Record<Exclude<FieldOfficerFilter, 'All'>, number> = {
+      Active: 0,
+      Upcoming: 1,
+      Completed: 2,
+    };
+
+    return fieldOfficerEvents
+      .filter(event => fieldOfficerFilter === 'All' || getFieldOfficerEventBucket(event) === fieldOfficerFilter)
+      .sort((left, right) => {
+        const bucketDelta =
+          statusRank[getFieldOfficerEventBucket(left)] - statusRank[getFieldOfficerEventBucket(right)];
+
+        if (bucketDelta !== 0) {
+          return bucketDelta;
+        }
+
+        return new Date(left.startDate).getTime() - new Date(right.startDate).getTime();
+      });
+  }, [fieldOfficerEvents, fieldOfficerFilter]);
+  const visibleFieldOfficerEvents = useMemo(
+    () => (showAllFieldOfficerEvents ? filteredFieldOfficerEvents : filteredFieldOfficerEvents.slice(0, 3)),
+    [filteredFieldOfficerEvents, showAllFieldOfficerEvents]
+  );
+  const hiddenFieldOfficerEventCount = Math.max(
+    filteredFieldOfficerEvents.length - visibleFieldOfficerEvents.length,
+    0
+  );
+  const assignedCount = tasks.filter(task => task.status === 'Assigned').length;
+  const inProgressCount = tasks.filter(task => task.status === 'In Progress').length;
+  const completedCount = tasks.filter(task => task.status === 'Completed').length;
+  const groupedFilteredTasks = useMemo(() => {
+    const groups = new Map<string, { projectId: string; projectTitle: string; tasks: AssignedTask[] }>();
+
+    filteredTasks.forEach(task => {
+      const existingGroup = groups.get(task.projectId);
+      if (existingGroup) {
+        existingGroup.tasks.push(task);
+        return;
+      }
+
+      groups.set(task.projectId, {
+        projectId: task.projectId,
+        projectTitle: task.projectTitle,
+        tasks: [task],
+      });
+    });
+
+    return Array.from(groups.values()).sort((left, right) => left.projectTitle.localeCompare(right.projectTitle));
+  }, [filteredTasks]);
+
+  useEffect(() => {
+    setShowAllFieldOfficerEvents(false);
+  }, [fieldOfficerFilter, fieldOfficerEvents.length]);
 
   if (loading) {
     return (
@@ -248,7 +471,11 @@ export default function VolunteerTasksScreen() {
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>My Assigned Tasks</Text>
-        <Text style={styles.headerSubtitle}>Tasks assigned to you inside joined events</Text>
+        <Text style={styles.headerSubtitle}>
+          {hasFieldOfficerAccess
+            ? 'Review your tasks and manage volunteer assignments in the events you supervise.'
+            : 'Tasks assigned to you inside joined events'}
+        </Text>
       </View>
 
       {loadError && (
@@ -261,11 +488,174 @@ export default function VolunteerTasksScreen() {
         </View>
       )}
 
+      {hasFieldOfficerAccess ? (
+        <View style={styles.fieldOfficerSection}>
+          <View style={styles.fieldOfficerSectionHeader}>
+            <View style={styles.fieldOfficerSectionTitleWrap}>
+              <Text style={styles.fieldOfficerSectionTitle}>Field Officer Events</Text>
+              <Text style={styles.fieldOfficerSectionSubtitle}>
+                Admin assigned you as field officer for these event teams.
+              </Text>
+            </View>
+            <View style={styles.fieldOfficerSectionBadge}>
+              <Text style={styles.fieldOfficerSectionBadgeText}>
+                {fieldOfficerEvents.length} event{fieldOfficerEvents.length === 1 ? '' : 's'}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.fieldOfficerFilterRow}>
+            {(['All', 'Active', 'Upcoming', 'Completed'] as const).map(option => (
+              <TouchableOpacity
+                key={option}
+                style={[
+                  styles.fieldOfficerFilterButton,
+                  fieldOfficerFilter === option && styles.fieldOfficerFilterButtonActive,
+                ]}
+                onPress={() => setFieldOfficerFilter(option)}
+              >
+                <Text
+                  style={[
+                    styles.fieldOfficerFilterButtonText,
+                    fieldOfficerFilter === option && styles.fieldOfficerFilterButtonTextActive,
+                  ]}
+                >
+                  {option} ({fieldOfficerEventCounts[option]})
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <Text style={styles.fieldOfficerSectionSummary}>
+            Showing {visibleFieldOfficerEvents.length} of {filteredFieldOfficerEvents.length} event
+            {filteredFieldOfficerEvents.length === 1 ? '' : 's'} in this view.
+          </Text>
+
+          {visibleFieldOfficerEvents.map(eventProject => {
+            const eventTasks = eventProject.internalTasks || [];
+            const assignableTasks = eventTasks.filter(task => !task.isFieldOfficer);
+            const assignedTaskCount = assignableTasks.filter(task => task.assignedVolunteerId).length;
+            const unassignedTaskCount = assignableTasks.length - assignedTaskCount;
+            const parentProgramTitle = eventProject.parentProjectId
+              ? parentProjectTitleById.get(eventProject.parentProjectId)
+              : null;
+            const eventBucket = getFieldOfficerEventBucket(eventProject);
+
+            return (
+              <TouchableOpacity
+                key={eventProject.id}
+                style={styles.fieldOfficerEventCard}
+                onPress={() => {
+                  setSelectedManagedEventId(eventProject.id);
+                  setShowFieldOfficerBoard(true);
+                }}
+              >
+                <View style={styles.fieldOfficerEventTopRow}>
+                  <View style={styles.fieldOfficerEventCopy}>
+                    <View style={styles.fieldOfficerEventTitleRow}>
+                      <Text style={styles.fieldOfficerEventTitle}>{eventProject.title}</Text>
+                      <View style={styles.fieldOfficerEventStatusBadge}>
+                        <Text style={styles.fieldOfficerEventStatusText}>{eventBucket}</Text>
+                      </View>
+                    </View>
+                    {parentProgramTitle ? (
+                      <Text style={styles.fieldOfficerEventProgram} numberOfLines={1}>
+                        Program: {parentProgramTitle}
+                      </Text>
+                    ) : null}
+                    <Text style={styles.fieldOfficerEventMeta}>
+                      {formatEventDateLabel(eventProject.startDate, eventProject.endDate)}
+                    </Text>
+                    <Text style={styles.fieldOfficerEventMeta} numberOfLines={1}>
+                      {eventProject.location.address}
+                    </Text>
+                  </View>
+                  <MaterialIcons name="supervisor-account" size={22} color="#166534" />
+                </View>
+
+                <View style={styles.fieldOfficerMetricsRow}>
+                  <View style={styles.fieldOfficerMetricCard}>
+                    <Text style={styles.fieldOfficerMetricValue}>{eventProject.volunteers.length}</Text>
+                    <Text style={styles.fieldOfficerMetricLabel}>joined volunteers</Text>
+                  </View>
+                  <View style={styles.fieldOfficerMetricCard}>
+                    <Text style={styles.fieldOfficerMetricValue}>{assignedTaskCount}</Text>
+                    <Text style={styles.fieldOfficerMetricLabel}>assigned tasks</Text>
+                  </View>
+                  <View style={styles.fieldOfficerMetricCard}>
+                    <Text style={styles.fieldOfficerMetricValue}>{unassignedTaskCount}</Text>
+                    <Text style={styles.fieldOfficerMetricLabel}>open tasks</Text>
+                  </View>
+                </View>
+
+                <View style={styles.fieldOfficerOpenRow}>
+                  <Text style={styles.fieldOfficerOpenText}>Open assignment board</Text>
+                  <MaterialIcons name="chevron-right" size={20} color="#166534" />
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+
+          {filteredFieldOfficerEvents.length === 0 ? (
+            <View style={styles.fieldOfficerEmptyState}>
+              <Text style={styles.fieldOfficerEmptyTitle}>No events in this filter</Text>
+              <Text style={styles.fieldOfficerEmptyText}>
+                Try another filter to review the rest of your field officer events.
+              </Text>
+            </View>
+          ) : null}
+
+          {hiddenFieldOfficerEventCount > 0 ? (
+            <TouchableOpacity
+              style={styles.fieldOfficerToggleButton}
+              onPress={() => setShowAllFieldOfficerEvents(true)}
+            >
+              <Text style={styles.fieldOfficerToggleButtonText}>
+                Show {hiddenFieldOfficerEventCount} more event
+                {hiddenFieldOfficerEventCount === 1 ? '' : 's'}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
+
+          {showAllFieldOfficerEvents && filteredFieldOfficerEvents.length > 3 ? (
+            <TouchableOpacity
+              style={styles.fieldOfficerToggleButton}
+              onPress={() => setShowAllFieldOfficerEvents(false)}
+            >
+              <Text style={styles.fieldOfficerToggleButtonText}>Show fewer events</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      ) : null}
+
+      <View style={styles.taskSummaryRow}>
+        <View style={styles.taskSummaryCard}>
+          <Text style={styles.taskSummaryValue}>{tasks.length}</Text>
+          <Text style={styles.taskSummaryLabel}>total tasks</Text>
+        </View>
+        <View style={styles.taskSummaryCard}>
+          <Text style={styles.taskSummaryValue}>{assignedCount}</Text>
+          <Text style={styles.taskSummaryLabel}>assigned</Text>
+        </View>
+        <View style={styles.taskSummaryCard}>
+          <Text style={styles.taskSummaryValue}>{inProgressCount}</Text>
+          <Text style={styles.taskSummaryLabel}>in progress</Text>
+        </View>
+        <View style={styles.taskSummaryCard}>
+          <Text style={styles.taskSummaryValue}>{completedCount}</Text>
+          <Text style={styles.taskSummaryLabel}>completed</Text>
+        </View>
+      </View>
+
       {tasks.length === 0 ? (
         <View style={styles.emptyContainer}>
           <MaterialIcons name="check-circle-outline" size={64} color="#ccc" />
           <Text style={styles.emptyTitle}>No tasks assigned yet</Text>
-          <Text style={styles.emptySubtitle}>Tasks will appear here when admins or field officers assign work to you inside an event</Text>
+          <Text style={styles.emptySubtitle}>
+            {hasFieldOfficerAccess
+              ? 'You can still manage assignments in your field officer events above.'
+              : 'Tasks will appear here when admins or field officers assign work to you inside an event'}
+          </Text>
         </View>
       ) : (
         <>
@@ -288,50 +678,76 @@ export default function VolunteerTasksScreen() {
             ))}
           </View>
 
-          <FlatList
-            data={filteredTasks}
-            keyExtractor={item => item.id}
-            renderItem={({ item }) => (
-              <TouchableOpacity
-                style={styles.taskCard}
-                onPress={() => {
-                  setSelectedTask(item);
-                  setShowDetails(true);
-                }}
-              >
-                <View style={styles.taskCardHeader}>
-                  <Text style={styles.taskTitle} numberOfLines={2}>
-                    {item.title}
-                  </Text>
-                  <View
-                    style={[
-                      styles.priorityBadge,
-                      { backgroundColor: getPriorityColor(item.priority) },
-                    ]}
-                  >
-                    <Text style={styles.priorityText}>{item.priority}</Text>
+          <ScrollView style={styles.taskList} contentContainerStyle={styles.taskListContent}>
+            {groupedFilteredTasks.map(group => (
+              <View key={group.projectId} style={styles.taskGroupCard}>
+                <View style={styles.taskGroupHeader}>
+                  <View style={styles.taskGroupCopy}>
+                    <Text style={styles.taskGroupTitle}>{group.projectTitle}</Text>
+                    <Text style={styles.taskGroupMeta}>
+                      {group.tasks.length} assigned task{group.tasks.length === 1 ? '' : 's'}
+                    </Text>
+                  </View>
+                  <View style={styles.taskGroupBadge}>
+                    <Text style={styles.taskGroupBadgeText}>Event tasks</Text>
                   </View>
                 </View>
 
-                <Text style={styles.projectName}>{item.projectTitle}</Text>
-                <Text style={styles.taskCategory}>{item.category}</Text>
-
-                <View style={styles.taskCardFooter}>
-                  <View
-                    style={[
-                      styles.statusBadge,
-                      { backgroundColor: getStatusColor(item.status) },
-                    ]}
+                {group.tasks.map(item => (
+                  <TouchableOpacity
+                    key={item.id}
+                    style={styles.taskCard}
+                    onPress={() => {
+                      setSelectedTask(item);
+                      setShowDetails(true);
+                    }}
                   >
-                    <Text style={styles.statusText}>{item.status}</Text>
-                  </View>
-                  <MaterialIcons name="chevron-right" size={20} color="#999" />
-                </View>
-              </TouchableOpacity>
-            )}
-            style={styles.taskList}
-            contentContainerStyle={styles.taskListContent}
-          />
+                    <View style={styles.taskCardHeader}>
+                      <Text style={styles.taskTitle} numberOfLines={2}>
+                        {item.title}
+                      </Text>
+                      <View
+                        style={[
+                          styles.priorityBadge,
+                          { backgroundColor: getPriorityColor(item.priority) },
+                        ]}
+                      >
+                        <Text style={styles.priorityText}>{item.priority}</Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.taskMetaRow}>
+                      <View style={styles.taskMetaChip}>
+                        <MaterialIcons name="category" size={14} color="#166534" />
+                        <Text style={styles.taskMetaChipText}>{item.category}</Text>
+                      </View>
+                      {item.isFieldOfficer ? (
+                        <View style={styles.taskMetaChip}>
+                          <MaterialIcons name="supervisor-account" size={14} color="#166534" />
+                          <Text style={styles.taskMetaChipText}>Field Officer</Text>
+                        </View>
+                      ) : null}
+                    </View>
+
+                    <View style={styles.taskCardFooter}>
+                      <View
+                        style={[
+                          styles.statusBadge,
+                          { backgroundColor: getStatusColor(item.status) },
+                        ]}
+                      >
+                        <Text style={styles.statusText}>{item.status}</Text>
+                      </View>
+                      <Text style={styles.taskUpdatedText}>
+                        Updated {new Date(item.updatedAt).toLocaleDateString()}
+                      </Text>
+                      <MaterialIcons name="chevron-right" size={20} color="#999" />
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ))}
+          </ScrollView>
         </>
       )}
 
@@ -430,21 +846,120 @@ export default function VolunteerTasksScreen() {
                     <Text style={styles.descriptionText}>
                       You can assign volunteers to tasks inside {selectedEventProject.title}.
                     </Text>
+                    <TouchableOpacity
+                      style={styles.manageBoardButton}
+                      onPress={() => {
+                        setSelectedManagedEventId(selectedEventProject.id);
+                        setShowFieldOfficerBoard(true);
+                      }}
+                    >
+                      <MaterialIcons name="assignment-ind" size={18} color="#fff" />
+                      <Text style={styles.manageBoardButtonText}>Open Event Assignment Board</Text>
+                    </TouchableOpacity>
 
-                    {(selectedEventProject.internalTasks || []).map(eventTask => (
-                      <View key={eventTask.id} style={styles.assignmentCard}>
-                        <Text style={styles.assignmentTitle}>{eventTask.title}</Text>
-                        <Text style={styles.assignmentMeta}>
-                          {eventTask.assignedVolunteerName || 'Unassigned'}
+                    <Text style={styles.fieldOfficerHintText}>
+                      Joined volunteers: {joinedVolunteerOptions.length}. Open the board to assign or unassign event tasks.
+                    </Text>
+                  </View>
+                ) : null}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="slide"
+        transparent
+        visible={showFieldOfficerBoard}
+        onRequestClose={() => setShowFieldOfficerBoard(false)}
+      >
+        <View style={styles.centeredView}>
+          <View style={styles.modalView}>
+            <TouchableOpacity
+              style={styles.closeButton}
+              onPress={() => setShowFieldOfficerBoard(false)}
+            >
+              <MaterialIcons name="close" size={28} color="#333" />
+            </TouchableOpacity>
+
+            {selectedManagedEvent ? (
+              <ScrollView style={styles.modalContent}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>{selectedManagedEvent.title}</Text>
+                  <View style={styles.fieldOfficerBadge}>
+                    <MaterialIcons name="supervisor-account" size={16} color="#166534" />
+                    <Text style={styles.fieldOfficerBadgeText}>Field Officer Assignment Board</Text>
+                  </View>
+                </View>
+
+                <View style={styles.infoSection}>
+                  <Text style={styles.infoLabel}>Event Schedule</Text>
+                  <Text style={styles.infoValue}>
+                    {formatEventDateLabel(selectedManagedEvent.startDate, selectedManagedEvent.endDate)}
+                  </Text>
+                </View>
+
+                <View style={styles.infoSection}>
+                  <Text style={styles.infoLabel}>Location</Text>
+                  <Text style={styles.descriptionText}>{selectedManagedEvent.location.address}</Text>
+                </View>
+
+                <View style={styles.infoSection}>
+                  <Text style={styles.infoLabel}>Joined Volunteers</Text>
+                  <View style={styles.assignmentButtonGroup}>
+                    {managedEventVolunteerOptions.length ? (
+                      managedEventVolunteerOptions.map(volunteer => (
+                        <View key={`joined-${volunteer.id}`} style={styles.joinedVolunteerChip}>
+                          <MaterialIcons name="person" size={14} color="#166534" />
+                          <Text style={styles.joinedVolunteerChipText}>{volunteer.name}</Text>
+                        </View>
+                      ))
+                    ) : (
+                      <Text style={styles.descriptionText}>
+                        No volunteers have joined this event yet.
+                      </Text>
+                    )}
+                  </View>
+                </View>
+
+                <View style={styles.infoSection}>
+                  <Text style={styles.infoLabel}>Volunteer Task Assignments</Text>
+                  <Text style={styles.descriptionText}>
+                    You can assign joined volunteers to event tasks from your mobile side. Field officer role tasks stay locked for admin control.
+                  </Text>
+
+                  {(selectedManagedEvent.internalTasks || []).map(eventTask => (
+                    <View key={eventTask.id} style={styles.assignmentCard}>
+                      <View style={styles.assignmentHeader}>
+                        <View style={styles.assignmentCopy}>
+                          <Text style={styles.assignmentTitle}>{eventTask.title}</Text>
+                          <Text style={styles.assignmentMeta}>
+                            {eventTask.assignedVolunteerName || 'Unassigned'}
+                          </Text>
+                          <Text style={styles.assignmentMeta}>{eventTask.status}</Text>
+                        </View>
+                        {eventTask.isFieldOfficer ? (
+                          <View style={styles.assignmentLockBadge}>
+                            <MaterialIcons name="lock" size={14} color="#92400e" />
+                            <Text style={styles.assignmentLockText}>Admin controlled</Text>
+                          </View>
+                        ) : null}
+                      </View>
+
+                      {eventTask.isFieldOfficer ? (
+                        <Text style={styles.fieldOfficerHintText}>
+                          This task marks the volunteer who manages the event team.
                         </Text>
+                      ) : (
                         <View style={styles.assignmentButtonGroup}>
                           <TouchableOpacity
                             style={styles.assignmentButton}
-                            onPress={() => void handleAssignEventTask(eventTask.id)}
+                            onPress={() => void handleAssignEventTask(selectedManagedEvent, eventTask.id)}
                           >
                             <Text style={styles.assignmentButtonText}>Unassign</Text>
                           </TouchableOpacity>
-                          {joinedVolunteerOptions.map(volunteer => (
+                          {managedEventVolunteerOptions.map(volunteer => (
                             <TouchableOpacity
                               key={`${eventTask.id}-${volunteer.id}`}
                               style={[
@@ -452,7 +967,9 @@ export default function VolunteerTasksScreen() {
                                 eventTask.assignedVolunteerId === volunteer.id &&
                                   styles.assignmentButtonActive,
                               ]}
-                              onPress={() => void handleAssignEventTask(eventTask.id, volunteer.id)}
+                              onPress={() =>
+                                void handleAssignEventTask(selectedManagedEvent, eventTask.id, volunteer.id)
+                              }
                             >
                               <Text
                                 style={[
@@ -466,12 +983,12 @@ export default function VolunteerTasksScreen() {
                             </TouchableOpacity>
                           ))}
                         </View>
-                      </View>
-                    ))}
-                  </View>
-                ) : null}
+                      )}
+                    </View>
+                  ))}
+                </View>
               </ScrollView>
-            )}
+            ) : null}
           </View>
         </View>
       </Modal>
@@ -500,6 +1017,228 @@ const styles = StyleSheet.create({
   headerSubtitle: {
     fontSize: 14,
     color: '#666',
+  },
+  fieldOfficerSection: {
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    gap: 12,
+  },
+  fieldOfficerSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  fieldOfficerSectionTitleWrap: {
+    flex: 1,
+  },
+  fieldOfficerSectionTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  fieldOfficerSectionSubtitle: {
+    marginTop: 4,
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#64748b',
+  },
+  fieldOfficerSectionBadge: {
+    borderRadius: 999,
+    backgroundColor: '#dcfce7',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  fieldOfficerSectionBadgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#166534',
+  },
+  fieldOfficerFilterRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  fieldOfficerFilterButton: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#f8fafc',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  fieldOfficerFilterButtonActive: {
+    backgroundColor: '#166534',
+    borderColor: '#166534',
+  },
+  fieldOfficerFilterButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  fieldOfficerFilterButtonTextActive: {
+    color: '#ffffff',
+  },
+  fieldOfficerSectionSummary: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#64748b',
+  },
+  fieldOfficerEventCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#dbe7df',
+    padding: 16,
+    gap: 12,
+  },
+  fieldOfficerEventTopRow: {
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'flex-start',
+  },
+  fieldOfficerEventCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  fieldOfficerEventTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  fieldOfficerEventTitle: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  fieldOfficerEventStatusBadge: {
+    borderRadius: 999,
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  fieldOfficerEventStatusText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#166534',
+  },
+  fieldOfficerEventProgram: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#1d4ed8',
+  },
+  fieldOfficerEventMeta: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#64748b',
+  },
+  fieldOfficerMetricsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  fieldOfficerMetricCard: {
+    minWidth: 92,
+    flexGrow: 1,
+    flexShrink: 1,
+    borderRadius: 12,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingHorizontal: 10,
+    paddingVertical: 12,
+  },
+  fieldOfficerMetricValue: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#166534',
+  },
+  fieldOfficerMetricLabel: {
+    marginTop: 2,
+    fontSize: 11,
+    color: '#64748b',
+  },
+  fieldOfficerOpenRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+    paddingTop: 12,
+  },
+  fieldOfficerOpenText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#166534',
+  },
+  fieldOfficerEmptyState: {
+    borderRadius: 14,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dbe7df',
+    paddingHorizontal: 14,
+    paddingVertical: 16,
+    gap: 4,
+  },
+  fieldOfficerEmptyTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  fieldOfficerEmptyText: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#64748b',
+  },
+  fieldOfficerToggleButton: {
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    backgroundColor: '#ecfdf5',
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  fieldOfficerToggleButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#166534',
+  },
+  taskSummaryRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 4,
+  },
+  taskSummaryCard: {
+    minWidth: 120,
+    flexGrow: 1,
+    flexShrink: 1,
+    borderRadius: 14,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dbe7df',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  taskSummaryValue: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#166534',
+  },
+  taskSummaryLabel: {
+    marginTop: 4,
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
   centerContainer: {
     flex: 1,
@@ -571,17 +1310,55 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     gap: 12,
   },
+  taskGroupCard: {
+    borderRadius: 16,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dbe7df',
+    padding: 14,
+    gap: 12,
+  },
+  taskGroupHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  taskGroupCopy: {
+    flex: 1,
+  },
+  taskGroupTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  taskGroupMeta: {
+    marginTop: 3,
+    fontSize: 12,
+    color: '#64748b',
+  },
+  taskGroupBadge: {
+    borderRadius: 999,
+    backgroundColor: '#dcfce7',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  taskGroupBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#166534',
+  },
   taskCard: {
-    backgroundColor: '#fff',
+    backgroundColor: '#f8fafc',
     borderRadius: 12,
     padding: 16,
-    borderLeftWidth: 4,
-    borderLeftColor: '#4CAF50',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 2,
+    shadowOpacity: 0.04,
+    shadowRadius: 2,
+    elevation: 1,
   },
   taskCardHeader: {
     flexDirection: 'row',
@@ -612,6 +1389,28 @@ const styles = StyleSheet.create({
     color: '#4CAF50',
     marginBottom: 4,
   },
+  taskMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 12,
+  },
+  taskMetaChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  taskMetaChipText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#166534',
+  },
   taskCategory: {
     fontSize: 12,
     color: '#999',
@@ -621,6 +1420,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  taskUpdatedText: {
+    flex: 1,
+    textAlign: 'right',
+    fontSize: 11,
+    color: '#64748b',
   },
   statusBadge: {
     paddingHorizontal: 10,
@@ -709,6 +1516,28 @@ const styles = StyleSheet.create({
     color: '#333',
     lineHeight: 22,
   },
+  manageBoardButton: {
+    marginTop: 12,
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#166534',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  manageBoardButtonText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  fieldOfficerHintText: {
+    marginTop: 10,
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#64748b',
+  },
   statusButtonGroup: {
     flexDirection: 'row',
     gap: 10,
@@ -770,10 +1599,33 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#0f172a',
   },
+  assignmentHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  assignmentCopy: {
+    flex: 1,
+  },
   assignmentMeta: {
     marginTop: 4,
     fontSize: 12,
     color: '#64748b',
+  },
+  assignmentLockBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    backgroundColor: '#fef3c7',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  assignmentLockText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#92400e',
   },
   assignmentButtonGroup: {
     flexDirection: 'row',
@@ -800,5 +1652,21 @@ const styles = StyleSheet.create({
   },
   assignmentButtonTextActive: {
     color: '#fff',
+  },
+  joinedVolunteerChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  joinedVolunteerChipText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#166534',
   },
 });

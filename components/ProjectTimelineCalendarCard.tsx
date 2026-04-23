@@ -23,6 +23,7 @@ type ProjectTimelineCalendarCardProps = {
   planningItems: AdminPlanningItem[];
   accentColor?: string;
   emptyText?: string;
+  focusDate?: string;
   projectFilterIds?: string[];
   onOpenProject?: (projectId: string) => void;
 };
@@ -109,12 +110,19 @@ export default function ProjectTimelineCalendarCard({
   planningItems,
   accentColor = '#166534',
   emptyText = 'No scheduled items yet.',
+  focusDate,
   projectFilterIds,
   onOpenProject,
 }: ProjectTimelineCalendarCardProps) {
-  const calendarDate = useMemo(() => new Date(), []);
+  const calendarDate = useMemo(() => {
+    if (isValidDateValue(focusDate)) {
+      return new Date(focusDate!);
+    }
+
+    return new Date();
+  }, [focusDate]);
   const monthGrid = useMemo(() => getMonthGrid(calendarDate), [calendarDate]);
-  const currentDay = calendarDate.getDate();
+  const highlightedDay = calendarDate.getDate();
   const monthLabel = useMemo(
     () => calendarDate.toLocaleDateString(undefined, { month: 'long', year: 'numeric' }),
     [calendarDate]
@@ -262,7 +270,7 @@ export default function ProjectTimelineCalendarCard({
           <View style={styles.grid}>
             {monthGrid.map((day, index) => {
               const hasEvents = typeof day === 'number' && dayCounts.has(day);
-              const isToday = day === currentDay;
+              const isHighlightedDay = day === highlightedDay;
 
               return (
                 <View
@@ -270,7 +278,7 @@ export default function ProjectTimelineCalendarCard({
                   style={[
                     styles.dayCell,
                     day === null && styles.dayCellEmpty,
-                    isToday && styles.dayCellToday,
+                    isHighlightedDay && styles.dayCellToday,
                     hasEvents && styles.dayCellWithEvents,
                   ]}
                 >

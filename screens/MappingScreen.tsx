@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Alert,
   Modal,
   ActivityIndicator,
   Platform,
@@ -13,8 +12,8 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
+import * as Location from 'expo-location';
 import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
-import PhotoMapMarker from '../components/PhotoMapMarker';
 import InlineLoadError from '../components/InlineLoadError';
 import { useAuth } from '../contexts/AuthContext';
 import { PartnerReport, Project } from '../models/types';
@@ -23,12 +22,11 @@ import {
   getProjectsScreenSnapshot,
   subscribeToStorageChanges,
 } from '../models/storage';
-import { isImageMediaUri } from '../utils/media';
+import { getPrimaryReportMediaUri } from '../utils/media';
 import { navigateToAvailableRoute } from '../utils/navigation';
 import {
   getInitialProjectRegion,
   getMappedProjects,
-  getProjectMarkerColor,
   getPrimaryProjectImageSource,
 } from '../utils/projectMap';
 import { getProjectStatusColor } from '../utils/projectStatus';
@@ -42,11 +40,18 @@ export default function MappingScreen({ navigation }: any) {
   const [partnerReports, setPartnerReports] = useState<PartnerReport[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [showDetails, setShowDetails] = useState(false);
+  const [userRegion, setUserRegion] = useState<Region | null>(null);
   const [loading, setLoading] = useState(true);
+  const mapRef = React.useRef<MapView | null>(null);
   const mobileGoogleMapsApiKey =
     (Constants.expoConfig?.extra?.mobileGoogleMapsApiKey as string | undefined) ||
     (Constants.expoConfig?.extra?.androidGoogleMapsApiKey as string | undefined);
   const mappedProjects = React.useMemo(() => getMappedProjects(projects), [projects]);
+  const isVolunteerView = user?.role === 'volunteer';
+  const initialRegion = React.useMemo(
+    () => getInitialProjectRegion(mappedProjects) as Region,
+    [mappedProjects]
+  );
 
   useEffect(() => {
     void loadProjects();
@@ -60,6 +65,45 @@ export default function MappingScreen({ navigation }: any) {
       }
     );
   }, [user]);
+
+  useEffect(() => {
+    if (!isVolunteerView) {
+      return;
+    }
+
+    let active = true;
+
+    const loadCurrentLocation = async () => {
+      try {
+        const permission = await Location.requestForegroundPermissionsAsync();
+        if (!active || permission.status !== 'granted') {
+          return;
+        }
+
+        const location = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+        if (!active) {
+          return;
+        }
+
+        setUserRegion({
+          latitude: location.coords.latitude,
+          longitude: location.coords.longitude,
+          latitudeDelta: 0.08,
+          longitudeDelta: 0.08,
+        });
+      } catch (error) {
+        console.error('Error loading current location for volunteer map:', error);
+      }
+    };
+
+    void loadCurrentLocation();
+
+    return () => {
+      active = false;
+    };
+  }, [isVolunteerView]);
 
   // Loads map data and narrows project visibility based on the active role.
   const loadProjects = async () => {
@@ -87,10 +131,7 @@ export default function MappingScreen({ navigation }: any) {
           ? snapshot.projects.filter(
               project =>
                 project.isEvent &&
-                (
-                  (project.joinedUserIds || []).includes(user.id) ||
                 joinedVolunteerProjectIds.has(project.id)
-                )
             )
           : snapshot.projects;
 
@@ -120,6 +161,19 @@ export default function MappingScreen({ navigation }: any) {
     }
 
     setSelectedProject(project);
+    if (isVolunteerView) {
+      mapRef.current?.animateToRegion(
+        {
+          latitude: project.location.latitude,
+          longitude: project.location.longitude,
+          latitudeDelta: 0.06,
+          longitudeDelta: 0.06,
+        },
+        250
+      );
+      return;
+    }
+
     setShowDetails(true);
   };
 
@@ -141,6 +195,11 @@ export default function MappingScreen({ navigation }: any) {
     navigateToAvailableRoute(navigation, 'Projects', { projectId: selectedProject.id });
   };
 
+  const handleRecenterMap = () => {
+    const targetRegion = userRegion || initialRegion;
+    mapRef.current?.animateToRegion(targetRegion, 250);
+  };
+
   if (loading) {
     return (
       <View style={styles.centerContainer}>
@@ -152,35 +211,40 @@ export default function MappingScreen({ navigation }: any) {
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Live Command Center</Text>
-        <Text style={styles.headerSubtitle}>
-          {user?.role === 'admin'
-            ? 'Projects and field uploads in Negros Occidental'
-            : user?.role === 'partner'
-            ? 'Pins are limited to projects with approved partner proposals'
-            : 'Pins are limited to events you joined in Negros Occidental'}
-        </Text>
-      </View>
-
-      {loadError ? (
-        <View style={styles.inlineErrorWrap}>
-          <InlineLoadError
-            title={loadError.title}
-            message={loadError.message}
-            onRetry={() => void loadProjects()}
-          />
+      {!isVolunteerView ? (
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>Live Command Center</Text>
+          <Text style={styles.headerSubtitle}>
+            {user?.role === 'admin'
+              ? 'Projects and field uploads in Negros Occidental'
+              : 'Pins are limited to projects with approved partner proposals'}
+          </Text>
         </View>
       ) : null}
 
       <View style={styles.mapContainer}>
+        {loadError ? (
+          <View style={isVolunteerView ? styles.volunteerInlineErrorWrap : styles.inlineErrorWrap}>
+            <InlineLoadError
+              title={loadError.title}
+              message={loadError.message}
+              onRetry={() => void loadProjects()}
+            />
+          </View>
+        ) : null}
+
         <MapView
+          ref={map => {
+            mapRef.current = map;
+          }}
           style={styles.mapView}
-          initialRegion={getInitialProjectRegion(mappedProjects) as Region}
+          initialRegion={initialRegion}
           provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
           showsCompass
           showsScale
           toolbarEnabled
+          showsUserLocation={isVolunteerView}
+          showsMyLocationButton={isVolunteerView}
         >
           {mappedProjects.map((project, index) => (
             <Marker
@@ -189,32 +253,94 @@ export default function MappingScreen({ navigation }: any) {
                 latitude: project.location.latitude,
                 longitude: project.location.longitude,
               }}
-              anchor={{ x: 0.5, y: 1 }}
               title={`${index + 1}. ${project.title}`}
               description={`${project.isEvent ? 'Event' : 'Program'} | ${project.status}`}
               onPress={() => handleProjectSelection(project.id)}
-            >
-              <PhotoMapMarker accentColor={getProjectMarkerColor(project)} />
-            </Marker>
+            />
           ))}
         </MapView>
+
+        {isVolunteerView ? (
+          <>
+            <View style={styles.volunteerTopOverlay}>
+              <View style={styles.volunteerHeroCard}>
+                <View style={styles.volunteerHeroText}>
+                  <Text style={styles.volunteerHeroTitle}>My Joined Events</Text>
+                  <Text style={styles.volunteerHeroSubtitle}>
+                    Tap a pin to view the event and open details.
+                  </Text>
+                </View>
+                <View style={styles.volunteerCountBadge}>
+                  <Text style={styles.volunteerCountValue}>{mappedProjects.length}</Text>
+                  <Text style={styles.volunteerCountLabel}>pins</Text>
+                </View>
+              </View>
+            </View>
+
+            <TouchableOpacity style={styles.recenterButton} onPress={handleRecenterMap}>
+              <MaterialIcons name="my-location" size={20} color="#166534" />
+            </TouchableOpacity>
+
+            <View style={styles.volunteerFooterOverlay}>
+              {selectedProject ? (
+                <View style={styles.volunteerEventCard}>
+                  <View style={styles.volunteerEventHeader}>
+                    <View style={styles.volunteerEventTitleBlock}>
+                      <Text style={styles.volunteerEventEyebrow}>Selected event</Text>
+                      <Text style={styles.volunteerEventTitle} numberOfLines={1}>
+                        {selectedProject.title}
+                      </Text>
+                    </View>
+                    <TouchableOpacity onPress={() => setSelectedProject(null)}>
+                      <MaterialIcons name="close" size={20} color="#64748b" />
+                    </TouchableOpacity>
+                  </View>
+                  <Text style={styles.volunteerEventMeta} numberOfLines={2}>
+                    {selectedProject.location.address || selectedProject.description}
+                  </Text>
+                  <View style={styles.volunteerMetaRow}>
+                    <Text style={styles.volunteerMetaChip}>{selectedProject.status}</Text>
+                    <Text style={styles.volunteerMetaChip}>
+                      {new Date(selectedProject.startDate).toLocaleDateString()}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.volunteerPrimaryButton}
+                    onPress={() => setShowDetails(true)}
+                  >
+                    <Text style={styles.volunteerPrimaryButtonText}>Open Event Info</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <View style={styles.volunteerHintCard}>
+                  <MaterialIcons name="place" size={18} color="#166534" />
+                  <Text style={styles.volunteerHintText}>
+                    Pick an event pin to preview it here.
+                  </Text>
+                </View>
+              )}
+            </View>
+          </>
+        ) : null}
       </View>
 
-      <View style={styles.projectListContainer}>
-        <Text style={styles.projectListTitle}>
-          {`${user?.role === 'volunteer' ? 'Events' : 'Projects'} ${mappedProjects.length} mapped | Uploaded Impact ${partnerReports.reduce((sum, report) => sum + report.impactCount, 0)}`}
-        </Text>
-        {projects.length > mappedProjects.length ? (
-          <Text style={styles.projectListWarning}>
-            {`${projects.length - mappedProjects.length} ${projects.length - mappedProjects.length === 1 ? 'item is' : 'items are'} missing coordinates and hidden from the map.`}
+      {!isVolunteerView ? (
+        <View style={styles.projectListContainer}>
+          <Text style={styles.projectListTitle}>
+            {`Projects ${mappedProjects.length} mapped | Uploaded Impact ${partnerReports.reduce((sum, report) => sum + report.impactCount, 0)}`}
           </Text>
-        ) : null}
-        {(Platform.OS === 'android' || Platform.OS === 'ios') && !mobileGoogleMapsApiKey ? (
-          <Text style={styles.projectListWarning}>
-            Google Maps mobile key is missing. Add `GOOGLE_MAPS_MOBILE_API_KEY` to `.env`.
-          </Text>
-        ) : null}
-      </View>
+          {projects.length > mappedProjects.length ? (
+            <Text style={styles.projectListWarning}>
+              {`${projects.length - mappedProjects.length} ${projects.length - mappedProjects.length === 1 ? 'item is' : 'items are'} missing coordinates and hidden from the map.`}
+            </Text>
+          ) : null}
+          {(Platform.OS === 'android' || Platform.OS === 'ios') && !mobileGoogleMapsApiKey ? (
+            <Text style={styles.projectListWarning}>
+              Google Maps mobile key is missing. Add `GOOGLE_MAPS_MOBILE_API_KEY` to `.env`.
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
 
       <Modal
         animationType="slide"
@@ -314,14 +440,20 @@ export default function MappingScreen({ navigation }: any) {
 
                 {(() => {
                   const matchedPhotoReport = partnerReports.find(
-                    report => report.projectId === selectedProject.id && report.mediaFile && isImageMediaUri(report.mediaFile)
+                    report =>
+                      report.projectId === selectedProject.id &&
+                      Boolean(getPrimaryReportMediaUri(report.mediaFile, report.attachments))
                   );
-                  if (!matchedPhotoReport?.mediaFile) {
+                  const reportMediaUri = getPrimaryReportMediaUri(
+                    matchedPhotoReport?.mediaFile,
+                    matchedPhotoReport?.attachments
+                  );
+                  if (!reportMediaUri) {
                     return null;
                   }
                   return (
                     <Image
-                      source={{ uri: matchedPhotoReport.mediaFile }}
+                      source={{ uri: reportMediaUri }}
                       style={styles.reportPhoto}
                       resizeMode="cover"
                     />
@@ -382,9 +514,17 @@ const styles = StyleSheet.create({
   mapContainer: {
     flex: 1,
     backgroundColor: '#fff',
+    position: 'relative',
   },
   mapView: {
     flex: 1,
+  },
+  volunteerInlineErrorWrap: {
+    position: 'absolute',
+    top: 18,
+    left: 16,
+    right: 16,
+    zIndex: 3,
   },
   projectListContainer: {
     backgroundColor: '#fff',
@@ -402,6 +542,171 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontSize: 12,
     color: '#b45309',
+  },
+  volunteerTopOverlay: {
+    position: 'absolute',
+    top: 16,
+    left: 16,
+    right: 72,
+    zIndex: 2,
+  },
+  volunteerHeroCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.96)',
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.12,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 8,
+  },
+  volunteerHeroText: {
+    flex: 1,
+  },
+  volunteerHeroTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  volunteerHeroSubtitle: {
+    marginTop: 2,
+    fontSize: 12,
+    lineHeight: 17,
+    color: '#64748b',
+  },
+  volunteerCountBadge: {
+    minWidth: 56,
+    alignItems: 'center',
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    backgroundColor: '#ecfdf3',
+  },
+  volunteerCountValue: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#166534',
+  },
+  volunteerCountLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#166534',
+    textTransform: 'uppercase',
+  },
+  recenterButton: {
+    position: 'absolute',
+    top: 24,
+    right: 16,
+    zIndex: 2,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.96)',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.12,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 8,
+  },
+  volunteerFooterOverlay: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: 18,
+    zIndex: 2,
+  },
+  volunteerEventCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.97)',
+    borderRadius: 20,
+    padding: 16,
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.16,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 10,
+  },
+  volunteerEventHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  volunteerEventTitleBlock: {
+    flex: 1,
+  },
+  volunteerEventEyebrow: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#16a34a',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  volunteerEventTitle: {
+    marginTop: 4,
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  volunteerEventMeta: {
+    marginTop: 10,
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#475569',
+  },
+  volunteerMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 12,
+  },
+  volunteerMetaChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: '#f1f5f9',
+    color: '#334155',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  volunteerPrimaryButton: {
+    marginTop: 14,
+    minHeight: 46,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#166534',
+  },
+  volunteerPrimaryButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  volunteerHintCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.96)',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 10,
+  },
+  volunteerHintText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    color: '#475569',
+    fontWeight: '600',
   },
   centeredView: {
     flex: 1,

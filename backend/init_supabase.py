@@ -1,11 +1,13 @@
 try:
     from .app_storage_seed import ensure_app_storage_table, ensure_postgres_hot_storage_tables
     from .db import get_connection
+    from .operation_guard import SCHEMA_SETUP_UNLOCK_ENV_VAR, require_shared_db_unlock
     from .relational_mirror import ensure_relational_mirror_tables
     from .schema_maintenance import maintain_schema_health
 except ImportError:
     from app_storage_seed import ensure_app_storage_table, ensure_postgres_hot_storage_tables
     from db import get_connection
+    from operation_guard import SCHEMA_SETUP_UNLOCK_ENV_VAR, require_shared_db_unlock
     from relational_mirror import ensure_relational_mirror_tables
     from schema_maintenance import maintain_schema_health
 
@@ -46,6 +48,8 @@ BASE_DDL = [
 
 # Creates or updates the backend schema used by the volunteer system.
 def main() -> None:
+    require_shared_db_unlock("schema setup and maintenance", SCHEMA_SETUP_UNLOCK_ENV_VAR)
+
     ensure_app_storage_table()
 
     with get_connection() as connection:

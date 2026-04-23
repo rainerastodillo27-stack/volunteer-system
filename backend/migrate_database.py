@@ -4,16 +4,24 @@ Database Migration Script
 Migrates all data from old Supabase database to new database
 """
 
+import os
 import psycopg2
 import psycopg2.extras
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 import sys
 import time
 from datetime import datetime
+from dotenv import load_dotenv
 
-# Database URLs
-OLD_DB_URL = "postgresql://postgres.zargqwmmibyxwwidzucv:CAPSTONE_ISCAP1@aws-1-ap-northeast-2.pooler.supabase.com:6543/postgres?sslmode=require"
-NEW_DB_URL = "postgresql://postgres.oyvbknflgopiekwzwjgy:CAPSTONE_ISCAP1@aws-1-ap-south-1.pooler.supabase.com:6543/postgres?sslmode=require"
+try:
+    from .operation_guard import DB_MIGRATION_UNLOCK_ENV_VAR, require_shared_db_unlock
+except ImportError:
+    from operation_guard import DB_MIGRATION_UNLOCK_ENV_VAR, require_shared_db_unlock
+
+load_dotenv()
+
+OLD_DB_URL = os.getenv("VOLCRE_OLD_DB_URL", "").strip()
+NEW_DB_URL = os.getenv("VOLCRE_NEW_DB_URL", "").strip()
 
 
 class DatabaseMigrator:
@@ -358,6 +366,13 @@ class DatabaseMigrator:
 
 
 def main():
+    require_shared_db_unlock("database-to-database migration", DB_MIGRATION_UNLOCK_ENV_VAR)
+
+    if not OLD_DB_URL or not NEW_DB_URL:
+        print("Missing migration database URLs.")
+        print("Set VOLCRE_OLD_DB_URL and VOLCRE_NEW_DB_URL before running this script.")
+        sys.exit(1)
+
     migrator = DatabaseMigrator(OLD_DB_URL, NEW_DB_URL)
     success = migrator.run_migration()
     sys.exit(0 if success else 1)

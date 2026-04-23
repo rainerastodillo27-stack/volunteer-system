@@ -449,6 +449,7 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
         projects={projects}
         planningCalendars={planningCalendars}
         planningItems={planningItems}
+        focusDate={featuredEvent?.startDate}
         projectFilterIds={joinedEventIds.length ? joinedEventIds : undefined}
         accentColor="#166534"
         emptyText="No volunteer timeline items yet."

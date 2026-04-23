@@ -1,15 +1,18 @@
-import React, { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, FlatList, StyleSheet, Text, TouchableOpacity, Alert, Pressable, Image, Platform, ImageSourcePropType, Modal, TextInput, ScrollView } from 'react-native';
+import React, { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { View, FlatList, StyleSheet, Text, TouchableOpacity, Alert, Pressable, Image, Platform, ImageSourcePropType, Modal, TextInput, ScrollView, useWindowDimensions } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
 import { useFocusEffect } from '@react-navigation/native';
 import InlineLoadError from '../components/InlineLoadError';
+import ProjectYearCalendarCard from '../components/ProjectYearCalendarCard';
 import { useAuth } from '../contexts/AuthContext';
 import {
   buildProgramProposalProjectId,
+  getAllVolunteers,
   getProjectsScreenSnapshot,
   getVolunteerProjectMatches,
   requestVolunteerProjectJoin,
+  saveEvent,
   submitVolunteerTimeOutReport,
   submitPartnerProgramProposal,
   startVolunteerTimeLog,
@@ -57,6 +60,8 @@ const FALLBACK_ICON_BY_CATEGORY: Record<Project['category'], keyof typeof Materi
 
 type ProjectCategoryGroup = {
   category: Project['category'];
+  eventCount: number;
+  programCount: number;
   projects: Project[];
 };
 
@@ -64,6 +69,8 @@ type Recommendation = {
   label: 'Good Skill Fit' | 'Suggested for You' | 'Open Program';
   reasons: string[];
 };
+
+type ContentFilter = 'All' | 'Programs' | 'Events';
 
 type PartnerProposalDraft = {
   proposedTitle: string;
@@ -75,6 +82,23 @@ type PartnerProposalDraft = {
   communityNeed: string;
   expectedDeliverables: string;
 };
+
+function formatProjectDateRange(startValue?: string, endValue?: string): string {
+  const startDate = startValue ? new Date(startValue) : null;
+  const endDate = endValue ? new Date(endValue) : null;
+
+  if (!startDate || Number.isNaN(startDate.getTime())) {
+    return 'Schedule to be announced';
+  }
+
+  const startLabel = format(startDate, 'MMM d, yyyy');
+  if (!endDate || Number.isNaN(endDate.getTime())) {
+    return startLabel;
+  }
+
+  const endLabel = format(endDate, 'MMM d, yyyy');
+  return startLabel === endLabel ? startLabel : `${startLabel} - ${endLabel}`;
+}
 
 function createPartnerProposalDraft(project: Project): PartnerProposalDraft {
   return {
@@ -122,6 +146,31 @@ function getCompletionProofSummary(log?: VolunteerTimeLog | null): string {
   }
 
   return proofItems.length > 0 ? proofItems.join(' and ') : 'No proof submitted';
+}
+
+function formatSuggestionReasons(reasons: string[]): string {
+  return reasons
+    .map((reason) => (reason ? `${reason.charAt(0).toUpperCase()}${reason.slice(1)}` : reason))
+    .join(', ');
+}
+
+function getEventAvailabilitySummary(project: Project): string {
+  if (project.status === 'Completed' || project.status === 'Cancelled') {
+    return project.status;
+  }
+
+  if (project.status === 'On Hold') {
+    return 'Currently on hold';
+  }
+
+  const volunteersNeeded = Math.max(project.volunteersNeeded || 0, 0);
+  const remainingSlots = Math.max(volunteersNeeded - project.volunteers.length, 0);
+
+  if (remainingSlots === 0) {
+    return 'Volunteer slots full';
+  }
+
+  return `${remainingSlots} spot${remainingSlots === 1 ? '' : 's'} left`;
 }
 
 // Normalizes text into searchable word tokens for project recommendations.
@@ -332,11 +381,15 @@ function ProjectCardImage({
 // Category header component for collapsible categories
 function CategoryHeader({
   category,
+  eventCount,
+  programCount,
   projectCount,
   isExpanded,
   onToggle,
 }: {
   category: Project['category'];
+  eventCount: number;
+  programCount: number;
   projectCount: number;
   isExpanded: boolean;
   onToggle: () => void;
@@ -370,7 +423,9 @@ function CategoryHeader({
         />
         <View style={styles.categoryHeaderText}>
           <Text style={styles.categoryTitle}>{category}</Text>
-          <Text style={styles.categoryCount}>{projectCount} program{projectCount !== 1 ? 's' : ''}</Text>
+          <Text style={styles.categoryCount}>
+            {projectCount} item{projectCount !== 1 ? 's' : ''} | {programCount} program{programCount !== 1 ? 's' : ''} | {eventCount} event{eventCount !== 1 ? 's' : ''}
+          </Text>
         </View>
       </View>
       <MaterialIcons
@@ -385,6 +440,8 @@ function CategoryHeader({
 // Lists projects and actions for volunteers, partners, and admins.
 export default function ProjectsScreen({ navigation, route }: any) {
   const { user } = useAuth();
+  const { width } = useWindowDimensions();
+  const isDesktop = Platform.OS === 'web' || width >= 1100;
   const projectListRef = useRef<FlatList<ProjectCategoryGroup> | null>(null);
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -393,8 +450,13 @@ export default function ProjectsScreen({ navigation, route }: any) {
   const [timeLogs, setTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
+  const [allVolunteers, setAllVolunteers] = useState<Volunteer[]>([]);
   const [loadingProjectId, setLoadingProjectId] = useState<string | null>(null);
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
+  const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<Project['category'] | null>(null);
+  const [selectedProgramId, setSelectedProgramId] = useState<string | null>(null);
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [timeOutProjectId, setTimeOutProjectId] = useState<string | null>(null);
   const [timeOutReportDraft, setTimeOutReportDraft] = useState('');
   const [timeOutPhotoDraft, setTimeOutPhotoDraft] = useState('');
@@ -409,6 +471,9 @@ export default function ProjectsScreen({ navigation, route }: any) {
   );
 
   const [statusFilter, setStatusFilter] = useState<'All' | Project['status']>('All');
+  const [contentFilter, setContentFilter] = useState<ContentFilter>('All');
+  const [searchQuery, setSearchQuery] = useState('');
+  const deferredSearchQuery = useDeferredValue(searchQuery.trim().toLowerCase());
   // Applies the latest project snapshot to local screen state.
   const applySnapshot = useCallback((snapshot: {
     projects: Project[];
@@ -429,8 +494,12 @@ export default function ProjectsScreen({ navigation, route }: any) {
   // Loads projects plus role-specific volunteer or partner data for this screen.
   const loadProjectsData = useCallback(async () => {
     try {
-      const snapshot = await getProjectsScreenSnapshot(user);
+      const [snapshot, volunteers] = await Promise.all([
+        getProjectsScreenSnapshot(user),
+        user?.role === 'volunteer' ? getAllVolunteers() : Promise.resolve([] as Volunteer[]),
+      ]);
       applySnapshot(snapshot);
+      setAllVolunteers(volunteers);
       setLoadError(null);
       if (snapshot.volunteerProfile?.id) {
         const matches = await getVolunteerProjectMatches(snapshot.volunteerProfile.id);
@@ -450,6 +519,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
         setPartnerApplications([]);
         setVolunteerJoinRecords([]);
         setVolunteerMatches([]);
+        setAllVolunteers([]);
       });
       setLoadError(nextLoadError);
     }
@@ -655,30 +725,225 @@ export default function ProjectsScreen({ navigation, route }: any) {
   );
 
   const visibleProjects = useMemo(() => {
-    return statusFilter === 'All' ? projects : projects.filter(project => project.status === statusFilter);
-  }, [projects, statusFilter]);
+    return projects
+      .filter(project => (statusFilter === 'All' ? true : project.status === statusFilter))
+      .filter(project =>
+        contentFilter === 'All'
+          ? true
+          : contentFilter === 'Programs'
+          ? !project.isEvent
+          : Boolean(project.isEvent)
+      )
+      .filter(project => {
+        if (!deferredSearchQuery) {
+          return true;
+        }
+
+        const searchableText = [
+          project.title,
+          project.description,
+          project.location.address,
+          project.category,
+          project.programModule || '',
+          project.isEvent ? 'event' : 'program',
+          project.status,
+        ]
+          .join(' ')
+          .toLowerCase();
+
+        return searchableText.includes(deferredSearchQuery);
+      })
+      .sort((left, right) => {
+        if (Boolean(left.isEvent) !== Boolean(right.isEvent)) {
+          return Number(Boolean(left.isEvent)) - Number(Boolean(right.isEvent));
+        }
+
+        return new Date(left.startDate).getTime() - new Date(right.startDate).getTime();
+      });
+  }, [contentFilter, deferredSearchQuery, projects, statusFilter]);
+
+  const linkedEventsByProgramId = useMemo(() => {
+    const map = new Map<string, Project[]>();
+
+    visibleProjects
+      .filter(project => project.isEvent && project.parentProjectId)
+      .sort((left, right) => new Date(left.startDate).getTime() - new Date(right.startDate).getTime())
+      .forEach(event => {
+        const parentId = event.parentProjectId!;
+        const current = map.get(parentId) || [];
+        current.push(event);
+        map.set(parentId, current);
+      });
+
+    return map;
+  }, [visibleProjects]);
 
   // Groups projects by category
   const projectsByCategory = useMemo<ProjectCategoryGroup[]>(() => {
     const categories: Project['category'][] = ['Education', 'Livelihood', 'Nutrition', 'Disaster'];
-    const grouped: Record<Project['category'], Project[]> = {
+    const groupedPrograms: Record<Project['category'], Project[]> = {
       Education: [],
       Livelihood: [],
       Nutrition: [],
       Disaster: [],
     };
 
-    visibleProjects.forEach(project => {
-      if (grouped[project.category]) {
-        grouped[project.category].push(project);
-      }
-    });
+    projects
+      .filter(project => !project.isEvent)
+      .forEach(project => {
+        if (!groupedPrograms[project.category]) {
+          return;
+        }
 
-    return categories.map(category => ({
-      category,
-      projects: grouped[category],
-    })).filter(group => group.projects.length > 0);
-  }, [visibleProjects]);
+        const programMatches = visibleProjects.some(visibleProject => visibleProject.id === project.id);
+        const hasVisibleEvents = (linkedEventsByProgramId.get(project.id) || []).length > 0;
+        const shouldInclude =
+          contentFilter === 'Programs'
+            ? programMatches
+            : contentFilter === 'Events'
+            ? hasVisibleEvents
+            : programMatches || hasVisibleEvents;
+
+        if (shouldInclude) {
+          groupedPrograms[project.category].push(project);
+        }
+      });
+    
+    Object.values(groupedPrograms).forEach(group =>
+      group.sort((left, right) => new Date(left.startDate).getTime() - new Date(right.startDate).getTime())
+    );
+
+    return categories.map(category => {
+      const categoryPrograms = groupedPrograms[category];
+      const visibleEventCount = categoryPrograms.reduce(
+        (count, project) => count + (linkedEventsByProgramId.get(project.id) || []).length,
+        0
+      );
+
+      return {
+        category,
+        eventCount: visibleEventCount,
+        programCount: categoryPrograms.length,
+        projects: categoryPrograms,
+      };
+    }).filter(group => group.projects.length > 0);
+  }, [contentFilter, linkedEventsByProgramId, projects, visibleProjects]);
+
+  const categoryCount = projectsByCategory.length;
+  const totalProgramCount = useMemo(
+    () => projectsByCategory.reduce((count, group) => count + group.programCount, 0),
+    [projectsByCategory]
+  );
+  const totalEventCount = useMemo(
+    () => projectsByCategory.reduce((count, group) => count + group.eventCount, 0),
+    [projectsByCategory]
+  );
+  const openVolunteerEventCount = useMemo(
+    () =>
+      Array.from(linkedEventsByProgramId.values())
+        .flat()
+        .filter(
+          project =>
+            project.status !== 'Completed' &&
+            project.status !== 'Cancelled'
+        ).length,
+    [linkedEventsByProgramId]
+  );
+
+  const totalVisibleGroupItems = totalProgramCount + totalEventCount;
+
+  const selectedCategoryGroup = useMemo(
+    () => (selectedCategory ? projectsByCategory.find(group => group.category === selectedCategory) || null : null),
+    [projectsByCategory, selectedCategory]
+  );
+
+  const selectedProgram = useMemo(
+    () => projects.find(project => project.id === selectedProgramId && !project.isEvent) || null,
+    [projects, selectedProgramId]
+  );
+
+  const selectedProgramEvents = useMemo(
+    () => (selectedProgram ? linkedEventsByProgramId.get(selectedProgram.id) || [] : []),
+    [linkedEventsByProgramId, selectedProgram]
+  );
+
+  const selectedEvent = useMemo(
+    () => projects.find(project => project.id === selectedEventId && project.isEvent) || null,
+    [projects, selectedEventId]
+  );
+
+  const isFieldOfficerForEvent = useCallback((event: Project) => {
+    if (!volunteerProfile?.id || !event.isEvent) {
+      return false;
+    }
+
+    return (event.internalTasks || []).some(
+      task => task.isFieldOfficer && task.assignedVolunteerId === volunteerProfile.id
+    );
+  }, [volunteerProfile?.id]);
+
+  const getAssignableVolunteersForEvent = useCallback((event: Project) => {
+    return event.volunteers
+      .map(volunteerId => allVolunteers.find(volunteer => volunteer.id === volunteerId) || null)
+      .filter((volunteer): volunteer is Volunteer => volunteer !== null)
+      .sort((left, right) => left.name.localeCompare(right.name));
+  }, [allVolunteers]);
+
+  const handleAssignEventTask = useCallback(async (
+    eventProject: Project,
+    taskId: string,
+    volunteerId?: string
+  ) => {
+    if (!isFieldOfficerForEvent(eventProject)) {
+      Alert.alert('Access Restricted', 'Only the assigned field officer can manage volunteers in this event.');
+      return;
+    }
+
+    try {
+      const assignableVolunteers = getAssignableVolunteersForEvent(eventProject);
+      const assignedVolunteer =
+        volunteerId ? assignableVolunteers.find(volunteer => volunteer.id === volunteerId) || null : null;
+
+      const updatedTasks = (eventProject.internalTasks || []).map(task => {
+        if (task.id !== taskId) {
+          return task;
+        }
+
+        if (task.isFieldOfficer) {
+          return task;
+        }
+
+        const nextStatus =
+          volunteerId && task.status === 'Unassigned'
+            ? 'Assigned'
+            : !volunteerId
+            ? 'Unassigned'
+            : task.status;
+
+        return {
+          ...task,
+          assignedVolunteerId: volunteerId || undefined,
+          assignedVolunteerName: assignedVolunteer?.name || undefined,
+          status: nextStatus,
+          updatedAt: new Date().toISOString(),
+        };
+      });
+
+      await saveEvent({
+        ...eventProject,
+        internalTasks: updatedTasks,
+        updatedAt: new Date().toISOString(),
+      });
+
+      void loadProjectsData();
+      Alert.alert('Saved', 'Volunteer assignment updated for this event.');
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to update the event assignment.')
+      );
+    }
+  }, [getAssignableVolunteersForEvent, isFieldOfficerForEvent, loadProjectsData]);
 
   useEffect(() => {
     const requestedProjectId = route?.params?.projectId;
@@ -710,6 +975,27 @@ export default function ProjectsScreen({ navigation, route }: any) {
     navigation.setParams({ projectId: undefined });
   }, [navigation, projectsByCategory, route?.params?.projectId]);
 
+  useEffect(() => {
+    if (selectedCategory && !projectsByCategory.some(group => group.category === selectedCategory)) {
+      setSelectedCategory(null);
+      setSelectedProgramId(null);
+      setSelectedEventId(null);
+    }
+  }, [projectsByCategory, selectedCategory]);
+
+  useEffect(() => {
+    if (selectedProgramId && !projects.some(project => project.id === selectedProgramId && !project.isEvent)) {
+      setSelectedProgramId(null);
+      setSelectedEventId(null);
+    }
+  }, [projects, selectedProgramId]);
+
+  useEffect(() => {
+    if (selectedEventId && !projects.some(project => project.id === selectedEventId && project.isEvent)) {
+      setSelectedEventId(null);
+    }
+  }, [projects, selectedEventId]);
+
   // Toggle category expansion
   const toggleCategory = useCallback((category: Project['category']) => {
     setExpandedCategories(prev => {
@@ -721,6 +1007,14 @@ export default function ProjectsScreen({ navigation, route }: any) {
       }
       return next;
     });
+  }, []);
+
+  const expandAllCategories = useCallback(() => {
+    setExpandedCategories(new Set(projectsByCategory.map(group => group.category)));
+  }, [projectsByCategory]);
+
+  const collapseAllCategories = useCallback(() => {
+    setExpandedCategories(new Set());
   }, []);
 
   // Checks whether the current volunteer is already part of a project.
@@ -736,6 +1030,71 @@ export default function ProjectsScreen({ navigation, route }: any) {
       (volunteerId ? project.volunteers.includes(volunteerId) : false)
     );
   }, [user?.id, volunteerProfile?.id]);
+
+  const getVolunteerEventActionState = useCallback((project: Project) => {
+    const joined = isJoined(project);
+    const joinRecord = volunteerJoinRecordByProjectId.get(project.id);
+    const volunteerMatch = volunteerMatchByProjectId.get(project.id);
+    const completedParticipation = joinRecord?.participationStatus === 'Completed';
+    const isPendingApproval = volunteerMatch?.status === 'Requested';
+    const wasRejected = volunteerMatch?.status === 'Rejected';
+    const isClosedStatus = project.status === 'Completed' || project.status === 'Cancelled';
+    const isOnHold = project.status === 'On Hold';
+
+    const joinButtonLabel = completedParticipation
+      ? 'Completed'
+      : joined
+      ? 'Approved'
+      : isPendingApproval
+      ? 'Pending Approval'
+      : isClosedStatus
+      ? project.status
+      : isOnHold
+      ? 'On Hold'
+      : wasRejected
+      ? 'Request Again'
+      : 'Request to Join';
+
+    const joinButtonIcon: keyof typeof MaterialIcons.glyphMap = completedParticipation
+      ? 'task-alt'
+      : joined
+      ? 'check-circle'
+      : isPendingApproval
+      ? 'hourglass-empty'
+      : isClosedStatus || isOnHold
+      ? 'event-busy'
+      : wasRejected
+      ? 'refresh'
+      : 'add-circle-outline';
+
+    const statusMessage = completedParticipation
+      ? 'You already completed this event.'
+      : joined
+      ? 'You are approved to join this event.'
+      : isPendingApproval
+      ? 'Waiting for admin approval.'
+      : isClosedStatus
+      ? `This event is ${project.status.toLowerCase()}.`
+      : isOnHold
+      ? 'This event is currently on hold.'
+      : wasRejected
+      ? 'Your last request was rejected. You can submit again.'
+      : 'Open for volunteer requests.';
+
+    const isJoinDisabled =
+      joined || completedParticipation || isPendingApproval || isClosedStatus || isOnHold;
+
+    return {
+      joined,
+      joinButtonIcon,
+      joinButtonLabel,
+      completedParticipation,
+      isJoinDisabled,
+      isPendingApproval,
+      statusMessage,
+      wasRejected,
+    };
+  }, [isJoined, volunteerJoinRecordByProjectId, volunteerMatchByProjectId]);
 
   // Formats timestamps shown on time logs and project metadata.
   const formatTimestamp = (value?: string) => {
@@ -799,42 +1158,63 @@ export default function ProjectsScreen({ navigation, route }: any) {
     }
   }, []);
 
+  const handleOpenCategory = useCallback((category: Project['category']) => {
+    setSelectedCategory(category);
+    setSelectedProgramId(null);
+    setSelectedEventId(null);
+  }, []);
+
+  const handleOpenProgramDetails = useCallback((projectId: string) => {
+    setSelectedProgramId(projectId);
+    setSelectedEventId(null);
+  }, []);
+
+  const handleOpenEventDetails = useCallback((eventId: string) => {
+    setSelectedEventId(eventId);
+  }, []);
+
+  const handleMobileBack = useCallback(() => {
+    if (selectedEventId) {
+      setSelectedEventId(null);
+      return;
+    }
+
+    if (selectedProgramId) {
+      setSelectedProgramId(null);
+      return;
+    }
+
+    if (selectedCategory) {
+      setSelectedCategory(null);
+    }
+  }, [selectedCategory, selectedEventId, selectedProgramId]);
+
   // Renders a single project card with role-specific actions.
   const renderProjectItem = useCallback(({ item }: { item: Project }) => {
           const suggestion = getProjectSuggestion(item, volunteerProfile);
-          const joined = isJoined(item);
+          const eventActionState = item.isEvent ? getVolunteerEventActionState(item) : null;
+          const joined = eventActionState?.joined || false;
           const activeLog = activeLogByProjectId.get(item.id);
           const latestLog = latestLogByProjectId.get(item.id);
           const joinRecord = volunteerJoinRecordByProjectId.get(item.id);
-          const volunteerMatch = volunteerMatchByProjectId.get(item.id);
-          const completedParticipation = joinRecord?.participationStatus === 'Completed';
+          const completedParticipation = eventActionState?.completedParticipation || false;
           const isExpanded = expandedProjectId === item.id;
+          const linkedEvents = !item.isEvent ? linkedEventsByProgramId.get(item.id) || [] : [];
+          const dateSummary = formatProjectDateRange(item.startDate, item.endDate);
+          const locationSummary = item.location.address || 'Location to be announced';
           const partnerApplication =
             partnerApplicationByProjectId.byProjectId.get(item.id) ||
             partnerApplicationByProjectId.byProgramModule.get(item.programModule || item.category) ||
             partnerApplicationByProjectId.byProjectId.get(buildProgramProposalProjectId(item.programModule || item.category));
-          const isPendingApproval = volunteerMatch?.status === 'Requested';
-          const wasRejected = volunteerMatch?.status === 'Rejected';
-          const joinButtonLabel = completedParticipation
-            ? 'Completed'
-            : joined
-            ? 'Approved'
-            : isPendingApproval
-            ? 'Pending Approval'
-            : wasRejected
-            ? 'Request Again'
-            : item.isEvent
-            ? 'Request to Join'
-            : 'Open Event';
-          const joinButtonIcon = completedParticipation
-            ? 'task-alt'
-            : joined
-            ? 'check-circle'
-            : isPendingApproval
-            ? 'hourglass-empty'
-            : wasRejected
-            ? 'refresh'
-            : 'add-circle-outline';
+          const isPendingApproval = eventActionState?.isPendingApproval || false;
+          const wasRejected = eventActionState?.wasRejected || false;
+          const joinButtonLabel = item.isEvent && eventActionState ? eventActionState.joinButtonLabel : 'Open Event';
+          const joinButtonIcon = item.isEvent && eventActionState ? eventActionState.joinButtonIcon : 'add-circle-outline';
+          const suggestionReasonText = formatSuggestionReasons(suggestion.reasons);
+          const aboutSectionTitle = item.isEvent ? 'About this event' : 'About this program';
+          const activitySummary = item.isEvent
+            ? getEventAvailabilitySummary(item)
+            : `${linkedEvents.length} linked event${linkedEvents.length === 1 ? '' : 's'}`;
 
           return (
             <View style={styles.card}>
@@ -860,7 +1240,46 @@ export default function ProjectsScreen({ navigation, route }: any) {
                 </View>
               </View>
 
-              <Text style={styles.description}>{item.description}</Text>
+              <View style={styles.cardQuickFacts}>
+                <View style={styles.cardQuickFact}>
+                  <MaterialIcons name="event" size={15} color="#166534" />
+                  <Text style={styles.cardQuickFactText} numberOfLines={1}>
+                    {dateSummary}
+                  </Text>
+                </View>
+                <View style={styles.cardQuickFact}>
+                  <MaterialIcons name="place" size={15} color="#0f766e" />
+                  <Text style={styles.cardQuickFactText} numberOfLines={1}>
+                    {locationSummary}
+                  </Text>
+                </View>
+                <View style={styles.cardQuickFact}>
+                  <MaterialIcons
+                    name={item.isEvent ? 'people-alt' : 'event-note'}
+                    size={15}
+                    color="#4338ca"
+                  />
+                  <Text style={styles.cardQuickFactText} numberOfLines={1}>
+                    {activitySummary}
+                  </Text>
+                </View>
+              </View>
+
+              <Text style={styles.cardSectionLabel}>{aboutSectionTitle}</Text>
+              <Text style={styles.description} numberOfLines={isExpanded ? undefined : 3}>
+                {item.description}
+              </Text>
+
+              {user?.role === 'volunteer' ? (
+                <View style={styles.cardInsightWrap}>
+                  <View style={styles.volunteerInsightCard}>
+                    <Text style={styles.volunteerInsightLabel}>
+                      {item.isEvent ? 'Why this event may fit you' : 'Why this program may fit you'}
+                    </Text>
+                    <Text style={styles.volunteerInsightText}>{suggestionReasonText}</Text>
+                  </View>
+                </View>
+              ) : null}
 
               <Pressable
                 style={styles.expandToggle}
@@ -884,50 +1303,331 @@ export default function ProjectsScreen({ navigation, route }: any) {
                     <>
                       <View style={styles.expandedRow}>
                         <MaterialIcons name="campaign" size={18} color="#7c3aed" />
-                        <Text style={styles.expandedText}>{`Event Type: ${item.programModule || item.category}`}</Text>
+                        <View style={styles.expandedTextWrap}>
+                          <Text style={styles.expandedLabel}>Event type</Text>
+                          <Text style={styles.expandedValue}>{item.programModule || item.category}</Text>
+                        </View>
                       </View>
                       <View style={styles.expandedRow}>
                         <MaterialIcons name="place" size={18} color="#f97316" />
-                        <Text style={styles.expandedText}>{`Venue: ${item.location.address}`}</Text>
+                        <View style={styles.expandedTextWrap}>
+                          <Text style={styles.expandedLabel}>Venue</Text>
+                          <Text style={styles.expandedValue}>{item.location.address}</Text>
+                        </View>
                       </View>
                       <View style={styles.expandedRow}>
                         <MaterialIcons name="event-available" size={18} color="#2563eb" />
-                        <Text style={styles.expandedText}>
-                          {`Event Day: ${format(new Date(item.startDate), 'MMM d, yyyy')}`}
-                        </Text>
+                        <View style={styles.expandedTextWrap}>
+                          <Text style={styles.expandedLabel}>Event day</Text>
+                          <Text style={styles.expandedValue}>{format(new Date(item.startDate), 'MMM d, yyyy')}</Text>
+                        </View>
                       </View>
                     </>
                   ) : (
                     <>
                       <View style={styles.expandedRow}>
                         <MaterialIcons name="place" size={18} color="#f97316" />
-                        <Text style={styles.expandedText}>{item.location.address}</Text>
+                        <View style={styles.expandedTextWrap}>
+                          <Text style={styles.expandedLabel}>Location</Text>
+                          <Text style={styles.expandedValue}>{item.location.address}</Text>
+                        </View>
                       </View>
                       <View style={styles.expandedRow}>
                         <MaterialIcons name="event" size={18} color="#2563eb" />
-                        <Text style={styles.expandedText}>
-                          {`Schedule: ${format(new Date(item.startDate), 'MMM d, yyyy')} - ${format(
-                            new Date(item.endDate),
-                            'MMM d, yyyy'
-                          )}`}
-                        </Text>
+                        <View style={styles.expandedTextWrap}>
+                          <Text style={styles.expandedLabel}>Schedule</Text>
+                          <Text style={styles.expandedValue}>
+                            {`${format(new Date(item.startDate), 'MMM d, yyyy')} - ${format(
+                              new Date(item.endDate),
+                              'MMM d, yyyy'
+                            )}`}
+                          </Text>
+                        </View>
                       </View>
                       <View style={styles.expandedRow}>
                         <MaterialIcons name="info" size={18} color="#16a34a" />
-                        <Text style={styles.expandedText}>
-                          {`Suggested: ${suggestion.label} • ${suggestion.reasons.join(', ')}`}
-                        </Text>
+                        <View style={styles.expandedTextWrap}>
+                          <Text style={styles.expandedLabel}>Suggested because</Text>
+                          <Text style={styles.expandedValue}>{suggestionReasonText}</Text>
+                        </View>
                       </View>
                     </>
                   )}
                 </View>
               )}
 
-              {user?.role === 'volunteer' && (
+              {!item.isEvent && isExpanded ? (
+                <View style={styles.projectEventsPanel}>
+                  <View style={styles.projectEventsPanelHeader}>
+                    <Text style={styles.projectEventsPanelTitle}>Events Inside This Project</Text>
+                    <Text style={styles.projectEventsPanelMeta}>
+                      {linkedEvents.length} event{linkedEvents.length === 1 ? '' : 's'}
+                    </Text>
+                  </View>
+
+                  {linkedEvents.length ? (
+                    linkedEvents.map(event => {
+                      const linkedEventAction = getVolunteerEventActionState(event);
+                      const eventJoined = linkedEventAction.joined;
+                      const eventCompleted = linkedEventAction.completedParticipation;
+                      const eventJoinRecord = volunteerJoinRecordByProjectId.get(event.id);
+                      const eventActiveLog = activeLogByProjectId.get(event.id);
+                      const eventLatestLog = latestLogByProjectId.get(event.id);
+                      const eventExpanded = expandedEventId === event.id;
+                      const eventFieldOfficer = isFieldOfficerForEvent(event);
+                      const assignableVolunteers = getAssignableVolunteersForEvent(event);
+                      const assignableTasks = (event.internalTasks || []).filter(task => !task.isFieldOfficer);
+
+                      return (
+                        <View key={event.id} style={styles.nestedEventCard}>
+                          <TouchableOpacity
+                            style={styles.nestedEventHeader}
+                            activeOpacity={0.86}
+                            onPress={() =>
+                              setExpandedEventId(current => (current === event.id ? null : event.id))
+                            }
+                          >
+                            <View style={styles.nestedEventHeaderCopy}>
+                              <View style={styles.nestedEventTitleRow}>
+                                <Text style={styles.nestedEventTitle}>{event.title}</Text>
+                                <View style={styles.nestedEventTypeBadge}>
+                                  <Text style={styles.nestedEventTypeBadgeText}>Event</Text>
+                                </View>
+                              </View>
+                              <Text style={styles.nestedEventMeta}>
+                                {formatProjectDateRange(event.startDate, event.endDate)}
+                              </Text>
+                              <Text style={styles.nestedEventMeta}>{event.location.address}</Text>
+                              <Text style={styles.nestedEventStatus}>{linkedEventAction.statusMessage}</Text>
+                            </View>
+                            <MaterialIcons
+                              name={eventExpanded ? 'expand-less' : 'expand-more'}
+                              size={20}
+                              color="#166534"
+                            />
+                          </TouchableOpacity>
+
+                          <View style={styles.nestedEventSummaryRow}>
+                            <Text style={styles.nestedEventSummaryText}>
+                              {event.volunteers.length}/{event.volunteersNeeded} volunteers
+                            </Text>
+                            <Text style={styles.nestedEventSummaryText}>{event.status}</Text>
+                          </View>
+
+                          {user?.role === 'volunteer' ? (
+                            <View style={styles.nestedEventActionBlock}>
+                              <View style={styles.joinRow}>
+                                <TouchableOpacity
+                                  style={[
+                                    styles.joinButton,
+                                    eventCompleted
+                                      ? styles.joinButtonCompleted
+                                      : (eventJoined || linkedEventAction.isPendingApproval) && styles.joinButtonJoined,
+                                    loadingProjectId === event.id && styles.joinButtonLoading,
+                                  ]}
+                                  disabled={linkedEventAction.isJoinDisabled || loadingProjectId === event.id}
+                                  onPress={() => handleJoinProject(event.id)}
+                                >
+                                  <MaterialIcons
+                                    name={linkedEventAction.joinButtonIcon}
+                                    size={18}
+                                    color={
+                                      eventCompleted
+                                        ? '#166534'
+                                        : eventJoined || linkedEventAction.isPendingApproval
+                                        ? '#155724'
+                                        : '#fff'
+                                    }
+                                  />
+                                  <Text
+                                    style={[
+                                      styles.joinButtonText,
+                                      eventCompleted
+                                        ? styles.joinButtonTextCompleted
+                                        : (eventJoined || linkedEventAction.isPendingApproval) && styles.joinButtonTextJoined,
+                                    ]}
+                                  >
+                                    {loadingProjectId === event.id ? 'Sending...' : linkedEventAction.joinButtonLabel}
+                                  </Text>
+                                </TouchableOpacity>
+
+                                {eventJoined && !eventCompleted ? (
+                                  <TouchableOpacity
+                                    style={[
+                                      styles.timeButton,
+                                      eventActiveLog ? styles.timeOutButton : styles.timeInButton,
+                                    ]}
+                                    onPress={() =>
+                                      eventActiveLog ? openTimeOutModal(event.id) : handleTimeIn(event.id)
+                                    }
+                                    disabled={loadingProjectId === event.id}
+                                  >
+                                    <MaterialIcons
+                                      name={eventActiveLog ? 'logout' : 'login'}
+                                      size={16}
+                                      color="#fff"
+                                    />
+                                    <Text style={styles.timeButtonText}>
+                                      {eventActiveLog ? 'Time Out' : 'Time In'}
+                                    </Text>
+                                  </TouchableOpacity>
+                                ) : null}
+                              </View>
+
+                              {eventJoined ? (
+                                <TouchableOpacity
+                                  style={styles.groupChatButton}
+                                  onPress={() => handleOpenGroupChat(event.id)}
+                                >
+                                  <MaterialIcons name="groups" size={16} color="#166534" />
+                                  <Text style={styles.groupChatButtonText}>Open Group Chat</Text>
+                                </TouchableOpacity>
+                              ) : null}
+
+                              {(linkedEventAction.isPendingApproval || linkedEventAction.wasRejected) && !eventJoined ? (
+                                <View style={styles.logMeta}>
+                                  <Text style={styles.logMetaLabel}>Request status</Text>
+                                  <Text style={styles.logMetaValue}>{linkedEventAction.statusMessage}</Text>
+                                </View>
+                              ) : null}
+
+                              {eventJoined ? (
+                                <>
+                                  <View style={styles.logMeta}>
+                                    <Text style={styles.logMetaLabel}>Participation status</Text>
+                                    <Text style={styles.logMetaValue}>
+                                      {eventCompleted
+                                        ? eventJoinRecord?.completedAt
+                                          ? `Completed ${formatTimestamp(eventJoinRecord.completedAt)}`
+                                          : 'Completed and saved to profile'
+                                        : 'Joined'}
+                                    </Text>
+                                  </View>
+
+                                  <View style={styles.logMeta}>
+                                    <Text style={styles.logMetaLabel}>
+                                      {eventActiveLog ? 'Active since' : 'Last log'}
+                                    </Text>
+                                    <Text style={styles.logMetaValue}>
+                                      {eventActiveLog
+                                        ? formatTimestamp(eventActiveLog.timeIn)
+                                        : eventLatestLog
+                                        ? `${formatTimestamp(eventLatestLog.timeIn)} -> ${formatTimestamp(eventLatestLog.timeOut)}`
+                                        : 'No logs yet'}
+                                    </Text>
+                                  </View>
+                                </>
+                              ) : null}
+                            </View>
+                          ) : user?.role === 'partner' ? (
+                            <View style={styles.nestedEventActionBlock}>
+                              <TouchableOpacity
+                                style={[
+                                  styles.joinButton,
+                                  loadingProjectId === event.id && styles.joinButtonLoading,
+                                ]}
+                                disabled={loadingProjectId === event.id}
+                                onPress={() => handleJoinProject(event.id)}
+                              >
+                                <MaterialIcons name="campaign" size={18} color="#fff" />
+                                <Text style={styles.joinButtonText}>Submit Proposal</Text>
+                              </TouchableOpacity>
+                            </View>
+                          ) : user?.role === 'admin' ? (
+                            <View style={styles.nestedEventActionBlock}>
+                              <TouchableOpacity
+                                style={styles.openProgramButton}
+                                onPress={() => handleOpenProject(event.id)}
+                              >
+                                <MaterialIcons name="folder-open" size={18} color="#fff" />
+                                <Text style={styles.openProgramButtonText}>Open Event</Text>
+                              </TouchableOpacity>
+                            </View>
+                          ) : null}
+
+                          {eventExpanded ? (
+                            <View style={styles.nestedEventExpandedSection}>
+                              <Text style={styles.nestedEventDescription}>{event.description}</Text>
+
+                              {eventFieldOfficer ? (
+                                <View style={styles.fieldOfficerInlineCard}>
+                                  <View style={styles.fieldOfficerInlineHeader}>
+                                    <Text style={styles.fieldOfficerInlineTitle}>Field Officer Controls</Text>
+                                    <Text style={styles.fieldOfficerInlineMeta}>
+                                      {assignableVolunteers.length} volunteer{assignableVolunteers.length === 1 ? '' : 's'}
+                                    </Text>
+                                  </View>
+                                  <Text style={styles.fieldOfficerInlineText}>
+                                    Assign joined volunteers to event tasks here. Field officer role tasks stay locked for admin control.
+                                  </Text>
+
+                                  {assignableTasks.length ? (
+                                    assignableTasks.map(task => (
+                                      <View key={task.id} style={styles.fieldOfficerTaskCard}>
+                                        <Text style={styles.fieldOfficerTaskTitle}>{task.title}</Text>
+                                        <Text style={styles.fieldOfficerTaskMeta}>
+                                          {task.assignedVolunteerName || 'Unassigned'} | {task.status}
+                                        </Text>
+                                        <View style={styles.assignmentChipRow}>
+                                          <TouchableOpacity
+                                            style={styles.assignmentChip}
+                                            onPress={() => void handleAssignEventTask(event, task.id)}
+                                          >
+                                            <Text style={styles.assignmentChipText}>Unassign</Text>
+                                          </TouchableOpacity>
+                                          {assignableVolunteers.map(volunteer => (
+                                            <TouchableOpacity
+                                              key={`${task.id}-${volunteer.id}`}
+                                              style={[
+                                                styles.assignmentChip,
+                                                task.assignedVolunteerId === volunteer.id && styles.assignmentChipActive,
+                                              ]}
+                                              onPress={() => void handleAssignEventTask(event, task.id, volunteer.id)}
+                                            >
+                                              <Text
+                                                style={[
+                                                  styles.assignmentChipText,
+                                                  task.assignedVolunteerId === volunteer.id && styles.assignmentChipTextActive,
+                                                ]}
+                                              >
+                                                {volunteer.name}
+                                              </Text>
+                                            </TouchableOpacity>
+                                          ))}
+                                        </View>
+                                      </View>
+                                    ))
+                                  ) : (
+                                    <View style={styles.logMeta}>
+                                      <Text style={styles.logMetaLabel}>Assignment board</Text>
+                                      <Text style={styles.logMetaValue}>No assignable event tasks yet.</Text>
+                                    </View>
+                                  )}
+                                </View>
+                              ) : null}
+                            </View>
+                          ) : null}
+                        </View>
+                      );
+                    })
+                  ) : (
+                    <View style={styles.logMeta}>
+                      <Text style={styles.logMetaLabel}>Events</Text>
+                      <Text style={styles.logMetaValue}>
+                        No events are linked to this project yet.
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              ) : null}
+
+              {user?.role === 'volunteer' && item.isEvent && (
                 <View style={styles.volunteerActions}>
-                  <Text style={styles.matchReason}>
-                    Suggestion based on: {suggestion.reasons.join(', ')}
-                  </Text>
+                  {!joined && !isPendingApproval && !completedParticipation ? (
+                    <Text style={styles.volunteerActionHint}>
+                      Request to join first. Time In and Time Out appear after approval.
+                    </Text>
+                  ) : null}
 
                   {item.isEvent ? (
                     <>
@@ -940,7 +1640,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                               : (joined || isPendingApproval) && styles.joinButtonJoined,
                             loadingProjectId === item.id && styles.joinButtonLoading,
                           ]}
-                          disabled={joined || completedParticipation || isPendingApproval || loadingProjectId === item.id}
+                          disabled={Boolean(eventActionState?.isJoinDisabled) || loadingProjectId === item.id}
                           onPress={() => handleJoinProject(item.id)}
                         >
                           <MaterialIcons
@@ -993,9 +1693,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                         <View style={styles.logMeta}>
                           <Text style={styles.logMetaLabel}>Request status</Text>
                           <Text style={styles.logMetaValue}>
-                            {isPendingApproval
-                              ? 'Waiting for admin approval'
-                              : 'Rejected. You may submit a new request.'}
+                            {eventActionState?.statusMessage || 'Request status unavailable.'}
                           </Text>
                         </View>
                       )}
@@ -1057,14 +1755,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                         </>
                       ) : null}
                     </>
-                  ) : (
-                    <View style={styles.logMeta}>
-                      <Text style={styles.logMetaLabel}>Volunteer access</Text>
-                      <Text style={styles.logMetaValue}>
-                        Volunteers join events, not programs. Open the event under this program to request access and log hours.
-                      </Text>
-                    </View>
-                  )}
+                  ) : null}
                 </View>
               )}
 
@@ -1143,20 +1834,31 @@ export default function ProjectsScreen({ navigation, route }: any) {
                   <Text style={styles.status}>{item.status}</Text>
                 </View>
                 <Text style={styles.volunteers}>
-                  {item.volunteers.length}/{item.volunteersNeeded} volunteers
+                  {item.isEvent
+                    ? `${item.volunteers.length}/${item.volunteersNeeded} volunteers`
+                    : `${linkedEvents.length} linked event${linkedEvents.length === 1 ? '' : 's'}`}
                 </Text>
               </View>
             </View>
           );
         }, [
           activeLogByProjectId,
+          allVolunteers,
+          expandedEventId,
           expandedProjectId,
-          isJoined,
+          getVolunteerEventActionState,
+          getAssignableVolunteersForEvent,
+          handleAssignEventTask,
+          handleJoinProject,
+          handleOpenGroupChat,
+          handleTimeIn,
           latestLogByProjectId,
+          linkedEventsByProgramId,
           loadingProjectId,
           partnerApplicationByProjectId,
           handleOpenImagePreview,
           handleOpenProject,
+          isFieldOfficerForEvent,
           openTimeOutModal,
           user,
           volunteerJoinRecordByProjectId,
@@ -1239,88 +1941,643 @@ export default function ProjectsScreen({ navigation, route }: any) {
   };
 
   const hasTimeOutProof = Boolean(timeOutReportDraft.trim() || timeOutPhotoDraft.trim());
+  const selectedEventActionState = selectedEvent ? getVolunteerEventActionState(selectedEvent) : null;
+  const selectedEventJoinRecord = selectedEvent ? volunteerJoinRecordByProjectId.get(selectedEvent.id) : undefined;
+  const selectedEventActiveLog = selectedEvent ? activeLogByProjectId.get(selectedEvent.id) : undefined;
+  const selectedEventLatestLog = selectedEvent ? latestLogByProjectId.get(selectedEvent.id) : undefined;
+  const selectedEventFieldOfficer = selectedEvent ? isFieldOfficerForEvent(selectedEvent) : false;
+  const selectedEventAssignableVolunteers = selectedEvent ? getAssignableVolunteersForEvent(selectedEvent) : [];
+  const selectedEventAssignableTasks = selectedEvent
+    ? (selectedEvent.internalTasks || []).filter(task => !task.isFieldOfficer)
+    : [];
 
   return (
     <View style={styles.container}>
-      <Text style={styles.heading}>Programs and Projects</Text>
-      <Text style={styles.subheading}>
-        {user?.role === 'volunteer'
-          ? 'Program recommendations are based on your saved skills and skills description.'
-          : user?.role === 'partner'
-          ? 'Partner organizations can express interest and collaborate on any listed program.'
-          : 'Current program list and participation needs.'}
-      </Text>
+      {isDesktop ? (
+        <>
+          <View style={styles.topPanel}>
+            <View style={styles.heroCard}>
+              <View style={styles.heroEyebrow}>
+                <MaterialIcons name="dashboard-customize" size={14} color="#166534" />
+                <Text style={styles.heroEyebrowText}>Projects Workspace</Text>
+              </View>
+              <Text style={styles.heading}>Programs and Projects</Text>
+              <Text style={styles.subheading}>
+                {user?.role === 'volunteer'
+                  ? 'Browse by category, open a program, then choose the event you want to join.'
+                  : user?.role === 'partner'
+                  ? 'Review active programs, narrow the list quickly, and open the right workspace with less scrolling.'
+                  : 'Track programs, events, and participation with a clearer operations view.'}
+              </Text>
 
-      <View style={styles.statusFilterBar}>
-        {(['All', 'Planning', 'In Progress', 'On Hold', 'Completed', 'Cancelled'] as const).map(option => (
-          <TouchableOpacity
-            key={option}
-            style={[styles.statusFilterButton, statusFilter === option && styles.statusFilterButtonActive]}
-            onPress={() => setStatusFilter(option)}
-            activeOpacity={0.85}
-          >
-            <Text style={[styles.statusFilterButtonText, statusFilter === option && styles.statusFilterButtonTextActive]}>
-              {option}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
+              <View style={styles.overviewRow}>
+                <View style={styles.overviewCard}>
+                  <Text style={styles.overviewValue}>{totalVisibleGroupItems}</Text>
+                  <Text style={styles.overviewLabel}>visible items</Text>
+                </View>
+                <View style={styles.overviewCard}>
+                  <Text style={styles.overviewValue}>{totalProgramCount}</Text>
+                  <Text style={styles.overviewLabel}>programs</Text>
+                </View>
+                <View style={styles.overviewCard}>
+                  <Text style={styles.overviewValue}>{totalEventCount}</Text>
+                  <Text style={styles.overviewLabel}>events</Text>
+                </View>
+                <View style={styles.overviewCard}>
+                  <Text style={styles.overviewValue}>
+                    {user?.role === 'volunteer' ? openVolunteerEventCount : categoryCount}
+                  </Text>
+                  <Text style={styles.overviewLabel}>
+                    {user?.role === 'volunteer' ? 'open events' : 'categories'}
+                  </Text>
+                </View>
+              </View>
 
-      {loadError ? (
-        <InlineLoadError
-          title={loadError.title}
-          message={loadError.message}
-          onRetry={() => void loadProjectsData()}
-        />
-      ) : null}
+              {user?.role === 'volunteer' ? (
+                <View style={styles.volunteerGuideCard}>
+                  <Text style={styles.volunteerGuideTitle}>Simple way to use this page</Text>
+                  <View style={styles.volunteerGuideSteps}>
+                    <View style={styles.volunteerGuideStep}>
+                      <Text style={styles.volunteerGuideStepNumber}>1</Text>
+                      <Text style={styles.volunteerGuideStepText}>Pick a program category</Text>
+                    </View>
+                    <View style={styles.volunteerGuideStep}>
+                      <Text style={styles.volunteerGuideStepNumber}>2</Text>
+                      <Text style={styles.volunteerGuideStepText}>Open a program to see its events</Text>
+                    </View>
+                    <View style={styles.volunteerGuideStep}>
+                      <Text style={styles.volunteerGuideStepNumber}>3</Text>
+                      <Text style={styles.volunteerGuideStepText}>Request to join, then time in after approval</Text>
+                    </View>
+                  </View>
+                </View>
+              ) : null}
+            </View>
 
-      <FlatList<ProjectCategoryGroup>
-        ref={projectListRef}
-        data={projectsByCategory}
-        keyExtractor={(item, index) => `category-${item.category}-${index}`}
-        renderItem={({ item: categoryGroup }) => (
-          <View>
-            <CategoryHeader
-              category={categoryGroup.category}
-              projectCount={categoryGroup.projects.length}
-              isExpanded={expandedCategories.has(categoryGroup.category)}
-              onToggle={() => toggleCategory(categoryGroup.category)}
+            <View style={styles.controlsCard}>
+              <View style={styles.searchRow}>
+                <MaterialIcons name="search" size={18} color="#64748b" />
+                <TextInput
+                  style={styles.searchInput}
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                  placeholder="Search a program, event, place, or status"
+                  placeholderTextColor="#94a3b8"
+                />
+                {searchQuery ? (
+                  <TouchableOpacity onPress={() => setSearchQuery('')}>
+                    <MaterialIcons name="close" size={18} color="#64748b" />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+
+              <View style={styles.filterSection}>
+                <Text style={styles.filterSectionLabel}>View</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterChipRow}>
+                  {(['All', 'Programs', 'Events'] as const).map(option => (
+                    <TouchableOpacity
+                      key={option}
+                      style={[styles.secondaryFilterButton, contentFilter === option && styles.secondaryFilterButtonActive]}
+                      onPress={() => setContentFilter(option)}
+                      activeOpacity={0.85}
+                    >
+                      <Text
+                        style={[
+                          styles.secondaryFilterButtonText,
+                          contentFilter === option && styles.secondaryFilterButtonTextActive,
+                        ]}
+                      >
+                        {option}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+
+              <View style={styles.filterSection}>
+                <Text style={styles.filterSectionLabel}>Status</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterChipRow}>
+                  {(['All', 'Planning', 'In Progress', 'On Hold', 'Completed', 'Cancelled'] as const).map(option => (
+                    <TouchableOpacity
+                      key={option}
+                      style={[styles.statusFilterButton, statusFilter === option && styles.statusFilterButtonActive]}
+                      onPress={() => setStatusFilter(option)}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={[styles.statusFilterButtonText, statusFilter === option && styles.statusFilterButtonTextActive]}>
+                        {option}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+
+              <View style={styles.controlsFooter}>
+                <Text style={styles.controlsSummary}>
+                  {totalVisibleGroupItems} result{totalVisibleGroupItems === 1 ? '' : 's'} across {categoryCount} categor{categoryCount === 1 ? 'y' : 'ies'}
+                </Text>
+                <View style={styles.controlsFooterActions}>
+                  <TouchableOpacity style={styles.controlsFooterButton} onPress={expandAllCategories}>
+                    <Text style={styles.controlsFooterButtonText}>Expand All</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.controlsFooterButton} onPress={collapseAllCategories}>
+                    <Text style={styles.controlsFooterButtonText}>Collapse All</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          </View>
+
+          {loadError ? (
+            <InlineLoadError
+              title={loadError.title}
+              message={loadError.message}
+              onRetry={() => void loadProjectsData()}
             />
-            {expandedCategories.has(categoryGroup.category) && (
+          ) : null}
+
+          <FlatList<ProjectCategoryGroup>
+            ref={projectListRef}
+            data={projectsByCategory}
+            keyExtractor={(item, index) => `category-${item.category}-${index}`}
+            renderItem={({ item: categoryGroup }) => (
               <View>
-                {categoryGroup.projects.map((project) => (
-                  <React.Fragment key={project.id}>
-                    {renderProjectItem({ item: project })}
-                  </React.Fragment>
-                ))}
+                <CategoryHeader
+                  category={categoryGroup.category}
+                  eventCount={categoryGroup.eventCount}
+                  programCount={categoryGroup.programCount}
+                  projectCount={categoryGroup.projects.length}
+                  isExpanded={expandedCategories.has(categoryGroup.category)}
+                  onToggle={() => toggleCategory(categoryGroup.category)}
+                />
+                {expandedCategories.has(categoryGroup.category) && (
+                  <View>
+                    {categoryGroup.projects.map((project) => (
+                      <React.Fragment key={project.id}>
+                        {renderProjectItem({ item: project })}
+                      </React.Fragment>
+                    ))}
+                  </View>
+                )}
               </View>
             )}
+            initialNumToRender={6}
+            maxToRenderPerBatch={8}
+            windowSize={7}
+            updateCellsBatchingPeriod={50}
+            removeClippedSubviews
+            onScrollToIndexFailed={({ index }) => {
+              const safeIndex = Math.max(0, Math.min(index, projectsByCategory.length - 1));
+              projectListRef.current?.scrollToOffset({
+                offset: safeIndex * 280,
+                animated: true,
+              });
+            }}
+            ListEmptyComponent={
+              loadError ? null : (
+                <View style={styles.emptyState}>
+                  <MaterialIcons name="folder-open" size={44} color="#94a3b8" />
+                  <Text style={styles.emptyStateTitle}>No matching items</Text>
+                  <Text style={styles.emptyStateText}>
+                    {searchQuery || contentFilter !== 'All' || statusFilter !== 'All'
+                      ? 'Try clearing some filters or searching with a different keyword.'
+                      : 'There are no programs or projects available right now.'}
+                  </Text>
+                </View>
+              )
+            }
+          />
+        </>
+      ) : (
+        <ScrollView style={styles.mobileFlow} contentContainerStyle={styles.mobileFlowContent}>
+          <View style={styles.mobileHeaderCard}>
+            {selectedCategory || selectedProgram || selectedEvent ? (
+              <TouchableOpacity style={styles.mobileBackButton} onPress={handleMobileBack}>
+                <MaterialIcons name="arrow-back" size={18} color="#166534" />
+                <Text style={styles.mobileBackButtonText}>Back</Text>
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.heroEyebrow}>
+                <MaterialIcons name="dashboard-customize" size={14} color="#166534" />
+                <Text style={styles.heroEyebrowText}>Projects Workspace</Text>
+              </View>
+            )}
+
+            <Text style={styles.mobileTitle}>
+              {selectedEvent
+                ? 'Event Details'
+                : selectedProgram
+                ? 'Project Details'
+                : selectedCategory
+                ? `${selectedCategory} Projects`
+                : 'Programs'}
+            </Text>
+            <Text style={styles.mobileSubtitle}>
+              {selectedEvent
+                ? 'Open one event at a time so actions and assignments are easier to follow.'
+                : selectedProgram
+                ? 'Review the selected project, then open one event for the full event details.'
+                : selectedCategory
+                ? 'Tap a project to open its details and see the events inside it.'
+                : user?.role === 'volunteer'
+                ? 'Choose a category first, then open a program and the event you want to join.'
+                : 'Choose a program category first, then drill down into the project and event you need.'}
+            </Text>
           </View>
-        )}
-        initialNumToRender={6}
-        maxToRenderPerBatch={8}
-        windowSize={7}
-        updateCellsBatchingPeriod={50}
-        removeClippedSubviews
-        onScrollToIndexFailed={({ index }) => {
-          const safeIndex = Math.max(0, Math.min(index, projectsByCategory.length - 1));
-          projectListRef.current?.scrollToOffset({
-            offset: safeIndex * 280,
-            animated: true,
-          });
-        }}
-        ListEmptyComponent={
-          loadError ? null : (
-            <View style={styles.emptyState}>
-              <MaterialIcons name="folder-open" size={44} color="#94a3b8" />
-              <Text style={styles.emptyStateTitle}>No programs yet</Text>
-              <Text style={styles.emptyStateText}>
-                There are no programs or projects available right now.
-              </Text>
-            </View>
-          )
-        }
-      />
+
+          {!selectedCategory ? (
+            <>
+              <View style={styles.controlsCard}>
+                <View style={styles.searchRow}>
+                  <MaterialIcons name="search" size={18} color="#64748b" />
+                  <TextInput
+                    style={styles.searchInput}
+                    value={searchQuery}
+                    onChangeText={setSearchQuery}
+                    placeholder="Search a program, event, place, or status"
+                    placeholderTextColor="#94a3b8"
+                  />
+                  {searchQuery ? (
+                    <TouchableOpacity onPress={() => setSearchQuery('')}>
+                      <MaterialIcons name="close" size={18} color="#64748b" />
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+
+                <View style={styles.filterSection}>
+                  <Text style={styles.filterSectionLabel}>Status</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterChipRow}>
+                    {(['All', 'Planning', 'In Progress', 'On Hold', 'Completed', 'Cancelled'] as const).map(option => (
+                      <TouchableOpacity
+                        key={option}
+                        style={[styles.statusFilterButton, statusFilter === option && styles.statusFilterButtonActive]}
+                        onPress={() => setStatusFilter(option)}
+                        activeOpacity={0.85}
+                      >
+                        <Text style={[styles.statusFilterButtonText, statusFilter === option && styles.statusFilterButtonTextActive]}>
+                          {option}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+              </View>
+
+              {user?.role === 'volunteer' ? (
+                <View style={styles.mobileGuideCard}>
+                  <Text style={styles.mobileGuideTitle}>How to browse programs</Text>
+                  <Text style={styles.mobileGuideText}>
+                    Start with a category, open the program you like, then choose the event where you want to help.
+                  </Text>
+                </View>
+              ) : null}
+
+              {loadError ? (
+                <InlineLoadError
+                  title={loadError.title}
+                  message={loadError.message}
+                  onRetry={() => void loadProjectsData()}
+                />
+              ) : null}
+
+              {projectsByCategory.length ? (
+                projectsByCategory.map(group => (
+                  <TouchableOpacity
+                    key={group.category}
+                    style={styles.mobileCategoryCard}
+                    onPress={() => handleOpenCategory(group.category)}
+                  >
+                    <Text style={styles.mobileCardLabel}>Category</Text>
+                    <View style={styles.mobileCategoryHeader}>
+                      <Text style={styles.mobileCategoryTitle}>{group.category}</Text>
+                      <MaterialIcons name="chevron-right" size={22} color="#166534" />
+                    </View>
+                    <Text style={styles.mobileCategoryMeta}>
+                      {group.programCount} project{group.programCount === 1 ? '' : 's'} | {group.eventCount} event{group.eventCount === 1 ? '' : 's'}
+                    </Text>
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <View style={styles.emptyState}>
+                  <MaterialIcons name="folder-open" size={44} color="#94a3b8" />
+                  <Text style={styles.emptyStateTitle}>No matching programs</Text>
+                  <Text style={styles.emptyStateText}>Try clearing the status filter or search.</Text>
+                </View>
+              )}
+            </>
+          ) : selectedCategoryGroup && !selectedProgram ? (
+            selectedCategoryGroup.projects.length ? (
+              selectedCategoryGroup.projects.map(project => (
+                <TouchableOpacity
+                  key={project.id}
+                  style={styles.mobileEntityCard}
+                  onPress={() => handleOpenProgramDetails(project.id)}
+                >
+                  <Text style={styles.mobileCardLabel}>Program</Text>
+                  <Text style={styles.mobileEntityTitle}>{project.title}</Text>
+                  <Text style={styles.mobileEntityMeta}>{formatProjectDateRange(project.startDate, project.endDate)}</Text>
+                  <Text style={styles.mobileEntityMeta}>{project.location.address}</Text>
+                  <Text style={styles.mobileEntitySummary} numberOfLines={3}>{project.description}</Text>
+                  <View style={styles.mobileEntityFooter}>
+                    <Text style={styles.mobileEntityFooterText}>
+                      {(linkedEventsByProgramId.get(project.id) || []).length} event{(linkedEventsByProgramId.get(project.id) || []).length === 1 ? '' : 's'} inside
+                    </Text>
+                    <MaterialIcons name="chevron-right" size={20} color="#166534" />
+                  </View>
+                </TouchableOpacity>
+              ))
+            ) : (
+              <View style={styles.emptyState}>
+                <MaterialIcons name="folder-open" size={44} color="#94a3b8" />
+                <Text style={styles.emptyStateTitle}>No projects in this category</Text>
+                <Text style={styles.emptyStateText}>Try changing the active filters.</Text>
+              </View>
+            )
+          ) : selectedProgram && !selectedEvent ? (
+            <>
+              <ProjectYearCalendarCard
+                program={selectedProgram}
+                projects={[selectedProgram, ...selectedProgramEvents]}
+              />
+
+              <View style={styles.mobileDetailCard}>
+                <View style={styles.mobileProgramHeaderRow}>
+                  <View style={styles.mobileProgramHeaderCopy}>
+                    <Text style={styles.mobileCardLabel}>Program card</Text>
+                    <Text style={styles.mobileDetailTitle}>{selectedProgram.title}</Text>
+                  </View>
+                  <View
+                    style={[
+                      styles.mobileProgramStatusBadge,
+                      { backgroundColor: `${getProjectStatusColor(selectedProgram.status)}1a` },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.mobileProgramStatusText,
+                        { color: getProjectStatusColor(selectedProgram.status) },
+                      ]}
+                    >
+                      {selectedProgram.status}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.mobileProgramStatRow}>
+                  <View style={styles.mobileProgramStatChip}>
+                    <Text style={styles.mobileProgramStatValue}>
+                      {selectedProgram.programModule || selectedProgram.category}
+                    </Text>
+                    <Text style={styles.mobileProgramStatLabel}>module</Text>
+                  </View>
+                  <View style={styles.mobileProgramStatChip}>
+                    <Text style={styles.mobileProgramStatValue}>{selectedProgramEvents.length}</Text>
+                    <Text style={styles.mobileProgramStatLabel}>linked events</Text>
+                  </View>
+                </View>
+
+                <Text style={styles.mobileDetailMeta}>{formatProjectDateRange(selectedProgram.startDate, selectedProgram.endDate)}</Text>
+                <Text style={styles.mobileDetailMeta}>{selectedProgram.location.address}</Text>
+                <Text style={styles.mobileDetailDescription}>{selectedProgram.description}</Text>
+              </View>
+
+              {user?.role === 'volunteer' ? (
+                <View style={styles.mobileGuideCard}>
+                  <Text style={styles.mobileGuideTitle}>Next step</Text>
+                  <Text style={styles.mobileGuideText}>
+                    Open an event below to request to join and see your volunteer actions.
+                  </Text>
+                </View>
+              ) : null}
+
+              <View style={styles.mobileSectionHeader}>
+                <Text style={styles.mobileSectionTitle}>Events Inside This Project</Text>
+                <Text style={styles.mobileSectionMeta}>
+                  {selectedProgramEvents.length} event{selectedProgramEvents.length === 1 ? '' : 's'}
+                </Text>
+              </View>
+
+              {selectedProgramEvents.length ? (
+                selectedProgramEvents.map(event => (
+                  <TouchableOpacity
+                    key={event.id}
+                    style={styles.mobileEntityCard}
+                    onPress={() => handleOpenEventDetails(event.id)}
+                  >
+                    <Text style={styles.mobileCardLabel}>Event</Text>
+                    <Text style={styles.mobileEntityTitle}>{event.title}</Text>
+                    <Text style={styles.mobileEntityMeta}>{formatProjectDateRange(event.startDate, event.endDate)}</Text>
+                    <Text style={styles.mobileEntityMeta}>{event.location.address}</Text>
+                    <Text style={styles.mobileEntitySummary} numberOfLines={2}>{event.description}</Text>
+                    <View style={styles.mobileEntityFooter}>
+                      <Text style={styles.mobileEntityFooterText}>{event.volunteers.length}/{event.volunteersNeeded} volunteers</Text>
+                      <MaterialIcons name="chevron-right" size={20} color="#166534" />
+                    </View>
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <View style={styles.emptyState}>
+                  <MaterialIcons name="event-busy" size={44} color="#94a3b8" />
+                  <Text style={styles.emptyStateTitle}>No events yet</Text>
+                  <Text style={styles.emptyStateText}>This project does not have any events yet.</Text>
+                </View>
+              )}
+            </>
+          ) : selectedEvent ? (
+            <>
+              <View style={styles.mobileDetailCard}>
+                <Text style={styles.mobileCardLabel}>Event overview</Text>
+                <Text style={styles.mobileDetailTitle}>{selectedEvent.title}</Text>
+                <Text style={styles.mobileDetailMeta}>{formatProjectDateRange(selectedEvent.startDate, selectedEvent.endDate)}</Text>
+                <Text style={styles.mobileDetailMeta}>{selectedEvent.location.address}</Text>
+                <Text style={styles.mobileDetailDescription}>{selectedEvent.description}</Text>
+              </View>
+
+              {user?.role === 'volunteer' && selectedEventActionState ? (
+                <View style={styles.mobileEventActionCard}>
+                  <View style={styles.volunteerInsightCard}>
+                    <Text style={styles.volunteerInsightLabel}>Why this event may fit you</Text>
+                    <Text style={styles.volunteerInsightText}>
+                      {formatSuggestionReasons(getProjectSuggestion(selectedEvent, volunteerProfile).reasons)}
+                    </Text>
+                  </View>
+
+                  {!selectedEventActionState.joined &&
+                  !selectedEventActionState.isPendingApproval &&
+                  !selectedEventActionState.completedParticipation ? (
+                    <Text style={styles.volunteerActionHint}>
+                      Request to join first. Time In and Time Out appear after approval.
+                    </Text>
+                  ) : null}
+
+                  <TouchableOpacity
+                    style={[
+                      styles.joinButton,
+                      selectedEventActionState.completedParticipation
+                        ? styles.joinButtonCompleted
+                        : (selectedEventActionState.joined || selectedEventActionState.isPendingApproval) && styles.joinButtonJoined,
+                      loadingProjectId === selectedEvent.id && styles.joinButtonLoading,
+                    ]}
+                    disabled={selectedEventActionState.isJoinDisabled || loadingProjectId === selectedEvent.id}
+                    onPress={() => handleJoinProject(selectedEvent.id)}
+                  >
+                    <MaterialIcons
+                      name={selectedEventActionState.joinButtonIcon}
+                      size={18}
+                      color={
+                        selectedEventActionState.completedParticipation
+                          ? '#166534'
+                          : selectedEventActionState.joined || selectedEventActionState.isPendingApproval
+                          ? '#155724'
+                          : '#fff'
+                      }
+                    />
+                    <Text
+                      style={[
+                        styles.joinButtonText,
+                        selectedEventActionState.completedParticipation
+                          ? styles.joinButtonTextCompleted
+                          : (selectedEventActionState.joined || selectedEventActionState.isPendingApproval) && styles.joinButtonTextJoined,
+                      ]}
+                    >
+                      {loadingProjectId === selectedEvent.id ? 'Sending...' : selectedEventActionState.joinButtonLabel}
+                    </Text>
+                  </TouchableOpacity>
+
+                  <Text style={styles.mobileEventStatusText}>{selectedEventActionState.statusMessage}</Text>
+
+                  {selectedEventActionState.joined && !selectedEventActionState.completedParticipation ? (
+                    <TouchableOpacity
+                      style={[
+                        styles.timeButton,
+                        selectedEventActiveLog ? styles.timeOutButton : styles.timeInButton,
+                      ]}
+                      onPress={() =>
+                        selectedEventActiveLog ? openTimeOutModal(selectedEvent.id) : handleTimeIn(selectedEvent.id)
+                      }
+                      disabled={loadingProjectId === selectedEvent.id}
+                    >
+                      <MaterialIcons
+                        name={selectedEventActiveLog ? 'logout' : 'login'}
+                        size={16}
+                        color="#fff"
+                      />
+                      <Text style={styles.timeButtonText}>
+                        {selectedEventActiveLog ? 'Time Out' : 'Time In'}
+                      </Text>
+                    </TouchableOpacity>
+                  ) : null}
+
+                  {selectedEventActionState.joined ? (
+                    <TouchableOpacity
+                      style={styles.groupChatButton}
+                      onPress={() => handleOpenGroupChat(selectedEvent.id)}
+                    >
+                      <MaterialIcons name="groups" size={16} color="#166534" />
+                      <Text style={styles.groupChatButtonText}>Open Group Chat</Text>
+                    </TouchableOpacity>
+                  ) : null}
+
+                  {selectedEventJoinRecord || selectedEventActiveLog || selectedEventLatestLog ? (
+                    <View style={styles.logMeta}>
+                      <Text style={styles.logMetaLabel}>Participation</Text>
+                      <Text style={styles.logMetaValue}>
+                        {selectedEventActionState.completedParticipation
+                          ? selectedEventJoinRecord?.completedAt
+                            ? `Completed ${formatTimestamp(selectedEventJoinRecord.completedAt)}`
+                            : 'Completed and saved to profile'
+                          : selectedEventActiveLog
+                          ? `Active since ${formatTimestamp(selectedEventActiveLog.timeIn)}`
+                          : selectedEventLatestLog
+                          ? `Last log ${formatTimestamp(selectedEventLatestLog.timeIn)}`
+                          : 'Joined'}
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
+              ) : user?.role === 'partner' ? (
+                <View style={styles.mobileEventActionCard}>
+                  <TouchableOpacity
+                    style={[styles.joinButton, loadingProjectId === selectedEvent.id && styles.joinButtonLoading]}
+                    disabled={loadingProjectId === selectedEvent.id}
+                    onPress={() => handleJoinProject(selectedEvent.id)}
+                  >
+                    <MaterialIcons name="campaign" size={18} color="#fff" />
+                    <Text style={styles.joinButtonText}>Submit Proposal</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : user?.role === 'admin' ? (
+                <View style={styles.mobileEventActionCard}>
+                  <TouchableOpacity
+                    style={styles.openProgramButton}
+                    onPress={() => handleOpenProject(selectedEvent.id)}
+                  >
+                    <MaterialIcons name="folder-open" size={18} color="#fff" />
+                    <Text style={styles.openProgramButtonText}>Open Event</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+
+              {selectedEventFieldOfficer ? (
+                <View style={styles.mobileFieldOfficerCard}>
+                  <View style={styles.mobileSectionHeader}>
+                    <Text style={styles.mobileSectionTitle}>Field Officer Controls</Text>
+                    <Text style={styles.mobileSectionMeta}>
+                      {selectedEventAssignableVolunteers.length} volunteer{selectedEventAssignableVolunteers.length === 1 ? '' : 's'}
+                    </Text>
+                  </View>
+                  <Text style={styles.mobileDetailDescription}>
+                    Assign joined volunteers to event tasks here. These assignments are saved to the shared event record.
+                  </Text>
+
+                  {selectedEventAssignableTasks.length ? (
+                    selectedEventAssignableTasks.map(task => (
+                      <View key={task.id} style={styles.fieldOfficerTaskCard}>
+                        <Text style={styles.fieldOfficerTaskTitle}>{task.title}</Text>
+                        <Text style={styles.fieldOfficerTaskMeta}>
+                          {task.assignedVolunteerName || 'Unassigned'} | {task.status}
+                        </Text>
+                        <View style={styles.assignmentChipRow}>
+                          <TouchableOpacity
+                            style={styles.assignmentChip}
+                            onPress={() => void handleAssignEventTask(selectedEvent, task.id)}
+                          >
+                            <Text style={styles.assignmentChipText}>Unassign</Text>
+                          </TouchableOpacity>
+                          {selectedEventAssignableVolunteers.map(volunteer => (
+                            <TouchableOpacity
+                              key={`${task.id}-${volunteer.id}`}
+                              style={[
+                                styles.assignmentChip,
+                                task.assignedVolunteerId === volunteer.id && styles.assignmentChipActive,
+                              ]}
+                              onPress={() => void handleAssignEventTask(selectedEvent, task.id, volunteer.id)}
+                            >
+                              <Text
+                                style={[
+                                  styles.assignmentChipText,
+                                  task.assignedVolunteerId === volunteer.id && styles.assignmentChipTextActive,
+                                ]}
+                              >
+                                {volunteer.name}
+                              </Text>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      </View>
+                    ))
+                  ) : (
+                    <View style={styles.logMeta}>
+                      <Text style={styles.logMetaLabel}>Assignment board</Text>
+                      <Text style={styles.logMetaValue}>No assignable tasks yet.</Text>
+                    </View>
+                  )}
+                </View>
+              ) : null}
+            </>
+          ) : null}
+        </ScrollView>
+      )}
 
       <Modal
         visible={Boolean(timeOutProjectId)}
@@ -1618,19 +2875,455 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     padding: Platform.select({ web: 8, default: 15 }),
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#eef4ef',
+  },
+  topPanel: {
+    gap: 12,
+    marginBottom: 12,
+  },
+  mobileFlow: {
+    flex: 1,
+  },
+  mobileFlowContent: {
+    paddingHorizontal: 2,
+    paddingBottom: 24,
+    gap: 12,
+  },
+  mobileHeaderCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 22,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderWidth: 1,
+    borderColor: '#dbe7df',
+    gap: 8,
+  },
+  mobileGuideCard: {
+    backgroundColor: '#f7fff8',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#ccebd5',
+    padding: 14,
+    gap: 6,
+  },
+  mobileGuideTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#166534',
+  },
+  mobileGuideText: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#475569',
+  },
+  mobileBackButton: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  mobileBackButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#166534',
+  },
+  mobileTitle: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  mobileSubtitle: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: '#64748b',
+  },
+  mobileCategoryCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#dbe7df',
+    padding: 16,
+    gap: 8,
+  },
+  mobileCardLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    color: '#64748b',
+  },
+  mobileCategoryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  mobileCategoryTitle: {
+    flex: 1,
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  mobileCategoryMeta: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#64748b',
+  },
+  mobileEntityCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#dbe7df',
+    padding: 16,
+    gap: 6,
+  },
+  mobileEntityTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  mobileEntityMeta: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#64748b',
+  },
+  mobileEntitySummary: {
+    marginTop: 4,
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#475569',
+  },
+  mobileEntityFooter: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+    paddingTop: 10,
+  },
+  mobileEntityFooterText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#166534',
+  },
+  mobileDetailCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#dbe7df',
+    padding: 16,
+    gap: 8,
+  },
+  mobileProgramHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  mobileProgramHeaderCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  mobileProgramStatusBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  mobileProgramStatusText: {
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  mobileProgramStatRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  mobileProgramStatChip: {
+    flex: 1,
+    borderRadius: 16,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  mobileProgramStatValue: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  mobileProgramStatLabel: {
+    marginTop: 4,
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748b',
+  },
+  mobileDetailTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  mobileDetailMeta: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#64748b',
+  },
+  mobileDetailDescription: {
+    marginTop: 4,
+    fontSize: 13,
+    lineHeight: 20,
+    color: '#475569',
+  },
+  mobileSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  mobileSectionTitle: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  mobileSectionMeta: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#64748b',
+  },
+  mobileEventActionCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#dbe7df',
+    padding: 16,
+    gap: 10,
+  },
+  mobileEventStatusText: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#166534',
+    fontWeight: '600',
+  },
+  mobileFieldOfficerCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#dbe7df',
+    padding: 16,
+    gap: 12,
+  },
+  heroCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 24,
+    paddingHorizontal: 18,
+    paddingVertical: 18,
+    borderWidth: 1,
+    borderColor: '#dbe7df',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.06,
+    shadowRadius: 18,
+    elevation: 2,
+  },
+  heroEyebrow: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    backgroundColor: '#dcfce7',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginBottom: 12,
+  },
+  heroEyebrowText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#166534',
   },
   heading: {
-    fontSize: 20,
-    fontWeight: 'bold',
+    fontSize: 26,
+    fontWeight: '800',
     marginBottom: 6,
-    color: '#333',
+    color: '#0f172a',
   },
   subheading: {
-    fontSize: 13,
+    fontSize: 14,
     color: '#64748b',
-    marginBottom: 15,
+    lineHeight: 21,
+  },
+  volunteerGuideCard: {
+    marginTop: 16,
+    borderRadius: 18,
+    backgroundColor: '#f7fff8',
+    borderWidth: 1,
+    borderColor: '#ccebd5',
+    padding: 14,
+    gap: 10,
+  },
+  volunteerGuideTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#166534',
+  },
+  volunteerGuideSteps: {
+    gap: 8,
+  },
+  volunteerGuideStep: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  volunteerGuideStepNumber: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    textAlign: 'center',
+    textAlignVertical: 'center',
+    overflow: 'hidden',
+    backgroundColor: '#166534',
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 22,
+  },
+  volunteerGuideStepText: {
+    flex: 1,
+    fontSize: 12,
     lineHeight: 18,
+    color: '#334155',
+    fontWeight: '600',
+  },
+  overviewRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginTop: 16,
+  },
+  overviewCard: {
+    minWidth: 120,
+    flexGrow: 1,
+    flexShrink: 1,
+    borderRadius: 16,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  overviewValue: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#166534',
+  },
+  overviewLabel: {
+    marginTop: 4,
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  controlsCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 22,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderWidth: 1,
+    borderColor: '#dbe7df',
+    gap: 14,
+  },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#f8fafc',
+    paddingHorizontal: 14,
+    paddingVertical: Platform.select({ web: 12, default: 10 }),
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: '#0f172a',
+    paddingVertical: 0,
+  },
+  filterSection: {
+    gap: 8,
+  },
+  filterSectionLabel: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#475569',
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
+  },
+  filterChipRow: {
+    gap: 8,
+    paddingRight: 8,
+  },
+  secondaryFilterButton: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#f8fafc',
+    paddingHorizontal: 13,
+    paddingVertical: 8,
+  },
+  secondaryFilterButtonActive: {
+    backgroundColor: '#166534',
+    borderColor: '#166534',
+  },
+  secondaryFilterButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  secondaryFilterButtonTextActive: {
+    color: '#ffffff',
+  },
+  controlsFooter: {
+    flexDirection: Platform.select({ web: 'row', default: 'column' }),
+    alignItems: Platform.select({ web: 'center', default: 'flex-start' }),
+    justifyContent: 'space-between',
+    gap: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+    paddingTop: 14,
+  },
+  controlsSummary: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#64748b',
+  },
+  controlsFooterActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  controlsFooterButton: {
+    borderRadius: 999,
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  controlsFooterButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#166534',
   },
   emptyState: {
     alignItems: 'center',
@@ -1656,15 +3349,15 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: '#fff',
-    borderRadius: Platform.select({ web: 10, default: 14 }),
+    borderRadius: Platform.select({ web: 18, default: 18 }),
     marginBottom: 12,
-    borderLeftWidth: 4,
-    borderLeftColor: '#4CAF50',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 3,
-    elevation: 3,
+    borderWidth: 1,
+    borderColor: '#dbe7df',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.06,
+    shadowRadius: 14,
+    elevation: 2,
     overflow: 'hidden',
   },
   programImage: {
@@ -1777,9 +3470,9 @@ const styles = StyleSheet.create({
   cardHeader: {
     flexDirection: 'row',
     gap: 10,
-    marginBottom: 8,
-    paddingHorizontal: 15,
-    paddingTop: 15,
+    marginBottom: 10,
+    paddingHorizontal: 16,
+    paddingTop: 16,
   },
   metaRow: {
     flexDirection: 'row',
@@ -1788,10 +3481,10 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   title: {
-    fontSize: 18,
-    fontWeight: 'bold',
+    fontSize: 20,
+    fontWeight: '800',
     marginBottom: 4,
-    color: '#333',
+    color: '#0f172a',
   },
   category: {
     fontSize: 12,
@@ -1826,21 +3519,85 @@ const styles = StyleSheet.create({
   },
   description: {
     fontSize: 14,
-    color: '#666',
+    color: '#475569',
     marginBottom: 10,
-    lineHeight: 20,
-    paddingHorizontal: 15,
+    lineHeight: 21,
+    paddingHorizontal: 16,
+  },
+  cardSectionLabel: {
+    paddingHorizontal: 16,
+    marginBottom: 4,
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    color: '#64748b',
+  },
+  cardInsightWrap: {
+    paddingHorizontal: 16,
+    marginBottom: 10,
+  },
+  volunteerInsightCard: {
+    borderRadius: 12,
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 4,
+  },
+  volunteerInsightLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
+    color: '#1d4ed8',
+  },
+  volunteerInsightText: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#1e3a8a',
+    fontWeight: '600',
+  },
+  cardQuickFacts: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    paddingHorizontal: 16,
+    marginBottom: 10,
+  },
+  cardQuickFact: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minWidth: 150,
+    flexGrow: 1,
+    flexShrink: 1,
+    borderRadius: 12,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  cardQuickFactText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#334155',
   },
   expandToggle: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#f0fdf4',
-    borderRadius: 10,
+    backgroundColor: '#f6fbf7',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#dbe7df',
     paddingHorizontal: 12,
     paddingVertical: 10,
     marginBottom: 10,
-    marginHorizontal: 15,
+    marginHorizontal: 16,
   },
   expandToggleText: {
     color: '#166534',
@@ -1859,10 +3616,21 @@ const styles = StyleSheet.create({
   },
   expandedRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 8,
   },
-  expandedText: {
+  expandedTextWrap: {
+    flex: 1,
+    gap: 2,
+  },
+  expandedLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
+    color: '#64748b',
+  },
+  expandedValue: {
     flex: 1,
     fontSize: 13,
     color: '#334155',
@@ -1877,17 +3645,298 @@ const styles = StyleSheet.create({
   volunteerActions: {
     marginBottom: 4,
     gap: 8,
-    paddingHorizontal: 15,
+    paddingHorizontal: 16,
+  },
+  volunteerActionHint: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#475569',
+    fontWeight: '600',
+  },
+  projectEventsPanel: {
+    marginHorizontal: 16,
+    marginBottom: 12,
+    gap: 10,
+  },
+  projectEventsPanelHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  projectEventsPanelTitle: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  projectEventsPanelMeta: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#64748b',
+  },
+  nestedEventCard: {
+    borderRadius: 16,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 14,
+    gap: 10,
+  },
+  nestedEventHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  nestedEventHeaderCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  nestedEventTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  nestedEventTitle: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  nestedEventTypeBadge: {
+    borderRadius: 999,
+    backgroundColor: '#eef2ff',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  nestedEventTypeBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#4338ca',
+  },
+  nestedEventMeta: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#475569',
+  },
+  nestedEventStatus: {
+    marginTop: 2,
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#166534',
+    fontWeight: '600',
+  },
+  nestedEventSummaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  nestedEventSummaryText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#64748b',
+  },
+  nestedEventActionBlock: {
+    gap: 8,
+  },
+  nestedEventExpandedSection: {
+    borderTopWidth: 1,
+    borderTopColor: '#dbe7df',
+    paddingTop: 12,
+    gap: 12,
+  },
+  nestedEventDescription: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: '#475569',
+  },
+  fieldOfficerInlineCard: {
+    borderRadius: 14,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dbe7df',
+    padding: 12,
+    gap: 10,
+  },
+  fieldOfficerInlineHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  fieldOfficerInlineTitle: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  fieldOfficerInlineMeta: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#166534',
+  },
+  fieldOfficerInlineText: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#64748b',
+  },
+  fieldOfficerTaskCard: {
+    borderRadius: 12,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 12,
+    gap: 8,
+  },
+  fieldOfficerTaskTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  fieldOfficerTaskMeta: {
+    fontSize: 12,
+    color: '#64748b',
+  },
+  assignmentChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  assignmentChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#ffffff',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  assignmentChipActive: {
+    backgroundColor: '#166534',
+    borderColor: '#166534',
+  },
+  assignmentChipText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  assignmentChipTextActive: {
+    color: '#ffffff',
+  },
+  programEventsSection: {
+    gap: 10,
+  },
+  programEventsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  programEventsTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  programEventsSubtitle: {
+    marginTop: 2,
+    fontSize: 12,
+    color: '#64748b',
+  },
+  programEventsCountBadge: {
+    borderRadius: 999,
+    backgroundColor: '#dcfce7',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  programEventsCountText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#166534',
+  },
+  programEventCard: {
+    borderRadius: 12,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 12,
+    gap: 10,
+  },
+  programEventHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  programEventCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  programEventTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  programEventMeta: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#475569',
+  },
+  programEventStatusText: {
+    marginTop: 2,
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#166534',
+    fontWeight: '600',
+  },
+  programEventJoinButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#166534',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    alignSelf: 'flex-start',
+  },
+  programEventJoinButtonDisabled: {
+    opacity: 0.78,
+  },
+  programEventJoinButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  programEventFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  programEventTypeBadge: {
+    borderRadius: 999,
+    backgroundColor: '#eef2ff',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  programEventTypeBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#4338ca',
+  },
+  programEventSlots: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748b',
   },
   partnerActions: {
     marginBottom: 4,
     gap: 8,
-    paddingHorizontal: 15,
+    paddingHorizontal: 16,
   },
   adminActions: {
     marginBottom: 4,
     gap: 8,
-    paddingHorizontal: 15,
+    paddingHorizontal: 16,
   },
   joinRow: {
     flexDirection: 'row',
@@ -2378,12 +4427,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: 10,
-    paddingTop: 10,
-    paddingHorizontal: 15,
-    paddingBottom: 15,
+    marginTop: 12,
+    paddingTop: 12,
+    paddingHorizontal: 16,
+    paddingBottom: 16,
     borderTopWidth: 1,
-    borderTopColor: '#eee',
+    borderTopColor: '#e2e8f0',
   },
   statusBadge: {
     flexDirection: 'row',
@@ -2409,11 +4458,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingVertical: 12,
-    marginHorizontal: 15,
+    paddingVertical: 14,
+    marginHorizontal: 2,
     marginBottom: 12,
     marginTop: 8,
-    borderRadius: 12,
+    borderRadius: 16,
   },
   categoryHeaderContent: {
     flexDirection: 'row',
@@ -2439,15 +4488,12 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   statusFilterBar: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
     gap: 8,
-    marginBottom: 16,
   },
   statusFilterButton: {
-    backgroundColor: '#fff',
+    backgroundColor: '#f8fafc',
     borderWidth: 1,
-    borderColor: '#dbe2ea',
+    borderColor: '#cbd5e1',
     borderRadius: 999,
     paddingHorizontal: 12,
     paddingVertical: 8,

@@ -9,10 +9,11 @@ import {
   Platform,
   TextInput,
   Image,
+  useWindowDimensions,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import type { SubmittedReport } from '../screens/ReportsScreen';
-import { isImageMediaUri } from '../utils/media';
+import { getAttachmentUris, isImageMediaUri } from '../utils/media';
 
 interface ReportDetailsModalProps {
   visible: boolean;
@@ -36,6 +37,7 @@ export default function ReportDetailsModal({
   const [approvalNotes, setApprovalNotes] = useState('');
   const [showApprovalForm, setShowApprovalForm] = useState(false);
   const [actionType, setActionType] = useState<'approve' | 'reject' | null>(null);
+  const { width } = useWindowDimensions();
 
   if (!report) return null;
 
@@ -63,104 +65,113 @@ export default function ReportDetailsModal({
   };
 
   const canApprove = showModerationActions && userRole === 'admin' && report.status === 'Submitted';
-  const attachmentPreviews = [
-    report.mediaFile,
-    ...(report.attachments || []).map(attachment => attachment.url),
-  ].filter((value, index, values): value is string => Boolean(value) && values.indexOf(value) === index);
+  const isWideLayout = Platform.OS === 'web' && width >= 960;
+  const attachmentPreviews = getAttachmentUris([
+    report.mediaFile || '',
+    ...(report.attachments || []),
+  ]);
+  const statusPresentation = getStatusPresentation(report.status);
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={handleClose}>
       <View style={styles.backdrop}>
-        <View style={styles.container}>
+        <View style={[styles.container, isWideLayout && styles.containerWide]}>
           {/* Header */}
           <View style={styles.header}>
             <View style={styles.headerContent}>
               <Text style={styles.title}>{report.title}</Text>
-              <Text style={styles.submitter}>by {report.submitterName}</Text>
+              <Text style={styles.submitter}>Submitted by {report.submitterName}</Text>
             </View>
-            <TouchableOpacity onPress={handleClose} hitSlop={8}>
+            <TouchableOpacity style={styles.headerCloseButton} onPress={handleClose} hitSlop={8}>
               <MaterialIcons name="close" size={24} color="#0f172a" />
             </TouchableOpacity>
           </View>
 
-          <ScrollView style={styles.content} showsVerticalScrollIndicator>
+          <ScrollView
+            style={styles.content}
+            contentContainerStyle={styles.contentContainer}
+            showsVerticalScrollIndicator
+          >
             {/* Status Section */}
-            <View style={styles.statusSection}>
-              <View
-                style={[
-                  styles.statusBadge,
-                  report.status === 'Approved' && styles.statusApproved,
-                  report.status === 'Rejected' && styles.statusRejected,
-                  report.status === 'Draft' && styles.statusDraft,
-                  report.status === 'Submitted' && styles.statusSubmitted,
-                ]}
-              >
-                <MaterialIcons
-                  name={
-                    report.status === 'Approved'
-                      ? 'check-circle'
-                      : report.status === 'Rejected'
-                      ? 'cancel'
-                      : report.status === 'Submitted'
-                      ? 'hourglass-empty'
-                      : 'edit'
-                  }
-                  size={16}
-                  color="#fff"
-                />
-                <Text style={styles.statusText}>{report.status}</Text>
+            <View style={styles.heroCard}>
+              <View style={styles.heroTopRow}>
+                <View
+                  style={[
+                    styles.statusBadge,
+                    { backgroundColor: statusPresentation.badgeBackground },
+                  ]}
+                >
+                  <MaterialIcons
+                    name={statusPresentation.icon}
+                    size={16}
+                    color={statusPresentation.badgeText}
+                  />
+                  <Text style={[styles.statusText, { color: statusPresentation.badgeText }]}>
+                    {report.status}
+                  </Text>
+                </View>
+
+                <View style={styles.dateInfo}>
+                  <MaterialIcons name="calendar-today" size={14} color="#64748b" />
+                  <Text style={styles.dateText}>
+                    {new Date(report.submittedAt).toLocaleDateString(undefined, {
+                      year: 'numeric',
+                      month: 'long',
+                      day: 'numeric',
+                    })}
+                  </Text>
+                </View>
               </View>
 
-              <View style={styles.dateInfo}>
-                <MaterialIcons name="calendar-today" size={14} color="#64748b" />
-                <Text style={styles.dateText}>
-                  {new Date(report.submittedAt).toLocaleDateString(undefined, {
-                    year: 'numeric',
-                    month: 'long',
-                    day: 'numeric',
-                  })}
-                </Text>
-              </View>
-            </View>
-
-            {/* Report Type & Category */}
-            <View style={styles.metadataSection}>
-              <View style={styles.metadataItem}>
-                <Text style={styles.metadataLabel}>Report Type</Text>
-                <Text style={styles.metadataValue}>{formatReportType(report.reportType)}</Text>
-              </View>
-              {report.projectTitle && (
-                <View style={styles.metadataItem}>
-                  <Text style={styles.metadataLabel}>Project</Text>
-                  <Text style={styles.metadataValue}>{report.projectTitle}</Text>
+              <View style={[styles.metadataSection, isWideLayout && styles.metadataSectionWide]}>
+                <View style={[styles.metadataItem, isWideLayout && styles.metadataItemWide]}>
+                  <Text style={styles.metadataLabel}>Report Type</Text>
+                  <Text style={styles.metadataValue}>{formatReportType(report.reportType)}</Text>
                 </View>
-              )}
-              {report.category && (
-                <View style={styles.metadataItem}>
-                  <Text style={styles.metadataLabel}>Category</Text>
-                  <Text style={styles.metadataValue}>{report.category}</Text>
-                </View>
-              )}
+                {report.projectTitle && (
+                  <View style={[styles.metadataItem, isWideLayout && styles.metadataItemWide]}>
+                    <Text style={styles.metadataLabel}>
+                      {report.projectKind === 'event' ? 'Event' : 'Project'}
+                    </Text>
+                    <Text style={styles.metadataValue}>{report.projectTitle}</Text>
+                  </View>
+                )}
+                {report.category && (
+                  <View style={[styles.metadataItem, isWideLayout && styles.metadataItemWide]}>
+                    <Text style={styles.metadataLabel}>Category</Text>
+                    <Text style={styles.metadataValue}>{report.category}</Text>
+                  </View>
+                )}
+              </View>
             </View>
 
             {/* Description */}
-            <View style={styles.section}>
+            <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>Description</Text>
               <Text style={styles.descriptionText}>{report.description}</Text>
             </View>
 
             {attachmentPreviews.length > 0 && (
-              <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Attachments</Text>
-                <View style={styles.attachmentsList}>
+              <View style={styles.sectionCard}>
+                <View style={styles.sectionHeaderRow}>
+                  <Text style={styles.sectionTitle}>Attachments</Text>
+                  <Text style={styles.sectionCaption}>
+                    {attachmentPreviews.length} file{attachmentPreviews.length === 1 ? '' : 's'}
+                  </Text>
+                </View>
+                <View style={[styles.attachmentsList, isWideLayout && styles.attachmentsListWide]}>
                   {attachmentPreviews.map(uri =>
                     isImageMediaUri(uri) ? (
-                      <Image
+                      <View
                         key={uri}
-                        source={{ uri }}
-                        style={styles.attachmentPreview}
-                        resizeMode="cover"
-                      />
+                        style={[styles.attachmentPreviewCard, isWideLayout && styles.attachmentPreviewCardWide]}
+                      >
+                        <Image
+                          source={{ uri }}
+                          style={styles.attachmentPreview}
+                          resizeMode="contain"
+                        />
+                      </View>
                     ) : (
                       <View key={uri} style={styles.attachmentFileCard}>
                         <MaterialIcons name="attach-file" size={16} color="#166534" />
@@ -173,9 +184,14 @@ export default function ReportDetailsModal({
             )}
 
             {/* Metrics */}
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Key Metrics</Text>
-              <View style={styles.metricsDisplay}>
+            <View style={styles.sectionCard}>
+              <View style={styles.sectionHeaderRow}>
+                <Text style={styles.sectionTitle}>Key Metrics</Text>
+                <Text style={styles.sectionCaption}>
+                  {Object.values(report.metrics).filter(value => Boolean(value)).length} captured
+                </Text>
+              </View>
+              <View style={[styles.metricsDisplay, isWideLayout && styles.metricsDisplayWide]}>
                 {Object.entries(report.metrics).map(
                   ([key, value]) =>
                     value && (
@@ -190,7 +206,7 @@ export default function ReportDetailsModal({
 
             {/* Approval Section (Admin Only) */}
             {canApprove && !showApprovalForm && (
-              <View style={styles.section}>
+              <View style={styles.sectionCard}>
                 <Text style={styles.sectionTitle}>Admin Actions</Text>
                 <View style={styles.adminActions}>
                   <TouchableOpacity
@@ -219,7 +235,7 @@ export default function ReportDetailsModal({
 
             {/* Approval Form */}
             {showApprovalForm && (
-              <View style={styles.section}>
+              <View style={styles.sectionCard}>
                 <Text style={styles.sectionTitle}>
                   {actionType === 'approve' ? 'Approve Report' : 'Reject Report'}
                 </Text>
@@ -265,7 +281,7 @@ export default function ReportDetailsModal({
 
             {/* Approval History */}
             {report.approvedBy && (
-              <View style={styles.section}>
+              <View style={styles.sectionCard}>
                 <Text style={styles.sectionTitle}>Approval History</Text>
                 <View style={styles.approvalHistory}>
                   <View
@@ -344,101 +360,163 @@ function formatMetricKey(key: string): string {
   return labels[key] || key;
 }
 
+function getStatusPresentation(status: SubmittedReport['status']) {
+  switch (status) {
+    case 'Approved':
+      return {
+        icon: 'check-circle' as const,
+        badgeBackground: '#dcfce7',
+        badgeText: '#166534',
+      };
+    case 'Rejected':
+      return {
+        icon: 'cancel' as const,
+        badgeBackground: '#fee2e2',
+        badgeText: '#b91c1c',
+      };
+    case 'Draft':
+      return {
+        icon: 'edit' as const,
+        badgeBackground: '#e2e8f0',
+        badgeText: '#475569',
+      };
+    default:
+      return {
+        icon: 'hourglass-empty' as const,
+        badgeBackground: '#dbeafe',
+        badgeText: '#1d4ed8',
+      };
+  }
+}
+
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.58)',
+    backgroundColor: 'rgba(15, 23, 42, 0.56)',
     justifyContent: 'flex-end',
+    alignItems: 'center',
   },
   container: {
     height: '90%',
+    width: '100%',
     backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 16,
-    paddingTop: 20,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 18,
+    paddingTop: 18,
     flexDirection: 'column',
+  },
+  containerWide: {
+    width: '88%',
+    maxWidth: 1180,
+    height: '88%',
+    marginBottom: 24,
+    borderRadius: 24,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    marginBottom: 16,
-    paddingBottom: 12,
+    gap: 12,
+    marginBottom: 14,
+    paddingBottom: 14,
     borderBottomWidth: 1,
     borderBottomColor: '#e2e8f0',
   },
   headerContent: {
     flex: 1,
   },
+  headerCloseButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
   title: {
-    fontSize: 18,
+    fontSize: 22,
     fontWeight: '800',
     color: '#0f172a',
     marginBottom: 4,
   },
   submitter: {
-    fontSize: 12,
+    fontSize: 13,
     color: '#64748b',
   },
   content: {
     flex: 1,
-    paddingHorizontal: 4,
   },
-  statusSection: {
+  contentContainer: {
+    paddingBottom: 20,
+  },
+  heroCard: {
+    padding: 16,
+    borderRadius: 18,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    marginBottom: 14,
+  },
+  heroTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingBottom: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
-    marginBottom: 16,
+    flexWrap: 'wrap',
+    gap: 10,
+    marginBottom: 14,
   },
   statusBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
     paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: '#fef3c7',
-  },
-  statusApproved: {
-    backgroundColor: '#dcfce7',
-  },
-  statusRejected: {
-    backgroundColor: '#fee2e2',
-  },
-  statusDraft: {
-    backgroundColor: '#f3f4f6',
-  },
-  statusSubmitted: {
-    backgroundColor: '#dbeafe',
+    paddingVertical: 7,
+    borderRadius: 999,
   },
   statusText: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '700',
-    color: '#fff',
   },
   dateInfo: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
   },
   dateText: {
     fontSize: 12,
     color: '#64748b',
   },
   metadataSection: {
-    paddingHorizontal: 8,
-    paddingVertical: 12,
-    backgroundColor: '#f8fafc',
-    borderRadius: 10,
-    marginBottom: 16,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 8,
   },
+  metadataSectionWide: {
+    gap: 12,
+  },
   metadataItem: {
-    paddingVertical: 6,
+    width: '100%',
+    borderRadius: 14,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  metadataItemWide: {
+    flex: 1,
+    minWidth: 220,
   },
   metadataLabel: {
     fontSize: 11,
@@ -448,24 +526,38 @@ const styles = StyleSheet.create({
   },
   metadataValue: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#0f172a',
-  },
-  section: {
-    marginBottom: 16,
-    paddingBottom: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
-  },
-  sectionTitle: {
-    fontSize: 14,
     fontWeight: '700',
     color: '#0f172a',
+  },
+  sectionCard: {
+    marginBottom: 14,
+    padding: 16,
+    borderRadius: 18,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderBottomColor: '#e2e8f0',
+    borderColor: '#e2e8f0',
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
     marginBottom: 12,
   },
+  sectionTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  sectionCaption: {
+    fontSize: 12,
+    color: '#64748b',
+    fontWeight: '600',
+  },
   descriptionText: {
-    fontSize: 13,
-    lineHeight: 20,
+    fontSize: 14,
+    lineHeight: 22,
     color: '#475569',
   },
   metricsDisplay: {
@@ -473,12 +565,32 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 10,
   },
+  metricsDisplayWide: {
+    gap: 12,
+  },
   attachmentsList: {
     gap: 10,
   },
+  attachmentsListWide: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'flex-start',
+    gap: 14,
+  },
+  attachmentPreviewCard: {
+    borderRadius: 12,
+    overflow: 'hidden',
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 12,
+  },
+  attachmentPreviewCardWide: {
+    width: '100%',
+  },
   attachmentPreview: {
     width: '100%',
-    height: 180,
+    height: Platform.select({ web: 360, default: 220 }),
     borderRadius: 12,
     backgroundColor: '#e2e8f0',
   },
@@ -498,12 +610,12 @@ const styles = StyleSheet.create({
   },
   metricCard: {
     flex: Platform.select({ web: 0, default: 1 }),
-    minWidth: '45%',
-    paddingHorizontal: 12,
-    paddingVertical: 12,
+    minWidth: 220,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
     backgroundColor: '#f1f5f9',
-    borderRadius: 10,
-    borderLeftWidth: 3,
+    borderRadius: 14,
+    borderLeftWidth: 4,
     borderLeftColor: '#166534',
   },
   metricCardLabel: {
@@ -520,9 +632,11 @@ const styles = StyleSheet.create({
   adminActions: {
     flexDirection: 'row',
     gap: 10,
+    flexWrap: 'wrap',
   },
   adminActionButton: {
     flex: 1,
+    minWidth: 180,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -562,9 +676,11 @@ const styles = StyleSheet.create({
   formActions: {
     flexDirection: 'row',
     gap: 10,
+    flexWrap: 'wrap',
   },
   formCancelButton: {
     flex: 1,
+    minWidth: 160,
     paddingVertical: 10,
     borderRadius: 10,
     borderWidth: 1,
@@ -578,6 +694,7 @@ const styles = StyleSheet.create({
   },
   formSubmitButton: {
     flex: 1,
+    minWidth: 160,
     paddingVertical: 10,
     borderRadius: 10,
     backgroundColor: '#16a34a',
@@ -599,14 +716,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    backgroundColor: '#fee2e2',
-    borderLeftWidth: 3,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    backgroundColor: '#fff7ed',
+    borderLeftWidth: 4,
     borderLeftColor: '#dc2626',
+    borderRadius: 14,
   },
   approvalHistoryApproved: {
-    backgroundColor: '#dcfce7',
+    backgroundColor: '#ecfdf3',
     borderLeftColor: '#16a34a',
   },
   approvalHistoryIcon: {
@@ -616,18 +734,18 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   approvalHistoryStatus: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '700',
-    color: '#fff',
+    color: '#0f172a',
   },
   approvalHistoryBy: {
     fontSize: 12,
-    color: '#fff',
+    color: '#475569',
     marginTop: 2,
   },
   approvalHistoryDate: {
     fontSize: 11,
-    color: 'rgba(255, 255, 255, 0.8)',
+    color: '#64748b',
     marginTop: 4,
   },
   approvalNotesBox: {
@@ -654,10 +772,12 @@ const styles = StyleSheet.create({
     borderTopColor: '#e2e8f0',
   },
   closeButton: {
+    minHeight: 48,
     paddingVertical: 12,
-    borderRadius: 10,
+    borderRadius: 14,
     backgroundColor: '#166534',
     alignItems: 'center',
+    justifyContent: 'center',
   },
   closeButtonText: {
     fontSize: 14,

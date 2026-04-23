@@ -55,6 +55,14 @@ function getProgressPercent(report: SubmittedReport): number {
   return Math.max(8, Math.min(100, Math.round(scaled / Math.min(metricValues.length, 4))));
 }
 
+function getLinkedActivityLabel(report: SubmittedReport): string {
+  if (report.projectTitle) {
+    return report.projectTitle;
+  }
+
+  return report.projectKind === 'event' ? 'No linked event' : 'No linked project';
+}
+
 export default function AdminReportsDashboard({
   reports,
   projects,
@@ -108,12 +116,12 @@ export default function AdminReportsDashboard({
       {
         key: 'volunteer',
         label: 'Volunteer Reports',
-        subtitle: 'Timeout and field submissions',
+        subtitle: 'Event and field submissions',
         count: volunteerReports.length,
         accent: '#fff6d9',
         panel: '#d1a120',
         card: '#dfb33f',
-        chips: ['Volunteer', 'Hours', 'Field'],
+        chips: ['Volunteer', 'Event', 'Field'],
         reports: volunteerReports,
       },
       {
@@ -220,7 +228,7 @@ export default function AdminReportsDashboard({
                             <Text style={styles.reportDate}>{formatShortDate(report.submittedAt)}</Text>
                           </View>
                           <Text style={styles.reportMeta} numberOfLines={1}>
-                            {[report.submitterName, report.projectTitle || 'No linked project'].join(' • ')}
+                            {[report.submitterName, getLinkedActivityLabel(report)].join(' • ')}
                           </Text>
                           <View style={styles.progressTrack}>
                             <View style={[styles.progressFill, { width: `${progress}%`, backgroundColor: column.accent }]} />

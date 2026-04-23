@@ -58,7 +58,7 @@ import { format } from 'date-fns';
 import { navigateToAvailableRoute } from '../utils/navigation';
 import { getPrimaryProjectImageSource } from '../utils/projectMap';
 import { getProjectStatusColor } from '../utils/projectStatus';
-import { isImageMediaUri, pickImageFromDevice } from '../utils/media';
+import { getPrimaryReportMediaUri, isImageMediaUri, pickImageFromDevice } from '../utils/media';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 const statuses = ['Planning', 'In Progress', 'On Hold', 'Completed', 'Cancelled'];
@@ -188,6 +188,27 @@ function addDays(sourceDate: Date, days: number): Date {
 
 function getDateKey(sourceDate: Date): string {
   return sourceDate.toISOString().slice(0, 10);
+}
+
+function formatCalendarItemDateRange(startValue?: string, endValue?: string): string {
+  if (!startValue) {
+    return 'Date pending';
+  }
+
+  const startDate = new Date(startValue);
+  const endDate = endValue ? new Date(endValue) : startDate;
+
+  if (Number.isNaN(startDate.getTime())) {
+    return 'Date pending';
+  }
+
+  if (Number.isNaN(endDate.getTime())) {
+    return format(startDate, 'MMM d, yyyy');
+  }
+
+  const startLabel = format(startDate, 'MMM d');
+  const endLabel = format(endDate, 'MMM d, yyyy');
+  return startLabel === endLabel ? endLabel : `${startLabel} - ${endLabel}`;
 }
 
 // Returns the default project form used for create and edit flows.
@@ -336,6 +357,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [selectedProgramProposalModule, setSelectedProgramProposalModule] = useState<ProgramSuiteModule | null>(null);
+  const [selectedSchedulerYear, setSelectedSchedulerYear] = useState(new Date().getFullYear());
   const [newStatus, setNewStatus] = useState<Project['status']>('Planning');
   const [updateDescription, setUpdateDescription] = useState('');
   const [projectDraft, setProjectDraft] = useState<ProjectDraft>(createEmptyProjectDraft());
@@ -1534,71 +1556,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         </Text>
       </TouchableOpacity>
 
-      <View style={styles.programSuiteSchedulerCard}>
-        <View style={styles.programSuiteSchedulerHeader}>
-          <View>
-            <Text style={styles.programSuiteSchedulerTitle}>Project Scheduler</Text>
-            <Text style={styles.programSuiteSchedulerMeta}>
-              Projects inside {section.title} appear here for the current 3-week window.
-            </Text>
-          </View>
-          <Text style={styles.programSuiteSchedulerRange}>{schedulerRangeLabel}</Text>
-        </View>
-
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          <View style={styles.schedulerCalendarWrap}>
-            <View style={styles.schedulerCalendarHeaderRow}>
-              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(dayLabel => (
-                <Text key={`${section.module}-${dayLabel}`} style={styles.schedulerCalendarHeaderCell}>
-                  {dayLabel}
-                </Text>
-              ))}
-            </View>
-
-            {schedulerCalendarWeeks.map((week, weekIndex) => (
-              <View key={`${section.module}-week-${weekIndex}`} style={styles.schedulerCalendarWeekRow}>
-                {week.map(day => {
-                  const dayProjects = section.eventsByDate.get(getDateKey(day)) || [];
-                  return (
-                    <View key={`${section.module}-${day.toISOString()}`} style={styles.schedulerCalendarDayCell}>
-                      <Text style={styles.schedulerCalendarDayDate}>{format(day, 'd')}</Text>
-
-                      {dayProjects.length ? (
-                        <>
-                          {dayProjects.slice(0, 3).map(project => (
-                            <TouchableOpacity
-                              key={`${section.module}-${project.id}-${day.toISOString()}`}
-                              style={[
-                                styles.schedulerCalendarEvent,
-                                { backgroundColor: getProjectStatusColor(project.status) },
-                              ]}
-                              onPress={() => {
-                                void handleSelectProject(project);
-                              }}
-                              activeOpacity={0.85}
-                            >
-                              <Text style={styles.schedulerCalendarEventText} numberOfLines={1}>
-                                {project.title}
-                              </Text>
-                            </TouchableOpacity>
-                          ))}
-
-                          {dayProjects.length > 3 ? (
-                            <Text style={styles.schedulerCalendarMoreText}>+{dayProjects.length - 3} more</Text>
-                          ) : null}
-                        </>
-                      ) : (
-                        <Text style={styles.schedulerCalendarEmpty}>No events</Text>
-                      )}
-                    </View>
-                  );
-                })}
-              </View>
-            ))}
-          </View>
-        </ScrollView>
-      </View>
-
       <Animated.View
         style={[
           styles.programSuiteProjectsAnimatedWrap,
@@ -2105,8 +2062,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       : null;
     const candidateDate = selectedProject?.startDate || requestedProject?.startDate || projects[0]?.startDate;
     const parsedDate = candidateDate ? new Date(candidateDate) : new Date();
-    return Number.isNaN(parsedDate.getTime()) ? new Date() : parsedDate;
-  }, [projects, route?.params?.projectId, selectedProject?.startDate]);
+    const safeDate = Number.isNaN(parsedDate.getTime()) ? new Date() : parsedDate;
+
+    if (safeDate.getFullYear() === selectedSchedulerYear) {
+      return safeDate;
+    }
+
+    return new Date(selectedSchedulerYear, 0, 1);
+  }, [projects, route?.params?.projectId, selectedProject?.startDate, selectedSchedulerYear]);
 
   const schedulerCalendarDays = useMemo(() => {
     const monday = getStartOfWeekMonday(schedulerAnchorDate);
@@ -2130,6 +2093,48 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     return `${format(rangeStart, 'MMM d')} - ${format(rangeEnd, 'MMM d, yyyy')}`;
   }, [schedulerAnchorDate, schedulerCalendarDays]);
 
+  const suiteScheduledProjects = useMemo(
+    () =>
+      projects
+        .filter(project => {
+          const module = getProgramSuiteModule(project);
+          if (!module) {
+            return false;
+          }
+
+          const startDate = new Date(project.startDate);
+          const endDate = new Date(project.endDate);
+
+          if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+            return false;
+          }
+
+          return (
+            isDateOverlappingRange(schedulerCalendarWindow.start, startDate, endDate) ||
+            isDateOverlappingRange(schedulerCalendarWindow.end, startDate, endDate) ||
+            isDateOverlappingRange(startDate, schedulerCalendarWindow.start, schedulerCalendarWindow.end)
+          );
+        })
+        .sort((left, right) => new Date(left.startDate).getTime() - new Date(right.startDate).getTime()),
+    [projects, schedulerCalendarWindow.end, schedulerCalendarWindow.start]
+  );
+
+  const suiteEventsByDate = useMemo(() => {
+    const nextEventsByDate = new Map<string, Project[]>();
+
+    schedulerCalendarDays.forEach(day => {
+      const dayEvents = suiteScheduledProjects.filter(project => {
+        const startDate = new Date(project.startDate);
+        const endDate = new Date(project.endDate);
+        return isDateOverlappingRange(day, startDate, endDate);
+      });
+
+      nextEventsByDate.set(getDateKey(day), dayEvents);
+    });
+
+    return nextEventsByDate;
+  }, [schedulerCalendarDays, suiteScheduledProjects]);
+
   const programSections = useMemo(
     () =>
       featuredProgramModules.map(module => {
@@ -2144,45 +2149,17 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           .filter(project => getProgramSuiteModule(project) === module)
           .sort((left, right) => new Date(left.startDate).getTime() - new Date(right.startDate).getTime());
 
-        const scheduledProjects = sectionProjects
-          .filter(project => {
-            const startDate = new Date(project.startDate);
-            const endDate = new Date(project.endDate);
-
-            if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
-              return false;
-            }
-
-            return (
-              isDateOverlappingRange(schedulerCalendarWindow.start, startDate, endDate) ||
-              isDateOverlappingRange(schedulerCalendarWindow.end, startDate, endDate) ||
-              isDateOverlappingRange(startDate, schedulerCalendarWindow.start, schedulerCalendarWindow.end)
-            );
-          });
-
-        const eventsByDate = new Map<string, Project[]>();
-        schedulerCalendarDays.forEach(day => {
-          const dayEvents = scheduledProjects.filter(project => {
-            const startDate = new Date(project.startDate);
-            const endDate = new Date(project.endDate);
-            return isDateOverlappingRange(day, startDate, endDate);
-          });
-
-          eventsByDate.set(getDateKey(day), dayEvents);
-        });
-
         return {
           module,
           ...details,
           projects: sectionProjects,
-          eventsByDate,
           totalPrograms: sectionProjects.filter(project => !project.isEvent).length,
           inProgressCount: sectionProjects.filter(project => project.status === 'In Progress').length,
           eventCount: sectionProjects.filter(project => project.isEvent).length,
           pendingProposalCount: pendingProposalApplication ? 1 : 0,
         };
       }),
-    [allPartnerApplications, projects, schedulerCalendarDays, schedulerCalendarWindow.end, schedulerCalendarWindow.start]
+    [allPartnerApplications, projects]
   );
 
   useEffect(() => {
@@ -2949,15 +2926,17 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                         <Text style={styles.applicationMeta}>
                           Uploaded {format(new Date(report.createdAt), 'PPpp')}
                         </Text>
-                        {report.mediaFile ? (
-                          isImageMediaUri(report.mediaFile) ? (
+                        {getPrimaryReportMediaUri(report.mediaFile, report.attachments) ? (
+                          isImageMediaUri(getPrimaryReportMediaUri(report.mediaFile, report.attachments)) ? (
                             <Image
-                              source={{ uri: report.mediaFile }}
+                              source={{ uri: getPrimaryReportMediaUri(report.mediaFile, report.attachments) || '' }}
                               style={styles.reportImagePreview}
                               resizeMode="cover"
                             />
                           ) : (
-                            <Text style={styles.applicationMeta}>Media: {report.mediaFile}</Text>
+                            <Text style={styles.applicationMeta}>
+                              Media: {getPrimaryReportMediaUri(report.mediaFile, report.attachments)}
+                            </Text>
                           )
                         ) : null}
                       </View>
@@ -3339,9 +3318,111 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         </View>
       ) : null}
       {!loadError ? (
-        <View style={styles.programSuiteStack}>
-          {programSections.map(renderProgramSection)}
-        </View>
+        <>
+          <View style={styles.programSuiteSchedulerCard}>
+            <View style={styles.programSuiteSchedulerHeader}>
+              <View>
+                <Text style={styles.programSuiteSchedulerTitle}>Program Calendar</Text>
+                <Text style={styles.programSuiteSchedulerMeta}>
+                  One shared calendar for all program cards in the current 3-week window.
+                </Text>
+              </View>
+              <View style={styles.programSuiteSchedulerControls}>
+                <View style={styles.programSuiteSchedulerYearSwitcher}>
+                  <TouchableOpacity
+                    style={styles.programSuiteSchedulerYearButton}
+                    onPress={() => setSelectedSchedulerYear(current => current - 1)}
+                    activeOpacity={0.85}
+                  >
+                    <MaterialIcons name="chevron-left" size={18} color="#1e3a8a" />
+                  </TouchableOpacity>
+                  <Text style={styles.programSuiteSchedulerYearText}>{selectedSchedulerYear}</Text>
+                  <TouchableOpacity
+                    style={styles.programSuiteSchedulerYearButton}
+                    onPress={() => setSelectedSchedulerYear(current => current + 1)}
+                    activeOpacity={0.85}
+                  >
+                    <MaterialIcons name="chevron-right" size={18} color="#1e3a8a" />
+                  </TouchableOpacity>
+                </View>
+                <Text style={styles.programSuiteSchedulerRange}>{schedulerRangeLabel}</Text>
+              </View>
+            </View>
+
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <View style={styles.schedulerCalendarWrap}>
+                <View style={styles.schedulerCalendarHeaderRow}>
+                  {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(dayLabel => (
+                    <Text key={`suite-${dayLabel}`} style={styles.schedulerCalendarHeaderCell}>
+                      {dayLabel}
+                    </Text>
+                  ))}
+                </View>
+
+                {schedulerCalendarWeeks.map((week, weekIndex) => (
+                  <View key={`suite-week-${weekIndex}`} style={styles.schedulerCalendarWeekRow}>
+                    {week.map(day => {
+                      const dayProjects = suiteEventsByDate.get(getDateKey(day)) || [];
+                      return (
+                        <View key={`suite-${day.toISOString()}`} style={styles.schedulerCalendarDayCell}>
+                          <Text style={styles.schedulerCalendarDayDate}>{format(day, 'MMM d')}</Text>
+
+                          {dayProjects.length ? (
+                            <>
+                              {dayProjects.slice(0, 3).map(project => {
+                                const module = getProgramSuiteModule(project);
+                                const moduleAccent = module ? programSuiteConfig[module].accent : '#475569';
+
+                                return (
+                                  <TouchableOpacity
+                                    key={`suite-${project.id}-${day.toISOString()}`}
+                                    style={[
+                                      styles.schedulerCalendarEvent,
+                                      {
+                                        backgroundColor: getProjectStatusColor(project.status),
+                                        borderLeftColor: moduleAccent,
+                                      },
+                                    ]}
+                                    onPress={() => {
+                                      void handleSelectProject(project);
+                                    }}
+                                    activeOpacity={0.85}
+                                  >
+                                    <Text style={styles.schedulerCalendarEventText} numberOfLines={1}>
+                                      {project.title}
+                                    </Text>
+                                    <Text style={styles.schedulerCalendarEventDate} numberOfLines={1}>
+                                      {formatCalendarItemDateRange(project.startDate, project.endDate)}
+                                    </Text>
+                                    {module ? (
+                                      <Text style={styles.schedulerCalendarEventModule} numberOfLines={1}>
+                                        {module}
+                                      </Text>
+                                    ) : null}
+                                  </TouchableOpacity>
+                                );
+                              })}
+
+                              {dayProjects.length > 3 ? (
+                                <Text style={styles.schedulerCalendarMoreText}>+{dayProjects.length - 3} more</Text>
+                              ) : null}
+                            </>
+                          ) : (
+                            <Text style={styles.schedulerCalendarEmpty}>No events</Text>
+                          )}
+                        </View>
+                      );
+                    })}
+                  </View>
+                ))}
+              </View>
+            </ScrollView>
+          </View>
+
+          <View style={styles.programSuiteStack}>
+            {programSections.map(renderProgramSection)}
+          </View>
+        </>
       ) : null}
       {!loadError && projects.length === 0 ? (
         <View style={styles.emptyState}>
@@ -3459,7 +3540,7 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   programSuiteSection: {
-    gap: 14,
+    gap: 0,
   },
   programSuiteHeaderCard: {
     borderWidth: 1,
@@ -3557,6 +3638,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#dbeafe',
     padding: 16,
+    marginBottom: 20,
     shadowColor: '#0f172a',
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.05,
@@ -3569,6 +3651,36 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     gap: 12,
     marginBottom: 14,
+  },
+  programSuiteSchedulerControls: {
+    alignItems: 'flex-end',
+    gap: 8,
+  },
+  programSuiteSchedulerYearSwitcher: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 999,
+    backgroundColor: '#eff6ff',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  programSuiteSchedulerYearButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  programSuiteSchedulerYearText: {
+    minWidth: 52,
+    textAlign: 'center',
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#1e3a8a',
   },
   programSuiteSchedulerTitle: {
     fontSize: 24,
@@ -4755,11 +4867,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 5,
     marginBottom: 6,
+    borderLeftWidth: 4,
   },
   schedulerCalendarEventText: {
     fontSize: 11,
     fontWeight: '700',
     color: '#ffffff',
+  },
+  schedulerCalendarEventDate: {
+    marginTop: 2,
+    fontSize: 10,
+    fontWeight: '700',
+    color: 'rgba(255,255,255,0.92)',
+  },
+  schedulerCalendarEventModule: {
+    marginTop: 2,
+    fontSize: 10,
+    fontWeight: '700',
+    color: 'rgba(255,255,255,0.88)',
+    textTransform: 'uppercase',
   },
   schedulerCalendarMoreText: {
     fontSize: 11,

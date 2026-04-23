@@ -86,10 +86,13 @@ Notes:
 - You can set `SUPABASE_DB_URL_FALLBACK` in `.env` if you want an explicit backup DSN.
 - `GET /db-health` now includes endpoint diagnostics for failover troubleshooting.
 
-Then create the schema and seed demo records:
+Then create the schema and seed demo records intentionally:
 
 ```bash
+set VOLCRE_ALLOW_SCHEMA_SETUP=true
 python init_supabase.py
+
+set VOLCRE_ALLOW_DEMO_LOGIN_SEED=true
 python seed_demo_data.py
 ```
 
@@ -152,7 +155,7 @@ npm run backend
 
 - Admin accounts can log in on web only.
 - Volunteer and partner accounts can log in on mobile only.
-- Demo data is initialized on app startup from `models/storage.ts`.
+- Shared database writes are protected by default. Demo bootstrap and schema scripts only run after explicit env unlocks.
 
 ## Demo Credentials
 

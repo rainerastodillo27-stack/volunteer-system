@@ -1437,12 +1437,134 @@ export async function getUserByEmail(email: string): Promise<User | null> {
   return getUserByEmailOrPhone(email);
 }
 
-// Looks up a single user by email address or phone number.
-export async function getUserByEmailOrPhone(identifier: string): Promise<User | null> {
-  const payload = await requestApiJson<{ user?: User | null }>(
-    `/users/lookup?identifier=${encodeURIComponent(identifier.trim())}`
+function getLoginIdentifierUsernameAlias(identifier: string): string {
+  const normalizedIdentifier = identifier.trim().toLowerCase();
+  if (!normalizedIdentifier || normalizedIdentifier.includes('@')) {
+    return '';
+  }
+
+  const phoneLikeIdentifier = normalizedIdentifier.replace(/[+\-()\s]/g, '');
+  if (/^\d+$/.test(phoneLikeIdentifier)) {
+    return '';
+  }
+
+  return normalizedIdentifier;
+}
+
+function getMatchingUserByLoginIdentifier(users: User[], identifier: string): User | null {
+  const normalizedIdentifier = identifier.trim().toLowerCase();
+  const usernameAlias = getLoginIdentifierUsernameAlias(identifier);
+  const normalizedPhone = normalizeComparablePhone(identifier);
+
+  return (
+    users.find(user => {
+      const normalizedUserEmail = user.email?.trim().toLowerCase() || '';
+      const normalizedUserPhone = normalizeComparablePhone(user.phone);
+
+      if (normalizedUserEmail && normalizedUserEmail === normalizedIdentifier) {
+        return true;
+      }
+
+      if (
+        usernameAlias &&
+        normalizedUserEmail &&
+        normalizedUserEmail.split('@', 1)[0] === usernameAlias
+      ) {
+        return true;
+      }
+
+      return Boolean(
+        normalizedPhone &&
+        normalizedUserPhone &&
+        normalizedUserPhone === normalizedPhone
+      );
+    }) || null
   );
-  return payload.user || null;
+}
+
+async function canVolunteerLogin(user: User): Promise<{
+  allowed: boolean;
+  reason?: string;
+}> {
+  if (user.role !== 'volunteer') {
+    return { allowed: true };
+  }
+
+  const volunteers = await getLinkedVolunteersForUserAccount(user);
+  const approvedVolunteer = volunteers.find(
+    volunteer => (volunteer.registrationStatus || 'Approved') === 'Approved'
+  );
+  if (approvedVolunteer) {
+    return { allowed: true };
+  }
+
+  const rejectedVolunteer = volunteers.find(
+    volunteer => volunteer.registrationStatus === 'Rejected'
+  );
+  if (rejectedVolunteer) {
+    return {
+      allowed: false,
+      reason: 'Your volunteer account was rejected. Please contact the admin team.',
+    };
+  }
+
+  if (volunteers.length > 0) {
+    return {
+      allowed: false,
+      reason: 'Your volunteer account is still pending approval.',
+    };
+  }
+
+  return {
+    allowed: false,
+    reason: 'No volunteer profile is linked to this account yet.',
+  };
+}
+
+async function loginWithStoredCredentials(
+  identifier: string,
+  password: string
+): Promise<User | null> {
+  const users = await getAllUsers();
+  const matchedUser = getMatchingUserByLoginIdentifier(users, identifier);
+  if (!matchedUser) {
+    return null;
+  }
+
+  if ((matchedUser.password || '').trim() !== password.trim()) {
+    return null;
+  }
+
+  const [volunteerAccess, partnerAccess] = await Promise.all([
+    canVolunteerLogin(matchedUser),
+    canPartnerLogin(matchedUser),
+  ]);
+
+  if (!volunteerAccess.allowed) {
+    throw new Error(volunteerAccess.reason || 'Your volunteer account cannot log in right now.');
+  }
+
+  if (!partnerAccess.allowed) {
+    throw new Error(partnerAccess.reason || 'Your partner account cannot log in right now.');
+  }
+
+  return matchedUser;
+}
+
+// Looks up a single user by email address, email username alias, or phone number.
+export async function getUserByEmailOrPhone(identifier: string): Promise<User | null> {
+  try {
+    const payload = await requestApiJson<{ user?: User | null }>(
+      `/users/lookup?identifier=${encodeURIComponent(identifier.trim())}`
+    );
+    if (payload.user) {
+      return payload.user;
+    }
+  } catch {
+    // Fall back to the mirrored shared users list when lookup is unavailable.
+  }
+
+  return getMatchingUserByLoginIdentifier(await getAllUsers(), identifier);
 }
 
 // Validates login credentials against the shared user list.
@@ -1464,8 +1586,19 @@ export async function loginWithCredentials(
     return payload.user || null;
   } catch (error: any) {
     if (error?.message === 'Invalid email/phone or password.') {
-      return null;
+      return loginWithStoredCredentials(identifier, password);
     }
+
+    const fallbackMessages = [
+      'Database unavailable while checking your account. Please try again.',
+      'Failed to fetch',
+      'Network request failed',
+      'Database Unavailable',
+    ];
+    if (fallbackMessages.some(message => String(error?.message || '').includes(message))) {
+      return loginWithStoredCredentials(identifier, password);
+    }
+
     throw error;
   }
 }
@@ -3230,6 +3363,46 @@ function calculateImpactCountFromMetrics(metrics?: Record<string, number>): numb
   );
 }
 
+const REPORT_MEDIA_FILE_MAX_LENGTH = 500;
+
+function normalizeReportMediaPayload(input: {
+  attachments?: {
+    url: string;
+    type: 'image' | 'video' | 'document' | 'media';
+    description?: string;
+  }[];
+  mediaFile?: string;
+}): {
+  attachments: {
+    url: string;
+    type: 'image' | 'video' | 'document' | 'media';
+    description?: string;
+  }[];
+  mediaFile?: string;
+} {
+  const attachments = (input.attachments || [])
+    .map(attachment => ({
+      ...attachment,
+      url: attachment.url.trim(),
+      description: attachment.description?.trim() || undefined,
+    }))
+    .filter(attachment => attachment.url);
+
+  let mediaFile = input.mediaFile?.trim() || undefined;
+  if (mediaFile && mediaFile.length > REPORT_MEDIA_FILE_MAX_LENGTH) {
+    if (!attachments.some(attachment => attachment.url === mediaFile)) {
+      attachments.unshift({
+        url: mediaFile,
+        type: 'image',
+        description: 'Uploaded report photo',
+      });
+    }
+    mediaFile = undefined;
+  }
+
+  return { attachments, mediaFile };
+}
+
 // Submits one report into the shared impact hub for any supported role.
 export async function submitImpactHubReport(input: {
   projectId: string;
@@ -3252,6 +3425,10 @@ export async function submitImpactHubReport(input: {
   partnerName?: string;
 }): Promise<PartnerReport> {
   const normalizedMetrics = input.metrics || {};
+  const normalizedMediaPayload = normalizeReportMediaPayload({
+    attachments: input.attachments,
+    mediaFile: input.mediaFile,
+  });
   const report: PartnerReport = {
     id: `impact-report-${Date.now()}`,
     projectId: input.projectId,
@@ -3269,11 +3446,29 @@ export async function submitImpactHubReport(input: {
         ? input.impactCount
         : calculateImpactCountFromMetrics(normalizedMetrics),
     metrics: normalizedMetrics,
-    attachments: input.attachments || [],
-    mediaFile: input.mediaFile?.trim() || undefined,
+    attachments: normalizedMediaPayload.attachments,
+    mediaFile: normalizedMediaPayload.mediaFile,
     createdAt: new Date().toISOString(),
     status: 'Submitted',
   };
+
+  try {
+    const payload = await requestApiJson<{ report?: PartnerReport }>('/reports', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(report),
+    });
+    if (payload.report) {
+      return payload.report;
+    }
+  } catch (error: any) {
+    const message = String(error?.message || '');
+    if (!message.includes('404')) {
+      throw error;
+    }
+  }
 
   await savePartnerReport(report);
   return report;

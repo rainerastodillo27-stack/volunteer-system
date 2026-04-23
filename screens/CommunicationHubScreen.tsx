@@ -377,6 +377,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   const { width } = useWindowDimensions();
   const isWide = width >= 1180;
   const isMedium = width >= 860;
+  const isCompactLayout = width < 640;
   const { projectId: requestedProjectId } = route?.params || {};
 
   const [view, setView] = useState<'conversations' | 'detail'>('conversations');
@@ -1184,6 +1185,36 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     () => activeNeedPosts.find(message => message.id === selectedNeedMessageId) || null,
     [activeNeedPosts, selectedNeedMessageId]
   );
+  const isVolunteerCompact = user?.role === 'volunteer' && !isMedium;
+  const compactMetricCards = [
+    {
+      label: 'Joined chats',
+      value: projectChats.length,
+      hint: 'Your event spaces',
+    },
+    {
+      label: 'Unread',
+      value: totalUnreadCount,
+      hint: 'Messages to review',
+    },
+  ];
+  const fullMetricCards = [
+    {
+      label: 'Project Chats',
+      value: projectChats.length,
+      hint: 'Shared coordination spaces',
+    },
+    {
+      label: 'Unread',
+      value: totalUnreadCount,
+      hint: 'Direct messages awaiting review',
+    },
+    {
+      label: 'Reachable Users',
+      value: allUsers.length,
+      hint: 'Admins, partners, and volunteers',
+    },
+  ];
 
   const showEmptyState =
     filteredProjectChats.length === 0 &&
@@ -1208,8 +1239,14 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={80}
       >
-        <View style={[styles.detailShell, isWide && styles.centeredShell]}>
-          <View style={styles.detailHero}>
+        <View
+          style={[
+            styles.detailShell,
+            isCompactLayout && styles.detailShellCompact,
+            isWide && styles.centeredShell,
+          ]}
+        >
+          <View style={[styles.detailHero, isVolunteerCompact && styles.detailHeroCompact]}>
             <TouchableOpacity
               onPress={() => {
                 setView('conversations');
@@ -1223,16 +1260,20 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
               <MaterialIcons name="arrow-back" size={22} color="#0f172a" />
             </TouchableOpacity>
 
-            <View style={styles.detailHeroCopy}>
+            <View style={[styles.detailHeroCopy, isVolunteerCompact && styles.detailHeroCopyCompact]}>
               <Text style={styles.detailEyebrow}>
                 {selectedProjectChat ? 'Project group chat' : 'Direct conversation'}
               </Text>
-              <Text style={styles.detailTitle}>{selectedChatTitle}</Text>
-              <Text style={styles.detailSubtitle}>{selectedChatSubtitle}</Text>
+              <Text style={[styles.detailTitle, isVolunteerCompact && styles.detailTitleCompact]}>
+                {selectedChatTitle}
+              </Text>
+              <Text style={[styles.detailSubtitle, isVolunteerCompact && styles.detailSubtitleCompact]}>
+                {selectedChatSubtitle}
+              </Text>
             </View>
 
             {selectedProjectChat ? (
-              <View style={styles.detailBadge}>
+              <View style={[styles.detailBadge, isVolunteerCompact && styles.detailBadgeCompact]}>
                 <MaterialIcons
                   name={selectedProjectChat.project.isEvent ? 'event' : 'groups'}
                   size={18}
@@ -1257,11 +1298,14 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
           <ScrollView
             style={styles.messagesScroll}
-            contentContainerStyle={styles.messagesContent}
+            contentContainerStyle={[
+              styles.messagesContent,
+              isCompactLayout && styles.messagesContentCompact,
+            ]}
             showsVerticalScrollIndicator={false}
           >
             {selectedProjectChat ? (
-              <View style={styles.planningBoardCard}>
+              <View style={[styles.planningBoardCard, isVolunteerCompact && styles.planningBoardCardCompact]}>
                 <View style={styles.planningBoardHeader}>
                   <View style={styles.planningBoardCopy}>
                     <Text style={styles.planningBoardTitle}>Planning Board</Text>
@@ -1275,16 +1319,21 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                   </View>
                 </View>
 
-                <View style={[styles.planningMetricsRow, !isMedium && styles.metricsRowStacked]}>
-                  <View style={styles.planningMetricCard}>
+                <View
+                  style={[
+                    styles.planningMetricsRow,
+                    (!isMedium || isVolunteerCompact) && styles.metricsRowStacked,
+                  ]}
+                >
+                  <View style={[styles.planningMetricCard, isVolunteerCompact && styles.planningMetricCardCompact]}>
                     <Text style={styles.planningMetricValue}>{planningMetrics.open}</Text>
                     <Text style={styles.planningMetricLabel}>Open</Text>
                   </View>
-                  <View style={styles.planningMetricCard}>
+                  <View style={[styles.planningMetricCard, isVolunteerCompact && styles.planningMetricCardCompact]}>
                     <Text style={styles.planningMetricValue}>{planningMetrics.inProgress}</Text>
                     <Text style={styles.planningMetricLabel}>In Progress</Text>
                   </View>
-                  <View style={styles.planningMetricCard}>
+                  <View style={[styles.planningMetricCard, isVolunteerCompact && styles.planningMetricCardCompact]}>
                     <Text style={styles.planningMetricValue}>{planningMetrics.fulfilled}</Text>
                     <Text style={styles.planningMetricLabel}>Fulfilled</Text>
                   </View>
@@ -1377,6 +1426,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                       key={message.id}
                       style={[
                         styles.needCard,
+                        isCompactLayout && styles.needCardCompact,
                         isOwnMessage ? styles.needCardOwn : styles.needCardOther,
                       ]}
                     >
@@ -1536,6 +1586,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                       key={message.id}
                       style={[
                         styles.scopeProposalCard,
+                        isCompactLayout && styles.scopeProposalCardCompact,
                         isOwnMessage ? styles.scopeProposalCardOwn : styles.scopeProposalCardOther,
                       ]}
                     >
@@ -1703,10 +1754,11 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                   return (
                     <View
                       key={message.id}
-                      style={[
-                        styles.responseCard,
-                        isOwnMessage ? styles.responseCardOwn : styles.responseCardOther,
-                      ]}
+                    style={[
+                      styles.responseCard,
+                      isCompactLayout && styles.responseCardCompact,
+                      isOwnMessage ? styles.responseCardOwn : styles.responseCardOther,
+                    ]}
                     >
                       <View style={styles.responseTopRow}>
                         <Text style={[styles.messageSender, isOwnMessage && styles.messageSenderOwn]}>
@@ -1776,6 +1828,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                     key={message.id}
                     style={[
                       styles.messageBubble,
+                      isCompactLayout && styles.messageBubbleCompact,
                       isOwnMessage ? styles.messageBubbleOwn : styles.messageBubbleOther,
                     ]}
                   >
@@ -1809,12 +1862,13 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
             )}
           </ScrollView>
 
-          <View style={styles.composerShell}>
+          <View style={[styles.composerShell, isVolunteerCompact && styles.composerShellCompact]}>
             {detailCanPostNeeds ? (
-              <View style={styles.modeToggleRow}>
+              <View style={[styles.modeToggleRow, isVolunteerCompact && styles.modeToggleRowCompact]}>
                 <TouchableOpacity
                   style={[
                     styles.modeToggleButton,
+                    isVolunteerCompact && styles.modeToggleButtonCompact,
                     composerMode === 'message' && styles.modeToggleButtonActive,
                   ]}
                   onPress={() => setComposerMode('message')}
@@ -1837,6 +1891,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                 <TouchableOpacity
                   style={[
                     styles.modeToggleButton,
+                    isVolunteerCompact && styles.modeToggleButtonCompact,
                     composerMode === 'need-post' && styles.modeToggleButtonActive,
                   ]}
                   onPress={() => setComposerMode('need-post')}
@@ -1860,6 +1915,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                   <TouchableOpacity
                     style={[
                       styles.modeToggleButton,
+                      isVolunteerCompact && styles.modeToggleButtonCompact,
                       composerMode === 'scope-proposal' && styles.modeToggleButtonActive,
                     ]}
                     onPress={() => setComposerMode('scope-proposal')}
@@ -1883,7 +1939,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
             ) : null}
 
             {detailCanPostNeeds && composerMode === 'need-post' ? (
-              <View style={styles.needComposerCard}>
+              <View style={[styles.needComposerCard, isVolunteerCompact && styles.needComposerCardCompact]}>
                 <Text style={styles.needComposerTitle}>Post a planning need in this group</Text>
                 <Text style={styles.needComposerSubtitle}>
                   Share exactly what the team needs so volunteers, partners, and admins can coordinate around one clear request.
@@ -2152,7 +2208,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
             ) : null}
 
             <View style={[styles.inputRow, !isMedium && styles.inputRowStacked]}>
-              <TouchableOpacity style={styles.attachmentButton} onPress={handlePickAttachment}>
+              <TouchableOpacity
+                style={[styles.attachmentButton, isVolunteerCompact && styles.attachmentButtonCompact]}
+                onPress={handlePickAttachment}
+              >
                 <MaterialIcons name="photo-library" size={18} color="#166534" />
               </TouchableOpacity>
 
@@ -2184,7 +2243,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                 />
               )}
 
-              <TouchableOpacity style={styles.sendButton} onPress={handleSendMessage}>
+              <TouchableOpacity
+                style={[styles.sendButton, isVolunteerCompact && styles.sendButtonCompact]}
+                onPress={handleSendMessage}
+              >
                 <MaterialIcons
                   name={composerMode === 'scope-proposal' ? 'description' : composerMode === 'need-post' ? 'campaign' : selectedNeedMessage ? 'assignment-turned-in' : 'send'}
                   size={18}
@@ -2205,43 +2267,64 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     <View style={styles.screen}>
       <ScrollView
         style={styles.listScroll}
-        contentContainerStyle={styles.listScrollContent}
+        contentContainerStyle={[
+          styles.listScrollContent,
+          isCompactLayout && styles.listScrollContentCompact,
+        ]}
         showsVerticalScrollIndicator={false}
       >
         <View style={[styles.listShell, isWide && styles.centeredShell]}>
-          <View style={styles.heroCard}>
+          <View style={[styles.heroCard, isVolunteerCompact && styles.heroCardCompact]}>
             <View style={styles.heroCopy}>
-              <Text style={styles.heroEyebrow}>Collaboration workspace</Text>
-              <Text style={styles.heroTitle}>Communication Hub</Text>
-              <Text style={styles.heroSubtitle}>
-                {projectChatSubtitle}
+              <Text style={styles.heroEyebrow}>
+                {isVolunteerCompact ? 'Volunteer coordination' : 'Collaboration workspace'}
+              </Text>
+              <Text style={[styles.heroTitle, isVolunteerCompact && styles.heroTitleCompact]}>
+                Communication Hub
+              </Text>
+              <Text style={[styles.heroSubtitle, isVolunteerCompact && styles.heroSubtitleCompact]}>
+                {isVolunteerCompact
+                  ? 'Open your joined event chats, follow direct messages, and reach people fast.'
+                  : projectChatSubtitle}
               </Text>
             </View>
 
-            <View style={[styles.metricsRow, !isMedium && styles.metricsRowStacked]}>
-              <View style={styles.metricCard}>
-                <Text style={styles.metricLabel}>Project Chats</Text>
-                <Text style={styles.metricValue}>{projectChats.length}</Text>
-                <Text style={styles.metricHint}>Shared coordination spaces</Text>
-              </View>
-              <View style={styles.metricCard}>
-                <Text style={styles.metricLabel}>Unread</Text>
-                <Text style={styles.metricValue}>{totalUnreadCount}</Text>
-                <Text style={styles.metricHint}>Direct messages awaiting review</Text>
-              </View>
-              <View style={styles.metricCard}>
-                <Text style={styles.metricLabel}>Reachable Users</Text>
-                <Text style={styles.metricValue}>{allUsers.length}</Text>
-                <Text style={styles.metricHint}>Admins, partners, and volunteers</Text>
-              </View>
+            <View
+              style={[
+                styles.metricsRow,
+                !isMedium && styles.metricsRowStacked,
+                isVolunteerCompact && styles.metricsRowCompact,
+              ]}
+            >
+              {(isVolunteerCompact ? compactMetricCards : fullMetricCards).map(card => (
+                <View
+                  key={card.label}
+                  style={[styles.metricCard, isVolunteerCompact && styles.metricCardCompact]}
+                >
+                  <Text style={styles.metricLabel}>{card.label}</Text>
+                  <Text style={[styles.metricValue, isVolunteerCompact && styles.metricValueCompact]}>
+                    {card.value}
+                  </Text>
+                  <Text style={styles.metricHint}>{card.hint}</Text>
+                </View>
+              ))}
             </View>
 
-            <View style={styles.searchCard}>
+            {isVolunteerCompact ? (
+              <View style={styles.compactSupportNote}>
+                <MaterialIcons name="tips-and-updates" size={16} color="#166534" />
+                <Text style={styles.compactSupportNoteText}>
+                  Search any name, event, or project to jump straight into the right conversation.
+                </Text>
+              </View>
+            ) : null}
+
+            <View style={[styles.searchCard, isVolunteerCompact && styles.searchCardCompact]}>
               <MaterialIcons name="search" size={20} color="#64748b" />
               <TextInput
                 value={searchText}
                 onChangeText={setSearchText}
-                placeholder="Search chats, names, or projects"
+                placeholder={isVolunteerCompact ? 'Search chats, teammates, or events' : 'Search chats, names, or projects'}
                 placeholderTextColor="#94a3b8"
                 style={styles.searchInput}
               />
@@ -2273,10 +2356,12 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
           ) : (
             <View style={[styles.sectionsGrid, isWide && styles.sectionsGridWide]}>
               <View style={styles.primaryColumn}>
-                <View style={styles.sectionCard}>
+                <View style={[styles.sectionCard, isVolunteerCompact && styles.sectionCardCompact]}>
                   <View style={styles.sectionHeader}>
                     <View>
-                      <Text style={styles.sectionTitle}>{projectChatSectionTitle}</Text>
+                      <Text style={[styles.sectionTitle, isVolunteerCompact && styles.sectionTitleCompact]}>
+                        {projectChatSectionTitle}
+                      </Text>
                       <Text style={styles.sectionDescription}>
                         Open the shared group and post updates, coordination notes, or customized needs.
                       </Text>
@@ -2289,7 +2374,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                     filteredProjectChats.map(projectChat => (
                       <TouchableOpacity
                         key={projectChat.project.id}
-                        style={styles.projectChatCard}
+                        style={[styles.projectChatCard, isVolunteerCompact && styles.projectChatCardCompact]}
                         onPress={() => handleSelectProjectChat(projectChat)}
                       >
                         <View style={styles.projectChatIcon}>
@@ -2318,10 +2403,12 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                   )}
                 </View>
 
-                <View style={styles.sectionCard}>
+                <View style={[styles.sectionCard, isVolunteerCompact && styles.sectionCardCompact]}>
                   <View style={styles.sectionHeader}>
                     <View>
-                      <Text style={styles.sectionTitle}>Direct conversations</Text>
+                      <Text style={[styles.sectionTitle, isVolunteerCompact && styles.sectionTitleCompact]}>
+                        Direct conversations
+                      </Text>
                       <Text style={styles.sectionDescription}>
                         Keep one-to-one follow-ups clean and easy to track.
                       </Text>
@@ -2334,7 +2421,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                     filteredConversations.map(item => (
                       <TouchableOpacity
                         key={item.user.id}
-                        style={styles.conversationRow}
+                        style={[styles.conversationRow, isVolunteerCompact && styles.conversationRowCompact]}
                         onPress={() => handleSelectUser(item.user)}
                       >
                         <View style={styles.userAvatar}>
@@ -2376,10 +2463,12 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
               </View>
 
               <View style={styles.secondaryColumn}>
-                <View style={styles.sectionCard}>
+                <View style={[styles.sectionCard, isVolunteerCompact && styles.sectionCardCompact]}>
                   <View style={styles.sectionHeader}>
                     <View>
-                      <Text style={styles.sectionTitle}>Start a new chat</Text>
+                      <Text style={[styles.sectionTitle, isVolunteerCompact && styles.sectionTitleCompact]}>
+                        Start a new chat
+                      </Text>
                       <Text style={styles.sectionDescription}>
                         Reach out to other people in the system without leaving the hub.
                       </Text>
@@ -2410,34 +2499,57 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                   )}
                 </View>
 
-                <View style={styles.sectionCard}>
+                <View style={[styles.sectionCard, isVolunteerCompact && styles.sectionCardCompact]}>
                   <View style={styles.sectionHeader}>
                     <View>
-                      <Text style={styles.sectionTitle}>Hub tips</Text>
+                      <Text style={[styles.sectionTitle, isVolunteerCompact && styles.sectionTitleCompact]}>
+                        {isVolunteerCompact ? 'Quick help' : 'Hub tips'}
+                      </Text>
                       <Text style={styles.sectionDescription}>
-                        Use project group chats, respond to needs, and keep conversations moving.
+                        {isVolunteerCompact
+                          ? 'A few shortcuts to keep conversations easy to manage on mobile.'
+                          : 'Use project group chats, respond to needs, and keep conversations moving.'}
                       </Text>
                     </View>
                   </View>
 
-                  <View style={styles.tipCard}>
-                    <MaterialIcons name="campaign" size={18} color="#166534" />
-                      <Text style={styles.tipText}>
-                      Use project group chats like planning rooms: admins, partners, and joined volunteers can all post structured needs.
-                    </Text>
-                  </View>
-                  <View style={styles.tipCard}>
-                    <MaterialIcons name="forum" size={18} color="#166534" />
-                    <Text style={styles.tipText}>
-                      Respond to a need directly from the planning board so the whole team can see who is helping.
-                    </Text>
-                  </View>
-                  <View style={styles.tipCard}>
-                    <MaterialIcons name="photo-library" size={18} color="#166534" />
-                    <Text style={styles.tipText}>
-                      Attach a photo when a request needs reference material, stock levels, or field context.
-                    </Text>
-                  </View>
+                  {isVolunteerCompact ? (
+                    <View style={styles.compactTipsList}>
+                      <View style={styles.tipCard}>
+                        <MaterialIcons name="campaign" size={18} color="#166534" />
+                        <Text style={styles.tipText}>
+                          Use your joined event chat first when the update affects the whole team.
+                        </Text>
+                      </View>
+                      <View style={styles.tipCard}>
+                        <MaterialIcons name="assignment-turned-in" size={18} color="#166534" />
+                        <Text style={styles.tipText}>
+                          Tap a planning need to reply so everyone sees who is helping.
+                        </Text>
+                      </View>
+                    </View>
+                  ) : (
+                    <>
+                      <View style={styles.tipCard}>
+                        <MaterialIcons name="campaign" size={18} color="#166534" />
+                        <Text style={styles.tipText}>
+                          Use project group chats like planning rooms: admins, partners, and joined volunteers can all post structured needs.
+                        </Text>
+                      </View>
+                      <View style={styles.tipCard}>
+                        <MaterialIcons name="forum" size={18} color="#166534" />
+                        <Text style={styles.tipText}>
+                          Respond to a need directly from the planning board so the whole team can see who is helping.
+                        </Text>
+                      </View>
+                      <View style={styles.tipCard}>
+                        <MaterialIcons name="photo-library" size={18} color="#166534" />
+                        <Text style={styles.tipText}>
+                          Attach a photo when a request needs reference material, stock levels, or field context.
+                        </Text>
+                      </View>
+                    </>
+                  )}
                 </View>
               </View>
             </View>
@@ -2464,6 +2576,9 @@ const styles = StyleSheet.create({
   listScrollContent: {
     padding: 20,
   },
+  listScrollContentCompact: {
+    padding: 12,
+  },
   listShell: {
     width: '100%',
     gap: 20,
@@ -2481,6 +2596,11 @@ const styles = StyleSheet.create({
     shadowRadius: 24,
     elevation: 4,
   },
+  heroCardCompact: {
+    borderRadius: 22,
+    padding: 16,
+    gap: 14,
+  },
   heroCopy: {
     gap: 8,
   },
@@ -2496,15 +2616,25 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#0f172a',
   },
+  heroTitleCompact: {
+    fontSize: 25,
+  },
   heroSubtitle: {
     fontSize: 15,
     lineHeight: 22,
     color: '#475569',
     maxWidth: 760,
   },
+  heroSubtitleCompact: {
+    fontSize: 14,
+    lineHeight: 20,
+  },
   metricsRow: {
     flexDirection: 'row',
     gap: 14,
+  },
+  metricsRowCompact: {
+    gap: 10,
   },
   metricsRowStacked: {
     flexDirection: 'column',
@@ -2517,6 +2647,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fff7',
     borderWidth: 1,
     borderColor: '#cde8ce',
+  },
+  metricCardCompact: {
+    borderRadius: 18,
+    padding: 14,
   },
   metricLabel: {
     fontSize: 12,
@@ -2531,11 +2665,32 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#0f172a',
   },
+  metricValueCompact: {
+    marginTop: 6,
+    fontSize: 25,
+  },
   metricHint: {
     marginTop: 6,
     fontSize: 13,
     lineHeight: 19,
     color: '#64748b',
+  },
+  compactSupportNote: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderRadius: 16,
+    backgroundColor: '#f8fff7',
+    borderWidth: 1,
+    borderColor: '#d7ead8',
+  },
+  compactSupportNoteText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#475569',
   },
   searchCard: {
     flexDirection: 'row',
@@ -2547,6 +2702,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fafc',
     paddingHorizontal: 16,
     paddingVertical: 14,
+  },
+  searchCardCompact: {
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
   },
   searchInput: {
     flex: 1,
@@ -2586,6 +2746,11 @@ const styles = StyleSheet.create({
     shadowRadius: 20,
     elevation: 3,
   },
+  sectionCardCompact: {
+    borderRadius: 22,
+    padding: 16,
+    gap: 14,
+  },
   sectionHeader: {
     gap: 6,
   },
@@ -2593,6 +2758,9 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '800',
     color: '#0f172a',
+  },
+  sectionTitleCompact: {
+    fontSize: 18,
   },
   sectionDescription: {
     fontSize: 14,
@@ -2608,6 +2776,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fff7',
     borderWidth: 1,
     borderColor: '#d7ead8',
+  },
+  projectChatCardCompact: {
+    alignItems: 'flex-start',
+    padding: 14,
   },
   projectChatIcon: {
     width: 46,
@@ -2644,6 +2816,10 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderBottomWidth: 1,
     borderBottomColor: '#e5efe4',
+  },
+  conversationRowCompact: {
+    paddingVertical: 12,
+    gap: 12,
   },
   conversationCopy: {
     flex: 1,
@@ -2754,6 +2930,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#d7ead8',
   },
+  compactTipsList: {
+    gap: 12,
+  },
   tipText: {
     flex: 1,
     fontSize: 13,
@@ -2793,6 +2972,10 @@ const styles = StyleSheet.create({
     gap: 14,
     backgroundColor: '#f8fafc',
   },
+  detailShellCompact: {
+    padding: 10,
+    gap: 10,
+  },
   detailHero: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2807,6 +2990,13 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 4,
   },
+  detailHeroCompact: {
+    alignItems: 'flex-start',
+    borderRadius: 18,
+    padding: 16,
+    gap: 12,
+    flexWrap: 'wrap',
+  },
   backButton: {
     width: 44,
     height: 44,
@@ -2820,6 +3010,9 @@ const styles = StyleSheet.create({
     gap: 4,
     minWidth: 0,
   },
+  detailHeroCopyCompact: {
+    width: '100%',
+  },
   detailEyebrow: {
     fontSize: 11,
     fontWeight: '800',
@@ -2832,10 +3025,17 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#ffffff',
   },
+  detailTitleCompact: {
+    fontSize: 21,
+  },
   detailSubtitle: {
     fontSize: 14,
     lineHeight: 20,
     color: '#dbeafe',
+  },
+  detailSubtitleCompact: {
+    fontSize: 13,
+    lineHeight: 18,
   },
   detailBadge: {
     flexDirection: 'row',
@@ -2845,6 +3045,9 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 8,
     backgroundColor: '#dbeafe',
+  },
+  detailBadgeCompact: {
+    alignSelf: 'flex-start',
   },
   detailBadgeText: {
     fontSize: 12,
@@ -2858,6 +3061,10 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#bfdbfe',
     gap: 16,
+  },
+  planningBoardCardCompact: {
+    padding: 16,
+    gap: 12,
   },
   planningBoardHeader: {
     gap: 12,
@@ -2902,6 +3109,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fff7',
     borderWidth: 1,
     borderColor: '#d7ead8',
+  },
+  planningMetricCardCompact: {
+    padding: 12,
   },
   planningMetricValue: {
     fontSize: 24,
@@ -2986,11 +3196,23 @@ const styles = StyleSheet.create({
     paddingBottom: 24,
     gap: 14,
   },
+  messagesContentCompact: {
+    paddingHorizontal: 8,
+    paddingVertical: 10,
+    paddingBottom: 18,
+    gap: 10,
+  },
   messageBubble: {
     maxWidth: '86%',
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderRadius: 20,
+  },
+  messageBubbleCompact: {
+    maxWidth: '94%',
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    borderRadius: 18,
   },
   messageBubbleOther: {
     alignSelf: 'flex-start',
@@ -3040,6 +3262,11 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     padding: 16,
     gap: 10,
+  },
+  needCardCompact: {
+    maxWidth: '96%',
+    padding: 14,
+    gap: 8,
   },
   needCardOther: {
     alignSelf: 'flex-start',
@@ -3182,6 +3409,11 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 10,
   },
+  responseCardCompact: {
+    maxWidth: '94%',
+    padding: 14,
+    gap: 8,
+  },
   responseCardOther: {
     alignSelf: 'flex-start',
     backgroundColor: '#ffffff',
@@ -3256,10 +3488,18 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 2,
   },
+  composerShellCompact: {
+    borderRadius: 18,
+    padding: 14,
+    gap: 12,
+  },
   modeToggleRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 12,
+  },
+  modeToggleRowCompact: {
+    gap: 8,
   },
   modeToggleButton: {
     flexDirection: 'row',
@@ -3271,6 +3511,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#f0f9ff',
     borderWidth: 2,
     borderColor: '#bfdbfe',
+  },
+  modeToggleButtonCompact: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 9,
   },
   modeToggleButtonActive: {
     backgroundColor: '#2563eb',
@@ -3291,6 +3537,10 @@ const styles = StyleSheet.create({
     borderColor: '#bfdbfe',
     padding: 18,
     gap: 14,
+  },
+  needComposerCardCompact: {
+    padding: 14,
+    gap: 12,
   },
   needComposerTitle: {
     fontSize: 16,
@@ -3401,6 +3651,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#86efac',
   },
+  attachmentButtonCompact: {
+    width: '100%',
+    borderRadius: 14,
+  },
   messageInput: {
     flex: 1,
     minHeight: 52,
@@ -3502,6 +3756,10 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     backgroundColor: '#166534',
   },
+  sendButtonCompact: {
+    width: '100%',
+    minHeight: 50,
+  },
   sendButtonText: {
     fontSize: 14,
     fontWeight: '800',
@@ -3551,6 +3809,11 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     padding: 16,
     gap: 12,
+  },
+  scopeProposalCardCompact: {
+    maxWidth: '96%',
+    padding: 14,
+    gap: 10,
   },
   scopeProposalCardOther: {
     alignSelf: 'flex-start',

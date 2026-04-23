@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from db import get_connection
+from operation_guard import DEMO_LOGIN_SEED_UNLOCK_ENV_VAR, require_shared_db_unlock
 
 
 NOW = datetime.now(timezone.utc).isoformat()
@@ -61,6 +62,8 @@ def run_many(cursor, statement: str, rows: list[tuple]) -> None:
 
 # Seeds only the demo login accounts into Postgres.
 def main() -> None:
+    require_shared_db_unlock("demo login account seeding", DEMO_LOGIN_SEED_UNLOCK_ENV_VAR)
+
     with get_connection() as connection:
         with connection.cursor() as cursor:
             run_many(

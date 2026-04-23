@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import {
   getAllPartnerReports,
   getAllProjects,
+  getProjectsScreenSnapshot,
   getAllVolunteers,
   submitFieldReport,
   getImpactHubReportsByUser,
@@ -26,6 +27,7 @@ export interface SubmittedReport {
   description: string;
   projectId?: string;
   projectTitle?: string;
+  projectKind?: 'event' | 'project';
   category?: string;
   metrics: {
     volunteerHours?: number;
@@ -68,6 +70,7 @@ function normalizeImpactHubReport(
     description: report.description || '',
     projectId: report.projectId,
     projectTitle: linkedProject?.title,
+    projectKind: linkedProject?.isEvent ? 'event' : linkedProject ? 'project' : undefined,
     category: linkedProject?.category,
     metrics: report.metrics || {},
     attachments: report.attachments || [],
@@ -93,10 +96,16 @@ export default function ReportsScreen() {
   const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
 
   const loadProjects = useCallback(async () => {
+    if (user?.role === 'volunteer' && user.id) {
+      const snapshot = await getProjectsScreenSnapshot(user);
+      setProjects(snapshot.projects);
+      return snapshot.projects;
+    }
+
     const allProjects = await getAllProjects();
     setProjects(allProjects);
     return allProjects;
-  }, []);
+  }, [user]);
 
   const loadVolunteers = useCallback(async () => {
     const allVolunteers = await getAllVolunteers();
@@ -178,6 +187,7 @@ export default function ReportsScreen() {
             description: reportData.description,
             metrics: numericMetrics,
             attachments: reportData.attachments,
+            mediaFile: reportData.mediaFile,
           });
         } else {
           await submitImpactHubReport({
@@ -192,14 +202,19 @@ export default function ReportsScreen() {
             description: reportData.description,
             metrics: numericMetrics,
             attachments: reportData.attachments,
+            mediaFile: reportData.mediaFile,
           });
         }
         setShowUploadModal(false);
         await loadReports();
         Alert.alert('Success', 'Your report was submitted to the impact hub.');
-      } catch (error) {
+      } catch (error: any) {
         console.error('Error submitting report:', error);
-        Alert.alert('Error', 'Failed to submit report');
+        const detail =
+          typeof error?.message === 'string' && error.message.trim()
+            ? error.message.trim()
+            : 'Failed to submit report.';
+        Alert.alert('Error', detail);
       }
     },
     [loadReports, projects, user?.id, user?.name, user?.role]
@@ -222,6 +237,14 @@ export default function ReportsScreen() {
 
     return reports.filter(report => report.submittedBy === user?.id);
   }, [reports, user?.id, user?.role]);
+
+  const volunteerEventProjects = useMemo(() => {
+    if (user?.role !== 'volunteer') {
+      return projects;
+    }
+
+    return projects.filter(project => project.isEvent);
+  }, [projects, user?.role]);
 
   const dashboard =
     user?.role === 'admin' ? (
@@ -248,7 +271,7 @@ export default function ReportsScreen() {
     ) : (
       <VolunteerReportsDashboard
         reports={userReports}
-        projects={projects}
+        projects={volunteerEventProjects}
         onUploadReport={() => setShowUploadModal(true)}
         onViewReport={handleViewReport}
         loading={loading}
@@ -264,7 +287,8 @@ export default function ReportsScreen() {
         visible={showUploadModal}
         onClose={() => setShowUploadModal(false)}
         onSubmit={handleUploadReport}
-        projects={projects}
+        projects={user?.role === 'volunteer' ? volunteerEventProjects : projects}
+        userRole={user?.role}
       />
       <ReportDetailsModal
         visible={showDetailsModal}

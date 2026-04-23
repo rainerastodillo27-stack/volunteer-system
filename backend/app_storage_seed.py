@@ -6,6 +6,10 @@ from typing import Any
 try:
     from .db import get_postgres_connection
     from .field_rules import normalize_comparable_phone, normalize_email, sanitize_hot_storage_item
+    from .operation_guard import (
+        DEMO_SEED_UNLOCK_ENV_VAR,
+        require_shared_db_unlock,
+    )
     from .relational_mirror import (
         ensure_relational_mirror_tables,
         get_relational_collection,
@@ -20,6 +24,7 @@ try:
 except ImportError:
     from db import get_postgres_connection
     from field_rules import normalize_comparable_phone, normalize_email, sanitize_hot_storage_item
+    from operation_guard import DEMO_SEED_UNLOCK_ENV_VAR, require_shared_db_unlock
     from relational_mirror import (
         ensure_relational_mirror_tables,
         get_relational_collection,
@@ -50,6 +55,11 @@ DEMO_SEED_ENV_VAR = "ENABLE_DEMO_SEED"
 
 def is_demo_seed_enabled() -> bool:
     raw_value = str(os.getenv(DEMO_SEED_ENV_VAR, "")).strip().lower()
+    return raw_value in {"1", "true", "yes", "on"}
+
+
+def is_demo_seed_unlocked() -> bool:
+    raw_value = str(os.getenv(DEMO_SEED_UNLOCK_ENV_VAR, "")).strip().lower()
     return raw_value in {"1", "true", "yes", "on"}
 
 
@@ -770,6 +780,8 @@ def ensure_app_storage_seeded() -> None:
 
     if not is_demo_seed_enabled():
         return
+
+    require_shared_db_unlock("demo storage seeding", DEMO_SEED_UNLOCK_ENV_VAR)
 
     ensure_app_storage_table()
     demo_storage = build_demo_app_storage()

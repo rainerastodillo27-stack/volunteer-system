@@ -20,6 +20,37 @@ export function isImageMediaUri(value?: string | null): boolean {
   );
 }
 
+// Flattens attachment values into a unique list of URIs.
+export function getAttachmentUris(
+  attachments?: Array<string | { url?: string | null }> | null
+): string[] {
+  if (!attachments?.length) {
+    return [];
+  }
+
+  const uris = attachments
+    .map(attachment =>
+      typeof attachment === 'string' ? attachment : attachment?.url || ''
+    )
+    .map(value => value.trim())
+    .filter(Boolean);
+
+  return uris.filter((value, index) => uris.indexOf(value) === index);
+}
+
+// Returns the best available image/media URI from a primary field plus attachments.
+export function getPrimaryReportMediaUri(
+  mediaFile?: string | null,
+  attachments?: Array<string | { url?: string | null }> | null
+): string | null {
+  const candidates = [
+    (mediaFile || '').trim(),
+    ...getAttachmentUris(attachments),
+  ].filter(Boolean);
+
+  return candidates.find(isImageMediaUri) || candidates[0] || null;
+}
+
 // Opens the device photo picker and returns a persistable image URI/data URI.
 export async function pickImageFromDevice(): Promise<string | null> {
   if (Platform.OS !== 'web') {

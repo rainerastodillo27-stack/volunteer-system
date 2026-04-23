@@ -82,6 +82,9 @@ export default function SystemSettingsScreen() {
         <Text style={styles.infoText}>
           Re-sync the demo login accounts into the Postgres-backed backend storage.
         </Text>
+        <Text style={styles.infoText}>
+          This only works when the backend is explicitly unlocked for demo seeding.
+        </Text>
         <TouchableOpacity style={styles.primaryButton} onPress={handleSeedBackendData}>
           <Text style={styles.primaryButtonText}>Seed Demo Login Accounts</Text>
         </TouchableOpacity>
