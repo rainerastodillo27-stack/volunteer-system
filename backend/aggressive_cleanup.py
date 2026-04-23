@@ -20,7 +20,6 @@ def get_aggressive_retention_policies() -> dict[str, int]:
     return {
         "volunteer_time_logs": 90,         # Keep only 3 months
         "volunteer_project_joins": 60,     # Keep only 2 months
-        "partner_event_check_ins": 30,     # Keep only 1 month
         "partner_reports": 90,             # Keep only 3 months
         "published_impact_reports": 180,   # Keep 6 months
         "status_updates": 30,              # Keep only 1 month
@@ -98,7 +97,6 @@ def remove_null_or_empty_data(connection: Any) -> int:
     tables = [
         "app_volunteer_time_logs_store",
         "app_volunteer_project_joins_store",
-        "app_partner_event_check_ins_store",
         "app_partner_reports_store",
         "published_impact_reports_store",
         "status_updates_store",
@@ -151,7 +149,6 @@ def run_aggressive_cleanup() -> None:
         table_mapping = {
             "app_volunteer_time_logs_store": policies["volunteer_time_logs"],
             "app_volunteer_project_joins_store": policies["volunteer_project_joins"],
-            "app_partner_event_check_ins_store": policies["partner_event_check_ins"],
             "app_partner_reports_store": policies["partner_reports"],
             "published_impact_reports_store": policies["published_impact_reports"],
             "status_updates_store": policies["status_updates"],

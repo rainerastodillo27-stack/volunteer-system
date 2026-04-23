@@ -191,7 +191,7 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
     );
   };
 
-  // Returns projects associated with the selected partner.
+  // Returns projects linked to the selected partner through approved proposals.
   const getPartnerProjects = () => {
     if (!selectedPartner) return [];
     return projects.filter(project => project.partnerId === selectedPartner.id);
@@ -242,7 +242,7 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
             <View style={styles.stat}>
               <MaterialIcons name="folder" size={24} color="#2196F3" />
               <Text style={styles.statValue}>{partnerProjects.length}</Text>
-              <Text style={styles.statLabel}>Projects</Text>
+              <Text style={styles.statLabel}>Partnered Projects</Text>
             </View>
             <View style={styles.stat}>
               <MaterialIcons name="group" size={24} color="#FFA500" />
@@ -304,7 +304,7 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Associated Projects</Text>
+          <Text style={styles.sectionTitle}>Partnered Projects</Text>
           {partnerProjects.length === 0 ? (
             <Text style={styles.emptyTextProjects}>No projects yet</Text>
           ) : (
@@ -447,7 +447,7 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
                 {partner.advocacyFocus.join(', ')}
               </Text>
               <Text style={styles.partnerCardMeta}>
-                {projects.filter(p => p.partnerId === partner.id).length} projects
+                {projects.filter(p => p.partnerId === partner.id).length} partnered projects
               </Text>
             </View>
             <MaterialIcons name="chevron-right" size={20} color="#999" />

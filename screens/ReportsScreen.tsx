@@ -5,6 +5,7 @@ import {
   getAllPartnerReports,
   getAllProjects,
   getAllVolunteers,
+  submitFieldReport,
   getImpactHubReportsByUser,
   submitImpactHubReport,
   subscribeToStorageChanges,
@@ -110,12 +111,13 @@ export default function ReportsScreen() {
     setLoading(true);
     try {
       const allProjects = await loadProjects();
-      const impactReports =
-        user.role === 'admin'
-          ? await getAllPartnerReports()
-          : await getImpactHubReportsByUser(user.id);
+      const rawReports = user.role === 'admin' ? await getAllPartnerReports() : await getImpactHubReportsByUser(user.id);
 
-      setReports(impactReports.map(report => normalizeImpactHubReport(report, allProjects)));
+      setReports(
+        rawReports
+          .map(report => normalizeImpactHubReport(report, allProjects))
+          .sort((left, right) => new Date(right.submittedAt).getTime() - new Date(left.submittedAt).getTime())
+      );
     } catch (error) {
       console.error('Error loading reports:', error);
       Alert.alert('Error', 'Failed to load reports');
@@ -159,21 +161,39 @@ export default function ReportsScreen() {
       }
 
       try {
-        await submitImpactHubReport({
-          projectId: targetProjectId,
-          submitterUserId: user.id,
-          submitterName: user.name,
-          submitterRole: user.role,
-          partnerUserId: user.role === 'partner' ? user.id : undefined,
-          partnerName: user.role === 'partner' ? user.name : undefined,
-          reportType: reportData.reportType as ImpactHubReportType,
-          title: reportData.title,
-          description: reportData.description,
-          metrics: Object.fromEntries(
-            Object.entries(reportData.metrics).filter(([, value]) => typeof value === 'number')
-          ) as Record<string, number>,
-          attachments: reportData.attachments,
-        });
+        const reportType = reportData.reportType as ImpactHubReportType;
+        const numericMetrics = Object.fromEntries(
+          Object.entries(reportData.metrics).filter(([, value]) => typeof value === 'number')
+        ) as Record<string, number>;
+
+        if (reportType === 'field_report') {
+          await submitFieldReport({
+            projectId: targetProjectId,
+            submitterUserId: user.id,
+            submitterName: user.name,
+            submitterRole: user.role,
+            partnerUserId: user.role === 'partner' ? user.id : undefined,
+            partnerName: user.role === 'partner' ? user.name : undefined,
+            title: reportData.title,
+            description: reportData.description,
+            metrics: numericMetrics,
+            attachments: reportData.attachments,
+          });
+        } else {
+          await submitImpactHubReport({
+            projectId: targetProjectId,
+            submitterUserId: user.id,
+            submitterName: user.name,
+            submitterRole: user.role,
+            partnerUserId: user.role === 'partner' ? user.id : undefined,
+            partnerName: user.role === 'partner' ? user.name : undefined,
+            reportType,
+            title: reportData.title,
+            description: reportData.description,
+            metrics: numericMetrics,
+            attachments: reportData.attachments,
+          });
+        }
         setShowUploadModal(false);
         await loadReports();
         Alert.alert('Success', 'Your report was submitted to the impact hub.');

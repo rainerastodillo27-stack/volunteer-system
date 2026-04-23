@@ -61,6 +61,7 @@ def main() -> None:
     dropped_tables = maintenance_summary["dropped_rogue_tables"]
     cleaned_hot_storage = maintenance_summary["cleaned_hot_storage"]
     pruned_users = maintenance_summary["pruned_stale_app_users"]
+    migrated_report_tables = maintenance_summary.get("migrated_report_tables", [])
     archived_records = maintenance_summary.get("archived_records", [])
     print("Supabase Postgres schema created or updated.")
     if dropped_tables:
@@ -69,6 +70,8 @@ def main() -> None:
         print(f"Sanitized collections: {', '.join(cleaned_hot_storage)}")
     if pruned_users:
         print(f"Pruned stale legacy app users: {', '.join(pruned_users)}")
+    if migrated_report_tables:
+        print(f"Migrated legacy report rows into reports: {', '.join(migrated_report_tables)}")
     if archived_records:
         print(f"Archived old records: {', '.join(archived_records)}")
 

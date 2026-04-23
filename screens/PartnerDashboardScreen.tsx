@@ -11,13 +11,11 @@ import {
   View,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import * as Location from 'expo-location';
 import { useFocusEffect } from '@react-navigation/native';
 import InlineLoadError from '../components/InlineLoadError';
 import ProjectTimelineCalendarCard from '../components/ProjectTimelineCalendarCard';
 import { useAuth } from '../contexts/AuthContext';
 import {
-  createPartnerEventCheckIn,
   getDashboardTimelineSnapshot,
   getPartnerDashboardSnapshot,
   submitPartnerProgramProposal,
@@ -28,12 +26,10 @@ import {
   AdminPlanningCalendar,
   AdminPlanningItem,
   Partner,
-  PartnerEventCheckIn,
   PartnerProjectApplication,
   PartnerReport,
   PartnerReportType,
   Project,
-  PublishedImpactReport,
 } from '../models/types';
 import { isImageMediaUri, pickImageFromDevice } from '../utils/media';
 import { navigateToAvailableRoute } from '../utils/navigation';
@@ -85,30 +81,7 @@ function getProjectStatusColor(status: ReturnType<typeof getDisplayProjectStatus
   }
 }
 
-function getVisibleImpactReportsForPartner(
-  partnerUserId: string,
-  projects: Project[],
-  partnerApplications: PartnerProjectApplication[],
-  reports: PublishedImpactReport[]
-) {
-  const approvedProjectIds = new Set(
-    partnerApplications
-      .filter(application => application.partnerUserId === partnerUserId && application.status === 'Approved')
-      .map(application => application.projectId)
-  );
-
-  const allowedProjectIds = new Set(
-    projects
-      .filter(project => approvedProjectIds.has(project.id))
-      .map(project => project.id)
-  );
-
-  return reports
-    .filter(report => Boolean(report.publishedAt) && allowedProjectIds.has(report.projectId))
-    .sort((a, b) => new Date(b.generatedAt).getTime() - new Date(a.generatedAt).getTime());
-}
-
-// Shows the partner workspace for RSVP, field check-in, report uploads, and published impact files.
+// Shows the partner workspace for program proposals and report uploads.
 export default function PartnerDashboardScreen({ navigation }: any) {
   const { user, logout } = useAuth();
   const [loading, setLoading] = useState(true);
@@ -116,10 +89,7 @@ export default function PartnerDashboardScreen({ navigation }: any) {
   const [partners, setPartners] = useState<Partner[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [partnerApplications, setPartnerApplications] = useState<PartnerProjectApplication[]>([]);
-  const [partnerCheckIns, setPartnerCheckIns] = useState<PartnerEventCheckIn[]>([]);
   const [partnerReports, setPartnerReports] = useState<PartnerReport[]>([]);
-  const [publishedImpactReports, setPublishedImpactReports] = useState<PublishedImpactReport[]>([]);
-  const [partnerCheckInProjectId, setPartnerCheckInProjectId] = useState<string | null>(null);
   const [actionProjectId, setActionProjectId] = useState<string | null>(null);
   const [reportForm, setReportForm] = useState<ReportFormState>(createEmptyReportForm());
   const [planningCalendars, setPlanningCalendars] = useState<AdminPlanningCalendar[]>([]);
@@ -151,23 +121,12 @@ export default function PartnerDashboardScreen({ navigation }: any) {
         getDashboardTimelineSnapshot(),
       ]);
       const ownedPartners = snapshot.partners.filter(isOwnedByCurrentPartner);
-      const visibleImpactReports = getVisibleImpactReportsForPartner(
-        user.id,
-        snapshot.projects,
-        snapshot.partnerApplications,
-        snapshot.publishedImpactReports
-      );
       setPartners(ownedPartners);
       setProjects(snapshot.projects);
       setPartnerApplications(
         snapshot.partnerApplications
           .filter(application => application.partnerUserId === user.id)
           .sort((a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime())
-      );
-      setPartnerCheckIns(
-        snapshot.partnerCheckIns
-          .filter(checkIn => checkIn.partnerUserId === user.id)
-          .sort((a, b) => new Date(b.checkInTime).getTime() - new Date(a.checkInTime).getTime())
       );
       setPartnerReports(
         snapshot.partnerReports
@@ -178,7 +137,6 @@ export default function PartnerDashboardScreen({ navigation }: any) {
           )
           .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       );
-      setPublishedImpactReports(visibleImpactReports);
       setPlanningCalendars(timelineSnapshot.planningCalendars);
       setPlanningItems(timelineSnapshot.planningItems);
       setLoadError(null);
@@ -204,9 +162,7 @@ export default function PartnerDashboardScreen({ navigation }: any) {
           'partners',
           'projects',
           'partnerProjectApplications',
-          'partnerEventCheckIns',
           'partnerReports',
-          'publishedImpactReports',
           'adminPlanningCalendars',
           'adminPlanningItems',
         ],
@@ -289,7 +245,11 @@ export default function PartnerDashboardScreen({ navigation }: any) {
 
     try {
       setActionProjectId(projectId);
-      await submitPartnerProgramProposal(projectId, user);
+      const selectedProject = projects.find(project => project.id === projectId);
+      const selectedProgramModule = selectedProject?.programModule || selectedProject?.category;
+      await submitPartnerProgramProposal(projectId, user, {
+        programModule: selectedProgramModule,
+      });
       Alert.alert('Proposal Sent', 'Your project proposal has been sent to the admin for approval.');
       void loadDashboardData();
     } catch (error) {
@@ -299,48 +259,6 @@ export default function PartnerDashboardScreen({ navigation }: any) {
       );
     } finally {
       setActionProjectId(null);
-    }
-  };
-
-  const handleCheckIn = async (project: Project) => {
-    if (!user || !approvedPartner) {
-      Alert.alert('Approval Required', 'You need an approved project proposal before checking in.');
-      return;
-    }
-
-    try {
-      setPartnerCheckInProjectId(project.id);
-      const permission = await Location.requestForegroundPermissionsAsync();
-      if (permission.status !== 'granted') {
-        Alert.alert('Location Required', 'Location access is required to capture GPS coordinates.');
-        return;
-      }
-
-      const position = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
-      });
-
-      const checkIn = await createPartnerEventCheckIn({
-        projectId: project.id,
-        partnerId: approvedPartner.id,
-        partnerUserId: user.id,
-        gpsCoordinates: {
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-        },
-      });
-
-      Alert.alert(
-        'Checked In',
-        `GPS captured at ${checkIn.gpsCoordinates.latitude.toFixed(4)}, ${checkIn.gpsCoordinates.longitude.toFixed(4)} on ${new Date(checkIn.checkInTime).toLocaleString()}.`
-      );
-    } catch (error) {
-      Alert.alert(
-        getRequestErrorTitle(error, 'Check-In Failed'),
-        getRequestErrorMessage(error, 'Unable to complete event check-in.')
-      );
-    } finally {
-      setPartnerCheckInProjectId(null);
     }
   };
 
@@ -409,56 +327,6 @@ export default function PartnerDashboardScreen({ navigation }: any) {
     updateReportFormForProject(projectId, { mediaFile: '' });
   };
 
-  const handleDownloadReport = (report: PublishedImpactReport) => {
-    const linkedProject = projects.find(project => project.id === report.projectId);
-    const summaryContent = [
-      `Published Report`,
-      `File: ${report.reportFile}`,
-      `Project: ${linkedProject?.title || 'Project'}`,
-      `Format: ${report.format}`,
-      `Generated: ${new Date(report.generatedAt).toLocaleString()}`,
-      `Published: ${report.publishedAt ? new Date(report.publishedAt).toLocaleString() : 'Not published yet'}`,
-    ].join('\n');
-    const downloadContent = report.downloadContent || summaryContent;
-    const downloadMimeType =
-      report.downloadMimeType ||
-      (report.format === 'Excel' ? 'text/csv;charset=utf-8;' : 'text/plain;charset=utf-8;');
-
-    if (Platform.OS === 'web' && typeof document !== 'undefined') {
-      const fallbackName =
-        report.format === 'Excel'
-          ? report.reportFile.replace(/\.xlsx$/i, '.csv')
-          : report.reportFile.replace(/\.pdf$/i, '.txt');
-      const blob = new Blob([downloadContent], {
-        type: downloadMimeType,
-      });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = fallbackName;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
-      return;
-    }
-
-    Alert.alert(
-      'Report Ready',
-      downloadContent,
-      [
-        { text: 'Close', style: 'cancel' },
-        {
-          text: 'Open Project',
-          onPress: () =>
-            navigateToAvailableRoute(navigation, 'Projects', {
-              projectId: report.projectId,
-            }),
-        },
-      ]
-    );
-  };
-
   if (loading && projects.length === 0 && partners.length === 0) {
     return (
       <View style={styles.loadingContainer}>
@@ -498,7 +366,7 @@ export default function PartnerDashboardScreen({ navigation }: any) {
         title="Partner Project Calendar"
         subtitle={
           timelineProjectIds?.length
-            ? 'Your approved and joined projects are aligned with the admin planning calendar.'
+            ? 'Your approved project proposals are aligned with the admin planning calendar.'
             : 'Review the shared project schedule and admin planning dates in one timeline.'
         }
         projects={projects}
@@ -588,17 +456,6 @@ export default function PartnerDashboardScreen({ navigation }: any) {
 
               {attending ? (
                 <>
-                  <TouchableOpacity
-                    style={styles.checkInButton}
-                    onPress={() => handleCheckIn(project)}
-                    disabled={partnerCheckInProjectId === project.id}
-                  >
-                    <MaterialIcons name="place" size={16} color="#fff" />
-                    <Text style={styles.checkInButtonText}>
-                      {partnerCheckInProjectId === project.id ? 'Checking In...' : 'Check-In'}
-                    </Text>
-                  </TouchableOpacity>
-
                   <View style={styles.inlineReportCard}>
                     <View style={styles.inlineReportHeader}>
                       <View style={{ flex: 1 }}>
@@ -712,57 +569,12 @@ export default function PartnerDashboardScreen({ navigation }: any) {
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Impact Report Hub</Text>
-        {publishedImpactReports.filter(report => Boolean(report.publishedAt)).length === 0 ? (
-          <View style={styles.card}>
-            <Text style={styles.cardText}>No published PDF or Excel files yet.</Text>
-          </View>
-        ) : (
-          publishedImpactReports
-            .filter(report => Boolean(report.publishedAt))
-            .map(report => (
-              <View key={report.id} style={styles.card}>
-                <Text style={styles.cardTitle}>{report.reportFile}</Text>
-                <Text style={styles.cardMeta}>
-                  {(projects.find(project => project.id === report.projectId)?.title || 'Project')} • {report.format} • Published {new Date(report.publishedAt || report.generatedAt).toLocaleDateString()}
-                </Text>
-                <TouchableOpacity
-                  style={styles.primaryButton}
-                  onPress={() => handleDownloadReport(report)}
-                >
-                  <Text style={styles.primaryButtonText}>Download Report</Text>
-                </TouchableOpacity>
-              </View>
-            ))
-        )}
-      </View>
-
-      <View style={styles.section}>
         <Text style={styles.sectionTitle}>Field Activity History</Text>
-        {partnerCheckIns.length === 0 && partnerReports.length === 0 ? (
+        {partnerReports.length === 0 ? (
           <View style={styles.card}>
-            <Text style={styles.cardText}>No partner field activity yet. Approved projects will show check-ins and submitted reports here.</Text>
+            <Text style={styles.cardText}>No partner reports submitted yet. Approved projects will show submitted reports here.</Text>
           </View>
         ) : (
-          <>
-            {partnerCheckIns.length > 0 ? (
-              <View style={styles.card}>
-                <Text style={styles.cardTitle}>Recent Check-Ins</Text>
-                {partnerCheckIns.slice(0, 5).map(checkIn => {
-                  const linkedProject = projects.find(project => project.id === checkIn.projectId);
-                  return (
-                    <View key={checkIn.id} style={styles.historyItem}>
-                      <Text style={styles.historyTitle}>{linkedProject?.title || 'Project check-in'}</Text>
-                      <Text style={styles.historyMeta}>
-                        {new Date(checkIn.checkInTime).toLocaleString()} • {checkIn.gpsCoordinates.latitude.toFixed(4)}, {checkIn.gpsCoordinates.longitude.toFixed(4)}
-                      </Text>
-                    </View>
-                  );
-                })}
-              </View>
-            ) : null}
-
-            {partnerReports.length > 0 ? (
               <View style={styles.card}>
                 <Text style={styles.cardTitle}>Submitted Reports</Text>
                 {partnerReports.slice(0, 5).map(report => {
@@ -782,8 +594,6 @@ export default function PartnerDashboardScreen({ navigation }: any) {
                   );
                 })}
               </View>
-            ) : null}
-          </>
         )}
       </View>
     </ScrollView>
@@ -927,19 +737,6 @@ const styles = StyleSheet.create({
   },
   secondaryButtonText: {
     color: '#166534',
-  },
-  checkInButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: '#2563eb',
-    borderRadius: 10,
-    paddingVertical: 12,
-  },
-  checkInButtonText: {
-    color: '#fff',
-    fontWeight: '700',
   },
   inlineReportCard: {
     borderWidth: 1,

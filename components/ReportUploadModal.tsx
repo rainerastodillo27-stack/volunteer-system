@@ -41,6 +41,7 @@ export default function ReportUploadModal({ visible, onClose, onSubmit, projects
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const reportTypeOptions: { value: SubmittedReport['reportType']; label: string; icon: MaterialIconName }[] = [
+    { value: 'field_report', label: 'Field Report', icon: 'assignment' },
     { value: 'volunteer_engagement', label: 'Volunteer Engagement', icon: 'people' },
     { value: 'program_impact', label: 'Program Impact', icon: 'trending-up' },
     { value: 'event_performance', label: 'Event Performance', icon: 'event' },
@@ -52,6 +53,7 @@ export default function ReportUploadModal({ visible, onClose, onSubmit, projects
     const baseFields = ['volunteerHours', 'verifiedAttendance', 'activeVolunteers'];
     
     switch (reportType) {
+      case 'field_report':
       case 'program_impact':
         return ['beneficiariesServed', 'tasksCompleted'];
       case 'event_performance':

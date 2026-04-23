@@ -63,37 +63,30 @@ These are the primary tables used by the running system.
 - Used for: partner request approval and project participation governance.
 - Key links: references `project_id` and `partner_user_id`.
 
-### 10) partner_event_check_ins
-- Purpose: Stores partner check-in records for events, including GPS coordinates.
-- Used for: on-site participation validation and event presence tracking.
-- Key links: references project and partner identity fields.
+### 10) retired partner check-ins
+- The partner event check-in table was removed from the active schema.
 
-### 11) partner_reports
-- Purpose: Stores submitted reports from partners (and report metadata).
-- Used for: project/event reporting, impact metrics capture, and review workflow.
-- Key links: references `project_id`, partner identity fields, and submitter fields.
+### 11) reports
+- Purpose: Stores submitted reports from partners, volunteers, field submissions, and published impact file records.
+- Used for: project/event reporting, impact metrics capture, review workflow, field report history, and published report tracking.
+- Key links: references `project_id`, partner identity fields, submitter fields, `report_type`, and generated impact file metadata.
 
-### 12) published_impact_reports
-- Purpose: Stores publication records for finalized impact reports.
-- Used for: report publishing history and generated report file tracking.
-- Key links: references `project_id`.
-
-### 13) messages
+### 12) messages
 - Purpose: Stores direct (user-to-user) chat messages.
 - Used for: one-to-one communication and message read state handling.
 - Key links: `sender_id` and `recipient_id` reference `users(id)`.
 
-### 14) project_group_messages
+### 13) project_group_messages
 - Purpose: Stores project group chat messages and structured proposal/resolution messages.
 - Used for: project coordination, scope proposals, and threaded response actions.
 - Key links: `sender_id` references `users(id)`, scoped by `project_id`.
 
-### 15) admin_planning_calendars
+### 14) admin_planning_calendars
 - Purpose: Stores admin calendar definitions.
 - Used for: planning calendar setup and calendar-level organization.
 - Key links: parent table for planning items.
 
-### 16) admin_planning_items
+### 15) admin_planning_items
 - Purpose: Stores scheduled planning items/events under admin calendars.
 - Used for: planning/scheduling operations and optional linking to projects.
 - Key links: references `calendar_id` and optionally `linked_project_id`.
@@ -110,6 +103,16 @@ These tables are retained for migration/compatibility in some environments and s
 - Purpose: Legacy key-value JSON storage table (`key`, `value`).
 - Current use: backward compatibility fallback and migration source in consolidation logic.
 
+### Deprecated canonical report tables
+- partner_reports
+- published_impact_reports
+
+Purpose:
+- Older canonical report tables used before consolidating all report records into `reports`.
+
+Current use:
+- Migration source only. Rows are migrated into `reports` during schema maintenance.
+
 ### Legacy hot-storage `app_*_store` tables
 - app_users_store
 - app_partners_store
@@ -120,7 +123,6 @@ These tables are retained for migration/compatibility in some environments and s
 - app_volunteer_time_logs_store
 - app_volunteer_project_joins_store
 - app_partner_project_applications_store
-- app_partner_event_check_ins_store
 - app_partner_reports_store
 - app_published_impact_reports_store
 
@@ -148,9 +150,8 @@ Current use:
 - volunteerTimeLogs -> volunteer_time_logs
 - volunteerProjectJoins -> volunteer_project_joins
 - partnerProjectApplications -> partner_project_applications
-- partnerEventCheckIns -> partner_event_check_ins
-- partnerReports -> partner_reports
-- publishedImpactReports -> published_impact_reports
+- partnerReports -> reports
+- publishedImpactReports -> reports
 - adminPlanningCalendars -> admin_planning_calendars
 - adminPlanningItems -> admin_planning_items
 - messages -> messages

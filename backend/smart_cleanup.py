@@ -139,38 +139,26 @@ def run_cleanup():
         )
         total_cleaned += deleted
         
-        # 5. Old check-ins
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-        deleted = simple_delete(
-            conn,
-            "app_partner_event_check_ins_store",
-            f"(data->>'updated_at')::timestamp with time zone < '{cutoff}'::timestamp with time zone",
-            "5. Removing check-ins older than 30 days"
-        )
-        total_cleaned += deleted
-        
-        # 6. Old reports
+        # 5. Old reports
         cutoff = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
         deleted = simple_delete(
             conn,
             "app_partner_reports_store",
             f"(data->>'updated_at')::timestamp with time zone < '{cutoff}'::timestamp with time zone",
-            "6. Removing reports older than 60 days"
+            "5. Removing reports older than 60 days"
         )
         total_cleaned += deleted
         
-        # 7. Null records
-        print("\n7. Removing null/empty records...", end=" ", flush=True)
+        # 6. Null records
+        print("\n6. Removing null/empty records...", end=" ", flush=True)
         cursor = conn.cursor()
         cursor.execute("DELETE FROM app_volunteer_time_logs_store WHERE data IS NULL")
         n1 = cursor.rowcount
         cursor.execute("DELETE FROM app_volunteer_project_joins_store WHERE data IS NULL")
         n2 = cursor.rowcount
-        cursor.execute("DELETE FROM app_partner_event_check_ins_store WHERE data IS NULL")
-        n3 = cursor.rowcount
         cursor.execute("DELETE FROM app_partner_reports_store WHERE data IS NULL")
-        n4 = cursor.rowcount
-        null_deleted = n1 + n2 + n3 + n4
+        n3 = cursor.rowcount
+        null_deleted = n1 + n2 + n3
         print(f"({null_deleted} deleted)")
         conn.commit()
         total_cleaned += null_deleted

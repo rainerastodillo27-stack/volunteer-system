@@ -17,6 +17,7 @@ from .app_storage_seed import (
     clear_postgres_hot_storage_collection,
     ensure_app_storage_seeded,
     get_postgres_hot_storage_collection,
+    is_demo_seed_enabled,
     is_hot_storage_key,
     replace_postgres_hot_storage_collection,
 )
@@ -83,9 +84,11 @@ class VolunteerTimeLogEndPayload(BaseModel):
 # Request payload for partner join requests.
 class PartnerProjectJoinRequestPayload(BaseModel):
     projectId: str
+    programModule: str | None = None
     partnerUserId: str
     partnerName: str
     partnerEmail: str = ""
+    proposalDetails: dict[str, Any] | None = None
 
 
 # Request payload for reviewing a partner join request.
@@ -126,6 +129,63 @@ class ProjectGroupMessagePayload(BaseModel):
     responseAction: str | None = None
     responseToTitle: str | None = None
     attachments: list[str] | None = None
+
+
+def _normalize_partner_proposal_date(value: Any, fallback: str) -> str:
+    raw_value = str(value or "").strip()
+    if not raw_value:
+        return fallback
+
+    try:
+        parsed = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+    except ValueError:
+        return fallback
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.isoformat()
+
+
+def _normalize_partner_proposal_details(
+    details: dict[str, Any] | None,
+    requested_program_module: str,
+    fallback_project: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    fallback_project = fallback_project or {}
+    fallback_location = fallback_project.get("location") or {}
+    fallback_now = datetime.now(timezone.utc).isoformat()
+    fallback_title = str(fallback_project.get("title") or "").strip()
+    fallback_description = str(fallback_project.get("description") or "").strip()
+    fallback_address = str(fallback_location.get("address") or "").strip()
+    fallback_module = str(
+        fallback_project.get("programModule")
+        or fallback_project.get("category")
+        or requested_program_module
+        or ""
+    ).strip()
+
+    payload = details if isinstance(details, dict) else {}
+    raw_volunteers_needed = payload.get("proposedVolunteersNeeded")
+    try:
+        proposed_volunteers_needed = max(int(raw_volunteers_needed), 0)
+    except (TypeError, ValueError):
+        proposed_volunteers_needed = max(int(fallback_project.get("volunteersNeeded") or 0), 0)
+
+    return {
+        "targetProjectId": str(payload.get("targetProjectId") or fallback_project.get("id") or "").strip() or None,
+        "targetProjectTitle": str(payload.get("targetProjectTitle") or fallback_title).strip() or None,
+        "targetProjectDescription": str(payload.get("targetProjectDescription") or fallback_description).strip() or None,
+        "targetProjectAddress": str(payload.get("targetProjectAddress") or fallback_address).strip() or None,
+        "requestedProgramModule": str(payload.get("requestedProgramModule") or fallback_module).strip() or None,
+        "proposedTitle": str(payload.get("proposedTitle") or fallback_title).strip(),
+        "proposedDescription": str(payload.get("proposedDescription") or fallback_description).strip(),
+        "proposedStartDate": _normalize_partner_proposal_date(payload.get("proposedStartDate"), fallback_now),
+        "proposedEndDate": _normalize_partner_proposal_date(payload.get("proposedEndDate"), fallback_now),
+        "proposedLocation": str(payload.get("proposedLocation") or fallback_address).strip(),
+        "proposedVolunteersNeeded": proposed_volunteers_needed,
+        "communityNeed": str(payload.get("communityNeed") or "").strip(),
+        "expectedDeliverables": str(payload.get("expectedDeliverables") or "").strip(),
+    }
 
 
 app = FastAPI(title="NVC CONNECT Storage API")
@@ -487,7 +547,7 @@ def _clear_special_storage_collection(connection: Any, key: str) -> None:
 
 # Returns the user ids that should have access to a project's group chat.
 def _get_project_chat_participant_user_ids(connection: Any, project_id: str) -> set[str]:
-    project = _postgres_get_hot_item_by_id(connection, "projects", project_id)
+    project, _ = _postgres_get_project_like_item_by_id(connection, project_id)
     if project is None:
         return set()
 
@@ -518,7 +578,7 @@ def _get_project_chat_participant_user_ids(connection: Any, project_id: str) -> 
 def _assert_project_group_chat_access(
     connection: Any, project_id: str, user_id: str
 ) -> dict[str, Any]:
-    project = _postgres_get_hot_item_by_id(connection, "projects", project_id)
+    project, _ = _postgres_get_project_like_item_by_id(connection, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found.")
 
@@ -587,6 +647,20 @@ def _postgres_upsert_hot_item(connection: Any, key: str, item: dict[str, Any]) -
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
+def _postgres_get_project_like_item_by_id(
+    connection: Any, item_id: str
+) -> tuple[dict[str, Any] | None, str | None]:
+    project = _postgres_get_hot_item_by_id(connection, "projects", item_id)
+    if project is not None:
+        return project, "projects"
+
+    event = _postgres_get_hot_item_by_id(connection, "events", item_id)
+    if event is not None:
+        return event, "events"
+
+    return None, None
+
+
 # Finds the volunteer profile tied to a specific user id.
 def _postgres_get_volunteer_by_user_id(connection: Any, user_id: str) -> dict[str, Any] | None:
     volunteers = _postgres_get_hot_items_by_field(connection, "volunteers", "userId", user_id)
@@ -607,7 +681,7 @@ def _postgres_get_volunteer_recognition_status(
             """
             with joined_projects as (
                 select distinct project_id
-                from volunteer_project_joins
+                from volunteer_event_joins
                 where coalesce(volunteer_id, '') = %s
                   and coalesce(project_id, '') <> ''
             ),
@@ -663,6 +737,10 @@ def _postgres_ensure_volunteer_project_join_record(
     volunteer: dict[str, Any],
     source: str,
 ) -> None:
+    project, _ = _postgres_get_project_like_item_by_id(connection, project_id)
+    if project is None or not bool(project.get("isEvent")):
+        return
+
     existing_records = _postgres_get_hot_items_by_field(
         connection,
         "volunteerProjectJoins",
@@ -701,10 +779,12 @@ def _postgres_sync_volunteer_engagement_status(
 
     has_active_match = any(
         match.get("status") in {"Matched", "Requested"}
+        and bool((_postgres_get_project_like_item_by_id(connection, str(match.get("projectId") or ""))[0] or {}).get("isEvent"))
         for match in matches
     )
     has_active_participation = any(
         (record.get("participationStatus") or "Active") == "Active"
+        and bool((_postgres_get_project_like_item_by_id(connection, str(record.get("projectId") or ""))[0] or {}).get("isEvent"))
         for record in join_records
     )
 
@@ -749,7 +829,19 @@ def _build_projects_snapshot(
     user_id: str | None,
     role: str | None,
 ) -> dict[str, Any]:
-    projects = get_postgres_hot_storage_collection(connection, "projects")
+    raw_projects = get_postgres_hot_storage_collection(connection, "projects")
+    raw_events = get_postgres_hot_storage_collection(connection, "events")
+    projects = [
+        *[
+            {
+                **project,
+                "joinedUserIds": [],
+                "volunteers": [],
+            }
+            for project in raw_projects
+        ],
+        *raw_events,
+    ]
     snapshot: dict[str, Any] = {
         "projects": projects,
         "volunteerProfile": None,
@@ -766,8 +858,18 @@ def _build_projects_snapshot(
         snapshot["volunteerProfile"] = volunteer
         if volunteer is not None:
             snapshot["timeLogs"] = _postgres_get_volunteer_time_logs(connection, volunteer["id"])
+            volunteer_join_records = _postgres_get_hot_items_by_field(
+                connection,
+                "volunteerProjectJoins",
+                "volunteerId",
+                volunteer["id"],
+            )
             snapshot["volunteerJoinRecords"] = _sort_iso_desc(
-                _postgres_get_hot_items_by_field(connection, "volunteerProjectJoins", "volunteerId", volunteer["id"]),
+                [
+                    record
+                    for record in volunteer_join_records
+                    if bool((_postgres_get_project_like_item_by_id(connection, str(record.get("projectId") or ""))[0] or {}).get("isEvent"))
+                ],
                 "joinedAt",
             )
         return snapshot
@@ -780,8 +882,11 @@ def _build_projects_snapshot(
 @app.on_event("startup")
 # Prepares storage tables when the FastAPI app starts.
 def startup() -> None:
-    # Keep demo credentials and seed data available whenever the backend starts.
-    # Run in background thread to avoid blocking server startup
+    if not is_demo_seed_enabled():
+        print("[OK] Backend started in canonical-only mode; demo seed is disabled")
+        return
+
+    # Run demo seeding in the background when it is explicitly enabled.
     def seed_storage():
         try:
             ensure_app_storage_seeded()
@@ -1269,10 +1374,22 @@ def get_partner_applications_by_user(partner_user_id: str) -> dict[str, Any]:
 # API endpoint that creates a partner program proposal for admin review.
 async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload) -> dict[str, Any]:
     _require_postgres()
+    requested_program_module = str(payload.programModule or "").strip()
+    proposal_project_id = f"program:{requested_program_module}" if requested_program_module else payload.projectId
+
     with get_postgres_connection() as connection:
-        project = _postgres_get_hot_item_by_id(connection, "projects", payload.projectId)
-        if project is None:
-            raise HTTPException(status_code=404, detail="Project not found.")
+        target_project: dict[str, Any] | None = None
+        target_project_id = str((payload.proposalDetails or {}).get("targetProjectId") or "").strip()
+        if target_project_id:
+            target_project, _ = _postgres_get_project_like_item_by_id(connection, target_project_id)
+
+        if not requested_program_module:
+            project = target_project
+            if project is None:
+                project, _ = _postgres_get_project_like_item_by_id(connection, payload.projectId)
+            if project is None:
+                raise HTTPException(status_code=404, detail="Project not found.")
+            target_project = project
 
         existing_application = next(
             (
@@ -1281,7 +1398,7 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
                     connection,
                     payload.partnerUserId,
                 )
-                if application.get("projectId") == payload.projectId
+                if application.get("projectId") == proposal_project_id
             ),
             None,
         )
@@ -1290,10 +1407,15 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
 
         application = {
             "id": f"partner-application-{int(datetime.now(timezone.utc).timestamp() * 1000)}",
-            "projectId": payload.projectId,
+            "projectId": proposal_project_id,
             "partnerUserId": payload.partnerUserId,
             "partnerName": payload.partnerName,
             "partnerEmail": payload.partnerEmail,
+            "proposalDetails": _normalize_partner_proposal_details(
+                payload.proposalDetails,
+                requested_program_module,
+                target_project,
+            ),
             "status": "Pending",
             "requestedAt": datetime.now(timezone.utc).isoformat(),
         }
@@ -1323,8 +1445,79 @@ async def review_partner_project_application(
         if application is None:
             raise HTTPException(status_code=404, detail="Application not found.")
 
+        next_project_id = str(application.get("projectId") or "")
+        should_create_program_project = next_status == "Approved" and next_project_id.startswith("program:")
+
+        if should_create_program_project:
+            proposal_details = application.get("proposalDetails") or {}
+            requested_program_module = str(
+                proposal_details.get("requestedProgramModule")
+                or next_project_id.split(":", 1)[1]
+            ).strip()
+            if not requested_program_module:
+                raise HTTPException(status_code=400, detail="Program module is required to approve this proposal.")
+
+            now_iso = datetime.now(timezone.utc).isoformat()
+            partner_user_id = str(application.get("partnerUserId") or "")
+            partner_email = str(application.get("partnerEmail") or "").strip().lower()
+            partner_name = str(application.get("partnerName") or "Partner").strip() or "Partner"
+
+            partner_records = _postgres_get_hot_items_by_field(connection, "partners", "ownerUserId", partner_user_id)
+            if not partner_records and partner_email:
+                all_partners = get_postgres_hot_storage_collection(connection, "partners")
+                partner_records = [
+                    candidate
+                    for candidate in all_partners
+                    if str(candidate.get("contactEmail") or "").strip().lower() == partner_email
+                ]
+
+            partner_id = str(partner_records[0].get("id") or "") if partner_records else ""
+            created_project_id = f"project-proposal-{int(datetime.now(timezone.utc).timestamp() * 1000)}"
+            generated_start_date = _normalize_partner_proposal_date(
+                proposal_details.get("proposedStartDate"),
+                now_iso,
+            )
+            generated_end_date = _normalize_partner_proposal_date(
+                proposal_details.get("proposedEndDate"),
+                generated_start_date,
+            )
+            if datetime.fromisoformat(generated_end_date) < datetime.fromisoformat(generated_start_date):
+                generated_end_date = generated_start_date
+
+            generated_project = {
+                "id": created_project_id,
+                "title": str(proposal_details.get("proposedTitle") or "").strip()
+                or f"{requested_program_module} Partner Program - {partner_name}",
+                "description": str(proposal_details.get("proposedDescription") or "").strip()
+                or f"Partner-initiated {requested_program_module} program approved by admin.",
+                "partnerId": partner_id,
+                "programModule": requested_program_module,
+                "status": "Planning",
+                "category": requested_program_module,
+                "startDate": generated_start_date,
+                "endDate": generated_end_date,
+                "location": {
+                    "latitude": 0,
+                    "longitude": 0,
+                    "address": str(proposal_details.get("proposedLocation") or "").strip()
+                    or str(proposal_details.get("targetProjectAddress") or "").strip()
+                    or "Program location to be finalized",
+                },
+                "volunteersNeeded": max(int(proposal_details.get("proposedVolunteersNeeded") or 0), 0),
+                "volunteers": [],
+                "joinedUserIds": [],
+                "createdAt": now_iso,
+                "updatedAt": now_iso,
+                "statusUpdates": [],
+                "internalTasks": [],
+            }
+            _postgres_upsert_hot_item(connection, "projects", generated_project)
+            next_project_id = created_project_id
+            broadcast_keys.append("projects")
+
         updated_application = {
             **application,
+            "projectId": next_project_id,
             "status": next_status,
             "reviewedAt": datetime.now(timezone.utc).isoformat(),
             "reviewedBy": reviewed_by,
@@ -1361,9 +1554,11 @@ async def review_volunteer_match(match_id: str, payload: VolunteerMatchReviewPay
             raise HTTPException(status_code=404, detail="Volunteer not found.")
 
         project_id = str(match.get("projectId") or "")
-        project = _postgres_get_hot_item_by_id(connection, "projects", project_id)
-        if project is None:
+        project, project_storage_key = _postgres_get_project_like_item_by_id(connection, project_id)
+        if project is None or project_storage_key is None:
             raise HTTPException(status_code=404, detail="Project not found.")
+        if not bool(project.get("isEvent")):
+            raise HTTPException(status_code=400, detail="Volunteers can only join events.")
 
         updated_match = {
             **match,
@@ -1382,7 +1577,7 @@ async def review_volunteer_match(match_id: str, payload: VolunteerMatchReviewPay
 
             _postgres_upsert_hot_item(
                 connection,
-                "projects",
+                project_storage_key,
                 {
                     **project,
                     "joinedUserIds": joined_user_ids
@@ -1395,7 +1590,7 @@ async def review_volunteer_match(match_id: str, payload: VolunteerMatchReviewPay
                 },
             )
             _postgres_ensure_volunteer_project_join_record(connection, project_id, volunteer, "VolunteerJoin")
-            broadcast_keys.extend(["projects", "volunteerProjectJoins"])
+            broadcast_keys.extend([project_storage_key, "volunteerProjectJoins"])
 
         updated_volunteer = _postgres_sync_volunteer_engagement_status(connection, volunteer_id)
         if updated_volunteer is not None:
@@ -1412,9 +1607,11 @@ async def review_volunteer_match(match_id: str, payload: VolunteerMatchReviewPay
 async def join_project(project_id: str, payload: ProjectJoinPayload) -> dict[str, Any]:
     _require_postgres()
     with get_postgres_connection() as connection:
-        project = _postgres_get_hot_item_by_id(connection, "projects", project_id)
-        if project is None:
+        project, project_storage_key = _postgres_get_project_like_item_by_id(connection, project_id)
+        if project is None or project_storage_key is None:
             raise HTTPException(status_code=404, detail="Project not found.")
+        if not bool(project.get("isEvent")):
+            raise HTTPException(status_code=400, detail="Volunteers can only join events.")
 
         volunteer = _postgres_get_volunteer_by_user_id(connection, payload.userId)
         joined_user_ids = list(project.get("joinedUserIds") or [])
@@ -1432,7 +1629,7 @@ async def join_project(project_id: str, payload: ProjectJoinPayload) -> dict[str
             "volunteers": volunteer_ids,
             "updatedAt": datetime.now(timezone.utc).isoformat(),
         }
-        _postgres_upsert_hot_item(connection, "projects", updated_project)
+        _postgres_upsert_hot_item(connection, project_storage_key, updated_project)
 
         volunteer_profile = volunteer
         if volunteer is not None:
@@ -1441,7 +1638,7 @@ async def join_project(project_id: str, payload: ProjectJoinPayload) -> dict[str
 
         connection.commit()
 
-    await connection_manager.broadcast_storage_event(["projects", "volunteerProjectJoins", "volunteers"])
+    await connection_manager.broadcast_storage_event([project_storage_key, "volunteerProjectJoins", "volunteers"])
     return {"project": updated_project, "volunteerProfile": volunteer_profile}
 
 
@@ -1810,6 +2007,11 @@ async def clear_storage() -> dict[str, str]:
 @app.post("/bootstrap")
 # API endpoint that seeds app storage with demo data.
 def bootstrap_storage() -> dict[str, str]:
+    if not is_demo_seed_enabled():
+        raise HTTPException(
+            status_code=403,
+            detail="Demo bootstrap is disabled in canonical-only mode.",
+        )
     ensure_app_storage_seeded()
     return {"status": "ok"}
 

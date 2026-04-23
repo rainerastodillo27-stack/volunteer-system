@@ -20,11 +20,8 @@ import {
   getAllPartners,
   getAllUsers,
   getAllVolunteers,
-  reviewPartnerRegistration,
-  reviewVolunteerRegistration,
   saveUser,
   subscribeToStorageChanges,
-  verifyPartnerRegistration,
   getPendingUserApprovals,
   approveUser,
   rejectUser,
@@ -53,9 +50,13 @@ export default function UserManagementScreen() {
   const [userTypeDraft, setUserTypeDraft] = useState<UserType>('Adult');
   const [pillarsDraft, setPillarsDraft] = useState<NVCSector[]>([]);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [expandedUserRoles, setExpandedUserRoles] = useState<Record<UserRole, boolean>>({
+    admin: false,
+    partner: false,
+    volunteer: false,
+  });
   const [reviewTarget, setReviewTarget] = useState<
-    | { type: 'partner'; record: Partner }
-    | { type: 'volunteer'; record: Volunteer }
+    | { type: 'user'; record: User }
     | null
   >(null);
 
@@ -102,9 +103,6 @@ export default function UserManagementScreen() {
       });
     }, [isAdmin, loadUsers])
   );
-
-  const getVolunteerRegistrationStatus = (volunteer: Volunteer) =>
-    volunteer.registrationStatus || 'Approved';
 
   // Flags recently created accounts so they can be visually highlighted.
   const isNewAccount = (createdAt: string) => {
@@ -196,77 +194,6 @@ export default function UserManagementScreen() {
     );
   };
 
-  const handleVerifyPartner = async (partnerId: string) => {
-    if (!user?.id) {
-      return;
-    }
-
-    try {
-      const partner = await verifyPartnerRegistration(partnerId, user.id);
-      setReviewTarget(current =>
-        current?.type === 'partner' && current.record.id === partner.id
-          ? { type: 'partner', record: partner }
-          : current
-      );
-      Alert.alert('Verified', `${partner.name} was marked as DSWD-verified.`);
-      await loadUsers();
-    } catch (error) {
-      Alert.alert(
-        getRequestErrorTitle(error),
-        getRequestErrorMessage(error, 'Failed to verify partner application.')
-      );
-    }
-  };
-
-  const handleReviewPartner = async (partnerId: string, status: 'Approved' | 'Rejected') => {
-    if (!user?.id) {
-      return;
-    }
-
-    try {
-      const partner = await reviewPartnerRegistration(partnerId, status, user.id);
-      setReviewTarget(null);
-      Alert.alert(
-        status === 'Approved' ? 'Partner Approved' : 'Partner Rejected',
-        status === 'Approved'
-          ? `${partner.name} can now log in to the partner portal.`
-          : `${partner.name} was rejected.`
-      );
-      await loadUsers();
-    } catch (error) {
-      Alert.alert(
-        getRequestErrorTitle(error),
-        getRequestErrorMessage(error, 'Failed to review partner application.')
-      );
-    }
-  };
-
-  const handleReviewVolunteer = async (
-    volunteerId: string,
-    status: 'Approved' | 'Rejected'
-  ) => {
-    if (!user?.id) {
-      return;
-    }
-
-    try {
-      const volunteer = await reviewVolunteerRegistration(volunteerId, status, user.id);
-      setReviewTarget(null);
-      Alert.alert(
-        status === 'Approved' ? 'Volunteer Approved' : 'Volunteer Rejected',
-        status === 'Approved'
-          ? `${volunteer.name} can now log in to the volunteer account.`
-          : `${volunteer.name} was rejected.`
-      );
-      await loadUsers();
-    } catch (error) {
-      Alert.alert(
-        getRequestErrorTitle(error),
-        getRequestErrorMessage(error, 'Failed to review volunteer account.')
-      );
-    }
-  };
-
   const handleApproveUser = async (targetUser: User) => {
     if (!user?.id) {
       return;
@@ -327,16 +254,19 @@ export default function UserManagementScreen() {
     );
   };
 
-  const openPartnerReview = (partner: Partner) => {
-    setReviewTarget({ type: 'partner', record: partner });
-  };
-
-  const openVolunteerReview = (volunteer: Volunteer) => {
-    setReviewTarget({ type: 'volunteer', record: volunteer });
+  const openUserReview = (targetUser: User) => {
+    setReviewTarget({ type: 'user', record: targetUser });
   };
 
   const closeReviewModal = () => {
     setReviewTarget(null);
+  };
+
+  const toggleUserRoleSection = (role: UserRole) => {
+    setExpandedUserRoles(current => ({
+      ...current,
+      [role]: !current[role],
+    }));
   };
 
   if (!isAdmin) {
@@ -351,18 +281,145 @@ export default function UserManagementScreen() {
     );
   }
 
-  const totalAdmins = users.filter(item => item.role === 'admin').length;
-  const totalPartners = users.filter(item => item.role === 'partner').length;
-  const totalVolunteers = users.filter(item => item.role === 'volunteer').length;
-  const pendingPartnerRequests = partners
-    .filter(partner => partner.status === 'Pending')
-    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
-  const rejectedPartnerRequests = partners
-    .filter(partner => partner.status === 'Rejected')
-    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
-  const pendingVolunteerRequests = volunteers
-    .filter(volunteer => getVolunteerRegistrationStatus(volunteer) === 'Pending')
-    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+  const adminUsers = users.filter(item => item.role === 'admin');
+  const partnerUsers = users.filter(item => item.role === 'partner');
+  const volunteerUsers = users.filter(item => item.role === 'volunteer');
+  const totalAdmins = adminUsers.length;
+  const totalPartners = partnerUsers.length;
+  const totalVolunteers = volunteerUsers.length;
+  const getLinkedPartnerForUser = (targetUser: User) =>
+    partners.find(partner => {
+      if (partner.ownerUserId) {
+        return partner.ownerUserId === targetUser.id;
+      }
+
+      return (
+        (partner.contactEmail || '').trim().toLowerCase() === (targetUser.email || '').trim().toLowerCase() ||
+        (partner.contactPhone || '').trim() === (targetUser.phone || '').trim()
+      );
+    }) || null;
+  const getLinkedVolunteerForUser = (targetUser: User) =>
+    volunteers.find(volunteer => {
+      if (volunteer.userId) {
+        return volunteer.userId === targetUser.id;
+      }
+
+      return (
+        (volunteer.email || '').trim().toLowerCase() === (targetUser.email || '').trim().toLowerCase() ||
+        (volunteer.phone || '').trim() === (targetUser.phone || '').trim()
+      );
+    }) || null;
+  const renderUserCard = (item: User) => {
+    const linkedPartners = partners.filter(partner => {
+      if (partner.ownerUserId) {
+        return partner.ownerUserId === item.id;
+      }
+
+      return (
+        (partner.contactEmail || '').trim().toLowerCase() === (item.email || '').trim().toLowerCase() ||
+        (partner.contactPhone || '').trim() === (item.phone || '').trim()
+      );
+    });
+    const linkedVolunteer = getLinkedVolunteerForUser(item);
+
+    return (
+      <View key={item.id} style={styles.userCard}>
+        <View style={styles.userHeader}>
+          <View style={styles.avatar}>
+            <Text style={styles.avatarText}>{item.name.charAt(0).toUpperCase()}</Text>
+          </View>
+          <View style={styles.userInfo}>
+            <View style={styles.nameRow}>
+              <Text style={styles.userName}>{item.name}</Text>
+              {isNewAccount(item.createdAt) && (
+                <View style={styles.newBadge}>
+                  <Text style={styles.newBadgeText}>New</Text>
+                </View>
+              )}
+            </View>
+            <Text style={styles.userMeta}>{item.email}</Text>
+            <Text style={styles.userMeta}>{item.phone || 'No phone number'}</Text>
+            <Text style={styles.userMeta}>{item.userType || 'No profile type'}</Text>
+            <Text style={styles.userMeta}>
+              Created {format(new Date(item.createdAt), 'MMM dd, yyyy hh:mm a')}
+            </Text>
+            <Text style={styles.userMeta}>
+              {(item.pillarsOfInterest || []).length > 0
+                ? item.pillarsOfInterest?.join(', ')
+                : 'No pillar preferences'}
+            </Text>
+            {item.role === 'partner' ? (
+              linkedPartners.length > 0 ? (
+                linkedPartners.map(partner => (
+                  <View key={partner.id} style={styles.linkedRecordBox}>
+                    <Text style={styles.linkedRecordTitle}>{partner.name}</Text>
+                    <Text style={styles.linkedRecordMeta}>
+                      {partner.status} • {partner.sectorType} • DSWD {partner.dswdAccreditationNo || 'Not provided'}
+                    </Text>
+                  </View>
+                ))
+              ) : (
+                <View style={styles.linkedRecordBox}>
+                  <Text style={styles.linkedRecordMeta}>No linked partner organization record yet.</Text>
+                </View>
+              )
+            ) : null}
+            {item.role === 'volunteer' && linkedVolunteer ? (
+              <View style={styles.linkedRecordBox}>
+                <Text style={styles.linkedRecordTitle}>{linkedVolunteer.name}</Text>
+                <Text style={styles.linkedRecordMeta}>
+                  {linkedVolunteer.registrationStatus || 'Pending'} • {linkedVolunteer.occupation || 'No occupation provided'}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+          <View style={styles.roleBadge}>
+            <Text style={styles.roleBadgeText}>{item.role}</Text>
+          </View>
+        </View>
+
+        <View style={styles.actionsRow}>
+          <TouchableOpacity style={styles.editButton} onPress={() => openEditModal(item)}>
+            <MaterialIcons name="edit" size={16} color="#166534" />
+            <Text style={styles.editButtonText}>Edit</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.deleteButton} onPress={() => handleDeleteUser(item)}>
+            <MaterialIcons name="delete-outline" size={16} color="#b91c1c" />
+            <Text style={styles.deleteButtonText}>Delete</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  };
+  const userSections: Array<{
+    id: string;
+    role: UserRole;
+    title: string;
+    subtitle: string;
+    users: User[];
+  }> = [
+    {
+      id: 'section-partners',
+      role: 'partner',
+      title: 'Partner Accounts',
+      subtitle: 'Partner user accounts are listed separately from volunteers and admins.',
+      users: partnerUsers,
+    },
+    {
+      id: 'section-volunteers',
+      role: 'volunteer',
+      title: 'Volunteer Accounts',
+      subtitle: 'Volunteer user accounts are grouped here for easier review.',
+      users: volunteerUsers,
+    },
+    {
+      id: 'section-admins',
+      role: 'admin',
+      title: 'Admin Accounts',
+      subtitle: 'Admin users are shown separately from partner and volunteer users.',
+      users: adminUsers,
+    },
+  ];
 
   return (
     <View style={styles.container}>
@@ -414,18 +471,18 @@ export default function UserManagementScreen() {
       ) : null}
 
       <FlatList
-        data={users}
+        data={userSections}
         keyExtractor={item => item.id}
         contentContainerStyle={styles.listContent}
         ListHeaderComponent={
           <>
             <View style={styles.requestSection}>
-              <Text style={styles.requestSectionTitle}>User Account Approvals</Text>
+              <Text style={styles.requestSectionTitle}>Users Waiting For Approval</Text>
               <Text style={styles.requestSectionSubtitle}>
-                New user accounts waiting for admin approval before they can log in.
+                All volunteer and partner signups that still need admin approval before they can join the system.
               </Text>
               {pendingUserApprovals.length === 0 ? (
-                <Text style={styles.requestEmptyText}>No pending user account approvals.</Text>
+                <Text style={styles.requestEmptyText}>No users are waiting for approval.</Text>
               ) : (
                 pendingUserApprovals.map(pendingUser => (
                   <View key={pendingUser.id} style={styles.requestCard}>
@@ -438,51 +495,8 @@ export default function UserManagementScreen() {
                         <Text style={styles.requestMeta}>
                           Submitted {format(new Date(pendingUser.createdAt), 'MMM dd, yyyy hh:mm a')}
                         </Text>
-                      </View>
-                      <View style={[styles.requestBadge, styles.requestBadgePending]}>
-                        <Text style={styles.requestBadgeText}>Pending</Text>
-                      </View>
-                    </View>
-                    <View style={styles.requestActionRow}>
-                      <TouchableOpacity
-                        style={[styles.requestActionButton, styles.approveActionButton]}
-                        onPress={() => handleApproveUser(pendingUser)}
-                      >
-                        <Text style={styles.requestActionButtonText}>Approve</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[styles.requestActionButton, styles.rejectActionButton]}
-                        onPress={() => handleRejectUser(pendingUser)}
-                      >
-                        <Text style={styles.requestActionButtonText}>Reject</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                ))
-              )}
-            </View>
-
-            <View style={styles.requestSection}>
-              <Text style={styles.requestSectionTitle}>Partner Onboarding Requests</Text>
-              <Text style={styles.requestSectionSubtitle}>
-                Pending partner applications that need verification and admin approval.
-              </Text>
-              {pendingPartnerRequests.length === 0 ? (
-                <Text style={styles.requestEmptyText}>No pending partner onboarding requests.</Text>
-              ) : (
-                pendingPartnerRequests.map(partner => (
-                  <View key={partner.id} style={styles.requestCard}>
-                    <View style={styles.requestHeader}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.requestName}>{partner.name}</Text>
                         <Text style={styles.requestMeta}>
-                          {partner.sectorType} • DSWD {partner.dswdAccreditationNo || 'Pending'}
-                        </Text>
-                        <Text style={styles.requestMeta}>
-                          {partner.contactEmail || partner.contactPhone || 'No contact details'}
-                        </Text>
-                        <Text style={styles.requestMeta}>
-                          Submitted {format(new Date(partner.createdAt), 'MMM dd, yyyy hh:mm a')}
+                          Review the full application before approving or rejecting.
                         </Text>
                       </View>
                       <View style={[styles.requestBadge, styles.requestBadgePending]}>
@@ -492,9 +506,9 @@ export default function UserManagementScreen() {
                     <View style={styles.requestActionRow}>
                       <TouchableOpacity
                         style={[styles.requestActionButton, styles.reviewActionButton]}
-                        onPress={() => openPartnerReview(partner)}
+                        onPress={() => openUserReview(pendingUser)}
                       >
-                        <Text style={styles.requestActionButtonText}>View Application</Text>
+                        <Text style={styles.requestActionButtonText}>Review Details</Text>
                       </TouchableOpacity>
                     </View>
                   </View>
@@ -502,174 +516,49 @@ export default function UserManagementScreen() {
               )}
             </View>
 
-            <View style={styles.requestSection}>
-              <Text style={styles.requestSectionTitle}>Volunteer Onboarding Requests</Text>
-              <Text style={styles.requestSectionSubtitle}>
-                Pending volunteer accounts that need admin approval before login.
-              </Text>
-              {pendingVolunteerRequests.length === 0 ? (
-                <Text style={styles.requestEmptyText}>No pending volunteer onboarding requests.</Text>
-              ) : (
-                pendingVolunteerRequests.map(volunteer => (
-                  <View key={volunteer.id} style={styles.requestCard}>
-                    <View style={styles.requestHeader}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.requestName}>{volunteer.name}</Text>
-                        <Text style={styles.requestMeta}>{volunteer.email || 'No email on file'}</Text>
-                        <Text style={styles.requestMeta}>{volunteer.phone || 'No phone number on file'}</Text>
-                        <Text style={styles.requestMeta}>
-                          Submitted {format(new Date(volunteer.createdAt), 'MMM dd, yyyy hh:mm a')}
-                        </Text>
-                      </View>
-                      <View style={[styles.requestBadge, styles.requestBadgePending]}>
-                        <Text style={styles.requestBadgeText}>Pending</Text>
-                      </View>
-                    </View>
-                    <View style={styles.requestActionRow}>
-                      <TouchableOpacity
-                        style={[styles.requestActionButton, styles.reviewActionButton]}
-                        onPress={() => openVolunteerReview(volunteer)}
-                      >
-                        <Text style={styles.requestActionButtonText}>View Membership Form</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                ))
-              )}
-            </View>
-
-            <View style={styles.requestSection}>
-              <Text style={styles.requestSectionTitle}>Rejected Partner Requests</Text>
-              <Text style={styles.requestSectionSubtitle}>
-                Rejected partner applications stay here so admins can still approve them later.
-              </Text>
-              {rejectedPartnerRequests.length === 0 ? (
-                <Text style={styles.requestEmptyText}>No rejected partner requests.</Text>
-              ) : (
-                rejectedPartnerRequests.map(partner => (
-                  <View key={partner.id} style={styles.requestCard}>
-                    <View style={styles.requestHeader}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.requestName}>{partner.name}</Text>
-                        <Text style={styles.requestMeta}>
-                          {partner.sectorType} • DSWD {partner.dswdAccreditationNo || 'Pending'}
-                        </Text>
-                        <Text style={styles.requestMeta}>
-                          {partner.contactEmail || partner.contactPhone || 'No contact details'}
-                        </Text>
-                        <Text style={styles.requestMeta}>
-                          Submitted {format(new Date(partner.createdAt), 'MMM dd, yyyy hh:mm a')}
-                        </Text>
-                        {partner.validatedAt ? (
-                          <Text style={styles.requestMeta}>
-                            Last reviewed {format(new Date(partner.validatedAt), 'MMM dd, yyyy hh:mm a')}
-                          </Text>
-                        ) : null}
-                      </View>
-                      <View style={[styles.requestBadge, styles.requestBadgeRejected]}>
-                        <Text style={[styles.requestBadgeText, styles.requestBadgeTextRejected]}>Rejected</Text>
-                      </View>
-                    </View>
-                    <View style={styles.requestActionRow}>
-                      <TouchableOpacity
-                        style={[styles.requestActionButton, styles.reviewActionButton]}
-                        onPress={() => openPartnerReview(partner)}
-                      >
-                        <Text style={styles.requestActionButtonText}>Review Decision</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                ))
-              )}
-            </View>
           </>
         }
         renderItem={({ item }) => {
-          const linkedPartners = partners.filter(partner => {
-            if (partner.ownerUserId) {
-              return partner.ownerUserId === item.id;
-            }
-
-            return (
-              (partner.contactEmail || '').trim().toLowerCase() === (item.email || '').trim().toLowerCase() ||
-              (partner.contactPhone || '').trim() === (item.phone || '').trim()
-            );
-          });
-          const linkedVolunteer =
-            volunteers.find(volunteer => {
-              if (volunteer.userId) {
-                return volunteer.userId === item.id;
-              }
-
-              return (
-                (volunteer.email || '').trim().toLowerCase() === (item.email || '').trim().toLowerCase() ||
-                (volunteer.phone || '').trim() === (item.phone || '').trim()
-              );
-            }) || null;
+          const isExpanded = expandedUserRoles[item.role];
 
           return (
-            <View style={styles.userCard}>
-              <View style={styles.userHeader}>
-                <View style={styles.avatar}>
-                  <Text style={styles.avatarText}>{item.name.charAt(0).toUpperCase()}</Text>
-                </View>
-                <View style={styles.userInfo}>
-                  <View style={styles.nameRow}>
-                    <Text style={styles.userName}>{item.name}</Text>
-                    {isNewAccount(item.createdAt) && (
-                      <View style={styles.newBadge}>
-                        <Text style={styles.newBadgeText}>New</Text>
-                      </View>
-                    )}
+            <View style={styles.userRoleSection}>
+              <TouchableOpacity
+                style={styles.userTypeBox}
+                onPress={() => toggleUserRoleSection(item.role)}
+                activeOpacity={0.85}
+              >
+                <View style={styles.userTypeBoxHeader}>
+                  <View style={styles.userTypeBoxTextWrap}>
+                    <Text style={styles.requestSectionTitle}>{item.title}</Text>
+                    <Text style={styles.requestSectionSubtitle}>{item.subtitle}</Text>
                   </View>
-                  <Text style={styles.userMeta}>{item.email}</Text>
-                  <Text style={styles.userMeta}>{item.phone || 'No phone number'}</Text>
-                  <Text style={styles.userMeta}>{item.userType || 'No profile type'}</Text>
-                  <Text style={styles.userMeta}>
-                    Created {format(new Date(item.createdAt), 'MMM dd, yyyy hh:mm a')}
-                  </Text>
-                  <Text style={styles.userMeta}>
-                    {(item.pillarsOfInterest || []).length > 0
-                      ? item.pillarsOfInterest?.join(', ')
-                      : 'No pillar preferences'}
-                  </Text>
-                  {item.role === 'partner' ? (
-                    linkedPartners.length > 0 ? (
-                      linkedPartners.map(partner => (
-                        <View key={partner.id} style={styles.linkedRecordBox}>
-                          <Text style={styles.linkedRecordTitle}>{partner.name}</Text>
-                          <Text style={styles.linkedRecordMeta}>
-                            {partner.status} • {partner.sectorType} • DSWD {partner.dswdAccreditationNo || 'Not provided'}
-                          </Text>
-                        </View>
-                      ))
-                    ) : (
-                      <View style={styles.linkedRecordBox}>
-                        <Text style={styles.linkedRecordMeta}>No linked partner organization record yet.</Text>
-                      </View>
-                    )
-                  ) : null}
+                  <View style={styles.userTypeBoxMeta}>
+                    <View style={styles.userTypeCountBadge}>
+                      <Text style={styles.userTypeCountText}>{item.users.length}</Text>
+                    </View>
+                    <MaterialIcons
+                      name={isExpanded ? 'expand-less' : 'expand-more'}
+                      size={24}
+                      color="#0f172a"
+                    />
+                  </View>
                 </View>
-                <View style={styles.roleBadge}>
-                  <Text style={styles.roleBadgeText}>{item.role}</Text>
-                </View>
-              </View>
+              </TouchableOpacity>
 
-              <View style={styles.actionsRow}>
-                <TouchableOpacity style={styles.editButton} onPress={() => openEditModal(item)}>
-                  <MaterialIcons name="edit" size={16} color="#166534" />
-                  <Text style={styles.editButtonText}>Edit</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.deleteButton} onPress={() => handleDeleteUser(item)}>
-                  <MaterialIcons name="delete-outline" size={16} color="#b91c1c" />
-                  <Text style={styles.deleteButtonText}>Delete</Text>
-                </TouchableOpacity>
-              </View>
+              {isExpanded ? (
+                item.users.length > 0 ? (
+                  item.users.map(renderUserCard)
+                ) : (
+                  <View style={styles.userRoleEmptyState}>
+                    <Text style={styles.requestEmptyText}>No accounts in this section.</Text>
+                  </View>
+                )
+              ) : null}
             </View>
           );
         }}
       />
-
       <Modal visible={showEditModal} animationType="slide" onRequestClose={closeEditModal}>
         <View style={styles.modalContainer}>
           <View style={styles.modalHeader}>
@@ -771,150 +660,160 @@ export default function UserManagementScreen() {
             <TouchableOpacity onPress={closeReviewModal}>
               <Text style={styles.modalCancel}>Close</Text>
             </TouchableOpacity>
-            <Text style={styles.modalTitle}>
-              {reviewTarget?.type === 'partner' ? 'Partner Application' : 'Volunteer Form'}
-            </Text>
+            <Text style={styles.modalTitle}>User Review</Text>
             <View style={styles.modalHeaderSpacer} />
           </View>
 
           <ScrollView style={styles.modalBody} contentContainerStyle={styles.reviewContent}>
-            {reviewTarget?.type === 'partner' ? (
+            {reviewTarget?.type === 'user' ? (
               <>
-                <Text style={styles.reviewSectionTitle}>Organization Details</Text>
-                <Text style={styles.reviewRowLabel}>Organization Name</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.name}</Text>
-                <Text style={styles.reviewRowLabel}>Sector Type</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.sectorType}</Text>
-                <Text style={styles.reviewRowLabel}>DSWD Accreditation No.</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.dswdAccreditationNo || 'Not provided'}</Text>
-                <Text style={styles.reviewRowLabel}>SEC Registration No.</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.secRegistrationNo || 'Not provided'}</Text>
-                <Text style={styles.reviewRowLabel}>Advocacy Focus</Text>
-                <Text style={styles.reviewRowValue}>
-                  {reviewTarget.record.advocacyFocus.length > 0
-                    ? reviewTarget.record.advocacyFocus.join(', ')
-                    : 'Not provided'}
-                </Text>
-                <Text style={styles.reviewRowLabel}>Description</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.description || 'Not provided'}</Text>
-
-                <Text style={styles.reviewSectionTitle}>Contact Information</Text>
-                <Text style={styles.reviewRowLabel}>Email</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.contactEmail || 'Not provided'}</Text>
-                <Text style={styles.reviewRowLabel}>Phone</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.contactPhone || 'Not provided'}</Text>
-                <Text style={styles.reviewRowLabel}>Address</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.address || 'Not provided'}</Text>
-
-                <Text style={styles.reviewSectionTitle}>Verification</Text>
-                <Text style={styles.reviewRowLabel}>Status</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.status}</Text>
-                <Text style={styles.reviewRowLabel}>Verification Status</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.verificationStatus || 'Pending'}</Text>
-                <Text style={styles.reviewRowLabel}>Verification Notes</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.verificationNotes || 'No verification notes yet.'}</Text>
-                <Text style={styles.reviewRowLabel}>Registration Documents</Text>
-                <Text style={styles.reviewRowValue}>
-                  {reviewTarget.record.registrationDocuments?.length
-                    ? reviewTarget.record.registrationDocuments.join('\n')
-                    : 'No uploaded registration documents.'}
-                </Text>
-              </>
-            ) : reviewTarget?.type === 'volunteer' ? (
-              <>
-                <Text style={styles.reviewSectionTitle}>Personal Information</Text>
+                <Text style={styles.reviewSectionTitle}>Account Details</Text>
                 <Text style={styles.reviewRowLabel}>Full Name</Text>
                 <Text style={styles.reviewRowValue}>{reviewTarget.record.name}</Text>
+                <Text style={styles.reviewRowLabel}>Role</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.role}</Text>
                 <Text style={styles.reviewRowLabel}>Email</Text>
                 <Text style={styles.reviewRowValue}>{reviewTarget.record.email || 'Not provided'}</Text>
                 <Text style={styles.reviewRowLabel}>Phone</Text>
                 <Text style={styles.reviewRowValue}>{reviewTarget.record.phone || 'Not provided'}</Text>
-                <Text style={styles.reviewRowLabel}>Gender</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.gender || 'Not provided'}</Text>
-                <Text style={styles.reviewRowLabel}>Date of Birth</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.dateOfBirth || 'Not provided'}</Text>
-                <Text style={styles.reviewRowLabel}>Civil Status</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.civilStatus || 'Not provided'}</Text>
-
-                <Text style={styles.reviewSectionTitle}>Home Address</Text>
-                <Text style={styles.reviewRowLabel}>Full Address</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.homeAddress || 'Not provided'}</Text>
-                <Text style={styles.reviewRowLabel}>Region</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.homeAddressRegion || 'Not provided'}</Text>
-                <Text style={styles.reviewRowLabel}>City / Municipality</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.homeAddressCityMunicipality || 'Not provided'}</Text>
-                <Text style={styles.reviewRowLabel}>Barangay</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.homeAddressBarangay || 'Not provided'}</Text>
-
-                <Text style={styles.reviewSectionTitle}>Professional Information</Text>
-                <Text style={styles.reviewRowLabel}>Occupation</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.occupation || 'Not provided'}</Text>
-                <Text style={styles.reviewRowLabel}>Workplace or School</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.workplaceOrSchool || 'Not provided'}</Text>
-                <Text style={styles.reviewRowLabel}>College Course</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.collegeCourse || 'Not provided'}</Text>
-                <Text style={styles.reviewRowLabel}>Certifications or Trainings</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.certificationsOrTrainings || 'Not provided'}</Text>
-                <Text style={styles.reviewRowLabel}>Hobbies and Interests</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.hobbiesAndInterests || 'Not provided'}</Text>
-                <Text style={styles.reviewRowLabel}>Special Skills</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.specialSkills || 'Not provided'}</Text>
-                <Text style={styles.reviewRowLabel}>Video Briefing URL</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.videoBriefingUrl || 'Not provided'}</Text>
-
-                <Text style={styles.reviewSectionTitle}>Affiliations</Text>
+                <Text style={styles.reviewRowLabel}>Profile Type</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.userType || 'Not provided'}</Text>
+                <Text style={styles.reviewRowLabel}>Pillars of Interest</Text>
                 <Text style={styles.reviewRowValue}>
-                  {reviewTarget.record.affiliations && reviewTarget.record.affiliations.length > 0
-                    ? reviewTarget.record.affiliations
-                        .map(affiliation => `${affiliation.organization || 'Organization not provided'} - ${affiliation.position || 'Position not provided'}`)
-                        .join('\n')
-                    : 'No affiliations provided.'}
+                  {reviewTarget.record.pillarsOfInterest && reviewTarget.record.pillarsOfInterest.length > 0
+                    ? reviewTarget.record.pillarsOfInterest.join(', ')
+                    : 'No pillar preferences'}
                 </Text>
+                <Text style={styles.reviewRowLabel}>Approval Status</Text>
+                <Text style={styles.reviewRowValue}>{reviewTarget.record.approvalStatus || 'pending'}</Text>
+                <Text style={styles.reviewRowLabel}>Submitted</Text>
+                <Text style={styles.reviewRowValue}>
+                  {format(new Date(reviewTarget.record.createdAt), 'MMM dd, yyyy hh:mm a')}
+                </Text>
+
+                {reviewTarget.record.role === 'partner' ? (
+                  <>
+                    <Text style={styles.reviewSectionTitle}>Partner Application</Text>
+                    {(() => {
+                      const linkedPartner = getLinkedPartnerForUser(reviewTarget.record);
+                      if (!linkedPartner) {
+                        return <Text style={styles.reviewRowValue}>No partner application record found.</Text>;
+                      }
+
+                      return (
+                        <>
+                          <Text style={styles.reviewRowLabel}>Organization Name</Text>
+                          <Text style={styles.reviewRowValue}>{linkedPartner.name}</Text>
+                          <Text style={styles.reviewRowLabel}>Sector Type</Text>
+                          <Text style={styles.reviewRowValue}>{linkedPartner.sectorType}</Text>
+                          <Text style={styles.reviewRowLabel}>DSWD Accreditation No.</Text>
+                          <Text style={styles.reviewRowValue}>{linkedPartner.dswdAccreditationNo || 'Not provided'}</Text>
+                          <Text style={styles.reviewRowLabel}>SEC Registration No.</Text>
+                          <Text style={styles.reviewRowValue}>{linkedPartner.secRegistrationNo || 'Not provided'}</Text>
+                          <Text style={styles.reviewRowLabel}>Advocacy Focus</Text>
+                          <Text style={styles.reviewRowValue}>
+                            {linkedPartner.advocacyFocus.length > 0
+                              ? linkedPartner.advocacyFocus.join(', ')
+                              : 'Not provided'}
+                          </Text>
+                          <Text style={styles.reviewRowLabel}>Description</Text>
+                          <Text style={styles.reviewRowValue}>{linkedPartner.description || 'Not provided'}</Text>
+                          <Text style={styles.reviewRowLabel}>Contact Email</Text>
+                          <Text style={styles.reviewRowValue}>{linkedPartner.contactEmail || 'Not provided'}</Text>
+                          <Text style={styles.reviewRowLabel}>Contact Phone</Text>
+                          <Text style={styles.reviewRowValue}>{linkedPartner.contactPhone || 'Not provided'}</Text>
+                          <Text style={styles.reviewRowLabel}>Address</Text>
+                          <Text style={styles.reviewRowValue}>{linkedPartner.address || 'Not provided'}</Text>
+                          <Text style={styles.reviewRowLabel}>Verification Status</Text>
+                          <Text style={styles.reviewRowValue}>{linkedPartner.verificationStatus || 'Pending'}</Text>
+                        </>
+                      );
+                    })()}
+                  </>
+                ) : reviewTarget.record.role === 'volunteer' ? (
+                  <>
+                    <Text style={styles.reviewSectionTitle}>Volunteer Membership Form</Text>
+                    {(() => {
+                      const linkedVolunteer = getLinkedVolunteerForUser(reviewTarget.record);
+                      if (!linkedVolunteer) {
+                        return <Text style={styles.reviewRowValue}>No volunteer profile record found.</Text>;
+                      }
+
+                      return (
+                        <>
+                          <Text style={styles.reviewRowLabel}>Gender</Text>
+                          <Text style={styles.reviewRowValue}>{linkedVolunteer.gender || 'Not provided'}</Text>
+                          <Text style={styles.reviewRowLabel}>Date of Birth</Text>
+                          <Text style={styles.reviewRowValue}>{linkedVolunteer.dateOfBirth || 'Not provided'}</Text>
+                          <Text style={styles.reviewRowLabel}>Civil Status</Text>
+                          <Text style={styles.reviewRowValue}>{linkedVolunteer.civilStatus || 'Not provided'}</Text>
+                          <Text style={styles.reviewRowLabel}>Home Address</Text>
+                          <Text style={styles.reviewRowValue}>{linkedVolunteer.homeAddress || 'Not provided'}</Text>
+                          <Text style={styles.reviewRowLabel}>Region</Text>
+                          <Text style={styles.reviewRowValue}>{linkedVolunteer.homeAddressRegion || 'Not provided'}</Text>
+                          <Text style={styles.reviewRowLabel}>City / Municipality</Text>
+                          <Text style={styles.reviewRowValue}>
+                            {linkedVolunteer.homeAddressCityMunicipality || 'Not provided'}
+                          </Text>
+                          <Text style={styles.reviewRowLabel}>Barangay</Text>
+                          <Text style={styles.reviewRowValue}>{linkedVolunteer.homeAddressBarangay || 'Not provided'}</Text>
+                          <Text style={styles.reviewRowLabel}>Occupation</Text>
+                          <Text style={styles.reviewRowValue}>{linkedVolunteer.occupation || 'Not provided'}</Text>
+                          <Text style={styles.reviewRowLabel}>Workplace / School</Text>
+                          <Text style={styles.reviewRowValue}>{linkedVolunteer.workplaceOrSchool || 'Not provided'}</Text>
+                          <Text style={styles.reviewRowLabel}>College Course</Text>
+                          <Text style={styles.reviewRowValue}>{linkedVolunteer.collegeCourse || 'Not provided'}</Text>
+                          <Text style={styles.reviewRowLabel}>Certifications / Trainings</Text>
+                          <Text style={styles.reviewRowValue}>
+                            {linkedVolunteer.certificationsOrTrainings || 'Not provided'}
+                          </Text>
+                          <Text style={styles.reviewRowLabel}>Hobbies and Interests</Text>
+                          <Text style={styles.reviewRowValue}>{linkedVolunteer.hobbiesAndInterests || 'Not provided'}</Text>
+                          <Text style={styles.reviewRowLabel}>Special Skills</Text>
+                          <Text style={styles.reviewRowValue}>{linkedVolunteer.specialSkills || 'Not provided'}</Text>
+                          <Text style={styles.reviewRowLabel}>Video Briefing URL</Text>
+                          <Text style={styles.reviewRowValue}>{linkedVolunteer.videoBriefingUrl || 'Not provided'}</Text>
+                          <Text style={styles.reviewRowLabel}>Affiliations</Text>
+                          <Text style={styles.reviewRowValue}>
+                            {linkedVolunteer.affiliations && linkedVolunteer.affiliations.length > 0
+                              ? linkedVolunteer.affiliations
+                                  .map(affiliation =>
+                                    `${affiliation.organization || 'Organization not provided'} - ${affiliation.position || 'Position not provided'}`
+                                  )
+                                  .join('\n')
+                              : 'No affiliations provided.'}
+                          </Text>
+                          <Text style={styles.reviewRowLabel}>Registration Status</Text>
+                          <Text style={styles.reviewRowValue}>
+                            {linkedVolunteer.registrationStatus || 'Pending'}
+                          </Text>
+                        </>
+                      );
+                    })()}
+                  </>
+                ) : null}
               </>
             ) : null}
           </ScrollView>
 
           {reviewTarget ? (
             <View style={styles.reviewActionFooter}>
-              {reviewTarget.type === 'partner' ? (
+              {reviewTarget.type === 'user' ? (
                 <>
-                  {reviewTarget.record.verificationStatus !== 'Verified' ? (
-                    <TouchableOpacity
-                      style={[styles.requestActionButton, styles.verifyActionButton]}
-                      onPress={() => handleVerifyPartner(reviewTarget.record.id)}
-                    >
-                      <Text style={styles.requestActionButtonText}>Verify</Text>
-                    </TouchableOpacity>
-                  ) : null}
                   <TouchableOpacity
                     style={[styles.requestActionButton, styles.approveActionButton]}
-                    onPress={() => handleReviewPartner(reviewTarget.record.id, 'Approved')}
+                    onPress={() => handleApproveUser(reviewTarget.record)}
                   >
                     <Text style={styles.requestActionButtonText}>Approve</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={[styles.requestActionButton, styles.rejectActionButton]}
-                    onPress={() => handleReviewPartner(reviewTarget.record.id, 'Rejected')}
+                    onPress={() => handleRejectUser(reviewTarget.record)}
                   >
                     <Text style={styles.requestActionButtonText}>Reject</Text>
                   </TouchableOpacity>
                 </>
-              ) : (
-                <>
-                  <TouchableOpacity
-                    style={[styles.requestActionButton, styles.approveActionButton]}
-                    onPress={() => handleReviewVolunteer(reviewTarget.record.id, 'Approved')}
-                  >
-                    <Text style={styles.requestActionButtonText}>Approve</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.requestActionButton, styles.rejectActionButton]}
-                    onPress={() => handleReviewVolunteer(reviewTarget.record.id, 'Rejected')}
-                  >
-                    <Text style={styles.requestActionButtonText}>Reject</Text>
-                  </TouchableOpacity>
-                </>
-              )}
+              ) : null}
             </View>
           ) : null}
         </View>
@@ -1204,6 +1103,49 @@ const styles = StyleSheet.create({
     padding: 16,
     marginHorizontal: 16,
     marginBottom: 8,
+  },
+  userRoleSection: {
+    marginTop: 8,
+    marginBottom: 4,
+    paddingHorizontal: 16,
+  },
+  userTypeBox: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  userTypeBoxHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  userTypeBoxTextWrap: {
+    flex: 1,
+  },
+  userTypeBoxMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  userTypeCountBadge: {
+    minWidth: 30,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: '#dcfce7',
+    alignItems: 'center',
+  },
+  userTypeCountText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#166534',
+  },
+  userRoleEmptyState: {
+    paddingTop: 10,
   },
   requestSectionTitle: {
     fontSize: 18,

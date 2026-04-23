@@ -149,21 +149,8 @@ def run_cleanup():
         total_cleaned += deleted
         print(f"   Total deleted: {deleted}\n")
         
-        # 5. Remove old event check-ins (30+ days)
-        print("5. Removing event check-ins older than 30 days...")
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-        deleted = batch_delete(
-            cursor,
-            "app_partner_event_check_ins_store",
-            "(data->>'updated_at')::timestamp < %s::timestamp",
-            [cutoff],
-            batch_size=50
-        )
-        total_cleaned += deleted
-        print(f"   Total deleted: {deleted}\n")
-        
-        # 6. Remove old reports (90+ days)
-        print("6. Removing partner reports older than 90 days...")
+        # 5. Remove old reports (90+ days)
+        print("5. Removing reports older than 90 days...")
         cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
         deleted = batch_delete(
             cursor,
@@ -175,12 +162,11 @@ def run_cleanup():
         total_cleaned += deleted
         print(f"   Total deleted: {deleted}\n")
         
-        # 7. Remove null/empty data
-        print("7. Removing null or empty records...")
+        # 6. Remove null/empty data
+        print("6. Removing null or empty records...")
         tables = [
             "app_volunteer_time_logs_store",
             "app_volunteer_project_joins_store",
-            "app_partner_event_check_ins_store",
             "app_partner_reports_store",
         ]
         for table in tables:
@@ -194,8 +180,8 @@ def run_cleanup():
                 print(f"   {table}: skipped ({str(e)[:50]})")
         print()
         
-        # 8. Optimize database
-        print("8. Optimizing database storage...")
+        # 7. Optimize database
+        print("7. Optimizing database storage...")
         cursor.execute("VACUUM ANALYZE")
         print("   Database vacuumed and analyzed\n")
         

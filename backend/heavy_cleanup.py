@@ -56,10 +56,8 @@ def main():
          "3. Removing completed joins"),
         ("DELETE FROM app_volunteer_project_joins_store WHERE TRUE LIMIT 5000", 
          "4. Removing project joins batch 1"),
-        ("DELETE FROM app_partner_event_check_ins_store WHERE TRUE LIMIT 5000", 
-         "5. Removing check-ins"),
         ("DELETE FROM app_partner_reports_store WHERE TRUE LIMIT 5000", 
-         "6. Removing reports"),
+         "5. Removing reports"),
     ]
     
     print("Executing cleanup (each operation uses fresh connection):\n")

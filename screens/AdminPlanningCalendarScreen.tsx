@@ -944,7 +944,7 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
                 <View>
                   <Text style={styles.schedulerTitle}>Scheduler view</Text>
                   <Text style={styles.schedulerSubtitle}>
-                    Click a day to add a plan. Click a project band to jump to the Project Suite.
+                    Click a day to add a plan. Click a project band to jump to the Program Management Suite.
                   </Text>
                 </View>
               </View>

@@ -1,25 +1,22 @@
 import React, { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, FlatList, StyleSheet, Text, TouchableOpacity, Alert, Pressable, Image, Platform, ImageSourcePropType, Modal, TextInput } from 'react-native';
+import { View, FlatList, StyleSheet, Text, TouchableOpacity, Alert, Pressable, Image, Platform, ImageSourcePropType, Modal, TextInput, ScrollView } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
 import { useFocusEffect } from '@react-navigation/native';
 import InlineLoadError from '../components/InlineLoadError';
 import { useAuth } from '../contexts/AuthContext';
 import {
-  getAllPublishedImpactReports,
+  buildProgramProposalProjectId,
   getProjectsScreenSnapshot,
   getVolunteerProjectMatches,
   requestVolunteerProjectJoin,
-<<<<<<< HEAD
   submitVolunteerTimeOutReport,
-=======
->>>>>>> 037fab59f64e3dec7dffb08a79f446fc37a7fd82
   submitPartnerProgramProposal,
   startVolunteerTimeLog,
   endVolunteerTimeLog,
   subscribeToStorageChanges,
 } from '../models/storage';
-import { PartnerProjectApplication, Project, PublishedImpactReport, Volunteer, VolunteerProjectJoinRecord, VolunteerProjectMatch, VolunteerTimeLog } from '../models/types';
+import { PartnerProjectApplication, PartnerProjectProposalDetails, Project, Volunteer, VolunteerProjectJoinRecord, VolunteerProjectMatch, VolunteerTimeLog } from '../models/types';
 import { isImageMediaUri, pickImageFromDevice } from '../utils/media';
 import { navigateToAvailableRoute } from '../utils/navigation';
 import { getProjectStatusColor } from '../utils/projectStatus';
@@ -67,6 +64,51 @@ type Recommendation = {
   label: 'Good Skill Fit' | 'Suggested for You' | 'Open Program';
   reasons: string[];
 };
+
+type PartnerProposalDraft = {
+  proposedTitle: string;
+  proposedDescription: string;
+  proposedStartDate: string;
+  proposedEndDate: string;
+  proposedLocation: string;
+  proposedVolunteersNeeded: string;
+  communityNeed: string;
+  expectedDeliverables: string;
+};
+
+function createPartnerProposalDraft(project: Project): PartnerProposalDraft {
+  return {
+    proposedTitle: project.title,
+    proposedDescription: project.description,
+    proposedStartDate: project.startDate.slice(0, 10),
+    proposedEndDate: project.endDate.slice(0, 10),
+    proposedLocation: project.location.address,
+    proposedVolunteersNeeded: String(project.volunteersNeeded || 1),
+    communityNeed: '',
+    expectedDeliverables: '',
+  };
+}
+
+function buildPartnerProposalDetails(
+  project: Project,
+  draft: PartnerProposalDraft
+): PartnerProjectProposalDetails {
+  return {
+    targetProjectId: project.id,
+    targetProjectTitle: project.title,
+    targetProjectDescription: project.description,
+    targetProjectAddress: project.location.address,
+    requestedProgramModule: project.programModule || project.category,
+    proposedTitle: draft.proposedTitle.trim(),
+    proposedDescription: draft.proposedDescription.trim(),
+    proposedStartDate: draft.proposedStartDate.trim(),
+    proposedEndDate: draft.proposedEndDate.trim(),
+    proposedLocation: draft.proposedLocation.trim(),
+    proposedVolunteersNeeded: Number(draft.proposedVolunteersNeeded),
+    communityNeed: draft.communityNeed.trim(),
+    expectedDeliverables: draft.expectedDeliverables.trim(),
+  };
+}
 
 function getCompletionProofSummary(log?: VolunteerTimeLog | null): string {
   const proofItems: string[] = [];
@@ -191,7 +233,14 @@ function getProgramPhotoSource(project: Project): ImageSourcePropType | undefine
 
 // Returns image candidates for a project card, prioritizing bundled local program photos.
 function getProjectImageSources(project: Project): ImageSourcePropType[] {
+  if (project.imageHidden) {
+    return [];
+  }
+
   const imageSources: ImageSourcePropType[] = [];
+  if (isImageMediaUri(project.imageUrl)) {
+    imageSources.push({ uri: project.imageUrl });
+  }
   const programPhotoSource = getProgramPhotoSource(project);
 
   if (programPhotoSource) {
@@ -344,12 +393,13 @@ export default function ProjectsScreen({ navigation, route }: any) {
   const [timeLogs, setTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
-  const [impactReports, setImpactReports] = useState<PublishedImpactReport[]>([]);
   const [loadingProjectId, setLoadingProjectId] = useState<string | null>(null);
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
   const [timeOutProjectId, setTimeOutProjectId] = useState<string | null>(null);
   const [timeOutReportDraft, setTimeOutReportDraft] = useState('');
   const [timeOutPhotoDraft, setTimeOutPhotoDraft] = useState('');
+  const [proposalProjectId, setProposalProjectId] = useState<string | null>(null);
+  const [partnerProposalDraft, setPartnerProposalDraft] = useState<PartnerProposalDraft | null>(null);
   const [imagePreview, setImagePreview] = useState<{
     title: string;
     source: ImageSourcePropType;
@@ -379,13 +429,9 @@ export default function ProjectsScreen({ navigation, route }: any) {
   // Loads projects plus role-specific volunteer or partner data for this screen.
   const loadProjectsData = useCallback(async () => {
     try {
-      const [snapshot, publishedReports] = await Promise.all([
-        getProjectsScreenSnapshot(user),
-        getAllPublishedImpactReports(),
-      ]);
+      const snapshot = await getProjectsScreenSnapshot(user);
       applySnapshot(snapshot);
       setLoadError(null);
-      setImpactReports(publishedReports.filter(report => Boolean(report.publishedAt)));
       if (snapshot.volunteerProfile?.id) {
         const matches = await getVolunteerProjectMatches(snapshot.volunteerProfile.id);
         setVolunteerMatches(matches);
@@ -404,7 +450,6 @@ export default function ProjectsScreen({ navigation, route }: any) {
         setPartnerApplications([]);
         setVolunteerJoinRecords([]);
         setVolunteerMatches([]);
-        setImpactReports([]);
       });
       setLoadError(nextLoadError);
     }
@@ -414,7 +459,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
     React.useCallback(() => {
       void loadProjectsData();
       return subscribeToStorageChanges(
-        ['projects', 'volunteers', 'volunteerProjectJoins', 'volunteerTimeLogs', 'partnerProjectApplications', 'volunteerMatches', 'publishedImpactReports'],
+        ['projects', 'volunteers', 'volunteerProjectJoins', 'volunteerTimeLogs', 'partnerProjectApplications', 'volunteerMatches'],
         () => {
           void loadProjectsData();
         }
@@ -422,76 +467,18 @@ export default function ProjectsScreen({ navigation, route }: any) {
     }, [loadProjectsData])
   );
 
-  useEffect(() => {
-    const requestedProjectId = route?.params?.projectId;
-    if (!requestedProjectId || projects.length === 0) {
-      return;
-    }
-
-<<<<<<< HEAD
-    const filteredProjects =
-      statusFilter === 'All'
-        ? projects
-        : projects.filter(project => project.status === statusFilter);
-
-    const targetCategoryGroups = (['Education', 'Livelihood', 'Nutrition', 'Disaster'] as const)
-      .map(category => ({
-        category,
-        projects: filteredProjects.filter(project => project.category === category),
-      }))
-      .filter(categoryGroup => categoryGroup.projects.length > 0);
-
-    const targetCategoryIndex = targetCategoryGroups.findIndex(categoryGroup =>
-=======
-    const targetCategoryIndex = projectsByCategory.findIndex(categoryGroup =>
->>>>>>> 037fab59f64e3dec7dffb08a79f446fc37a7fd82
-      categoryGroup.projects.some(project => project.id === requestedProjectId)
-    );
-    if (targetCategoryIndex === -1) {
-      return;
-    }
-
-<<<<<<< HEAD
-    const targetCategory = targetCategoryGroups[targetCategoryIndex];
-=======
-    const targetCategory = projectsByCategory[targetCategoryIndex];
->>>>>>> 037fab59f64e3dec7dffb08a79f446fc37a7fd82
-    if (!targetCategory) {
-      return;
-    }
-
-    setExpandedProjectId(requestedProjectId);
-    setExpandedCategories(prev => new Set(prev).add(targetCategory.category));
-    requestAnimationFrame(() => {
-      projectListRef.current?.scrollToIndex({
-        index: targetCategoryIndex,
-        animated: true,
-        viewPosition: 0.15,
-      });
-    });
-    navigation.setParams({ projectId: undefined });
-<<<<<<< HEAD
-  }, [navigation, projects, route?.params?.projectId, statusFilter]);
-=======
-  }, [navigation, projects, projectsByCategory, route?.params?.projectId]);
->>>>>>> 037fab59f64e3dec7dffb08a79f446fc37a7fd82
-
   // Handles the active project action based on the current user role.
   const handleJoinProject = async (projectId: string) => {
     if (!user?.id) return;
     try {
       setLoadingProjectId(projectId);
       if (user.role === 'partner') {
-        const application = await submitPartnerProgramProposal(projectId, user);
-        startTransition(() => {
-          setPartnerApplications(prev => {
-            const withoutCurrent = prev.filter(existing => existing.id !== application.id);
-            return [application, ...withoutCurrent].sort(
-              (a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime()
-            );
-          });
-        });
-        Alert.alert('Submitted', 'Your project proposal has been sent to the admin for approval.');
+        const selectedProject = projects.find(project => project.id === projectId);
+        if (!selectedProject) {
+          throw new Error('Selected project was not found.');
+        }
+        setProposalProjectId(projectId);
+        setPartnerProposalDraft(createPartnerProposalDraft(selectedProject));
         return;
       }
 
@@ -506,17 +493,88 @@ export default function ProjectsScreen({ navigation, route }: any) {
       });
       Alert.alert(
         'Request Sent',
-        'Your join request was sent to the admin. You will be notified once it is approved or rejected.'
+        'Your event join request was sent to the admin. You will be notified once it is approved or rejected.'
       );
     } catch (error) {
       Alert.alert(
         getRequestErrorTitle(error),
-        getRequestErrorMessage(error, 'Failed to submit this project proposal. Please try again.')
+        getRequestErrorMessage(error, 'Failed to submit this request. Please try again.')
       );
     } finally {
       setLoadingProjectId(null);
     }
   };
+
+  const activeProposalProject = useMemo(
+    () => projects.find(project => project.id === proposalProjectId) || null,
+    [projects, proposalProjectId]
+  );
+
+  const closeProposalModal = useCallback(() => {
+    if (loadingProjectId === proposalProjectId) {
+      return;
+    }
+    setProposalProjectId(null);
+    setPartnerProposalDraft(null);
+  }, [loadingProjectId, proposalProjectId]);
+
+  const handlePartnerProposalDraftChange = useCallback(
+    <K extends keyof PartnerProposalDraft>(key: K, value: PartnerProposalDraft[K]) => {
+      setPartnerProposalDraft(current => (current ? { ...current, [key]: value } : current));
+    },
+    []
+  );
+
+  const submitPartnerProposal = useCallback(async () => {
+    if (!user || user.role !== 'partner' || !activeProposalProject || !partnerProposalDraft) {
+      return;
+    }
+
+    const volunteersNeeded = Number(partnerProposalDraft.proposedVolunteersNeeded);
+    if (
+      !partnerProposalDraft.proposedTitle.trim() ||
+      !partnerProposalDraft.proposedDescription.trim() ||
+      !partnerProposalDraft.proposedStartDate.trim() ||
+      !partnerProposalDraft.proposedEndDate.trim() ||
+      !partnerProposalDraft.proposedLocation.trim() ||
+      !partnerProposalDraft.communityNeed.trim() ||
+      !partnerProposalDraft.expectedDeliverables.trim() ||
+      Number.isNaN(volunteersNeeded) ||
+      volunteersNeeded < 1
+    ) {
+      Alert.alert(
+        'Incomplete Proposal',
+        'Fill in the proposal title, description, dates, location, volunteers needed, community need, and expected deliverables.'
+      );
+      return;
+    }
+
+    try {
+      setLoadingProjectId(activeProposalProject.id);
+      const application = await submitPartnerProgramProposal(activeProposalProject.id, user, {
+        programModule: activeProposalProject.programModule || activeProposalProject.category,
+        proposalDetails: buildPartnerProposalDetails(activeProposalProject, partnerProposalDraft),
+      });
+      startTransition(() => {
+        setPartnerApplications(prev => {
+          const withoutCurrent = prev.filter(existing => existing.id !== application.id);
+          return [application, ...withoutCurrent].sort(
+            (a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime()
+          );
+        });
+      });
+      setProposalProjectId(null);
+      setPartnerProposalDraft(null);
+      Alert.alert('Submitted', 'Your detailed project proposal has been sent to the admin for review.');
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to submit this request. Please try again.')
+      );
+    } finally {
+      setLoadingProjectId(null);
+    }
+  }, [activeProposalProject, partnerProposalDraft, user]);
 
   // Starts a volunteer time log for the selected project.
   const handleTimeIn = async (projectId: string) => {
@@ -548,7 +606,26 @@ export default function ProjectsScreen({ navigation, route }: any) {
   };
 
   const partnerApplicationByProjectId = useMemo(
-    () => new Map(partnerApplications.map(app => [app.projectId, app])),
+    () => {
+      const byProjectId = new Map<string, PartnerProjectApplication>();
+      const byProgramModule = new Map<string, PartnerProjectApplication>();
+
+      partnerApplications.forEach(application => {
+        byProjectId.set(application.projectId, application);
+
+        const requestedProgramModule = application.projectId.startsWith('program:')
+          ? application.projectId.slice('program:'.length).trim()
+          : '';
+        if (requestedProgramModule) {
+          byProgramModule.set(requestedProgramModule, application);
+        }
+      });
+
+      return {
+        byProjectId,
+        byProgramModule,
+      };
+    },
     [partnerApplications]
   );
 
@@ -603,6 +680,36 @@ export default function ProjectsScreen({ navigation, route }: any) {
     })).filter(group => group.projects.length > 0);
   }, [visibleProjects]);
 
+  useEffect(() => {
+    const requestedProjectId = route?.params?.projectId;
+    if (!requestedProjectId || projectsByCategory.length === 0) {
+      return;
+    }
+
+    const targetCategoryIndex = projectsByCategory.findIndex(categoryGroup =>
+      categoryGroup.projects.some(project => project.id === requestedProjectId)
+    );
+    if (targetCategoryIndex === -1) {
+      return;
+    }
+
+    const targetCategory = projectsByCategory[targetCategoryIndex];
+    if (!targetCategory) {
+      return;
+    }
+
+    setExpandedProjectId(requestedProjectId);
+    setExpandedCategories(prev => new Set(prev).add(targetCategory.category));
+    requestAnimationFrame(() => {
+      projectListRef.current?.scrollToIndex({
+        index: targetCategoryIndex,
+        animated: true,
+        viewPosition: 0.15,
+      });
+    });
+    navigation.setParams({ projectId: undefined });
+  }, [navigation, projectsByCategory, route?.params?.projectId]);
+
   // Toggle category expansion
   const toggleCategory = useCallback((category: Project['category']) => {
     setExpandedCategories(prev => {
@@ -618,6 +725,10 @@ export default function ProjectsScreen({ navigation, route }: any) {
 
   // Checks whether the current volunteer is already part of a project.
   const isJoined = useCallback((project: Project) => {
+    if (!project.isEvent) {
+      return false;
+    }
+
     const joinedUsers = project.joinedUserIds || [];
     const volunteerId = volunteerProfile?.id;
     return (
@@ -698,12 +809,10 @@ export default function ProjectsScreen({ navigation, route }: any) {
           const volunteerMatch = volunteerMatchByProjectId.get(item.id);
           const completedParticipation = joinRecord?.participationStatus === 'Completed';
           const isExpanded = expandedProjectId === item.id;
-          const partnerApplication = partnerApplicationByProjectId.get(item.id);
-          const projectImpactReports = impactReports.filter(report => report.projectId === item.id);
-          const canViewProjectFiles =
-            user?.role === 'admin' ||
-            (user?.role === 'volunteer' && (joined || Boolean(joinRecord))) ||
-            (user?.role === 'partner' && partnerApplication?.status === 'Approved');
+          const partnerApplication =
+            partnerApplicationByProjectId.byProjectId.get(item.id) ||
+            partnerApplicationByProjectId.byProgramModule.get(item.programModule || item.category) ||
+            partnerApplicationByProjectId.byProjectId.get(buildProgramProposalProjectId(item.programModule || item.category));
           const isPendingApproval = volunteerMatch?.status === 'Requested';
           const wasRejected = volunteerMatch?.status === 'Rejected';
           const joinButtonLabel = completedParticipation
@@ -714,7 +823,9 @@ export default function ProjectsScreen({ navigation, route }: any) {
             ? 'Pending Approval'
             : wasRejected
             ? 'Request Again'
-            : 'Request to Join';
+            : item.isEvent
+            ? 'Request to Join'
+            : 'Open Event';
           const joinButtonIcon = completedParticipation
             ? 'task-alt'
             : joined
@@ -769,25 +880,46 @@ export default function ProjectsScreen({ navigation, route }: any) {
 
               {isExpanded && (
                 <View style={styles.expandedSection}>
-                  <View style={styles.expandedRow}>
-                    <MaterialIcons name="place" size={18} color="#f97316" />
-                    <Text style={styles.expandedText}>{item.location.address}</Text>
-                  </View>
-                  <View style={styles.expandedRow}>
-                    <MaterialIcons name="event" size={18} color="#2563eb" />
-                    <Text style={styles.expandedText}>
-                      {`Schedule: ${format(new Date(item.startDate), 'MMM d, yyyy')} - ${format(
-                        new Date(item.endDate),
-                        'MMM d, yyyy'
-                      )}`}
-                    </Text>
-                  </View>
-                  <View style={styles.expandedRow}>
-                    <MaterialIcons name="info" size={18} color="#16a34a" />
-                    <Text style={styles.expandedText}>
-                      {`Suggested: ${suggestion.label} • ${suggestion.reasons.join(', ')}`}
-                    </Text>
-                  </View>
+                  {item.isEvent ? (
+                    <>
+                      <View style={styles.expandedRow}>
+                        <MaterialIcons name="campaign" size={18} color="#7c3aed" />
+                        <Text style={styles.expandedText}>{`Event Type: ${item.programModule || item.category}`}</Text>
+                      </View>
+                      <View style={styles.expandedRow}>
+                        <MaterialIcons name="place" size={18} color="#f97316" />
+                        <Text style={styles.expandedText}>{`Venue: ${item.location.address}`}</Text>
+                      </View>
+                      <View style={styles.expandedRow}>
+                        <MaterialIcons name="event-available" size={18} color="#2563eb" />
+                        <Text style={styles.expandedText}>
+                          {`Event Day: ${format(new Date(item.startDate), 'MMM d, yyyy')}`}
+                        </Text>
+                      </View>
+                    </>
+                  ) : (
+                    <>
+                      <View style={styles.expandedRow}>
+                        <MaterialIcons name="place" size={18} color="#f97316" />
+                        <Text style={styles.expandedText}>{item.location.address}</Text>
+                      </View>
+                      <View style={styles.expandedRow}>
+                        <MaterialIcons name="event" size={18} color="#2563eb" />
+                        <Text style={styles.expandedText}>
+                          {`Schedule: ${format(new Date(item.startDate), 'MMM d, yyyy')} - ${format(
+                            new Date(item.endDate),
+                            'MMM d, yyyy'
+                          )}`}
+                        </Text>
+                      </View>
+                      <View style={styles.expandedRow}>
+                        <MaterialIcons name="info" size={18} color="#16a34a" />
+                        <Text style={styles.expandedText}>
+                          {`Suggested: ${suggestion.label} • ${suggestion.reasons.join(', ')}`}
+                        </Text>
+                      </View>
+                    </>
+                  )}
                 </View>
               )}
 
@@ -797,151 +929,141 @@ export default function ProjectsScreen({ navigation, route }: any) {
                     Suggestion based on: {suggestion.reasons.join(', ')}
                   </Text>
 
-                  <View style={styles.joinRow}>
-                    <TouchableOpacity
-                      style={[
-                        styles.joinButton,
-                        completedParticipation
-                          ? styles.joinButtonCompleted
-                          : (joined || isPendingApproval) && styles.joinButtonJoined,
-                        loadingProjectId === item.id && styles.joinButtonLoading,
-                      ]}
-                      disabled={joined || completedParticipation || isPendingApproval || loadingProjectId === item.id}
-                      onPress={() => handleJoinProject(item.id)}
-                    >
-                      <MaterialIcons
-                        name={joinButtonIcon}
-                        size={18}
-                        color={
-                          completedParticipation
-                            ? '#166534'
-                            : joined || isPendingApproval
-                            ? '#155724'
-                            : '#fff'
-                        }
-                      />
-                      <Text
-                        style={[
-                          styles.joinButtonText,
-                          completedParticipation
-                            ? styles.joinButtonTextCompleted
-                            : (joined || isPendingApproval) && styles.joinButtonTextJoined,
-                        ]}
-                      >
-                        {joinButtonLabel}
-                      </Text>
-                    </TouchableOpacity>
-
-                    {joined && !completedParticipation && (
-                      <TouchableOpacity
-                        style={[
-                          styles.timeButton,
-                          activeLog ? styles.timeOutButton : styles.timeInButton,
-                        ]}
-                        onPress={() =>
-                          activeLog ? openTimeOutModal(item.id) : handleTimeIn(item.id)
-                        }
-                        disabled={loadingProjectId === item.id}
-                      >
-                        <MaterialIcons
-                          name={activeLog ? 'logout' : 'login'}
-                          size={16}
-                          color="#fff"
-                        />
-                        <Text style={styles.timeButtonText}>
-                          {activeLog ? 'Time Out' : 'Time In'}
-                        </Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-
-                  {(isPendingApproval || wasRejected) && !joined && (
-                    <View style={styles.logMeta}>
-                      <Text style={styles.logMetaLabel}>Request status</Text>
-                      <Text style={styles.logMetaValue}>
-                        {isPendingApproval
-                          ? 'Waiting for admin approval'
-                          : 'Rejected. You may submit a new request.'}
-                      </Text>
-                    </View>
-                  )}
-
-                  {joined && (
+                  {item.isEvent ? (
                     <>
-                      <TouchableOpacity
-                        style={styles.groupChatButton}
-                        onPress={() => handleOpenGroupChat(item.id)}
-                      >
-                        <MaterialIcons name="groups" size={16} color="#166534" />
-                        <Text style={styles.groupChatButtonText}>Open Group Chat</Text>
-                      </TouchableOpacity>
+                      <View style={styles.joinRow}>
+                        <TouchableOpacity
+                          style={[
+                            styles.joinButton,
+                            completedParticipation
+                              ? styles.joinButtonCompleted
+                              : (joined || isPendingApproval) && styles.joinButtonJoined,
+                            loadingProjectId === item.id && styles.joinButtonLoading,
+                          ]}
+                          disabled={joined || completedParticipation || isPendingApproval || loadingProjectId === item.id}
+                          onPress={() => handleJoinProject(item.id)}
+                        >
+                          <MaterialIcons
+                            name={joinButtonIcon}
+                            size={18}
+                            color={
+                              completedParticipation
+                                ? '#166534'
+                                : joined || isPendingApproval
+                                ? '#155724'
+                                : '#fff'
+                            }
+                          />
+                          <Text
+                            style={[
+                              styles.joinButtonText,
+                              completedParticipation
+                                ? styles.joinButtonTextCompleted
+                                : (joined || isPendingApproval) && styles.joinButtonTextJoined,
+                            ]}
+                          >
+                            {joinButtonLabel}
+                          </Text>
+                        </TouchableOpacity>
 
-                      <View style={styles.logMeta}>
-                        <Text style={styles.logMetaLabel}>Participation status</Text>
-                        <Text style={styles.logMetaValue}>
-                          {completedParticipation
-                            ? joinRecord?.completedAt
-                              ? `Completed ${formatTimestamp(joinRecord.completedAt)}`
-                              : 'Completed and saved to profile'
-                            : isPendingApproval
-                            ? 'Waiting for admin approval'
-                            : wasRejected
-                            ? 'Request rejected by admin'
-                            : 'Joined'}
-                        </Text>
+                        {joined && !completedParticipation && (
+                          <TouchableOpacity
+                            style={[
+                              styles.timeButton,
+                              activeLog ? styles.timeOutButton : styles.timeInButton,
+                            ]}
+                            onPress={() =>
+                              activeLog ? openTimeOutModal(item.id) : handleTimeIn(item.id)
+                            }
+                            disabled={loadingProjectId === item.id}
+                          >
+                            <MaterialIcons
+                              name={activeLog ? 'logout' : 'login'}
+                              size={16}
+                              color="#fff"
+                            />
+                            <Text style={styles.timeButtonText}>
+                              {activeLog ? 'Time Out' : 'Time In'}
+                            </Text>
+                          </TouchableOpacity>
+                        )}
                       </View>
 
-                      <View style={styles.logMeta}>
-                        <Text style={styles.logMetaLabel}>
-                          {activeLog ? 'Active since' : 'Last log'}
-                        </Text>
-                        <Text style={styles.logMetaValue}>
-                          {activeLog
-                            ? formatTimestamp(activeLog.timeIn)
-                            : latestLog
-                            ? `${formatTimestamp(latestLog.timeIn)} -> ${formatTimestamp(latestLog.timeOut)}`
-                            : 'No logs yet'}
-                        </Text>
-                      </View>
-
-                      {activeLog ? (
-                        <View style={styles.proofReminderCard}>
-                          <MaterialIcons name="verified" size={16} color="#b45309" />
-                          <Text style={styles.proofReminderText}>
-                            Upload a task photo or write a completion report before timing out.
+                      {(isPendingApproval || wasRejected) && !joined && (
+                        <View style={styles.logMeta}>
+                          <Text style={styles.logMetaLabel}>Request status</Text>
+                          <Text style={styles.logMetaValue}>
+                            {isPendingApproval
+                              ? 'Waiting for admin approval'
+                              : 'Rejected. You may submit a new request.'}
                           </Text>
                         </View>
-                      ) : latestLog?.completionPhoto || latestLog?.completionReport ? (
-                        <View style={styles.logMeta}>
-                          <Text style={styles.logMetaLabel}>Completion proof</Text>
-                          <Text style={styles.logMetaValue}>{getCompletionProofSummary(latestLog)}</Text>
-                          {latestLog.completionReport ? (
-                            <Text style={styles.proofReportText}>{latestLog.completionReport}</Text>
-                          ) : null}
-                        </View>
-                      ) : null}
-
-                      {canViewProjectFiles && (
-                        <View style={styles.filesSection}>
-                          <Text style={styles.filesSectionTitle}>Published Files</Text>
-                          {projectImpactReports.length === 0 ? (
-                            <Text style={styles.filesEmptyText}>
-                              No published files for this project yet.
-                            </Text>
-                          ) : (
-                            projectImpactReports.map(report => (
-                              <View key={report.id} style={styles.fileCard}>
-                                <Text style={styles.fileName}>{report.reportFile}</Text>
-                                <Text style={styles.fileMeta}>
-                                  {report.format} • Published{' '}
-                                  {format(new Date(report.publishedAt || report.generatedAt), 'MMM d, yyyy')}
-                                </Text>
-                              </View>
-                            ))
-                          )}
-                        </View>
                       )}
+
+                      {joined ? (
+                        <>
+                          <TouchableOpacity
+                            style={styles.groupChatButton}
+                            onPress={() => handleOpenGroupChat(item.id)}
+                          >
+                            <MaterialIcons name="groups" size={16} color="#166534" />
+                            <Text style={styles.groupChatButtonText}>Open Group Chat</Text>
+                          </TouchableOpacity>
+
+                          <View style={styles.logMeta}>
+                            <Text style={styles.logMetaLabel}>Participation status</Text>
+                            <Text style={styles.logMetaValue}>
+                              {completedParticipation
+                                ? joinRecord?.completedAt
+                                  ? `Completed ${formatTimestamp(joinRecord.completedAt)}`
+                                  : 'Completed and saved to profile'
+                                : isPendingApproval
+                                ? 'Waiting for admin approval'
+                                : wasRejected
+                                ? 'Request rejected by admin'
+                                : 'Joined'}
+                            </Text>
+                          </View>
+
+                          <View style={styles.logMeta}>
+                            <Text style={styles.logMetaLabel}>
+                              {activeLog ? 'Active since' : 'Last log'}
+                            </Text>
+                            <Text style={styles.logMetaValue}>
+                              {activeLog
+                                ? formatTimestamp(activeLog.timeIn)
+                                : latestLog
+                                ? `${formatTimestamp(latestLog.timeIn)} -> ${formatTimestamp(latestLog.timeOut)}`
+                                : 'No logs yet'}
+                            </Text>
+                          </View>
+
+                          {activeLog ? (
+                            <View style={styles.proofReminderCard}>
+                              <MaterialIcons name="verified" size={16} color="#b45309" />
+                              <Text style={styles.proofReminderText}>
+                                Upload a task photo or write a completion report before timing out.
+                              </Text>
+                            </View>
+                          ) : latestLog?.completionPhoto || latestLog?.completionReport ? (
+                            <View style={styles.logMeta}>
+                              <Text style={styles.logMetaLabel}>Completion proof</Text>
+                              <Text style={styles.logMetaValue}>{getCompletionProofSummary(latestLog)}</Text>
+                              {latestLog.completionReport ? (
+                                <Text style={styles.proofReportText}>{latestLog.completionReport}</Text>
+                              ) : null}
+                            </View>
+                          ) : null}
+                        </>
+                      ) : null}
                     </>
+                  ) : (
+                    <View style={styles.logMeta}>
+                      <Text style={styles.logMetaLabel}>Volunteer access</Text>
+                      <Text style={styles.logMetaValue}>
+                        Volunteers join events, not programs. Open the event under this program to request access and log hours.
+                      </Text>
+                    </View>
                   )}
                 </View>
               )}
@@ -986,30 +1108,10 @@ export default function ProjectsScreen({ navigation, route }: any) {
                         {partnerApplication?.status === 'Pending'
                           ? 'Your project proposal is pending admin approval.'
                           : partnerApplication?.status === 'Approved'
-                          ? 'Your project proposal was approved by the admin.'
+                          ? 'Your project proposal was approved by the admin and is now shown in Projects.'
                           : 'This proposal was rejected by the admin.'}
                       </Text>
 
-                      {canViewProjectFiles && (
-                        <View style={styles.filesSection}>
-                          <Text style={styles.filesSectionTitle}>Published Files</Text>
-                          {projectImpactReports.length === 0 ? (
-                            <Text style={styles.filesEmptyText}>
-                              No published files for this project yet.
-                            </Text>
-                          ) : (
-                            projectImpactReports.map(report => (
-                              <View key={report.id} style={styles.fileCard}>
-                                <Text style={styles.fileName}>{report.reportFile}</Text>
-                                <Text style={styles.fileMeta}>
-                                  {report.format} • Published{' '}
-                                  {format(new Date(report.publishedAt || report.generatedAt), 'MMM d, yyyy')}
-                                </Text>
-                              </View>
-                            ))
-                          )}
-                        </View>
-                      )}
                     </>
                   )}
                 </View>
@@ -1053,7 +1155,6 @@ export default function ProjectsScreen({ navigation, route }: any) {
           latestLogByProjectId,
           loadingProjectId,
           partnerApplicationByProjectId,
-          impactReports,
           handleOpenImagePreview,
           handleOpenProject,
           openTimeOutModal,
@@ -1321,6 +1422,161 @@ export default function ProjectsScreen({ navigation, route }: any) {
               <MaterialIcons name="task-alt" size={18} color="#fff" />
               <Text style={styles.timeOutSubmitButtonText}>
                 {loadingProjectId === timeOutProjectId ? 'Submitting...' : 'Submit and Time Out'}
+              </Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={Boolean(activeProposalProject && partnerProposalDraft)}
+        transparent
+        animationType="slide"
+        onRequestClose={closeProposalModal}
+      >
+        <Pressable style={styles.proposalFormBackdrop} onPress={closeProposalModal}>
+          <Pressable style={styles.proposalFormCard} onPress={() => undefined}>
+            <View style={styles.proposalFormHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.proposalFormTitle}>Submit Project Proposal</Text>
+                <Text style={styles.proposalFormSubtitle}>
+                  {activeProposalProject?.title || 'Selected program'}
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={closeProposalModal}
+                style={styles.proposalFormCloseButton}
+                disabled={loadingProjectId === activeProposalProject?.id}
+              >
+                <MaterialIcons name="close" size={22} color="#0f172a" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView
+              style={styles.proposalFormScroll}
+              contentContainerStyle={styles.proposalFormContent}
+              showsVerticalScrollIndicator={Platform.OS === 'web'}
+            >
+              <View style={styles.proposalReferenceCard}>
+                <Text style={styles.proposalReferenceLabel}>Based on Program</Text>
+                <Text style={styles.proposalReferenceTitle}>{activeProposalProject?.title}</Text>
+                <Text style={styles.proposalReferenceMeta}>
+                  {(activeProposalProject?.programModule || activeProposalProject?.category) ?? 'Program'}
+                </Text>
+                <Text style={styles.proposalReferenceBody}>
+                  {activeProposalProject?.description}
+                </Text>
+              </View>
+
+              <Text style={styles.proposalFieldLabel}>Proposal Title</Text>
+              <TextInput
+                style={styles.proposalInput}
+                value={partnerProposalDraft?.proposedTitle || ''}
+                onChangeText={value => handlePartnerProposalDraftChange('proposedTitle', value)}
+                placeholder="Enter the title the admin should review"
+                placeholderTextColor="#94a3b8"
+                editable={loadingProjectId !== activeProposalProject?.id}
+              />
+
+              <Text style={styles.proposalFieldLabel}>Proposal Description</Text>
+              <TextInput
+                style={[styles.proposalInput, styles.proposalTextArea]}
+                multiline
+                numberOfLines={4}
+                textAlignVertical="top"
+                value={partnerProposalDraft?.proposedDescription || ''}
+                onChangeText={value => handlePartnerProposalDraftChange('proposedDescription', value)}
+                placeholder="Describe the proposed project, activities, and partner contribution."
+                placeholderTextColor="#94a3b8"
+                editable={loadingProjectId !== activeProposalProject?.id}
+              />
+
+              <View style={styles.proposalFieldRow}>
+                <View style={styles.proposalFieldHalf}>
+                  <Text style={styles.proposalFieldLabel}>Start Date</Text>
+                  <TextInput
+                    style={styles.proposalInput}
+                    value={partnerProposalDraft?.proposedStartDate || ''}
+                    onChangeText={value => handlePartnerProposalDraftChange('proposedStartDate', value)}
+                    placeholder="YYYY-MM-DD"
+                    placeholderTextColor="#94a3b8"
+                    editable={loadingProjectId !== activeProposalProject?.id}
+                  />
+                </View>
+                <View style={styles.proposalFieldHalf}>
+                  <Text style={styles.proposalFieldLabel}>End Date</Text>
+                  <TextInput
+                    style={styles.proposalInput}
+                    value={partnerProposalDraft?.proposedEndDate || ''}
+                    onChangeText={value => handlePartnerProposalDraftChange('proposedEndDate', value)}
+                    placeholder="YYYY-MM-DD"
+                    placeholderTextColor="#94a3b8"
+                    editable={loadingProjectId !== activeProposalProject?.id}
+                  />
+                </View>
+              </View>
+
+              <Text style={styles.proposalFieldLabel}>Proposed Location</Text>
+              <TextInput
+                style={styles.proposalInput}
+                value={partnerProposalDraft?.proposedLocation || ''}
+                onChangeText={value => handlePartnerProposalDraftChange('proposedLocation', value)}
+                placeholder="Barangay, city, municipality, or venue"
+                placeholderTextColor="#94a3b8"
+                editable={loadingProjectId !== activeProposalProject?.id}
+              />
+
+              <Text style={styles.proposalFieldLabel}>Volunteers Needed</Text>
+              <TextInput
+                style={styles.proposalInput}
+                value={partnerProposalDraft?.proposedVolunteersNeeded || ''}
+                onChangeText={value => handlePartnerProposalDraftChange('proposedVolunteersNeeded', value)}
+                placeholder="Number of volunteers needed"
+                keyboardType={Platform.OS === 'ios' ? 'number-pad' : 'numeric'}
+                placeholderTextColor="#94a3b8"
+                editable={loadingProjectId !== activeProposalProject?.id}
+              />
+
+              <Text style={styles.proposalFieldLabel}>Community Need</Text>
+              <TextInput
+                style={[styles.proposalInput, styles.proposalTextArea]}
+                multiline
+                numberOfLines={3}
+                textAlignVertical="top"
+                value={partnerProposalDraft?.communityNeed || ''}
+                onChangeText={value => handlePartnerProposalDraftChange('communityNeed', value)}
+                placeholder="Explain the need or problem this proposal is addressing."
+                placeholderTextColor="#94a3b8"
+                editable={loadingProjectId !== activeProposalProject?.id}
+              />
+
+              <Text style={styles.proposalFieldLabel}>Expected Deliverables</Text>
+              <TextInput
+                style={[styles.proposalInput, styles.proposalTextArea]}
+                multiline
+                numberOfLines={3}
+                textAlignVertical="top"
+                value={partnerProposalDraft?.expectedDeliverables || ''}
+                onChangeText={value => handlePartnerProposalDraftChange('expectedDeliverables', value)}
+                placeholder="List the expected outputs, results, or partner commitments."
+                placeholderTextColor="#94a3b8"
+                editable={loadingProjectId !== activeProposalProject?.id}
+              />
+            </ScrollView>
+
+            <TouchableOpacity
+              style={[
+                styles.proposalSubmitButton,
+                loadingProjectId === activeProposalProject?.id && styles.proposalSubmitButtonDisabled,
+              ]}
+              onPress={() => {
+                void submitPartnerProposal();
+              }}
+              disabled={loadingProjectId === activeProposalProject?.id}
+            >
+              <MaterialIcons name="campaign" size={18} color="#fff" />
+              <Text style={styles.proposalSubmitButtonText}>
+                {loadingProjectId === activeProposalProject?.id ? 'Submitting...' : 'Send Proposal to Admin'}
               </Text>
             </TouchableOpacity>
           </Pressable>
@@ -1749,6 +2005,137 @@ const styles = StyleSheet.create({
   partnerNote: {
     fontSize: 12,
     color: '#0f172a',
+  },
+  proposalFormBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.58)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 18,
+  },
+  proposalFormCard: {
+    width: '100%',
+    maxWidth: 640,
+    maxHeight: '92%',
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    overflow: 'hidden',
+  },
+  proposalFormHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    paddingHorizontal: 18,
+    paddingTop: 18,
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  proposalFormTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  proposalFormSubtitle: {
+    marginTop: 4,
+    fontSize: 13,
+    color: '#475569',
+    fontWeight: '600',
+  },
+  proposalFormCloseButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f1f5f9',
+  },
+  proposalFormScroll: {
+    flexGrow: 0,
+  },
+  proposalFormContent: {
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    gap: 12,
+  },
+  proposalReferenceCard: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#dbe2ea',
+    padding: 14,
+  },
+  proposalReferenceLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    color: '#64748b',
+  },
+  proposalReferenceTitle: {
+    marginTop: 6,
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  proposalReferenceMeta: {
+    marginTop: 4,
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#166534',
+  },
+  proposalReferenceBody: {
+    marginTop: 8,
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#475569',
+  },
+  proposalFieldLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  proposalInput: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#f8fafc',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    fontSize: 14,
+    color: '#0f172a',
+  },
+  proposalTextArea: {
+    minHeight: 108,
+    lineHeight: 20,
+  },
+  proposalFieldRow: {
+    flexDirection: Platform.select({ web: 'row', default: 'column' }),
+    gap: 12,
+  },
+  proposalFieldHalf: {
+    flex: 1,
+    gap: 8,
+  },
+  proposalSubmitButton: {
+    marginHorizontal: 18,
+    marginBottom: 18,
+    marginTop: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#166534',
+    borderRadius: 12,
+    paddingVertical: 13,
+  },
+  proposalSubmitButtonDisabled: {
+    opacity: 0.72,
+  },
+  proposalSubmitButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '800',
   },
   filesSection: {
     marginTop: 10,

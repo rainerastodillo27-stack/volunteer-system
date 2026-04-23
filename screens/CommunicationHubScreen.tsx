@@ -552,10 +552,16 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       }
 
       const joinedProjectIds = new Set<string>(
-        snapshot.volunteerJoinRecords.map(record => record.projectId)
+        snapshot.volunteerJoinRecords
+          .filter(record => snapshot.projects.some(project => project.id === record.projectId && project.isEvent))
+          .map(record => record.projectId)
       );
 
       for (const project of snapshot.projects) {
+        if (!project.isEvent) {
+          continue;
+        }
+
         if ((project.joinedUserIds || []).includes(user.id)) {
           joinedProjectIds.add(project.id);
         }
@@ -1112,14 +1118,14 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       ? 'Project coordination spaces'
       : user?.role === 'partner'
       ? 'Partner coordination spaces'
-      : 'Joined project group chats';
+      : 'Joined event group chats';
 
   const projectChatSubtitle =
     user?.role === 'admin'
       ? 'Monitor every project and event conversation from one place.'
       : user?.role === 'partner'
       ? 'Coordinate approved projects with admin and volunteers, then manage needs in one planning group chat.'
-      : 'Stay updated with the programs you joined, post needs, and coordinate with your team.';
+      : 'Stay updated with the events you joined, post needs, and coordinate with your team.';
 
   const needPosts = useMemo(
     () =>

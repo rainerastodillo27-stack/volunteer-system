@@ -320,6 +320,7 @@ function formatReportType(type: string): string {
     General: 'General Report',
     Medical: 'Medical Report',
     Logistics: 'Logistics Report',
+    field_report: 'Field Report',
     volunteer_engagement: 'Volunteer Engagement',
     program_impact: 'Program Impact',
     event_performance: 'Event Performance',

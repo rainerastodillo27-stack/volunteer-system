@@ -21,7 +21,6 @@ def get_retention_policies() -> dict[str, int]:
     return {
         "volunteer_time_logs": 730,      # Keep 2 years
         "volunteer_project_joins": 365,  # Keep 1 year for active projects
-        "partner_event_check_ins": 180,  # Keep 6 months
         "partner_reports": 365,          # Keep 1 year
         "published_impact_reports": 730, # Keep 2 years
         "status_updates": 180,           # Keep 6 months for completed projects
@@ -114,47 +113,8 @@ def cleanup_old_project_joins(connection: Any, days_to_keep: int = 365) -> int:
         return deleted_count
 
 
-def cleanup_old_event_checkins(connection: Any, days_to_keep: int = 180) -> int:
-    """Remove old partner event check-ins."""
-    cutoff_date = (datetime.now(timezone.utc) - timedelta(days=days_to_keep)).isoformat()
-    
-    with connection.cursor() as cursor:
-        cursor.execute(
-            """
-            select exists (
-                select 1 from information_schema.tables 
-                where table_schema = 'public' and table_name = 'app_partner_event_check_ins_store'
-            )
-            """
-        )
-        if not cursor.fetchone()[0]:
-            return 0
-        
-        cursor.execute(
-            """
-            select id
-            from app_partner_event_check_ins_store
-            where (data->>'updated_at')::timestamp with time zone < %s::timestamp with time zone
-            limit 1000
-            """,
-            (cutoff_date,),
-        )
-        
-        old_checkins = cursor.fetchall()
-        deleted_count = 0
-        
-        for (record_id,) in old_checkins:
-            cursor.execute(
-                "delete from app_partner_event_check_ins_store where id = %s",
-                (record_id,),
-            )
-            deleted_count += 1
-        
-        return deleted_count
-
-
 def cleanup_old_reports(connection: Any, days_to_keep: int = 365) -> int:
-    """Remove old partner reports."""
+    """Remove old reports."""
     cutoff_date = (datetime.now(timezone.utc) - timedelta(days=days_to_keep)).isoformat()
     
     with connection.cursor() as cursor:
@@ -289,7 +249,6 @@ def vacuum_analyze_tables(connection: Any) -> None:
     hot_storage_tables = [
         "app_volunteer_time_logs_store",
         "app_volunteer_project_joins_store",
-        "app_partner_event_check_ins_store",
         "app_partner_reports_store",
         "app_published_impact_reports_store",
         "app_status_updates_store",
@@ -323,13 +282,12 @@ def get_storage_stats(connection: Any) -> dict[str, int]:
     hot_storage_tables = [
         "app_volunteer_time_logs_store",
         "app_volunteer_project_joins_store",
-        "app_partner_event_check_ins_store",
         "app_partner_reports_store",
         "app_published_impact_reports_store",
         "app_status_updates_store",
         "project_group_messages",
         "messages",
-        "partner_reports",
+        "reports",
     ]
     
     with connection.cursor() as cursor:
@@ -375,8 +333,7 @@ def main() -> None:
         operations = [
             ("Removing old time logs", lambda: cleanup_old_time_logs(connection, policies["volunteer_time_logs"])),
             ("Removing old project joins", lambda: cleanup_old_project_joins(connection, policies["volunteer_project_joins"])),
-            ("Removing old event check-ins", lambda: cleanup_old_event_checkins(connection, policies["partner_event_check_ins"])),
-            ("Removing old partner reports", lambda: cleanup_old_reports(connection, policies["partner_reports"])),
+            ("Removing old reports", lambda: cleanup_old_reports(connection, policies["partner_reports"])),
             ("Removing orphaned records", lambda: cleanup_orphaned_records(connection)),
             ("Removing duplicate records", lambda: deduplicate_records(connection)),
         ]

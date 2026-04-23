@@ -1,29 +1,32 @@
 try:
     from .db import get_postgres_connection
+    from .storage_table_contract import (
+        CANONICAL_STORAGE_TABLES,
+        LEGACY_AUXILIARY_TABLES,
+        LEGACY_COMPAT_STORAGE_TABLES,
+        MESSAGE_STORAGE_TABLES,
+    )
 except ImportError:
     from db import get_postgres_connection
+    from storage_table_contract import (
+        CANONICAL_STORAGE_TABLES,
+        LEGACY_AUXILIARY_TABLES,
+        LEGACY_COMPAT_STORAGE_TABLES,
+        MESSAGE_STORAGE_TABLES,
+    )
 
 
-CANONICAL_TABLES = [
-    "users",
-    "partners",
-    "volunteers",
-    "projects",
-    "status_updates",
-    "volunteer_matches",
-    "volunteer_time_logs",
-    "volunteer_project_joins",
-    "partner_project_applications",
-    "partner_event_check_ins",
-    "partner_reports",
-    "published_impact_reports",
-    "messages",
-    "project_group_messages",
-    "admin_planning_calendars",
-    "admin_planning_items",
-]
+CANONICAL_TABLES = sorted(
+    {
+        *CANONICAL_STORAGE_TABLES.values(),
+        *MESSAGE_STORAGE_TABLES.values(),
+    }
+)
 
-EXPECTED_SUPPORT_TABLES: set[str] = set()
+EXPECTED_SUPPORT_TABLES: set[str] = {
+    *LEGACY_COMPAT_STORAGE_TABLES.values(),
+    *LEGACY_AUXILIARY_TABLES,
+}
 
 EXPECTED_TABLES = set(CANONICAL_TABLES) | EXPECTED_SUPPORT_TABLES
 
@@ -49,7 +52,11 @@ def main() -> None:
             for table_name in existing_tables:
                 print(table_name)
 
-            rogue_tables = [table_name for table_name in existing_tables if table_name not in EXPECTED_TABLES]
+            rogue_tables = [
+                table_name
+                for table_name in existing_tables
+                if table_name not in EXPECTED_TABLES
+            ]
             print_section("Unexpected Tables")
             if rogue_tables:
                 for table_name in rogue_tables:
@@ -111,11 +118,14 @@ def main() -> None:
                     left join partners pr on pr.id = p.partner_id
                     where coalesce(p.partner_id, '') <> '' and pr.id is null
                 """,
-                "matches_with_missing_project": """
+                "matches_with_missing_project_or_event": """
                     select count(*)
                     from volunteer_matches m
                     left join projects p on p.id = m.project_id
-                    where coalesce(m.project_id, '') <> '' and p.id is null
+                    left join events e on e.id = m.project_id
+                    where coalesce(m.project_id, '') <> ''
+                      and p.id is null
+                      and e.id is null
                 """,
                 "matches_with_missing_volunteer": """
                     select count(*)

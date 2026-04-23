@@ -14,7 +14,6 @@ import { useFocusEffect } from '@react-navigation/native';
 import {
   getAllVolunteerTimeLogs,
   getAllPartnerReports,
-  getAllPublishedImpactReports,
   getDashboardSnapshot,
   subscribeToStorageChanges,
 } from '../models/storage';
@@ -75,7 +74,6 @@ export default function DashboardScreen({ navigation }: any) {
     timeIns: 0,
     timeOuts: 0,
     pendingReports: 0,
-    publishedReports: 0,
   });
   const [timeTrackingTarget, setTimeTrackingTarget] = useState({
     latestTimeInProjectId: undefined as string | undefined,
@@ -89,12 +87,11 @@ export default function DashboardScreen({ navigation }: any) {
   // Loads dashboard totals and recent status updates from storage.
   const loadDashboardData = React.useCallback(async () => {
     try {
-      const [{ projects, partners, users, volunteers, statusUpdates }, volunteerTimeLogs, partnerReports, impactReports] =
+      const [{ projects, partners, users, volunteers, statusUpdates }, volunteerTimeLogs, partnerReports] =
         await Promise.all([
           getDashboardSnapshot(),
           getAllVolunteerTimeLogs(),
           getAllPartnerReports(),
-          getAllPublishedImpactReports(),
         ]);
 
       setLoadError(null);
@@ -122,7 +119,6 @@ export default function DashboardScreen({ navigation }: any) {
         timeIns: volunteerTimeLogs.length,
         timeOuts: volunteerTimeLogs.filter(log => Boolean(log.timeOut)).length,
         pendingReports: partnerReports.filter(report => report.status === 'Submitted').length,
-        publishedReports: impactReports.filter(report => Boolean(report.publishedAt)).length,
       });
 
       const latestTimeInLog = volunteerTimeLogs[0];
@@ -166,7 +162,6 @@ export default function DashboardScreen({ navigation }: any) {
           'volunteerProjectJoins',
           'volunteerTimeLogs',
           'partnerReports',
-          'publishedImpactReports',
         ],
         () => {
           void loadDashboardData();

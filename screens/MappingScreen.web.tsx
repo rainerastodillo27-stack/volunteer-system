@@ -137,7 +137,7 @@ export default function MappingScreen({ navigation }: any) {
 
   useEffect(() => {
     return subscribeToStorageChanges(
-      ['projects', 'partnerProjectApplications', 'volunteerProjectJoins'],
+      ['projects', 'events', 'partnerProjectApplications', 'volunteerProjectJoins'],
       () => {
         void loadProjects();
       }
@@ -237,7 +237,7 @@ export default function MappingScreen({ navigation }: any) {
     };
   }, [projects, selectedMapStyle.mapTypeId, webGoogleMapsApiKey]);
 
-  // Loads map projects and narrows visibility to projects the current user joined.
+  // Loads map projects and narrows visibility based on the active role.
   const loadProjects = async () => {
     try {
       const snapshot = await getProjectsScreenSnapshot(user);
@@ -253,15 +253,16 @@ export default function MappingScreen({ navigation }: any) {
       const visibleProjects =
         user?.role === 'partner'
           ? snapshot.projects.filter(
-              project =>
-                (project.joinedUserIds || []).includes(user.id) ||
-                approvedPartnerProjectIds.has(project.id)
+              project => approvedPartnerProjectIds.has(project.id)
             )
           : user?.role === 'volunteer'
           ? snapshot.projects.filter(
               project =>
-                (project.joinedUserIds || []).includes(user.id) ||
+                project.isEvent &&
+                (
+                  (project.joinedUserIds || []).includes(user.id) ||
                 joinedVolunteerProjectIds.has(project.id)
+                )
             )
           : snapshot.projects;
 
@@ -314,7 +315,9 @@ export default function MappingScreen({ navigation }: any) {
             <Text style={styles.headerSubtitle}>
               {user?.role === 'admin'
                 ? 'Google Maps view for Negros Occidental, Philippines'
-                : 'Only projects you joined appear as pins'}
+                : user?.role === 'partner'
+                ? 'Only approved partner proposals appear as pins'
+                : 'Only events you joined appear as pins'}
             </Text>
           </View>
 
@@ -426,7 +429,7 @@ export default function MappingScreen({ navigation }: any) {
                   onPress={handleOpenProjectDetails}
                 >
                   <Text style={styles.viewDetailsButtonText}>
-                    {user?.role === 'admin' ? 'Open Project Suite' : 'View Full Details'}
+                    {user?.role === 'admin' ? 'Open Program Management Suite' : 'View Full Details'}
                   </Text>
                 </TouchableOpacity>
               </ScrollView>

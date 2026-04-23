@@ -57,7 +57,6 @@
         <mxCell id="131" value="&lt;b&gt;status_updates&lt;/b&gt;&lt;hr/&gt;PK id&lt;br&gt;FK project_id&lt;br&gt;status&lt;br&gt;description&lt;br&gt;updated_by&lt;br&gt;updated_at" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=6;fillColor=#ffffff;strokeColor=#1f2937;" vertex="1" parent="1">
           <mxGeometry x="1110" y="500" width="220" height="170" as="geometry" />
         </mxCell>
-        <mxCell id="132" value="&lt;b&gt;partner_event_check_ins&lt;/b&gt;&lt;hr/&gt;PK id&lt;br&gt;FK project_id&lt;br&gt;FK partner_id&lt;br&gt;FK partner_user_id&lt;br&gt;gps_coordinates (jsonb)&lt;br&gt;check_in_time" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=6;fillColor=#ffffff;strokeColor=#1f2937;" vertex="1" parent="1">
           <mxGeometry x="1360" y="500" width="260" height="180" as="geometry" />
         </mxCell>
 

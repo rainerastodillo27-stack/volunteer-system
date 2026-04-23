@@ -81,7 +81,8 @@ export default function AdminReportsDashboard({
   }, [reports]);
 
   const columns = useMemo<StatusColumn[]>(() => {
-    const allReports = [...reports]
+    const fieldReports = [...reports]
+      .filter(report => report.reportType === 'field_report')
       .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
 
     const volunteerReports = [...reports]
@@ -95,14 +96,14 @@ export default function AdminReportsDashboard({
     return [
       {
         key: 'all',
-        label: 'All Reports',
-        subtitle: 'Every submitted item',
-        count: allReports.length,
+        label: 'Field Reports',
+        subtitle: 'Structured field submissions',
+        count: fieldReports.length,
         accent: '#d9f2de',
         panel: '#2f8f45',
         card: '#4aa764',
-        chips: ['Newest', 'All roles', 'Metrics'],
-        reports: allReports,
+        chips: ['Field', 'Metrics', 'Latest'],
+        reports: fieldReports,
       },
       {
         key: 'volunteer',
@@ -219,7 +220,7 @@ export default function AdminReportsDashboard({
                             <Text style={styles.reportDate}>{formatShortDate(report.submittedAt)}</Text>
                           </View>
                           <Text style={styles.reportMeta} numberOfLines={1}>
-                            {report.submitterName} • {report.projectTitle || 'No linked project'}
+                            {[report.submitterName, report.projectTitle || 'No linked project'].join(' • ')}
                           </Text>
                           <View style={styles.progressTrack}>
                             <View style={[styles.progressFill, { width: `${progress}%`, backgroundColor: column.accent }]} />
@@ -233,6 +234,7 @@ export default function AdminReportsDashboard({
               </View>
             ))}
           </View>
+
         </View>
       </ScrollView>
     </View>
@@ -348,6 +350,108 @@ const styles = StyleSheet.create({
   },
   boardStacked: {
     flexDirection: 'column',
+  },
+  tableSection: {
+    marginTop: 16,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: '#f7f9fe',
+    borderWidth: 1,
+    borderColor: '#d7dcea',
+  },
+  tableSectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+    marginBottom: 12,
+  },
+  tableTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#233046',
+  },
+  tableSubtitle: {
+    marginTop: 2,
+    fontSize: 12,
+    color: '#617086',
+  },
+  tableCount: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#40506a',
+    backgroundColor: '#e4e9f5',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  tableEmptyState: {
+    paddingVertical: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 10,
+    backgroundColor: '#eef2fb',
+  },
+  tableEmptyTitle: {
+    marginTop: 8,
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#344055',
+  },
+  tableEmptyText: {
+    marginTop: 4,
+    fontSize: 11,
+    color: '#617086',
+  },
+  table: {
+    minWidth: 920,
+  },
+  tableHeaderRow: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: '#cfd7e8',
+    paddingBottom: 10,
+    marginBottom: 6,
+  },
+  tableRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e3e8f2',
+  },
+  tableCell: {
+    flex: 1,
+    paddingRight: 10,
+    fontSize: 12,
+    color: '#2f3a4c',
+    fontWeight: '600',
+  },
+  tableHeaderCell: {
+    color: '#51607b',
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  tableCellWide: {
+    flex: 1.4,
+  },
+  tableCellExtraWide: {
+    flex: 1.8,
+  },
+  statusCell: {
+    flex: 1,
+    marginRight: 10,
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    backgroundColor: '#d9f2de',
+  },
+  statusCellText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#245c34',
   },
   columnPanel: {
     flex: 1,

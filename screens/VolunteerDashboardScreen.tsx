@@ -39,6 +39,25 @@ function formatLongDate(value?: string): string {
   });
 }
 
+function formatDateRangeLabel(startDate?: string, endDate?: string): string {
+  const formattedStartDate = formatLongDate(startDate);
+  const formattedEndDate = formatLongDate(endDate);
+
+  if (formattedStartDate === formattedEndDate) {
+    return formattedStartDate;
+  }
+
+  if (formattedStartDate === 'To be announced') {
+    return formattedEndDate;
+  }
+
+  if (formattedEndDate === 'To be announced') {
+    return formattedStartDate;
+  }
+
+  return `${formattedStartDate} - ${formattedEndDate}`;
+}
+
 function getUpcomingProject(projects: Project[]): Project | null {
   const now = new Date();
 
@@ -124,6 +143,7 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
       return subscribeToStorageChanges(
         [
           'projects',
+          'events',
           'volunteerProjectJoins',
           'volunteerMatches',
           'volunteerTimeLogs',
@@ -137,19 +157,94 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
     }, [loadDashboardData])
   );
 
-  const joinedProjects = useMemo(
-    () => projects.filter(project => (project.joinedUserIds || []).includes(user?.id || '')),
-    [projects, user?.id]
+  const joinedEvents = useMemo(
+    () =>
+      projects.filter(
+        project =>
+          project.isEvent &&
+          (
+            (project.joinedUserIds || []).includes(user?.id || '') ||
+            (volunteerProfile ? project.volunteers.includes(volunteerProfile.id) : false)
+          )
+      ),
+    [projects, user?.id, volunteerProfile]
   );
 
-  const upcomingProject = useMemo(() => getUpcomingProject(joinedProjects), [joinedProjects]);
-  const suggestedProject = useMemo(() => getUpcomingProject(projects), [projects]);
-  const featuredProject = upcomingProject || suggestedProject;
+  const upcomingEvent = useMemo(() => getUpcomingProject(joinedEvents), [joinedEvents]);
+  const suggestedEvent = useMemo(
+    () => getUpcomingProject(projects.filter(project => project.isEvent)),
+    [projects]
+  );
+  const featuredEvent = upcomingEvent || suggestedEvent;
   const volunteerTone = getVolunteerStatusTone(volunteerProfile?.registrationStatus);
 
   const totalHours = volunteerProfile?.totalHoursContributed || 0;
   const completedLogs = timeLogs.filter(log => Boolean(log.timeOut)).length;
-  const joinedProjectIds = joinedProjects.map(project => project.id);
+  const joinedEventIds = joinedEvents.map(project => project.id);
+  const featuredEventDateRange = featuredEvent
+    ? formatDateRangeLabel(featuredEvent.startDate, featuredEvent.endDate)
+    : 'To be announced';
+  const featuredEventSummaryCards = featuredEvent
+    ? [
+        {
+          label: 'Campaign',
+          value: featuredEvent.programModule || featuredEvent.category,
+          meta: 'Advocacy area',
+        },
+        {
+          label: 'Schedule',
+          value: featuredEventDateRange,
+          meta: 'Planned event window',
+        },
+        {
+          label: 'Venue',
+          value: featuredEvent.location.address || 'Venue to be confirmed',
+          meta: 'Where volunteers should report',
+        },
+        {
+          label: 'Volunteer Slots',
+          value: `${featuredEvent.volunteers.length}/${featuredEvent.volunteersNeeded}`,
+          meta:
+            featuredEvent.volunteers.length >= featuredEvent.volunteersNeeded
+              ? 'Team capacity is currently full'
+              : `${featuredEvent.volunteersNeeded - featuredEvent.volunteers.length} slot${
+                  featuredEvent.volunteersNeeded - featuredEvent.volunteers.length === 1 ? '' : 's'
+                } may still be open`,
+        },
+      ]
+    : [];
+  const volunteerDetailCards = [
+    {
+      label: 'Date of Birth',
+      value: formatLongDate(volunteerProfile?.dateOfBirth),
+      meta: 'Personal profile record',
+    },
+    {
+      label: 'Gender',
+      value: volunteerProfile?.gender || 'Not set',
+      meta: 'Profile information',
+    },
+    {
+      label: 'Phone',
+      value: volunteerProfile?.phone || 'Not set',
+      meta: 'Best contact number',
+    },
+    {
+      label: 'Workplace / School',
+      value: volunteerProfile?.workplaceOrSchool || 'Not set',
+      meta: 'Current affiliation',
+    },
+    {
+      label: 'Total Points',
+      value: String(Math.round(totalHours * 10)),
+      meta: 'Based on recorded service hours',
+    },
+    {
+      label: 'Completed Logs',
+      value: String(completedLogs),
+      meta: 'Finished time-in and time-out entries',
+    },
+  ];
 
   const openProjects = React.useCallback(
     (projectId?: string) => {
@@ -245,8 +340,8 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
 
         <View style={styles.metricRow}>
           <View style={styles.metricCard}>
-            <Text style={styles.metricValue}>{joinedProjects.length}</Text>
-            <Text style={styles.metricLabel}>joined projects</Text>
+            <Text style={styles.metricValue}>{joinedEvents.length}</Text>
+            <Text style={styles.metricLabel}>joined events</Text>
           </View>
           <View style={styles.metricCard}>
             <Text style={styles.metricValue}>{totalHours.toFixed(1)}</Text>
@@ -263,40 +358,34 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
         <View style={styles.detailCard}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Event Details</Text>
-            <TouchableOpacity onPress={() => openProjects(featuredProject?.id)}>
-              <Text style={styles.linkText}>{featuredProject ? 'Open project' : 'View projects'}</Text>
+            <TouchableOpacity onPress={() => openProjects(featuredEvent?.id)}>
+              <Text style={styles.linkText}>{featuredEvent ? 'Open event' : 'View events'}</Text>
             </TouchableOpacity>
           </View>
 
-          {featuredProject ? (
-            <View style={styles.detailGrid}>
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Event Name</Text>
-                <Text style={styles.detailValue}>{featuredProject.title}</Text>
+          {featuredEvent ? (
+            <>
+              <View style={styles.detailHeroPanel}>
+                <View style={styles.detailHeroChip}>
+                  <MaterialIcons name="event-available" size={14} color="#166534" />
+                  <Text style={styles.detailHeroChipText}>{upcomingEvent ? 'Your next joined event' : 'Suggested event'}</Text>
+                </View>
+                <Text style={styles.detailHeroTitle}>{featuredEvent.title}</Text>
+                <Text style={styles.detailHeroText}>{featuredEvent.description}</Text>
               </View>
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Campaign</Text>
-                <Text style={styles.detailValue}>{featuredProject.programModule || featuredProject.category}</Text>
+
+              <View style={styles.detailSummaryGrid}>
+                {featuredEventSummaryCards.map(card => (
+                  <View key={card.label} style={styles.detailSummaryCard}>
+                    <Text style={styles.detailSummaryEyebrow}>{card.label}</Text>
+                    <Text style={styles.detailSummaryValue}>{card.value}</Text>
+                    <Text style={styles.detailSummaryMeta}>{card.meta}</Text>
+                  </View>
+                ))}
               </View>
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Description</Text>
-                <Text style={styles.detailValue}>{featuredProject.description}</Text>
-              </View>
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Venue Address</Text>
-                <Text style={styles.detailValue}>{featuredProject.location.address}</Text>
-              </View>
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Starting Date</Text>
-                <Text style={styles.detailValue}>{formatLongDate(featuredProject.startDate)}</Text>
-              </View>
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Until Date</Text>
-                <Text style={styles.detailValue}>{formatLongDate(featuredProject.endDate)}</Text>
-              </View>
-            </View>
+            </>
           ) : (
-            <Text style={styles.emptySectionText}>You do not have a featured project yet. Explore available projects to get started.</Text>
+            <Text style={styles.emptySectionText}>You do not have a featured event yet. Explore available events to get started.</Text>
           )}
         </View>
 
@@ -318,31 +407,14 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
             </View>
           </View>
 
-          <View style={styles.detailGrid}>
-            <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Date Of Birth</Text>
-              <Text style={styles.detailValue}>{formatLongDate(volunteerProfile?.dateOfBirth)}</Text>
-            </View>
-            <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Gender</Text>
-              <Text style={styles.detailValue}>{volunteerProfile?.gender || 'Not set'}</Text>
-            </View>
-            <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Phone</Text>
-              <Text style={styles.detailValue}>{volunteerProfile?.phone || 'Not set'}</Text>
-            </View>
-            <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Workplace / School</Text>
-              <Text style={styles.detailValue}>{volunteerProfile?.workplaceOrSchool || 'Not set'}</Text>
-            </View>
-            <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Total Points Earned</Text>
-              <Text style={styles.detailValue}>{Math.round(totalHours * 10)}</Text>
-            </View>
-            <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Completed Time Logs</Text>
-              <Text style={styles.detailValue}>{completedLogs}</Text>
-            </View>
+          <View style={styles.detailSummaryGrid}>
+            {volunteerDetailCards.map(card => (
+              <View key={card.label} style={styles.detailSummaryCard}>
+                <Text style={styles.detailSummaryEyebrow}>{card.label}</Text>
+                <Text style={styles.detailSummaryValue}>{card.value}</Text>
+                <Text style={styles.detailSummaryMeta}>{card.meta}</Text>
+              </View>
+            ))}
           </View>
         </View>
       </View>
@@ -368,16 +440,16 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
       </View>
 
       <ProjectTimelineCalendarCard
-        title="Volunteer Project Calendar"
+        title="Volunteer Event Calendar"
         subtitle={
-          joinedProjectIds.length
-            ? 'Your joined projects are shown together with admin planning updates.'
-            : 'Browse the shared admin schedule to discover project and event dates.'
+          joinedEventIds.length
+            ? 'Your joined events are shown together with admin planning updates.'
+            : 'Browse the shared admin schedule to discover upcoming event dates.'
         }
         projects={projects}
         planningCalendars={planningCalendars}
         planningItems={planningItems}
-        projectFilterIds={joinedProjectIds.length ? joinedProjectIds : undefined}
+        projectFilterIds={joinedEventIds.length ? joinedEventIds : undefined}
         accentColor="#166534"
         emptyText="No volunteer timeline items yet."
         onOpenProject={projectId => openProjects(projectId)}
@@ -602,6 +674,78 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     color: '#166534',
+  },
+  detailHeroPanel: {
+    borderRadius: 20,
+    backgroundColor: '#f6fbf7',
+    borderWidth: 1,
+    borderColor: '#dbe7df',
+    padding: 16,
+    marginBottom: 14,
+    gap: 10,
+  },
+  detailHeroChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    backgroundColor: '#dcfce7',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  detailHeroChipText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#166534',
+  },
+  detailHeroTitle: {
+    fontSize: 22,
+    lineHeight: 28,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  detailHeroText: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: '#475569',
+  },
+  detailSummaryGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  detailSummaryCard: {
+    minWidth: 150,
+    flexGrow: 1,
+    flexShrink: 1,
+    borderRadius: 18,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  detailSummaryEyebrow: {
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: '800',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  detailSummaryValue: {
+    marginTop: 8,
+    fontSize: 15,
+    lineHeight: 21,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  detailSummaryMeta: {
+    marginTop: 8,
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#64748b',
   },
   detailGrid: {
     gap: 12,

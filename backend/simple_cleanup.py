@@ -72,17 +72,8 @@ def run_cleanup():
         )
         print(f"   Deleted {cursor.rowcount} records\n")
         
-        # 5. Remove old event check-ins (keep only 30 days)
-        print("5. Removing event check-ins older than 30 days...")
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-        cursor.execute(
-            "DELETE FROM app_partner_event_check_ins_store WHERE (data->>'updated_at')::timestamp < %s::timestamp",
-            (cutoff,)
-        )
-        print(f"   Deleted {cursor.rowcount} records\n")
-        
-        # 6. Remove old reports (keep only 90 days)
-        print("6. Removing partner reports older than 90 days...")
+        # 5. Remove old reports (keep only 90 days)
+        print("5. Removing reports older than 90 days...")
         cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
         cursor.execute(
             "DELETE FROM app_partner_reports_store WHERE (data->>'updated_at')::timestamp < %s::timestamp",
@@ -90,8 +81,8 @@ def run_cleanup():
         )
         print(f"   Deleted {cursor.rowcount} records\n")
         
-        # 7. Remove old status updates (keep only 30 days)
-        print("7. Removing status updates older than 30 days...")
+        # 6. Remove old status updates (keep only 30 days)
+        print("6. Removing status updates older than 30 days...")
         cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
         try:
             cursor.execute(
@@ -102,8 +93,8 @@ def run_cleanup():
         except:
             print("   Table not found or error - skipping\n")
         
-        # 8. Remove old messages (keep only 30 days)
-        print("8. Removing messages older than 30 days...")
+        # 7. Remove old messages (keep only 30 days)
+        print("7. Removing messages older than 30 days...")
         cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
         try:
             cursor.execute(
@@ -114,12 +105,11 @@ def run_cleanup():
         except:
             print("   Table not found or error - skipping\n")
         
-        # 9. Remove null/empty data
-        print("9. Removing null or empty records...")
+        # 8. Remove null/empty data
+        print("8. Removing null or empty records...")
         tables = [
             "app_volunteer_time_logs_store",
             "app_volunteer_project_joins_store",
-            "app_partner_event_check_ins_store",
             "app_partner_reports_store",
         ]
         total_null_deleted = 0

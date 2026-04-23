@@ -1,6 +1,7 @@
 import { ImageSourcePropType } from 'react-native';
 import { Project } from '../models/types';
 import { getProjectStatusColor } from './projectStatus';
+import { isImageMediaUri } from './media';
 
 const PROGRAM_IMAGE_BY_CATEGORY: Partial<Record<Project['category'], ImageSourcePropType>> = {
   Nutrition: require('../assets/programs/nutrition.jpg'),
@@ -78,7 +79,14 @@ function getProgramPhotoSource(project: Project): ImageSourcePropType | undefine
 }
 
 function getProjectImageSources(project: Project): ImageSourcePropType[] {
+  if (project.imageHidden) {
+    return [];
+  }
+
   const imageSources: ImageSourcePropType[] = [];
+  if (isImageMediaUri(project.imageUrl)) {
+    imageSources.push({ uri: project.imageUrl });
+  }
   const programPhotoSource = getProgramPhotoSource(project);
 
   if (programPhotoSource) {

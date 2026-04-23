@@ -17,9 +17,8 @@ import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import PhotoMapMarker from '../components/PhotoMapMarker';
 import InlineLoadError from '../components/InlineLoadError';
 import { useAuth } from '../contexts/AuthContext';
-import { PartnerEventCheckIn, PartnerReport, Project } from '../models/types';
+import { PartnerReport, Project } from '../models/types';
 import {
-  getAllPartnerEventCheckIns,
   getAllPartnerReports,
   getProjectsScreenSnapshot,
   subscribeToStorageChanges,
@@ -35,7 +34,6 @@ export default function MappingScreen({ navigation }: any) {
   const { user } = useAuth();
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [partnerCheckIns, setPartnerCheckIns] = useState<PartnerEventCheckIn[]>([]);
   const [partnerReports, setPartnerReports] = useState<PartnerReport[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [showDetails, setShowDetails] = useState(false);
@@ -48,19 +46,18 @@ export default function MappingScreen({ navigation }: any) {
 
   useEffect(() => {
     return subscribeToStorageChanges(
-      ['projects', 'partnerEventCheckIns', 'partnerReports', 'partnerProjectApplications', 'volunteerProjectJoins'],
+      ['projects', 'events', 'partnerReports', 'partnerProjectApplications', 'volunteerProjectJoins'],
       () => {
         void loadProjects();
       }
     );
   }, [user]);
 
-  // Loads map data and narrows project visibility to records the current user joined.
+  // Loads map data and narrows project visibility based on the active role.
   const loadProjects = async () => {
     try {
-      const [snapshot, allCheckIns, allReports] = await Promise.all([
+      const [snapshot, allReports] = await Promise.all([
         getProjectsScreenSnapshot(user),
-        getAllPartnerEventCheckIns(),
         getAllPartnerReports(),
       ]);
 
@@ -76,29 +73,28 @@ export default function MappingScreen({ navigation }: any) {
       const visibleProjects =
         user?.role === 'partner'
           ? snapshot.projects.filter(
-              project =>
-                (project.joinedUserIds || []).includes(user.id) ||
-                approvedPartnerProjectIds.has(project.id)
+              project => approvedPartnerProjectIds.has(project.id)
             )
           : user?.role === 'volunteer'
           ? snapshot.projects.filter(
               project =>
-                (project.joinedUserIds || []).includes(user.id) ||
+                project.isEvent &&
+                (
+                  (project.joinedUserIds || []).includes(user.id) ||
                 joinedVolunteerProjectIds.has(project.id)
+                )
             )
           : snapshot.projects;
 
       const visibleProjectIds = new Set(visibleProjects.map(project => project.id));
 
       setProjects(visibleProjects);
-      setPartnerCheckIns(allCheckIns.filter(checkIn => visibleProjectIds.has(checkIn.projectId)));
       setPartnerReports(allReports.filter(report => visibleProjectIds.has(report.projectId)));
       setLoadError(null);
       setLoading(false);
     } catch (error) {
       console.error('Error loading projects for map:', error);
       setProjects([]);
-      setPartnerCheckIns([]);
       setPartnerReports([]);
       setLoadError({
         title: getRequestErrorTitle(error, 'Database Unavailable'),
@@ -152,8 +148,10 @@ export default function MappingScreen({ navigation }: any) {
         <Text style={styles.headerTitle}>Live Command Center</Text>
         <Text style={styles.headerSubtitle}>
           {user?.role === 'admin'
-            ? 'Projects, partner GPS check-ins, and field uploads in Negros Occidental'
-            : 'Pins are limited to projects you joined in Negros Occidental'}
+            ? 'Projects and field uploads in Negros Occidental'
+            : user?.role === 'partner'
+            ? 'Pins are limited to projects with approved partner proposals'
+            : 'Pins are limited to events you joined in Negros Occidental'}
         </Text>
       </View>
 
@@ -191,26 +189,12 @@ export default function MappingScreen({ navigation }: any) {
               <PhotoMapMarker accentColor={getProjectMarkerColor(project)} />
             </Marker>
           ))}
-          {partnerCheckIns.map(checkIn => (
-            <Marker
-              key={checkIn.id}
-              coordinate={{
-                latitude: checkIn.gpsCoordinates.latitude,
-                longitude: checkIn.gpsCoordinates.longitude,
-              }}
-              anchor={{ x: 0.5, y: 1 }}
-              title={`Partner Check-In: ${checkIn.projectId}`}
-              description={new Date(checkIn.checkInTime).toLocaleString()}
-            >
-              <PhotoMapMarker accentColor="#2563eb" />
-            </Marker>
-          ))}
         </MapView>
       </View>
 
       <View style={styles.projectListContainer}>
         <Text style={styles.projectListTitle}>
-          {`Projects ${projects.length} | Check-Ins ${partnerCheckIns.length} | Uploaded Impact ${partnerReports.reduce((sum, report) => sum + report.impactCount, 0)}`}
+          {`${user?.role === 'volunteer' ? 'Events' : 'Projects'} ${projects.length} | Uploaded Impact ${partnerReports.reduce((sum, report) => sum + report.impactCount, 0)}`}
         </Text>
         {Platform.OS === 'android' && !androidGoogleMapsApiKey ? (
           <Text style={styles.projectListWarning}>
@@ -306,12 +290,6 @@ export default function MappingScreen({ navigation }: any) {
 
                 <View style={styles.infoGrid}>
                   <View style={styles.infoItem}>
-                    <Text style={styles.infoLabel}>Check-Ins</Text>
-                    <Text style={styles.infoValue}>
-                      {partnerCheckIns.filter(checkIn => checkIn.projectId === selectedProject.id).length}
-                    </Text>
-                  </View>
-                  <View style={styles.infoItem}>
                     <Text style={styles.infoLabel}>Impact Uploads</Text>
                     <Text style={styles.infoValue}>
                       {partnerReports
@@ -339,7 +317,7 @@ export default function MappingScreen({ navigation }: any) {
 
                 <TouchableOpacity style={styles.viewDetailsButton} onPress={handleOpenProjectDetails}>
                   <Text style={styles.viewDetailsButtonText}>
-                    {user?.role === 'admin' ? 'Open Project Suite' : 'View Full Details'}
+                    {user?.role === 'admin' ? 'Open Program Management Suite' : 'View Full Details'}
                   </Text>
                 </TouchableOpacity>
               </ScrollView>

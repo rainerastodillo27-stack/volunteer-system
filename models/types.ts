@@ -10,6 +10,7 @@ export type PartnerReportType = 'General' | 'Medical' | 'Logistics';
 export type ImpactHubReportType =
   | PartnerReportType
   | 'volunteer_engagement'
+  | 'field_report'
   | 'program_impact'
   | 'event_performance'
   | 'partner_collaboration'
@@ -66,6 +67,7 @@ export interface ProjectInternalTask {
   status: 'Unassigned' | 'Assigned' | 'In Progress' | 'Completed';
   assignedVolunteerId?: string;
   assignedVolunteerName?: string;
+  isFieldOfficer?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -102,8 +104,11 @@ export interface Project {
   title: string;
   description: string;
   partnerId: string;
+  imageUrl?: string;
+  imageHidden?: boolean;
   programModule?: AdvocacyFocus;
   isEvent?: boolean;
+  parentProjectId?: string;
   status: 'Planning' | 'In Progress' | 'On Hold' | 'Completed' | 'Cancelled';
   category: 'Education' | 'Livelihood' | 'Nutrition' | 'Disaster';
   startDate: string;
@@ -263,7 +268,7 @@ export interface VolunteerProjectMatch {
   hoursContributed: number;
 }
 
-// Represents a volunteer joining a project through either self-join or admin assignment.
+// Represents a volunteer joining an event through either self-join or admin assignment.
 export interface VolunteerProjectJoinRecord {
   id: string;
   projectId: string;
@@ -278,6 +283,22 @@ export interface VolunteerProjectJoinRecord {
   completedBy?: string;
 }
 
+export interface PartnerProjectProposalDetails {
+  targetProjectId?: string;
+  targetProjectTitle?: string;
+  targetProjectDescription?: string;
+  targetProjectAddress?: string;
+  requestedProgramModule?: AdvocacyFocus;
+  proposedTitle: string;
+  proposedDescription: string;
+  proposedStartDate: string;
+  proposedEndDate: string;
+  proposedLocation: string;
+  proposedVolunteersNeeded: number;
+  communityNeed: string;
+  expectedDeliverables: string;
+}
+
 // Represents a partner's request to join a project or event.
 export interface PartnerProjectApplication {
   id: string;
@@ -285,23 +306,11 @@ export interface PartnerProjectApplication {
   partnerUserId: string;
   partnerName: string;
   partnerEmail: string;
+  proposalDetails?: PartnerProjectProposalDetails;
   status: 'Pending' | 'Approved' | 'Rejected';
   requestedAt: string;
   reviewedAt?: string;
   reviewedBy?: string;
-}
-
-// Represents a partner event check-in captured during field execution.
-export interface PartnerEventCheckIn {
-  id: string;
-  projectId: string;
-  partnerId: string;
-  partnerUserId: string;
-  gpsCoordinates: {
-    latitude: number;
-    longitude: number;
-  };
-  checkInTime: string;
 }
 
 // Represents a partner-submitted operational or impact report for a project.

@@ -10,7 +10,6 @@ from typing import Any
 RETENTION_DAYS = {
     "volunteer_time_logs": 730,        # 2 years
     "volunteer_project_joins": 365,    # 1 year
-    "partner_event_check_ins": 180,    # 6 months
     "partner_reports": 365,            # 1 year
     "published_impact_reports": 730,   # 2 years
     "status_updates": 180,             # 6 months
@@ -20,7 +19,6 @@ RETENTION_DAYS = {
 MAX_RECORDS_PER_TABLE = {
     "app_volunteer_time_logs_store": 5000,
     "app_volunteer_project_joins_store": 10000,
-    "app_partner_event_check_ins_store": 5000,
     "app_partner_reports_store": 2000,
     "app_published_impact_reports_store": 1000,
     "project_group_messages": 20000,
@@ -37,7 +35,6 @@ def apply_retention_policies(connection: Any) -> dict[str, int]:
     retention_policies = [
         ("app_volunteer_time_logs_store", RETENTION_DAYS.get("volunteer_time_logs", 730)),
         ("app_volunteer_project_joins_store", RETENTION_DAYS.get("volunteer_project_joins", 365)),
-        ("app_partner_event_check_ins_store", RETENTION_DAYS.get("partner_event_check_ins", 180)),
         ("app_partner_reports_store", RETENTION_DAYS.get("partner_reports", 365)),
         ("app_published_impact_reports_store", RETENTION_DAYS.get("published_impact_reports", 730)),
     ]
@@ -135,11 +132,10 @@ def analyze_storage_growth(connection: Any) -> dict[str, Any]:
     storage_tables = [
         "app_volunteer_time_logs_store",
         "app_volunteer_project_joins_store",
-        "app_partner_event_check_ins_store",
         "app_partner_reports_store",
         "app_published_impact_reports_store",
         "project_group_messages",
-        "partner_reports",
+        "reports",
     ]
     
     with connection.cursor() as cursor:

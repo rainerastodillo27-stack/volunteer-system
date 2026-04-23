@@ -102,8 +102,11 @@ RELATIONAL_TABLE_DDL = [
       title text not null,
       description text,
       partner_id text,
+      image_url text,
+      image_hidden boolean not null default false,
       program_module text,
       is_event boolean not null default false,
+      parent_project_id text,
       status text,
       category text,
       start_date text,
@@ -117,8 +120,43 @@ RELATIONAL_TABLE_DDL = [
       updated_at text
     )
     """,
-    "create index if not exists projects_partner_id_idx on projects (partner_id)",
+    "alter table projects add column if not exists parent_project_id text",
+    "alter table projects add column if not exists image_url text",
+    "alter table projects add column if not exists image_hidden boolean not null default false",
     "alter table projects add column if not exists internal_tasks jsonb not null default '[]'::jsonb",
+    "create index if not exists projects_partner_id_idx on projects (partner_id)",
+    "create index if not exists projects_parent_project_id_idx on projects (parent_project_id)",
+    f"""
+    create table if not exists events (
+      id text primary key,
+      title text not null,
+      description text,
+      partner_id text,
+      image_url text,
+      image_hidden boolean not null default false,
+      program_module text,
+      is_event boolean not null default true,
+      parent_project_id text,
+      status text,
+      category text,
+      start_date text,
+      end_date text,
+      location jsonb not null default {JSON_OBJECT},
+      volunteers_needed integer not null default 0,
+      volunteers jsonb not null default {JSON_ARRAY},
+      joined_user_ids jsonb not null default {JSON_ARRAY},
+      internal_tasks jsonb not null default {JSON_ARRAY},
+      created_at text,
+      updated_at text
+    )
+    """,
+    "alter table events add column if not exists is_event boolean not null default true",
+    "alter table events add column if not exists parent_project_id text",
+    "alter table events add column if not exists image_url text",
+    "alter table events add column if not exists image_hidden boolean not null default false",
+    "alter table events add column if not exists internal_tasks jsonb not null default '[]'::jsonb",
+    "create index if not exists events_partner_id_idx on events (partner_id)",
+    "create index if not exists events_parent_project_id_idx on events (parent_project_id)",
     f"""
     create table if not exists status_updates (
       id text primary key,
@@ -162,8 +200,24 @@ RELATIONAL_TABLE_DDL = [
     """,
     "create index if not exists volunteer_time_logs_volunteer_id_idx on volunteer_time_logs (volunteer_id)",
     "create index if not exists volunteer_time_logs_project_id_idx on volunteer_time_logs (project_id)",
+    """
+    do $$
+    begin
+      if exists (
+        select 1
+        from information_schema.tables
+        where table_schema = 'public' and table_name = 'volunteer_project_joins'
+      ) and not exists (
+        select 1
+        from information_schema.tables
+        where table_schema = 'public' and table_name = 'volunteer_event_joins'
+      ) then
+        alter table volunteer_project_joins rename to volunteer_event_joins;
+      end if;
+    end $$;
+    """,
     f"""
-    create table if not exists volunteer_project_joins (
+    create table if not exists volunteer_event_joins (
       id text primary key,
       project_id text,
       volunteer_id text,
@@ -177,8 +231,8 @@ RELATIONAL_TABLE_DDL = [
       completed_by text
     )
     """,
-    "create index if not exists volunteer_project_joins_project_id_idx on volunteer_project_joins (project_id)",
-    "create index if not exists volunteer_project_joins_volunteer_id_idx on volunteer_project_joins (volunteer_id)",
+    "create index if not exists volunteer_event_joins_project_id_idx on volunteer_event_joins (project_id)",
+    "create index if not exists volunteer_event_joins_volunteer_id_idx on volunteer_event_joins (volunteer_id)",
     f"""
     create table if not exists partner_project_applications (
       id text primary key,
@@ -186,28 +240,18 @@ RELATIONAL_TABLE_DDL = [
       partner_user_id text,
       partner_name text,
       partner_email text,
+      proposal_details jsonb not null default {JSON_OBJECT},
       status text,
       requested_at text,
       reviewed_at text,
       reviewed_by text
     )
     """,
+    "alter table partner_project_applications add column if not exists proposal_details jsonb not null default '{}'::jsonb",
     "create index if not exists partner_project_applications_project_id_idx on partner_project_applications (project_id)",
     "create index if not exists partner_project_applications_partner_user_id_idx on partner_project_applications (partner_user_id)",
-    f"""
-    create table if not exists partner_event_check_ins (
-      id text primary key,
-      project_id text,
-      partner_id text,
-      partner_user_id text,
-      gps_coordinates jsonb not null default {JSON_OBJECT},
-      check_in_time text
-    )
-    """,
-    "create index if not exists partner_event_check_ins_project_id_idx on partner_event_check_ins (project_id)",
-    "create index if not exists partner_event_check_ins_partner_user_id_idx on partner_event_check_ins (partner_user_id)",
-    f"""
-    create table if not exists partner_reports (
+        f"""
+        create table if not exists reports (
       id text primary key,
       project_id text,
       partner_id text,
@@ -226,29 +270,34 @@ RELATIONAL_TABLE_DDL = [
       created_at text,
       status text,
       reviewed_at text,
-      reviewed_by text
+            reviewed_by text,
+            generated_by text,
+            generated_at text,
+            report_file text,
+            format text,
+            published_at text,
+            download_content text,
+            download_mime_type text,
+            source_report_ids jsonb not null default {JSON_ARRAY}
     )
     """,
-    "create index if not exists partner_reports_project_id_idx on partner_reports (project_id)",
-    "create index if not exists partner_reports_partner_user_id_idx on partner_reports (partner_user_id)",
-    "alter table partner_reports add column if not exists submitter_user_id text",
-    "alter table partner_reports add column if not exists submitter_name text",
-    "alter table partner_reports add column if not exists submitter_role text",
-    "alter table partner_reports add column if not exists title text",
-    "alter table partner_reports add column if not exists metrics jsonb not null default '{}'::jsonb",
-    "alter table partner_reports add column if not exists attachments jsonb not null default '[]'::jsonb",
-    f"""
-    create table if not exists published_impact_reports (
-      id text primary key,
-      project_id text,
-      generated_by text,
-      generated_at text,
-      report_file text,
-      format text,
-      published_at text
-    )
-    """,
-    "create index if not exists published_impact_reports_project_id_idx on published_impact_reports (project_id)",
+        "create index if not exists reports_project_id_idx on reports (project_id)",
+        "create index if not exists reports_partner_user_id_idx on reports (partner_user_id)",
+                "create index if not exists reports_generated_at_idx on reports (generated_at)",
+        "alter table reports add column if not exists submitter_user_id text",
+        "alter table reports add column if not exists submitter_name text",
+        "alter table reports add column if not exists submitter_role text",
+        "alter table reports add column if not exists title text",
+        "alter table reports add column if not exists metrics jsonb not null default '{}'::jsonb",
+        "alter table reports add column if not exists attachments jsonb not null default '[]'::jsonb",
+        "alter table reports add column if not exists generated_by text",
+        "alter table reports add column if not exists generated_at text",
+        "alter table reports add column if not exists report_file text",
+        "alter table reports add column if not exists format text",
+        "alter table reports add column if not exists published_at text",
+        "alter table reports add column if not exists download_content text",
+        "alter table reports add column if not exists download_mime_type text",
+        "alter table reports add column if not exists source_report_ids jsonb not null default '[]'::jsonb",
     f"""
     create table if not exists admin_planning_calendars (
       id text primary key,
@@ -365,8 +414,36 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("title", False),
             ("description", False),
             ("partner_id", False),
+            ("image_url", False),
+            ("image_hidden", False),
             ("program_module", False),
             ("is_event", False),
+            ("parent_project_id", False),
+            ("status", False),
+            ("category", False),
+            ("start_date", False),
+            ("end_date", False),
+            ("location", True),
+            ("volunteers_needed", False),
+            ("volunteers", True),
+            ("joined_user_ids", True),
+            ("internal_tasks", True),
+            ("created_at", False),
+            ("updated_at", False),
+        ],
+    },
+    "events": {
+        "table": "events",
+        "columns": [
+            ("id", False),
+            ("title", False),
+            ("description", False),
+            ("partner_id", False),
+            ("image_url", False),
+            ("image_hidden", False),
+            ("program_module", False),
+            ("is_event", False),
+            ("parent_project_id", False),
             ("status", False),
             ("category", False),
             ("start_date", False),
@@ -419,7 +496,7 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
         ],
     },
     "volunteerProjectJoins": {
-        "table": "volunteer_project_joins",
+        "table": "volunteer_event_joins",
         "columns": [
             ("id", False),
             ("project_id", False),
@@ -442,25 +519,15 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("partner_user_id", False),
             ("partner_name", False),
             ("partner_email", False),
+            ("proposal_details", True),
             ("status", False),
             ("requested_at", False),
             ("reviewed_at", False),
             ("reviewed_by", False),
         ],
     },
-    "partnerEventCheckIns": {
-        "table": "partner_event_check_ins",
-        "columns": [
-            ("id", False),
-            ("project_id", False),
-            ("partner_id", False),
-            ("partner_user_id", False),
-            ("gps_coordinates", True),
-            ("check_in_time", False),
-        ],
-    },
     "partnerReports": {
-        "table": "partner_reports",
+        "table": "reports",
         "columns": [
             ("id", False),
             ("project_id", False),
@@ -484,7 +551,7 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
         ],
     },
     "publishedImpactReports": {
-        "table": "published_impact_reports",
+        "table": "reports",
         "columns": [
             ("id", False),
             ("project_id", False),
@@ -493,6 +560,9 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("report_file", False),
             ("format", False),
             ("published_at", False),
+            ("download_content", False),
+            ("download_mime_type", False),
+            ("source_report_ids", True),
         ],
     },
     "adminPlanningCalendars": {
@@ -526,6 +596,36 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
 }
 
 FIELD_NAME_MAPS: dict[str, dict[str, str]] = {
+    "projects": {
+        "partnerId": "partner_id",
+        "imageUrl": "image_url",
+        "imageHidden": "image_hidden",
+        "programModule": "program_module",
+        "isEvent": "is_event",
+        "parentProjectId": "parent_project_id",
+        "startDate": "start_date",
+        "endDate": "end_date",
+        "volunteersNeeded": "volunteers_needed",
+        "joinedUserIds": "joined_user_ids",
+        "internalTasks": "internal_tasks",
+        "createdAt": "created_at",
+        "updatedAt": "updated_at",
+    },
+    "events": {
+        "partnerId": "partner_id",
+        "imageUrl": "image_url",
+        "imageHidden": "image_hidden",
+        "programModule": "program_module",
+        "isEvent": "is_event",
+        "parentProjectId": "parent_project_id",
+        "startDate": "start_date",
+        "endDate": "end_date",
+        "volunteersNeeded": "volunteers_needed",
+        "joinedUserIds": "joined_user_ids",
+        "internalTasks": "internal_tasks",
+        "createdAt": "created_at",
+        "updatedAt": "updated_at",
+    },
     "volunteers": {"userId": "user_id"},
     "statusUpdates": {"projectId": "project_id", "updatedBy": "updated_by", "updatedAt": "updated_at"},
     "volunteerMatches": {
@@ -561,16 +661,10 @@ FIELD_NAME_MAPS: dict[str, dict[str, str]] = {
         "partnerUserId": "partner_user_id",
         "partnerName": "partner_name",
         "partnerEmail": "partner_email",
+        "proposalDetails": "proposal_details",
         "requestedAt": "requested_at",
         "reviewedAt": "reviewed_at",
         "reviewedBy": "reviewed_by",
-    },
-    "partnerEventCheckIns": {
-        "projectId": "project_id",
-        "partnerId": "partner_id",
-        "partnerUserId": "partner_user_id",
-        "gpsCoordinates": "gps_coordinates",
-        "checkInTime": "check_in_time",
     },
     "partnerReports": {
         "projectId": "project_id",
@@ -592,6 +686,9 @@ FIELD_NAME_MAPS: dict[str, dict[str, str]] = {
         "generatedBy": "generated_by",
         "generatedAt": "generated_at",
         "reportFile": "report_file",
+        "downloadContent": "download_content",
+        "downloadMimeType": "download_mime_type",
+        "sourceReportIds": "source_report_ids",
         "publishedAt": "published_at",
     },
     "adminPlanningCalendars": {
@@ -712,8 +809,35 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("title") or "",
             item.get("description"),
             item.get("partnerId"),
+            item.get("imageUrl"),
+            bool(item.get("imageHidden", False)),
             item.get("programModule"),
             bool(item.get("isEvent", False)),
+            item.get("parentProjectId"),
+            item.get("status"),
+            item.get("category"),
+            item.get("startDate"),
+            item.get("endDate"),
+            _json_dump(item.get("location"), {}),
+            _to_int(item.get("volunteersNeeded")),
+            _json_dump(item.get("volunteers"), []),
+            _json_dump(item.get("joinedUserIds"), []),
+            _json_dump(item.get("internalTasks"), []),
+            item.get("createdAt"),
+            item.get("updatedAt"),
+        )
+
+    if key == "events":
+        return (
+            item.get("id"),
+            item.get("title") or "",
+            item.get("description"),
+            item.get("partnerId"),
+            item.get("imageUrl"),
+            bool(item.get("imageHidden", False)),
+            item.get("programModule"),
+            bool(item.get("isEvent", True)),
+            item.get("parentProjectId"),
             item.get("status"),
             item.get("category"),
             item.get("startDate"),
@@ -784,20 +908,11 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("partnerUserId"),
             item.get("partnerName"),
             item.get("partnerEmail"),
+            _json_dump(item.get("proposalDetails"), {}),
             item.get("status"),
             item.get("requestedAt"),
             item.get("reviewedAt"),
             item.get("reviewedBy"),
-        )
-
-    if key == "partnerEventCheckIns":
-        return (
-            item.get("id"),
-            item.get("projectId"),
-            item.get("partnerId"),
-            item.get("partnerUserId"),
-            _json_dump(item.get("gpsCoordinates"), {}),
-            item.get("checkInTime"),
         )
 
     if key == "partnerReports":
@@ -832,6 +947,9 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("reportFile"),
             item.get("format"),
             item.get("publishedAt"),
+            item.get("downloadContent"),
+            item.get("downloadMimeType"),
+            _json_dump(item.get("sourceReportIds"), []),
         )
 
     if key == "adminPlanningCalendars":
@@ -865,6 +983,14 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
 
 def _field_column_name(key: str, field_name: str) -> str:
     return FIELD_NAME_MAPS.get(key, {}).get(field_name, field_name)
+
+
+def _row_filter_clause(key: str) -> str | None:
+    if key == "partnerReports":
+        return "generated_at is null"
+    if key == "publishedImpactReports":
+        return "generated_at is not null"
+    return None
 
 
 def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
@@ -948,8 +1074,35 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "title": row["title"],
             "description": row["description"],
             "partnerId": row["partner_id"],
+            "imageUrl": row["image_url"],
+            "imageHidden": bool(row["image_hidden"]),
             "programModule": row["program_module"],
             "isEvent": bool(row["is_event"]),
+            "parentProjectId": row["parent_project_id"],
+            "status": row["status"],
+            "category": row["category"],
+            "startDate": row["start_date"],
+            "endDate": row["end_date"],
+            "location": row["location"] or {},
+            "volunteersNeeded": row["volunteers_needed"],
+            "volunteers": row["volunteers"] or [],
+            "joinedUserIds": row["joined_user_ids"] or [],
+            "internalTasks": row["internal_tasks"] or [],
+            "createdAt": row["created_at"],
+            "updatedAt": row["updated_at"],
+        }
+
+    if key == "events":
+        return {
+            "id": row["id"],
+            "title": row["title"],
+            "description": row["description"],
+            "partnerId": row["partner_id"],
+            "imageUrl": row["image_url"],
+            "imageHidden": bool(row["image_hidden"]),
+            "programModule": row["program_module"],
+            "isEvent": True,
+            "parentProjectId": row["parent_project_id"],
             "status": row["status"],
             "category": row["category"],
             "startDate": row["start_date"],
@@ -1020,20 +1173,11 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "partnerUserId": row["partner_user_id"],
             "partnerName": row["partner_name"],
             "partnerEmail": row["partner_email"],
+            "proposalDetails": row["proposal_details"] or {},
             "status": row["status"],
             "requestedAt": row["requested_at"],
             "reviewedAt": row["reviewed_at"],
             "reviewedBy": row["reviewed_by"],
-        }
-
-    if key == "partnerEventCheckIns":
-        return {
-            "id": row["id"],
-            "projectId": row["project_id"],
-            "partnerId": row["partner_id"],
-            "partnerUserId": row["partner_user_id"],
-            "gpsCoordinates": row["gps_coordinates"] or {},
-            "checkInTime": row["check_in_time"],
         }
 
     if key == "partnerReports":
@@ -1067,6 +1211,9 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "generatedAt": row["generated_at"],
             "reportFile": row["report_file"],
             "format": row["format"],
+            "downloadContent": row["download_content"],
+            "downloadMimeType": row["download_mime_type"],
+            "sourceReportIds": row["source_report_ids"] or [],
             "publishedAt": row["published_at"],
         }
 
@@ -1114,9 +1261,13 @@ def sync_relational_mirror_collection(connection: Any, key: str, items: list[Any
     rows = [_normalize_row(key, item) for item in normalized_items]
     column_names = [column_name for column_name, _ in spec["columns"]]
     placeholders = [("%s::jsonb" if is_json else "%s") for _, is_json in spec["columns"]]
+    filter_clause = _row_filter_clause(key)
 
     with connection.cursor() as cursor:
-        cursor.execute(f"delete from {spec['table']}")
+        if filter_clause:
+            cursor.execute(f"delete from {spec['table']} where {filter_clause}")
+        else:
+            cursor.execute(f"delete from {spec['table']}")
         if rows:
             cursor.executemany(
                 f"""
@@ -1140,10 +1291,13 @@ def get_relational_collection(connection: Any, key: str) -> list[dict[str, Any]]
     from psycopg.rows import dict_row
 
     column_names = [column_name for column_name, _ in spec["columns"]]
+    filter_clause = _row_filter_clause(key)
     with connection.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(
-            f"select {', '.join(column_names)} from {spec['table']} order by id asc"
-        )
+        query = f"select {', '.join(column_names)} from {spec['table']}"
+        if filter_clause:
+            query += f" where {filter_clause}"
+        query += " order by id asc"
+        cursor.execute(query)
         rows = cursor.fetchall()
     return [_row_to_item(key, row) for row in rows]
 
@@ -1156,11 +1310,12 @@ def get_relational_item_by_id(connection: Any, key: str, item_id: str) -> dict[s
     from psycopg.rows import dict_row
 
     column_names = [column_name for column_name, _ in spec["columns"]]
+    filter_clause = _row_filter_clause(key)
     with connection.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(
-            f"select {', '.join(column_names)} from {spec['table']} where id = %s",
-            (item_id,),
-        )
+        query = f"select {', '.join(column_names)} from {spec['table']} where id = %s"
+        if filter_clause:
+            query += f" and {filter_clause}"
+        cursor.execute(query, (item_id,))
         row = cursor.fetchone()
     return None if row is None else _row_to_item(key, row)
 
@@ -1183,11 +1338,13 @@ def get_relational_items_by_field(
         return []
 
     column_names = [column_name for column_name, _ in spec["columns"]]
+    filter_clause = _row_filter_clause(key)
     with connection.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(
-            f"select {', '.join(column_names)} from {spec['table']} where coalesce({column_name}, '') = %s order by id asc",
-            (field_value,),
-        )
+        query = f"select {', '.join(column_names)} from {spec['table']} where coalesce({column_name}, '') = %s"
+        if filter_clause:
+            query += f" and {filter_clause}"
+        query += " order by id asc"
+        cursor.execute(query, (field_value,))
         rows = cursor.fetchall()
     return [_row_to_item(key, row) for row in rows]
 

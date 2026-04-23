@@ -16,7 +16,6 @@ try:
     from .database_cleanup import (
         cleanup_old_time_logs,
         cleanup_old_project_joins,
-        cleanup_old_event_checkins,
         cleanup_old_reports,
         cleanup_orphaned_records,
         deduplicate_records,
@@ -30,7 +29,6 @@ except ImportError:
     from database_cleanup import (
         cleanup_old_time_logs,
         cleanup_old_project_joins,
-        cleanup_old_event_checkins,
         cleanup_old_reports,
         cleanup_orphaned_records,
         deduplicate_records,
@@ -109,9 +107,7 @@ def run_full_cleanup() -> None:
              lambda: cleanup_old_time_logs(connection, policies["volunteer_time_logs"])),
             ("Removing old project joins (>365 days)", 
              lambda: cleanup_old_project_joins(connection, policies["volunteer_project_joins"])),
-            ("Removing old event check-ins (>180 days)", 
-             lambda: cleanup_old_event_checkins(connection, policies["partner_event_check_ins"])),
-            ("Removing old partner reports (>365 days)", 
+            ("Removing old reports (>365 days)", 
              lambda: cleanup_old_reports(connection, policies["partner_reports"])),
             ("Removing orphaned records", 
              lambda: cleanup_orphaned_records(connection)),
@@ -173,8 +169,7 @@ Commands:
 Cleanup Operations:
   • Removes time logs older than 730 days
   • Removes project joins older than 365 days
-  • Removes event check-ins older than 180 days
-  • Removes reviewed reports older than 365 days
+    • Removes reviewed reports older than 365 days
   • Removes orphaned records with missing references
   • Removes duplicate records
 

@@ -166,10 +166,10 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     setShowAvailabilityModal(false);
   };
 
-  // Assigns the selected volunteer to an in-progress project.
+  // Assigns the selected volunteer to an in-progress event.
   const handleMatchVolunteer = async (projectId: string) => {
     if (!isAdmin) {
-      Alert.alert('Access Restricted', 'Only admin accounts can match volunteers to projects.');
+      Alert.alert('Access Restricted', 'Only admin accounts can match volunteers to events.');
       return;
     }
 
@@ -177,7 +177,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
 
     try {
       await assignVolunteerToProject(projectId, selectedVolunteer.id, user?.id || '');
-      Alert.alert('Success', 'Volunteer assigned to project and notified.');
+      Alert.alert('Success', 'Volunteer assigned to event and notified.');
 
       const matches = await getVolunteerProjectMatches(selectedVolunteer.id);
       setVolunteerMatches(matches);
@@ -314,6 +314,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   // Returns in-progress projects already matched to the selected volunteer.
   const getMatchedProjects = () => {
     return projects.filter(p =>
+      p.isEvent &&
       p.status === 'In Progress' &&
       volunteerMatches.find(m => m.projectId === p.id && m.status === 'Matched')
     );
@@ -322,6 +323,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   // Returns in-progress projects still waiting for match approval.
   const getPendingProjects = () => {
     return projects.filter(p =>
+      p.isEvent &&
       p.status === 'In Progress' &&
       volunteerMatches.find(m => m.projectId === p.id && m.status === 'Requested')
     );
@@ -331,6 +333,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   const getAvailableProjects = () => {
     return projects.filter(
       p =>
+        p.isEvent &&
         p.status === 'In Progress' &&
         !volunteerMatches.find(
           m =>

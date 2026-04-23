@@ -89,17 +89,12 @@ def run_cleanup():
                 "condition": f"(data->>'updated_at')::timestamp < NOW() - INTERVAL '40 days'"
             },
             {
-                "description": "5. Deleting check-ins older than 25 days",
-                "table": "app_partner_event_check_ins_store",
-                "condition": f"(data->>'updated_at')::timestamp < NOW() - INTERVAL '25 days'"
-            },
-            {
-                "description": "6. Deleting reports older than 50 days",
+                "description": "5. Deleting reports older than 50 days",
                 "table": "app_partner_reports_store",
                 "condition": f"(data->>'updated_at')::timestamp < NOW() - INTERVAL '50 days'"
             },
             {
-                "description": "7. Deleting null records from time logs",
+                "description": "6. Deleting null records from time logs",
                 "table": "app_volunteer_time_logs_store",
                 "condition": "data IS NULL"
             },

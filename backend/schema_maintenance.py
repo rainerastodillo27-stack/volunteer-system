@@ -3,25 +3,14 @@ from typing import Any
 try:
     from .field_rules import normalize_email, sanitize_hot_storage_item
     from .relational_mirror import sync_relational_mirror_collection
+    from .storage_table_contract import KNOWN_ROGUE_TABLES, LEGACY_COMPAT_STORAGE_TABLES
 except ImportError:
     from field_rules import normalize_email, sanitize_hot_storage_item
     from relational_mirror import sync_relational_mirror_collection
+    from storage_table_contract import KNOWN_ROGUE_TABLES, LEGACY_COMPAT_STORAGE_TABLES
 
-ROGUE_TABLES = ['Volunteer management System']
-HOT_STORAGE_TABLES = {
-    "users": "app_users_store",
-    "partners": "app_partners_store",
-    "projects": "app_projects_store",
-    "volunteers": "app_volunteers_store",
-    "statusUpdates": "app_status_updates_store",
-    "volunteerMatches": "app_volunteer_matches_store",
-    "volunteerTimeLogs": "app_volunteer_time_logs_store",
-    "volunteerProjectJoins": "app_volunteer_project_joins_store",
-    "partnerProjectApplications": "app_partner_project_applications_store",
-    "partnerEventCheckIns": "app_partner_event_check_ins_store",
-    "partnerReports": "app_partner_reports_store",
-    "publishedImpactReports": "app_published_impact_reports_store",
-}
+ROGUE_TABLES = list(KNOWN_ROGUE_TABLES)
+HOT_STORAGE_TABLES = dict(LEGACY_COMPAT_STORAGE_TABLES)
 DATA_QUALITY_CONSTRAINT_SPECS = [
     ("app_users", "app_users_id_len_chk", "length(app_users_id) between 1 and 64"),
     ("app_users", "app_users_email_format_chk", "email is not null and length(email) <= 254 and email ~* '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$'"),
@@ -91,32 +80,30 @@ DATA_QUALITY_CONSTRAINT_SPECS = [
     ("volunteer_time_logs", "volunteer_time_logs_note_len_chk", "note is null or length(note) <= 1000"),
     ("volunteer_time_logs", "volunteer_time_logs_completion_photo_len_chk", "completion_photo is null or length(completion_photo) <= 500"),
     ("volunteer_time_logs", "volunteer_time_logs_completion_report_len_chk", "completion_report is null or length(completion_report) <= 500"),
-    ("volunteer_project_joins", "volunteer_project_joins_id_len_chk", "length(id) between 1 and 64"),
-    ("volunteer_project_joins", "volunteer_project_joins_volunteer_name_len_chk", "volunteer_name is null or length(volunteer_name) <= 120"),
-    ("volunteer_project_joins", "volunteer_project_joins_volunteer_email_chk", "volunteer_email is null or volunteer_email = '' or (length(volunteer_email) <= 254 and volunteer_email ~* '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$')"),
-    ("volunteer_project_joins", "volunteer_project_joins_source_chk", "source is null or source in ('VolunteerJoin', 'AdminMatch')"),
-    ("volunteer_project_joins", "volunteer_project_joins_participation_status_chk", "participation_status is null or participation_status in ('Active', 'Completed')"),
-    ("volunteer_project_joins", "volunteer_project_joins_completed_by_len_chk", "completed_by is null or length(completed_by) <= 64"),
+    ("volunteer_event_joins", "volunteer_event_joins_id_len_chk", "length(id) between 1 and 64"),
+    ("volunteer_event_joins", "volunteer_event_joins_volunteer_name_len_chk", "volunteer_name is null or length(volunteer_name) <= 120"),
+    ("volunteer_event_joins", "volunteer_event_joins_volunteer_email_chk", "volunteer_email is null or volunteer_email = '' or (length(volunteer_email) <= 254 and volunteer_email ~* '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$')"),
+    ("volunteer_event_joins", "volunteer_event_joins_source_chk", "source is null or source in ('VolunteerJoin', 'AdminMatch')"),
+    ("volunteer_event_joins", "volunteer_event_joins_participation_status_chk", "participation_status is null or participation_status in ('Active', 'Completed')"),
+    ("volunteer_event_joins", "volunteer_event_joins_completed_by_len_chk", "completed_by is null or length(completed_by) <= 64"),
     ("partner_project_applications", "partner_project_applications_id_len_chk", "length(id) between 1 and 64"),
     ("partner_project_applications", "partner_project_applications_status_chk", "status is null or status in ('Pending', 'Approved', 'Rejected')"),
     ("partner_project_applications", "partner_project_applications_partner_name_len_chk", "partner_name is null or length(partner_name) <= 120"),
     ("partner_project_applications", "partner_project_applications_partner_email_chk", "partner_email is null or partner_email = '' or (length(partner_email) <= 254 and partner_email ~* '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$')"),
     ("partner_project_applications", "partner_project_applications_reviewed_by_len_chk", "reviewed_by is null or length(reviewed_by) <= 64"),
-    ("partner_event_check_ins", "partner_event_check_ins_id_len_chk", "length(id) between 1 and 64"),
-    ("partner_reports", "partner_reports_id_len_chk", "length(id) between 1 and 64"),
-    ("partner_reports", "partner_reports_status_chk", "status is null or status in ('Submitted', 'Reviewed')"),
-    ("partner_reports", "partner_reports_impact_count_chk", "impact_count >= 0"),
-    ("partner_reports", "partner_reports_partner_name_len_chk", "partner_name is null or length(partner_name) <= 120"),
-    ("partner_reports", "partner_reports_submitter_name_len_chk", "submitter_name is null or length(submitter_name) <= 120"),
-    ("partner_reports", "partner_reports_submitter_role_chk", "submitter_role is null or submitter_role in ('admin', 'volunteer', 'partner')"),
-    ("partner_reports", "partner_reports_title_len_chk", "title is null or length(title) <= 150"),
-    ("partner_reports", "partner_reports_report_type_chk", "report_type is null or report_type in ('General', 'Medical', 'Logistics', 'volunteer_engagement', 'program_impact', 'event_performance', 'partner_collaboration', 'system_metrics')"),
-    ("partner_reports", "partner_reports_description_len_chk", "description is null or length(description) <= 3000"),
-    ("partner_reports", "partner_reports_media_file_len_chk", "media_file is null or length(media_file) <= 500"),
-    ("published_impact_reports", "published_impact_reports_id_len_chk", "length(id) between 1 and 64"),
-    ("published_impact_reports", "published_impact_reports_format_chk", "format is null or format in ('PDF', 'Excel')"),
-    ("published_impact_reports", "published_impact_reports_report_file_len_chk", "report_file is null or length(report_file) <= 500"),
-    ("published_impact_reports", "published_impact_reports_generated_by_len_chk", "generated_by is null or length(generated_by) <= 64"),
+    ("reports", "reports_id_len_chk", "length(id) between 1 and 64"),
+    ("reports", "reports_status_chk", "status is null or status in ('Submitted', 'Reviewed')"),
+    ("reports", "reports_impact_count_chk", "impact_count >= 0"),
+    ("reports", "reports_partner_name_len_chk", "partner_name is null or length(partner_name) <= 120"),
+    ("reports", "reports_submitter_name_len_chk", "submitter_name is null or length(submitter_name) <= 120"),
+    ("reports", "reports_submitter_role_chk", "submitter_role is null or submitter_role in ('admin', 'volunteer', 'partner')"),
+    ("reports", "reports_title_len_chk", "title is null or length(title) <= 150"),
+    ("reports", "reports_report_type_chk", "report_type is null or report_type in ('General', 'Medical', 'Logistics', 'volunteer_engagement', 'field_report', 'program_impact', 'event_performance', 'partner_collaboration', 'system_metrics')"),
+    ("reports", "reports_description_len_chk", "description is null or length(description) <= 3000"),
+    ("reports", "reports_media_file_len_chk", "media_file is null or length(media_file) <= 500"),
+    ("reports", "reports_format_chk", "format is null or format in ('PDF', 'Excel')"),
+    ("reports", "reports_report_file_len_chk", "report_file is null or length(report_file) <= 500"),
+    ("reports", "reports_generated_by_len_chk", "generated_by is null or length(generated_by) <= 64"),
     ("messages", "messages_id_len_chk", "length(messages_id) between 1 and 64"),
     ("messages", "messages_content_len_chk", "length(content) between 1 and 4000"),
     ("project_group_messages", "project_group_messages_id_len_chk", "length(project_group_messages_id) between 1 and 64"),
@@ -138,6 +125,220 @@ def _public_table_exists(connection: Any, table_name: str) -> bool:
         )
         row = cursor.fetchone()
     return bool(row and row[0])
+
+
+def _public_table_column_exists(connection: Any, table_name: str, column_name: str) -> bool:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            select exists (
+              select 1
+              from information_schema.columns
+              where table_schema = 'public'
+                and table_name = %s
+                and column_name = %s
+            )
+            """,
+            (table_name, column_name),
+        )
+        row = cursor.fetchone()
+    return bool(row and row[0])
+
+
+def migrate_legacy_report_tables_to_reports(connection: Any) -> list[str]:
+    if not _public_table_exists(connection, "reports"):
+        return []
+
+    migration_notes: list[str] = []
+
+    with connection.cursor() as cursor:
+        if _public_table_exists(connection, "partner_reports"):
+            cursor.execute(
+                """
+                insert into reports (
+                  id,
+                  project_id,
+                  partner_id,
+                  partner_user_id,
+                  partner_name,
+                  submitter_user_id,
+                  submitter_name,
+                  submitter_role,
+                  title,
+                  report_type,
+                  description,
+                  impact_count,
+                  metrics,
+                  attachments,
+                  media_file,
+                  created_at,
+                  status,
+                  reviewed_at,
+                  reviewed_by,
+                  generated_by,
+                  generated_at,
+                  report_file,
+                  format,
+                  published_at,
+                  download_content,
+                  download_mime_type,
+                  source_report_ids
+                )
+                select
+                  id,
+                  project_id,
+                  partner_id,
+                  partner_user_id,
+                  partner_name,
+                  submitter_user_id,
+                  submitter_name,
+                  submitter_role,
+                  title,
+                  report_type,
+                  description,
+                  impact_count,
+                  metrics,
+                  attachments,
+                  media_file,
+                  created_at,
+                  status,
+                  reviewed_at,
+                  reviewed_by,
+                  null::text,
+                  null::text,
+                  null::text,
+                  null::text,
+                  null::text,
+                  null::text,
+                  null::text,
+                  '[]'::jsonb
+                from partner_reports
+                on conflict (id) do nothing
+                """
+            )
+            migrated_partner_rows = cursor.rowcount or 0
+            if migrated_partner_rows:
+                migration_notes.append(f"partner_reports:{migrated_partner_rows}")
+
+        if _public_table_exists(connection, "published_impact_reports"):
+            download_content_expr = (
+                "download_content"
+                if _public_table_column_exists(connection, "published_impact_reports", "download_content")
+                else "null::text"
+            )
+            download_mime_type_expr = (
+                "download_mime_type"
+                if _public_table_column_exists(connection, "published_impact_reports", "download_mime_type")
+                else "null::text"
+            )
+            source_report_ids_expr = (
+                "source_report_ids"
+                if _public_table_column_exists(connection, "published_impact_reports", "source_report_ids")
+                else "'[]'::jsonb"
+            )
+
+            cursor.execute(
+                f"""
+                insert into reports (
+                  id,
+                  project_id,
+                  partner_id,
+                  partner_user_id,
+                  partner_name,
+                  submitter_user_id,
+                  submitter_name,
+                  submitter_role,
+                  title,
+                  report_type,
+                  description,
+                  impact_count,
+                  metrics,
+                  attachments,
+                  media_file,
+                  created_at,
+                  status,
+                  reviewed_at,
+                  reviewed_by,
+                  generated_by,
+                  generated_at,
+                  report_file,
+                  format,
+                  published_at,
+                  download_content,
+                  download_mime_type,
+                  source_report_ids
+                )
+                select
+                  id,
+                  project_id,
+                  null::text,
+                  null::text,
+                  null::text,
+                  null::text,
+                  null::text,
+                  null::text,
+                  null::text,
+                  null::text,
+                  null::text,
+                  0,
+                  '{{}}'::jsonb,
+                  '[]'::jsonb,
+                  null::text,
+                  generated_at,
+                  null::text,
+                  null::text,
+                  null::text,
+                  generated_by,
+                  generated_at,
+                  report_file,
+                  format,
+                  published_at,
+                  {download_content_expr},
+                  {download_mime_type_expr},
+                  {source_report_ids_expr}
+                from published_impact_reports
+                on conflict (id) do nothing
+                """
+            )
+            migrated_published_rows = cursor.rowcount or 0
+            if migrated_published_rows:
+                migration_notes.append(f"published_impact_reports:{migrated_published_rows}")
+
+    return migration_notes
+
+
+def migrate_legacy_volunteer_project_joins(connection: Any) -> int:
+    if not _public_table_exists(connection, "volunteer_project_joins"):
+        return 0
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            do $$
+            begin
+              if not exists (
+                select 1
+                from information_schema.tables
+                where table_schema = 'public' and table_name = 'volunteer_event_joins'
+              ) then
+                alter table volunteer_project_joins rename to volunteer_event_joins;
+              end if;
+            end $$;
+            """
+        )
+
+    if not _public_table_exists(connection, "volunteer_event_joins"):
+        return 0
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            select count(*)
+            from volunteer_event_joins
+            """
+        )
+        row = cursor.fetchone()
+    return int(row[0] or 0) if row is not None else 0
 
 
 def _upsert_app_storage_collection(connection: Any, key: str, items: list[dict[str, Any]]) -> None:
@@ -385,6 +586,8 @@ def maintain_schema_health(connection: Any) -> dict[str, list[str]]:
     
     cleaned_collections = sanitize_hot_storage_collections(connection)
     sync_legacy_app_users_from_hot_storage(connection)
+    migrated_report_tables = migrate_legacy_report_tables_to_reports(connection)
+    migrated_event_joins = migrate_legacy_volunteer_project_joins(connection)
     applied_constraints = apply_data_quality_constraints(connection)
     
     # Apply data retention and archival policies
@@ -401,6 +604,8 @@ def maintain_schema_health(connection: Any) -> dict[str, list[str]]:
         "dropped_rogue_tables": drop_empty_rogue_tables(connection),
         "cleaned_hot_storage": [f"{key}:{count}" for key, count in sorted(cleaned_collections.items())],
         "pruned_stale_app_users": prune_stale_legacy_app_users(connection),
+        "migrated_report_tables": migrated_report_tables,
+        "migrated_event_joins": [f"volunteer_event_joins:{migrated_event_joins}"] if migrated_event_joins else [],
         "applied_constraints": applied_constraints,
         "archived_records": archival_messages,
     }

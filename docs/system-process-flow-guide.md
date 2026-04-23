@@ -74,13 +74,6 @@ This document explains the connected process flow for all user roles in the volu
 5. Admin approves or rejects it.
 6. When approved, the partner gains access to that project's partner actions.
 
-### Partner Check-In
-
-1. The partner opens an approved project.
-2. The partner taps `Check-In`.
-3. The system captures the coordinates and stores the field activity entry.
-4. The check-in history appears on the partner dashboard.
-
 ### Partner Reports
 
 1. The partner fills out the project report form.
@@ -187,7 +180,6 @@ Linked cleanup includes:
 - volunteer matches
 - volunteer time logs
 - partner applications
-- partner check-ins
 - partner reports
 - project membership references
 - user messages
@@ -200,7 +192,7 @@ Sign up -> admin approval -> login -> request project join -> admin approval -> 
 
 ### Partner
 
-Sign up -> admin approval -> login -> submit project proposal -> admin approval -> check in -> upload report -> report appears in `Reports` -> download published impact file
+Sign up -> admin approval -> login -> submit project proposal -> admin approval -> upload report -> report appears in `Reports` -> download published impact file
 
 ### Admin
 

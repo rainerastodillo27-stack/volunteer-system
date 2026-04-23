@@ -5,7 +5,6 @@ import {
   AdminPlanningItem,
   AdvocacyFocus,
   ImpactHubReportType,
-  PartnerEventCheckIn,
   PartnerReport,
   PartnerReportType,
   PartnerSectorType,
@@ -22,6 +21,7 @@ import {
   SectorNeed,
   VolunteerTimeLog,
   PartnerProjectApplication,
+  PartnerProjectProposalDetails,
   PublishedImpactReport,
   VolunteerProjectJoinRecord,
 } from './types';
@@ -33,6 +33,7 @@ const STORAGE_KEYS = {
   CURRENT_USER: 'currentUser',
   PARTNERS: 'partners',
   PROJECTS: 'projects',
+  EVENTS: 'events',
   VOLUNTEERS: 'volunteers',
   MESSAGES: 'messages',
   PROJECT_GROUP_MESSAGES: 'projectGroupMessages',
@@ -41,7 +42,6 @@ const STORAGE_KEYS = {
   VOLUNTEER_TIME_LOGS: 'volunteerTimeLogs',
   VOLUNTEER_PROJECT_JOINS: 'volunteerProjectJoins',
   PARTNER_PROJECT_APPLICATIONS: 'partnerProjectApplications',
-  PARTNER_EVENT_CHECK_INS: 'partnerEventCheckIns',
   PARTNER_REPORTS: 'partnerReports',
   PUBLISHED_IMPACT_REPORTS: 'publishedImpactReports',
   ADMIN_PLANNING_CALENDARS: 'adminPlanningCalendars',
@@ -158,6 +158,19 @@ function createGeneratedMessageId(): string {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+export function buildProgramProposalProjectId(programModule: string): string {
+  return `program:${String(programModule || '').trim()}`;
+}
+
+export function getProgramModuleFromProposalProjectId(projectId: string): string | null {
+  if (!projectId.startsWith('program:')) {
+    return null;
+  }
+
+  const extractedModule = projectId.slice('program:'.length).trim();
+  return extractedModule || null;
+}
+
 async function getPrimaryAdminUser(): Promise<User | null> {
   const users = await getAllUsers();
   return users.find(candidate => candidate.role === 'admin') || null;
@@ -187,9 +200,16 @@ async function notifyAdminAboutPartnerProjectJoin(
     getPrimaryAdminUser(),
   ]);
 
-  if (!project || !adminUser) {
+  if (!adminUser) {
     return;
   }
+
+  const requestedProgramModule = getProgramModuleFromProposalProjectId(projectId);
+  const targetLabel = project
+    ? `"${project.title}"`
+    : requestedProgramModule
+    ? `the ${requestedProgramModule} program module`
+    : 'a new program';
 
   const partnerEmail = partnerUser.email?.trim()
     ? ` (${partnerUser.email.trim()})`
@@ -198,7 +218,7 @@ async function notifyAdminAboutPartnerProjectJoin(
   await sendSystemMessage(
     partnerUser.id,
     adminUser.id,
-    `${partnerUser.name}${partnerEmail} requested to join "${project.title}". Review it in the Project Management Suite to approve or reject.`
+    `${partnerUser.name}${partnerEmail} submitted a project proposal for ${targetLabel}. Review it in the Program Management Suite to approve or reject.`
   );
 }
 
@@ -206,15 +226,21 @@ async function notifyPartnerAboutProjectJoinReview(
   application: PartnerProjectApplication,
   reviewedBy: string
 ): Promise<void> {
-  const project = await getProject(application.projectId);
-  if (!project) {
-    return;
-  }
+  const [project, requestedProgramModule] = await Promise.all([
+    getProject(application.projectId),
+    Promise.resolve(getProgramModuleFromProposalProjectId(application.projectId)),
+  ]);
+
+  const targetLabel = project
+    ? `"${project.title}"`
+    : requestedProgramModule
+    ? `the ${requestedProgramModule} program module`
+    : 'your proposed program';
 
   const outcome =
     application.status === 'Approved'
-      ? `approved your request to join "${project.title}". You can now coordinate with NVC through Messages.`
-      : `rejected your request to join "${project.title}". You may contact NVC admin for clarification.`;
+      ? `approved your project proposal for ${targetLabel}. You can now coordinate with NVC through Messages.`
+      : `rejected your project proposal for ${targetLabel}. You may contact NVC admin for clarification.`;
 
   await sendSystemMessage(
     reviewedBy,
@@ -779,6 +805,7 @@ export async function getDashboardSnapshot(): Promise<{
   const items = await getStorageItems([
     STORAGE_KEYS.USERS,
     STORAGE_KEYS.PROJECTS,
+    STORAGE_KEYS.EVENTS,
     STORAGE_KEYS.PARTNERS,
     STORAGE_KEYS.VOLUNTEERS,
     STORAGE_KEYS.STATUS_UPDATES,
@@ -789,7 +816,10 @@ export async function getDashboardSnapshot(): Promise<{
 
   return {
     users: (items[STORAGE_KEYS.USERS] as User[] | null) || [],
-    projects: (items[STORAGE_KEYS.PROJECTS] as Project[] | null) || [],
+    projects: mergeProjectAndEventRecords(
+      items[STORAGE_KEYS.PROJECTS] as Project[] | null,
+      items[STORAGE_KEYS.EVENTS] as Project[] | null
+    ),
     partners,
     volunteers: (items[STORAGE_KEYS.VOLUNTEERS] as Volunteer[] | null) || [],
     statusUpdates: (items[STORAGE_KEYS.STATUS_UPDATES] as StatusUpdate[] | null) || [],
@@ -801,7 +831,6 @@ export async function getPartnerDashboardSnapshot(): Promise<{
   projects: Project[];
   partners: Partner[];
   partnerApplications: PartnerProjectApplication[];
-  partnerCheckIns: PartnerEventCheckIn[];
   partnerReports: PartnerReport[];
   publishedImpactReports: PublishedImpactReport[];
   sectorNeeds: SectorNeed[];
@@ -809,9 +838,9 @@ export async function getPartnerDashboardSnapshot(): Promise<{
   await ensurePartnerOwnershipLinks();
   const items = await getStorageItems([
     STORAGE_KEYS.PROJECTS,
+    STORAGE_KEYS.EVENTS,
     STORAGE_KEYS.PARTNERS,
     STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
-    STORAGE_KEYS.PARTNER_EVENT_CHECK_INS,
     STORAGE_KEYS.PARTNER_REPORTS,
     STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS,
   ]);
@@ -820,13 +849,14 @@ export async function getPartnerDashboardSnapshot(): Promise<{
     .filter(p => !p.contactEmail?.toLowerCase().includes('eduindia.org'));
 
   return {
-    projects: (items[STORAGE_KEYS.PROJECTS] as Project[] | null) || [],
+    projects: mergeProjectAndEventRecords(
+      items[STORAGE_KEYS.PROJECTS] as Project[] | null,
+      items[STORAGE_KEYS.EVENTS] as Project[] | null
+    ),
     partners,
     partnerApplications:
       (items[STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS] as PartnerProjectApplication[] | null) ||
       [],
-    partnerCheckIns:
-      (items[STORAGE_KEYS.PARTNER_EVENT_CHECK_INS] as PartnerEventCheckIn[] | null) || [],
     partnerReports: (items[STORAGE_KEYS.PARTNER_REPORTS] as PartnerReport[] | null) || [],
     publishedImpactReports:
       (items[STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS] as PublishedImpactReport[] | null) || [],
@@ -839,11 +869,13 @@ export async function getDashboardTimelineSnapshot(): Promise<DashboardTimelineS
   const planningCalendars = await ensureAdminPlanningCalendarsSeeded();
   const items = await getStorageItems([
     STORAGE_KEYS.PROJECTS,
+    STORAGE_KEYS.EVENTS,
     STORAGE_KEYS.ADMIN_PLANNING_ITEMS,
   ]);
 
-  const projects = ((items[STORAGE_KEYS.PROJECTS] as Project[] | null) || []).map(
-    normalizeProjectRecord
+  const projects = mergeProjectAndEventRecords(
+    items[STORAGE_KEYS.PROJECTS] as Project[] | null,
+    items[STORAGE_KEYS.EVENTS] as Project[] | null
   );
   const planningItems = ((items[STORAGE_KEYS.ADMIN_PLANNING_ITEMS] as AdminPlanningItem[] | null) || [])
     .map(normalizeAdminPlanningItemRecord)
@@ -878,7 +910,9 @@ export async function getProjectsScreenSnapshot(
   );
 
   return {
-    projects: payload.projects || [],
+    projects: (payload.projects || []).map(project =>
+      project?.isEvent ? normalizeEventRecord(project) : normalizeProjectRecord(project)
+    ),
     volunteerProfile: payload.volunteerProfile || null,
     timeLogs: payload.timeLogs || [],
     partnerApplications: payload.partnerApplications || [],
@@ -1145,6 +1179,7 @@ function normalizeProjectInternalTask(
     status: task.status || (task.assignedVolunteerId ? 'Assigned' : 'Unassigned'),
     assignedVolunteerId: task.assignedVolunteerId?.trim() || undefined,
     assignedVolunteerName: task.assignedVolunteerName?.trim() || undefined,
+    isFieldOfficer: Boolean(task.isFieldOfficer),
     createdAt: task.createdAt || now,
     updatedAt: task.updatedAt || now,
   };
@@ -1154,7 +1189,7 @@ function normalizeProjectRecord(project: Project): Project {
   const normalizedTasks =
     project.internalTasks && project.internalTasks.length > 0
       ? project.internalTasks.map(task => normalizeProjectInternalTask(task, project.id))
-      : buildSampleProjectTasks(project);
+      : [];
   const normalizedCategory =
     (project.category as string) === 'Other'
       ? 'Disaster'
@@ -1168,13 +1203,61 @@ function normalizeProjectRecord(project: Project): Project {
 
   return {
     ...project,
+    imageUrl: project.imageUrl?.trim() || undefined,
+    imageHidden: Boolean(project.imageHidden),
     category: normalizedCategory,
     programModule: normalizedProgramModule,
-    joinedUserIds: project.joinedUserIds || [],
-    volunteers: project.volunteers || [],
+    parentProjectId: project.parentProjectId?.trim() || undefined,
+    joinedUserIds: project.isEvent ? (project.joinedUserIds || []) : [],
+    volunteers: project.isEvent ? (project.volunteers || []) : [],
     statusUpdates: project.statusUpdates || [],
     internalTasks: normalizedTasks,
   };
+}
+
+function normalizeEventRecord(event: Project): Project {
+  return {
+    ...normalizeProjectRecord(event),
+    isEvent: true,
+  };
+}
+
+function isVolunteerJoinableEvent(project: Project | null | undefined): project is Project {
+  return Boolean(project?.isEvent);
+}
+
+function mergeProjectAndEventRecords(
+  projects: Project[] | null | undefined,
+  events: Project[] | null | undefined
+): Project[] {
+  const normalizedProjects = (projects || []).map(project =>
+    normalizeProjectRecord({
+      ...project,
+      isEvent: false,
+      parentProjectId: undefined,
+    })
+  );
+  const normalizedEvents = (events || []).map(event =>
+    normalizeEventRecord(event)
+  );
+  const mergedById = new Map<string, Project>();
+
+  normalizedProjects.forEach(project => {
+    mergedById.set(project.id, project);
+  });
+
+  // Event entries take precedence so a duplicated id is represented once as an event.
+  normalizedEvents.forEach(event => {
+    mergedById.set(event.id, event);
+  });
+
+  return Array.from(mergedById.values());
+}
+
+export async function getAllEvents(): Promise<Project[]> {
+  return ((await getStorageItem<Project[]>(STORAGE_KEYS.EVENTS)) || []).map(
+    normalizeEventRecord
+  );
 }
 
 // Creates a new sign-in account and optional volunteer profile records.
@@ -1434,15 +1517,6 @@ export async function deleteUser(userId: string): Promise<void> {
   );
   await setStorageItem(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS, filteredPartnerApplications);
 
-  const partnerCheckIns =
-    await getStorageItem<PartnerEventCheckIn[]>(STORAGE_KEYS.PARTNER_EVENT_CHECK_INS) || [];
-  const filteredPartnerCheckIns = partnerCheckIns.filter(
-    checkIn =>
-      checkIn.partnerUserId !== userId &&
-      !removedPartnerIds.includes(checkIn.partnerId)
-  );
-  await setStorageItem(STORAGE_KEYS.PARTNER_EVENT_CHECK_INS, filteredPartnerCheckIns);
-
   const partnerReports =
     await getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [];
   const filteredPartnerReports = partnerReports.filter(
@@ -1485,6 +1559,16 @@ export async function deleteUser(userId: string): Promise<void> {
     ),
   }));
   await setStorageItem(STORAGE_KEYS.PROJECTS, updatedProjects);
+
+  const events = await getStorageItem<Project[]>(STORAGE_KEYS.EVENTS) || [];
+  const updatedEvents = events.map(event => ({
+    ...event,
+    joinedUserIds: (event.joinedUserIds || []).filter(joinedId => joinedId !== userId),
+    volunteers: event.volunteers.filter(
+      volunteerId => !removedVolunteerIds.includes(volunteerId)
+    ),
+  }));
+  await setStorageItem(STORAGE_KEYS.EVENTS, updatedEvents);
 
   const currentUser = await getCurrentUser();
   if (currentUser?.id === userId) {
@@ -1940,7 +2024,11 @@ export async function deleteAdminPlanningItem(itemId: string): Promise<void> {
 export async function saveProject(project: Project): Promise<void> {
   const projects = await getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS) || [];
   const existingIndex = projects.findIndex(p => p.id === project.id);
-  const normalizedProject = normalizeProjectRecord(project);
+  const normalizedProject = normalizeProjectRecord({
+    ...project,
+    isEvent: false,
+    parentProjectId: undefined,
+  });
   if (existingIndex >= 0) {
     projects[existingIndex] = normalizedProject;
   } else {
@@ -1949,13 +2037,26 @@ export async function saveProject(project: Project): Promise<void> {
   await setStorageItem(STORAGE_KEYS.PROJECTS, projects);
 }
 
+// Inserts or updates an event record in the dedicated events collection.
+export async function saveEvent(event: Project): Promise<void> {
+  const events = await getStorageItem<Project[]>(STORAGE_KEYS.EVENTS) || [];
+  const existingIndex = events.findIndex(entry => entry.id === event.id);
+  const normalizedEvent = normalizeEventRecord(event);
+  if (existingIndex >= 0) {
+    events[existingIndex] = normalizedEvent;
+  } else {
+    events.push(normalizedEvent);
+  }
+  await setStorageItem(STORAGE_KEYS.EVENTS, events);
+}
+
 // Deletes a project and cleans up dependent records that reference it.
 export async function deleteProject(projectId: string): Promise<void> {
   const [
     projects,
+    events,
     statusUpdates,
     partnerApplications,
-    partnerCheckIns,
     partnerReports,
     publishedImpactReports,
     volunteerJoinRecords,
@@ -1964,9 +2065,79 @@ export async function deleteProject(projectId: string): Promise<void> {
   ] =
     await Promise.all([
       getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS),
+      getStorageItem<Project[]>(STORAGE_KEYS.EVENTS),
       getStorageItem<StatusUpdate[]>(STORAGE_KEYS.STATUS_UPDATES),
       getStorageItem<PartnerProjectApplication[]>(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS),
-      getStorageItem<PartnerEventCheckIn[]>(STORAGE_KEYS.PARTNER_EVENT_CHECK_INS),
+      getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS),
+      getStorageItem<PublishedImpactReport[]>(STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS),
+      getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS),
+      getStorageItem<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS),
+      getStorageItem<ProjectGroupMessage[]>(STORAGE_KEYS.PROJECT_GROUP_MESSAGES),
+    ]);
+
+  const relatedProjectIds = new Set([
+    projectId,
+    ...((events || [])
+      .filter(event => event.parentProjectId === projectId)
+      .map(event => event.id)),
+  ]);
+
+  await Promise.all([
+    setStorageItem(
+      STORAGE_KEYS.PROJECTS,
+      (projects || []).filter(project => project.id !== projectId)
+    ),
+    setStorageItem(
+      STORAGE_KEYS.EVENTS,
+      (events || []).filter(event => !relatedProjectIds.has(event.id))
+    ),
+    setStorageItem(
+      STORAGE_KEYS.STATUS_UPDATES,
+      (statusUpdates || []).filter(update => !relatedProjectIds.has(update.projectId))
+    ),
+    setStorageItem(
+      STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
+      (partnerApplications || []).filter(application => !relatedProjectIds.has(application.projectId))
+    ),
+    setStorageItem(
+      STORAGE_KEYS.PARTNER_REPORTS,
+      (partnerReports || []).filter(report => !relatedProjectIds.has(report.projectId))
+    ),
+    setStorageItem(
+      STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS,
+      (publishedImpactReports || []).filter(report => !relatedProjectIds.has(report.projectId))
+    ),
+    setStorageItem(
+      STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
+      (volunteerJoinRecords || []).filter(record => !relatedProjectIds.has(record.projectId))
+    ),
+    setStorageItem(
+      STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
+      (volunteerTimeLogs || []).filter(log => !relatedProjectIds.has(log.projectId))
+    ),
+    setStorageItem(
+      STORAGE_KEYS.PROJECT_GROUP_MESSAGES,
+      (projectGroupMessages || []).filter(message => !relatedProjectIds.has(message.projectId))
+    ),
+  ]);
+}
+
+// Deletes one event and cleans up records that reference it.
+export async function deleteEvent(eventId: string): Promise<void> {
+  const [
+    events,
+    statusUpdates,
+    partnerApplications,
+    partnerReports,
+    publishedImpactReports,
+    volunteerJoinRecords,
+    volunteerTimeLogs,
+    projectGroupMessages,
+  ] =
+    await Promise.all([
+      getStorageItem<Project[]>(STORAGE_KEYS.EVENTS),
+      getStorageItem<StatusUpdate[]>(STORAGE_KEYS.STATUS_UPDATES),
+      getStorageItem<PartnerProjectApplication[]>(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS),
       getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS),
       getStorageItem<PublishedImpactReport[]>(STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS),
       getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS),
@@ -1976,40 +2147,36 @@ export async function deleteProject(projectId: string): Promise<void> {
 
   await Promise.all([
     setStorageItem(
-      STORAGE_KEYS.PROJECTS,
-      (projects || []).filter(project => project.id !== projectId)
+      STORAGE_KEYS.EVENTS,
+      (events || []).filter(event => event.id !== eventId)
     ),
     setStorageItem(
       STORAGE_KEYS.STATUS_UPDATES,
-      (statusUpdates || []).filter(update => update.projectId !== projectId)
+      (statusUpdates || []).filter(update => update.projectId !== eventId)
     ),
     setStorageItem(
       STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
-      (partnerApplications || []).filter(application => application.projectId !== projectId)
-    ),
-    setStorageItem(
-      STORAGE_KEYS.PARTNER_EVENT_CHECK_INS,
-      (partnerCheckIns || []).filter(checkIn => checkIn.projectId !== projectId)
+      (partnerApplications || []).filter(application => application.projectId !== eventId)
     ),
     setStorageItem(
       STORAGE_KEYS.PARTNER_REPORTS,
-      (partnerReports || []).filter(report => report.projectId !== projectId)
+      (partnerReports || []).filter(report => report.projectId !== eventId)
     ),
     setStorageItem(
       STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS,
-      (publishedImpactReports || []).filter(report => report.projectId !== projectId)
+      (publishedImpactReports || []).filter(report => report.projectId !== eventId)
     ),
     setStorageItem(
       STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
-      (volunteerJoinRecords || []).filter(record => record.projectId !== projectId)
+      (volunteerJoinRecords || []).filter(record => record.projectId !== eventId)
     ),
     setStorageItem(
       STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
-      (volunteerTimeLogs || []).filter(log => log.projectId !== projectId)
+      (volunteerTimeLogs || []).filter(log => log.projectId !== eventId)
     ),
     setStorageItem(
       STORAGE_KEYS.PROJECT_GROUP_MESSAGES,
-      (projectGroupMessages || []).filter(message => message.projectId !== projectId)
+      (projectGroupMessages || []).filter(message => message.projectId !== eventId)
     ),
   ]);
 }
@@ -2022,8 +2189,9 @@ export async function getProject(id: string): Promise<Project | null> {
 
 // Returns all projects and events from shared storage.
 export async function getAllProjects(): Promise<Project[]> {
-  return ((await getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS)) || []).map(
-    normalizeProjectRecord
+  return mergeProjectAndEventRecords(
+    await getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS),
+    await getStorageItem<Project[]>(STORAGE_KEYS.EVENTS)
   );
 }
 
@@ -2278,12 +2446,11 @@ export async function submitVolunteerTimeOutReport(input: {
 
   const description = completionReport || 'Volunteer submitted completion proof during time out.';
 
-  return submitImpactHubReport({
+  return submitFieldReport({
     projectId: input.projectId,
     submitterUserId: input.volunteerUserId,
     submitterName: input.volunteerName,
     submitterRole: 'volunteer',
-    reportType: 'volunteer_engagement',
     title: `${input.projectTitle || 'Volunteer Project'} Completion Report`,
     description,
     metrics: {
@@ -2632,6 +2799,10 @@ export async function requestVolunteerProjectJoin(
     throw new Error('Project not found.');
   }
 
+  if (!isVolunteerJoinableEvent(project)) {
+    throw new Error('Volunteers can only join events. Open an event inside this program to continue.');
+  }
+
   if (!volunteer) {
     throw new Error('Volunteer profile not found.');
   }
@@ -2728,6 +2899,10 @@ export async function assignVolunteerToProject(
 
   if (!project) {
     throw new Error('Project not found.');
+  }
+
+  if (!isVolunteerJoinableEvent(project)) {
+    throw new Error('Volunteers can only be assigned to events.');
   }
 
   if (!volunteer) {
@@ -2843,6 +3018,11 @@ export async function completeVolunteerProjectParticipation(
   volunteerId: string,
   completedBy: string
 ): Promise<VolunteerProjectJoinRecord> {
+  const project = await getProject(projectId);
+  if (!isVolunteerJoinableEvent(project)) {
+    throw new Error('Volunteer participation can only be completed for events.');
+  }
+
   await ensureVolunteerProjectJoinRecord(projectId, volunteerId, 'AdminMatch');
 
   const records =
@@ -2896,6 +3076,13 @@ export async function getPartnerProjectApplications(
     .sort((a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime());
 }
 
+// Returns partner applications across all programs.
+export async function getAllPartnerProjectApplications(): Promise<PartnerProjectApplication[]> {
+  const applications =
+    await getStorageItem<PartnerProjectApplication[]>(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS) || [];
+  return applications.sort((a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime());
+}
+
 // Returns partner applications submitted by a specific partner account.
 export async function getPartnerProjectApplicationsByUser(
   partnerUserId: string
@@ -2909,8 +3096,17 @@ export async function getPartnerProjectApplicationsByUser(
 // Creates a partner program proposal for admin review.
 export async function submitPartnerProgramProposal(
   projectId: string,
-  partnerUser: User
+  partnerUser: User,
+  options?: {
+    programModule?: string;
+    proposalDetails?: PartnerProjectProposalDetails;
+  }
 ): Promise<PartnerProjectApplication> {
+  const requestedProgramModule = String(options?.programModule || '').trim();
+  const proposalProjectId = requestedProgramModule
+    ? buildProgramProposalProjectId(requestedProgramModule)
+    : projectId;
+
   const payload = await requestApiJson<{ application?: PartnerProjectApplication | null }>(
     '/partner-project-applications/request',
     {
@@ -2919,10 +3115,12 @@ export async function submitPartnerProgramProposal(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        projectId,
+        projectId: proposalProjectId,
+        programModule: requestedProgramModule || undefined,
         partnerUserId: partnerUser.id,
         partnerName: partnerUser.name,
         partnerEmail: partnerUser.email || '',
+        proposalDetails: options?.proposalDetails,
       }),
     }
   );
@@ -2932,7 +3130,7 @@ export async function submitPartnerProgramProposal(
   }
 
   try {
-    await notifyAdminAboutPartnerProjectJoin(projectId, partnerUser);
+    await notifyAdminAboutPartnerProjectJoin(proposalProjectId, partnerUser);
   } catch (error) {
     console.error('Error notifying admin about partner join request:', error);
   }
@@ -3045,71 +3243,6 @@ export async function reviewPartnerRegistration(
   return updatedPartner;
 }
 
-// Saves one partner event check-in captured from the field.
-export async function savePartnerEventCheckIn(checkIn: PartnerEventCheckIn): Promise<void> {
-  const checkIns =
-    await getStorageItem<PartnerEventCheckIn[]>(STORAGE_KEYS.PARTNER_EVENT_CHECK_INS) || [];
-  const existingIndex = checkIns.findIndex(entry => entry.id === checkIn.id);
-  if (existingIndex >= 0) {
-    checkIns[existingIndex] = checkIn;
-  } else {
-    checkIns.push(checkIn);
-  }
-  await setStorageItem(STORAGE_KEYS.PARTNER_EVENT_CHECK_INS, checkIns);
-}
-
-// Returns partner event check-ins for a specific project.
-export async function getPartnerEventCheckInsByProject(
-  projectId: string
-): Promise<PartnerEventCheckIn[]> {
-  const checkIns =
-    await getStorageItem<PartnerEventCheckIn[]>(STORAGE_KEYS.PARTNER_EVENT_CHECK_INS) || [];
-  return checkIns
-    .filter(checkIn => checkIn.projectId === projectId)
-    .sort((a, b) => new Date(b.checkInTime).getTime() - new Date(a.checkInTime).getTime());
-}
-
-// Returns partner event check-ins submitted by one partner user.
-export async function getPartnerEventCheckInsByUser(
-  partnerUserId: string
-): Promise<PartnerEventCheckIn[]> {
-  const checkIns =
-    await getStorageItem<PartnerEventCheckIn[]>(STORAGE_KEYS.PARTNER_EVENT_CHECK_INS) || [];
-  return checkIns
-    .filter(checkIn => checkIn.partnerUserId === partnerUserId)
-    .sort((a, b) => new Date(b.checkInTime).getTime() - new Date(a.checkInTime).getTime());
-}
-
-// Returns every partner event check-in stored in the system.
-export async function getAllPartnerEventCheckIns(): Promise<PartnerEventCheckIn[]> {
-  const checkIns =
-    await getStorageItem<PartnerEventCheckIn[]>(STORAGE_KEYS.PARTNER_EVENT_CHECK_INS) || [];
-  return checkIns.sort((a, b) => new Date(b.checkInTime).getTime() - new Date(a.checkInTime).getTime());
-}
-
-// Captures a new partner event check-in for an approved project collaboration.
-export async function createPartnerEventCheckIn(input: {
-  projectId: string;
-  partnerId: string;
-  partnerUserId: string;
-  gpsCoordinates: {
-    latitude: number;
-    longitude: number;
-  };
-}): Promise<PartnerEventCheckIn> {
-  const checkIn: PartnerEventCheckIn = {
-    id: `partner-checkin-${Date.now()}`,
-    projectId: input.projectId,
-    partnerId: input.partnerId,
-    partnerUserId: input.partnerUserId,
-    gpsCoordinates: input.gpsCoordinates,
-    checkInTime: new Date().toISOString(),
-  };
-
-  await savePartnerEventCheckIn(checkIn);
-  return checkIn;
-}
-
 // Saves one uploaded partner report.
 export async function savePartnerReport(report: PartnerReport): Promise<void> {
   const reports = await getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [];
@@ -3154,6 +3287,25 @@ export async function getImpactHubReportsByUser(userId: string): Promise<Partner
   return reports
     .filter(report => report.submitterUserId === userId || report.partnerUserId === userId)
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+// Returns only field reports stored in the dedicated field report collection.
+export async function getFieldReports(): Promise<PartnerReport[]> {
+  const reports = await getAllPartnerReports();
+  return reports
+    .filter(report => report.reportType === 'field_report')
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+// Backwards-compatible alias for callers that expect an all-records getter.
+export async function getAllFieldReports(): Promise<PartnerReport[]> {
+  return getFieldReports();
+}
+
+// Returns only field reports created by one user.
+export async function getFieldReportsByUser(userId: string): Promise<PartnerReport[]> {
+  const reports = await getFieldReports();
+  return reports.filter(report => report.submitterUserId === userId || report.partnerUserId === userId);
 }
 
 function calculateImpactCountFromMetrics(metrics?: Record<string, number>): number {
@@ -3214,6 +3366,42 @@ export async function submitImpactHubReport(input: {
 
   await savePartnerReport(report);
   return report;
+}
+
+// Submits a field report with the same shared storage path as other impact reports.
+export async function submitFieldReport(input: {
+  projectId: string;
+  submitterUserId: string;
+  submitterName: string;
+  submitterRole: UserRole;
+  title?: string;
+  description: string;
+  metrics?: Record<string, number>;
+  attachments?: {
+    url: string;
+    type: 'image' | 'video' | 'document' | 'media';
+    description?: string;
+  }[];
+  mediaFile?: string;
+  partnerId?: string;
+  partnerUserId?: string;
+  partnerName?: string;
+}): Promise<PartnerReport> {
+  return submitImpactHubReport({
+    projectId: input.projectId,
+    submitterUserId: input.submitterUserId,
+    submitterName: input.submitterName,
+    submitterRole: input.submitterRole,
+    reportType: 'field_report',
+    title: input.title,
+    description: input.description,
+    metrics: input.metrics,
+    attachments: input.attachments,
+    mediaFile: input.mediaFile,
+    partnerId: input.partnerId,
+    partnerUserId: input.partnerUserId,
+    partnerName: input.partnerName,
+  });
 }
 
 // Submits a partner impact or operations report.
@@ -3507,7 +3695,7 @@ export async function publishImpactReport(reportId: string): Promise<PublishedIm
   return updatedReport;
 }
 
-// Adds a user directly to a project or event once access has been approved.
+// Adds a user directly to an event once access has been approved.
 export async function joinProjectEvent(
   projectId: string,
   userId: string
@@ -3580,7 +3768,7 @@ async function attachVolunteerToProject(projectId: string, volunteerId: string):
     getProject(projectId),
     getVolunteer(volunteerId),
   ]);
-  if (!project || !volunteer) return;
+  if (!project || !volunteer || !project.isEvent) return;
 
   const joinedUserIds = project.joinedUserIds || [];
   const hasVolunteerId = project.volunteers.includes(volunteerId);
@@ -3588,12 +3776,19 @@ async function attachVolunteerToProject(projectId: string, volunteerId: string):
 
   if (hasVolunteerId && hasUserId) return;
 
-  await saveProject({
+  const updatedRecord: Project = {
     ...project,
     volunteers: hasVolunteerId ? project.volunteers : [...project.volunteers, volunteerId],
     joinedUserIds: hasUserId ? joinedUserIds : [...joinedUserIds, volunteer.userId],
     updatedAt: new Date().toISOString(),
-  });
+  };
+
+  if (project.isEvent) {
+    await saveEvent(updatedRecord);
+    return;
+  }
+
+  await saveProject(updatedRecord);
 }
 
 async function ensureVolunteerProjectJoinRecord(
@@ -3601,6 +3796,11 @@ async function ensureVolunteerProjectJoinRecord(
   volunteerId: string,
   source: VolunteerProjectJoinRecord['source']
 ): Promise<void> {
+  const project = await getProject(projectId);
+  if (!project?.isEvent) {
+    return;
+  }
+
   const records =
     await getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS) || [];
   const existingRecord = records.find(
@@ -3681,14 +3881,29 @@ async function syncVolunteerEngagementStatus(volunteerId: string): Promise<void>
     getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS),
   ]);
 
-  const hasActiveMatch = matches.some(
-    match => match.status === 'Matched'
+  const activeEventMatchFlags = await Promise.all(
+    matches
+      .filter(match => match.status === 'Matched')
+      .map(async match => {
+        const project = await getProject(match.projectId);
+        return Boolean(project?.isEvent);
+      })
   );
-  const hasActiveParticipation = (joinRecords || []).some(
-    record =>
-      record.volunteerId === volunteerId &&
-      (record.participationStatus || 'Active') === 'Active'
+  const hasActiveMatch = activeEventMatchFlags.some(Boolean);
+
+  const activeParticipationFlags = await Promise.all(
+    (joinRecords || [])
+      .filter(record => record.volunteerId === volunteerId)
+      .map(async record => {
+        if ((record.participationStatus || 'Active') !== 'Active') {
+          return false;
+        }
+
+        const project = await getProject(record.projectId);
+        return Boolean(project?.isEvent);
+      })
   );
+  const hasActiveParticipation = activeParticipationFlags.some(Boolean);
 
   const nextStatus = hasActiveMatch || hasActiveParticipation ? 'Busy' : 'Open to Volunteer';
 

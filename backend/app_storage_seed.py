@@ -1,4 +1,5 @@
 import json
+import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -12,6 +13,10 @@ try:
         sync_all_relational_mirror_tables,
         sync_relational_mirror_collection,
     )
+    from .storage_table_contract import (
+        CANONICAL_STORAGE_TABLES,
+        LEGACY_COMPAT_STORAGE_TABLES,
+    )
 except ImportError:
     from db import get_postgres_connection
     from field_rules import normalize_comparable_phone, normalize_email, sanitize_hot_storage_item
@@ -22,40 +27,30 @@ except ImportError:
         sync_all_relational_mirror_tables,
         sync_relational_mirror_collection,
     )
+    from storage_table_contract import (
+        CANONICAL_STORAGE_TABLES,
+        LEGACY_COMPAT_STORAGE_TABLES,
+    )
 
 
-HOT_STORAGE_TABLES = {
-    "users": "users",
-    "partners": "partners",
-    "projects": "projects",
-    "volunteers": "volunteers",
-    "statusUpdates": "status_updates",
-    "volunteerMatches": "volunteer_matches",
-    "volunteerTimeLogs": "volunteer_time_logs",
-    "volunteerProjectJoins": "volunteer_project_joins",
-    "partnerProjectApplications": "partner_project_applications",
-    "partnerEventCheckIns": "partner_event_check_ins",
-    "partnerReports": "partner_reports",
-    "publishedImpactReports": "published_impact_reports",
-    "adminPlanningCalendars": "admin_planning_calendars",
-    "adminPlanningItems": "admin_planning_items",
+HOT_STORAGE_TABLES = dict(CANONICAL_STORAGE_TABLES)
+LEGACY_HOT_STORAGE_TABLES = dict(LEGACY_COMPAT_STORAGE_TABLES)
+REQUIRED_DEMO_COLLECTION_KEYS = {
+    "users",
+    "partners",
+    "events",
+    "volunteers",
+    "volunteerMatches",
+    "volunteerProjectJoins",
+    "partnerProjectApplications",
 }
-LEGACY_HOT_STORAGE_TABLES = {
-    "users": "app_users_store",
-    "partners": "app_partners_store",
-    "projects": "app_projects_store",
-    "volunteers": "app_volunteers_store",
-    "statusUpdates": "app_status_updates_store",
-    "volunteerMatches": "app_volunteer_matches_store",
-    "volunteerTimeLogs": "app_volunteer_time_logs_store",
-    "volunteerProjectJoins": "app_volunteer_project_joins_store",
-    "partnerProjectApplications": "app_partner_project_applications_store",
-    "partnerEventCheckIns": "app_partner_event_check_ins_store",
-    "partnerReports": "app_partner_reports_store",
-    "publishedImpactReports": "app_published_impact_reports_store",
-}
-REQUIRED_DEMO_COLLECTION_KEYS = {"users", "partners", "volunteers"}
 _APP_STORAGE_SEED_CONFIRMED = False
+DEMO_SEED_ENV_VAR = "ENABLE_DEMO_SEED"
+
+
+def is_demo_seed_enabled() -> bool:
+    raw_value = str(os.getenv(DEMO_SEED_ENV_VAR, "")).strip().lower()
+    return raw_value in {"1", "true", "yes", "on"}
 
 
 # Builds the demo JSON collections used by the app storage layer.
@@ -183,8 +178,8 @@ def build_demo_app_storage() -> dict[str, Any]:
             {
                 "id": "project-sample-nutrition-program",
                 "title": "Baybay Nutrition Learning Program",
-                "description": "Sample approved program used to demonstrate the partner proposal and admin project flow.",
-                "partnerId": "partner-partner-user-3",
+                "description": "Sample admin-created nutrition program used for planning, volunteer coordination, and event scheduling.",
+                "partnerId": "",
                 "programModule": "Nutrition",
                 "status": "Planning",
                 "category": "Nutrition",
@@ -203,12 +198,37 @@ def build_demo_app_storage() -> dict[str, Any]:
                 "statusUpdates": [],
             },
             {
+                "id": "project-sample-livelihood-program",
+                "title": "Kabankalan Livelihood Starter Initiative",
+                "description": "Sample partner-initiated livelihood program that was approved by the admin and now appears with its partnered organization.",
+                "partnerId": "partner-partner-user-2",
+                "programModule": "Livelihood",
+                "status": "Planning",
+                "category": "Livelihood",
+                "startDate": "2026-06-02T08:00:00.000Z",
+                "endDate": "2026-06-02T12:00:00.000Z",
+                "location": {
+                    "latitude": 10.6711,
+                    "longitude": 122.9534,
+                    "address": "Kabankalan City, Negros Occidental",
+                },
+                "volunteersNeeded": 15,
+                "volunteers": [],
+                "joinedUserIds": [],
+                "createdAt": now_iso,
+                "updatedAt": now_iso,
+                "statusUpdates": [],
+            },
+        ],
+        "events": [
+            {
                 "id": "project-sample-nutrition-event-1",
-                "title": "Baybay Nutrition Distribution Day",
-                "description": "Sample event created from the approved nutrition program.",
-                "partnerId": "partner-partner-user-3",
+                "title": "Quarterly Assessment",
+                "description": "Quarterly Assessment event for Mingo nutrition coordination, announcements, and assigning tasks to the event team.",
+                "partnerId": "",
                 "programModule": "Nutrition",
                 "isEvent": True,
+                "parentProjectId": "project-sample-nutrition-program",
                 "status": "In Progress",
                 "category": "Nutrition",
                 "startDate": "2026-05-14T08:00:00.000Z",
@@ -219,11 +239,92 @@ def build_demo_app_storage() -> dict[str, Any]:
                     "address": "Baybay, Talisay City, Negros Occidental",
                 },
                 "volunteersNeeded": 8,
+                "volunteers": ["volunteer-profile-1"],
+                "joinedUserIds": ["volunteer-1"],
+                "createdAt": now_iso,
+                "updatedAt": now_iso,
+                "statusUpdates": [],
+                "internalTasks": [
+                    {
+                        "id": "project-sample-nutrition-event-1-task-field-officer",
+                        "title": "Field Officer Lead",
+                        "description": "Coordinate the Quarterly Assessment floor team and assign other volunteers within this event as needs change.",
+                        "category": "Field Officer",
+                        "priority": "High",
+                        "status": "Assigned",
+                        "assignedVolunteerId": "volunteer-profile-1",
+                        "assignedVolunteerName": "Volunteer Account",
+                        "isFieldOfficer": True,
+                        "createdAt": now_iso,
+                        "updatedAt": now_iso,
+                    },
+                    {
+                        "id": "project-sample-nutrition-event-1-task-mingo-supplies",
+                        "title": "Mingo Supply Staging",
+                        "description": "Prepare nutrition packs, assessment sheets, and event materials before the session opens.",
+                        "category": "Logistics",
+                        "priority": "High",
+                        "status": "Unassigned",
+                        "createdAt": now_iso,
+                        "updatedAt": now_iso,
+                    },
+                    {
+                        "id": "project-sample-nutrition-event-1-task-attendance",
+                        "title": "Attendance and Assessment Desk",
+                        "description": "Welcome arrivals, confirm attendance, and guide participants through the assessment flow.",
+                        "category": "Front Desk",
+                        "priority": "Medium",
+                        "status": "Unassigned",
+                        "createdAt": now_iso,
+                        "updatedAt": now_iso,
+                    },
+                ],
+            },
+            {
+                "id": "project-sample-livelihood-event-1",
+                "title": "Livelihood Kickoff Workshop",
+                "description": "Kickoff event for the approved livelihood initiative with partner coordination, volunteer orientation, and starter kit planning.",
+                "partnerId": "partner-partner-user-2",
+                "programModule": "Livelihood",
+                "isEvent": True,
+                "parentProjectId": "project-sample-livelihood-program",
+                "status": "Planning",
+                "category": "Livelihood",
+                "startDate": "2026-06-05T08:00:00.000Z",
+                "endDate": "2026-06-05T12:00:00.000Z",
+                "location": {
+                    "latitude": 10.6692,
+                    "longitude": 122.9515,
+                    "address": "Kabankalan City, Negros Occidental",
+                },
+                "volunteersNeeded": 10,
                 "volunteers": [],
                 "joinedUserIds": [],
                 "createdAt": now_iso,
                 "updatedAt": now_iso,
                 "statusUpdates": [],
+                "internalTasks": [
+                    {
+                        "id": "project-sample-livelihood-event-1-task-orientation",
+                        "title": "Volunteer Orientation Desk",
+                        "description": "Brief volunteers on the approved livelihood initiative, registration flow, and starter kit release process.",
+                        "category": "Operations",
+                        "priority": "High",
+                        "status": "Unassigned",
+                        "createdAt": now_iso,
+                        "updatedAt": now_iso,
+                    },
+                    {
+                        "id": "project-sample-livelihood-event-1-task-kits",
+                        "title": "Starter Kit Preparation",
+                        "description": "Prepare participant starter kits, materials, and workshop tools before the event opens.",
+                        "category": "Logistics",
+                        "priority": "High",
+                        "status": "Unassigned",
+                        "createdAt": now_iso,
+                        "updatedAt": now_iso,
+                    },
+                ],
             },
         ],
         "volunteers": [
@@ -255,28 +356,28 @@ def build_demo_app_storage() -> dict[str, Any]:
         "messages": [],
         "projectGroupMessages": [
             {
-                "id": "message-sample-nutrition-proposal",
-                "projectId": "project-sample-nutrition-program",
-                "senderId": "partner-user-3",
-                "content": "Program Proposal: Baybay Nutrition Learning Program - Timeline: 2 weeks",
+                "id": "message-sample-livelihood-initiation",
+                "projectId": "project-sample-livelihood-program",
+                "senderId": "partner-user-2",
+                "content": "Program Proposal Approved: Kabankalan Livelihood Starter Initiative - Timeline: 6 weeks",
                 "timestamp": now_iso,
                 "kind": "scope-proposal",
                 "scopeProposal": {
-                    "title": "Baybay Nutrition Learning Program",
-                    "description": "A partner-initiated nutrition program proposal that can be reviewed, approved, and converted into a project and event sequence.",
+                    "title": "Kabankalan Livelihood Starter Initiative",
+                    "description": "A partner-initiated livelihood proposal that was approved by the admin and converted into a full program and event sequence.",
                     "included": [
-                        "Learner registration",
-                        "Nutrition learning session",
-                        "Supply distribution",
+                        "Skills orientation sessions",
+                        "Starter toolkits",
+                        "Mentor matching",
                     ],
                     "excluded": [
-                        "Volunteer recruitment",
+                        "Volunteer deployment scheduling",
                     ],
-                    "timeline": "2 weeks",
-                    "resources": "Food packs, learning materials, venue coordination",
-                    "successCriteria": "Program approved by admin and ready for project scheduling.",
+                    "timeline": "6 weeks",
+                    "resources": "Starter kits, mentor roster, barangay venue coordination",
+                    "successCriteria": "Admin approval and conversion into a scheduled livelihood project.",
                     "proposedByRole": "partner",
-                    "proposedById": "partner-user-3",
+                    "proposedById": "partner-user-2",
                     "status": "Approved",
                     "approvedBy": "admin-1",
                     "approvedAt": now_iso,
@@ -288,28 +389,59 @@ def build_demo_app_storage() -> dict[str, Any]:
                 "id": "status-sample-nutrition-program",
                 "projectId": "project-sample-nutrition-program",
                 "status": "Planning",
-                "description": "Sample approved program created from a partner proposal.",
+                "description": "Sample admin-created nutrition program prepared for planning and event scheduling.",
+                "updatedBy": "admin-1",
+                "updatedAt": now_iso,
+            },
+            {
+                "id": "status-sample-livelihood-program",
+                "projectId": "project-sample-livelihood-program",
+                "status": "Planning",
+                "description": "Sample partner-initiated livelihood program approved by the admin and linked to its partnered organization.",
                 "updatedBy": "admin-1",
                 "updatedAt": now_iso,
             },
         ],
-        "volunteerMatches": [],
+        "volunteerMatches": [
+            {
+                "id": "match-qassessment-vol1",
+                "volunteerId": "volunteer-profile-1",
+                "projectId": "project-sample-nutrition-event-1",
+                "status": "Matched",
+                "requestedAt": now_iso,
+                "matchedAt": now_iso,
+                "reviewedAt": now_iso,
+                "reviewedBy": "admin-1",
+                "hoursContributed": 0,
+            },
+        ],
         "volunteerTimeLogs": [],
-        "volunteerProjectJoins": [],
+        "volunteerProjectJoins": [
+            {
+                "id": "join-qassessment-vol1",
+                "projectId": "project-sample-nutrition-event-1",
+                "volunteerId": "volunteer-profile-1",
+                "volunteerUserId": "volunteer-1",
+                "volunteerName": "Volunteer Account",
+                "volunteerEmail": "volunteer@example.com",
+                "joinedAt": now_iso,
+                "source": "VolunteerJoin",
+                "participationStatus": "Active",
+            },
+        ],
         "partnerProjectApplications": [
             {
-                "id": "partner-application-sample-nutrition-program",
-                "projectId": "project-sample-nutrition-program",
-                "partnerUserId": "partner-user-3",
-                "partnerName": "Jollibee Foundation Account",
-                "partnerEmail": "partnerships@jollibeefoundation.org",
+                "id": "partner-application-sample-livelihood-initiation",
+                "projectId": "project-sample-livelihood-program",
+                "partnerUserId": "partner-user-2",
+                "partnerName": "PBSP Account",
+                "partnerEmail": "partnerships@pbsp.org.ph",
                 "status": "Approved",
                 "requestedAt": now_iso,
                 "reviewedAt": now_iso,
                 "reviewedBy": "admin-1",
             },
         ],
-        "partnerEventCheckIns": [],
         "partnerReports": [],
         "publishedImpactReports": [],
         "adminPlanningCalendars": [],
@@ -457,6 +589,87 @@ def _merge_required_demo_items(
     return merged_items
 
 
+def _upsert_demo_collection_items(
+    connection: Any,
+    key: str,
+    canonical_items: list[dict[str, Any]],
+    remove_ids: set[str] | None = None,
+) -> None:
+    if key not in HOT_STORAGE_TABLES:
+        return
+
+    existing_items = get_postgres_hot_storage_collection(connection, key)
+    keep_items = [
+        item
+        for item in existing_items
+        if isinstance(item, dict)
+        and str(item.get("id") or "").strip() not in (remove_ids or set())
+        and str(item.get("id") or "").strip()
+        not in {str(canonical_item.get("id") or "").strip() for canonical_item in canonical_items}
+    ]
+    replace_postgres_hot_storage_collection(connection, key, [*keep_items, *canonical_items])
+
+
+def _normalize_demo_project_examples(connection: Any, demo_storage: dict[str, Any]) -> None:
+    canonical_projects = [
+        item
+        for item in demo_storage.get("projects", [])
+        if isinstance(item, dict)
+        and str(item.get("id") or "").strip()
+        in {"project-sample-nutrition-program", "project-sample-livelihood-program"}
+    ]
+    if canonical_projects:
+        _upsert_demo_collection_items(connection, "projects", canonical_projects)
+
+    canonical_events = [
+        item
+        for item in demo_storage.get("events", [])
+        if isinstance(item, dict)
+        and str(item.get("id") or "").strip()
+        in {"project-sample-nutrition-event-1", "project-sample-livelihood-event-1"}
+    ]
+    if canonical_events:
+        _upsert_demo_collection_items(connection, "events", canonical_events)
+
+    canonical_status_updates = [
+        item
+        for item in demo_storage.get("statusUpdates", [])
+        if isinstance(item, dict)
+        and str(item.get("id") or "").strip()
+        in {"status-sample-nutrition-program", "status-sample-livelihood-program"}
+    ]
+    if canonical_status_updates:
+        _upsert_demo_collection_items(connection, "statusUpdates", canonical_status_updates)
+
+    canonical_messages = [
+        item
+        for item in demo_storage.get("projectGroupMessages", [])
+        if isinstance(item, dict)
+        and str(item.get("id") or "").strip() == "message-sample-livelihood-initiation"
+    ]
+    if canonical_messages:
+        _upsert_demo_collection_items(
+            connection,
+            "projectGroupMessages",
+            canonical_messages,
+            remove_ids={"message-sample-nutrition-proposal"},
+        )
+
+    canonical_applications = [
+        item
+        for item in demo_storage.get("partnerProjectApplications", [])
+        if isinstance(item, dict)
+        and str(item.get("id") or "").strip() == "partner-application-sample-livelihood-initiation"
+    ]
+    if canonical_applications:
+        _upsert_demo_collection_items(
+            connection,
+            "partnerProjectApplications",
+            canonical_applications,
+            remove_ids={"partner-application-sample-nutrition-program"},
+        )
+
+
 # Replaces all rows in a hot-storage collection with a normalized item list.
 def replace_postgres_hot_storage_collection(
     connection: Any,
@@ -521,6 +734,8 @@ def ensure_postgres_hot_storage_seeded(connection: Any, demo_storage: dict[str, 
         if merged_items != current_items:
             replace_postgres_hot_storage_collection(connection, key, merged_items)
 
+    _normalize_demo_project_examples(connection, demo_storage)
+
     synced_collections = {
         key: get_postgres_hot_storage_collection(connection, key)
         for key in HOT_STORAGE_TABLES
@@ -553,6 +768,9 @@ def ensure_app_storage_seeded() -> None:
     if _APP_STORAGE_SEED_CONFIRMED:
         return
 
+    if not is_demo_seed_enabled():
+        return
+
     ensure_app_storage_table()
     demo_storage = build_demo_app_storage()
 
@@ -564,6 +782,13 @@ def ensure_app_storage_seeded() -> None:
             with get_postgres_connection() as connection:
                 ensure_postgres_hot_storage_tables(connection)
                 if _has_required_demo_seed(connection):
+                    _normalize_demo_project_examples(connection, demo_storage)
+                    synced_collections = {
+                        key: get_postgres_hot_storage_collection(connection, key)
+                        for key in HOT_STORAGE_TABLES
+                    }
+                    sync_hot_storage_app_storage(connection, synced_collections)
+                    sync_all_relational_mirror_tables(connection, synced_collections)
                     connection.commit()
                     _APP_STORAGE_SEED_CONFIRMED = True
                     break

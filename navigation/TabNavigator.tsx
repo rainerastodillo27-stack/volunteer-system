@@ -249,7 +249,7 @@ export default function TabNavigator() {
       ? VolunteerDashboardScreen
       : DashboardScreen;
   const projectWorkspaceComponent = isAdmin ? ProjectLifecycleScreen : ProjectsScreen;
-  const projectWorkspaceTitle = isAdmin ? 'Project Suite' : 'Projects';
+  const projectWorkspaceTitle = isAdmin ? 'Program Management Suite' : 'Projects';
   const isWeb = Platform.OS === 'web';
   const useSidebar = isWeb && isAdmin;
   const [collapsed, setCollapsed] = useState(true);

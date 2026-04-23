@@ -11,28 +11,15 @@ try:
     from .api import ensure_message_storage, ensure_project_group_message_storage
     from .app_storage_seed import ensure_app_storage_seeded
     from .db import get_postgres_connection
+    from .storage_table_contract import DEPRECATED_STORAGE_TABLES
 except ImportError:
     from api import ensure_message_storage, ensure_project_group_message_storage
     from app_storage_seed import ensure_app_storage_seeded
     from db import get_postgres_connection
+    from storage_table_contract import DEPRECATED_STORAGE_TABLES
 
 
-LEGACY_DROP_TABLES = [
-    "app_storage",
-    "app_users",
-    "app_users_store",
-    "app_partners_store",
-    "app_projects_store",
-    "app_volunteers_store",
-    "app_status_updates_store",
-    "app_volunteer_matches_store",
-    "app_volunteer_time_logs_store",
-    "app_volunteer_project_joins_store",
-    "app_partner_project_applications_store",
-    "app_partner_event_check_ins_store",
-    "app_partner_reports_store",
-    "app_published_impact_reports_store",
-]
+LEGACY_DROP_TABLES = list(DEPRECATED_STORAGE_TABLES)
 
 
 def _table_exists(connection: Any, table_name: str) -> bool:
@@ -270,9 +257,9 @@ def main() -> None:
     print(f"Migrated direct messages from legacy storage: {migrated_messages}")
     print(f"Migrated project group messages from legacy storage: {migrated_group_messages}")
     if dropped_tables:
-        print("Dropped legacy tables: " + ", ".join(dropped_tables))
+        print("Dropped deprecated tables: " + ", ".join(dropped_tables))
     else:
-        print("No legacy tables needed dropping.")
+        print("No deprecated tables needed dropping.")
 
 
 if __name__ == "__main__":
