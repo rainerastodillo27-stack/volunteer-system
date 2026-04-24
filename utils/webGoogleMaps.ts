@@ -88,10 +88,12 @@ function getGoogleMapsScriptUrl(apiKey: string) {
     v: 'weekly',
     loading: 'async',
     callback: GOOGLE_MAPS_READY_CALLBACK,
-    auth_referrer_policy: 'origin',
+    libraries: 'marker',
   });
 
-  return `https://maps.googleapis.com/maps/api/js?${params.toString()}`;
+  const url = `https://maps.googleapis.com/maps/api/js?${params.toString()}`;
+  console.log('[Maps] Loading Google Maps from:', url);
+  return url;
 }
 
 function resolveLoadedGoogleMaps(): GoogleMapsGlobal | null {
@@ -145,7 +147,12 @@ export function loadGoogleMaps(apiKey: string) {
     const handleError = () => {
       cleanup();
       window.__googleMapsAssetsPromise = undefined;
-      reject(new Error('Google Maps script failed to load.'));
+      const isDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+      const errorMsg = isDev 
+        ? 'Google Maps failed to load. Check: 1) Maps JavaScript API is enabled in Google Cloud Console, 2) API key is valid, 3) Try setting API key restrictions to "None" temporarily for dev testing.'
+        : 'Google Maps script failed to load.';
+      console.error('[Maps] Load error:', errorMsg);
+      reject(new Error(errorMsg));
     };
 
     if (existingScript) {
@@ -158,8 +165,8 @@ export function loadGoogleMaps(apiKey: string) {
     script.id = GOOGLE_MAPS_SCRIPT_ID;
     script.async = true;
     script.defer = true;
-    script.referrerPolicy = 'origin';
     script.src = getGoogleMapsScriptUrl(normalizedApiKey);
+    console.log('[Maps] API key last 4 chars:', normalizedApiKey.slice(-4));
     script.addEventListener('error', handleError, { once: true });
     document.head.appendChild(script);
   });

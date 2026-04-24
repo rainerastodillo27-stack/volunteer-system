@@ -213,6 +213,7 @@ def _normalize_partner_proposal_details(
         "proposedEndDate": _normalize_partner_proposal_date(payload.get("proposedEndDate"), fallback_now),
         "proposedLocation": str(payload.get("proposedLocation") or fallback_address).strip(),
         "proposedVolunteersNeeded": proposed_volunteers_needed,
+        "skillsNeeded": payload.get("skillsNeeded") or [],
         "communityNeed": str(payload.get("communityNeed") or "").strip(),
         "expectedDeliverables": str(payload.get("expectedDeliverables") or "").strip(),
     }
@@ -695,6 +696,15 @@ def _postgres_get_project_like_item_by_id(
 def _postgres_get_volunteer_by_user_id(connection: Any, user_id: str) -> dict[str, Any] | None:
     volunteers = _postgres_get_hot_items_by_field(connection, "volunteers", "userId", user_id)
     return volunteers[0] if volunteers else None
+
+
+def _volunteer_has_time_in_for_project(connection: Any, volunteer_id: str, project_id: str) -> bool:
+    time_logs = _postgres_get_volunteer_time_logs(connection, volunteer_id)
+    return any(
+        str(log.get("projectId") or "").strip() == project_id
+        and bool(str(log.get("timeIn") or "").strip())
+        for log in time_logs
+    )
 
 
 # Computes joined-program count and top-volunteer recognition state.
@@ -1749,6 +1759,7 @@ async def review_partner_project_application(
                     or "Program location to be finalized",
                 },
                 "volunteersNeeded": max(int(proposal_details.get("proposedVolunteersNeeded") or 0), 0),
+                "skillsNeeded": proposal_details.get("skillsNeeded") or [],
                 "volunteers": [],
                 "joinedUserIds": [],
                 "createdAt": now_iso,
@@ -2222,6 +2233,9 @@ async def submit_report(payload: ReportSubmitPayload) -> dict[str, Any]:
     _require_postgres()
 
     now = datetime.now(timezone.utc).isoformat()
+    project_id = str(payload.projectId).strip()
+    submitter_user_id = str(payload.submitterUserId).strip()
+    submitter_role = str(payload.submitterRole).strip().lower()
     metrics = payload.metrics if isinstance(payload.metrics, dict) else {}
     attachments = [
         {
@@ -2254,13 +2268,13 @@ async def submit_report(payload: ReportSubmitPayload) -> dict[str, Any]:
 
     report = {
         "id": str(payload.id or f"impact-report-{int(datetime.now(timezone.utc).timestamp() * 1000)}"),
-        "projectId": str(payload.projectId).strip(),
+        "projectId": project_id,
         "partnerId": str(payload.partnerId or "").strip() or None,
         "partnerUserId": str(payload.partnerUserId or "").strip() or None,
         "partnerName": str(payload.partnerName or "").strip() or None,
-        "submitterUserId": str(payload.submitterUserId).strip(),
+        "submitterUserId": submitter_user_id,
         "submitterName": str(payload.submitterName).strip(),
-        "submitterRole": str(payload.submitterRole).strip(),
+        "submitterRole": submitter_role,
         "title": str(payload.title or "").strip() or None,
         "reportType": str(payload.reportType).strip(),
         "description": str(payload.description or "").strip(),
@@ -2276,6 +2290,20 @@ async def submit_report(payload: ReportSubmitPayload) -> dict[str, Any]:
 
     try:
         with get_postgres_connection() as connection:
+            if submitter_role == "volunteer":
+                volunteer = _postgres_get_volunteer_by_user_id(connection, submitter_user_id)
+                if volunteer is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Volunteer profile not found. You must complete your volunteer profile first.",
+                    )
+
+                if not _volunteer_has_time_in_for_project(connection, str(volunteer.get("id") or ""), project_id):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Volunteers must time in to this event before submitting a report.",
+                    )
+
             saved_report = _postgres_upsert_hot_item(connection, "partnerReports", report)
             connection.commit()
         await connection_manager.broadcast_storage_event(["partnerReports"])

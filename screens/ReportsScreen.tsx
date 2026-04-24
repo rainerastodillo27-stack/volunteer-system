@@ -11,7 +11,7 @@ import {
   submitImpactHubReport,
   subscribeToStorageChanges,
 } from '../models/storage';
-import type { ImpactHubReportType, PartnerReport, Project, Volunteer, UserRole } from '../models/types';
+import type { ImpactHubReportType, PartnerReport, Project, Volunteer, UserRole, VolunteerTimeLog } from '../models/types';
 import ReportUploadModal from '../components/ReportUploadModal';
 import ReportDetailsModal from '../components/ReportDetailsModal';
 import AdminReportsDashboard from '../components/AdminReportsDashboard';
@@ -94,14 +94,29 @@ export default function ReportsScreen() {
   const [selectedReport, setSelectedReport] = useState<SubmittedReport | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
+  const [volunteerTimedInProjectIds, setVolunteerTimedInProjectIds] = useState<string[]>([]);
+  const [volunteerTimeLogs, setVolunteerTimeLogs] = useState<VolunteerTimeLog[]>([]);
 
   const loadProjects = useCallback(async () => {
     if (user?.role === 'volunteer' && user.id) {
       const snapshot = await getProjectsScreenSnapshot(user);
       setProjects(snapshot.projects);
+      setVolunteerTimeLogs(snapshot.timeLogs);
+      setVolunteerTimedInProjectIds(
+        Array.from(
+          new Set(
+            snapshot.timeLogs
+              .filter(log => Boolean(log.timeIn))
+              .map(log => log.projectId)
+              .filter(Boolean)
+          )
+        )
+      );
       return snapshot.projects;
     }
 
+    setVolunteerTimedInProjectIds([]);
+    setVolunteerTimeLogs([]);
     const allProjects = await getAllProjects();
     setProjects(allProjects);
     return allProjects;
@@ -163,9 +178,15 @@ export default function ReportsScreen() {
         return;
       }
 
-      const targetProjectId = reportData.projectId || projects[0]?.id;
+      const targetProjectId =
+        reportData.projectId || (user.role === 'volunteer' ? undefined : projects[0]?.id);
       if (!targetProjectId) {
-        Alert.alert('Validation Error', 'Select a project before submitting a report.');
+        Alert.alert(
+          'Validation Error',
+          user.role === 'volunteer'
+            ? 'Select an event you already timed in to before submitting a report.'
+            : 'Select a project before submitting a report.'
+        );
         return;
       }
 
@@ -243,8 +264,22 @@ export default function ReportsScreen() {
       return projects;
     }
 
-    return projects.filter(project => project.isEvent);
-  }, [projects, user?.role]);
+    return projects.filter(
+      project => project.isEvent && volunteerTimedInProjectIds.includes(project.id)
+    );
+  }, [projects, user?.role, volunteerTimedInProjectIds]);
+
+  const handleOpenUploadModal = useCallback(() => {
+    if (user?.role === 'volunteer' && volunteerEventProjects.length === 0) {
+      Alert.alert(
+        'Time In Required',
+        'You can only submit a report for an event where you already timed in.'
+      );
+      return;
+    }
+
+    setShowUploadModal(true);
+  }, [user?.role, volunteerEventProjects.length]);
 
   const dashboard =
     user?.role === 'admin' ? (
@@ -252,7 +287,7 @@ export default function ReportsScreen() {
         reports={userReports}
         projects={projects}
         volunteers={volunteers}
-        onUploadReport={() => setShowUploadModal(true)}
+        onUploadReport={handleOpenUploadModal}
         onViewReport={handleViewReport}
         loading={loading}
         onRefresh={onRefresh}
@@ -262,7 +297,7 @@ export default function ReportsScreen() {
       <PartnerReportsDashboard
         reports={userReports}
         projects={projects}
-        onUploadReport={() => setShowUploadModal(true)}
+        onUploadReport={handleOpenUploadModal}
         onViewReport={handleViewReport}
         loading={loading}
         onRefresh={onRefresh}
@@ -272,7 +307,7 @@ export default function ReportsScreen() {
       <VolunteerReportsDashboard
         reports={userReports}
         projects={volunteerEventProjects}
-        onUploadReport={() => setShowUploadModal(true)}
+        onUploadReport={handleOpenUploadModal}
         onViewReport={handleViewReport}
         loading={loading}
         onRefresh={onRefresh}
@@ -289,6 +324,7 @@ export default function ReportsScreen() {
         onSubmit={handleUploadReport}
         projects={user?.role === 'volunteer' ? volunteerEventProjects : projects}
         userRole={user?.role}
+        volunteerTimeLogs={user?.role === 'volunteer' ? volunteerTimeLogs : undefined}
       />
       <ReportDetailsModal
         visible={showDetailsModal}

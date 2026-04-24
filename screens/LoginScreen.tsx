@@ -28,6 +28,36 @@ import {
 
 const BACKEND_HEALTH_TIMEOUT_MS = 5000;
 
+// Get all available skills that volunteers can select from
+function getAvailableSkills(): string[] {
+  return [
+    'organization',
+    'communication',
+    'food handling',
+    'logistics',
+    'measurement',
+    'healthcare',
+    'photography',
+    'documentation',
+    'cleanup',
+    'inventory management',
+    'customer service',
+    'preparation',
+    'teaching',
+    'facilitation',
+    'data entry',
+    'attention to detail',
+    'computer skills',
+    'storytelling',
+    'technical skills',
+    'coordination',
+    'leadership',
+    'equipment management',
+    'guidance',
+    'note-taking',
+  ].sort();
+}
+
 type SignupVolunteerSheetState = {
   gender: string;
   dateOfBirth: string;
@@ -43,6 +73,7 @@ type SignupVolunteerSheetState = {
   videoBriefingUrl: string;
   hobbiesAndInterests: string;
   specialSkills: string;
+  skills: string[];
   affiliationOrg1: string;
   affiliationPos1: string;
   affiliationOrg2: string;
@@ -148,6 +179,7 @@ function createEmptySignupVolunteerSheet(): SignupVolunteerSheetState {
     videoBriefingUrl: '',
     hobbiesAndInterests: '',
     specialSkills: '',
+    skills: [],
     affiliationOrg1: '',
     affiliationPos1: '',
     affiliationOrg2: '',
@@ -652,6 +684,7 @@ export default function LoginScreen() {
                   signupVolunteerSheet.certificationsOrTrainings.trim(),
                 hobbiesAndInterests: signupVolunteerSheet.hobbiesAndInterests.trim(),
                 specialSkills: signupVolunteerSheet.specialSkills.trim(),
+                skills: signupVolunteerSheet.skills,
                 videoBriefingUrl: signupVolunteerSheet.videoBriefingUrl.trim(),
                 affiliations: [
                   {
@@ -1393,6 +1426,31 @@ export default function LoginScreen() {
                     onChangeText={value => updateSignupVolunteerSheet('specialSkills', value)}
                     editable={!signupLoading}
                   />
+
+                  <Text style={styles.modalSectionSubLabel}>Skills (Select all that apply)</Text>
+                  <View style={styles.skillsGrid}>
+                    {getAvailableSkills().map(skill => {
+                      const isSelected = signupVolunteerSheet.skills.includes(skill);
+                      return (
+                        <TouchableOpacity
+                          key={skill}
+                          style={[styles.skillChip, isSelected && styles.skillChipActive]}
+                          onPress={() => {
+                            const currentSkills = signupVolunteerSheet.skills;
+                            const newSkills = isSelected
+                              ? currentSkills.filter(s => s !== skill)
+                              : [...currentSkills, skill];
+                            updateSignupVolunteerSheet('skills', newSkills);
+                          }}
+                          disabled={signupLoading}
+                        >
+                          <Text style={[styles.skillChipText, isSelected && styles.skillChipTextActive]}>
+                            {skill}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
 
                   <Text style={styles.modalSectionLabel}>Certifications & Media</Text>
                   
@@ -2286,6 +2344,32 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     fontSize: 16,
     paddingHorizontal: 16,
+  },
+  skillsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 12,
+  },
+  skillChip: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    backgroundColor: '#e2e8f0',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
+  skillChipActive: {
+    backgroundColor: '#4CAF50',
+    borderColor: '#2e7d32',
+  },
+  skillChipText: {
+    color: '#475569',
+    fontWeight: '600',
+    fontSize: 12,
+  },
+  skillChipTextActive: {
+    color: '#fff',
   },
 });
 

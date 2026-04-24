@@ -127,6 +127,35 @@ RELATIONAL_TABLE_DDL = [
     "create index if not exists projects_partner_id_idx on projects (partner_id)",
     "create index if not exists projects_parent_project_id_idx on projects (parent_project_id)",
     f"""
+    create table if not exists programs (
+      id text primary key,
+      title text not null,
+      description text,
+      partner_id text,
+      image_url text,
+      image_hidden boolean not null default false,
+      program_module text,
+      status text,
+      category text,
+      start_date text,
+      end_date text,
+      location jsonb not null default {JSON_OBJECT},
+      volunteers_needed integer not null default 0,
+      volunteers jsonb not null default {JSON_ARRAY},
+      joined_user_ids jsonb not null default {JSON_ARRAY},
+      linked_event_count integer not null default 0,
+      created_at text,
+      updated_at text
+    )
+    """,
+    "alter table programs add column if not exists image_url text",
+    "alter table programs add column if not exists image_hidden boolean not null default false",
+    "alter table programs add column if not exists joined_user_ids jsonb not null default '[]'::jsonb",
+    "alter table programs add column if not exists linked_event_count integer not null default 0",
+    "create index if not exists programs_partner_id_idx on programs (partner_id)",
+    "create index if not exists programs_program_module_idx on programs (program_module)",
+    "create index if not exists programs_category_idx on programs (category)",
+    f"""
     create table if not exists events (
       id text primary key,
       title text not null,
@@ -432,6 +461,29 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("updated_at", False),
         ],
     },
+    "programs": {
+        "table": "programs",
+        "columns": [
+            ("id", False),
+            ("title", False),
+            ("description", False),
+            ("partner_id", False),
+            ("image_url", False),
+            ("image_hidden", False),
+            ("program_module", False),
+            ("status", False),
+            ("category", False),
+            ("start_date", False),
+            ("end_date", False),
+            ("location", True),
+            ("volunteers_needed", False),
+            ("volunteers", True),
+            ("joined_user_ids", True),
+            ("linked_event_count", False),
+            ("created_at", False),
+            ("updated_at", False),
+        ],
+    },
     "events": {
         "table": "events",
         "columns": [
@@ -608,6 +660,19 @@ FIELD_NAME_MAPS: dict[str, dict[str, str]] = {
         "volunteersNeeded": "volunteers_needed",
         "joinedUserIds": "joined_user_ids",
         "internalTasks": "internal_tasks",
+        "createdAt": "created_at",
+        "updatedAt": "updated_at",
+    },
+    "programs": {
+        "partnerId": "partner_id",
+        "imageUrl": "image_url",
+        "imageHidden": "image_hidden",
+        "programModule": "program_module",
+        "startDate": "start_date",
+        "endDate": "end_date",
+        "volunteersNeeded": "volunteers_needed",
+        "joinedUserIds": "joined_user_ids",
+        "linkedEventCount": "linked_event_count",
         "createdAt": "created_at",
         "updatedAt": "updated_at",
     },
@@ -823,6 +888,28 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             _json_dump(item.get("volunteers"), []),
             _json_dump(item.get("joinedUserIds"), []),
             _json_dump(item.get("internalTasks"), []),
+            item.get("createdAt"),
+            item.get("updatedAt"),
+        )
+
+    if key == "programs":
+        return (
+            item.get("id"),
+            item.get("title") or "",
+            item.get("description"),
+            item.get("partnerId"),
+            item.get("imageUrl"),
+            bool(item.get("imageHidden", False)),
+            item.get("programModule"),
+            item.get("status"),
+            item.get("category"),
+            item.get("startDate"),
+            item.get("endDate"),
+            _json_dump(item.get("location"), {}),
+            _to_int(item.get("volunteersNeeded")),
+            _json_dump(item.get("volunteers"), []),
+            _json_dump(item.get("joinedUserIds"), []),
+            _to_int(item.get("linkedEventCount")),
             item.get("createdAt"),
             item.get("updatedAt"),
         )
@@ -1092,6 +1179,28 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "updatedAt": row["updated_at"],
         }
 
+    if key == "programs":
+        return {
+            "id": row["id"],
+            "title": row["title"],
+            "description": row["description"],
+            "partnerId": row["partner_id"],
+            "imageUrl": row["image_url"],
+            "imageHidden": bool(row["image_hidden"]),
+            "programModule": row["program_module"],
+            "status": row["status"],
+            "category": row["category"],
+            "startDate": row["start_date"],
+            "endDate": row["end_date"],
+            "location": row["location"] or {},
+            "volunteersNeeded": row["volunteers_needed"],
+            "volunteers": row["volunteers"] or [],
+            "joinedUserIds": row["joined_user_ids"] or [],
+            "linkedEventCount": row["linked_event_count"],
+            "createdAt": row["created_at"],
+            "updatedAt": row["updated_at"],
+        }
+
     if key == "events":
         return {
             "id": row["id"],
@@ -1246,10 +1355,65 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
     raise KeyError(f"Unsupported relational mirror key: {key}")
 
 
+def refresh_program_rows_from_projects(connection: Any) -> None:
+    with connection.cursor() as cursor:
+        cursor.execute("delete from programs")
+        cursor.execute(
+            """
+            insert into programs (
+              id,
+              title,
+              description,
+              partner_id,
+              image_url,
+              image_hidden,
+              program_module,
+              status,
+              category,
+              start_date,
+              end_date,
+              location,
+              volunteers_needed,
+              volunteers,
+              joined_user_ids,
+              linked_event_count,
+              created_at,
+              updated_at
+            )
+            select
+              p.id,
+              p.title,
+              p.description,
+              p.partner_id,
+              p.image_url,
+              coalesce(p.image_hidden, false),
+              p.program_module,
+              p.status,
+              p.category,
+              p.start_date,
+              p.end_date,
+              coalesce(p.location, '{}'::jsonb),
+              coalesce(p.volunteers_needed, 0),
+              coalesce(p.volunteers, '[]'::jsonb),
+              coalesce(p.joined_user_ids, '[]'::jsonb),
+              (
+                select count(*)
+                from events e
+                where coalesce(e.parent_project_id, '') = p.id
+              ),
+              p.created_at,
+              p.updated_at
+            from projects p
+            where coalesce(p.is_event, false) = false
+            """
+        )
+
+
 def ensure_relational_mirror_tables(connection: Any) -> None:
     with connection.cursor() as cursor:
         for statement in RELATIONAL_TABLE_DDL:
             cursor.execute(statement)
+    refresh_program_rows_from_projects(connection)
 
 
 def sync_relational_mirror_collection(connection: Any, key: str, items: list[Any]) -> None:
@@ -1276,6 +1440,8 @@ def sync_relational_mirror_collection(connection: Any, key: str, items: list[Any
                 """,
                 rows,
             )
+    if key in {"projects", "events"}:
+        refresh_program_rows_from_projects(connection)
 
 
 def sync_all_relational_mirror_tables(connection: Any, collections: dict[str, list[Any]]) -> None:
@@ -1377,5 +1543,7 @@ def upsert_relational_item(connection: Any, key: str, item: dict[str, Any]) -> d
             """,
             row,
         )
+    if key in {"projects", "events"}:
+        refresh_program_rows_from_projects(connection)
 
     return item

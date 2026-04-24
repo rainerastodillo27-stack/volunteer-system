@@ -56,7 +56,7 @@ import { Volunteer, VolunteerProjectJoinRecord, VolunteerProjectMatch } from '..
 import { useAuth } from '../contexts/AuthContext';
 import { format } from 'date-fns';
 import { navigateToAvailableRoute } from '../utils/navigation';
-import { getPrimaryProjectImageSource } from '../utils/projectMap';
+import { getPrimaryProjectImageSource, inferCoordinatesFromPlace } from '../utils/projectMap';
 import { getProjectStatusColor } from '../utils/projectStatus';
 import { getPrimaryReportMediaUri, isImageMediaUri, pickImageFromDevice } from '../utils/media';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
@@ -170,6 +170,27 @@ function getStartOfWeekMonday(sourceDate: Date): Date {
   return date;
 }
 
+function getStartOfWeekSunday(sourceDate: Date): Date {
+  const date = new Date(sourceDate);
+  date.setDate(date.getDate() - date.getDay());
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function isSameCalendarDay(left: Date, right: Date): boolean {
+  return (
+    left.getFullYear() === right.getFullYear() &&
+    left.getMonth() === right.getMonth() &&
+    left.getDate() === right.getDate()
+  );
+}
+
+function getMonthCalendarDays(sourceDate: Date): Date[] {
+  const monthStart = new Date(sourceDate.getFullYear(), sourceDate.getMonth(), 1);
+  const gridStart = getStartOfWeekSunday(monthStart);
+  return Array.from({ length: 42 }, (_, index) => addDays(gridStart, index));
+}
+
 function getCalendarDayDifference(start: Date, end: Date): number {
   const utcStart = Date.UTC(start.getFullYear(), start.getMonth(), start.getDate());
   const utcEnd = Date.UTC(end.getFullYear(), end.getMonth(), end.getDate());
@@ -190,6 +211,59 @@ function getDateKey(sourceDate: Date): string {
   return sourceDate.toISOString().slice(0, 10);
 }
 
+const CALENDAR_STATUS_VISIBILITY_ORDER: Record<Project['status'], number> = {
+  Planning: 0,
+  'In Progress': 1,
+  'On Hold': 2,
+  Completed: 3,
+  Cancelled: 4,
+};
+
+function compareProjectsForCalendarVisibility(left: Project, right: Project): number {
+  const statusDifference =
+    CALENDAR_STATUS_VISIBILITY_ORDER[left.status] - CALENDAR_STATUS_VISIBILITY_ORDER[right.status];
+  if (statusDifference !== 0) {
+    return statusDifference;
+  }
+
+  return (
+    new Date(left.startDate).getTime() - new Date(right.startDate).getTime() ||
+    left.title.localeCompare(right.title)
+  );
+}
+
+function getVisibleCalendarProjects(projects: Project[], maxCount: number): Project[] {
+  const sortedProjects = [...projects].sort(compareProjectsForCalendarVisibility);
+  const selectedProjects: Project[] = [];
+
+  statuses.forEach(status => {
+    if (selectedProjects.length >= maxCount) {
+      return;
+    }
+
+    const nextProject = sortedProjects.find(
+      project =>
+        project.status === status &&
+        !selectedProjects.some(selectedProject => selectedProject.id === project.id)
+    );
+
+    if (nextProject) {
+      selectedProjects.push(nextProject);
+    }
+  });
+
+  sortedProjects.forEach(project => {
+    if (
+      selectedProjects.length < maxCount &&
+      !selectedProjects.some(selectedProject => selectedProject.id === project.id)
+    ) {
+      selectedProjects.push(project);
+    }
+  });
+
+  return selectedProjects;
+}
+
 function formatCalendarItemDateRange(startValue?: string, endValue?: string): string {
   if (!startValue) {
     return 'Date pending';
@@ -203,11 +277,11 @@ function formatCalendarItemDateRange(startValue?: string, endValue?: string): st
   }
 
   if (Number.isNaN(endDate.getTime())) {
-    return format(startDate, 'MMM d, yyyy');
+    return format(startDate, 'MMM d, h:mm a');
   }
 
-  const startLabel = format(startDate, 'MMM d');
-  const endLabel = format(endDate, 'MMM d, yyyy');
+  const startLabel = format(startDate, 'MMM d, h:mm a');
+  const endLabel = format(endDate, 'MMM d, h:mm a');
   return startLabel === endLabel ? endLabel : `${startLabel} - ${endLabel}`;
 }
 
@@ -337,6 +411,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const { user, isAdmin } = useAuth();
   const { width } = useWindowDimensions();
   const isDesktop = Platform.OS === 'web' || width >= 1100;
+  const listScrollViewRef = React.useRef<ScrollView | null>(null);
+  const listScrollOffsetRef = React.useRef(0);
+  const windowScrollOffsetRef = React.useRef(0);
+  const shouldRestoreListScrollRef = React.useRef(false);
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [partners, setPartners] = useState<Partner[]>([]);
@@ -358,6 +436,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [selectedProgramProposalModule, setSelectedProgramProposalModule] = useState<ProgramSuiteModule | null>(null);
   const [selectedSchedulerYear, setSelectedSchedulerYear] = useState(new Date().getFullYear());
+  const [selectedSchedulerMonth, setSelectedSchedulerMonth] = useState(new Date().getMonth());
+  const [isSchedulerMonthHovered, setIsSchedulerMonthHovered] = useState(false);
+  const [currentDate, setCurrentDate] = useState(() => new Date());
   const [newStatus, setNewStatus] = useState<Project['status']>('Planning');
   const [updateDescription, setUpdateDescription] = useState('');
   const [projectDraft, setProjectDraft] = useState<ProjectDraft>(createEmptyProjectDraft());
@@ -370,6 +451,34 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     Education: new Animated.Value(0),
     Nutrition: new Animated.Value(0),
   });
+
+  const shiftSchedulerMonth = (delta: number) => {
+    setSelectedSchedulerMonth(currentMonth => {
+      const nextMonth = currentMonth + delta;
+
+      if (nextMonth > 11) {
+        setSelectedSchedulerYear(currentYear => currentYear + 1);
+        return 0;
+      }
+
+      if (nextMonth < 0) {
+        setSelectedSchedulerYear(currentYear => currentYear - 1);
+        return 11;
+      }
+
+      return nextMonth;
+    });
+  };
+
+  useEffect(() => {
+    const refreshCurrentDate = () => {
+      setCurrentDate(new Date());
+    };
+
+    refreshCurrentDate();
+    const timer = setInterval(refreshCurrentDate, 60000);
+    return () => clearInterval(timer);
+  }, []);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -550,6 +659,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   // Selects a project and loads all related lifecycle details.
   const handleSelectProject = async (project: Project) => {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      windowScrollOffsetRef.current = window.scrollY || window.pageYOffset || 0;
+    }
+    shouldRestoreListScrollRef.current = true;
     setSelectedProject(project);
     await Promise.all([
       loadStatusUpdates(project.id),
@@ -714,6 +827,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     setSelectedProgramProposalModule(null);
   };
 
+  const handleReturnToProjectList = () => {
+    shouldRestoreListScrollRef.current = true;
+    setSelectedProject(null);
+  };
+
   const getCurrentSelectedProject = (): Project | null => {
     if (!selectedProject) {
       return null;
@@ -736,11 +854,23 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       return;
     }
 
-    const latitude = Number(projectDraft.latitude);
-    const longitude = Number(projectDraft.longitude);
+    const parsedLatitude = Number(projectDraft.latitude);
+    const parsedLongitude = Number(projectDraft.longitude);
     const volunteersNeeded = Number(projectDraft.volunteersNeeded);
     const startDateValue = new Date(projectDraft.startDate);
     const endDateValue = new Date(projectDraft.endDate);
+    const existingProject = editingProjectId
+      ? projects.find(project => project.id === editingProjectId) || null
+      : null;
+    const existingEventByTitle =
+      projectDraft.isEvent && !editingProjectId
+        ? projects.find(
+            project =>
+              project.isEvent &&
+              project.parentProjectId === projectDraft.parentProjectId &&
+              normalizeProjectTitle(project.title) === normalizeProjectTitle(projectDraft.title)
+          ) || null
+        : null;
 
     if (
       !projectDraft.title.trim() ||
@@ -748,8 +878,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       !projectDraft.startDate.trim() ||
       !projectDraft.endDate.trim() ||
       !projectDraft.address.trim() ||
-      Number.isNaN(latitude) ||
-      Number.isNaN(longitude) ||
       Number.isNaN(volunteersNeeded) ||
       Number.isNaN(startDateValue.getTime()) ||
       Number.isNaN(endDateValue.getTime())
@@ -763,18 +891,38 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       return;
     }
 
-    const existingProject = editingProjectId
-      ? projects.find(project => project.id === editingProjectId) || null
-      : null;
-    const existingEventByTitle =
-      projectDraft.isEvent && !editingProjectId
-        ? projects.find(
-            project =>
-              project.isEvent &&
-              project.parentProjectId === projectDraft.parentProjectId &&
-              normalizeProjectTitle(project.title) === normalizeProjectTitle(projectDraft.title)
-          ) || null
-        : null;
+    const hasManualCoordinates =
+      Boolean(projectDraft.latitude.trim()) &&
+      Boolean(projectDraft.longitude.trim()) &&
+      Number.isFinite(parsedLatitude) &&
+      Number.isFinite(parsedLongitude);
+
+    const resolvedCoordinates =
+      (hasManualCoordinates
+        ? { latitude: parsedLatitude, longitude: parsedLongitude }
+        : null) ||
+      inferCoordinatesFromPlace(projectDraft.address, projects) ||
+      (existingProject
+        ? {
+            latitude: existingProject.location.latitude,
+            longitude: existingProject.location.longitude,
+          }
+        : null) ||
+      (existingEventByTitle
+        ? {
+            latitude: existingEventByTitle.location.latitude,
+            longitude: existingEventByTitle.location.longitude,
+          }
+        : null);
+
+    if (!resolvedCoordinates) {
+      Alert.alert(
+        'Place Not Recognized',
+        'Enter a recognizable barangay, city, municipality, or venue so the map can place this program.'
+      );
+      return;
+    }
+
     const now = new Date().toISOString();
     const savedProject: Project = {
       id:
@@ -794,8 +942,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       startDate: startDateValue.toISOString(),
       endDate: endDateValue.toISOString(),
       location: {
-        latitude,
-        longitude,
+        latitude: resolvedCoordinates.latitude,
+        longitude: resolvedCoordinates.longitude,
         address: projectDraft.address.trim(),
       },
       volunteersNeeded,
@@ -853,7 +1001,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           onPress: async () => {
             try {
               await deleteProjectLikeRecord(selectedProject);
-              setSelectedProject(null);
+              handleReturnToProjectList();
               setStatusUpdates([]);
               setAllPartnerApplications([]);
               setPartnerReports([]);
@@ -979,6 +1127,32 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       setActionLoadingKey(null);
     }
   };
+
+  useEffect(() => {
+    if (selectedProject || !shouldRestoreListScrollRef.current) {
+      return;
+    }
+
+    const restoreOffset = listScrollOffsetRef.current;
+    const restoreWindowOffset = windowScrollOffsetRef.current;
+    const restoreTimer = setTimeout(() => {
+      listScrollViewRef.current?.scrollTo({ y: restoreOffset, animated: false });
+
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(() => {
+            window.scrollTo({ top: restoreWindowOffset, left: 0, behavior: 'auto' });
+            shouldRestoreListScrollRef.current = false;
+          });
+        });
+        return;
+      }
+
+      shouldRestoreListScrollRef.current = false;
+    }, 0);
+
+    return () => clearTimeout(restoreTimer);
+  }, [selectedProject, projects.length]);
 
   const handleUpdateSelectedProjectImage = async (removeImage = false) => {
     const currentSelectedProject = getCurrentSelectedProject();
@@ -1161,11 +1335,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   };
 
   const getAssignableVolunteerOptions = (project: Project) => {
-    return getProjectVolunteerEntries(project).map(entry => ({
-      id: entry.id,
-      name: entry.name,
-      participationStatus: entry.participationStatus,
-    }));
+    return getProjectVolunteerEntries(project)
+      .filter(entry => entry.participationStatus === 'Active')
+      .map(entry => ({
+        id: entry.id,
+        name: entry.name,
+        participationStatus: entry.participationStatus,
+      }));
   };
 
   // Builds the volunteer-request list for the selected project.
@@ -1216,6 +1392,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     const assignedVolunteer = assignableVolunteers.find(
       volunteer => volunteer.id === taskDraft.assignedVolunteerId
     );
+    if (taskDraft.assignedVolunteerId && !assignedVolunteer) {
+      Alert.alert(
+        'Validation Error',
+        'A volunteer must already be joined to this project before they can be assigned a task.'
+      );
+      return;
+    }
     const now = new Date().toISOString();
     const taskStatus =
       taskDraft.assignedVolunteerId && taskDraft.status === 'Unassigned'
@@ -1519,6 +1702,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               {section.inProgressCount}
             </Text>
             <Text style={styles.programSuiteMetricLabel}>In progress</Text>
+          </View>
+          <View style={[styles.programSuiteMetricPill, { borderColor: getProjectStatusColor('Planning') }]}>
+            <Text style={[styles.programSuiteMetricValue, { color: getProjectStatusColor('Planning') }]}>
+              {section.planningCount}
+            </Text>
+            <Text style={styles.programSuiteMetricLabel}>Planning</Text>
           </View>
           <View style={[styles.programSuiteMetricPill, { borderColor: section.border }]}>
             <Text style={[styles.programSuiteMetricValue, { color: section.accent }]}>
@@ -1826,36 +2015,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           <View style={[styles.formRow, styles.formRowReverse]}>
             <TextInput
               style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
-              placeholder="Location address"
+              placeholder="Barangay, city, municipality, or venue"
               placeholderTextColor="#999"
               value={projectDraft.address}
               onChangeText={value => handleProjectDraftChange('address', value)}
             />
-            <Text style={styles.labelRight}>Address</Text>
-          </View>
-
-          <View style={[styles.formRow, styles.formRowReverse]}>
-            <TextInput
-              style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
-              placeholder="Latitude"
-              placeholderTextColor="#999"
-              keyboardType="decimal-pad"
-              value={projectDraft.latitude}
-              onChangeText={value => handleProjectDraftChange('latitude', value)}
-            />
-            <Text style={styles.labelRight}>Latitude</Text>
-          </View>
-
-          <View style={[styles.formRow, styles.formRowReverse]}>
-            <TextInput
-              style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
-              placeholder="Longitude"
-              placeholderTextColor="#999"
-              keyboardType="decimal-pad"
-              value={projectDraft.longitude}
-              onChangeText={value => handleProjectDraftChange('longitude', value)}
-            />
-            <Text style={styles.labelRight}>Longitude</Text>
+            <Text style={styles.labelRight}>Place</Text>
           </View>
 
           <View style={[styles.formRow, styles.formRowReverse]}>
@@ -1974,6 +2139,15 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                     </View>
 
                     <View style={styles.proposalInfoCard}>
+                      <Text style={styles.proposalInfoLabel}>Skills Needed</Text>
+                      <Text style={styles.proposalInfoValue}>
+                        {pendingProposal.proposalDetails?.skillsNeeded?.length
+                          ? pendingProposal.proposalDetails.skillsNeeded.join(', ')
+                          : 'Not specified'}
+                      </Text>
+                    </View>
+
+                    <View style={styles.proposalInfoCard}>
                       <Text style={styles.proposalInfoLabel}>Start Date</Text>
                       <Text style={styles.proposalInfoValue}>
                         {formatProposalDateValue(pendingProposal.proposalDetails?.proposedStartDate)}
@@ -2060,30 +2234,39 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     const requestedProject = requestedProjectId
       ? projects.find(project => project.id === requestedProjectId)
       : null;
-    const candidateDate = selectedProject?.startDate || requestedProject?.startDate || projects[0]?.startDate;
-    const parsedDate = candidateDate ? new Date(candidateDate) : new Date();
+    const defaultDate = new Date(selectedSchedulerYear, selectedSchedulerMonth, 1);
+    const candidateDate = selectedProject?.startDate || requestedProject?.startDate;
+    const parsedDate = candidateDate ? new Date(candidateDate) : defaultDate;
     const safeDate = Number.isNaN(parsedDate.getTime()) ? new Date() : parsedDate;
 
-    if (safeDate.getFullYear() === selectedSchedulerYear) {
+    if (
+      safeDate.getFullYear() === selectedSchedulerYear &&
+      safeDate.getMonth() === selectedSchedulerMonth
+    ) {
       return safeDate;
     }
 
-    return new Date(selectedSchedulerYear, 0, 1);
-  }, [projects, route?.params?.projectId, selectedProject?.startDate, selectedSchedulerYear]);
+    return new Date(selectedSchedulerYear, selectedSchedulerMonth, 1);
+  }, [
+    projects,
+    route?.params?.projectId,
+    selectedProject?.startDate,
+    selectedSchedulerMonth,
+    selectedSchedulerYear,
+  ]);
 
   const schedulerCalendarDays = useMemo(() => {
-    const monday = getStartOfWeekMonday(schedulerAnchorDate);
-    return Array.from({ length: 21 }, (_, index) => addDays(monday, index));
+    return getMonthCalendarDays(schedulerAnchorDate);
   }, [schedulerAnchorDate]);
 
   const schedulerCalendarWeeks = useMemo(
-    () => [0, 1, 2].map(weekIndex => schedulerCalendarDays.slice(weekIndex * 7, weekIndex * 7 + 7)),
+    () => [0, 1, 2, 3, 4, 5].map(weekIndex => schedulerCalendarDays.slice(weekIndex * 7, weekIndex * 7 + 7)),
     [schedulerCalendarDays]
   );
 
   const schedulerCalendarWindow = useMemo(() => {
-    const start = schedulerCalendarDays[0] || getStartOfWeekMonday(new Date());
-    const end = schedulerCalendarDays[20] || start;
+    const start = schedulerCalendarDays[0] || getStartOfWeekSunday(new Date());
+    const end = schedulerCalendarDays[41] || start;
     return { start, end };
   }, [schedulerCalendarDays]);
 
@@ -2115,25 +2298,61 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             isDateOverlappingRange(startDate, schedulerCalendarWindow.start, schedulerCalendarWindow.end)
           );
         })
-        .sort((left, right) => new Date(left.startDate).getTime() - new Date(right.startDate).getTime()),
+        .sort(compareProjectsForCalendarVisibility),
     [projects, schedulerCalendarWindow.end, schedulerCalendarWindow.start]
   );
 
-  const suiteEventsByDate = useMemo(() => {
+  const monthProjectCalendarProjects = useMemo(
+    () =>
+      [...projects].sort(
+        (left, right) =>
+          new Date(left.startDate).getTime() - new Date(right.startDate).getTime() ||
+          left.title.localeCompare(right.title)
+      ).filter(project => !project.isEvent),
+    [projects]
+  );
+
+  const schedulerProjectsByDate = useMemo(() => {
     const nextEventsByDate = new Map<string, Project[]>();
 
     schedulerCalendarDays.forEach(day => {
-      const dayEvents = suiteScheduledProjects.filter(project => {
+      const dayProjects = projects.filter(project => {
+        if (project.isEvent) {
+          return false;
+        }
+
         const startDate = new Date(project.startDate);
-        const endDate = new Date(project.endDate);
-        return isDateOverlappingRange(day, startDate, endDate);
+        return isSameCalendarDay(day, startDate);
       });
 
-      nextEventsByDate.set(getDateKey(day), dayEvents);
+      nextEventsByDate.set(getDateKey(day), dayProjects);
     });
 
     return nextEventsByDate;
-  }, [schedulerCalendarDays, suiteScheduledProjects]);
+  }, [projects, schedulerCalendarDays]);
+
+  const schedulerFeaturedProjects = useMemo(
+    () =>
+      [...projects]
+        .filter(project => !project.isEvent)
+        .sort(
+        (left, right) =>
+          new Date(left.startDate).getTime() - new Date(right.startDate).getTime() ||
+          left.title.localeCompare(right.title)
+        ),
+    [projects]
+  );
+
+  const availableProgramCount = useMemo(
+    () =>
+      new Set(
+        projects
+          .filter(project => !project.isEvent)
+          .map(project => getProgramSuiteModule(project))
+          .filter((module): module is ProgramSuiteModule => Boolean(module))
+      ).size,
+    [projects]
+  );
 
   const programSections = useMemo(
     () =>
@@ -2155,6 +2374,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           projects: sectionProjects,
           totalPrograms: sectionProjects.filter(project => !project.isEvent).length,
           inProgressCount: sectionProjects.filter(project => project.status === 'In Progress').length,
+          planningCount: sectionProjects.filter(project => project.status === 'Planning').length,
           eventCount: sectionProjects.filter(project => project.isEvent).length,
           pendingProposalCount: pendingProposalApplication ? 1 : 0,
         };
@@ -2345,7 +2565,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     return (
       <ScrollView style={styles.container} contentContainerStyle={styles.detailsScreenContent}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => setSelectedProject(null)}>
+          <TouchableOpacity onPress={handleReturnToProjectList}>
             <MaterialIcons name="arrow-back" size={24} color="#333" />
           </TouchableOpacity>
           <Text style={styles.title}>{activeSelectedProject.isEvent ? 'Event Details' : 'Project Details'}</Text>
@@ -2605,6 +2825,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                     </View>
 
                     <Text style={styles.taskDescription}>{task.description}</Text>
+                    {task.skillsNeeded && task.skillsNeeded.length > 0 && (
+                      <Text style={styles.taskSkillsText}>
+                        Skills needed: {task.skillsNeeded.join(', ')}
+                      </Text>
+                    )}
                     <Text style={styles.taskAssignmentText}>
                       Assigned to: {task.assignedVolunteerName || 'Unassigned'}
                     </Text>
@@ -3177,7 +3402,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
               {assignableVolunteerOptions.length === 0 ? (
                 <Text style={styles.helperText}>
-                  No volunteers have joined this event yet. You can still create the task and assign it later.
+                  No joined volunteers are available for this project yet. Volunteers must join first before task assignment.
                 </Text>
               ) : taskDraft.isFieldOfficer ? (
                 <Text style={styles.helperText}>
@@ -3266,7 +3491,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   }
 
   return (
-    <ScrollView style={styles.container}>
+    <ScrollView
+      ref={listScrollViewRef}
+      style={styles.container}
+      onScroll={event => {
+        listScrollOffsetRef.current = event.nativeEvent.contentOffset.y;
+      }}
+      scrollEventThrottle={16}
+    >
       <View style={styles.lifecycleHero}>
         <View style={styles.lifecycleHeroCopy}>
           <Text style={styles.lifecycleEyebrow}>Lifecycle workspace</Text>
@@ -3285,7 +3517,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       <View style={styles.lifecycleStatsRow}>
         <View style={styles.lifecycleStatPill}>
-          <Text style={styles.lifecycleStatValue}>{projects.length}</Text>
+          <Text style={styles.lifecycleStatValue}>{projects.filter(project => !project.isEvent).length}</Text>
+          <Text style={styles.lifecycleStatLabel}>Projects</Text>
+        </View>
+        <View style={styles.lifecycleStatPill}>
+          <Text style={styles.lifecycleStatValue}>{availableProgramCount}</Text>
           <Text style={styles.lifecycleStatLabel}>Programs</Text>
         </View>
         <View style={styles.lifecycleStatPill}>
@@ -3319,104 +3555,215 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       ) : null}
       {!loadError ? (
         <>
-          <View style={styles.programSuiteSchedulerCard}>
-            <View style={styles.programSuiteSchedulerHeader}>
-              <View>
-                <Text style={styles.programSuiteSchedulerTitle}>Program Calendar</Text>
-                <Text style={styles.programSuiteSchedulerMeta}>
-                  One shared calendar for all program cards in the current 3-week window.
-                </Text>
-              </View>
+          <View
+            style={[
+              styles.programSuiteSchedulerCard,
+              !isDesktop && styles.programSuiteSchedulerCardStacked,
+            ]}
+          >
+            <View
+              style={[
+                styles.programSuiteSchedulerAgendaPane,
+                !isDesktop && styles.programSuiteSchedulerAgendaPaneStacked,
+              ]}
+            >
+              <Text style={styles.programSuiteSchedulerAgendaTitle}>Projects</Text>
+              <Text style={styles.programSuiteSchedulerAgendaMeta}>
+                One shared list for all projects in the system.
+              </Text>
+
               <View style={styles.programSuiteSchedulerControls}>
-                <View style={styles.programSuiteSchedulerYearSwitcher}>
-                  <TouchableOpacity
-                    style={styles.programSuiteSchedulerYearButton}
-                    onPress={() => setSelectedSchedulerYear(current => current - 1)}
-                    activeOpacity={0.85}
-                  >
-                    <MaterialIcons name="chevron-left" size={18} color="#1e3a8a" />
-                  </TouchableOpacity>
-                  <Text style={styles.programSuiteSchedulerYearText}>{selectedSchedulerYear}</Text>
-                  <TouchableOpacity
-                    style={styles.programSuiteSchedulerYearButton}
-                    onPress={() => setSelectedSchedulerYear(current => current + 1)}
-                    activeOpacity={0.85}
-                  >
-                    <MaterialIcons name="chevron-right" size={18} color="#1e3a8a" />
-                  </TouchableOpacity>
-                </View>
                 <Text style={styles.programSuiteSchedulerRange}>{schedulerRangeLabel}</Text>
               </View>
+
+              {schedulerFeaturedProjects.length ? (
+                schedulerFeaturedProjects.map(project => (
+                  <TouchableOpacity
+                    key={`featured-${project.id}`}
+                    style={styles.programSuiteSchedulerAgendaRow}
+                    onPress={() => {
+                      void handleSelectProject(project);
+                    }}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.programSuiteSchedulerAgendaName} numberOfLines={1}>
+                      {project.title}
+                    </Text>
+                    <Text style={styles.programSuiteSchedulerAgendaDate}>
+                      {formatCalendarItemDateRange(project.startDate, project.endDate)}
+                    </Text>
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <Text style={styles.programSuiteSchedulerAgendaEmpty}>No projects yet.</Text>
+              )}
             </View>
 
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              <View style={styles.schedulerCalendarWrap}>
-                <View style={styles.schedulerCalendarHeaderRow}>
-                  {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(dayLabel => (
-                    <Text key={`suite-${dayLabel}`} style={styles.schedulerCalendarHeaderCell}>
-                      {dayLabel}
+            <View
+              style={[
+                styles.programSuiteSchedulerMonthPane,
+                !isDesktop && styles.programSuiteSchedulerMonthPaneStacked,
+              ]}
+            >
+              <View style={styles.programSuiteSchedulerMonthTopRow}>
+                <View>
+                  <Text style={styles.programSuiteSchedulerTodayLabel}>
+                    Today
+                  </Text>
+                  <Text style={styles.programSuiteSchedulerTodayDate}>
+                    {format(currentDate, 'EEEE, MMMM d')}
+                  </Text>
+                </View>
+                <View style={styles.programSuiteSchedulerHeaderControls}>
+                  <View style={styles.programSuiteSchedulerMonthSwitcher}>
+                    <TouchableOpacity
+                      style={styles.programSuiteSchedulerMonthButton}
+                      onPress={() => shiftSchedulerMonth(-1)}
+                      activeOpacity={0.85}
+                    >
+                      <MaterialIcons name="chevron-left" size={18} color="#236d35" />
+                    </TouchableOpacity>
+                    <Text style={styles.programSuiteSchedulerMonthText}>
+                      {format(new Date(selectedSchedulerYear, selectedSchedulerMonth, 1), 'MMMM yyyy')}
                     </Text>
+                    <TouchableOpacity
+                      style={styles.programSuiteSchedulerMonthButton}
+                      onPress={() => shiftSchedulerMonth(1)}
+                      activeOpacity={0.85}
+                    >
+                      <MaterialIcons name="chevron-right" size={18} color="#236d35" />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+
+              <View
+                style={[
+                  styles.programSuiteSchedulerMonthHeadingWrap,
+                  isSchedulerMonthHovered && styles.programSuiteSchedulerMonthHeadingWrapHovered,
+                ]}
+                onHoverIn={() => setIsSchedulerMonthHovered(true)}
+                onHoverOut={() => setIsSchedulerMonthHovered(false)}
+              >
+                <Text
+                  style={[
+                    styles.programSuiteSchedulerMonthHeading,
+                    isSchedulerMonthHovered && styles.programSuiteSchedulerMonthHeadingHovered,
+                  ]}
+                >
+                  {format(schedulerAnchorDate, 'MMMM yyyy')}
+                </Text>
+              </View>
+
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                <View style={styles.schedulerCalendarWrap}>
+                  <View style={styles.schedulerCalendarHeaderRow}>
+                    {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(dayLabel => (
+                      <Text key={`suite-${dayLabel}`} style={styles.schedulerCalendarHeaderCell}>
+                        {dayLabel}
+                      </Text>
+                    ))}
+                  </View>
+
+                  {schedulerCalendarWeeks.map((week, weekIndex) => (
+                    <View key={`suite-week-${weekIndex}`} style={styles.schedulerCalendarWeekRow}>
+                      {week.map(day => {
+                        const isCurrentMonth = day.getMonth() === schedulerAnchorDate.getMonth();
+                        const isToday = isSameCalendarDay(day, currentDate);
+                        const dayProjects = schedulerProjectsByDate.get(getDateKey(day)) || [];
+                        return (
+                          <View
+                            key={`suite-${day.toISOString()}`}
+                            style={[
+                              styles.schedulerCalendarDayCell,
+                              !isCurrentMonth && styles.schedulerCalendarDayCellMuted,
+                              isToday && styles.schedulerCalendarDayCellToday,
+                            ]}
+                          >
+                            <View style={styles.schedulerCalendarDayHeader}>
+                              <Text
+                                style={[
+                                  styles.schedulerCalendarDayDate,
+                                  !isCurrentMonth && styles.schedulerCalendarDayDateMuted,
+                                  isToday && styles.schedulerCalendarDayDateToday,
+                                ]}
+                              >
+                                {format(day, 'd')}
+                              </Text>
+                              {isToday ? <Text style={styles.schedulerCalendarTodayTag}>Today</Text> : null}
+                            </View>
+
+                            {dayProjects.length ? (
+                              dayProjects.map(project => (
+                                <View key={`calendar-project-${project.id}`} style={styles.schedulerCalendarProjectPill}>
+                                  <Text style={styles.schedulerCalendarProjectTitle} numberOfLines={2}>
+                                    {project.title}
+                                  </Text>
+                                </View>
+                              ))
+                            ) : null}
+                          </View>
+                        );
+                      })}
+                    </View>
                   ))}
                 </View>
+              </ScrollView>
 
-                {schedulerCalendarWeeks.map((week, weekIndex) => (
-                  <View key={`suite-week-${weekIndex}`} style={styles.schedulerCalendarWeekRow}>
-                    {week.map(day => {
-                      const dayProjects = suiteEventsByDate.get(getDateKey(day)) || [];
-                      return (
-                        <View key={`suite-${day.toISOString()}`} style={styles.schedulerCalendarDayCell}>
-                          <Text style={styles.schedulerCalendarDayDate}>{format(day, 'MMM d')}</Text>
-
-                          {dayProjects.length ? (
-                            <>
-                              {dayProjects.slice(0, 3).map(project => {
-                                const module = getProgramSuiteModule(project);
-                                const moduleAccent = module ? programSuiteConfig[module].accent : '#475569';
-
-                                return (
-                                  <TouchableOpacity
-                                    key={`suite-${project.id}-${day.toISOString()}`}
-                                    style={[
-                                      styles.schedulerCalendarEvent,
-                                      {
-                                        backgroundColor: getProjectStatusColor(project.status),
-                                        borderLeftColor: moduleAccent,
-                                      },
-                                    ]}
-                                    onPress={() => {
-                                      void handleSelectProject(project);
-                                    }}
-                                    activeOpacity={0.85}
-                                  >
-                                    <Text style={styles.schedulerCalendarEventText} numberOfLines={1}>
-                                      {project.title}
-                                    </Text>
-                                    <Text style={styles.schedulerCalendarEventDate} numberOfLines={1}>
-                                      {formatCalendarItemDateRange(project.startDate, project.endDate)}
-                                    </Text>
-                                    {module ? (
-                                      <Text style={styles.schedulerCalendarEventModule} numberOfLines={1}>
-                                        {module}
-                                      </Text>
-                                    ) : null}
-                                  </TouchableOpacity>
-                                );
-                              })}
-
-                              {dayProjects.length > 3 ? (
-                                <Text style={styles.schedulerCalendarMoreText}>+{dayProjects.length - 3} more</Text>
-                              ) : null}
-                            </>
-                          ) : (
-                            <Text style={styles.schedulerCalendarEmpty}>No events</Text>
-                          )}
-                        </View>
-                      );
-                    })}
+              <View style={styles.schedulerProjectCalendarSection}>
+                <View style={styles.schedulerProjectCalendarHeader}>
+                  <View>
+                    <Text style={styles.schedulerProjectCalendarTitle}>Project Calendar</Text>
+                    <Text style={styles.schedulerProjectCalendarMeta}>
+                      All project cards in the system
+                    </Text>
                   </View>
-                ))}
+                  <Text style={styles.schedulerProjectCalendarCount}>
+                    {monthProjectCalendarProjects.length} project{monthProjectCalendarProjects.length === 1 ? '' : 's'}
+                  </Text>
+                </View>
+
+                {monthProjectCalendarProjects.length ? (
+                  <View style={styles.schedulerProjectCalendarGrid}>
+                    {monthProjectCalendarProjects.map(project => (
+                      <TouchableOpacity
+                        key={`month-project-${project.id}`}
+                        style={styles.schedulerProjectCalendarCard}
+                        onPress={() => {
+                          void handleSelectProject(project);
+                        }}
+                        activeOpacity={0.85}
+                      >
+                        <View style={styles.schedulerProjectCalendarCardTopRow}>
+                          <Text style={styles.schedulerProjectCalendarCardTitle} numberOfLines={1}>
+                            {project.title}
+                          </Text>
+                          <View
+                            style={[
+                              styles.schedulerProjectCalendarStatusDot,
+                              { backgroundColor: getProjectStatusColor(project.status) },
+                            ]}
+                          />
+                        </View>
+                        <Text style={styles.schedulerProjectCalendarCardDate} numberOfLines={2}>
+                          {formatCalendarItemDateRange(project.startDate, project.endDate)}
+                        </Text>
+                        <Text style={styles.schedulerProjectCalendarCardMeta} numberOfLines={1}>
+                          {getProgramSuiteModule(project) || project.category}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                ) : (
+                  <View style={styles.schedulerProjectCalendarEmptyState}>
+                    <Text style={styles.schedulerProjectCalendarEmptyTitle}>No projects this month</Text>
+                    <Text style={styles.schedulerProjectCalendarEmptyMeta}>
+                      Move to another month to see its project boxes.
+                    </Text>
+                  </View>
+                )}
               </View>
-            </ScrollView>
+            </View>
           </View>
 
           <View style={styles.programSuiteStack}>
@@ -3634,36 +3981,84 @@ const styles = StyleSheet.create({
   },
   programSuiteSchedulerCard: {
     backgroundColor: '#ffffff',
-    borderRadius: 6,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#dbeafe',
-    padding: 16,
+    borderColor: '#bde0c6',
     marginBottom: 20,
+    overflow: 'hidden',
+    flexDirection: 'row',
     shadowColor: '#0f172a',
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.05,
     shadowRadius: 12,
     elevation: 2,
   },
-  programSuiteSchedulerHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    gap: 12,
-    marginBottom: 14,
+  programSuiteSchedulerCardStacked: {
+    flexDirection: 'column',
+  },
+  programSuiteSchedulerAgendaPane: {
+    width: '35%',
+    minWidth: 260,
+    backgroundColor: '#2f8f45',
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+  },
+  programSuiteSchedulerAgendaPaneStacked: {
+    width: '100%',
+    minWidth: 0,
+  },
+  programSuiteSchedulerAgendaTitle: {
+    color: '#f1fff4',
+    fontSize: 17,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  programSuiteSchedulerAgendaMeta: {
+    color: '#d6f8de',
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '600',
   },
   programSuiteSchedulerControls: {
-    alignItems: 'flex-end',
+    alignItems: 'flex-start',
     gap: 8,
+    marginTop: 12,
+    marginBottom: 10,
+  },
+  programSuiteSchedulerMonthSwitcher: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#c7e8cd',
+    borderRadius: 999,
+    backgroundColor: '#f0faf2',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  programSuiteSchedulerMonthButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  programSuiteSchedulerMonthText: {
+    minWidth: 74,
+    textAlign: 'center',
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#236d35',
   },
   programSuiteSchedulerYearSwitcher: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
     borderWidth: 1,
-    borderColor: '#bfdbfe',
+    borderColor: 'rgba(255,255,255,0.22)',
     borderRadius: 999,
-    backgroundColor: '#eff6ff',
+    backgroundColor: 'rgba(255,255,255,0.12)',
     paddingHorizontal: 8,
     paddingVertical: 4,
   },
@@ -3680,23 +4075,85 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontSize: 14,
     fontWeight: '800',
-    color: '#1e3a8a',
-  },
-  programSuiteSchedulerTitle: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: '#1e3a8a',
-  },
-  programSuiteSchedulerMeta: {
-    marginTop: 4,
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#475569',
+    color: '#f7fff8',
   },
   programSuiteSchedulerRange: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
-    color: '#475569',
+    color: '#d9f7df',
+  },
+  programSuiteSchedulerAgendaRow: {
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.25)',
+  },
+  programSuiteSchedulerAgendaName: {
+    color: '#f7fff8',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  programSuiteSchedulerAgendaDate: {
+    marginTop: 2,
+    color: '#d6f8de',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  programSuiteSchedulerAgendaEmpty: {
+    marginTop: 10,
+    color: '#d9f7df',
+    fontSize: 12,
+  },
+  programSuiteSchedulerMonthPane: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    padding: 16,
+  },
+  programSuiteSchedulerMonthPaneStacked: {
+    width: '100%',
+  },
+  programSuiteSchedulerMonthTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  programSuiteSchedulerTodayLabel: {
+    fontSize: 30,
+    lineHeight: 32,
+    fontWeight: '400',
+    color: '#203a2a',
+  },
+  programSuiteSchedulerTodayDate: {
+    marginTop: 2,
+    fontSize: 13,
+    color: '#203a2a',
+    fontWeight: '700',
+  },
+  programSuiteSchedulerYearHero: {
+    fontSize: 36,
+    lineHeight: 38,
+    fontWeight: '400',
+    color: '#203a2a',
+  },
+  programSuiteSchedulerMonthHeading: {
+    marginTop: 8,
+    marginBottom: 10,
+    textAlign: 'center',
+    color: '#5e7b65',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  programSuiteSchedulerMonthHeadingWrap: {
+    alignSelf: 'center',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  programSuiteSchedulerMonthHeadingWrapHovered: {
+    backgroundColor: '#ecfdf5',
+  },
+  programSuiteSchedulerMonthHeadingHovered: {
+    color: '#166534',
+    textDecorationLine: 'underline',
   },
   programSuiteProjectsAnimatedWrap: {
     overflow: 'hidden',
@@ -4591,6 +5048,12 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     marginTop: 10,
   },
+  taskSkillsText: {
+    fontSize: 12,
+    color: '#059669',
+    fontWeight: '600',
+    marginTop: 8,
+  },
   taskAssignmentText: {
     fontSize: 12,
     fontWeight: '700',
@@ -4807,96 +5270,183 @@ const styles = StyleSheet.create({
   schedulerCalendarWrap: {
     minWidth: 980,
   },
-  schedulerCalendarTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  schedulerCalendarRange: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#1f2937',
-  },
-  schedulerCalendarHint: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#64748b',
-  },
   schedulerCalendarHeaderRow: {
     flexDirection: 'row',
-    borderWidth: 1,
-    borderColor: '#dbeafe',
-    borderBottomWidth: 0,
+    justifyContent: 'space-between',
+    marginBottom: 6,
+    gap: 8,
   },
   schedulerCalendarHeaderCell: {
     flex: 1,
     textAlign: 'center',
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#334155',
-    paddingVertical: 8,
-    backgroundColor: '#f8fafc',
-    borderRightWidth: 1,
-    borderRightColor: '#dbeafe',
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#7a9181',
   },
   schedulerCalendarWeekRow: {
     flexDirection: 'row',
-    borderWidth: 1,
-    borderColor: '#dbeafe',
-    borderTopWidth: 0,
+    gap: 8,
+    marginBottom: 8,
   },
   schedulerCalendarDayCell: {
     flex: 1,
-    minHeight: 160,
+    minHeight: 132,
     paddingHorizontal: 8,
     paddingTop: 8,
     paddingBottom: 6,
-    borderRightWidth: 1,
-    borderRightColor: '#dbeafe',
-    backgroundColor: '#ffffff',
+    backgroundColor: '#f8fcf8',
+    borderWidth: 1,
+    borderColor: '#d9e7dc',
+    borderRadius: 12,
+  },
+  schedulerCalendarDayCellMuted: {
+    opacity: 0.55,
+  },
+  schedulerCalendarDayCellToday: {
+    borderColor: '#16a34a',
+    backgroundColor: '#effaf1',
+    shadowColor: '#14532d',
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 1,
+  },
+  schedulerCalendarDayHeader: {
+    alignItems: 'center',
+    marginBottom: 6,
+    gap: 3,
   },
   schedulerCalendarDayDate: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#334155',
-    marginBottom: 6,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#647f6c',
+    textAlign: 'center',
   },
-  schedulerCalendarEvent: {
-    borderRadius: 6,
+  schedulerCalendarDayDateMuted: {
+    color: '#9aa9a1',
+  },
+  schedulerCalendarDayDateToday: {
+    color: '#166534',
+    fontSize: 15,
+  },
+  schedulerCalendarTodayTag: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#166534',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  schedulerCalendarProjectPill: {
+    borderRadius: 8,
+    backgroundColor: '#e8f3ff',
+    borderWidth: 1,
+    borderColor: '#c7ddff',
     paddingHorizontal: 6,
     paddingVertical: 5,
     marginBottom: 6,
-    borderLeftWidth: 4,
   },
-  schedulerCalendarEventText: {
+  schedulerCalendarProjectTitle: {
     fontSize: 11,
+    lineHeight: 15,
     fontWeight: '700',
-    color: '#ffffff',
+    color: '#1e3a8a',
   },
-  schedulerCalendarEventDate: {
-    marginTop: 2,
-    fontSize: 10,
-    fontWeight: '700',
-    color: 'rgba(255,255,255,0.92)',
+  schedulerProjectCalendarSection: {
+    marginTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#d9e7dc',
+    paddingTop: 14,
   },
-  schedulerCalendarEventModule: {
+  schedulerProjectCalendarHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+    marginBottom: 12,
+  },
+  schedulerProjectCalendarTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  schedulerProjectCalendarMeta: {
     marginTop: 2,
-    fontSize: 10,
-    fontWeight: '700',
-    color: 'rgba(255,255,255,0.88)',
+    fontSize: 12,
+    color: '#64748b',
+    lineHeight: 18,
+  },
+  schedulerProjectCalendarCount: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#166534',
     textTransform: 'uppercase',
+    letterSpacing: 0.4,
   },
-  schedulerCalendarMoreText: {
-    fontSize: 11,
+  schedulerProjectCalendarGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  schedulerProjectCalendarCard: {
+    width: 220,
+    minHeight: 96,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#d9e7dc',
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    justifyContent: 'space-between',
+  },
+  schedulerProjectCalendarCardTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  schedulerProjectCalendarCardTitle: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  schedulerProjectCalendarCardDate: {
+    marginTop: 8,
+    fontSize: 12,
     fontWeight: '700',
     color: '#475569',
-    marginTop: 2,
+    lineHeight: 17,
   },
-  schedulerCalendarEmpty: {
+  schedulerProjectCalendarCardMeta: {
+    marginTop: 6,
     fontSize: 11,
-    color: '#94a3b8',
+    fontWeight: '700',
+    color: '#166534',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  schedulerProjectCalendarStatusDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  schedulerProjectCalendarEmptyState: {
+    backgroundColor: '#f8fcf8',
+    borderWidth: 1,
+    borderColor: '#d9e7dc',
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 18,
+    alignItems: 'center',
+  },
+  schedulerProjectCalendarEmptyTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  schedulerProjectCalendarEmptyMeta: {
     marginTop: 4,
+    fontSize: 12,
+    color: '#64748b',
+    textAlign: 'center',
   },
   schedulerWeekRow: {
     flexDirection: 'row',

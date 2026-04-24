@@ -68,6 +68,7 @@ export interface ProjectInternalTask {
   assignedVolunteerId?: string;
   assignedVolunteerName?: string;
   isFieldOfficer?: boolean;
+  skillsNeeded?: string[]; // Skills required for this specific task
   createdAt: string;
   updatedAt: string;
 }
@@ -121,6 +122,7 @@ export interface Project {
   volunteersNeeded: number;
   volunteers: string[]; // Volunteer IDs
   joinedUserIds?: string[];
+  skillsNeeded?: string[]; // Skills required for this project/event
   createdAt: string;
   updatedAt: string;
   statusUpdates: StatusUpdate[];
@@ -295,6 +297,7 @@ export interface PartnerProjectProposalDetails {
   proposedEndDate: string;
   proposedLocation: string;
   proposedVolunteersNeeded: number;
+  skillsNeeded?: string[]; // Skills required for this project/event
   communityNeed: string;
   expectedDeliverables: string;
 }

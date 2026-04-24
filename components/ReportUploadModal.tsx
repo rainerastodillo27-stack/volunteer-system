@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import {
   Modal,
   View,
@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import type { SubmittedReport } from '../screens/ReportsScreen';
+import type { VolunteerTimeLog } from '../models/types';
 import { isImageMediaUri, pickImageFromDevice } from '../utils/media';
 
 type MaterialIconName = keyof typeof MaterialIcons.glyphMap;
@@ -28,6 +29,7 @@ interface ReportUploadModalProps {
   ) => void;
   projects?: any[];
   userRole?: SubmittedReport['submitterRole'];
+  volunteerTimeLogs?: VolunteerTimeLog[];
 }
 
 export default function ReportUploadModal({
@@ -36,6 +38,7 @@ export default function ReportUploadModal({
   onSubmit,
   projects = [],
   userRole,
+  volunteerTimeLogs,
 }: ReportUploadModalProps) {
   const [reportType, setReportType] =
     useState<SubmittedReport['reportType']>('volunteer_engagement');
@@ -62,6 +65,34 @@ export default function ReportUploadModal({
   const isVolunteer = userRole === 'volunteer';
   const entityLabel = isVolunteer ? 'Event' : 'Project';
   const entityLabelLower = entityLabel.toLowerCase();
+
+  const volunteerMetrics = useMemo(() => {
+    if (!isVolunteer || !selectedProject || !volunteerTimeLogs?.length) {
+      return { volunteerHours: 0, tasksCompleted: 0 };
+    }
+
+    const logsForProject = volunteerTimeLogs.filter(log => log.projectId === selectedProject);
+    const totalHours = logsForProject.reduce((sum, log) => {
+      if (!log.timeIn) {
+        return sum;
+      }
+
+      const start = new Date(log.timeIn).getTime();
+      const end = log.timeOut ? new Date(log.timeOut).getTime() : Date.now();
+      if (Number.isNaN(start) || Number.isNaN(end) || end <= start) {
+        return sum;
+      }
+      return sum + (end - start) / 3_600_000;
+    }, 0);
+
+    const completedLogs = logsForProject.filter(log => Boolean(log.timeOut));
+    const hasAnyLog = logsForProject.length > 0;
+
+    return {
+      volunteerHours: Number(totalHours.toFixed(1)),
+      tasksCompleted: completedLogs.length > 0 ? completedLogs.length : hasAnyLog ? 1 : 0,
+    };
+  }, [isVolunteer, selectedProject, volunteerTimeLogs]);
 
   useEffect(() => {
     if (!visible) {
@@ -102,7 +133,7 @@ export default function ReportUploadModal({
 
   const getMetricFieldsForType = () => {
     if (isVolunteer) {
-      return ['volunteerHours', 'tasksCompleted', 'beneficiariesServed'];
+      return ['beneficiariesServed'];
     }
 
     const baseFields = ['volunteerHours', 'verifiedAttendance', 'activeVolunteers'];
@@ -215,9 +246,35 @@ export default function ReportUploadModal({
       return;
     }
 
-    const relevantMetrics = getMetricFieldsForType();
-    const metricsData = Object.fromEntries(
-      relevantMetrics
+    // Check if volunteer has timed in for this project
+    if (isVolunteer && selectedProject && volunteerTimeLogs) {
+      const hasTimeIn = volunteerTimeLogs.some(log =>
+        log.project_id === selectedProject && log.time_in && !log.time_out
+      );
+
+      if (!hasTimeIn) {
+        Alert.alert(
+          'Time-in Required',
+          'You must time-in to this event before you can submit a report. Please use the time tracking feature first.'
+        );
+        return;
+      }
+    }
+
+    const selectedProjectData = selectedProject
+      ? projects.find(project => project.id === selectedProject)
+      : undefined;
+
+    const volunteerMetricValues = isVolunteer
+      ? {
+          volunteerHours: volunteerMetrics.volunteerHours,
+          tasksCompleted: volunteerMetrics.tasksCompleted,
+        }
+      : {};
+
+    const manualMetricsFields = getMetricFieldsForType();
+    const manualMetrics = Object.fromEntries(
+      manualMetricsFields
         .filter(field => metrics[field as keyof typeof metrics])
         .map(field => [
           field,
@@ -225,9 +282,10 @@ export default function ReportUploadModal({
         ])
     );
 
-    const selectedProjectData = selectedProject
-      ? projects.find(project => project.id === selectedProject)
-      : undefined;
+    const metricsData = {
+      ...volunteerMetricValues,
+      ...manualMetrics,
+    };
 
     const volunteerNarrative = isVolunteer
       ? [
@@ -402,9 +460,28 @@ export default function ReportUploadModal({
         placeholderTextColor="#cbd5e1"
       />
 
-      <Text style={styles.sectionTitle}>Quick Numbers</Text>
+      <Text style={styles.sectionTitle}>Auto-generated Event Metrics</Text>
       <Text style={styles.sectionHelper}>
-        Add the numbers you know. These are optional but helpful for the admin report.
+        Volunteer hours and task count are generated automatically from your time log.
+      </Text>
+      <View style={styles.autoMetricsCard}>
+        <View style={styles.autoMetricRow}>
+          <Text style={styles.autoMetricLabel}>Volunteer Hours</Text>
+          <Text style={styles.autoMetricValue}>
+            {selectedProject ? `${volunteerMetrics.volunteerHours.toFixed(1)} hrs` : 'Select an event'}
+          </Text>
+        </View>
+        <View style={styles.autoMetricRow}>
+          <Text style={styles.autoMetricLabel}>Tasks Completed</Text>
+          <Text style={styles.autoMetricValue}>
+            {selectedProject ? volunteerMetrics.tasksCompleted : 'Select an event'}
+          </Text>
+        </View>
+      </View>
+
+      <Text style={styles.sectionTitle}>Optional Impact Numbers</Text>
+      <Text style={styles.sectionHelper}>
+        Share how many people your event work helped, if you know it.
       </Text>
       <View style={styles.metricsGrid}>
         {getMetricFieldsForType().map(field => (
@@ -951,5 +1028,29 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#fff',
+  },
+  autoMetricsCard: {
+    borderRadius: 12,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 16,
+    marginBottom: 20,
+  },
+  autoMetricRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  autoMetricLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0f172a',
+  },
+  autoMetricValue: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#166534',
   },
 });

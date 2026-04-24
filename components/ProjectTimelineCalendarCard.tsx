@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import type { AdminPlanningCalendar, AdminPlanningItem, Project } from '../models/types';
+import { getProjectStatusColor } from '../utils/projectStatus';
 
 type TimelineEntry = {
   id: string;
@@ -56,21 +57,6 @@ function isValidDateValue(value?: string): boolean {
   }
 
   return !Number.isNaN(new Date(value).getTime());
-}
-
-function getProjectTimelineColor(project: Project): string {
-  switch (project.status) {
-    case 'Completed':
-      return '#16a34a';
-    case 'Cancelled':
-      return '#dc2626';
-    case 'Planning':
-      return '#2563eb';
-    case 'On Hold':
-      return '#f59e0b';
-    default:
-      return '#0f766e';
-  }
 }
 
 function formatRange(startValue: string, endValue: string): string {
@@ -150,7 +136,7 @@ export default function ProjectTimelineCalendarCard({
         description: project.description,
         startDate: project.startDate,
         endDate: project.endDate || project.startDate,
-        color: getProjectTimelineColor(project),
+        color: getProjectStatusColor(project.status),
         laneLabel: getLaneLabel(project),
         projectId: project.id,
         kind: 'project',

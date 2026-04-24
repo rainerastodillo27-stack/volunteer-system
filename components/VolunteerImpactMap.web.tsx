@@ -97,7 +97,7 @@ function getWebGoogleMapsApiKey() {
 
 function getCurrentWebOrigin() {
   if (typeof window === 'undefined' || !window.location?.origin) {
-    return 'http://localhost:8081';
+    return 'http://localhost';
   }
 
   return window.location.origin;
@@ -117,7 +117,8 @@ function getMappedProjects(projects: Project[]) {
   return projects.filter(
     project =>
       Number.isFinite(project.location?.latitude) &&
-      Number.isFinite(project.location?.longitude)
+      Number.isFinite(project.location?.longitude) &&
+      !(project.location?.latitude === 0 && project.location?.longitude === 0)
   );
 }
 
@@ -303,7 +304,7 @@ export default function VolunteerImpactMap({
             mapTypeId: selectedMapStyle.mapTypeId,
             mapTypeControl: false,
             streetViewControl: false,
-            fullscreenControl: false,
+            fullscreenControl: true,
             zoomControl: true,
             restriction: {
               latLngBounds: PHILIPPINES_BOUNDS,
@@ -386,7 +387,15 @@ export default function VolunteerImpactMap({
     <View style={styles.section}>
       <View style={styles.headerRow}>
         <View style={styles.headerIdentity}>
-          <View style={styles.headerIcon}>
+          <View
+            style={[
+              styles.headerIcon,
+              {
+                backgroundColor: selectedMapStyle.chipBg,
+                borderColor: selectedMapStyle.chipBorder,
+              },
+            ]}
+          >
             <MaterialIcons name="place" size={18} color={selectedMapStyle.accentColor} />
           </View>
           <View style={styles.headerCopy}>
@@ -469,18 +478,6 @@ export default function VolunteerImpactMap({
           </View>
         ) : null}
       </View>
-
-      {selectedAccountOption ? (
-        <View style={styles.selectionSummary}>
-          <Text style={styles.selectionSummaryTitle}>
-            {selectedAccountOption.label}
-          </Text>
-          <Text style={styles.selectionSummaryText}>
-            {selectedAccountOption.projectCount} mapped
-            {selectedAccountOption.projectCount === 1 ? ' project' : ' projects'}
-          </Text>
-        </View>
-      ) : null}
 
       {selectedProject ? (
         <View style={styles.detailCard}>
@@ -600,7 +597,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#dcfce7',
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -613,14 +610,14 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     gap: 8,
     flexWrap: 'wrap',
-    maxWidth: '52%',
+    maxWidth: '58%',
   },
   mapStyleButton: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
     borderRadius: 999,
     borderWidth: 1,
   },
@@ -635,23 +632,23 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   title: {
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '800',
     color: '#0f172a',
   },
   subtitle: {
     fontSize: 12,
     color: '#64748b',
-    marginTop: 2,
+    marginTop: 3,
   },
   mapShell: {
     position: 'relative',
     overflow: 'hidden',
-    borderRadius: 18,
+    borderRadius: 20,
     borderWidth: 1,
-    borderColor: '#dbeafe',
-    backgroundColor: '#e0f2fe',
-    height: 320,
+    borderColor: '#d8e8db',
+    backgroundColor: '#ffffff',
+    height: 300,
   },
   mapHost: {
     width: '100%',
@@ -685,36 +682,17 @@ const styles = StyleSheet.create({
     color: '#334155',
     textAlign: 'center',
   },
-  selectionSummary: {
-    marginTop: 12,
-    backgroundColor: '#f8fafc',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  selectionSummaryTitle: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  selectionSummaryText: {
-    marginTop: 4,
-    fontSize: 12,
-    color: '#64748b',
-  },
   detailCard: {
     marginTop: 12,
-    backgroundColor: '#f8fafc',
-    borderRadius: 14,
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    borderColor: '#d8e8db',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
   },
   detailTitle: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '800',
     color: '#0f172a',
   },
@@ -728,7 +706,7 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontSize: 13,
     lineHeight: 19,
-    color: '#475569',
+    color: '#334155',
   },
   menuBackdrop: {
     flex: 1,

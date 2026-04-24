@@ -111,8 +111,147 @@ export function getPrimaryProjectImageSource(project: Project): ImageSourcePropT
   return getProjectImageSources(project)[0];
 }
 
+type ProjectCoordinates = Pick<Project['location'], 'latitude' | 'longitude'>;
+
+const KNOWN_PLACE_COORDINATES: Array<{
+  keywords: string[];
+  latitude: number;
+  longitude: number;
+}> = [
+  {
+    keywords: ['baybay talisay city', 'baybay talisay', 'talisay city'],
+    latitude: 10.5447,
+    longitude: 123.1885,
+  },
+  {
+    keywords: ['kabankalan city', 'kabankalan'],
+    latitude: 10.6711,
+    longitude: 122.9534,
+  },
+  {
+    keywords: ['bacolod city', 'bacolod'],
+    latitude: 10.6765,
+    longitude: 122.9509,
+  },
+  {
+    keywords: ['bago city', 'bago'],
+    latitude: 10.5333,
+    longitude: 122.8333,
+  },
+  {
+    keywords: ['silay city', 'silay'],
+    latitude: 10.8002,
+    longitude: 122.9726,
+  },
+  {
+    keywords: ['victorias city', 'victorias'],
+    latitude: 10.9013,
+    longitude: 123.0707,
+  },
+  {
+    keywords: ['cadiz city', 'cadiz'],
+    latitude: 10.9465,
+    longitude: 123.2881,
+  },
+  {
+    keywords: ['san carlos city', 'san carlos'],
+    latitude: 10.4812,
+    longitude: 123.4184,
+  },
+  {
+    keywords: ['himamaylan city', 'himamaylan'],
+    latitude: 10.1048,
+    longitude: 122.8703,
+  },
+  {
+    keywords: ['murcia'],
+    latitude: 10.6056,
+    longitude: 123.0417,
+  },
+  {
+    keywords: ['la carlota city', 'la carlota'],
+    latitude: 10.4247,
+    longitude: 122.9212,
+  },
+  {
+    keywords: ['sipalay city', 'sipalay'],
+    latitude: 9.7514,
+    longitude: 122.4665,
+  },
+  {
+    keywords: ['negros occidental'],
+    latitude: 10.5,
+    longitude: 123.0,
+  },
+];
+
+function normalizePlaceValue(value: string | undefined | null): string {
+  return (value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function hasUsableCoordinates(location?: Partial<Project['location']> | null): location is ProjectCoordinates {
+  return Boolean(
+    location &&
+      Number.isFinite(location.latitude) &&
+      Number.isFinite(location.longitude) &&
+      !(location.latitude === 0 && location.longitude === 0)
+  );
+}
+
+export function inferCoordinatesFromPlace(
+  place: string,
+  projects: Array<Pick<Project, 'location'>> = []
+): ProjectCoordinates | null {
+  const normalizedPlace = normalizePlaceValue(place);
+  if (!normalizedPlace) {
+    return null;
+  }
+
+  const exactProjectMatch = projects.find(project => {
+    const normalizedAddress = normalizePlaceValue(project.location?.address);
+    return normalizedAddress === normalizedPlace && hasUsableCoordinates(project.location);
+  });
+
+  if (exactProjectMatch) {
+    return {
+      latitude: exactProjectMatch.location.latitude,
+      longitude: exactProjectMatch.location.longitude,
+    };
+  }
+
+  const relatedProjectMatch = projects.find(project => {
+    const normalizedAddress = normalizePlaceValue(project.location?.address);
+    return (
+      normalizedAddress &&
+      (normalizedAddress.includes(normalizedPlace) ||
+        normalizedPlace.includes(normalizedAddress)) &&
+      hasUsableCoordinates(project.location)
+    );
+  });
+
+  if (relatedProjectMatch) {
+    return {
+      latitude: relatedProjectMatch.location.latitude,
+      longitude: relatedProjectMatch.location.longitude,
+    };
+  }
+
+  const keywordMatch = KNOWN_PLACE_COORDINATES.find(entry =>
+    entry.keywords.some(keyword => normalizedPlace.includes(keyword))
+  );
+
+  return keywordMatch
+    ? {
+        latitude: keywordMatch.latitude,
+        longitude: keywordMatch.longitude,
+      }
+    : null;
+}
+
 // Shared map constants and helpers for project and event map screens.
-export const EVENT_MARKER_COLOR = '#9C27B0';
 
 export const PHILIPPINES_REGION = {
   latitude: 12.8797,
@@ -133,17 +272,24 @@ export const PHILIPPINES_BOUNDS = {
   east: 127.5,
 };
 
-// Returns the marker color for a project, with events using a separate accent.
+export const NEGROS_REGION = {
+  latitude: 10.4,
+  longitude: 123.05,
+  latitudeDelta: 0.85,
+  longitudeDelta: 0.8,
+};
+
+// Returns the marker color for a project or event based only on lifecycle status.
 export function getProjectMarkerColor(project: Pick<Project, 'isEvent' | 'status'>) {
-  return project.isEvent ? EVENT_MARKER_COLOR : getProjectStatusColor(project.status);
+  return getProjectStatusColor(project.status);
 }
 
-// Returns only projects that have usable coordinates for native and web maps.
 export function getMappedProjects<T extends Pick<Project, 'location'>>(projects: T[]): T[] {
   return projects.filter(
     project =>
       Number.isFinite(project.location?.latitude) &&
-      Number.isFinite(project.location?.longitude)
+      Number.isFinite(project.location?.longitude) &&
+      !(project.location?.latitude === 0 && project.location?.longitude === 0)
   );
 }
 
@@ -152,7 +298,7 @@ export function getInitialProjectRegion(projects: Project[]) {
   const mappedProjects = getMappedProjects(projects);
 
   if (mappedProjects.length === 0) {
-    return PHILIPPINES_REGION;
+    return NEGROS_REGION;
   }
 
   const latitudes = mappedProjects.map(project => project.location.latitude);

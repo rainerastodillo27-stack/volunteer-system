@@ -43,6 +43,7 @@ import {
   subscribeToStorageChanges,
 } from '../models/storage';
 import { AdminPlanningCalendar, AdminPlanningItem, Project } from '../models/types';
+import { getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 type PlannerViewMode = '3weeks' | 'month' | 'agenda';
@@ -192,21 +193,8 @@ function itemTouchesRange(
   return endDate >= rangeStart && startDate <= rangeEnd;
 }
 
-function getProjectTimelineColor(project: Project, fallbackColor: string): string {
-  switch (project.status) {
-    case 'Planning':
-      return fallbackColor;
-    case 'In Progress':
-      return '#2563EB';
-    case 'On Hold':
-      return '#F97316';
-    case 'Completed':
-      return '#65A30D';
-    case 'Cancelled':
-      return '#DC2626';
-    default:
-      return fallbackColor;
-  }
+function getProjectTimelineColor(project: Project): string {
+  return getProjectStatusColor(project.status);
 }
 
 function formatRangeLabel(referenceDate: Date, viewMode: PlannerViewMode): string {
@@ -331,7 +319,7 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
       title: project.title,
       description: project.description,
       calendarId: projectPlanningCalendar.id,
-      color: getProjectTimelineColor(project, projectPlanningCalendar.color),
+      color: getProjectTimelineColor(project),
       startDate: project.startDate,
       endDate: project.endDate,
       location: project.location.address,

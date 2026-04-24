@@ -269,23 +269,25 @@ export default function DashboardScreen({ navigation }: any) {
       [...volunteersData]
         .sort((left, right) => left.name.localeCompare(right.name))
         .map(volunteer => {
-          const completedProjectIds =
-            volunteerCompletedProjectIdsByVolunteerId[volunteer.id] || volunteer.pastProjects || [];
-          const linkedProjectIds = projectsData
+          const joinedEventProjectIds = projectsData
             .filter(
               project =>
-                project.volunteers.includes(volunteer.id) ||
-                (project.joinedUserIds || []).includes(volunteer.userId)
+                project.isEvent &&
+                (
+                  (project.joinedUserIds || []).includes(volunteer.userId) ||
+                  project.volunteers.includes(volunteer.id) ||
+                  (project.internalTasks || []).some(task => task.assignedVolunteerId === volunteer.id)
+                )
             )
             .map(project => project.id);
 
           return {
             id: volunteer.id,
             label: volunteer.name,
-            projectIds: Array.from(new Set([...completedProjectIds, ...linkedProjectIds])),
+            projectIds: joinedEventProjectIds,
           };
         }),
-    [projectsData, volunteerCompletedProjectIdsByVolunteerId, volunteersData]
+    [projectsData, volunteersData]
   );
 
   const partnerMapAccounts = useMemo(
@@ -648,6 +650,7 @@ const styles = StyleSheet.create({
     borderColor: green.cardBorder,
     borderRadius: 14,
     padding: 12,
+    minHeight: Platform.OS === 'web' ? undefined : 420,
   },
   cardHeaderRow: {
     flexDirection: 'row',
@@ -688,7 +691,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#bde0c6',
     flexDirection: 'row',
-    minHeight: 320,
+    minHeight: Platform.OS === 'web' ? 320 : 280,
   },
   upcomingPane: {
     width: '40%',

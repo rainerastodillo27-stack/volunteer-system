@@ -4,7 +4,6 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
 import { useFocusEffect } from '@react-navigation/native';
 import InlineLoadError from '../components/InlineLoadError';
-import ProjectYearCalendarCard from '../components/ProjectYearCalendarCard';
 import { useAuth } from '../contexts/AuthContext';
 import {
   buildProgramProposalProjectId,
@@ -79,6 +78,7 @@ type PartnerProposalDraft = {
   proposedEndDate: string;
   proposedLocation: string;
   proposedVolunteersNeeded: string;
+  skillsNeeded: string;
   communityNeed: string;
   expectedDeliverables: string;
 };
@@ -108,6 +108,7 @@ function createPartnerProposalDraft(project: Project): PartnerProposalDraft {
     proposedEndDate: project.endDate.slice(0, 10),
     proposedLocation: project.location.address,
     proposedVolunteersNeeded: String(project.volunteersNeeded || 1),
+    skillsNeeded: (project.skillsNeeded || []).join(', '),
     communityNeed: '',
     expectedDeliverables: '',
   };
@@ -129,6 +130,7 @@ function buildPartnerProposalDetails(
     proposedEndDate: draft.proposedEndDate.trim(),
     proposedLocation: draft.proposedLocation.trim(),
     proposedVolunteersNeeded: Number(draft.proposedVolunteersNeeded),
+    skillsNeeded: draft.skillsNeeded.split(',').map(s => s.trim()).filter(s => s.length > 0),
     communityNeed: draft.communityNeed.trim(),
     expectedDeliverables: draft.expectedDeliverables.trim(),
   };
@@ -1025,9 +1027,14 @@ export default function ProjectsScreen({ navigation, route }: any) {
 
     const joinedUsers = project.joinedUserIds || [];
     const volunteerId = volunteerProfile?.id;
+    const isVolunteerAssigned = (project.internalTasks || []).some(
+      task => task.assignedVolunteerId === volunteerId
+    );
+    
     return (
       (user?.id ? joinedUsers.includes(user.id) : false) ||
-      (volunteerId ? project.volunteers.includes(volunteerId) : false)
+      (volunteerId ? project.volunteers.includes(volunteerId) : false) ||
+      isVolunteerAssigned
     );
   }, [user?.id, volunteerProfile?.id]);
 
@@ -1035,6 +1042,9 @@ export default function ProjectsScreen({ navigation, route }: any) {
     const joined = isJoined(project);
     const joinRecord = volunteerJoinRecordByProjectId.get(project.id);
     const volunteerMatch = volunteerMatchByProjectId.get(project.id);
+    const isAssigned = (project.internalTasks || []).some(
+      task => task.assignedVolunteerId === volunteerProfile?.id
+    );
     const completedParticipation = joinRecord?.participationStatus === 'Completed';
     const isPendingApproval = volunteerMatch?.status === 'Requested';
     const wasRejected = volunteerMatch?.status === 'Rejected';
@@ -1044,7 +1054,9 @@ export default function ProjectsScreen({ navigation, route }: any) {
     const joinButtonLabel = completedParticipation
       ? 'Completed'
       : joined
-      ? 'Approved'
+      ? isAssigned
+        ? 'Assigned'
+        : 'Approved'
       : isPendingApproval
       ? 'Pending Approval'
       : isClosedStatus
@@ -1070,7 +1082,9 @@ export default function ProjectsScreen({ navigation, route }: any) {
     const statusMessage = completedParticipation
       ? 'You already completed this event.'
       : joined
-      ? 'You are approved to join this event.'
+      ? isAssigned
+        ? 'Admin assigned you to this event.'
+        : 'You are approved to join this event.'
       : isPendingApproval
       ? 'Waiting for admin approval.'
       : isClosedStatus
@@ -1094,7 +1108,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
       statusMessage,
       wasRejected,
     };
-  }, [isJoined, volunteerJoinRecordByProjectId, volunteerMatchByProjectId]);
+  }, [isJoined, volunteerJoinRecordByProjectId, volunteerMatchByProjectId, volunteerProfile?.id]);
 
   // Formats timestamps shown on time logs and project metadata.
   const formatTimestamp = (value?: string) => {
@@ -2295,11 +2309,6 @@ export default function ProjectsScreen({ navigation, route }: any) {
             )
           ) : selectedProgram && !selectedEvent ? (
             <>
-              <ProjectYearCalendarCard
-                program={selectedProgram}
-                projects={[selectedProgram, ...selectedProgramEvents]}
-              />
-
               <View style={styles.mobileDetailCard}>
                 <View style={styles.mobileProgramHeaderRow}>
                   <View style={styles.mobileProgramHeaderCopy}>
@@ -2790,6 +2799,16 @@ export default function ProjectsScreen({ navigation, route }: any) {
                 onChangeText={value => handlePartnerProposalDraftChange('proposedVolunteersNeeded', value)}
                 placeholder="Number of volunteers needed"
                 keyboardType={Platform.OS === 'ios' ? 'number-pad' : 'numeric'}
+                placeholderTextColor="#94a3b8"
+                editable={loadingProjectId !== activeProposalProject?.id}
+              />
+
+              <Text style={styles.proposalFieldLabel}>Skills Needed</Text>
+              <TextInput
+                style={styles.proposalInput}
+                value={partnerProposalDraft?.skillsNeeded || ''}
+                onChangeText={value => handlePartnerProposalDraftChange('skillsNeeded', value)}
+                placeholder="e.g., teaching, medical, construction, cooking (comma-separated)"
                 placeholderTextColor="#94a3b8"
                 editable={loadingProjectId !== activeProposalProject?.id}
               />

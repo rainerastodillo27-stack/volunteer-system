@@ -34,59 +34,69 @@ These are the primary tables used by the running system.
 - Key links: associated with users via `user_id`.
 
 ### 4) projects
-- Purpose: Stores both program-level records and event-level records.
+- Purpose: Stores top-level operational project records that represent programs in the main workflow.
 - Used for: project lifecycle, scheduling, locations, volunteer requirements, and status progression.
 - Key links: linked from status updates, matches, joins, reports, and group messages.
 
-### 5) status_updates
+### 5) programs
+- Purpose: Stores a dedicated program table synchronized from top-level `projects` rows where `is_event = false`.
+- Used for: program-only reporting, cleaner querying, and schema-safe separation of program records from event rows.
+- Key links: mirrors program/project identity through `id`, keeps `partner_id`, `program_module`, schedule, volunteer metadata, and `linked_event_count`.
+
+### 6) events
+- Purpose: Stores event-level records linked to programs through `parent_project_id`.
+- Used for: event scheduling, volunteer deployment, internal task assignment, and event-specific participation tracking.
+- Key links: linked back to the owning program via `parent_project_id`.
+
+### 7) status_updates
 - Purpose: Stores timeline/status change entries for projects.
 - Used for: project progress feed and historical status tracking.
 - Key links: references `project_id`.
 
-### 6) volunteer_matches
+### 8) volunteer_matches
 - Purpose: Stores volunteer-to-project matching requests and outcomes.
 - Used for: assignment workflow, review/approval flow, and contributed hours accounting.
 - Key links: references `volunteer_id` and `project_id`.
 
-### 7) volunteer_time_logs
+### 9) volunteer_time_logs
 - Purpose: Stores volunteer attendance/time-in and time-out logs plus completion notes.
 - Used for: attendance validation, contribution reporting, and completion evidence.
 - Key links: references `volunteer_id` and `project_id`.
 
-### 8) volunteer_project_joins
+### 10) volunteer_project_joins
 - Purpose: Stores explicit join records between volunteers and projects.
 - Used for: participation roster management and completion tracking.
 - Key links: references project and volunteer identity fields.
 
-### 9) partner_project_applications
+### 11) partner_project_applications
 - Purpose: Stores partner requests/applications for project participation and their review state.
 - Used for: partner request approval and project participation governance.
 - Key links: references `project_id` and `partner_user_id`.
 
-### 10) retired partner check-ins
+### 12) retired partner check-ins
 - The partner event check-in table was removed from the active schema.
 
-### 11) reports
+### 13) reports
 - Purpose: Stores submitted reports from partners, volunteers, field submissions, and published impact file records.
 - Used for: project/event reporting, impact metrics capture, review workflow, field report history, and published report tracking.
 - Key links: references `project_id`, partner identity fields, submitter fields, `report_type`, and generated impact file metadata.
 
-### 12) messages
+### 14) messages
 - Purpose: Stores direct (user-to-user) chat messages.
 - Used for: one-to-one communication and message read state handling.
 - Key links: `sender_id` and `recipient_id` reference `users(id)`.
 
-### 13) project_group_messages
+### 15) project_group_messages
 - Purpose: Stores project group chat messages and structured proposal/resolution messages.
 - Used for: project coordination, scope proposals, and threaded response actions.
 - Key links: `sender_id` references `users(id)`, scoped by `project_id`.
 
-### 14) admin_planning_calendars
+### 16) admin_planning_calendars
 - Purpose: Stores admin calendar definitions.
 - Used for: planning calendar setup and calendar-level organization.
 - Key links: parent table for planning items.
 
-### 15) admin_planning_items
+### 17) admin_planning_items
 - Purpose: Stores scheduled planning items/events under admin calendars.
 - Used for: planning/scheduling operations and optional linking to projects.
 - Key links: references `calendar_id` and optionally `linked_project_id`.
@@ -144,6 +154,8 @@ Current use:
 - users -> users
 - partners -> partners
 - projects -> projects
+- programs -> programs
+- events -> events
 - volunteers -> volunteers
 - statusUpdates -> status_updates
 - volunteerMatches -> volunteer_matches

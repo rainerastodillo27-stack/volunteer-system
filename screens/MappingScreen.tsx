@@ -12,7 +12,6 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
-import * as Location from 'expo-location';
 import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import InlineLoadError from '../components/InlineLoadError';
 import { useAuth } from '../contexts/AuthContext';
@@ -40,7 +39,6 @@ export default function MappingScreen({ navigation }: any) {
   const [partnerReports, setPartnerReports] = useState<PartnerReport[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [showDetails, setShowDetails] = useState(false);
-  const [userRegion, setUserRegion] = useState<Region | null>(null);
   const [loading, setLoading] = useState(true);
   const mapRef = React.useRef<MapView | null>(null);
   const mobileGoogleMapsApiKey =
@@ -66,44 +64,7 @@ export default function MappingScreen({ navigation }: any) {
     );
   }, [user]);
 
-  useEffect(() => {
-    if (!isVolunteerView) {
-      return;
-    }
 
-    let active = true;
-
-    const loadCurrentLocation = async () => {
-      try {
-        const permission = await Location.requestForegroundPermissionsAsync();
-        if (!active || permission.status !== 'granted') {
-          return;
-        }
-
-        const location = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        });
-        if (!active) {
-          return;
-        }
-
-        setUserRegion({
-          latitude: location.coords.latitude,
-          longitude: location.coords.longitude,
-          latitudeDelta: 0.08,
-          longitudeDelta: 0.08,
-        });
-      } catch (error) {
-        console.error('Error loading current location for volunteer map:', error);
-      }
-    };
-
-    void loadCurrentLocation();
-
-    return () => {
-      active = false;
-    };
-  }, [isVolunteerView]);
 
   // Loads map data and narrows project visibility based on the active role.
   const loadProjects = async () => {
@@ -131,7 +92,11 @@ export default function MappingScreen({ navigation }: any) {
           ? snapshot.projects.filter(
               project =>
                 project.isEvent &&
-                joinedVolunteerProjectIds.has(project.id)
+                (
+                  joinedVolunteerProjectIds.has(project.id) ||
+                  (snapshot.volunteerProfile && (project.volunteers || []).includes(snapshot.volunteerProfile.id)) ||
+                  (snapshot.volunteerProfile && (project.internalTasks || []).some(task => task.assignedVolunteerId === snapshot.volunteerProfile?.id))
+                )
             )
           : snapshot.projects;
 
@@ -195,10 +160,7 @@ export default function MappingScreen({ navigation }: any) {
     navigateToAvailableRoute(navigation, 'Projects', { projectId: selectedProject.id });
   };
 
-  const handleRecenterMap = () => {
-    const targetRegion = userRegion || initialRegion;
-    mapRef.current?.animateToRegion(targetRegion, 250);
-  };
+
 
   if (loading) {
     return (
@@ -243,8 +205,6 @@ export default function MappingScreen({ navigation }: any) {
           showsCompass
           showsScale
           toolbarEnabled
-          showsUserLocation={isVolunteerView}
-          showsMyLocationButton={isVolunteerView}
         >
           {mappedProjects.map((project, index) => (
             <Marker
@@ -276,10 +236,6 @@ export default function MappingScreen({ navigation }: any) {
                 </View>
               </View>
             </View>
-
-            <TouchableOpacity style={styles.recenterButton} onPress={handleRecenterMap}>
-              <MaterialIcons name="my-location" size={20} color="#166534" />
-            </TouchableOpacity>
 
             <View style={styles.volunteerFooterOverlay}>
               {selectedProject ? (
@@ -331,7 +287,7 @@ export default function MappingScreen({ navigation }: any) {
           </Text>
           {projects.length > mappedProjects.length ? (
             <Text style={styles.projectListWarning}>
-              {`${projects.length - mappedProjects.length} ${projects.length - mappedProjects.length === 1 ? 'item is' : 'items are'} missing coordinates and hidden from the map.`}
+              {`${projects.length - mappedProjects.length} ${projects.length - mappedProjects.length === 1 ? 'item is' : 'items are'} missing a map placement and hidden from the map.`}
             </Text>
           ) : null}
           {(Platform.OS === 'android' || Platform.OS === 'ios') && !mobileGoogleMapsApiKey ? (
@@ -399,15 +355,9 @@ export default function MappingScreen({ navigation }: any) {
 
                 <View style={styles.infoGrid}>
                   <View style={styles.infoItem}>
-                    <Text style={styles.infoLabel}>Latitude</Text>
+                    <Text style={styles.infoLabel}>Place</Text>
                     <Text style={styles.infoValue}>
-                      {selectedProject.location.latitude.toFixed(4)}
-                    </Text>
-                  </View>
-                  <View style={styles.infoItem}>
-                    <Text style={styles.infoLabel}>Longitude</Text>
-                    <Text style={styles.infoValue}>
-                      {selectedProject.location.longitude.toFixed(4)}
+                      {selectedProject.location.address || 'Place to be announced'}
                     </Text>
                   </View>
                 </View>

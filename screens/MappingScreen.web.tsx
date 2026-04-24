@@ -20,11 +20,12 @@ import {
   PHILIPPINES_BOUNDS,
   PHILIPPINES_WEB_CENTER,
   getMappedProjects,
+  getProjectMarkerColor,
   getPrimaryProjectImageSource,
 } from '../utils/projectMap';
 import { getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
-import { loadGoogleMaps } from '../utils/webGoogleMaps';
+import { createGoogleMapsMarkerIcon, loadGoogleMaps } from '../utils/webGoogleMaps';
 
 const MapHost = 'div' as any;
 
@@ -93,7 +94,7 @@ function getWebGoogleMapsApiKey() {
 
 function getCurrentWebOrigin() {
   if (typeof window === 'undefined' || !window.location?.origin) {
-    return 'http://localhost:8081';
+    return 'http://localhost';
   }
 
   return window.location.origin;
@@ -107,11 +108,12 @@ function getGoogleMapsErrorMessage(error: unknown, apiKey: string) {
   }
 
   const message = error instanceof Error ? error.message : '';
-  if (message) {
-    return `Google Maps could not load on web. Allow ${currentOrigin} in your Google Maps web key referrers and make sure the Maps JavaScript API is enabled.`;
+  
+  if (message.includes('did not initialize')) {
+    return `Google Maps failed to initialize.\n\nTroubleshooting:\n• Verify "Maps JavaScript API" is ENABLED in Google Cloud Console\n• Check your API key is valid\n• Current URL: ${currentOrigin}\n• Clear browser cache and try again`;
   }
 
-  return `Google Maps could not load on web. Allow ${currentOrigin} in your Google Maps web key referrers, then check the browser console for more details.`;
+  return `Google Maps could not load: ${message || 'Unknown error. Check browser console for details.'}`;
 }
 
 // Displays the web version of the project map using the Google Maps JavaScript API.
@@ -206,6 +208,7 @@ export default function MappingScreen({ navigation }: any) {
             },
             map,
             title: project.title,
+            icon: createGoogleMapsMarkerIcon(googleMaps, getProjectMarkerColor(project)),
           });
 
           const listener = marker.addListener('click', () => {
@@ -259,7 +262,11 @@ export default function MappingScreen({ navigation }: any) {
           ? snapshot.projects.filter(
               project =>
                 project.isEvent &&
-                joinedVolunteerProjectIds.has(project.id)
+                (
+                  joinedVolunteerProjectIds.has(project.id) ||
+                  (snapshot.volunteerProfile && (project.volunteers || []).includes(snapshot.volunteerProfile.id)) ||
+                  (snapshot.volunteerProfile && (project.internalTasks || []).some(task => task.assignedVolunteerId === snapshot.volunteerProfile?.id))
+                )
             )
           : snapshot.projects;
 
@@ -408,15 +415,9 @@ export default function MappingScreen({ navigation }: any) {
 
                 <View style={styles.infoGrid}>
                   <View style={styles.infoItem}>
-                    <Text style={styles.infoLabel}>Latitude</Text>
+                    <Text style={styles.infoLabel}>Place</Text>
                     <Text style={styles.infoValue}>
-                      {selectedProject.location.latitude.toFixed(4)}
-                    </Text>
-                  </View>
-                  <View style={styles.infoItem}>
-                    <Text style={styles.infoLabel}>Longitude</Text>
-                    <Text style={styles.infoValue}>
-                      {selectedProject.location.longitude.toFixed(4)}
+                      {selectedProject.location.address || 'Place to be announced'}
                     </Text>
                   </View>
                 </View>

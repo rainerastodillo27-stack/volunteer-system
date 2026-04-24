@@ -469,14 +469,15 @@ export default function VolunteerTasksScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>My Assigned Tasks</Text>
-        <Text style={styles.headerSubtitle}>
-          {hasFieldOfficerAccess
-            ? 'Review your tasks and manage volunteer assignments in the events you supervise.'
-            : 'Tasks assigned to you inside joined events'}
-        </Text>
-      </View>
+      <ScrollView style={styles.scrollContent} contentContainerStyle={styles.scrollContentContainer} showsVerticalScrollIndicator={true}>
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>My Assigned Tasks</Text>
+          <Text style={styles.headerSubtitle}>
+            {hasFieldOfficerAccess
+              ? 'Review your tasks and manage volunteer assignments in the events you supervise.'
+              : 'Tasks assigned to you inside joined events'}
+          </Text>
+        </View>
 
       {loadError && (
         <View style={styles.inlineErrorWrap}>
@@ -678,7 +679,7 @@ export default function VolunteerTasksScreen() {
             ))}
           </View>
 
-          <ScrollView style={styles.taskList} contentContainerStyle={styles.taskListContent}>
+          <View style={styles.taskListContent}>
             {groupedFilteredTasks.map(group => (
               <View key={group.projectId} style={styles.taskGroupCard}>
                 <View style={styles.taskGroupHeader}>
@@ -747,9 +748,10 @@ export default function VolunteerTasksScreen() {
                 ))}
               </View>
             ))}
-          </ScrollView>
+          </View>
         </>
       )}
+      </ScrollView>
 
       <Modal
         animationType="slide"
@@ -798,6 +800,13 @@ export default function VolunteerTasksScreen() {
                   <Text style={styles.infoLabel}>Description</Text>
                   <Text style={styles.descriptionText}>{selectedTask.description}</Text>
                 </View>
+
+                {selectedTask.skillsNeeded && selectedTask.skillsNeeded.length > 0 && (
+                  <View style={styles.infoSection}>
+                    <Text style={styles.infoLabel}>Skills Needed</Text>
+                    <Text style={styles.skillsText}>{selectedTask.skillsNeeded.join(', ')}</Text>
+                  </View>
+                )}
 
                 <View style={styles.infoSection}>
                   <Text style={styles.infoLabel}>Status</Text>
@@ -1000,6 +1009,12 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
+  },
+  scrollContent: {
+    flex: 1,
+  },
+  scrollContentContainer: {
+    flexGrow: 1,
   },
   header: {
     paddingHorizontal: 20,
@@ -1303,7 +1318,7 @@ const styles = StyleSheet.create({
     color: '#fff',
   },
   taskList: {
-    flex: 1,
+    minHeight: 200,
   },
   taskListContent: {
     paddingHorizontal: 20,
@@ -1515,6 +1530,11 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#333',
     lineHeight: 22,
+  },
+  skillsText: {
+    fontSize: 14,
+    color: '#059669',
+    fontWeight: '600',
   },
   manageBoardButton: {
     marginTop: 12,

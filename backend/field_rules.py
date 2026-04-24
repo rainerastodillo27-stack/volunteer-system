@@ -114,7 +114,7 @@ def sanitize_hot_storage_item(key: str, item: dict[str, Any]) -> dict[str, Any]:
         sanitized["rating"] = clamp_rating(item.get("rating"))
         return sanitized
 
-    if key in {"projects", "events"}:
+    if key in {"projects", "programs", "events"}:
         sanitized["volunteersNeeded"] = clamp_non_negative_int(item.get("volunteersNeeded"))
         return sanitized
 

@@ -1,198 +1,117 @@
 import React, { useMemo } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
-import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { format } from 'date-fns';
 import type { Project } from '../models/types';
+import { getProjectStatusColor } from '../utils/projectStatus';
 
 type ProjectYearCalendarCardProps = {
   program: Project;
   projects: Project[];
 };
 
-type CalendarEntry = {
-  id: string;
-  title: string;
-  startDate: string;
-  endDate: string;
-  isEvent?: boolean;
-  status: Project['status'];
-};
-
-const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-function isValidDateValue(value?: string): boolean {
-  if (!value) {
-    return false;
-  }
-
-  return !Number.isNaN(new Date(value).getTime());
-}
-
-function getStatusColor(status: Project['status']): string {
-  switch (status) {
-    case 'Completed':
-      return '#16a34a';
-    case 'Cancelled':
-      return '#dc2626';
-    case 'Planning':
-      return '#2563eb';
-    case 'On Hold':
-      return '#d97706';
-    default:
-      return '#166534';
-  }
-}
-
-function formatEntryDateLabel(startValue: string, endValue: string): string {
-  const startDate = new Date(startValue);
-  const endDate = isValidDateValue(endValue) ? new Date(endValue) : startDate;
-
-  if (Number.isNaN(startDate.getTime())) {
+function formatDateRange(startDate?: string, endDate?: string): string {
+  if (!startDate) {
     return 'Date pending';
   }
 
-  const startLabel = format(startDate, 'MMM d');
-  const endLabel = format(endDate, 'MMM d');
-  return startLabel === endLabel ? startLabel : `${startLabel} - ${endLabel}`;
-}
+  const start = new Date(startDate);
+  const end = endDate ? new Date(endDate) : start;
 
-function clampDateToYear(date: Date, year: number, clampToEnd = false): Date {
-  if (date.getFullYear() === year) {
-    return date;
+  if (Number.isNaN(start.getTime())) {
+    return 'Date pending';
   }
 
-  if (date.getFullYear() < year) {
-    return new Date(year, 0, 1);
+  if (Number.isNaN(end.getTime()) || start.getTime() === end.getTime()) {
+    return format(start, 'MMM d, yyyy');
   }
 
-  return clampToEnd ? new Date(year, 11, 31, 23, 59, 59, 999) : new Date(year, 0, 1);
+  return `${format(start, 'MMM d')} - ${format(end, 'MMM d, yyyy')}`;
 }
 
 export default function ProjectYearCalendarCard({
   program,
   projects,
 }: ProjectYearCalendarCardProps) {
-  const { width } = useWindowDimensions();
-  const monthCardWidth = width < 420 ? '100%' : '48%';
-
-  const displayYear = useMemo(() => {
-    if (isValidDateValue(program.startDate)) {
-      return new Date(program.startDate).getFullYear();
-    }
-
-    const firstValidProject = projects.find(project => isValidDateValue(project.startDate));
-    return firstValidProject ? new Date(firstValidProject.startDate).getFullYear() : new Date().getFullYear();
-  }, [program.startDate, projects]);
-
-  const monthlyEntries = useMemo(() => {
-    const yearStart = new Date(displayYear, 0, 1).getTime();
-    const yearEnd = new Date(displayYear, 11, 31, 23, 59, 59, 999).getTime();
-
-    const buckets = MONTH_LABELS.map((label, index) => ({
-      index,
-      label,
-      items: [] as CalendarEntry[],
-    }));
-
-    projects.forEach(projectItem => {
-      if (!isValidDateValue(projectItem.startDate)) {
-        return;
-      }
-
-      const startDate = new Date(projectItem.startDate);
-      const endDate = isValidDateValue(projectItem.endDate) ? new Date(projectItem.endDate) : startDate;
-
-      if (endDate.getTime() < yearStart || startDate.getTime() > yearEnd) {
-        return;
-      }
-
-      const clampedStart = clampDateToYear(startDate, displayYear);
-      const clampedEnd = clampDateToYear(endDate, displayYear, true);
-
-      for (let monthIndex = clampedStart.getMonth(); monthIndex <= clampedEnd.getMonth(); monthIndex += 1) {
-        buckets[monthIndex].items.push({
-          id: `${projectItem.id}-${monthIndex}`,
-          title: projectItem.title,
-          startDate: projectItem.startDate,
-          endDate: projectItem.endDate,
-          isEvent: projectItem.isEvent,
-          status: projectItem.status,
-        });
-      }
-    });
-
-    return buckets.map(bucket => ({
-      ...bucket,
-      items: bucket.items.sort(
-        (left, right) => new Date(left.startDate).getTime() - new Date(right.startDate).getTime()
-      ),
-    }));
-  }, [displayYear, projects]);
-
-  const totalPinnedProjects = useMemo(
-    () => monthlyEntries.reduce((sum, month) => sum + month.items.length, 0),
-    [monthlyEntries]
+  const linkedEvents = useMemo(
+    () => projects.filter(project => project.id !== program.id && project.isEvent),
+    [program.id, projects]
   );
+
+  const statusColor = getProjectStatusColor(program.status);
 
   return (
     <View style={styles.card}>
       <View style={styles.header}>
         <View style={styles.headerCopy}>
-          <Text style={styles.eyebrow}>Single Calendar</Text>
-          <Text style={styles.title}>Program Calendar</Text>
-          <Text style={styles.subtitle}>
-            Projects are pinned from January to December based on their schedule.
+          <Text style={styles.eyebrow}>Project Details</Text>
+          <Text style={styles.title}>{program.title}</Text>
+          <Text style={styles.subtitle} numberOfLines={3}>
+            {program.description}
           </Text>
         </View>
 
-        <View style={styles.yearBadge}>
-          <MaterialIcons name="calendar-month" size={16} color="#166534" />
-          <Text style={styles.yearBadgeText}>{displayYear}</Text>
+        <View style={[styles.statusBadge, { borderColor: `${statusColor}33` }]}>
+          <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
+          <Text style={[styles.statusText, { color: statusColor }]}>{program.status}</Text>
         </View>
       </View>
 
       <View style={styles.summaryRow}>
         <View style={styles.summaryChip}>
-          <Text style={styles.summaryValue}>{projects.length}</Text>
-          <Text style={styles.summaryLabel}>program items</Text>
+          <Text style={styles.summaryValue}>{program.programModule || program.category}</Text>
+          <Text style={styles.summaryLabel}>module</Text>
         </View>
         <View style={styles.summaryChip}>
-          <Text style={styles.summaryValue}>{totalPinnedProjects}</Text>
-          <Text style={styles.summaryLabel}>month pins</Text>
+          <Text style={styles.summaryValue}>{program.volunteersNeeded}</Text>
+          <Text style={styles.summaryLabel}>volunteer slots</Text>
         </View>
       </View>
 
-      <View style={styles.monthGrid}>
-        {monthlyEntries.map(month => (
-          <View key={month.label} style={[styles.monthCard, { width: monthCardWidth }]}>
-            <View style={styles.monthHeader}>
-              <Text style={styles.monthTitle}>{month.label}</Text>
-              <Text style={styles.monthMeta}>
-                {month.items.length} item{month.items.length === 1 ? '' : 's'}
-              </Text>
-            </View>
-
-            {month.items.length ? (
-              month.items.map(item => (
-                <View key={item.id} style={styles.pinCard}>
-                  <View style={[styles.pinDot, { backgroundColor: getStatusColor(item.status) }]} />
-                  <View style={styles.pinCopy}>
-                    <Text style={styles.pinTitle} numberOfLines={2}>
-                      {item.title}
-                    </Text>
-                    <Text style={styles.pinMeta}>
-                      {item.isEvent ? 'Event' : 'Program'} | {formatEntryDateLabel(item.startDate, item.endDate)}
-                    </Text>
-                  </View>
-                </View>
-              ))
-            ) : (
-              <View style={styles.emptyMonth}>
-                <Text style={styles.emptyMonthText}>No projects pinned</Text>
-              </View>
-            )}
+      <View style={styles.detailList}>
+        <View style={styles.detailRow}>
+          <MaterialIcons name="event" size={18} color="#166534" />
+          <View style={styles.detailCopy}>
+            <Text style={styles.detailLabel}>Schedule</Text>
+            <Text style={styles.detailValue}>{formatDateRange(program.startDate, program.endDate)}</Text>
           </View>
-        ))}
+        </View>
+
+        <View style={styles.detailRow}>
+          <MaterialIcons name="place" size={18} color="#0f766e" />
+          <View style={styles.detailCopy}>
+            <Text style={styles.detailLabel}>Location</Text>
+            <Text style={styles.detailValue}>{program.location.address || 'Location to be announced'}</Text>
+          </View>
+        </View>
+      </View>
+
+      <View style={styles.linkedSection}>
+        <View style={styles.linkedHeader}>
+          <Text style={styles.linkedTitle}>Linked Events</Text>
+          <Text style={styles.linkedMeta}>{linkedEvents.length} event{linkedEvents.length === 1 ? '' : 's'}</Text>
+        </View>
+
+        {linkedEvents.length ? (
+          linkedEvents.slice(0, 3).map(event => (
+            <View key={event.id} style={styles.linkedCard}>
+              <View style={[styles.linkedDot, { backgroundColor: getProjectStatusColor(event.status) }]} />
+              <View style={styles.linkedCopy}>
+                <Text style={styles.linkedItemTitle} numberOfLines={2}>
+                  {event.title}
+                </Text>
+                <Text style={styles.linkedItemMeta} numberOfLines={1}>
+                  {formatDateRange(event.startDate, event.endDate)}
+                </Text>
+              </View>
+            </View>
+          ))
+        ) : (
+          <View style={styles.emptyState}>
+            <MaterialIcons name="event-busy" size={18} color="#94a3b8" />
+            <Text style={styles.emptyStateText}>No linked events yet</Text>
+          </View>
+        )}
       </View>
     </View>
   );
@@ -234,19 +153,24 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     color: '#64748b',
   },
-  yearBadge: {
+  statusBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
     borderRadius: 999,
-    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    backgroundColor: '#f8fafc',
     paddingHorizontal: 10,
     paddingVertical: 8,
   },
-  yearBadgeText: {
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 999,
+  },
+  statusText: {
     fontSize: 12,
     fontWeight: '800',
-    color: '#166534',
   },
   summaryRow: {
     flexDirection: 'row',
@@ -262,7 +186,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   summaryValue: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '800',
     color: '#0f172a',
   },
@@ -272,76 +196,94 @@ const styles = StyleSheet.create({
     color: '#64748b',
     fontWeight: '700',
   },
-  monthGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+  detailList: {
     gap: 10,
   },
-  monthCard: {
-    borderRadius: 18,
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    padding: 12,
+  detailRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    paddingVertical: 2,
+  },
+  detailCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  detailLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  detailValue: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#0f172a',
+    fontWeight: '700',
+  },
+  linkedSection: {
     gap: 10,
   },
-  monthHeader: {
+  linkedHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 10,
+    alignItems: 'center',
   },
-  monthTitle: {
-    fontSize: 15,
+  linkedTitle: {
+    fontSize: 14,
     fontWeight: '800',
     color: '#0f172a',
   },
-  monthMeta: {
+  linkedMeta: {
     fontSize: 11,
     fontWeight: '700',
     color: '#64748b',
   },
-  pinCard: {
+  linkedCard: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 10,
     borderRadius: 14,
-    backgroundColor: '#ffffff',
+    backgroundColor: '#f8fafc',
     borderWidth: 1,
-    borderColor: '#dbe7df',
+    borderColor: '#e2e8f0',
     padding: 10,
   },
-  pinDot: {
+  linkedDot: {
     width: 10,
     height: 10,
     borderRadius: 999,
     marginTop: 4,
   },
-  pinCopy: {
+  linkedCopy: {
     flex: 1,
-    gap: 3,
+    gap: 2,
   },
-  pinTitle: {
+  linkedItemTitle: {
     fontSize: 13,
     fontWeight: '800',
     color: '#0f172a',
   },
-  pinMeta: {
+  linkedItemMeta: {
     fontSize: 11,
-    lineHeight: 16,
     color: '#64748b',
+    fontWeight: '600',
   },
-  emptyMonth: {
-    borderRadius: 14,
+  emptyState: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: 12,
     borderWidth: 1,
     borderStyle: 'dashed',
     borderColor: '#cbd5e1',
-    paddingHorizontal: 10,
-    paddingVertical: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 12,
   },
-  emptyMonthText: {
-    fontSize: 12,
+  emptyStateText: {
+    fontSize: 11,
     color: '#94a3b8',
-    textAlign: 'center',
+    fontWeight: '700',
   },
 });

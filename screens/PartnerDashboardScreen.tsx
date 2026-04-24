@@ -77,7 +77,7 @@ function getProjectStatusColor(status: ReturnType<typeof getDisplayProjectStatus
     case 'Cancelled':
       return '#dc2626';
     default:
-      return '#f59e0b';
+      return '#0f766e';
   }
 }
 

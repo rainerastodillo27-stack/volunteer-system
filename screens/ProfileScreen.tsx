@@ -428,9 +428,17 @@ export default function ProfileScreen() {
   const projectById: Record<string, Project> = Object.fromEntries(
     projects.map(project => [project.id, project])
   );
-  const completedProjects = completedProjectIds
-    .map(projectId => projectById[projectId] || null)
-    .filter((project): project is Project => project !== null);
+  const joinedEventProjects = projects.filter(project => {
+    if (!project.isEvent) return false;
+    
+    const isJoinedByUser = (project.joinedUserIds || []).includes(user?.id || '');
+    const isJoinedByVolunteer = volunteerProfile ? project.volunteers.includes(volunteerProfile.id) : false;
+    const isAssignedToTask = (project.internalTasks || []).some(
+      task => task.assignedVolunteerId === volunteerProfile?.id
+    );
+    
+    return isJoinedByUser || isJoinedByVolunteer || isAssignedToTask;
+  });
 
   return (
     <ScrollView style={styles.container}>
@@ -639,8 +647,8 @@ export default function ProfileScreen() {
               <Text style={styles.infoLabel}>Background</Text>
               <Text style={styles.infoValue}>{volunteerProfile.background || 'No background added yet.'}</Text>
 
-              {completedProjects.length > 0 && (
-                <VolunteerImpactMap projects={completedProjects} />
+              {joinedEventProjects.length > 0 && (
+                <VolunteerImpactMap projects={joinedEventProjects} />
               )}
 
               <Text style={styles.infoLabel}>Completed Programs</Text>

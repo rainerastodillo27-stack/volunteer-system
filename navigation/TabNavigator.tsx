@@ -19,7 +19,7 @@ import VolunteerManagementScreen from '../screens/VolunteerManagementScreen';
 import PartnerManagementScreen from '../screens/PartnerManagementScreen';
 import VolunteerTasksScreen from '../screens/VolunteerTasksScreen';
 import ReportsScreen from '../screens/ReportsScreen';
-import { getMessagesForUser, subscribeToMessages } from '../models/storage';
+import { getAllPartnerReports, getMessagesForUser, subscribeToMessages, subscribeToStorageChanges } from '../models/storage';
 
 export type TabParamList = {
   Dashboard: undefined;
@@ -258,9 +258,12 @@ export default function TabNavigator() {
   const sidebarWidth = collapsed ? SIDEBAR_WIDTH_COLLAPSED : SIDEBAR_WIDTH;
   const contentGutter = collapsed ? CONTENT_GUTTER_COLLAPSED : CONTENT_GUTTER;
 
+  const [reportNotificationCount, setReportNotificationCount] = useState(0);
+
   useEffect(() => {
     if (!user?.id) {
       setMessageUnreadCount(0);
+      setReportNotificationCount(0);
       return;
     }
 
@@ -275,19 +278,43 @@ export default function TabNavigator() {
       }
     };
 
+    const loadReportNotificationCount = async () => {
+      if (user.role !== 'admin') {
+        setReportNotificationCount(0);
+        return;
+      }
+
+      try {
+        const reports = await getAllPartnerReports();
+        const pendingReports = reports.filter(report => report.status === 'Submitted').length;
+        setReportNotificationCount(pendingReports);
+      } catch {
+        setReportNotificationCount(0);
+      }
+    };
+
     void loadUnreadCount();
-    const unsubscribe = subscribeToMessages(user.id, () => {
+    void loadReportNotificationCount();
+
+    const unsubscribeMessages = subscribeToMessages(user.id, () => {
       void loadUnreadCount();
     });
+
+    const unsubscribeReports = subscribeToStorageChanges(['partnerReports'], () => {
+      void loadReportNotificationCount();
+    });
+
     const fallbackTimer = setInterval(() => {
       void loadUnreadCount();
+      void loadReportNotificationCount();
     }, 5000);
 
     return () => {
       clearInterval(fallbackTimer);
-      unsubscribe();
+      unsubscribeMessages();
+      unsubscribeReports?.();
     };
-  }, [user?.id]);
+  }, [user?.id, user?.role]);
 
   const handleSidebarPropsChange = useCallback(
     (props: BottomTabBarProps, signature: string) => {
@@ -398,7 +425,10 @@ export default function TabNavigator() {
       <Tab.Screen
         name="Reports"
         component={ReportsScreen}
-        options={{ title: 'Reports' }}
+        options={{
+          title: 'Reports',
+          tabBarBadge: isAdmin && reportNotificationCount > 0 ? reportNotificationCount : undefined,
+        }}
       />
 
       {showUsersTab && (

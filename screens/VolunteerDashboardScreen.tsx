@@ -10,15 +10,13 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import ProjectTimelineCalendarCard from '../components/ProjectTimelineCalendarCard';
 import { useAuth } from '../contexts/AuthContext';
 import {
-  getDashboardTimelineSnapshot,
   getMessagesForUser,
   getProjectsScreenSnapshot,
   subscribeToStorageChanges,
 } from '../models/storage';
-import type { AdminPlanningCalendar, AdminPlanningItem, Project, Volunteer, VolunteerTimeLog } from '../models/types';
+import type { Project, Volunteer, VolunteerTimeLog } from '../models/types';
 import { navigateToAvailableRoute } from '../utils/navigation';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
@@ -104,8 +102,6 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
   const [timeLogs, setTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const [unreadMessages, setUnreadMessages] = useState(0);
-  const [planningCalendars, setPlanningCalendars] = useState<AdminPlanningCalendar[]>([]);
-  const [planningItems, setPlanningItems] = useState<AdminPlanningItem[]>([]);
 
   const loadDashboardData = React.useCallback(async () => {
     if (!user?.id) {
@@ -113,9 +109,8 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
     }
 
     try {
-      const [projectSnapshot, timelineSnapshot, messages] = await Promise.all([
+      const [projectSnapshot, messages] = await Promise.all([
         getProjectsScreenSnapshot(user),
-        getDashboardTimelineSnapshot(),
         getMessagesForUser(user.id),
       ]);
 
@@ -123,8 +118,6 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
       setVolunteerProfile(projectSnapshot.volunteerProfile);
       setTimeLogs(projectSnapshot.timeLogs);
       setUnreadMessages(messages.filter(message => !message.read && message.recipientId === user.id).length);
-      setPlanningCalendars(timelineSnapshot.planningCalendars);
-      setPlanningItems(timelineSnapshot.planningItems);
       setLoadError(null);
     } catch (error) {
       setLoadError({
@@ -147,8 +140,6 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
           'volunteerProjectJoins',
           'volunteerMatches',
           'volunteerTimeLogs',
-          'adminPlanningCalendars',
-          'adminPlanningItems',
         ],
         () => {
           void loadDashboardData();
@@ -164,7 +155,50 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
           project.isEvent &&
           (
             (project.joinedUserIds || []).includes(user?.id || '') ||
-            (volunteerProfile ? project.volunteers.includes(volunteerProfile.id) : false)
+            (volunteerProfile ? project.volunteers.includes(volunteerProfile.id) : false) ||
+            (volunteerProfile ? (project.internalTasks || []).some(task => task.assignedVolunteerId === volunteerProfile.id) : false)
+          )
+      ),
+    [projects, user?.id, volunteerProfile]
+  );
+
+  const availableEvents = useMemo(
+    () =>
+      projects.filter(
+        project =>
+          project.isEvent &&
+          !(
+            (project.joinedUserIds || []).includes(user?.id || '') ||
+            (volunteerProfile ? project.volunteers.includes(volunteerProfile.id) : false) ||
+            (volunteerProfile ? (project.internalTasks || []).some(task => task.assignedVolunteerId === volunteerProfile.id) : false)
+          )
+      ),
+    [projects, user?.id, volunteerProfile]
+  );
+
+  const joinedProjects = useMemo(
+    () =>
+      projects.filter(
+        project =>
+          !project.isEvent &&
+          (
+            (project.joinedUserIds || []).includes(user?.id || '') ||
+            (volunteerProfile ? project.volunteers.includes(volunteerProfile.id) : false) ||
+            (volunteerProfile ? (project.internalTasks || []).some(task => task.assignedVolunteerId === volunteerProfile.id) : false)
+          )
+      ),
+    [projects, user?.id, volunteerProfile]
+  );
+
+  const availableProjects = useMemo(
+    () =>
+      projects.filter(
+        project =>
+          !project.isEvent &&
+          !(
+            (project.joinedUserIds || []).includes(user?.id || '') ||
+            (volunteerProfile ? project.volunteers.includes(volunteerProfile.id) : false) ||
+            (volunteerProfile ? (project.internalTasks || []).some(task => task.assignedVolunteerId === volunteerProfile.id) : false)
           )
       ),
     [projects, user?.id, volunteerProfile]
@@ -180,7 +214,6 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
 
   const totalHours = volunteerProfile?.totalHoursContributed || 0;
   const completedLogs = timeLogs.filter(log => Boolean(log.timeOut)).length;
-  const joinedEventIds = joinedEvents.map(project => project.id);
   const featuredEventDateRange = featuredEvent
     ? formatDateRangeLabel(featuredEvent.startDate, featuredEvent.endDate)
     : 'To be announced';
@@ -439,22 +472,189 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
         </TouchableOpacity>
       </View>
 
-      <ProjectTimelineCalendarCard
-        title="Volunteer Event Calendar"
-        subtitle={
-          joinedEventIds.length
-            ? 'Your joined events are shown together with admin planning updates.'
-            : 'Browse the shared admin schedule to discover upcoming event dates.'
-        }
-        projects={projects}
-        planningCalendars={planningCalendars}
-        planningItems={planningItems}
-        focusDate={featuredEvent?.startDate}
-        projectFilterIds={joinedEventIds.length ? joinedEventIds : undefined}
-        accentColor="#166534"
-        emptyText="No volunteer timeline items yet."
-        onOpenProject={projectId => openProjects(projectId)}
-      />
+      {joinedEvents.length > 1 && (
+        <View style={styles.detailCard}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Your Joined Events</Text>
+            <TouchableOpacity onPress={() => openProjects()}>
+              <Text style={styles.linkText}>View all</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.projectsList}>
+            {joinedEvents.map(project => (
+              <TouchableOpacity
+                key={project.id}
+                style={styles.projectItem}
+                onPress={() => openProjects(project.id)}
+              >
+                <View style={styles.projectItemHeader}>
+                  <Text style={styles.projectItemTitle}>{project.title}</Text>
+                  <View style={styles.projectItemBadge}>
+                    <Text style={styles.projectItemBadgeText}>{project.category}</Text>
+                  </View>
+                </View>
+
+                <Text style={styles.projectItemDescription}>{project.description}</Text>
+
+                <View style={styles.projectItemMeta}>
+                  <View style={styles.projectItemMetaItem}>
+                    <MaterialIcons name="event" size={14} color="#64748b" />
+                    <Text style={styles.projectItemMetaText}>
+                      {formatDateRangeLabel(project.startDate, project.endDate)}
+                    </Text>
+                  </View>
+                  <View style={styles.projectItemMetaItem}>
+                    <MaterialIcons name="location-on" size={14} color="#64748b" />
+                    <Text style={styles.projectItemMetaText}>
+                      {project.location.address || 'Location TBA'}
+                    </Text>
+                  </View>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      )}
+
+      {availableEvents.length > 0 && (
+        <View style={styles.detailCard}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Available Events</Text>
+            <TouchableOpacity onPress={() => openProjects()}>
+              <Text style={styles.linkText}>View all</Text>
+            </TouchableOpacity>
+          </View>
+
+          <Text style={styles.sectionSubtitle}>Events you can join and contribute to</Text>
+
+          <View style={styles.projectsList}>
+            {availableEvents.map(project => (
+              <TouchableOpacity
+                key={project.id}
+                style={styles.projectItem}
+                onPress={() => openProjects(project.id)}
+              >
+                <View style={styles.projectItemHeader}>
+                  <Text style={styles.projectItemTitle}>{project.title}</Text>
+                  <View style={styles.projectItemBadge}>
+                    <Text style={styles.projectItemBadgeText}>{project.category}</Text>
+                  </View>
+                </View>
+
+                <Text style={styles.projectItemDescription}>{project.description}</Text>
+
+                <View style={styles.projectItemMeta}>
+                  <View style={styles.projectItemMetaItem}>
+                    <MaterialIcons name="event" size={14} color="#64748b" />
+                    <Text style={styles.projectItemMetaText}>
+                      {formatDateRangeLabel(project.startDate, project.endDate)}
+                    </Text>
+                  </View>
+                  <View style={styles.projectItemMetaItem}>
+                    <MaterialIcons name="location-on" size={14} color="#64748b" />
+                    <Text style={styles.projectItemMetaText}>
+                      {project.location.address || 'Location TBA'}
+                    </Text>
+                  </View>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      )}
+
+      {joinedProjects.length > 0 && (
+        <View style={styles.detailCard}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Your Joined Programs</Text>
+            <TouchableOpacity onPress={() => openProjects()}>
+              <Text style={styles.linkText}>View all</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.projectsList}>
+            {joinedProjects.map(project => (
+              <TouchableOpacity
+                key={project.id}
+                style={styles.projectItem}
+                onPress={() => openProjects(project.id)}
+              >
+                <View style={styles.projectItemHeader}>
+                  <Text style={styles.projectItemTitle}>{project.title}</Text>
+                  <View style={styles.projectItemBadge}>
+                    <Text style={styles.projectItemBadgeText}>{project.category}</Text>
+                  </View>
+                </View>
+
+                <Text style={styles.projectItemDescription}>{project.description}</Text>
+
+                <View style={styles.projectItemMeta}>
+                  <View style={styles.projectItemMetaItem}>
+                    <MaterialIcons name="event" size={14} color="#64748b" />
+                    <Text style={styles.projectItemMetaText}>
+                      {formatDateRangeLabel(project.startDate, project.endDate)}
+                    </Text>
+                  </View>
+                  <View style={styles.projectItemMetaItem}>
+                    <MaterialIcons name="location-on" size={14} color="#64748b" />
+                    <Text style={styles.projectItemMetaText}>
+                      {project.location.address || 'Location TBA'}
+                    </Text>
+                  </View>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      )}
+
+      {availableProjects.length > 0 && (
+        <View style={styles.detailCard}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Available Programs</Text>
+            <TouchableOpacity onPress={() => openProjects()}>
+              <Text style={styles.linkText}>View all</Text>
+            </TouchableOpacity>
+          </View>
+
+          <Text style={styles.sectionSubtitle}>Programs you can join and contribute to</Text>
+
+          <View style={styles.projectsList}>
+            {availableProjects.map(project => (
+              <TouchableOpacity
+                key={project.id}
+                style={styles.projectItem}
+                onPress={() => openProjects(project.id)}
+              >
+                <View style={styles.projectItemHeader}>
+                  <Text style={styles.projectItemTitle}>{project.title}</Text>
+                  <View style={styles.projectItemBadge}>
+                    <Text style={styles.projectItemBadgeText}>{project.category}</Text>
+                  </View>
+                </View>
+
+                <Text style={styles.projectItemDescription}>{project.description}</Text>
+
+                <View style={styles.projectItemMeta}>
+                  <View style={styles.projectItemMetaItem}>
+                    <MaterialIcons name="event" size={14} color="#64748b" />
+                    <Text style={styles.projectItemMetaText}>
+                      {formatDateRangeLabel(project.startDate, project.endDate)}
+                    </Text>
+                  </View>
+                  <View style={styles.projectItemMetaItem}>
+                    <MaterialIcons name="location-on" size={14} color="#64748b" />
+                    <Text style={styles.projectItemMetaText}>
+                      {project.location.address || 'Location TBA'}
+                    </Text>
+                  </View>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      )}
     </ScrollView>
   );
 }
@@ -676,6 +876,11 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#166534',
   },
+  sectionSubtitle: {
+    fontSize: 12,
+    color: '#64748b',
+    marginBottom: 12,
+  },
   detailHeroPanel: {
     borderRadius: 20,
     backgroundColor: '#f6fbf7',
@@ -826,6 +1031,57 @@ const styles = StyleSheet.create({
   quickActionText: {
     fontSize: 12,
     lineHeight: 18,
+    color: '#64748b',
+  },
+  projectsList: {
+    gap: 12,
+  },
+  projectItem: {
+    borderRadius: 18,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 14,
+    gap: 10,
+  },
+  projectItemHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  projectItemTitle: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  projectItemBadge: {
+    borderRadius: 999,
+    backgroundColor: '#dcfce7',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  projectItemBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#166534',
+  },
+  projectItemDescription: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#475569',
+  },
+  projectItemMeta: {
+    gap: 8,
+  },
+  projectItemMetaItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  projectItemMetaText: {
+    fontSize: 11,
     color: '#64748b',
   },
 });

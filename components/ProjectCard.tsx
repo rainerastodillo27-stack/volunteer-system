@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import { getProjectStatusColor } from '../utils/projectStatus';
 
 type ProjectCardProps = {
   id: string;
@@ -17,20 +18,6 @@ export default function ProjectCard({
   volunteers,
   description,
 }: ProjectCardProps) {
-  // Chooses the accent color used by the project status badge.
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'Ongoing':
-        return '#FFA500';
-      case 'Completed':
-        return '#4CAF50';
-      case 'Planning':
-        return '#2196F3';
-      default:
-        return '#999';
-    }
-  };
-
   return (
     <TouchableOpacity
       style={styles.card}
@@ -44,7 +31,7 @@ export default function ProjectCard({
           <View
             style={[
               styles.statusDot,
-              { backgroundColor: getStatusColor(status) },
+              { backgroundColor: getProjectStatusColor(status) },
             ]}
           />
           <Text style={styles.status}>{status}</Text>

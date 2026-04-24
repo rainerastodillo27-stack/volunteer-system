@@ -1051,7 +1051,8 @@ function buildSampleProjectTasks(project: Project): ProjectInternalTask[] {
     title: string,
     description: string,
     category: string,
-    priority: ProjectInternalTask['priority']
+    priority: ProjectInternalTask['priority'],
+    skillsNeeded?: string[]
   ): ProjectInternalTask => ({
     id: `${project.id}-task-${idSuffix}`,
     title,
@@ -1059,6 +1060,7 @@ function buildSampleProjectTasks(project: Project): ProjectInternalTask[] {
     category,
     priority,
     status: 'Unassigned',
+    skillsNeeded,
     createdAt: now,
     updatedAt: now,
   });
@@ -1072,95 +1074,103 @@ function buildSampleProjectTasks(project: Project): ProjectInternalTask[] {
         'Registration of the Kids',
         'Handle child registration when the children are gathered in the common area before services begin.',
         'Front Desk',
-        'High'
+        'High',
+        ['organization', 'communication']
       ),
       createTask(
         'assessment',
         'Rapid Assessment Interviews',
         'Conduct condensed caregiver interviews using the shortened assessment tool. Best assigned to senior volunteers who can follow the questionnaire closely.',
         'Assessment',
-        'High'
+        'High',
+        ['interviewing', 'assessment', 'communication']
       ),
       createTask(
         'measurement',
         'Measurement',
         'Measure each child\'s height and weight accurately and prepare the values for encoding.',
         'Health Screening',
-        'High'
+        'High',
+        ['measurement', 'healthcare', 'accuracy']
       ),
       createTask(
         'encoding',
         'Encoding',
         'Encode all assessment and measurement data into the project records for reporting and monitoring.',
         'Data Encoding',
-        'Medium'
+        'Medium',
+        ['data entry', 'computer skills', 'attention to detail']
       ),
       createTask(
         'photo-documentation',
         'Photo Documentation',
         'Manage the photo booth and capture child photos for growth tracking and enrollment validation.',
         'Documentation',
-        'Medium'
+        'Medium',
+        ['photography', 'organization', 'technical skills']
       ),
       createTask(
         'wellness-counseling',
         'Wellness Counseling',
         'Advise mothers or caregivers using previous data and follow-through questions about the child\'s progress. Best assigned to senior volunteers.',
         'Counseling',
-        'High'
+        'High',
+        ['counseling', 'communication', 'healthcare knowledge']
       ),
       createTask(
         'entertainment',
         'Entertainment',
         'Lead child-friendly engagement activities while families wait and keep the common area organized.',
         'Youth Engagement',
-        'Low'
+        'Low',
+        ['childcare', 'entertainment', 'organization']
       ),
       createTask(
         'packing',
         'Packing Activities',
         'Assist with packing nutrition materials, supplies, or take-home items before and after distribution.',
         'Operations',
-        'Medium'
+        'Medium',
+        ['organization', 'packing', 'logistics']
       ),
     ];
   }
 
   if (project.programModule === 'Nutrition') {
     return [
-      createTask('registration', 'Beneficiary Registration', 'Register participants and confirm attendance before the nutrition activity starts.', 'Front Desk', 'High'),
-      createTask('preparation', 'Nutrition Pack Preparation', 'Prepare food packs, supplements, or feeding materials for the service area.', 'Operations', 'High'),
-      createTask('monitoring', 'Growth Monitoring Support', 'Support measurements, queue management, and beneficiary monitoring during the activity.', 'Field Support', 'Medium'),
-      createTask('documentation', 'Documentation and Photos', 'Capture photos and activity notes for reporting and monitoring.', 'Documentation', 'Medium'),
-      createTask('cleanup', 'Site Wrap-Up', 'Help consolidate materials, clean the area, and verify remaining inventory.', 'Operations', 'Low'),
+      createTask('registration', 'Beneficiary Registration', 'Register participants and confirm attendance before the nutrition activity starts.', 'Front Desk', 'High', ['organization', 'communication']),
+      createTask('preparation', 'Nutrition Pack Preparation', 'Prepare food packs, supplements, or feeding materials for the service area.', 'Operations', 'High', ['food handling', 'organization', 'logistics']),
+      createTask('monitoring', 'Growth Monitoring Support', 'Support measurements, queue management, and beneficiary monitoring during the activity.', 'Field Support', 'Medium', ['measurement', 'organization', 'healthcare']),
+      createTask('documentation', 'Documentation and Photos', 'Capture photos and activity notes for reporting and monitoring.', 'Documentation', 'Medium', ['photography', 'documentation', 'communication']),
+      createTask('cleanup', 'Site Wrap-Up', 'Help consolidate materials, clean the area, and verify remaining inventory.', 'Operations', 'Low', ['cleanup', 'organization', 'inventory management']),
     ];
   }
 
   if (project.programModule === 'Education') {
     return [
-      createTask('registration', 'Learner Registration', 'Check in learners and guardians, confirm attendance, and guide them to the proper station.', 'Front Desk', 'High'),
-      createTask('materials', 'Learning Materials Setup', 'Prepare handouts, kits, and learning materials before the session begins.', 'Operations', 'Medium'),
-      createTask('facilitation', 'Facilitation Support', 'Assist the lead facilitator, manage transitions, and support small-group learning.', 'Program Support', 'High'),
-      createTask('attendance', 'Attendance and Notes Encoding', 'Encode attendance, outputs, and key observations after the session.', 'Data Encoding', 'Medium'),
-      createTask('documentation', 'Photo and Story Capture', 'Capture session highlights and beneficiary stories for reporting.', 'Documentation', 'Low'),
+      createTask('registration', 'Learner Registration', 'Check in learners and guardians, confirm attendance, and guide them to the proper station.', 'Front Desk', 'High', ['organization', 'communication', 'customer service']),
+      createTask('materials', 'Learning Materials Setup', 'Prepare handouts, kits, and learning materials before the session begins.', 'Operations', 'Medium', ['organization', 'preparation', 'logistics']),
+      createTask('facilitation', 'Facilitation Support', 'Assist the lead facilitator, manage transitions, and support small-group learning.', 'Program Support', 'High', ['teaching', 'facilitation', 'communication']),
+      createTask('attendance', 'Attendance and Notes Encoding', 'Encode attendance, outputs, and key observations after the session.', 'Data Encoding', 'Medium', ['data entry', 'attention to detail', 'computer skills']),
+      createTask('documentation', 'Photo and Story Capture', 'Capture session highlights and beneficiary stories for reporting.', 'Documentation', 'Low', ['photography', 'storytelling', 'communication']),
     ];
   }
 
   if (project.programModule === 'Livelihood') {
     return [
-      createTask('registration', 'Participant Sign-In', 'Manage participant sign-in and orient arrivals to the workshop flow.', 'Front Desk', 'High'),
-      createTask('materials', 'Workshop Materials Preparation', 'Prepare tools, consumables, and handouts required for the livelihood session.', 'Operations', 'High'),
-      createTask('support', 'Workshop Support', 'Assist facilitators during demonstrations, breakout work, or production activities.', 'Program Support', 'Medium'),
-      createTask('inventory', 'Inventory and Output Tracking', 'Track distributed materials and completed outputs from participants.', 'Inventory', 'Medium'),
-      createTask('documentation', 'Photo Documentation', 'Capture workshop activities and outputs for monitoring and reporting.', 'Documentation', 'Low'),
+      createTask('registration', 'Participant Sign-In', 'Manage participant sign-in and orient arrivals to the workshop flow.', 'Front Desk', 'High', ['organization', 'communication', 'customer service']),
+      createTask('materials', 'Workshop Materials Preparation', 'Prepare tools, consumables, and handouts required for the livelihood session.', 'Operations', 'High', ['organization', 'preparation', 'logistics']),
+      createTask('support', 'Workshop Support', 'Assist facilitators during demonstrations, breakout work, or production activities.', 'Program Support', 'Medium', ['teaching', 'facilitation', 'technical skills']),
+      createTask('inventory', 'Inventory and Output Tracking', 'Track distributed materials and completed outputs from participants.', 'Inventory', 'Medium', ['inventory management', 'data entry', 'attention to detail']),
+      createTask('documentation', 'Photo Documentation', 'Capture workshop activities and outputs for monitoring and reporting.', 'Documentation', 'Low', ['photography', 'documentation']),
     ];
   }
 
   return [
-    createTask('coordination', 'Field Coordination', 'Support the project lead with on-site coordination and participant flow.', 'Operations', 'High'),
-    createTask('logistics', 'Logistics Support', 'Prepare supplies, manage equipment, and keep the work area organized.', 'Operations', 'Medium'),
-    createTask('beneficiary', 'Beneficiary Assistance', 'Assist attendees, answer questions, and route them to the proper station.', 'Field Support', 'Medium'),
-    createTask('documentation', 'Documentation', 'Capture activity notes and photos for project monitoring.', 'Documentation', 'Low'),
+    createTask('coordination', 'Field Coordination', 'Support the project lead with on-site coordination and participant flow.', 'Operations', 'High', ['coordination', 'leadership', 'organization']),
+    createTask('logistics', 'Logistics Support', 'Prepare supplies, manage equipment, and keep the work area organized.', 'Operations', 'Medium', ['logistics', 'organization', 'equipment management']),
+    createTask('beneficiary', 'Beneficiary Assistance', 'Assist attendees, answer questions, and route them to the proper station.', 'Field Support', 'Medium', ['communication', 'customer service', 'guidance']),
+    createTask('documentation', 'Documentation', 'Capture activity notes and photos for project monitoring.', 'Documentation', 'Low', ['documentation', 'photography', 'note-taking']),
   ];
 }
 
@@ -1180,6 +1190,7 @@ function normalizeProjectInternalTask(
     assignedVolunteerId: task.assignedVolunteerId?.trim() || undefined,
     assignedVolunteerName: task.assignedVolunteerName?.trim() || undefined,
     isFieldOfficer: Boolean(task.isFieldOfficer),
+    skillsNeeded: task.skillsNeeded || [],
     createdAt: task.createdAt || now,
     updatedAt: task.updatedAt || now,
   };
@@ -1290,6 +1301,7 @@ export async function createUserAccount(input: {
     certificationsOrTrainings?: string;
     hobbiesAndInterests?: string;
     specialSkills?: string;
+    skills: string[];
     videoBriefingUrl?: string;
     affiliations?: Array<{
       organization: string;
@@ -1366,7 +1378,7 @@ export async function createUserAccount(input: {
       name: createdUser.name,
       email: createdUser.email || '',
       phone: createdUser.phone || '',
-      skills: [],
+      skills: input.volunteerMembershipSheet?.skills || [],
       skillsDescription: input.pillarsOfInterest.join(', '),
       availability: {
         daysPerWeek: 0,
@@ -3403,6 +3415,55 @@ function normalizeReportMediaPayload(input: {
   return { attachments, mediaFile };
 }
 
+async function getVolunteerByUserIdWithFallback(userId: string): Promise<Volunteer | null> {
+  try {
+    return await getVolunteerByUserId(userId);
+  } catch (error) {
+    console.error('Error loading volunteer profile for report validation:', error);
+    const volunteers = (await getStorageItem<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS)) || [];
+    return volunteers
+      .map(normalizeVolunteerRecord)
+      .find(volunteer => volunteer.userId === userId) || null;
+  }
+}
+
+async function getVolunteerTimeLogsWithFallback(
+  volunteerId: string
+): Promise<VolunteerTimeLog[]> {
+  try {
+    return await getVolunteerTimeLogs(volunteerId);
+  } catch (error) {
+    console.error('Error loading volunteer time logs for report validation:', error);
+    const logs =
+      (await getStorageItem<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS)) || [];
+    return logs.filter(log => log.volunteerId === volunteerId);
+  }
+}
+
+async function validateVolunteerReportEligibility(input: {
+  projectId: string;
+  submitterUserId: string;
+  submitterRole: UserRole;
+}): Promise<void> {
+  if (input.submitterRole !== 'volunteer') {
+    return;
+  }
+
+  const volunteer = await getVolunteerByUserIdWithFallback(input.submitterUserId);
+  if (!volunteer) {
+    throw new Error('Volunteer profile not found. You must complete your volunteer profile first.');
+  }
+
+  const timeLogs = await getVolunteerTimeLogsWithFallback(volunteer.id);
+  const hasTimedIn = timeLogs.some(
+    log => log.projectId === input.projectId && Boolean(log.timeIn?.trim())
+  );
+
+  if (!hasTimedIn) {
+    throw new Error('You must time in to this event before submitting a report.');
+  }
+}
+
 // Submits one report into the shared impact hub for any supported role.
 export async function submitImpactHubReport(input: {
   projectId: string;
@@ -3424,6 +3485,12 @@ export async function submitImpactHubReport(input: {
   partnerUserId?: string;
   partnerName?: string;
 }): Promise<PartnerReport> {
+  await validateVolunteerReportEligibility({
+    projectId: input.projectId,
+    submitterUserId: input.submitterUserId,
+    submitterRole: input.submitterRole,
+  });
+
   const normalizedMetrics = input.metrics || {};
   const normalizedMediaPayload = normalizeReportMediaPayload({
     attachments: input.attachments,
