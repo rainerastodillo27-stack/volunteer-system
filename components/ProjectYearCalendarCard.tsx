@@ -3,7 +3,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { StyleSheet, Text, View } from 'react-native';
 import { format } from 'date-fns';
 import type { Project } from '../models/types';
-import { getProjectStatusColor } from '../utils/projectStatus';
+import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 
 type ProjectYearCalendarCardProps = {
   program: Project;
@@ -38,7 +38,8 @@ export default function ProjectYearCalendarCard({
     [program.id, projects]
   );
 
-  const statusColor = getProjectStatusColor(program.status);
+  const displayStatus = getProjectDisplayStatus(program);
+  const statusColor = getProjectStatusColor(program);
 
   return (
     <View style={styles.card}>
@@ -53,7 +54,7 @@ export default function ProjectYearCalendarCard({
 
         <View style={[styles.statusBadge, { borderColor: `${statusColor}33` }]}>
           <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
-          <Text style={[styles.statusText, { color: statusColor }]}>{program.status}</Text>
+          <Text style={[styles.statusText, { color: statusColor }]}>{displayStatus}</Text>
         </View>
       </View>
 
@@ -95,7 +96,7 @@ export default function ProjectYearCalendarCard({
         {linkedEvents.length ? (
           linkedEvents.slice(0, 3).map(event => (
             <View key={event.id} style={styles.linkedCard}>
-              <View style={[styles.linkedDot, { backgroundColor: getProjectStatusColor(event.status) }]} />
+              <View style={[styles.linkedDot, { backgroundColor: getProjectStatusColor(event) }]} />
               <View style={styles.linkedCopy}>
                 <Text style={styles.linkedItemTitle} numberOfLines={2}>
                   {event.title}

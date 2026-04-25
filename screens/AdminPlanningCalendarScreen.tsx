@@ -43,7 +43,7 @@ import {
   subscribeToStorageChanges,
 } from '../models/storage';
 import { AdminPlanningCalendar, AdminPlanningItem, Project } from '../models/types';
-import { getProjectStatusColor } from '../utils/projectStatus';
+import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 type PlannerViewMode = '3weeks' | 'month' | 'agenda';
@@ -194,7 +194,7 @@ function itemTouchesRange(
 }
 
 function getProjectTimelineColor(project: Project): string {
-  return getProjectStatusColor(project.status);
+  return getProjectStatusColor(project);
 }
 
 function formatRangeLabel(referenceDate: Date, viewMode: PlannerViewMode): string {
@@ -326,7 +326,7 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
       participantsLabel: `${project.volunteersNeeded} volunteer slots`,
       linkedProjectId: project.id,
       kind: 'project' as const,
-      projectStatus: project.status,
+      projectStatus: getProjectDisplayStatus(project),
     }));
 
   const allDisplayItems = [...projectTimelineItems, ...manualDisplayItems].sort((left, right) => {

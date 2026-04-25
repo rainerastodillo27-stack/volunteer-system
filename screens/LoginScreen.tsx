@@ -5,6 +5,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import {
   createUserAccount,
+  getAllProjects,
   getAllUsers,
   getApiBaseUrl,
   getUserByEmailOrPhone,
@@ -16,6 +17,11 @@ import { useAuth } from '../contexts/AuthContext';
 import AppLogo from '../components/AppLogo';
 import InlineLoadError from '../components/InlineLoadError';
 import { AdvocacyFocus, NVCSector, PartnerSectorType, User, UserRole, UserType } from '../models/types';
+import {
+  DEFAULT_VOLUNTEER_SKILL_OPTIONS,
+  TASK_SKILL_OPTIONS,
+  mergeSkillOptions,
+} from '../utils/skills';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 import {
   composePhilippineAddress,
@@ -27,36 +33,6 @@ import {
 } from '../utils/philippineAddressData';
 
 const BACKEND_HEALTH_TIMEOUT_MS = 5000;
-
-// Get all available skills that volunteers can select from
-function getAvailableSkills(): string[] {
-  return [
-    'organization',
-    'communication',
-    'food handling',
-    'logistics',
-    'measurement',
-    'healthcare',
-    'photography',
-    'documentation',
-    'cleanup',
-    'inventory management',
-    'customer service',
-    'preparation',
-    'teaching',
-    'facilitation',
-    'data entry',
-    'attention to detail',
-    'computer skills',
-    'storytelling',
-    'technical skills',
-    'coordination',
-    'leadership',
-    'equipment management',
-    'guidance',
-    'note-taking',
-  ].sort();
-}
 
 type SignupVolunteerSheetState = {
   gender: string;
@@ -259,6 +235,10 @@ export default function LoginScreen() {
   const [signupVolunteerSheet, setSignupVolunteerSheet] = useState<SignupVolunteerSheetState>(
     createEmptySignupVolunteerSheet()
   );
+  const [availableSkills, setAvailableSkills] = useState<string[]>(
+    mergeSkillOptions(DEFAULT_VOLUNTEER_SKILL_OPTIONS, TASK_SKILL_OPTIONS)
+  );
+  const [customVolunteerSkill, setCustomVolunteerSkill] = useState('');
   const [signupAcceptedCommitment, setSignupAcceptedCommitment] = useState(false);
   const [backendStatus, setBackendStatus] = useState<'checking' | 'online' | 'offline'>('checking');
   const [backendMessage, setBackendMessage] = useState('Checking backend connection...');
@@ -300,6 +280,42 @@ export default function LoginScreen() {
     signupVolunteerSheet.homeAddressCityMunicipality,
     signupVolunteerSheet.homeAddressRegion,
   ]);
+
+  useEffect(() => {
+    if (backendStatus !== 'online') {
+      setAvailableSkills(mergeSkillOptions(DEFAULT_VOLUNTEER_SKILL_OPTIONS, TASK_SKILL_OPTIONS));
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    const loadAvailableSkills = async () => {
+      try {
+        const projects = await getAllProjects();
+        const projectSkills = projects.flatMap(project => project.skillsNeeded || []);
+
+        if (!cancelled) {
+          setAvailableSkills(
+            mergeSkillOptions(DEFAULT_VOLUNTEER_SKILL_OPTIONS, TASK_SKILL_OPTIONS, projectSkills)
+          );
+        }
+      } catch {
+        if (!cancelled) {
+          setAvailableSkills(mergeSkillOptions(DEFAULT_VOLUNTEER_SKILL_OPTIONS, TASK_SKILL_OPTIONS));
+        }
+      }
+    };
+
+    void loadAvailableSkills();
+    const unsubscribe = subscribeToStorageChanges(['projects', 'events'], () => {
+      void loadAvailableSkills();
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [backendStatus]);
 
   useEffect(() => {
     let cancelled = false;
@@ -509,6 +525,7 @@ export default function LoginScreen() {
     setSignupRole('volunteer');
     setSignupPartnerApplication(createEmptySignupPartnerApplication());
     setSignupVolunteerSheet(createEmptySignupVolunteerSheet());
+    setCustomVolunteerSkill('');
     setSelectedRegionCode('');
     setSelectedCityCode('');
     setFilteredCities([]);
@@ -565,6 +582,20 @@ export default function LoginScreen() {
     value: SignupVolunteerSheetState[K]
   ) => {
     setSignupVolunteerSheet(current => ({ ...current, [key]: value }));
+  };
+
+  const handleAddCustomVolunteerSkill = () => {
+    const normalizedSkill = customVolunteerSkill.trim();
+    if (!normalizedSkill) {
+      return;
+    }
+
+    setAvailableSkills(current => mergeSkillOptions(current, [normalizedSkill]));
+    setSignupVolunteerSheet(current => ({
+      ...current,
+      skills: mergeSkillOptions(current.skills, [normalizedSkill]),
+    }));
+    setCustomVolunteerSkill('');
   };
 
   // Updates one field in the partner application form.
@@ -1429,7 +1460,7 @@ export default function LoginScreen() {
 
                   <Text style={styles.modalSectionSubLabel}>Skills (Select all that apply)</Text>
                   <View style={styles.skillsGrid}>
-                    {getAvailableSkills().map(skill => {
+                    {availableSkills.map(skill => {
                       const isSelected = signupVolunteerSheet.skills.includes(skill);
                       return (
                         <TouchableOpacity
@@ -1450,6 +1481,27 @@ export default function LoginScreen() {
                         </TouchableOpacity>
                       );
                     })}
+                  </View>
+
+                  <View style={styles.customSkillRow}>
+                    <TextInput
+                      style={styles.customSkillInput}
+                      placeholder="Add custom skill"
+                      placeholderTextColor="#9ca3af"
+                      value={customVolunteerSkill}
+                      onChangeText={setCustomVolunteerSkill}
+                      onSubmitEditing={handleAddCustomVolunteerSkill}
+                      returnKeyType="done"
+                      editable={!signupLoading}
+                    />
+                    <TouchableOpacity
+                      style={styles.customSkillAddButton}
+                      onPress={handleAddCustomVolunteerSkill}
+                      disabled={signupLoading}
+                    >
+                      <MaterialIcons name="add" size={18} color="#fff" />
+                      <Text style={styles.customSkillAddButtonText}>Add</Text>
+                    </TouchableOpacity>
                   </View>
 
                   <Text style={styles.modalSectionLabel}>Certifications & Media</Text>
@@ -2370,6 +2422,37 @@ const styles = StyleSheet.create({
   },
   skillChipTextActive: {
     color: '#fff',
+  },
+  customSkillRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  customSkillInput: {
+    flex: 1,
+    minHeight: 42,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    fontSize: 13,
+    color: '#0f172a',
+    backgroundColor: '#fff',
+  },
+  customSkillAddButton: {
+    minHeight: 42,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    backgroundColor: '#4CAF50',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  customSkillAddButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
   },
 });
 

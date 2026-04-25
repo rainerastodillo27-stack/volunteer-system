@@ -23,7 +23,7 @@ import {
   getProjectMarkerColor,
   getPrimaryProjectImageSource,
 } from '../utils/projectMap';
-import { getProjectStatusColor } from '../utils/projectStatus';
+import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 import { createGoogleMapsMarkerIcon, loadGoogleMaps } from '../utils/webGoogleMaps';
 
@@ -393,8 +393,8 @@ export default function MappingScreen({ navigation }: any) {
                 })()}
 
                 <View style={styles.statusBadge}>
-                  <View style={[styles.statusDot, { backgroundColor: getProjectStatusColor(selectedProject.status) }]} />
-                  <Text style={styles.statusText}>{selectedProject.status}</Text>
+                  <View style={[styles.statusDot, { backgroundColor: getProjectStatusColor(selectedProject) }]} />
+                  <Text style={styles.statusText}>{getProjectDisplayStatus(selectedProject)}</Text>
                 </View>
 
                 <Text style={styles.projectTitle}>{selectedProject.title}</Text>

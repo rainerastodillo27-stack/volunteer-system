@@ -10,15 +10,20 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import ProjectTimelineCalendarCard from '../components/ProjectTimelineCalendarCard';
 import { useAuth } from '../contexts/AuthContext';
 import {
+  getDashboardTimelineSnapshot,
   getMessagesForUser,
   getProjectsScreenSnapshot,
   subscribeToStorageChanges,
 } from '../models/storage';
-import type { Project, Volunteer, VolunteerTimeLog } from '../models/types';
+import type { AdminPlanningCalendar, AdminPlanningItem, Project, Volunteer, VolunteerTimeLog } from '../models/types';
 import { navigateToAvailableRoute } from '../utils/navigation';
+import { getProjectDisplayStatus } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
+
+const CORE_PROGRAM_MODULES = ['Livelihood', 'Education', 'Nutrition'] as const;
 
 function formatLongDate(value?: string): string {
   if (!value) {
@@ -62,7 +67,7 @@ function getUpcomingProject(projects: Project[]): Project | null {
   return (
     [...projects]
       .filter(project => {
-        if (project.status === 'Cancelled') {
+        if (getProjectDisplayStatus(project) === 'Cancelled') {
           return false;
         }
 
@@ -102,6 +107,8 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
   const [timeLogs, setTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const [unreadMessages, setUnreadMessages] = useState(0);
+  const [planningCalendars, setPlanningCalendars] = useState<AdminPlanningCalendar[]>([]);
+  const [planningItems, setPlanningItems] = useState<AdminPlanningItem[]>([]);
 
   const loadDashboardData = React.useCallback(async () => {
     if (!user?.id) {
@@ -109,14 +116,17 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
     }
 
     try {
-      const [projectSnapshot, messages] = await Promise.all([
+      const [projectSnapshot, timelineSnapshot, messages] = await Promise.all([
         getProjectsScreenSnapshot(user),
+        getDashboardTimelineSnapshot(),
         getMessagesForUser(user.id),
       ]);
 
       setProjects(projectSnapshot.projects);
       setVolunteerProfile(projectSnapshot.volunteerProfile);
       setTimeLogs(projectSnapshot.timeLogs);
+      setPlanningCalendars(timelineSnapshot.planningCalendars);
+      setPlanningItems(timelineSnapshot.planningItems);
       setUnreadMessages(messages.filter(message => !message.read && message.recipientId === user.id).length);
       setLoadError(null);
     } catch (error) {
@@ -140,6 +150,8 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
           'volunteerProjectJoins',
           'volunteerMatches',
           'volunteerTimeLogs',
+          'adminPlanningCalendars',
+          'adminPlanningItems',
         ],
         () => {
           void loadDashboardData();
@@ -160,6 +172,17 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
           )
       ),
     [projects, user?.id, volunteerProfile]
+  );
+
+  const assignedEvents = useMemo(
+    () =>
+      projects.filter(
+        project =>
+          project.isEvent &&
+          Boolean(volunteerProfile) &&
+          (project.internalTasks || []).some(task => task.assignedVolunteerId === volunteerProfile?.id)
+      ),
+    [projects, volunteerProfile]
   );
 
   const availableEvents = useMemo(
@@ -203,13 +226,28 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
       ),
     [projects, user?.id, volunteerProfile]
   );
+  const programOverviewCards = useMemo(
+    () =>
+      CORE_PROGRAM_MODULES.map(module => {
+        const moduleProjectCount = projects.filter(
+          project => !project.isEvent && (project.programModule || project.category) === module
+        ).length;
 
-  const upcomingEvent = useMemo(() => getUpcomingProject(joinedEvents), [joinedEvents]);
+        return {
+          label: module,
+          value: String(moduleProjectCount),
+          meta: `${moduleProjectCount} project${moduleProjectCount === 1 ? '' : 's'} available`,
+        };
+      }),
+    [projects]
+  );
+
+  const upcomingEvent = useMemo(() => getUpcomingProject(assignedEvents), [assignedEvents]);
   const suggestedEvent = useMemo(
     () => getUpcomingProject(projects.filter(project => project.isEvent)),
     [projects]
   );
-  const featuredEvent = upcomingEvent || suggestedEvent;
+  const featuredEvent = upcomingEvent || null;
   const volunteerTone = getVolunteerStatusTone(volunteerProfile?.registrationStatus);
 
   const totalHours = volunteerProfile?.totalHoursContributed || 0;
@@ -246,6 +284,7 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
         },
       ]
     : [];
+  const assignedEventIds = assignedEvents.map(project => project.id);
   const volunteerDetailCards = [
     {
       label: 'Date of Birth',
@@ -368,7 +407,7 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
 
         <Text style={styles.heroTitle}>Your next service opportunity is already on the timeline.</Text>
         <Text style={styles.heroSubtitle}>
-          Follow project dates, admin schedule updates, and your active participation from one place.
+          Follow your assigned event dates, admin schedule updates, and active participation from one place.
         </Text>
 
         <View style={styles.metricRow}>
@@ -401,7 +440,7 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
               <View style={styles.detailHeroPanel}>
                 <View style={styles.detailHeroChip}>
                   <MaterialIcons name="event-available" size={14} color="#166534" />
-                  <Text style={styles.detailHeroChipText}>{upcomingEvent ? 'Your next joined event' : 'Suggested event'}</Text>
+                  <Text style={styles.detailHeroChipText}>Your next assigned event</Text>
                 </View>
                 <Text style={styles.detailHeroTitle}>{featuredEvent.title}</Text>
                 <Text style={styles.detailHeroText}>{featuredEvent.description}</Text>
@@ -418,7 +457,7 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
               </View>
             </>
           ) : (
-            <Text style={styles.emptySectionText}>You do not have a featured event yet. Explore available events to get started.</Text>
+            <Text style={styles.emptySectionText}>You do not have an assigned event yet. Ask the admin or field officer to assign you to a task.</Text>
           )}
         </View>
 
@@ -452,11 +491,27 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
         </View>
       </View>
 
+      <ProjectTimelineCalendarCard
+        title="Volunteer Event Calendar"
+        subtitle={
+          assignedEventIds.length
+            ? 'Your assigned events are shown with the admin planning timeline below.'
+            : 'Review the shared project schedule and upcoming admin timeline in one view.'
+        }
+        projects={projects}
+        planningCalendars={planningCalendars}
+        planningItems={planningItems}
+        projectFilterIds={assignedEventIds.length ? assignedEventIds : undefined}
+        accentColor="#166534"
+        emptyText="No volunteer timeline items yet."
+        onOpenProject={projectId => openProjects(projectId)}
+      />
+
       <View style={styles.quickActionRow}>
         <TouchableOpacity style={styles.quickActionCard} onPress={() => openProjects()}>
           <MaterialIcons name="work-outline" size={22} color="#166534" />
           <Text style={styles.quickActionTitle}>Projects</Text>
-          <Text style={styles.quickActionText}>Browse all programs and events</Text>
+          <Text style={styles.quickActionText}>Browse all projects and events</Text>
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.quickActionCard} onPress={openTasks}>
@@ -564,6 +619,27 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
         </View>
       )}
 
+      <View style={styles.detailCard}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Programs</Text>
+          <TouchableOpacity onPress={() => openProjects()}>
+            <Text style={styles.linkText}>View all</Text>
+          </TouchableOpacity>
+        </View>
+
+        <Text style={styles.sectionSubtitle}>The three core program areas currently available in the system</Text>
+
+        <View style={styles.detailSummaryGrid}>
+          {programOverviewCards.map(card => (
+            <View key={card.label} style={styles.detailSummaryCard}>
+              <Text style={styles.detailSummaryEyebrow}>Program</Text>
+              <Text style={styles.detailSummaryValue}>{card.label}</Text>
+              <Text style={styles.detailSummaryMeta}>{card.meta}</Text>
+            </View>
+          ))}
+        </View>
+      </View>
+
       {joinedProjects.length > 0 && (
         <View style={styles.detailCard}>
           <View style={styles.sectionHeader}>
@@ -612,13 +688,13 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
       {availableProjects.length > 0 && (
         <View style={styles.detailCard}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Available Programs</Text>
+            <Text style={styles.sectionTitle}>Available Projects</Text>
             <TouchableOpacity onPress={() => openProjects()}>
               <Text style={styles.linkText}>View all</Text>
             </TouchableOpacity>
           </View>
 
-          <Text style={styles.sectionSubtitle}>Programs you can join and contribute to</Text>
+          <Text style={styles.sectionSubtitle}>Projects you can join and contribute to</Text>
 
           <View style={styles.projectsList}>
             {availableProjects.map(project => (

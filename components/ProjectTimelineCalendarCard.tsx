@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import type { AdminPlanningCalendar, AdminPlanningItem, Project } from '../models/types';
-import { getProjectStatusColor } from '../utils/projectStatus';
+import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 
 type TimelineEntry = {
   id: string;
@@ -120,7 +120,7 @@ export default function ProjectTimelineCalendarCard({
 
     const projectEntries: TimelineEntry[] = projects
       .filter(project => {
-        if (project.status === 'Cancelled' || !isValidDateValue(project.startDate)) {
+        if (getProjectDisplayStatus(project) === 'Cancelled' || !isValidDateValue(project.startDate)) {
           return false;
         }
 
@@ -136,7 +136,7 @@ export default function ProjectTimelineCalendarCard({
         description: project.description,
         startDate: project.startDate,
         endDate: project.endDate || project.startDate,
-        color: getProjectStatusColor(project.status),
+        color: getProjectStatusColor(project),
         laneLabel: getLaneLabel(project),
         projectId: project.id,
         kind: 'project',

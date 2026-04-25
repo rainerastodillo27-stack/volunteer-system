@@ -21,7 +21,7 @@ import {
 import { PartnerProjectApplication, PartnerProjectProposalDetails, Project, Volunteer, VolunteerProjectJoinRecord, VolunteerProjectMatch, VolunteerTimeLog } from '../models/types';
 import { isImageMediaUri, pickImageFromDevice } from '../utils/media';
 import { navigateToAvailableRoute } from '../utils/navigation';
-import { getProjectStatusColor } from '../utils/projectStatus';
+import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 const CATEGORY_KEYWORDS: Record<Project['category'], string[]> = {
@@ -100,6 +100,21 @@ function formatProjectDateRange(startValue?: string, endValue?: string): string 
   return startLabel === endLabel ? startLabel : `${startLabel} - ${endLabel}`;
 }
 
+function hasEventStartedForToday(startValue?: string, now: Date = new Date()): boolean {
+  if (!startValue) {
+    return true;
+  }
+
+  const startDate = new Date(startValue);
+  if (Number.isNaN(startDate.getTime())) {
+    return true;
+  }
+
+  const startDay = new Date(startDate);
+  startDay.setHours(0, 0, 0, 0);
+  return now >= startDay;
+}
+
 function createPartnerProposalDraft(project: Project): PartnerProposalDraft {
   return {
     proposedTitle: project.title,
@@ -157,11 +172,13 @@ function formatSuggestionReasons(reasons: string[]): string {
 }
 
 function getEventAvailabilitySummary(project: Project): string {
-  if (project.status === 'Completed' || project.status === 'Cancelled') {
-    return project.status;
+  const displayStatus = getProjectDisplayStatus(project);
+
+  if (displayStatus === 'Completed' || displayStatus === 'Cancelled') {
+    return displayStatus;
   }
 
-  if (project.status === 'On Hold') {
+  if (displayStatus === 'On Hold') {
     return 'Currently on hold';
   }
 
@@ -198,12 +215,14 @@ function getProjectSuggestion(project: Project, volunteer: Volunteer | null): Re
   const skillTerms = unique([
     ...((volunteer.skills || []).flatMap(normalizeWords)),
     ...normalizeWords(volunteer.skillsDescription),
+    ...normalizeWords(volunteer.specialSkills),
   ]);
 
   const projectTerms = unique([
     ...normalizeWords(project.title),
     ...normalizeWords(project.description),
     ...normalizeWords(project.location.address),
+    ...((project.skillsNeeded || []).flatMap(normalizeWords)),
     ...CATEGORY_KEYWORDS[project.category],
   ]);
 
@@ -446,6 +465,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
   const isDesktop = Platform.OS === 'web' || width >= 1100;
   const projectListRef = useRef<FlatList<ProjectCategoryGroup> | null>(null);
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
+  const [now, setNow] = useState<Date>(new Date());
   const [projects, setProjects] = useState<Project[]>([]);
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
   const [partnerApplications, setPartnerApplications] = useState<PartnerProjectApplication[]>([]);
@@ -459,6 +479,11 @@ export default function ProjectsScreen({ navigation, route }: any) {
   const [selectedCategory, setSelectedCategory] = useState<Project['category'] | null>(null);
   const [selectedProgramId, setSelectedProgramId] = useState<string | null>(null);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
   const [timeOutProjectId, setTimeOutProjectId] = useState<string | null>(null);
   const [timeOutReportDraft, setTimeOutReportDraft] = useState('');
   const [timeOutPhotoDraft, setTimeOutPhotoDraft] = useState('');
@@ -651,6 +676,41 @@ export default function ProjectsScreen({ navigation, route }: any) {
   // Starts a volunteer time log for the selected project.
   const handleTimeIn = async (projectId: string) => {
     if (!volunteerProfile) return;
+    const project = projects.find(item => item.id === projectId) || null;
+    if (!project) {
+      Alert.alert('Event not found', 'Please try opening the event again.');
+      return;
+    }
+
+    const projectStatus = getProjectDisplayStatus(project);
+    if (projectStatus === 'Completed' || projectStatus === 'Cancelled') {
+      Alert.alert('Event closed', 'Time in is only available while the event is still active.');
+      return;
+    }
+
+    if (project.isEvent) {
+      const startDate = project.startDate ? new Date(project.startDate) : null;
+      if (startDate && !Number.isNaN(startDate.getTime()) && !hasEventStartedForToday(project.startDate)) {
+        Alert.alert(
+          'Event not started',
+          `This event starts on ${format(startDate, 'MMM d')}. Please refresh once the event begins to time in.`
+        );
+        return;
+      }
+
+      const isAssignedToEventTask = (project.internalTasks || []).some(
+        task => task.assignedVolunteerId === volunteerProfile.id
+      );
+
+      if (!isAssignedToEventTask) {
+        Alert.alert(
+          'Assignment Required',
+          'You need to be assigned to an event task before you can time in.'
+        );
+        return;
+      }
+    }
+
     try {
       setLoadingProjectId(projectId);
       const createdLog = await startVolunteerTimeLog(volunteerProfile.id, projectId);
@@ -728,7 +788,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
 
   const visibleProjects = useMemo(() => {
     return projects
-      .filter(project => (statusFilter === 'All' ? true : project.status === statusFilter))
+      .filter(project => (statusFilter === 'All' ? true : getProjectDisplayStatus(project) === statusFilter))
       .filter(project =>
         contentFilter === 'All'
           ? true
@@ -748,7 +808,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
           project.category,
           project.programModule || '',
           project.isEvent ? 'event' : 'program',
-          project.status,
+          getProjectDisplayStatus(project),
         ]
           .join(' ')
           .toLowerCase();
@@ -846,8 +906,8 @@ export default function ProjectsScreen({ navigation, route }: any) {
         .flat()
         .filter(
           project =>
-            project.status !== 'Completed' &&
-            project.status !== 'Cancelled'
+            getProjectDisplayStatus(project) !== 'Completed' &&
+            getProjectDisplayStatus(project) !== 'Cancelled'
         ).length,
     [linkedEventsByProgramId]
   );
@@ -1039,6 +1099,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
   }, [user?.id, volunteerProfile?.id]);
 
   const getVolunteerEventActionState = useCallback((project: Project) => {
+    const displayStatus = getProjectDisplayStatus(project);
     const joined = isJoined(project);
     const joinRecord = volunteerJoinRecordByProjectId.get(project.id);
     const volunteerMatch = volunteerMatchByProjectId.get(project.id);
@@ -1048,11 +1109,21 @@ export default function ProjectsScreen({ navigation, route }: any) {
     const completedParticipation = joinRecord?.participationStatus === 'Completed';
     const isPendingApproval = volunteerMatch?.status === 'Requested';
     const wasRejected = volunteerMatch?.status === 'Rejected';
-    const isClosedStatus = project.status === 'Completed' || project.status === 'Cancelled';
-    const isOnHold = project.status === 'On Hold';
+    const isClosedStatus = displayStatus === 'Completed' || displayStatus === 'Cancelled';
+    const isOnHold = displayStatus === 'On Hold';
+
+    const startDate = project.startDate ? new Date(project.startDate) : null;
+    const eventHasNotStarted = !hasEventStartedForToday(project.startDate);
+    const canTimeIn =
+      isAssigned &&
+      !completedParticipation &&
+      !isPendingApproval &&
+      !isClosedStatus &&
+      !isOnHold &&
+      !eventHasNotStarted;
 
     const joinButtonLabel = completedParticipation
-      ? 'Completed'
+      ? 'Task Completed'
       : joined
       ? isAssigned
         ? 'Assigned'
@@ -1060,7 +1131,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
       : isPendingApproval
       ? 'Pending Approval'
       : isClosedStatus
-      ? project.status
+      ? displayStatus
       : isOnHold
       ? 'On Hold'
       : wasRejected
@@ -1083,12 +1154,14 @@ export default function ProjectsScreen({ navigation, route }: any) {
       ? 'You already completed this event.'
       : joined
       ? isAssigned
-        ? 'Admin assigned you to this event.'
-        : 'You are approved to join this event.'
+        ? eventHasNotStarted && startDate
+          ? `Assigned. Time in becomes available on ${format(startDate, 'MMM d')}.`
+          : 'Admin assigned you to this event. You can time in now.'
+        : 'You are approved to join this event, but you need an assigned task before timing in.'
       : isPendingApproval
       ? 'Waiting for admin approval.'
       : isClosedStatus
-      ? `This event is ${project.status.toLowerCase()}.`
+      ? `This event is ${displayStatus.toLowerCase()}.`
       : isOnHold
       ? 'This event is currently on hold.'
       : wasRejected
@@ -1105,6 +1178,8 @@ export default function ProjectsScreen({ navigation, route }: any) {
       completedParticipation,
       isJoinDisabled,
       isPendingApproval,
+      isAssigned,
+      canTimeIn,
       statusMessage,
       wasRejected,
     };
@@ -1144,10 +1219,13 @@ export default function ProjectsScreen({ navigation, route }: any) {
 
   const openTimeOutModal = useCallback((projectId: string) => {
     const activeLog = activeLogByProjectId.get(projectId);
-    setTimeOutProjectId(projectId);
-    setTimeOutReportDraft(activeLog?.completionReport || '');
-    setTimeOutPhotoDraft(activeLog?.completionPhoto || '');
-  }, [activeLogByProjectId]);
+    navigateToAvailableRoute(navigation, 'Reports', {
+      projectId,
+      autoOpenUpload: true,
+      completionReport: activeLog?.completionReport,
+      completionPhoto: activeLog?.completionPhoto,
+    });
+  }, [activeLogByProjectId, navigation]);
 
   const closeTimeOutModal = useCallback(() => {
     if (loadingProjectId === timeOutProjectId && timeOutProjectId) {
@@ -1384,6 +1462,8 @@ export default function ProjectsScreen({ navigation, route }: any) {
                       const linkedEventAction = getVolunteerEventActionState(event);
                       const eventJoined = linkedEventAction.joined;
                       const eventCompleted = linkedEventAction.completedParticipation;
+                      const eventLifecycleStatus = getProjectDisplayStatus(event);
+                      const eventIsClosed = eventLifecycleStatus === 'Completed' || eventLifecycleStatus === 'Cancelled';
                       const eventJoinRecord = volunteerJoinRecordByProjectId.get(event.id);
                       const eventActiveLog = activeLogByProjectId.get(event.id);
                       const eventLatestLog = latestLogByProjectId.get(event.id);
@@ -1425,7 +1505,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                             <Text style={styles.nestedEventSummaryText}>
                               {event.volunteers.length}/{event.volunteersNeeded} volunteers
                             </Text>
-                            <Text style={styles.nestedEventSummaryText}>{event.status}</Text>
+                            <Text style={styles.nestedEventSummaryText}>{getProjectDisplayStatus(event)}</Text>
                           </View>
 
                           {user?.role === 'volunteer' ? (
@@ -1465,30 +1545,67 @@ export default function ProjectsScreen({ navigation, route }: any) {
                                   </Text>
                                 </TouchableOpacity>
 
-                                {eventJoined && !eventCompleted ? (
+                                {eventJoined && (eventActiveLog || (!eventCompleted && !eventIsClosed)) ? (
                                   <TouchableOpacity
                                     style={[
                                       styles.timeButton,
                                       eventActiveLog ? styles.timeOutButton : styles.timeInButton,
+                                      !eventActiveLog && !linkedEventAction.canTimeIn && styles.timeButtonDisabled,
                                     ]}
-                                    onPress={() =>
-                                      eventActiveLog ? openTimeOutModal(event.id) : handleTimeIn(event.id)
+                                    onPress={() => {
+                                      if (eventActiveLog) {
+                                        return openTimeOutModal(event.id);
+                                      }
+
+                                      if (linkedEventAction.canTimeIn) {
+                                        return handleTimeIn(event.id);
+                                      }
+
+                                      if (linkedEventAction.isAssigned && eventLifecycleStatus === 'Planning') {
+                                        const startDate = event.startDate ? new Date(event.startDate) : null;
+                                        return Alert.alert(
+                                          'Not started yet',
+                                          startDate
+                                            ? `This event starts on ${format(startDate, 'MMM d')}. Time in will be available then.`
+                                            : 'This event has not started yet. Please refresh when the event begins.'
+                                        );
+                                      }
+
+                                      return Alert.alert(
+                                        'Assignment Required',
+                                        'You need to be assigned to an event task before you can time in.'
+                                      );
+                                    }}
+                                    disabled={
+                                      loadingProjectId === event.id ||
+                                      (!eventActiveLog && !linkedEventAction.canTimeIn)
                                     }
-                                    disabled={loadingProjectId === event.id}
                                   >
                                     <MaterialIcons
-                                      name={eventActiveLog ? 'logout' : 'login'}
+                                      name={
+                                        eventActiveLog
+                                          ? 'logout'
+                                          : linkedEventAction.canTimeIn
+                                          ? 'login'
+                                          : 'lock'
+                                      }
                                       size={16}
                                       color="#fff"
                                     />
                                     <Text style={styles.timeButtonText}>
-                                      {eventActiveLog ? 'Time Out' : 'Time In'}
+                                      {eventActiveLog
+                                        ? 'Time Out'
+                                        : linkedEventAction.canTimeIn
+                                        ? 'Time In'
+                                        : eventLifecycleStatus === 'Planning' && linkedEventAction.isAssigned
+                                        ? 'Await Start'
+                                        : 'Await Assignment'}
                                     </Text>
                                   </TouchableOpacity>
                                 ) : null}
                               </View>
 
-                              {eventJoined ? (
+                                {eventJoined ? (
                                 <TouchableOpacity
                                   style={styles.groupChatButton}
                                   onPress={() => handleOpenGroupChat(event.id)}
@@ -1685,19 +1802,27 @@ export default function ProjectsScreen({ navigation, route }: any) {
                             style={[
                               styles.timeButton,
                               activeLog ? styles.timeOutButton : styles.timeInButton,
+                              !activeLog && item.isEvent && !eventActionState?.isAssigned && styles.timeButtonDisabled,
                             ]}
                             onPress={() =>
-                              activeLog ? openTimeOutModal(item.id) : handleTimeIn(item.id)
+                              activeLog
+                                ? openTimeOutModal(item.id)
+                                : item.isEvent && !eventActionState?.isAssigned
+                                ? Alert.alert(
+                                    'Assignment Required',
+                                    'You need to be assigned to an event task before you can time in.'
+                                  )
+                                : handleTimeIn(item.id)
                             }
-                            disabled={loadingProjectId === item.id}
+                            disabled={loadingProjectId === item.id || (!activeLog && item.isEvent && !eventActionState?.isAssigned)}
                           >
                             <MaterialIcons
-                              name={activeLog ? 'logout' : 'login'}
+                              name={activeLog ? 'logout' : item.isEvent && !eventActionState?.isAssigned ? 'lock' : 'login'}
                               size={16}
                               color="#fff"
                             />
                             <Text style={styles.timeButtonText}>
-                              {activeLog ? 'Time Out' : 'Time In'}
+                              {activeLog ? 'Time Out' : item.isEvent && !eventActionState?.isAssigned ? 'Await Assignment' : 'Time In'}
                             </Text>
                           </TouchableOpacity>
                         )}
@@ -1754,7 +1879,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                             <View style={styles.proofReminderCard}>
                               <MaterialIcons name="verified" size={16} color="#b45309" />
                               <Text style={styles.proofReminderText}>
-                                Upload a task photo or write a completion report before timing out.
+                                Tap Time Out to open My Event Reports. Submitting the report will finalize your timeout.
                               </Text>
                             </View>
                           ) : latestLog?.completionPhoto || latestLog?.completionReport ? (
@@ -1842,10 +1967,10 @@ export default function ProjectsScreen({ navigation, route }: any) {
                   <View
                     style={[
                       styles.statusDot,
-                      { backgroundColor: getProjectStatusColor(item.status) },
+                      { backgroundColor: getProjectStatusColor(item) },
                     ]}
                   />
-                  <Text style={styles.status}>{item.status}</Text>
+                  <Text style={styles.status}>{getProjectDisplayStatus(item)}</Text>
                 </View>
                 <Text style={styles.volunteers}>
                   {item.isEvent
@@ -1886,11 +2011,13 @@ export default function ProjectsScreen({ navigation, route }: any) {
     const completionReport = timeOutReportDraft.trim();
     const completionPhoto = timeOutPhotoDraft.trim();
 
-    if (!completionReport && !completionPhoto) {
-      Alert.alert(
-        'Proof Required',
-        'Upload a photo or write a completion report before timing out.'
-      );
+    if (!completionReport) {
+      Alert.alert('Report Required', 'Submit your completion report before timing out.');
+      return;
+    }
+
+    if (!completionPhoto) {
+      Alert.alert('Photo Required', 'Upload a completion photo before timing out.');
       return;
     }
 
@@ -1938,12 +2065,13 @@ export default function ProjectsScreen({ navigation, route }: any) {
       setTimeOutProjectId(null);
       setTimeOutReportDraft('');
       setTimeOutPhotoDraft('');
-      Alert.alert(
-        autoSubmittedReport ? 'Time Out recorded' : 'Time Out recorded with warning',
-        autoSubmittedReport
-          ? 'Hours were added to your profile and your completion proof was sent to Reports.'
-          : 'Hours were added to your profile and your time log was saved, but the report could not be sent to Reports automatically.'
-      );
+      navigateToAvailableRoute(navigation, 'Reports', {
+        projectId,
+        autoOpenUpload: true,
+        completionReport,
+        completionPhoto,
+      });
+      Alert.alert('Time Out recorded', 'Your hours were added and you can now submit your event report.');
     } catch (error) {
       Alert.alert(
         getRequestErrorTitle(error, 'Unable to time out'),
@@ -1954,11 +2082,14 @@ export default function ProjectsScreen({ navigation, route }: any) {
     }
   };
 
-  const hasTimeOutProof = Boolean(timeOutReportDraft.trim() || timeOutPhotoDraft.trim());
+  const hasTimeOutPhoto = Boolean(timeOutPhotoDraft.trim());
+  const hasTimeOutReport = Boolean(timeOutReportDraft.trim());
+  const hasTimeOutSubmissionRequirements = hasTimeOutPhoto && hasTimeOutReport;
   const selectedEventActionState = selectedEvent ? getVolunteerEventActionState(selectedEvent) : null;
   const selectedEventJoinRecord = selectedEvent ? volunteerJoinRecordByProjectId.get(selectedEvent.id) : undefined;
   const selectedEventActiveLog = selectedEvent ? activeLogByProjectId.get(selectedEvent.id) : undefined;
   const selectedEventLatestLog = selectedEvent ? latestLogByProjectId.get(selectedEvent.id) : undefined;
+  const selectedEventLifecycleStatus = selectedEvent ? getProjectDisplayStatus(selectedEvent) : null;
   const selectedEventFieldOfficer = selectedEvent ? isFieldOfficerForEvent(selectedEvent) : false;
   const selectedEventAssignableVolunteers = selectedEvent ? getAssignableVolunteersForEvent(selectedEvent) : [];
   const selectedEventAssignableTasks = selectedEvent
@@ -2318,16 +2449,16 @@ export default function ProjectsScreen({ navigation, route }: any) {
                   <View
                     style={[
                       styles.mobileProgramStatusBadge,
-                      { backgroundColor: `${getProjectStatusColor(selectedProgram.status)}1a` },
+                      { backgroundColor: `${getProjectStatusColor(selectedProgram)}1a` },
                     ]}
                   >
                     <Text
                       style={[
                         styles.mobileProgramStatusText,
-                        { color: getProjectStatusColor(selectedProgram.status) },
+                        { color: getProjectStatusColor(selectedProgram) },
                       ]}
                     >
-                      {selectedProgram.status}
+                      {getProjectDisplayStatus(selectedProgram)}
                     </Text>
                   </View>
                 </View>
@@ -2455,24 +2586,66 @@ export default function ProjectsScreen({ navigation, route }: any) {
 
                   <Text style={styles.mobileEventStatusText}>{selectedEventActionState.statusMessage}</Text>
 
-                  {selectedEventActionState.joined && !selectedEventActionState.completedParticipation ? (
+                  {selectedEventActionState.joined &&
+                  (selectedEventActiveLog ||
+                    (!selectedEventActionState.completedParticipation &&
+                      selectedEventLifecycleStatus !== 'Completed' &&
+                      selectedEventLifecycleStatus !== 'Cancelled')) ? (
                     <TouchableOpacity
                       style={[
                         styles.timeButton,
                         selectedEventActiveLog ? styles.timeOutButton : styles.timeInButton,
+                        !selectedEventActiveLog && !selectedEventActionState.canTimeIn && styles.timeButtonDisabled,
                       ]}
-                      onPress={() =>
-                        selectedEventActiveLog ? openTimeOutModal(selectedEvent.id) : handleTimeIn(selectedEvent.id)
-                      }
-                      disabled={loadingProjectId === selectedEvent.id}
+                      onPress={() => {
+                        if (selectedEventActiveLog) {
+                          return openTimeOutModal(selectedEvent.id);
+                        }
+
+                        if (selectedEventActionState.canTimeIn) {
+                          return handleTimeIn(selectedEvent.id);
+                        }
+
+                        if (
+                          selectedEventActionState.isAssigned &&
+                          selectedEventLifecycleStatus === 'Planning'
+                        ) {
+                          const startDate = selectedEvent.startDate ? new Date(selectedEvent.startDate) : null;
+                          return Alert.alert(
+                            'Not started yet',
+                            startDate
+                              ? `This event starts on ${format(startDate, 'MMM d')}. Time in will be available then.`
+                              : 'This event has not started yet. Please refresh when the event begins.'
+                          );
+                        }
+
+                        return Alert.alert(
+                          'Assignment Required',
+                          'You need to be assigned to an event task before you can time in.'
+                        );
+                      }}
+                      disabled={loadingProjectId === selectedEvent.id || (!selectedEventActiveLog && !selectedEventActionState.canTimeIn)}
                     >
                       <MaterialIcons
-                        name={selectedEventActiveLog ? 'logout' : 'login'}
+                        name={
+                          selectedEventActiveLog
+                            ? 'logout'
+                            : selectedEventActionState.canTimeIn
+                            ? 'login'
+                            : 'lock'
+                        }
                         size={16}
                         color="#fff"
                       />
                       <Text style={styles.timeButtonText}>
-                        {selectedEventActiveLog ? 'Time Out' : 'Time In'}
+                        {selectedEventActiveLog
+                          ? 'Time Out'
+                          : selectedEventActionState.canTimeIn
+                          ? 'Time In'
+                          : selectedEventLifecycleStatus === 'Planning' &&
+                            selectedEventActionState.isAssigned
+                          ? 'Await Start'
+                          : 'Await Assignment'}
                       </Text>
                     </TouchableOpacity>
                   ) : null}
@@ -2613,7 +2786,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
             </View>
 
             <Text style={styles.timeOutModalHint}>
-              Before timing out, upload a photo or write a short report confirming that you finished the task.
+              Before timing out, submit your completion report and upload a completion photo.
             </Text>
 
             <View style={styles.timeOutProofActions}>
@@ -2653,7 +2826,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
               </View>
             ) : null}
 
-            <Text style={styles.timeOutFieldLabel}>Completion Report</Text>
+            <Text style={styles.timeOutFieldLabel}>Completion Report Required</Text>
             <TextInput
               style={styles.timeOutReportInput}
               multiline
@@ -2667,15 +2840,15 @@ export default function ProjectsScreen({ navigation, route }: any) {
             />
 
             <Text style={styles.timeOutRequirementText}>
-              {hasTimeOutProof
-                ? 'Proof attached. You can now submit your sign out.'
-                : 'At least one proof is required before sign out: upload a photo or write a completion report.'}
+              {hasTimeOutSubmissionRequirements
+                ? 'Report and photo attached. You can now submit sign out.'
+                : 'Both completion report and completion photo are required before sign out.'}
             </Text>
 
             <TouchableOpacity
               style={[
                 styles.timeOutSubmitButton,
-                !hasTimeOutProof && styles.timeOutSubmitButtonDisabled,
+                !hasTimeOutSubmissionRequirements && styles.timeOutSubmitButtonDisabled,
                 loadingProjectId === timeOutProjectId && styles.timeOutSubmitButtonDisabled,
               ]}
               onPress={() => {
@@ -2683,7 +2856,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                   void handleTimeOut(timeOutProjectId);
                 }
               }}
-              disabled={!hasTimeOutProof || loadingProjectId === timeOutProjectId}
+              disabled={!hasTimeOutSubmissionRequirements || loadingProjectId === timeOutProjectId}
             >
               <MaterialIcons name="task-alt" size={18} color="#fff" />
               <Text style={styles.timeOutSubmitButtonText}>
@@ -4003,6 +4176,9 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     gap: 6,
   },
+  timeButtonDisabled: {
+    opacity: 0.6,
+  },
   timeInButton: {
     backgroundColor: '#2563eb',
   },
@@ -4529,5 +4705,3 @@ const styles = StyleSheet.create({
   statusFilterButtonTextActive: {
     color: '#fff',
   },});
-
-

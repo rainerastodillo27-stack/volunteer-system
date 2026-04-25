@@ -64,6 +64,8 @@ const API_REQUEST_RETRY_BASE_MS = 1000;
 const API_REQUEST_RETRY_MAX_MS = 8000;
 const SHARED_STORAGE_CACHE_TTL_MS = 3000;
 const STORAGE_CHANGE_POLL_INTERVAL_MS = 3000;
+const STORAGE_CHANGE_DEBOUNCE_MS = 120;
+const STORAGE_CHANGE_CALLBACK_COOLDOWN_MS = 180;
 const LOCAL_ONLY_STORAGE_KEYS = new Set([STORAGE_KEYS.CURRENT_USER]);
 const NEGROS_OCCIDENTAL_BOUNDS = {
   minLatitude: 9.85,
@@ -73,6 +75,195 @@ const NEGROS_OCCIDENTAL_BOUNDS = {
 };
 let apiReadyConfirmedAt = 0;
 let apiReadyCheckPromise: Promise<void> | null = null;
+const inFlightJsonRequests = new Map<string, Promise<unknown>>();
+type StorageChangeEvent = { type: string; keys: string[] };
+type StorageChangeSubscriber = {
+  watchedKeys: Set<string>;
+  onChange: (event: StorageChangeEvent) => void | Promise<void>;
+  pendingKeys: Set<string>;
+  notifyTimer: ReturnType<typeof setTimeout> | null;
+  isNotifying: boolean;
+};
+const storageChangeSubscribers = new Map<number, StorageChangeSubscriber>();
+let nextStorageSubscriberId = 1;
+let sharedStorageSocket: WebSocket | null = null;
+let sharedStorageHeartbeat: ReturnType<typeof setInterval> | null = null;
+let sharedStorageReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let sharedStoragePendingChangeTimer: ReturnType<typeof setTimeout> | null = null;
+const sharedStoragePendingChangedKeys = new Set<string>();
+
+function hasStorageChangeSubscribers(): boolean {
+  return storageChangeSubscribers.size > 0;
+}
+
+function queueStorageSubscriberNotification(
+  subscriber: StorageChangeSubscriber,
+  changedKeys: string[]
+) {
+  changedKeys.forEach(key => {
+    if (subscriber.watchedKeys.has(key)) {
+      subscriber.pendingKeys.add(key);
+    }
+  });
+
+  if (subscriber.pendingKeys.size === 0 || subscriber.notifyTimer) {
+    return;
+  }
+
+  subscriber.notifyTimer = setTimeout(() => {
+    subscriber.notifyTimer = null;
+    void flushStorageSubscriberNotification(subscriber);
+  }, STORAGE_CHANGE_DEBOUNCE_MS);
+}
+
+async function flushStorageSubscriberNotification(subscriber: StorageChangeSubscriber) {
+  if (subscriber.isNotifying || subscriber.pendingKeys.size === 0) {
+    return;
+  }
+
+  const changedKeys = Array.from(subscriber.pendingKeys);
+  subscriber.pendingKeys.clear();
+  subscriber.isNotifying = true;
+
+  try {
+    const callbackResult = subscriber.onChange({ type: 'storage.changed', keys: changedKeys });
+    if (callbackResult && typeof (callbackResult as Promise<void>).then === 'function') {
+      await callbackResult;
+    } else {
+      await new Promise<void>(resolve => {
+        setTimeout(resolve, STORAGE_CHANGE_CALLBACK_COOLDOWN_MS);
+      });
+    }
+  } catch (error) {
+    console.error('Error notifying storage subscriber:', error);
+  } finally {
+    subscriber.isNotifying = false;
+    if (subscriber.pendingKeys.size > 0) {
+      queueStorageSubscriberNotification(subscriber, Array.from(subscriber.pendingKeys));
+    }
+  }
+}
+
+function notifyStorageChanged(changedKeys: string[]) {
+  for (const subscriber of storageChangeSubscribers.values()) {
+    if (!changedKeys.some(key => subscriber.watchedKeys.has(key))) {
+      continue;
+    }
+
+    queueStorageSubscriberNotification(subscriber, changedKeys);
+  }
+}
+
+function flushSharedStorageChangedKeys() {
+  if (sharedStoragePendingChangedKeys.size === 0) {
+    return;
+  }
+
+  const changedKeys = Array.from(sharedStoragePendingChangedKeys);
+  sharedStoragePendingChangedKeys.clear();
+  notifyStorageChanged(changedKeys);
+}
+
+function queueSharedStorageChangedKeys(changedKeys: string[]) {
+  changedKeys.forEach(key => sharedStoragePendingChangedKeys.add(key));
+  if (!sharedStoragePendingChangeTimer) {
+    sharedStoragePendingChangeTimer = setTimeout(() => {
+      sharedStoragePendingChangeTimer = null;
+      flushSharedStorageChangedKeys();
+    }, STORAGE_CHANGE_DEBOUNCE_MS);
+  }
+}
+
+function clearSharedStorageSocketResources(closeSocket = true) {
+  if (sharedStorageHeartbeat) {
+    clearInterval(sharedStorageHeartbeat);
+    sharedStorageHeartbeat = null;
+  }
+  if (sharedStoragePendingChangeTimer) {
+    clearTimeout(sharedStoragePendingChangeTimer);
+    sharedStoragePendingChangeTimer = null;
+  }
+  if (sharedStorageReconnectTimer) {
+    clearTimeout(sharedStorageReconnectTimer);
+    sharedStorageReconnectTimer = null;
+  }
+  if (closeSocket && sharedStorageSocket) {
+    sharedStorageSocket.onopen = null;
+    sharedStorageSocket.onmessage = null;
+    sharedStorageSocket.onerror = null;
+    sharedStorageSocket.onclose = null;
+    sharedStorageSocket.close();
+    sharedStorageSocket = null;
+  }
+}
+
+function connectSharedStorageSocket() {
+  if (!hasStorageChangeSubscribers()) {
+    clearSharedStorageSocketResources(true);
+    return;
+  }
+
+  if (
+    sharedStorageSocket &&
+    (sharedStorageSocket.readyState === WebSocket.OPEN ||
+      sharedStorageSocket.readyState === WebSocket.CONNECTING)
+  ) {
+    return;
+  }
+
+  if (sharedStorageReconnectTimer) {
+    clearTimeout(sharedStorageReconnectTimer);
+    sharedStorageReconnectTimer = null;
+  }
+
+  sharedStorageSocket = new WebSocket(getStorageWebSocketUrl());
+
+  sharedStorageSocket.onopen = () => {
+    if (sharedStorageHeartbeat) {
+      clearInterval(sharedStorageHeartbeat);
+    }
+    sharedStorageHeartbeat = setInterval(() => {
+      if (sharedStorageSocket?.readyState === WebSocket.OPEN) {
+        sharedStorageSocket.send('ping');
+      }
+    }, 25000);
+  };
+
+  sharedStorageSocket.onmessage = event => {
+    try {
+      const payload = JSON.parse(event.data) as { type: string; keys?: string[] };
+      const changedKeys = payload.keys || [];
+      if (payload.type !== 'storage.changed' || changedKeys.length === 0) {
+        return;
+      }
+
+      const hasInterestedSubscriber = Array.from(storageChangeSubscribers.values()).some(
+        subscriber => changedKeys.some(key => subscriber.watchedKeys.has(key))
+      );
+
+      if (!hasInterestedSubscriber) {
+        return;
+      }
+
+      invalidateSharedStorageCache(changedKeys);
+      queueSharedStorageChangedKeys(changedKeys);
+    } catch (error) {
+      console.error('Error parsing storage event:', error);
+    }
+  };
+
+  sharedStorageSocket.onclose = () => {
+    clearSharedStorageSocketResources(false);
+    sharedStorageSocket = null;
+    if (hasStorageChangeSubscribers()) {
+      sharedStorageReconnectTimer = setTimeout(connectSharedStorageSocket, 1500);
+    }
+  };
+
+  sharedStorageSocket.onerror = () => {
+    sharedStorageSocket?.close();
+  };
+}
 
 type ProjectsScreenSnapshot = {
   projects: Project[];
@@ -102,6 +293,21 @@ export type DashboardTimelineSnapshot = {
   planningCalendars: AdminPlanningCalendar[];
   planningItems: AdminPlanningItem[];
 };
+
+function buildVolunteerProjectJoinRecordId(projectId: string, volunteerId: string): string {
+  const rawId = `volunteer-join-${projectId}-${volunteerId}`;
+  if (rawId.length <= 64) {
+    return rawId;
+  }
+
+  let hash = 2166136261;
+  for (let index = 0; index < rawId.length; index += 1) {
+    hash ^= rawId.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return `voljoin-${projectId.slice(0, 18)}-${volunteerId.slice(0, 18)}-${(hash >>> 0).toString(16)}`;
+}
 
 const DEFAULT_ADMIN_PLANNING_CALENDARS: AdminPlanningCalendar[] = [
   {
@@ -618,8 +824,31 @@ async function requestApiJson<T>(
   init?: RequestInit,
   timeoutMs = REMOTE_STORAGE_TIMEOUT_MS
 ): Promise<T> {
-  const response = await fetchApiResponse(path, init, timeoutMs);
-  return (await response.json()) as T;
+  const method = String(init?.method || 'GET').toUpperCase();
+  const canDeduplicate = method === 'GET' && !init?.body;
+
+  if (!canDeduplicate) {
+    const response = await fetchApiResponse(path, init, timeoutMs);
+    return (await response.json()) as T;
+  }
+
+  const requestKey = `${method}:${path}:${timeoutMs}`;
+  const existingRequest = inFlightJsonRequests.get(requestKey);
+  if (existingRequest) {
+    return existingRequest as Promise<T>;
+  }
+
+  const nextRequest = (async () => {
+    const response = await fetchApiResponse(path, init, timeoutMs);
+    return (await response.json()) as T;
+  })();
+
+  inFlightJsonRequests.set(requestKey, nextRequest as Promise<unknown>);
+  try {
+    return await nextRequest;
+  } finally {
+    inFlightJsonRequests.delete(requestKey);
+  }
 }
 
 async function getLocalStorageItem<T>(key: string): Promise<T | null> {
@@ -2705,77 +2934,31 @@ export function subscribeToStorageChanges(
   keys: string[],
   onChange: (event: { type: string; keys: string[] }) => void
 ): () => void {
-  let socket: WebSocket | null = null;
-  let heartbeat: ReturnType<typeof setInterval> | null = null;
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  let closed = false;
   const watchedKeys = new Set(keys);
-  const watchedKeyList = Array.from(watchedKeys);
+  const subscriberId = nextStorageSubscriberId;
+  nextStorageSubscriberId += 1;
 
-  const cleanupSocket = () => {
-    if (heartbeat) {
-      clearInterval(heartbeat);
-      heartbeat = null;
-    }
-    if (socket) {
-      socket.onopen = null;
-      socket.onmessage = null;
-      socket.onerror = null;
-      socket.onclose = null;
-      socket.close();
-      socket = null;
-    }
-  };
+  storageChangeSubscribers.set(subscriberId, {
+    watchedKeys,
+    onChange,
+    pendingKeys: new Set<string>(),
+    notifyTimer: null,
+    isNotifying: false,
+  });
 
-  const connect = () => {
-    cleanupSocket();
-    socket = new WebSocket(getStorageWebSocketUrl());
-
-    socket.onopen = () => {
-      heartbeat = setInterval(() => {
-        if (socket?.readyState === WebSocket.OPEN) {
-          socket.send('ping');
-        }
-      }, 25000);
-      onChange({ type: 'storage.connected', keys: watchedKeyList });
-    };
-
-    socket.onmessage = event => {
-      try {
-        const payload = JSON.parse(event.data) as { type: string; keys?: string[] };
-        const changedKeys = payload.keys || [];
-        if (payload.type !== 'storage.changed') {
-          return;
-        }
-        if (changedKeys.some(key => watchedKeys.has(key))) {
-          invalidateSharedStorageCache(changedKeys);
-          onChange({ type: payload.type, keys: changedKeys });
-        }
-      } catch (error) {
-        console.error('Error parsing storage event:', error);
-      }
-    };
-
-    socket.onclose = () => {
-      cleanupSocket();
-      if (!closed) {
-        reconnectTimer = setTimeout(connect, 1500);
-      }
-    };
-
-    socket.onerror = () => {
-      socket?.close();
-    };
-  };
-
-  connect();
+  connectSharedStorageSocket();
 
   return () => {
-    closed = true;
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
+    const subscriber = storageChangeSubscribers.get(subscriberId);
+    if (subscriber?.notifyTimer) {
+      clearTimeout(subscriber.notifyTimer);
+      subscriber.notifyTimer = null;
     }
-    cleanupSocket();
+    storageChangeSubscribers.delete(subscriberId);
+    if (!hasStorageChangeSubscribers()) {
+      clearSharedStorageSocketResources(true);
+      sharedStoragePendingChangedKeys.clear();
+    }
   };
 }
 
@@ -2813,6 +2996,12 @@ export async function saveVolunteerProjectMatch(match: VolunteerProjectMatch): P
     matches.push(match);
   }
   await setStorageItem(STORAGE_KEYS.VOLUNTEER_MATCHES, matches);
+  invalidateSharedStorageCache([
+    STORAGE_KEYS.VOLUNTEER_MATCHES,
+    STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
+    STORAGE_KEYS.VOLUNTEERS,
+    STORAGE_KEYS.PROJECTS,
+  ]);
   if (match.status === 'Matched') {
     await attachVolunteerToProject(match.projectId, match.volunteerId);
   }
@@ -2924,6 +3113,9 @@ export async function reviewVolunteerProjectMatch(
   if (!payload.match) {
     throw new Error('Volunteer request review did not complete.');
   }
+
+  // Keep local shared storage in sync with the backend review result.
+  await saveVolunteerProjectMatch(payload.match);
 
   try {
     const volunteer = await getVolunteer(payload.match.volunteerId);
@@ -3989,7 +4181,7 @@ async function ensureVolunteerProjectJoinRecord(
   }
 
   const record: VolunteerProjectJoinRecord = {
-    id: `volunteer-join-${projectId}-${volunteerId}`,
+    id: buildVolunteerProjectJoinRecordId(projectId, volunteerId),
     projectId,
     volunteerId,
     volunteerUserId: volunteer.userId,

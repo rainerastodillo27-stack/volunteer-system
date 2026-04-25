@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Alert } from 'react-native';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -84,7 +84,7 @@ function normalizeImpactHubReport(
   };
 }
 
-export default function ReportsScreen() {
+export default function ReportsScreen({ navigation, route }: any) {
   const { user } = useAuth();
   const [reports, setReports] = useState<SubmittedReport[]>([]);
   const [loading, setLoading] = useState(false);
@@ -92,10 +92,17 @@ export default function ReportsScreen() {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [selectedReport, setSelectedReport] = useState<SubmittedReport | null>(null);
+  const [uploadModalInitialValues, setUploadModalInitialValues] = useState<{
+    projectId?: string;
+    completionReport?: string;
+    completionPhoto?: string;
+  } | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
   const [volunteerTimedInProjectIds, setVolunteerTimedInProjectIds] = useState<string[]>([]);
   const [volunteerTimeLogs, setVolunteerTimeLogs] = useState<VolunteerTimeLog[]>([]);
+  const reportsLoadInFlightRef = useRef<Promise<void> | null>(null);
+  const reportsReloadQueuedRef = useRef(false);
 
   const loadProjects = useCallback(async () => {
     if (user?.role === 'volunteer' && user.id) {
@@ -150,22 +157,66 @@ export default function ReportsScreen() {
     }
   }, [loadProjects, user?.id, user?.role]);
 
-  useEffect(() => {
-    void loadReports();
-    void loadVolunteers();
-  }, [loadReports, loadVolunteers]);
+  const loadReportsCoalesced = useCallback(async () => {
+    if (reportsLoadInFlightRef.current) {
+      reportsReloadQueuedRef.current = true;
+      return;
+    }
+
+    do {
+      reportsReloadQueuedRef.current = false;
+      const task = loadReports();
+      reportsLoadInFlightRef.current = task;
+      try {
+        await task;
+      } finally {
+        reportsLoadInFlightRef.current = null;
+      }
+    } while (reportsReloadQueuedRef.current);
+  }, [loadReports]);
 
   useEffect(() => {
-    return subscribeToStorageChanges(['partnerReports', 'projects'], () => {
-      void loadReports();
+    void loadReportsCoalesced();
+    void loadVolunteers();
+  }, [loadReportsCoalesced, loadVolunteers]);
+
+  useEffect(() => {
+    return subscribeToStorageChanges(['partnerReports', 'projects', 'volunteerTimeLogs'], async () => {
+      await loadReportsCoalesced();
     });
-  }, [loadReports]);
+  }, [loadReportsCoalesced]);
+
+  useEffect(() => {
+    const params = route?.params as
+      | {
+          projectId?: string;
+          autoOpenUpload?: boolean;
+          completionReport?: string;
+          completionPhoto?: string;
+        }
+      | undefined;
+
+    if (params?.autoOpenUpload) {
+      setShowUploadModal(true);
+      setUploadModalInitialValues({
+        projectId: params.projectId,
+        completionReport: params.completionReport,
+        completionPhoto: params.completionPhoto,
+      });
+      navigation?.setParams({
+        projectId: undefined,
+        autoOpenUpload: undefined,
+        completionReport: undefined,
+        completionPhoto: undefined,
+      });
+    }
+  }, [navigation, route?.params]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([loadReports(), loadVolunteers()]);
+    await Promise.all([loadReportsCoalesced(), loadVolunteers()]);
     setRefreshing(false);
-  }, [loadReports, loadVolunteers]);
+  }, [loadReportsCoalesced, loadVolunteers]);
 
   const handleUploadReport = useCallback(
     async (
@@ -195,6 +246,10 @@ export default function ReportsScreen() {
         const numericMetrics = Object.fromEntries(
           Object.entries(reportData.metrics).filter(([, value]) => typeof value === 'number')
         ) as Record<string, number>;
+        const completionPhotoUri =
+          (reportData.mediaFile || '').trim() ||
+          reportData.attachments?.find(attachment => Boolean(attachment?.url?.trim()))?.url?.trim() ||
+          undefined;
 
         if (reportType === 'field_report') {
           await submitFieldReport({
@@ -226,9 +281,15 @@ export default function ReportsScreen() {
             mediaFile: reportData.mediaFile,
           });
         }
+
         setShowUploadModal(false);
-        await loadReports();
-        Alert.alert('Success', 'Your report was submitted to the impact hub.');
+        await loadReportsCoalesced();
+        Alert.alert(
+          'Success',
+          user.role === 'volunteer'
+            ? 'Your report was submitted. Time out is complete and this event is now marked as task completed.'
+            : 'Your report was submitted to the impact hub.'
+        );
       } catch (error: any) {
         console.error('Error submitting report:', error);
         const detail =
@@ -238,7 +299,7 @@ export default function ReportsScreen() {
         Alert.alert('Error', detail);
       }
     },
-    [loadReports, projects, user?.id, user?.name, user?.role]
+    [loadReportsCoalesced, projects, user?.id, user?.name, user?.role]
   );
 
   const handleViewReport = useCallback((report: SubmittedReport) => {
@@ -249,6 +310,11 @@ export default function ReportsScreen() {
   const handleCloseDetails = useCallback(() => {
     setShowDetailsModal(false);
     setSelectedReport(null);
+  }, []);
+
+  const handleCloseUploadModal = useCallback(() => {
+    setShowUploadModal(false);
+    setUploadModalInitialValues(null);
   }, []);
 
   const userReports = useMemo(() => {
@@ -278,6 +344,7 @@ export default function ReportsScreen() {
       return;
     }
 
+    setUploadModalInitialValues(null);
     setShowUploadModal(true);
   }, [user?.role, volunteerEventProjects.length]);
 
@@ -320,11 +387,14 @@ export default function ReportsScreen() {
       {dashboard}
       <ReportUploadModal
         visible={showUploadModal}
-        onClose={() => setShowUploadModal(false)}
+        onClose={handleCloseUploadModal}
         onSubmit={handleUploadReport}
         projects={user?.role === 'volunteer' ? volunteerEventProjects : projects}
         userRole={user?.role}
         volunteerTimeLogs={user?.role === 'volunteer' ? volunteerTimeLogs : undefined}
+        initialProjectId={uploadModalInitialValues?.projectId}
+        initialDescription={uploadModalInitialValues?.completionReport}
+        initialMediaUri={uploadModalInitialValues?.completionPhoto}
       />
       <ReportDetailsModal
         visible={showDetailsModal}

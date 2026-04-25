@@ -280,8 +280,10 @@ export const NEGROS_REGION = {
 };
 
 // Returns the marker color for a project or event based only on lifecycle status.
-export function getProjectMarkerColor(project: Pick<Project, 'isEvent' | 'status'>) {
-  return getProjectStatusColor(project.status);
+export function getProjectMarkerColor(
+  project: Pick<Project, 'isEvent' | 'status' | 'startDate' | 'endDate'>
+) {
+  return getProjectStatusColor(project);
 }
 
 export function getMappedProjects<T extends Pick<Project, 'location'>>(projects: T[]): T[] {

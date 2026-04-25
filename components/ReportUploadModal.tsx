@@ -30,6 +30,9 @@ interface ReportUploadModalProps {
   projects?: any[];
   userRole?: SubmittedReport['submitterRole'];
   volunteerTimeLogs?: VolunteerTimeLog[];
+  initialProjectId?: string;
+  initialDescription?: string;
+  initialMediaUri?: string;
 }
 
 export default function ReportUploadModal({
@@ -39,6 +42,9 @@ export default function ReportUploadModal({
   projects = [],
   userRole,
   volunteerTimeLogs,
+  initialProjectId,
+  initialDescription,
+  initialMediaUri,
 }: ReportUploadModalProps) {
   const [reportType, setReportType] =
     useState<SubmittedReport['reportType']>('volunteer_engagement');
@@ -66,12 +72,29 @@ export default function ReportUploadModal({
   const entityLabel = isVolunteer ? 'Event' : 'Project';
   const entityLabelLower = entityLabel.toLowerCase();
 
+  const getLocalDateKey = (value: string) => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return '';
+    }
+
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${date.getFullYear()}-${month}-${day}`;
+  };
+
   const volunteerMetrics = useMemo(() => {
     if (!isVolunteer || !selectedProject || !volunteerTimeLogs?.length) {
-      return { volunteerHours: 0, tasksCompleted: 0 };
+      return { volunteerHours: 0, tasksCompleted: 0, attendanceDays: 0 };
     }
 
     const logsForProject = volunteerTimeLogs.filter(log => log.projectId === selectedProject);
+    const attendanceDays = new Set(
+      logsForProject
+        .filter(log => Boolean(log.timeIn))
+        .map(log => getLocalDateKey(log.timeIn))
+        .filter(Boolean)
+    ).size;
     const totalHours = logsForProject.reduce((sum, log) => {
       if (!log.timeIn) {
         return sum;
@@ -91,8 +114,14 @@ export default function ReportUploadModal({
     return {
       volunteerHours: Number(totalHours.toFixed(1)),
       tasksCompleted: completedLogs.length > 0 ? completedLogs.length : hasAnyLog ? 1 : 0,
+      attendanceDays,
     };
   }, [isVolunteer, selectedProject, volunteerTimeLogs]);
+
+  const selectedProjectData = useMemo(
+    () => (selectedProject ? projects.find(project => project.id === selectedProject) : undefined),
+    [projects, selectedProject]
+  );
 
   useEffect(() => {
     if (!visible) {
@@ -103,7 +132,17 @@ export default function ReportUploadModal({
       setReportType('event_performance');
       setSelectedProject(current => current || projects[0]?.id);
     }
-  }, [isVolunteer, projects, visible]);
+
+    if (initialProjectId) {
+      setSelectedProject(initialProjectId);
+    }
+    if (initialDescription) {
+      setDescription(initialDescription);
+    }
+    if (initialMediaUri) {
+      setSelectedPhotoUri(initialMediaUri);
+    }
+  }, [isVolunteer, projects, visible, initialProjectId, initialDescription, initialMediaUri]);
 
   useEffect(() => {
     if (!visible || !isVolunteer || !selectedProject || title.trim()) {
@@ -249,7 +288,7 @@ export default function ReportUploadModal({
     // Check if volunteer has timed in for this project
     if (isVolunteer && selectedProject && volunteerTimeLogs) {
       const hasTimeIn = volunteerTimeLogs.some(log =>
-        log.project_id === selectedProject && log.time_in && !log.time_out
+        log.projectId === selectedProject && log.timeIn && !log.timeOut
       );
 
       if (!hasTimeIn) {
@@ -408,6 +447,20 @@ export default function ReportUploadModal({
       />
       {errors.title ? <Text style={styles.errorText}>{errors.title}</Text> : null}
 
+      {isVolunteer && selectedProjectData ? (
+        <View style={styles.eventSummaryCard}>
+          <Text style={styles.eventSummaryLabel}>Event Schedule</Text>
+          <Text style={styles.eventSummaryValue}>
+            {`${new Date(selectedProjectData.startDate).toLocaleDateString()} - ${new Date(
+              selectedProjectData.endDate
+            ).toLocaleDateString()}`}
+          </Text>
+          <Text style={styles.eventSummaryHint}>
+            Time-in days are counted from your log entries for this event until the end date.
+          </Text>
+        </View>
+      ) : null}
+
       <Text style={styles.sectionTitle}>Volunteer Reflection</Text>
 
       <Text style={styles.label}>What happened during the event? *</Text>
@@ -475,6 +528,12 @@ export default function ReportUploadModal({
           <Text style={styles.autoMetricLabel}>Tasks Completed</Text>
           <Text style={styles.autoMetricValue}>
             {selectedProject ? volunteerMetrics.tasksCompleted : 'Select an event'}
+          </Text>
+        </View>
+        <View style={styles.autoMetricRow}>
+          <Text style={styles.autoMetricLabel}>Days Timed In</Text>
+          <Text style={styles.autoMetricValue}>
+            {selectedProject ? volunteerMetrics.attendanceDays : 'Select an event'}
           </Text>
         </View>
       </View>
@@ -1036,6 +1095,31 @@ const styles = StyleSheet.create({
     borderColor: '#e2e8f0',
     padding: 16,
     marginBottom: 20,
+  },
+  eventSummaryCard: {
+    borderRadius: 12,
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    padding: 14,
+    marginBottom: 12,
+  },
+  eventSummaryLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#166534',
+    marginBottom: 4,
+  },
+  eventSummaryValue: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  eventSummaryHint: {
+    marginTop: 4,
+    fontSize: 11,
+    lineHeight: 16,
+    color: '#4b5563',
   },
   autoMetricRow: {
     flexDirection: 'row',

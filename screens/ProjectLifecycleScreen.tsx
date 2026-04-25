@@ -6,6 +6,7 @@ import {
   Text,
   StyleSheet,
   ScrollView,
+  Pressable,
   TouchableOpacity,
   Alert,
   Modal,
@@ -18,6 +19,7 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import InlineLoadError from '../components/InlineLoadError';
+import { TASK_SKILL_OPTIONS } from '../utils/skills';
 import {
   AdvocacyFocus,
   Partner,
@@ -57,7 +59,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { format } from 'date-fns';
 import { navigateToAvailableRoute } from '../utils/navigation';
 import { getPrimaryProjectImageSource, inferCoordinatesFromPlace } from '../utils/projectMap';
-import { getProjectStatusColor } from '../utils/projectStatus';
+import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getPrimaryReportMediaUri, isImageMediaUri, pickImageFromDevice } from '../utils/media';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
@@ -155,6 +157,7 @@ type ProjectTaskDraft = {
   status: ProjectInternalTask['status'];
   assignedVolunteerId: string;
   isFieldOfficer: boolean;
+  skillsNeeded: string[];
 };
 
 type ProjectTimeLogEntry = VolunteerTimeLog & {
@@ -221,7 +224,8 @@ const CALENDAR_STATUS_VISIBILITY_ORDER: Record<Project['status'], number> = {
 
 function compareProjectsForCalendarVisibility(left: Project, right: Project): number {
   const statusDifference =
-    CALENDAR_STATUS_VISIBILITY_ORDER[left.status] - CALENDAR_STATUS_VISIBILITY_ORDER[right.status];
+    CALENDAR_STATUS_VISIBILITY_ORDER[getProjectDisplayStatus(left)] -
+    CALENDAR_STATUS_VISIBILITY_ORDER[getProjectDisplayStatus(right)];
   if (statusDifference !== 0) {
     return statusDifference;
   }
@@ -243,7 +247,7 @@ function getVisibleCalendarProjects(projects: Project[], maxCount: number): Proj
 
     const nextProject = sortedProjects.find(
       project =>
-        project.status === status &&
+        getProjectDisplayStatus(project) === status &&
         !selectedProjects.some(selectedProject => selectedProject.id === project.id)
     );
 
@@ -319,6 +323,7 @@ const createEmptyProjectTaskDraft = (): ProjectTaskDraft => ({
   status: 'Unassigned',
   assignedVolunteerId: '',
   isFieldOfficer: false,
+  skillsNeeded: [],
 });
 
 function getProjectCategoryFromModule(module: AdvocacyFocus): Project['category'] {
@@ -431,6 +436,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [showTaskModal, setShowTaskModal] = useState(false);
+  const [showAssignmentDropdown, setShowAssignmentDropdown] = useState(false);
   const [showProgramProposalModal, setShowProgramProposalModal] = useState(false);
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
@@ -443,6 +449,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [updateDescription, setUpdateDescription] = useState('');
   const [projectDraft, setProjectDraft] = useState<ProjectDraft>(createEmptyProjectDraft());
   const [taskDraft, setTaskDraft] = useState<ProjectTaskDraft>(createEmptyProjectTaskDraft());
+  const [customTaskSkill, setCustomTaskSkill] = useState('');
   const [expandedProgramModules, setExpandedProgramModules] = useState<Set<ProgramSuiteModule>>(
     () => new Set()
   );
@@ -451,6 +458,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     Education: new Animated.Value(0),
     Nutrition: new Animated.Value(0),
   });
+  const projectDraftParentProject = useMemo(
+    () =>
+      projectDraft.isEvent && projectDraft.parentProjectId
+        ? projects.find(project => !project.isEvent && project.id === projectDraft.parentProjectId) || null
+        : null,
+    [projectDraft.isEvent, projectDraft.parentProjectId, projects]
+  );
 
   const shiftSchedulerMonth = (delta: number) => {
     setSelectedSchedulerMonth(currentMonth => {
@@ -793,6 +807,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const openCreateTaskModal = () => {
     setEditingTaskId(null);
     setTaskDraft(createEmptyProjectTaskDraft());
+    setCustomTaskSkill('');
+    setShowAssignmentDropdown(false);
     setShowTaskModal(true);
   };
 
@@ -807,7 +823,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       status: task.status,
       assignedVolunteerId: task.assignedVolunteerId || '',
       isFieldOfficer: Boolean(task.isFieldOfficer),
+      skillsNeeded: task.skillsNeeded || [],
     });
+    setCustomTaskSkill('');
+    setShowAssignmentDropdown(false);
     setShowTaskModal(true);
   };
 
@@ -815,6 +834,46 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     setShowTaskModal(false);
     setEditingTaskId(null);
     setTaskDraft(createEmptyProjectTaskDraft());
+    setCustomTaskSkill('');
+    setShowAssignmentDropdown(false);
+  };
+
+  const toggleTaskSkill = (skillName: string) => {
+    const normalizedSkill = skillName.trim();
+    if (!normalizedSkill) {
+      return;
+    }
+
+    setTaskDraft(current => {
+      const hasSkill = current.skillsNeeded.includes(normalizedSkill);
+      const nextSkills = hasSkill
+        ? current.skillsNeeded.filter(skill => skill !== normalizedSkill)
+        : [...current.skillsNeeded, normalizedSkill];
+
+      return {
+        ...current,
+        skillsNeeded: nextSkills,
+      };
+    });
+  };
+
+  const handleAddCustomTaskSkill = () => {
+    const normalizedSkill = customTaskSkill.trim();
+    if (!normalizedSkill) {
+      return;
+    }
+
+    setTaskDraft(current => {
+      if (current.skillsNeeded.includes(normalizedSkill)) {
+        return current;
+      }
+
+      return {
+        ...current,
+        skillsNeeded: [...current.skillsNeeded, normalizedSkill],
+      };
+    });
+    setCustomTaskSkill('');
   };
 
   const openProgramProposalModal = (module: ProgramSuiteModule) => {
@@ -889,6 +948,44 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     if (projectDraft.isEvent && !projectDraft.parentProjectId?.trim()) {
       Alert.alert('Validation Error', 'Select a parent project before saving this event.');
       return;
+    }
+
+    if (projectDraft.startDate > projectDraft.endDate) {
+      Alert.alert('Validation Error', 'End date must be on or after the start date.');
+      return;
+    }
+
+    if (projectDraft.isEvent) {
+      const parentProject =
+        projects.find(project => !project.isEvent && project.id === projectDraft.parentProjectId) || null;
+
+      if (!parentProject) {
+        Alert.alert('Validation Error', 'Choose a valid parent project for this event.');
+        return;
+      }
+
+      const parentStartDate = parentProject.startDate.slice(0, 10);
+      const parentEndDate = parentProject.endDate.slice(0, 10);
+      const matchesParentSchedule =
+        projectDraft.startDate === parentStartDate && projectDraft.endDate === parentEndDate;
+      const isOutsideParentSchedule =
+        projectDraft.startDate < parentStartDate || projectDraft.endDate > parentEndDate;
+
+      if (matchesParentSchedule) {
+        Alert.alert(
+          'Validation Error',
+          'Event dates must be different from the parent project schedule. Choose a smaller window for the event.'
+        );
+        return;
+      }
+
+      if (isOutsideParentSchedule) {
+        Alert.alert(
+          'Validation Error',
+          `Event dates must stay within the parent project schedule (${parentStartDate} to ${parentEndDate}).`
+        );
+        return;
+      }
     }
 
     const hasManualCoordinates =
@@ -1404,6 +1501,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       taskDraft.assignedVolunteerId && taskDraft.status === 'Unassigned'
         ? 'Assigned'
         : taskDraft.status;
+    const normalizedSkills = Array.from(
+      new Set(taskDraft.skillsNeeded.map(skill => skill.trim()).filter(Boolean))
+    );
 
     const nextTask: ProjectInternalTask = {
       id: editingTaskId || `${currentSelectedProject.id}-task-${Date.now()}`,
@@ -1415,6 +1515,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       assignedVolunteerId: taskDraft.assignedVolunteerId || undefined,
       assignedVolunteerName: assignedVolunteer?.name,
       isFieldOfficer: taskDraft.isFieldOfficer,
+      skillsNeeded: normalizedSkills.length > 0 ? normalizedSkills : undefined,
       createdAt:
         currentSelectedProject.internalTasks?.find(task => task.id === editingTaskId)?.createdAt || now,
       updatedAt: now,
@@ -1528,10 +1629,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                 <View
                   style={[
                     styles.statusBadge,
-                    { backgroundColor: getProjectStatusColor(project.status) },
+                    { backgroundColor: getProjectStatusColor(project) },
                   ]}
                 >
-                  <Text style={styles.statusText}>{project.status}</Text>
+                  <Text style={styles.statusText}>{getProjectDisplayStatus(project)}</Text>
                 </View>
                 <View style={styles.pointsBadge}>
                   <MaterialIcons name="groups" size={15} color="#f59e0b" />
@@ -2012,6 +2113,20 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             <Text style={styles.labelRight}>End Date</Text>
           </View>
 
+          {projectDraft.isEvent && projectDraftParentProject ? (
+            <View style={[styles.formRow, styles.formRowTop, styles.formRowReverse]}>
+              <View style={[styles.statusOptionsCard, styles.helperPanel]}>
+                <Text style={styles.helperPanelTitle}>Event schedule must differ from the parent project</Text>
+                <Text style={styles.helperPanelText}>
+                  Parent project window: {projectDraftParentProject.startDate.slice(0, 10)} to{' '}
+                  {projectDraftParentProject.endDate.slice(0, 10)}. Set an event-specific start and end date inside
+                  that range.
+                </Text>
+              </View>
+              <Text style={[styles.labelRight, styles.labelTop]}>Date Rule</Text>
+            </View>
+          ) : null}
+
           <View style={[styles.formRow, styles.formRowReverse]}>
             <TextInput
               style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
@@ -2373,8 +2488,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           ...details,
           projects: sectionProjects,
           totalPrograms: sectionProjects.filter(project => !project.isEvent).length,
-          inProgressCount: sectionProjects.filter(project => project.status === 'In Progress').length,
-          planningCount: sectionProjects.filter(project => project.status === 'Planning').length,
+          inProgressCount: sectionProjects.filter(project => getProjectDisplayStatus(project) === 'In Progress').length,
+          planningCount: sectionProjects.filter(project => getProjectDisplayStatus(project) === 'Planning').length,
           eventCount: sectionProjects.filter(project => project.isEvent).length,
           pendingProposalCount: pendingProposalApplication ? 1 : 0,
         };
@@ -2537,6 +2652,16 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     const eventOperationsDetails = activeSelectedProject.isEvent
       ? [
           {
+            label: 'Start Date',
+            value: formattedStartDate,
+            meta: 'Admins can customize this in Edit Event',
+          },
+          {
+            label: 'End Date',
+            value: formattedEndDate,
+            meta: 'Admins can customize this in Edit Event',
+          },
+          {
             label: 'Event Name',
             value: activeSelectedProject.title,
             meta: 'Displayed across volunteer and admin views',
@@ -2583,10 +2708,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               <View
                 style={[
                   styles.detailsHeroStatus,
-                  { backgroundColor: getProjectStatusColor(activeSelectedProject.status) },
+                  { backgroundColor: getProjectStatusColor(activeSelectedProject) },
                 ]}
               >
-                <Text style={styles.statusText}>{activeSelectedProject.status}</Text>
+                <Text style={styles.statusText}>{getProjectDisplayStatus(activeSelectedProject)}</Text>
               </View>
             </View>
 
@@ -3356,46 +3481,127 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               </View>
 
               <View style={[styles.formRow, styles.formRowReverse, styles.formRowTop]}>
-                <View style={[styles.statusOptions, styles.statusOptionsCard]}>
-                  <TouchableOpacity
-                    style={[
-                      styles.statusOption,
-                      taskDraft.assignedVolunteerId === '' && styles.statusOptionSelected,
-                    ]}
-                    onPress={() => handleTaskDraftChange('assignedVolunteerId', '')}
-                  >
-                    <Text
-                      style={[
-                        styles.statusOptionText,
-                        taskDraft.assignedVolunteerId === '' && styles.statusOptionTextSelected,
-                      ]}
-                    >
-                      Unassigned
-                    </Text>
-                  </TouchableOpacity>
-                  {assignableVolunteerOptions.map(volunteerOption => (
-                    <TouchableOpacity
-                      key={volunteerOption.id}
-                      style={[
-                        styles.statusOption,
-                        taskDraft.assignedVolunteerId === volunteerOption.id &&
-                          styles.statusOptionSelected,
-                      ]}
-                      onPress={() =>
-                        handleTaskDraftChange('assignedVolunteerId', volunteerOption.id)
-                      }
-                    >
-                      <Text
-                        style={[
-                          styles.statusOptionText,
-                          taskDraft.assignedVolunteerId === volunteerOption.id &&
-                            styles.statusOptionTextSelected,
-                        ]}
-                      >
-                        {volunteerOption.name}
-                      </Text>
+                <View style={[styles.statusOptionsCard, styles.skillSelectionCard]}>
+                  <View style={styles.skillOptionGrid}>
+                    {TASK_SKILL_OPTIONS.map(skill => {
+                      const isSelected = taskDraft.skillsNeeded.includes(skill);
+
+                      return (
+                        <TouchableOpacity
+                          key={skill}
+                          style={styles.skillOptionRow}
+                          onPress={() => toggleTaskSkill(skill)}
+                        >
+                          <MaterialIcons
+                            name={isSelected ? 'check-box' : 'check-box-outline-blank'}
+                            size={20}
+                            color={isSelected ? '#0F766E' : '#9ca3af'}
+                          />
+                          <Text style={[styles.skillOptionText, isSelected && styles.skillOptionTextSelected]}>
+                            {skill}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+
+                  <View style={styles.customSkillRow}>
+                    <TextInput
+                      style={styles.customSkillInput}
+                      placeholder="Add custom skill"
+                      placeholderTextColor="#9ca3af"
+                      value={customTaskSkill}
+                      onChangeText={setCustomTaskSkill}
+                      onSubmitEditing={handleAddCustomTaskSkill}
+                      returnKeyType="done"
+                    />
+                    <TouchableOpacity style={styles.customSkillAddButton} onPress={handleAddCustomTaskSkill}>
+                      <MaterialIcons name="add" size={18} color="#fff" />
+                      <Text style={styles.customSkillAddButtonText}>Add</Text>
                     </TouchableOpacity>
-                  ))}
+                  </View>
+
+                  {taskDraft.skillsNeeded.length > 0 ? (
+                    <View style={styles.selectedSkillChips}>
+                      {taskDraft.skillsNeeded.map(skill => (
+                        <TouchableOpacity
+                          key={skill}
+                          style={styles.selectedSkillChip}
+                          onPress={() => toggleTaskSkill(skill)}
+                        >
+                          <Text style={styles.selectedSkillChipText}>{skill}</Text>
+                          <MaterialIcons name="close" size={14} color="#0F766E" />
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  ) : (
+                    <Text style={styles.helperText}>Select at least one skill when needed for better volunteer matching.</Text>
+                  )}
+                </View>
+                <Text style={[styles.labelRight, styles.labelTop]}>Skills</Text>
+              </View>
+
+              <View style={[styles.formRow, styles.formRowReverse, styles.formRowTop]}>
+                <View style={styles.dropdownWrapper}>
+                  <TouchableOpacity
+                    style={styles.dropdownButton}
+                    onPress={() => setShowAssignmentDropdown(!showAssignmentDropdown)}
+                  >
+                    <Text style={styles.dropdownButtonText}>
+                      {taskDraft.assignedVolunteerId === '' ?
+                        'Unassigned' :
+                        assignableVolunteerOptions.find(v => v.id === taskDraft.assignedVolunteerId)?.name ||
+                        'Select Volunteer'}
+                    </Text>
+                    <MaterialIcons
+                      name={showAssignmentDropdown ? 'expand-less' : 'expand-more'}
+                      size={24}
+                      color="#666"
+                    />
+                  </TouchableOpacity>
+
+                  {showAssignmentDropdown && (
+                    <View style={styles.dropdownContent}>
+                      <TouchableOpacity
+                        style={[
+                          styles.dropdownOption,
+                          taskDraft.assignedVolunteerId === '' && styles.dropdownOptionSelected,
+                        ]}
+                        onPress={() => {
+                          handleTaskDraftChange('assignedVolunteerId', '');
+                          setShowAssignmentDropdown(false);
+                        }}
+                      >
+                        <MaterialIcons
+                          name={taskDraft.assignedVolunteerId === '' ? 'radio-button-checked' : 'radio-button-unchecked'}
+                          size={20}
+                          color={taskDraft.assignedVolunteerId === '' ? '#0F766E' : '#ccc'}
+                        />
+                        <Text style={styles.dropdownOptionText}>Unassigned</Text>
+                      </TouchableOpacity>
+
+                      {assignableVolunteerOptions.map(volunteerOption => (
+                        <TouchableOpacity
+                          key={volunteerOption.id}
+                          style={[
+                            styles.dropdownOption,
+                            taskDraft.assignedVolunteerId === volunteerOption.id && styles.dropdownOptionSelected,
+                          ]}
+                          onPress={() => {
+                            handleTaskDraftChange('assignedVolunteerId', volunteerOption.id);
+                            setShowAssignmentDropdown(false);
+                          }}
+                        >
+                          <MaterialIcons
+                            name={taskDraft.assignedVolunteerId === volunteerOption.id ? 'radio-button-checked' : 'radio-button-unchecked'}
+                            size={20}
+                            color={taskDraft.assignedVolunteerId === volunteerOption.id ? '#0F766E' : '#ccc'}
+                          />
+                          <Text style={styles.dropdownOptionText}>{volunteerOption.name}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
                 </View>
                 <Text style={[styles.labelRight, styles.labelTop]}>Assign To</Text>
               </View>
@@ -3525,11 +3731,15 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           <Text style={styles.lifecycleStatLabel}>Programs</Text>
         </View>
         <View style={styles.lifecycleStatPill}>
-          <Text style={styles.lifecycleStatValue}>{projects.filter(project => project.status === 'In Progress').length}</Text>
+          <Text style={styles.lifecycleStatValue}>
+            {projects.filter(project => getProjectDisplayStatus(project) === 'In Progress').length}
+          </Text>
           <Text style={styles.lifecycleStatLabel}>In progress</Text>
         </View>
         <View style={styles.lifecycleStatPill}>
-          <Text style={styles.lifecycleStatValue}>{projects.filter(project => project.status === 'Planning').length}</Text>
+          <Text style={styles.lifecycleStatValue}>
+            {projects.filter(project => getProjectDisplayStatus(project) === 'Planning').length}
+          </Text>
           <Text style={styles.lifecycleStatLabel}>Planning</Text>
         </View>
         <View style={styles.lifecycleStatPill}>
@@ -3637,7 +3847,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                 </View>
               </View>
 
-              <View
+              <Pressable
                 style={[
                   styles.programSuiteSchedulerMonthHeadingWrap,
                   isSchedulerMonthHovered && styles.programSuiteSchedulerMonthHeadingWrapHovered,
@@ -3653,7 +3863,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                 >
                   {format(schedulerAnchorDate, 'MMMM yyyy')}
                 </Text>
-              </View>
+              </Pressable>
 
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 <View style={styles.schedulerCalendarWrap}>
@@ -3741,7 +3951,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                           <View
                             style={[
                               styles.schedulerProjectCalendarStatusDot,
-                              { backgroundColor: getProjectStatusColor(project.status) },
+                              { backgroundColor: getProjectStatusColor(project) },
                             ]}
                           />
                         </View>
@@ -4028,26 +4238,26 @@ const styles = StyleSheet.create({
   programSuiteSchedulerMonthSwitcher: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 5,
     borderWidth: 1,
     borderColor: '#c7e8cd',
     borderRadius: 999,
     backgroundColor: '#f0faf2',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
   },
   programSuiteSchedulerMonthButton: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
     backgroundColor: '#ffffff',
     alignItems: 'center',
     justifyContent: 'center',
   },
   programSuiteSchedulerMonthText: {
-    minWidth: 74,
+    minWidth: 64,
     textAlign: 'center',
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '800',
     color: '#236d35',
   },
@@ -4106,7 +4316,7 @@ const styles = StyleSheet.create({
   programSuiteSchedulerMonthPane: {
     flex: 1,
     backgroundColor: '#ffffff',
-    padding: 16,
+    padding: 12,
   },
   programSuiteSchedulerMonthPaneStacked: {
     width: '100%',
@@ -4116,15 +4326,18 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'flex-start',
   },
+  programSuiteSchedulerHeaderControls: {
+    alignItems: 'flex-end',
+  },
   programSuiteSchedulerTodayLabel: {
-    fontSize: 30,
-    lineHeight: 32,
+    fontSize: 22,
+    lineHeight: 24,
     fontWeight: '400',
     color: '#203a2a',
   },
   programSuiteSchedulerTodayDate: {
     marginTop: 2,
-    fontSize: 13,
+    fontSize: 11,
     color: '#203a2a',
     fontWeight: '700',
   },
@@ -4135,11 +4348,11 @@ const styles = StyleSheet.create({
     color: '#203a2a',
   },
   programSuiteSchedulerMonthHeading: {
-    marginTop: 8,
-    marginBottom: 10,
+    marginTop: 6,
+    marginBottom: 6,
     textAlign: 'center',
     color: '#5e7b65',
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: '700',
   },
   programSuiteSchedulerMonthHeadingWrap: {
@@ -5268,36 +5481,36 @@ const styles = StyleSheet.create({
     color: '#ffffff',
   },
   schedulerCalendarWrap: {
-    minWidth: 980,
+    minWidth: 860,
   },
   schedulerCalendarHeaderRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 6,
-    gap: 8,
+    marginBottom: 4,
+    gap: 5,
   },
   schedulerCalendarHeaderCell: {
     flex: 1,
     textAlign: 'center',
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '700',
     color: '#7a9181',
   },
   schedulerCalendarWeekRow: {
     flexDirection: 'row',
-    gap: 8,
-    marginBottom: 8,
+    gap: 5,
+    marginBottom: 5,
   },
   schedulerCalendarDayCell: {
     flex: 1,
-    minHeight: 132,
-    paddingHorizontal: 8,
-    paddingTop: 8,
-    paddingBottom: 6,
+    minHeight: 104,
+    paddingHorizontal: 6,
+    paddingTop: 6,
+    paddingBottom: 4,
     backgroundColor: '#f8fcf8',
     borderWidth: 1,
     borderColor: '#d9e7dc',
-    borderRadius: 12,
+    borderRadius: 9,
   },
   schedulerCalendarDayCellMuted: {
     opacity: 0.55,
@@ -5312,11 +5525,11 @@ const styles = StyleSheet.create({
   },
   schedulerCalendarDayHeader: {
     alignItems: 'center',
-    marginBottom: 6,
-    gap: 3,
+    marginBottom: 5,
+    gap: 2,
   },
   schedulerCalendarDayDate: {
-    fontSize: 13,
+    fontSize: 11,
     fontWeight: '700',
     color: '#647f6c',
     textAlign: 'center',
@@ -5326,10 +5539,10 @@ const styles = StyleSheet.create({
   },
   schedulerCalendarDayDateToday: {
     color: '#166534',
-    fontSize: 15,
+    fontSize: 12,
   },
   schedulerCalendarTodayTag: {
-    fontSize: 9,
+    fontSize: 8,
     fontWeight: '800',
     color: '#166534',
     textTransform: 'uppercase',
@@ -5340,13 +5553,13 @@ const styles = StyleSheet.create({
     backgroundColor: '#e8f3ff',
     borderWidth: 1,
     borderColor: '#c7ddff',
-    paddingHorizontal: 6,
-    paddingVertical: 5,
-    marginBottom: 6,
+    paddingHorizontal: 4,
+    paddingVertical: 3,
+    marginBottom: 4,
   },
   schedulerCalendarProjectTitle: {
-    fontSize: 11,
-    lineHeight: 15,
+    fontSize: 9,
+    lineHeight: 12,
     fontWeight: '700',
     color: '#1e3a8a',
   },
@@ -5599,6 +5812,7 @@ const styles = StyleSheet.create({
   modalContent: {
     flex: 1,
     padding: 16,
+    overflow: 'visible',
   },
   proposalModalBackdrop: {
     flex: 1,
@@ -5721,6 +5935,7 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     borderWidth: 1,
     borderColor: '#e5e7eb',
+    overflow: 'visible',
   },
   helperPanel: {
     flex: 1,
@@ -5778,6 +5993,135 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     color: '#166534',
+  },
+  dropdownWrapper: {
+    flex: 1,
+    position: 'relative',
+    zIndex: 1000,
+    overflow: 'visible',
+  },
+  dropdownButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 6,
+    backgroundColor: '#fff',
+  },
+  dropdownButtonText: {
+    fontSize: 15,
+    color: '#374151',
+    flex: 1,
+  },
+  dropdownContent: {
+    position: 'relative',
+    marginTop: 4,
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 6,
+    backgroundColor: '#fff',
+    zIndex: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 10,
+    maxHeight: 240,
+  },
+  dropdownOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f3f4f6',
+  },
+  dropdownOptionSelected: {
+    backgroundColor: '#f0fdf4',
+  },
+  dropdownOptionText: {
+    fontSize: 14,
+    color: '#374151',
+    marginLeft: 10,
+    flex: 1,
+  },
+  skillSelectionCard: {
+    gap: 10,
+  },
+  skillOptionGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  skillOptionRow: {
+    minWidth: 170,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  skillOptionText: {
+    fontSize: 13,
+    color: '#374151',
+    fontWeight: '600',
+  },
+  skillOptionTextSelected: {
+    color: '#0F766E',
+  },
+  customSkillRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 2,
+  },
+  customSkillInput: {
+    flex: 1,
+    minHeight: 42,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    fontSize: 13,
+    color: '#0f172a',
+    backgroundColor: '#fff',
+  },
+  customSkillAddButton: {
+    minHeight: 42,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    backgroundColor: '#0F766E',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  customSkillAddButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  selectedSkillChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 4,
+  },
+  selectedSkillChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#ecfeff',
+    borderWidth: 1,
+    borderColor: '#99f6e4',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  selectedSkillChipText: {
+    color: '#0F766E',
+    fontSize: 12,
+    fontWeight: '700',
   },
   projectImageRemoveButton: {
     flexDirection: 'row',

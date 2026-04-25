@@ -30,7 +30,14 @@ export type TabParamList = {
   Volunteers: { volunteerId?: string } | undefined;
   Map: undefined;
   Messages: { projectId?: string } | undefined;
-  Reports: undefined;
+  Reports:
+    | {
+        projectId?: string;
+        autoOpenUpload?: boolean;
+        completionReport?: string;
+        completionPhoto?: string;
+      }
+    | undefined;
   Users: undefined;
   Settings: undefined;
   Profile: undefined;

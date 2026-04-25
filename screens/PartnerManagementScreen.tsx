@@ -22,6 +22,7 @@ import {
 } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
 import InlineLoadError from '../components/InlineLoadError';
+import { getProjectDisplayStatus } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 const sectorOptions: PartnerSectorType[] = ['NGO', 'Hospital', 'Institution', 'Private'];
@@ -254,7 +255,7 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
             <View style={styles.stat}>
               <MaterialIcons name="location-on" size={24} color="#4CAF50" />
               <Text style={styles.statValue}>
-                {partnerProjects.filter(p => p.status === 'Completed').length}
+                {partnerProjects.filter(p => getProjectDisplayStatus(p) === 'Completed').length}
               </Text>
               <Text style={styles.statLabel}>Completed</Text>
             </View>
@@ -314,7 +315,7 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
                   <Text style={styles.projectName}>{project.title}</Text>
                   <Text style={styles.projectCategory}>{project.category}</Text>
                   <Text style={styles.projectMeta}>
-                    {project.volunteers.length} volunteer{project.volunteers.length === 1 ? '' : 's'} • {project.status}
+                    {project.volunteers.length} volunteer{project.volunteers.length === 1 ? '' : 's'} • {getProjectDisplayStatus(project)}
                   </Text>
                 </View>
                 <MaterialIcons name="chevron-right" size={20} color="#999" />

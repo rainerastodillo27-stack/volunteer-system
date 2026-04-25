@@ -1,9 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  FlatList,
   TouchableOpacity,
   ActivityIndicator,
   Alert,
@@ -18,14 +17,28 @@ import {
   getAllVolunteers,
   getAllProjects,
   getVolunteerByUserId,
+  getVolunteerProjectJoinRecords,
+  getVolunteerTimeLogs,
   subscribeToStorageChanges,
   saveEvent,
-  saveProject,
 } from '../models/storage';
-import { Project, ProjectInternalTask, Volunteer } from '../models/types';
+import {
+  Project,
+  ProjectInternalTask,
+  Volunteer,
+  VolunteerProjectJoinRecord,
+  VolunteerTimeLog,
+} from '../models/types';
+import { getProjectDisplayStatus } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
-type AssignedTask = ProjectInternalTask & { projectId: string; projectTitle: string };
+type AssignedTask = ProjectInternalTask & {
+  projectId: string;
+  projectTitle: string;
+  projectStartDate: string;
+  projectEndDate: string;
+  statusTrackingNote: string;
+};
 type FieldOfficerFilter = 'All' | 'Active' | 'Upcoming' | 'Completed';
 
 function formatEventDateLabel(startDate?: string, endDate?: string): string {
@@ -56,7 +69,7 @@ function formatEventDateLabel(startDate?: string, endDate?: string): string {
 }
 
 function getFieldOfficerEventBucket(project: Project): Exclude<FieldOfficerFilter, 'All'> {
-  switch (project.status) {
+  switch (getProjectDisplayStatus(project)) {
     case 'In Progress':
     case 'On Hold':
       return 'Active';
@@ -68,7 +81,73 @@ function getFieldOfficerEventBucket(project: Project): Exclude<FieldOfficerFilte
   }
 }
 
-function collectAssignedTasks(projects: Project[], volunteerProfile: Volunteer | null): AssignedTask[] {
+function getTrackedTaskStatus(
+  task: ProjectInternalTask,
+  project: Project,
+  joinRecord: VolunteerProjectJoinRecord | undefined,
+  timeLogs: VolunteerTimeLog[]
+): Pick<AssignedTask, 'status' | 'updatedAt' | 'statusTrackingNote'> {
+  if (!task.assignedVolunteerId) {
+    return {
+      status: 'Unassigned',
+      updatedAt: task.updatedAt,
+      statusTrackingNote: 'This task is waiting for an admin or field officer assignment.',
+    };
+  }
+
+  if (joinRecord?.participationStatus === 'Completed') {
+    return {
+      status: 'Completed',
+      updatedAt: joinRecord.completedAt || task.updatedAt,
+      statusTrackingNote: 'Completed automatically from your event participation record.',
+    };
+  }
+
+  const activeLog = timeLogs.find(log => !log.timeOut);
+  if (activeLog) {
+    return {
+      status: 'In Progress',
+      updatedAt: activeLog.timeIn,
+      statusTrackingNote: 'In progress while you have an active time-in for this event.',
+    };
+  }
+
+  const latestCompletedLog = timeLogs
+    .filter(log => Boolean(log.timeOut))
+    .sort(
+      (left, right) =>
+        new Date(right.timeOut || right.timeIn).getTime() -
+        new Date(left.timeOut || left.timeIn).getTime()
+    )[0];
+  if (latestCompletedLog?.timeOut) {
+    return {
+      status: 'Completed',
+      updatedAt: latestCompletedLog.timeOut,
+      statusTrackingNote: 'Completed automatically after your latest timed-out attendance log.',
+    };
+  }
+
+  if (getProjectDisplayStatus(project) === 'Completed' && task.title !== 'Volunteer Orientation Desk') {
+    return {
+      status: 'Completed',
+      updatedAt: project.updatedAt,
+      statusTrackingNote: 'Completed automatically because this event is already marked completed.',
+    };
+  }
+
+  return {
+    status: 'Assigned',
+    updatedAt: task.updatedAt,
+    statusTrackingNote: 'Assigned automatically when an admin or field officer gives you this task.',
+  };
+}
+
+function collectAssignedTasks(
+  projects: Project[],
+  volunteerProfile: Volunteer | null,
+  joinRecordByProjectId: Map<string, VolunteerProjectJoinRecord>,
+  volunteerTimeLogs: VolunteerTimeLog[]
+): AssignedTask[] {
   if (!volunteerProfile) {
     return [];
   }
@@ -82,10 +161,19 @@ function collectAssignedTasks(projects: Project[], volunteerProfile: Volunteer |
 
     project.internalTasks.forEach(task => {
       if (task.assignedVolunteerId === volunteerProfile.id) {
+        const trackedStatus = getTrackedTaskStatus(
+          task,
+          project,
+          joinRecordByProjectId.get(project.id),
+          volunteerTimeLogs.filter(log => log.projectId === project.id)
+        );
         assignedTasks.push({
           ...task,
+          ...trackedStatus,
           projectId: project.id,
           projectTitle: project.title,
+          projectStartDate: project.startDate,
+          projectEndDate: project.endDate,
         });
       }
     });
@@ -104,6 +192,8 @@ export default function VolunteerTasksScreen() {
   const [allProjects, setAllProjects] = useState<Project[]>([]);
   const [allVolunteers, setAllVolunteers] = useState<Volunteer[]>([]);
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
+  const [volunteerTimeLogs, setVolunteerTimeLogs] = useState<VolunteerTimeLog[]>([]);
+  const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedTask, setSelectedTask] = useState<AssignedTask | null>(null);
   const [showDetails, setShowDetails] = useState(false);
@@ -113,17 +203,28 @@ export default function VolunteerTasksScreen() {
   const [fieldOfficerFilter, setFieldOfficerFilter] = useState<FieldOfficerFilter>('All');
   const [showAllFieldOfficerEvents, setShowAllFieldOfficerEvents] = useState(false);
 
+  const tasksLoadInFlightRef = useRef<Promise<void> | null>(null);
+  const tasksReloadQueuedRef = useRef(false);
+
   useFocusEffect(
     React.useCallback(() => {
-      void loadVolunteerTasks();
-    }, [user])
+      void loadVolunteerTasksCoalesced();
+    }, [loadVolunteerTasksCoalesced])
   );
 
   useEffect(() => {
-    return subscribeToStorageChanges(['projects', 'events', 'volunteers'], () => {
-      void loadVolunteerTasks();
-    });
-  }, [user]);
+    return subscribeToStorageChanges(
+      ['projects', 'events', 'volunteers', 'volunteerTimeLogs', 'volunteerProjectJoins'],
+      async () => {
+        await loadVolunteerTasksCoalesced();
+      }
+    );
+  }, [loadVolunteerTasksCoalesced]);
+
+  const volunteerJoinRecordByProjectId = useMemo(
+    () => new Map(volunteerJoinRecords.map(record => [record.projectId, record] as const)),
+    [volunteerJoinRecords]
+  );
 
   const loadVolunteerTasks = async () => {
     try {
@@ -132,6 +233,8 @@ export default function VolunteerTasksScreen() {
         setAllProjects([]);
         setAllVolunteers([]);
         setVolunteerProfile(null);
+        setVolunteerTimeLogs([]);
+        setVolunteerJoinRecords([]);
         setLoading(false);
         return;
       }
@@ -142,10 +245,63 @@ export default function VolunteerTasksScreen() {
         getVolunteerByUserId(user.id),
       ]);
 
+      let nextVolunteerTimeLogs: VolunteerTimeLog[] = [];
+      let nextVolunteerJoinRecords: VolunteerProjectJoinRecord[] = [];
+
+      if (currentVolunteerProfile) {
+        const assignedProjectIds = Array.from(
+          new Set(
+            projects
+              .filter(project =>
+                (project.internalTasks || []).some(
+                  task => task.assignedVolunteerId === currentVolunteerProfile.id
+                )
+              )
+              .map(project => project.id)
+          )
+        );
+
+        nextVolunteerTimeLogs = await getVolunteerTimeLogs(currentVolunteerProfile.id).catch(error => {
+          console.error('Error loading volunteer time logs for task tracking:', error);
+          return [];
+        });
+
+        nextVolunteerJoinRecords = (
+          await Promise.all(
+            assignedProjectIds.map(async projectId => {
+              try {
+                const records = await getVolunteerProjectJoinRecords(projectId);
+                return records.find(record => record.volunteerId === currentVolunteerProfile.id) || null;
+              } catch (error) {
+                console.error(`Error loading join record for project ${projectId}:`, error);
+                return null;
+              }
+            })
+          )
+        ).filter((record): record is VolunteerProjectJoinRecord => record !== null);
+      }
+
+      const nextJoinRecordByProjectId = new Map(
+        nextVolunteerJoinRecords.map(record => [record.projectId, record] as const)
+      );
+      const nextTasks = collectAssignedTasks(
+        projects,
+        currentVolunteerProfile,
+        nextJoinRecordByProjectId,
+        nextVolunteerTimeLogs
+      );
+
       setAllProjects(projects);
       setAllVolunteers(volunteers);
       setVolunteerProfile(currentVolunteerProfile);
-      setTasks(collectAssignedTasks(projects, currentVolunteerProfile));
+      setVolunteerTimeLogs(nextVolunteerTimeLogs);
+      setVolunteerJoinRecords(nextVolunteerJoinRecords);
+      setTasks(nextTasks);
+      setSelectedTask(current =>
+        current
+          ? nextTasks.find(task => task.id === current.id && task.projectId === current.projectId) || null
+          : current
+      );
       setLoadError(null);
       setLoading(false);
     } catch (error) {
@@ -154,6 +310,8 @@ export default function VolunteerTasksScreen() {
       setAllProjects([]);
       setAllVolunteers([]);
       setVolunteerProfile(null);
+      setVolunteerTimeLogs([]);
+      setVolunteerJoinRecords([]);
       setLoadError({
         title: getRequestErrorTitle(error, 'Database Unavailable'),
         message: getRequestErrorMessage(error, 'Failed to load your assigned tasks.'),
@@ -162,53 +320,23 @@ export default function VolunteerTasksScreen() {
     }
   };
 
-  const handleUpdateTaskStatus = async (task: ProjectInternalTask & { projectId: string }, newStatus: string) => {
-    try {
-      const project = allProjects.find(p => p.id === task.projectId);
-
-      if (!project) {
-        Alert.alert('Error', 'Project not found');
-        return;
-      }
-
-      const updatedTasks = project.internalTasks?.map(t =>
-        t.id === task.id ? { ...t, status: newStatus as any, updatedAt: new Date().toISOString() } : t
-      ) || [];
-
-      const updatedProject: Project = {
-        ...project,
-        internalTasks: updatedTasks,
-      };
-
-      if (project.isEvent) {
-        await saveEvent(updatedProject);
-      } else {
-        await saveProject(updatedProject);
-      }
-      const nextProjects = allProjects.map(existingProject =>
-        existingProject.id === updatedProject.id ? updatedProject : existingProject
-      );
-      setAllProjects(nextProjects);
-      setTasks(collectAssignedTasks(nextProjects, volunteerProfile));
-      setSelectedTask(current =>
-        current?.id === task.id
-          ? {
-              ...current,
-              status: newStatus as ProjectInternalTask['status'],
-              updatedAt: new Date().toISOString(),
-            }
-          : current
-      );
-      setShowDetails(false);
-      void loadVolunteerTasks();
-      Alert.alert('Success', 'Task status updated');
-    } catch (error) {
-      console.error('Error updating task:', error);
-      Alert.alert('Error', 'Failed to update task status');
+  const loadVolunteerTasksCoalesced = React.useCallback(async () => {
+    if (tasksLoadInFlightRef.current) {
+      tasksReloadQueuedRef.current = true;
+      return;
     }
-  };
 
-  const selectedEventProject = useMemo(
+    do {
+      tasksReloadQueuedRef.current = false;
+      const task = loadVolunteerTasks();
+      tasksLoadInFlightRef.current = task;
+      try {
+        await task;
+      } finally {
+        tasksLoadInFlightRef.current = null;
+      }
+    } while (tasksReloadQueuedRef.current);
+  }, [user]);
     () => allProjects.find(project => project.id === selectedTask?.projectId && project.isEvent) || null,
     [allProjects, selectedTask?.projectId]
   );
@@ -340,21 +468,22 @@ export default function VolunteerTasksScreen() {
       const nextProjects = allProjects.map(project =>
         project.id === updatedProject.id ? updatedProject : project
       );
+      const nextTasks = collectAssignedTasks(
+        nextProjects,
+        volunteerProfile,
+        volunteerJoinRecordByProjectId,
+        volunteerTimeLogs
+      );
       setAllProjects(nextProjects);
-      setTasks(collectAssignedTasks(nextProjects, volunteerProfile));
+      setTasks(nextTasks);
       setSelectedTask(current => {
-        if (!current || current.projectId !== updatedProject.id) {
+        if (!current) {
           return current;
         }
 
-        const matchingTask = updatedTasks.find(task => task.id === current.id);
-        return matchingTask
-          ? {
-              ...matchingTask,
-              projectId: updatedProject.id,
-              projectTitle: updatedProject.title,
-            }
-          : current;
+        return (
+          nextTasks.find(task => task.id === current.id && task.projectId === current.projectId) || current
+        );
       });
       void loadVolunteerTasks();
       Alert.alert('Saved', 'Event task assignment updated.');
@@ -784,6 +913,11 @@ export default function VolunteerTasksScreen() {
 
                 <Text style={styles.projectNameModal}>{selectedTask.projectTitle}</Text>
 
+                <View style={styles.infoSection}>
+                  <Text style={styles.infoLabel}>Event Schedule</Text>
+                  <Text style={styles.infoValue}>{formatEventDateLabel(selectedTask.projectStartDate, selectedTask.projectEndDate)}</Text>
+                </View>
+
                 {selectedTask.isFieldOfficer ? (
                   <View style={styles.fieldOfficerBadge}>
                     <MaterialIcons name="supervisor-account" size={16} color="#166534" />
@@ -810,28 +944,19 @@ export default function VolunteerTasksScreen() {
 
                 <View style={styles.infoSection}>
                   <Text style={styles.infoLabel}>Status</Text>
-                  <View style={styles.statusButtonGroup}>
-                    {['Assigned', 'In Progress', 'Completed'].map(status => (
-                      <TouchableOpacity
-                        key={status}
-                        style={[
-                          styles.statusButton,
-                          selectedTask.status === status && styles.statusButtonActive,
-                          { borderColor: getStatusColor(status) },
-                        ]}
-                        onPress={() => handleUpdateTaskStatus(selectedTask, status)}
-                      >
-                        <Text
-                          style={[
-                            styles.statusButtonText,
-                            selectedTask.status === status && styles.statusButtonTextActive,
-                          ]}
-                        >
-                          {status}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
+                  <View
+                    style={[
+                      styles.statusBadge,
+                      styles.statusReadOnlyBadge,
+                      { backgroundColor: getStatusColor(selectedTask.status) },
+                    ]}
+                  >
+                    <Text style={styles.statusText}>{selectedTask.status}</Text>
                   </View>
+                  <Text style={styles.statusReadOnlyHint}>
+                    System generated from assignment tracking and attendance logs. Volunteers cannot edit this status. Event status is also automatically updated based on event dates.
+                  </Text>
+                  <Text style={styles.descriptionText}>{selectedTask.statusTrackingNote}</Text>
                 </View>
 
                 <View style={styles.dateSection}>
@@ -1449,6 +1574,10 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 12,
   },
+  statusReadOnlyBadge: {
+    alignSelf: 'flex-start',
+    marginBottom: 10,
+  },
   statusText: {
     fontSize: 12,
     fontWeight: '600',
@@ -1530,6 +1659,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#333',
     lineHeight: 22,
+  },
+  statusReadOnlyHint: {
+    marginBottom: 6,
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#64748b',
   },
   skillsText: {
     fontSize: 14,

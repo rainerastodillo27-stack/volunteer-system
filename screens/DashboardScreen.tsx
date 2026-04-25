@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import {
+  getAllVolunteerProjectMatches,
   getAllVolunteerTimeLogs,
   getAllPartnerReports,
   getDashboardSnapshot,
@@ -21,6 +22,7 @@ import {
 import type { Partner, Project, Volunteer } from '../models/types';
 import { useAuth } from '../contexts/AuthContext';
 import { navigateToAvailableRoute } from '../utils/navigation';
+import { getProjectDisplayStatus } from '../utils/projectStatus';
 import VolunteerImpactMap from '../components/VolunteerImpactMap';
 import { getRequestErrorMessage } from '../utils/requestErrors';
 
@@ -76,6 +78,7 @@ export default function DashboardScreen({ navigation }: any) {
     timeOuts: 0,
     pendingReports: 0,
   });
+  const [pendingVolunteerJoinRequests, setPendingVolunteerJoinRequests] = useState(0);
   const [timeTrackingTarget, setTimeTrackingTarget] = useState({
     latestTimeInProjectId: undefined as string | undefined,
     latestTimeOutProjectId: undefined as string | undefined,
@@ -87,15 +90,18 @@ export default function DashboardScreen({ navigation }: any) {
   const [volunteerCompletedProjectIdsByVolunteerId, setVolunteerCompletedProjectIdsByVolunteerId] =
     useState<Record<string, string[]>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
+  const dashboardLoadInFlightRef = useRef<Promise<void> | null>(null);
+  const dashboardReloadQueuedRef = useRef(false);
 
   // Loads dashboard totals and recent status updates from storage.
   const loadDashboardData = React.useCallback(async () => {
     try {
-      const [{ projects, partners, users, volunteers, statusUpdates }, volunteerTimeLogs, partnerReports] =
+      const [{ projects, partners, users, volunteers, statusUpdates }, volunteerTimeLogs, partnerReports, volunteerMatches] =
         await Promise.all([
           getDashboardSnapshot(),
           getAllVolunteerTimeLogs(),
           getAllPartnerReports(),
+          getAllVolunteerProjectMatches(),
         ]);
       const volunteerCompletedProjectEntries = await Promise.all(
         volunteers.map(async volunteer => [
@@ -114,8 +120,8 @@ export default function DashboardScreen({ navigation }: any) {
 
       setProjectStats({
         total: projects.length,
-        active: projects.filter(p => p.status === 'In Progress').length,
-        completed: projects.filter(p => p.status === 'Completed').length,
+        active: projects.filter(p => getProjectDisplayStatus(p) === 'In Progress').length,
+        completed: projects.filter(p => getProjectDisplayStatus(p) === 'Completed').length,
       });
 
       setPartnerStats({
@@ -134,6 +140,9 @@ export default function DashboardScreen({ navigation }: any) {
         timeOuts: volunteerTimeLogs.filter(log => Boolean(log.timeOut)).length,
         pendingReports: partnerReports.filter(report => report.status === 'Submitted').length,
       });
+      setPendingVolunteerJoinRequests(
+        volunteerMatches.filter(match => match.status === 'Requested').length
+      );
 
       const latestTimeInLog = volunteerTimeLogs[0];
       const latestTimeOutLog = volunteerTimeLogs.find(log => Boolean(log.timeOut)) || null;
@@ -165,9 +174,27 @@ export default function DashboardScreen({ navigation }: any) {
     }
   }, []);
 
+  const loadDashboardDataCoalesced = React.useCallback(async () => {
+    if (dashboardLoadInFlightRef.current) {
+      dashboardReloadQueuedRef.current = true;
+      return;
+    }
+
+    do {
+      dashboardReloadQueuedRef.current = false;
+      const task = loadDashboardData();
+      dashboardLoadInFlightRef.current = task;
+      try {
+        await task;
+      } finally {
+        dashboardLoadInFlightRef.current = null;
+      }
+    } while (dashboardReloadQueuedRef.current);
+  }, [loadDashboardData]);
+
   useFocusEffect(
     React.useCallback(() => {
-      void loadDashboardData();
+      void loadDashboardDataCoalesced();
       return subscribeToStorageChanges(
         [
           'users',
@@ -176,14 +203,15 @@ export default function DashboardScreen({ navigation }: any) {
           'volunteers',
           'statusUpdates',
           'volunteerProjectJoins',
+          'volunteerMatches',
           'volunteerTimeLogs',
           'partnerReports',
         ],
-        () => {
-          void loadDashboardData();
+        async () => {
+          await loadDashboardDataCoalesced();
         }
       );
-    }, [loadDashboardData])
+    }, [loadDashboardDataCoalesced])
   );
 
   // Confirms logout before clearing the current authenticated session.
@@ -306,7 +334,10 @@ export default function DashboardScreen({ navigation }: any) {
 
   const upcomingPrograms = useMemo(() => {
     return [...projectsData]
-      .filter(project => project.status === 'Planning' || project.status === 'In Progress')
+      .filter(project => {
+        const status = getProjectDisplayStatus(project);
+        return status === 'Planning' || status === 'In Progress';
+      })
       .sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime())
       .slice(0, 4);
   }, [projectsData]);
@@ -510,6 +541,12 @@ export default function DashboardScreen({ navigation }: any) {
           <Text style={styles.statisticsTitle}>Statistics</Text>
           <View style={styles.statLine}><Text style={styles.statKey}>Total Users</Text><Text style={styles.statNumber}>{userStats.total}</Text></View>
           <View style={styles.statLine}><Text style={styles.statKey}>New Applicants</Text><Text style={styles.statNumber}>{partnerStats.pending}</Text></View>
+          {isAdmin ? (
+            <View style={styles.statLine}>
+              <Text style={styles.statKey}>Pending Volunteer Requests</Text>
+              <Text style={styles.statNumber}>{pendingVolunteerJoinRequests}</Text>
+            </View>
+          ) : null}
           <View style={styles.statLine}><Text style={styles.statKey}>Upcoming Programs</Text><Text style={styles.statNumber}>{upcomingPrograms.length}</Text></View>
           <View style={[styles.statLine, styles.statLineLast]}><Text style={styles.statKey}>Total Programs</Text><Text style={styles.statNumber}>{projectStats.total}</Text></View>
         </View>

@@ -38,6 +38,19 @@ from .relational_mirror import (
 
 load_dotenv()
 
+
+def _stable_short_join_record_id(project_id: str, volunteer_id: str) -> str:
+    raw_id = f"volunteer-join-{project_id}-{volunteer_id}"
+    if len(raw_id) <= 64:
+        return raw_id
+
+    hash_value = 2166136261
+    for char in raw_id:
+        hash_value ^= ord(char)
+        hash_value = (hash_value * 16777619) & 0xFFFFFFFF
+
+    return f"voljoin-{project_id[:18]}-{volunteer_id[:18]}-{format(hash_value, 'x')}"
+
 TOP_VOLUNTEER_THRESHOLD = 5
 
 
@@ -707,6 +720,22 @@ def _volunteer_has_time_in_for_project(connection: Any, volunteer_id: str, proje
     )
 
 
+def _volunteer_is_assigned_to_event_task(
+    connection: Any,
+    volunteer_id: str,
+    project_id: str,
+) -> bool:
+    project, _ = _postgres_get_project_like_item_by_id(connection, project_id)
+    if not project or not bool(project.get("isEvent")):
+        return True
+
+    tasks = project.get("internalTasks") or []
+    return any(
+        str(task.get("assignedVolunteerId") or "").strip() == volunteer_id
+        for task in tasks
+    )
+
+
 # Computes joined-program count and top-volunteer recognition state.
 def _postgres_get_volunteer_recognition_status(
     connection: Any,
@@ -792,7 +821,7 @@ def _postgres_ensure_volunteer_project_join_record(
             return
 
     record = {
-        "id": f"volunteer-join-{project_id}-{volunteer['id']}",
+        "id": _stable_short_join_record_id(project_id, str(volunteer["id"])),
         "projectId": project_id,
         "volunteerId": volunteer["id"],
         "volunteerUserId": volunteer.get("userId", ""),
@@ -861,6 +890,87 @@ def _postgres_add_logged_hours_to_volunteer(
         "totalHoursContributed": round(float(volunteer.get("totalHoursContributed") or 0) + duration_hours, 1),
     }
     return _postgres_upsert_hot_item(connection, "volunteers", updated_volunteer)
+
+
+def _postgres_mark_volunteer_match_completed(
+    connection: Any,
+    project_id: str,
+    volunteer_id: str,
+    completed_by: str,
+) -> None:
+    matches = _postgres_get_hot_items_by_field(connection, "volunteerMatches", "volunteerId", volunteer_id)
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    for match in matches:
+        if str(match.get("projectId") or "") != project_id:
+            continue
+
+        if str(match.get("status") or "") == "Completed":
+            continue
+
+        _postgres_upsert_hot_item(
+            connection,
+            "volunteerMatches",
+            {
+                **match,
+                "status": "Completed",
+                "reviewedAt": now_iso,
+                "reviewedBy": completed_by,
+            },
+        )
+
+
+def _postgres_complete_volunteer_participation(
+    connection: Any,
+    project_id: str,
+    volunteer_id: str,
+    completed_by: str,
+) -> dict[str, Any] | None:
+    project, _ = _postgres_get_project_like_item_by_id(connection, project_id)
+    if project is None or not bool(project.get("isEvent")):
+        return None
+
+    volunteer = _postgres_get_hot_item_by_id(connection, "volunteers", volunteer_id)
+    if volunteer is None:
+        return None
+
+    _postgres_ensure_volunteer_project_join_record(connection, project_id, volunteer, "VolunteerJoin")
+    join_records = _postgres_get_hot_items_by_field(connection, "volunteerProjectJoins", "volunteerId", volunteer_id)
+    target_record = next(
+        (record for record in join_records if str(record.get("projectId") or "") == project_id),
+        None,
+    )
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    updated_record: dict[str, Any] | None = None
+    if target_record is not None:
+        updated_record = {
+            **target_record,
+            "participationStatus": "Completed",
+            "completedAt": now_iso,
+            "completedBy": completed_by,
+        }
+        _postgres_upsert_hot_item(connection, "volunteerProjectJoins", updated_record)
+
+    _postgres_mark_volunteer_match_completed(connection, project_id, volunteer_id, completed_by)
+
+    past_projects = [
+        str(item).strip()
+        for item in (volunteer.get("pastProjects") or [])
+        if str(item).strip()
+    ]
+    if project_id not in past_projects:
+        _postgres_upsert_hot_item(
+            connection,
+            "volunteers",
+            {
+                **volunteer,
+                "pastProjects": [*past_projects, project_id],
+            },
+        )
+
+    _postgres_sync_volunteer_engagement_status(connection, volunteer_id)
+    return updated_record
 
 
 # Builds the project snapshot payload consumed by frontend project screens.
@@ -1553,6 +1663,20 @@ async def start_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogStartP
         if volunteer is None:
             raise HTTPException(status_code=404, detail="Volunteer not found.")
 
+        project, _ = _postgres_get_project_like_item_by_id(connection, payload.projectId)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found.")
+
+        if bool(project.get("isEvent")) and not _volunteer_is_assigned_to_event_task(
+            connection,
+            volunteer_id,
+            payload.projectId,
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="You must be assigned to an event task before timing in.",
+            )
+
         existing_logs = _postgres_get_volunteer_time_logs(connection, volunteer_id)
         active_log = next(
             (
@@ -1597,10 +1721,10 @@ async def end_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogEndPaylo
 
         completion_report = str(payload.completionReport or "").strip()
         completion_photo = str(payload.completionPhoto or "").strip()
-        if not completion_report and not completion_photo:
+        if not completion_report:
             raise HTTPException(
                 status_code=400,
-                detail="Upload a completion photo or write a completion report before timing out.",
+                detail="Submit a completion report before timing out.",
             )
 
         updated_log = {
@@ -2289,6 +2413,7 @@ async def submit_report(payload: ReportSubmitPayload) -> dict[str, Any]:
     }
 
     try:
+        broadcast_keys = ["partnerReports"]
         with get_postgres_connection() as connection:
             if submitter_role == "volunteer":
                 volunteer = _postgres_get_volunteer_by_user_id(connection, submitter_user_id)
@@ -2304,9 +2429,42 @@ async def submit_report(payload: ReportSubmitPayload) -> dict[str, Any]:
                         detail="Volunteers must time in to this event before submitting a report.",
                     )
 
+                volunteer_id = str(volunteer.get("id") or "")
+                existing_logs = _postgres_get_volunteer_time_logs(connection, volunteer_id)
+                active_log = next(
+                    (
+                        log
+                        for log in existing_logs
+                        if str(log.get("projectId") or "") == project_id and not log.get("timeOut")
+                    ),
+                    None,
+                )
+
+                completion_photo = media_file or (
+                    attachments[0]["url"] if attachments and isinstance(attachments[0], dict) else None
+                )
+                if active_log is not None:
+                    updated_log = {
+                        **active_log,
+                        "timeOut": now,
+                        "completionReport": report["description"] or None,
+                        "completionPhoto": completion_photo,
+                    }
+                    _postgres_upsert_hot_item(connection, "volunteerTimeLogs", updated_log)
+                    _postgres_add_logged_hours_to_volunteer(connection, volunteer_id, updated_log)
+                    broadcast_keys.extend(["volunteerTimeLogs", "volunteers"])
+
+                _postgres_complete_volunteer_participation(
+                    connection,
+                    project_id,
+                    volunteer_id,
+                    submitter_user_id,
+                )
+                broadcast_keys.extend(["volunteerProjectJoins", "volunteerMatches", "volunteers"])
+
             saved_report = _postgres_upsert_hot_item(connection, "partnerReports", report)
             connection.commit()
-        await connection_manager.broadcast_storage_event(["partnerReports"])
+        await connection_manager.broadcast_storage_event(list(dict.fromkeys(broadcast_keys)))
         return {"report": saved_report}
     except HTTPException:
         raise

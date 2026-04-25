@@ -26,6 +26,7 @@ import {
 } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
 import InlineLoadError from '../components/InlineLoadError';
+import { getProjectDisplayStatus } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 // Lets admins inspect volunteers, update availability, and assign projects.
@@ -315,7 +316,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   const getMatchedProjects = () => {
     return projects.filter(p =>
       p.isEvent &&
-      p.status === 'In Progress' &&
+      getProjectDisplayStatus(p) === 'In Progress' &&
       volunteerMatches.find(m => m.projectId === p.id && m.status === 'Matched')
     );
   };
@@ -324,7 +325,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   const getPendingProjects = () => {
     return projects.filter(p =>
       p.isEvent &&
-      p.status === 'In Progress' &&
+      getProjectDisplayStatus(p) === 'In Progress' &&
       volunteerMatches.find(m => m.projectId === p.id && m.status === 'Requested')
     );
   };
@@ -334,7 +335,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     return projects.filter(
       p =>
         p.isEvent &&
-        p.status === 'In Progress' &&
+        getProjectDisplayStatus(p) === 'In Progress' &&
         !volunteerMatches.find(
           m =>
             m.projectId === p.id &&

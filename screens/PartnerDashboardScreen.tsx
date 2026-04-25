@@ -33,6 +33,7 @@ import {
 } from '../models/types';
 import { isImageMediaUri, pickImageFromDevice } from '../utils/media';
 import { navigateToAvailableRoute } from '../utils/navigation';
+import { getProjectDisplayStatus as getDerivedProjectStatus } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 type ReportFormState = {
@@ -53,8 +54,8 @@ function createEmptyReportForm(projectId = ''): ReportFormState {
   };
 }
 
-function getDisplayProjectStatus(status: Project['status']): 'Planned' | 'Active' | 'Completed' | 'Cancelled' {
-  switch (status) {
+function getDisplayProjectStatus(project: Project): 'Planned' | 'Active' | 'Completed' | 'Cancelled' {
+  switch (getDerivedProjectStatus(project)) {
     case 'Planning':
       return 'Planned';
     case 'Completed':
@@ -193,7 +194,7 @@ export default function PartnerDashboardScreen({ navigation }: any) {
   );
 
   const activeProjects = useMemo(
-    () => projects.filter(project => getDisplayProjectStatus(project.status) !== 'Cancelled'),
+    () => projects.filter(project => getDisplayProjectStatus(project) !== 'Cancelled'),
     [projects]
   );
   const timelineProjectIds = useMemo(
@@ -418,7 +419,7 @@ export default function PartnerDashboardScreen({ navigation }: any) {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Project Proposals</Text>
         {activeProjects.map(project => {
-          const displayStatus = getDisplayProjectStatus(project.status);
+          const displayStatus = getDisplayProjectStatus(project);
           const application = applicationByProjectId.get(project.id);
           const projectReportsForCard = partnerReports.filter(report => report.projectId === project.id);
           const latestProjectReport = projectReportsForCard[0];

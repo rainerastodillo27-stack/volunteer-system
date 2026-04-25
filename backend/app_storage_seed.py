@@ -229,6 +229,28 @@ def build_demo_app_storage() -> dict[str, Any]:
                 "updatedAt": now_iso,
                 "statusUpdates": [],
             },
+            {
+                "id": "project-sample-education-program",
+                "title": "Community Education Initiative",
+                "description": "Sample admin-created education program for testing time-in functionality based on event start dates.",
+                "partnerId": "",
+                "programModule": "Education",
+                "status": "In Progress",
+                "category": "Education",
+                "startDate": "2026-04-25T16:00:00.000Z",
+                "endDate": "2026-04-26T15:59:59.000Z",
+                "location": {
+                    "latitude": 10.5933,
+                    "longitude": 123.0243,
+                    "address": "Bacolod City, Negros Occidental",
+                },
+                "volunteersNeeded": 8,
+                "volunteers": [],
+                "joinedUserIds": [],
+                "createdAt": now_iso,
+                "updatedAt": now_iso,
+                "statusUpdates": [],
+            },
         ],
         "events": [
             {
@@ -265,6 +287,7 @@ def build_demo_app_storage() -> dict[str, Any]:
                         "assignedVolunteerId": "volunteer-profile-1",
                         "assignedVolunteerName": "Volunteer Account",
                         "isFieldOfficer": True,
+                        "skillsNeeded": ["leadership", "coordination", "communication"],
                         "createdAt": now_iso,
                         "updatedAt": now_iso,
                     },
@@ -275,6 +298,7 @@ def build_demo_app_storage() -> dict[str, Any]:
                         "category": "Logistics",
                         "priority": "High",
                         "status": "Unassigned",
+                        "skillsNeeded": ["logistics", "packing", "inventory management"],
                         "createdAt": now_iso,
                         "updatedAt": now_iso,
                     },
@@ -285,6 +309,7 @@ def build_demo_app_storage() -> dict[str, Any]:
                         "category": "Front Desk",
                         "priority": "Medium",
                         "status": "Unassigned",
+                        "skillsNeeded": ["organization", "communication", "data entry"],
                         "createdAt": now_iso,
                         "updatedAt": now_iso,
                     },
@@ -321,6 +346,7 @@ def build_demo_app_storage() -> dict[str, Any]:
                         "category": "Operations",
                         "priority": "High",
                         "status": "Unassigned",
+                        "skillsNeeded": ["public speaking", "organization", "communication"],
                         "createdAt": now_iso,
                         "updatedAt": now_iso,
                     },
@@ -331,6 +357,106 @@ def build_demo_app_storage() -> dict[str, Any]:
                         "category": "Logistics",
                         "priority": "High",
                         "status": "Unassigned",
+                        "skillsNeeded": ["logistics", "packing", "inventory management"],
+                        "createdAt": now_iso,
+                        "updatedAt": now_iso,
+                    },
+                ],
+            },
+            {
+                "id": "project-sample-education-event-1",
+                "title": "Education Workshop - Morning Session",
+                "description": "Morning education workshop for volunteer time-in testing - event starts today.",
+                "partnerId": "",
+                "programModule": "Education",
+                "isEvent": True,
+                "parentProjectId": "project-sample-education-program",
+                "status": "In Progress",
+                "category": "Education",
+                "startDate": "2026-04-25T16:00:00.000Z",
+                "endDate": "2026-04-26T15:59:59.000Z",
+                "location": {
+                    "latitude": 10.5933,
+                    "longitude": 123.0243,
+                    "address": "Bacolod City, Negros Occidental",
+                },
+                "volunteersNeeded": 5,
+                "volunteers": ["volunteer-profile-1"],
+                "joinedUserIds": ["volunteer-1"],
+                "createdAt": now_iso,
+                "updatedAt": now_iso,
+                "statusUpdates": [],
+                "internalTasks": [
+                    {
+                        "id": "project-sample-education-event-1-task-lead",
+                        "title": "Workshop Lead",
+                        "description": "Lead the morning education workshop session.",
+                        "category": "Leadership",
+                        "priority": "High",
+                        "status": "Assigned",
+                        "assignedVolunteerId": "volunteer-profile-1",
+                        "assignedVolunteerName": "Volunteer Account",
+                        "isFieldOfficer": True,
+                        "skillsNeeded": ["leadership", "education", "communication"],
+                        "createdAt": now_iso,
+                        "updatedAt": now_iso,
+                    },
+                    {
+                        "id": "project-sample-education-event-1-task-materials",
+                        "title": "Materials Preparation",
+                        "description": "Prepare educational materials and learning resources for the session.",
+                        "category": "Logistics",
+                        "priority": "High",
+                        "status": "Unassigned",
+                        "skillsNeeded": ["organization", "education", "resource management"],
+                        "createdAt": now_iso,
+                        "updatedAt": now_iso,
+                    },
+                ],
+            },
+            {
+                "id": "project-sample-education-event-2",
+                "title": "Education Workshop - Afternoon Session",
+                "description": "Afternoon education workshop for volunteer time-in testing - event starts today.",
+                "partnerId": "",
+                "programModule": "Education",
+                "isEvent": True,
+                "parentProjectId": "project-sample-education-program",
+                "status": "In Progress",
+                "category": "Education",
+                "startDate": "2026-04-25T16:00:00.000Z",
+                "endDate": "2026-04-26T15:59:59.000Z",
+                "location": {
+                    "latitude": 10.5933,
+                    "longitude": 123.0243,
+                    "address": "Bacolod City, Negros Occidental",
+                },
+                "volunteersNeeded": 5,
+                "volunteers": [],
+                "joinedUserIds": [],
+                "createdAt": now_iso,
+                "updatedAt": now_iso,
+                "statusUpdates": [],
+                "internalTasks": [
+                    {
+                        "id": "project-sample-education-event-2-task-lead",
+                        "title": "Workshop Lead",
+                        "description": "Lead the afternoon education workshop session.",
+                        "category": "Leadership",
+                        "priority": "High",
+                        "status": "Unassigned",
+                        "skillsNeeded": ["leadership", "education", "communication"],
+                        "createdAt": now_iso,
+                        "updatedAt": now_iso,
+                    },
+                    {
+                        "id": "project-sample-education-event-2-task-materials",
+                        "title": "Materials Preparation",
+                        "description": "Prepare educational materials and learning resources for the afternoon session.",
+                        "category": "Logistics",
+                        "priority": "High",
+                        "status": "Unassigned",
+                        "skillsNeeded": ["organization", "education", "resource management"],
                         "createdAt": now_iso,
                         "updatedAt": now_iso,
                     },
@@ -411,6 +537,14 @@ def build_demo_app_storage() -> dict[str, Any]:
                 "updatedBy": "admin-1",
                 "updatedAt": now_iso,
             },
+            {
+                "id": "status-sample-education-program",
+                "projectId": "project-sample-education-program",
+                "status": "In Progress",
+                "description": "Sample admin-created education program for testing volunteer time-in functionality.",
+                "updatedBy": "admin-1",
+                "updatedAt": now_iso,
+            },
         ],
         "volunteerMatches": [
             {
@@ -424,12 +558,34 @@ def build_demo_app_storage() -> dict[str, Any]:
                 "reviewedBy": "admin-1",
                 "hoursContributed": 0,
             },
+            {
+                "id": "match-education-event-1-vol1",
+                "volunteerId": "volunteer-profile-1",
+                "projectId": "project-sample-education-event-1",
+                "status": "Matched",
+                "requestedAt": now_iso,
+                "matchedAt": now_iso,
+                "reviewedAt": now_iso,
+                "reviewedBy": "admin-1",
+                "hoursContributed": 0,
+            },
         ],
         "volunteerTimeLogs": [],
         "volunteerProjectJoins": [
             {
                 "id": "join-qassessment-vol1",
                 "projectId": "project-sample-nutrition-event-1",
+                "volunteerId": "volunteer-profile-1",
+                "volunteerUserId": "volunteer-1",
+                "volunteerName": "Volunteer Account",
+                "volunteerEmail": "volunteer@example.com",
+                "joinedAt": now_iso,
+                "source": "VolunteerJoin",
+                "participationStatus": "Active",
+            },
+            {
+                "id": "join-education-event-1-vol1",
+                "projectId": "project-sample-education-event-1",
                 "volunteerId": "volunteer-profile-1",
                 "volunteerUserId": "volunteer-1",
                 "volunteerName": "Volunteer Account",
@@ -626,7 +782,11 @@ def _normalize_demo_project_examples(connection: Any, demo_storage: dict[str, An
         for item in demo_storage.get("projects", [])
         if isinstance(item, dict)
         and str(item.get("id") or "").strip()
-        in {"project-sample-nutrition-program", "project-sample-livelihood-program"}
+        in {
+            "project-sample-nutrition-program",
+            "project-sample-livelihood-program",
+            "project-sample-education-program",
+        }
     ]
     if canonical_projects:
         _upsert_demo_collection_items(connection, "projects", canonical_projects)
@@ -636,7 +796,12 @@ def _normalize_demo_project_examples(connection: Any, demo_storage: dict[str, An
         for item in demo_storage.get("events", [])
         if isinstance(item, dict)
         and str(item.get("id") or "").strip()
-        in {"project-sample-nutrition-event-1", "project-sample-livelihood-event-1"}
+        in {
+            "project-sample-nutrition-event-1",
+            "project-sample-livelihood-event-1",
+            "project-sample-education-event-1",
+            "project-sample-education-event-2",
+        }
     ]
     if canonical_events:
         _upsert_demo_collection_items(connection, "events", canonical_events)
@@ -646,7 +811,11 @@ def _normalize_demo_project_examples(connection: Any, demo_storage: dict[str, An
         for item in demo_storage.get("statusUpdates", [])
         if isinstance(item, dict)
         and str(item.get("id") or "").strip()
-        in {"status-sample-nutrition-program", "status-sample-livelihood-program"}
+        in {
+            "status-sample-nutrition-program",
+            "status-sample-livelihood-program",
+            "status-sample-education-program",
+        }
     ]
     if canonical_status_updates:
         _upsert_demo_collection_items(connection, "statusUpdates", canonical_status_updates)

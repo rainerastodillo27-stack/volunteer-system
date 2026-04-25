@@ -353,6 +353,7 @@ function formatMetricKey(key: string): string {
     activeVolunteers: 'Active Volunteers',
     beneficiariesServed: 'Beneficiaries Served',
     tasksCompleted: 'Tasks Completed',
+    attendanceDays: 'Days Timed In',
     eventsCount: 'Events Count',
     geofenceCompliance: 'Geofence Compliance',
     dataStorageVolume: 'Data Storage Volume',
