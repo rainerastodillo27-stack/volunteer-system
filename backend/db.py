@@ -10,6 +10,11 @@ try:
 except ImportError:  # pragma: no cover - dependency is required for runtime
     psycopg = None
 
+try:
+    from psycopg_pool import ConnectionPool
+except ImportError:  # pragma: no cover - optional for connection pooling
+    ConnectionPool = None
+
 
 POSTGRES_PROBE_CACHE_TTL_SECONDS = 10
 _POSTGRES_PROBE_CACHE: dict[str, Any] = {
@@ -19,6 +24,9 @@ _POSTGRES_PROBE_CACHE: dict[str, Any] = {
 }
 _POSTGRES_LAST_SUCCESSFUL_URL: str | None = None
 _POSTGRES_CANDIDATE_FAILURES: dict[str, dict[str, Any]] = {}
+_POSTGRES_CONNECTION_POOL: Any = None
+_POSTGRES_POOL_MIN_SIZE = 5
+_POSTGRES_POOL_MAX_SIZE = 20
 
 
 """Shared Postgres connection helpers for the backend API and seed scripts."""
@@ -355,6 +363,58 @@ def get_postgres_connection():
     raise RuntimeError("Failed to open Supabase Postgres connection.")
 
 
+# Initializes the connection pool when the app starts
+def init_postgres_pool() -> None:
+    global _POSTGRES_CONNECTION_POOL
+    if _POSTGRES_CONNECTION_POOL is not None:
+        return  # Pool already initialized
+
+    if ConnectionPool is None or not psycopg:
+        return  # Connection pooling not available
+
+    try:
+        database_url = _get_raw_database_url()
+        if not database_url:
+            return
+
+        # Create connection pool with optimized settings
+        _POSTGRES_CONNECTION_POOL = ConnectionPool(
+            database_url,
+            min_size=_POSTGRES_POOL_MIN_SIZE,
+            max_size=_POSTGRES_POOL_MAX_SIZE,
+            connect_timeout=_get_connect_timeout(),
+            timeout=_get_connect_timeout() * 2,  # Timeout waiting for available connection
+            kwargs={
+                "application_name": "volcre-backend-pool",
+                "prepare_threshold": None,  # Disable prepared statements for pooler compatibility
+            }
+        )
+        print(f"[OK] Postgres connection pool initialized (min={_POSTGRES_POOL_MIN_SIZE}, max={_POSTGRES_POOL_MAX_SIZE})")
+    except Exception as exc:
+        print(f"[WARN] Failed to initialize Postgres connection pool: {exc}")
+        _POSTGRES_CONNECTION_POOL = None
+
+
+# Returns a connection from the pool if available, otherwise creates a direct connection
+def get_pooled_postgres_connection():
+    """Get a database connection from the pool if available, otherwise create a direct connection."""
+    if _POSTGRES_CONNECTION_POOL is not None:
+        try:
+            return _POSTGRES_CONNECTION_POOL.getconn()
+        except Exception as exc:
+            print(f"[WARN] Failed to get connection from pool: {exc}")
+            # Fall back to direct connection
+            return get_postgres_connection()
+    return get_postgres_connection()
+
+
 # Returns the default backend database connection.
 def get_connection():
+    """Get a pooled connection if available, otherwise a direct connection."""
+    if _POSTGRES_CONNECTION_POOL is not None:
+        try:
+            return _POSTGRES_CONNECTION_POOL.getconn()
+        except Exception:
+            pass
     return get_postgres_connection()
+

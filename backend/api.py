@@ -1,6 +1,7 @@
 import os
 import json
 import threading
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -27,6 +28,7 @@ from .db import (
     get_postgres_connection,
     get_postgres_diagnostics,
     get_postgres_status,
+    init_postgres_pool,
 )
 from .field_rules import normalize_comparable_phone
 from .relational_mirror import (
@@ -37,6 +39,33 @@ from .relational_mirror import (
 
 
 load_dotenv()
+
+
+# Simple TTL-based cache for query results to improve performance
+class TTLCache:
+    """Simple time-to-live cache for function results."""
+    def __init__(self, ttl_seconds: int = 5):
+        self.cache: dict[str, tuple[Any, float]] = {}
+        self.ttl_seconds = ttl_seconds
+    
+    def get(self, key: str) -> Any | None:
+        if key not in self.cache:
+            return None
+        value, timestamp = self.cache[key]
+        if time.time() - timestamp > self.ttl_seconds:
+            del self.cache[key]
+            return None
+        return value
+    
+    def set(self, key: str, value: Any) -> None:
+        self.cache[key] = (value, time.time())
+    
+    def clear(self) -> None:
+        self.cache.clear()
+
+
+# Cache for projects snapshot (5 second TTL to avoid staleness but improve performance)
+_projects_snapshot_cache = TTLCache(ttl_seconds=5)
 
 
 def _stable_short_join_record_id(project_id: str, volunteer_id: str) -> str:
@@ -981,6 +1010,10 @@ def _build_projects_snapshot(
 ) -> dict[str, Any]:
     raw_projects = get_postgres_hot_storage_collection(connection, "projects")
     raw_events = get_postgres_hot_storage_collection(connection, "events")
+    
+    # Create a set of event project IDs for O(1) lookup instead of N+1 queries
+    event_project_ids = {event.get("id") for event in raw_events if event.get("isEvent")}
+    
     projects = [
         *[
             {
@@ -1014,11 +1047,12 @@ def _build_projects_snapshot(
                 "volunteerId",
                 volunteer["id"],
             )
+            # Fix N+1 query: filter using the pre-built event_project_ids set instead of querying per record
             snapshot["volunteerJoinRecords"] = _sort_iso_desc(
                 [
                     record
                     for record in volunteer_join_records
-                    if bool((_postgres_get_project_like_item_by_id(connection, str(record.get("projectId") or ""))[0] or {}).get("isEvent"))
+                    if record.get("projectId") in event_project_ids
                 ],
                 "joinedAt",
             )
@@ -1032,6 +1066,9 @@ def _build_projects_snapshot(
 @app.on_event("startup")
 # Prepares storage tables when the FastAPI app starts.
 def startup() -> None:
+    # Initialize connection pool for better performance
+    init_postgres_pool()
+
     if not is_demo_seed_enabled():
         print("[OK] Backend started in canonical-only mode; demo seed is disabled")
         return
@@ -1623,8 +1660,22 @@ async def delete_user_account(user_id: str) -> dict[str, Any]:
 # API endpoint that returns the projects screen snapshot.
 def get_projects_snapshot(user_id: str | None = None, role: str | None = None) -> dict[str, Any]:
     _require_postgres()
+    
+    # Create cache key from parameters
+    cache_key = f"snapshot:{user_id}:{role}"
+    
+    # Check cache first
+    cached_result = _projects_snapshot_cache.get(cache_key)
+    if cached_result is not None:
+        return cached_result
+    
+    # Not in cache, fetch from database
     with get_postgres_connection() as connection:
-        return _build_projects_snapshot(connection, user_id, role)
+        result = _build_projects_snapshot(connection, user_id, role)
+    
+    # Store in cache
+    _projects_snapshot_cache.set(cache_key, result)
+    return result
 
 
 @app.get("/volunteers/by-user/{user_id}")
@@ -2340,12 +2391,18 @@ async def put_storage_item(key: str, payload: StoragePayload) -> dict[str, str]:
         with get_postgres_connection() as connection:
             replace_postgres_hot_storage_collection(connection, key, payload.value)
             connection.commit()
+        
+        # Clear cache when data is modified
+        _projects_snapshot_cache.clear()
         await connection_manager.broadcast_storage_event([key])
         return {"status": "ok"}
     if key in SPECIAL_STORAGE_KEYS:
         with get_postgres_connection() as connection:
             _replace_special_storage_collection(connection, key, payload.value)
             connection.commit()
+        
+        # Clear cache when data is modified
+        _projects_snapshot_cache.clear()
         await connection_manager.broadcast_storage_event([key])
         return {"status": "ok"}
     raise HTTPException(status_code=400, detail=f"Unsupported storage key '{key}'.")
@@ -2480,12 +2537,18 @@ async def delete_storage_item(key: str) -> dict[str, str]:
         with get_postgres_connection() as connection:
             clear_postgres_hot_storage_collection(connection, key)
             connection.commit()
+        
+        # Clear cache when data is modified
+        _projects_snapshot_cache.clear()
         await connection_manager.broadcast_storage_event([key])
         return {"status": "ok"}
     if key in SPECIAL_STORAGE_KEYS:
         with get_postgres_connection() as connection:
             _clear_special_storage_collection(connection, key)
             connection.commit()
+        
+        # Clear cache when data is modified
+        _projects_snapshot_cache.clear()
         await connection_manager.broadcast_storage_event([key])
         return {"status": "ok"}
     raise HTTPException(status_code=400, detail=f"Unsupported storage key '{key}'.")
@@ -2501,6 +2564,8 @@ async def clear_storage() -> dict[str, str]:
             _clear_special_storage_collection(connection, key)
         connection.commit()
 
+    # Clear cache when all data is cleared
+    _projects_snapshot_cache.clear()
     await connection_manager.broadcast_storage_event(list(HOT_STORAGE_TABLES.keys()) + list(SPECIAL_STORAGE_KEYS))
     return {"status": "ok"}
 

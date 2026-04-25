@@ -907,6 +907,11 @@ function invalidateSharedStorageCache(keys?: string[]): void {
   }
 }
 
+// Exported function to allow screens to invalidate the storage cache
+export function clearStorageCache(keys?: string[]): void {
+  invalidateSharedStorageCache(keys);
+}
+
 async function saveRemoteStorageItem<T>(key: string, value: T): Promise<void> {
   await fetchApiResponse(`/storage/${encodeURIComponent(key)}`, {
     method: 'PUT',

@@ -337,6 +337,8 @@ export default function VolunteerTasksScreen() {
       }
     } while (tasksReloadQueuedRef.current);
   }, [user]);
+
+  const selectedEventProject = useMemo(
     () => allProjects.find(project => project.id === selectedTask?.projectId && project.isEvent) || null,
     [allProjects, selectedTask?.projectId]
   );

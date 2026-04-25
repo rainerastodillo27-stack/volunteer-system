@@ -18,6 +18,7 @@ import {
   getDashboardSnapshot,
   getVolunteerCompletedProjectIds,
   subscribeToStorageChanges,
+  clearStorageCache,
 } from '../models/storage';
 import type { Partner, Project, Volunteer } from '../models/types';
 import { useAuth } from '../contexts/AuthContext';
@@ -235,6 +236,24 @@ export default function DashboardScreen({ navigation }: any) {
     ]);
   };
 
+  const handleRefresh = async () => {
+    // Clear the storage cache to force a fresh load from the backend
+    clearStorageCache([
+      'users',
+      'projects',
+      'partners',
+      'volunteers',
+      'statusUpdates',
+      'volunteerProjectJoins',
+      'volunteerMatches',
+      'volunteerTimeLogs',
+      'partnerReports',
+      'events',
+    ]);
+    // Reload dashboard data
+    await loadDashboardDataCoalesced();
+  };
+
   const displayName = Platform.OS === 'web' && user?.role === 'admin' ? 'NVC Admin Account' : user?.name;
   const roleLabel =
     user?.role === 'admin'
@@ -386,6 +405,9 @@ export default function DashboardScreen({ navigation }: any) {
             <Text style={styles.greeting}>Welcome, {displayName}</Text>
             <Text style={styles.role}>{roleLabel}</Text>
           </View>
+          <TouchableOpacity onPress={handleRefresh} style={{ marginRight: 12 }}>
+            <MaterialIcons name="refresh" size={22} color="#335a42" />
+          </TouchableOpacity>
           <TouchableOpacity onPress={handleLogout}>
             <MaterialIcons name="logout" size={22} color="#335a42" />
           </TouchableOpacity>
