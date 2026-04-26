@@ -37,12 +37,14 @@ import {
   deleteAdminPlanningItem,
   getAllAdminPlanningCalendars,
   getAllAdminPlanningItems,
+  getAllPartnerProjectApplications,
   getAllProjects,
+  reviewPartnerProjectApplication,
   saveAdminPlanningCalendar,
   saveAdminPlanningItem,
   subscribeToStorageChanges,
 } from '../models/storage';
-import { AdminPlanningCalendar, AdminPlanningItem, Project } from '../models/types';
+import { AdminPlanningCalendar, AdminPlanningItem, PartnerProjectApplication, Project } from '../models/types';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
@@ -234,6 +236,7 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
   const [planningCalendars, setPlanningCalendars] = useState<AdminPlanningCalendar[]>([]);
   const [planningItems, setPlanningItems] = useState<AdminPlanningItem[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [partnerProjectApplications, setPartnerProjectApplications] = useState<PartnerProjectApplication[]>([]);
   const [selectedCalendarIds, setSelectedCalendarIds] = useState<string[]>([]);
   const [showItemModal, setShowItemModal] = useState(false);
   const [showCalendarModal, setShowCalendarModal] = useState(false);
@@ -242,15 +245,17 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
 
   const loadPlannerData = async () => {
     try {
-      const [calendars, items, allProjects] = await Promise.all([
+      const [calendars, items, allProjects, applications] = await Promise.all([
         getAllAdminPlanningCalendars(),
         getAllAdminPlanningItems(),
         getAllProjects(),
+        getAllPartnerProjectApplications(),
       ]);
 
       setPlanningCalendars(calendars);
       setPlanningItems(items);
       setProjects(allProjects);
+      setPartnerProjectApplications(applications);
       setSelectedCalendarIds(currentSelection => {
         const validIds = calendars.map(calendar => calendar.id);
         if (currentSelection.length === 0) {
@@ -274,7 +279,7 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
   useEffect(() => {
     void loadPlannerData();
     const unsubscribe = subscribeToStorageChanges(
-      ['adminPlanningCalendars', 'adminPlanningItems', 'projects'],
+      ['adminPlanningCalendars', 'adminPlanningItems', 'projects', 'partnerProjectApplications'],
       () => {
         void loadPlannerData();
       }

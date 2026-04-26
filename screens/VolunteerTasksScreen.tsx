@@ -206,21 +206,6 @@ export default function VolunteerTasksScreen() {
   const tasksLoadInFlightRef = useRef<Promise<void> | null>(null);
   const tasksReloadQueuedRef = useRef(false);
 
-  useFocusEffect(
-    React.useCallback(() => {
-      void loadVolunteerTasksCoalesced();
-    }, [loadVolunteerTasksCoalesced])
-  );
-
-  useEffect(() => {
-    return subscribeToStorageChanges(
-      ['projects', 'events', 'volunteers', 'volunteerTimeLogs', 'volunteerProjectJoins'],
-      async () => {
-        await loadVolunteerTasksCoalesced();
-      }
-    );
-  }, [loadVolunteerTasksCoalesced]);
-
   const volunteerJoinRecordByProjectId = useMemo(
     () => new Map(volunteerJoinRecords.map(record => [record.projectId, record] as const)),
     [volunteerJoinRecords]
@@ -337,6 +322,21 @@ export default function VolunteerTasksScreen() {
       }
     } while (tasksReloadQueuedRef.current);
   }, [user]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      void loadVolunteerTasksCoalesced();
+    }, [loadVolunteerTasksCoalesced])
+  );
+
+  useEffect(() => {
+    return subscribeToStorageChanges(
+      ['projects', 'events', 'volunteers', 'volunteerTimeLogs', 'volunteerProjectJoins'],
+      async () => {
+        await loadVolunteerTasksCoalesced();
+      }
+    );
+  }, [loadVolunteerTasksCoalesced]);
 
   const selectedEventProject = useMemo(
     () => allProjects.find(project => project.id === selectedTask?.projectId && project.isEvent) || null,

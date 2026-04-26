@@ -26,6 +26,7 @@ import {
   getProjectsScreenSnapshot,
   markMessageAsRead,
   MessageSubscriptionEvent,
+  reviewPartnerProjectApplication,
   saveMessage,
   saveProjectGroupMessage,
   subscribeToMessages,
@@ -34,6 +35,7 @@ import {
 import {
   Message,
   NeedResponseAction,
+  PartnerProjectApplication,
   Project,
   ProjectGroupMessage,
   ProjectGroupNeedPost,
@@ -65,6 +67,7 @@ const NEED_RESPONSE_ACTIONS: NeedResponseAction[] = [
 ];
 
 const SCOPE_PROPOSAL_STATUSES = ['Draft', 'Proposed', 'Under Review', 'Approved', 'Rejected'] as const;
+const PROPOSAL_REVIEW_FILTERS = ['All', 'Pending', 'Approved', 'Rejected'] as const;
 
 type ConversationItem = {
   user: User;
@@ -76,6 +79,14 @@ type ProjectChatItem = {
   project: Project;
   participantCount: number;
 };
+
+type ProposalChatItem = {
+  application: PartnerProjectApplication;
+  projectTitle: string;
+  programModule: string;
+};
+
+type ProposalReviewFilter = (typeof PROPOSAL_REVIEW_FILTERS)[number];
 
 type ChatMessage = Message | ProjectGroupMessage;
 
@@ -371,6 +382,52 @@ function getScopeProposalStatusPalette(status: string) {
   }
 }
 
+function getProposalReviewStatusPalette(status: PartnerProjectApplication['status']) {
+  switch (status) {
+    case 'Approved':
+      return {
+        backgroundColor: '#dcfce7',
+        textColor: '#166534',
+        borderColor: '#86efac',
+        icon: 'check-circle' as const,
+      };
+    case 'Rejected':
+      return {
+        backgroundColor: '#fee2e2',
+        textColor: '#b91c1c',
+        borderColor: '#fecaca',
+        icon: 'cancel' as const,
+      };
+    default:
+      return {
+        backgroundColor: '#ffedd5',
+        textColor: '#c2410c',
+        borderColor: '#fdba74',
+        icon: 'schedule' as const,
+      };
+  }
+}
+
+function sortProposalChatItems(items: ProposalChatItem[]) {
+  const statusRank: Record<PartnerProjectApplication['status'], number> = {
+    Pending: 0,
+    Approved: 1,
+    Rejected: 2,
+  };
+
+  return [...items].sort((left, right) => {
+    const leftRank = statusRank[left.application.status] ?? 99;
+    const rightRank = statusRank[right.application.status] ?? 99;
+    if (leftRank !== rightRank) {
+      return leftRank - rightRank;
+    }
+
+    const leftTime = new Date(left.application.reviewedAt || left.application.requestedAt || 0).getTime();
+    const rightTime = new Date(right.application.reviewedAt || right.application.requestedAt || 0).getTime();
+    return rightTime - leftTime;
+  });
+}
+
 // Manages direct messages and project coordination group chats.
 export default function CommunicationHubScreen({ navigation, route }: any) {
   const { user } = useAuth();
@@ -383,11 +440,14 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   const [view, setView] = useState<'conversations' | 'detail'>('conversations');
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [projectChats, setProjectChats] = useState<ProjectChatItem[]>([]);
+  const [proposalChats, setProposalChats] = useState<ProposalChatItem[]>([]);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [selectedProjectChat, setSelectedProjectChat] = useState<ProjectChatItem | null>(null);
+  const [selectedProposalApplication, setSelectedProposalApplication] = useState<PartnerProjectApplication | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [messageText, setMessageText] = useState('');
   const [searchText, setSearchText] = useState('');
+  const [proposalStatusFilter, setProposalStatusFilter] = useState<ProposalReviewFilter>('Pending');
   const [selectedAttachmentUri, setSelectedAttachmentUri] = useState<string | null>(null);
   const [composerMode, setComposerMode] = useState<'message' | 'need-post' | 'scope-proposal'>('message');
   const [needDraft, setNeedDraft] = useState<NeedPostDraft>(createNeedPostDraft);
@@ -507,6 +567,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   const loadProjectChats = async () => {
     if (!user?.id || !['volunteer', 'admin', 'partner'].includes(user.role)) {
       setProjectChats([]);
+      setProposalChats([]);
       return;
     }
 
@@ -521,7 +582,23 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
           }))
           .sort((left, right) => left.project.title.localeCompare(right.project.title));
 
+        const nextProposalChats = sortProposalChatItems(
+          snapshot.partnerApplications.map(application => ({
+            application,
+            projectTitle: application.proposalDetails?.targetProjectTitle || 'Program proposal',
+            programModule: String(application.proposalDetails?.requestedProgramModule || application.projectId || 'Program'),
+          }))
+        );
+
         setProjectChats(nextProjectChats);
+        setProposalChats(nextProposalChats);
+        setSelectedProposalApplication(currentSelection => {
+          if (!currentSelection) {
+            return currentSelection;
+          }
+
+          return nextProposalChats.find(item => item.application.id === currentSelection.id)?.application || null;
+        });
         setLoadError(null);
         lastLoadAlertMessageRef.current = null;
         return;
@@ -547,6 +624,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
           .sort((left, right) => left.project.title.localeCompare(right.project.title));
 
         setProjectChats(nextProjectChats);
+        setProposalChats([]);
         setLoadError(null);
         lastLoadAlertMessageRef.current = null;
         return;
@@ -581,6 +659,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         .sort((left, right) => left.project.title.localeCompare(right.project.title));
 
       setProjectChats(nextProjectChats);
+      setProposalChats([]);
       setLoadError(null);
       lastLoadAlertMessageRef.current = null;
     } catch (error) {
@@ -629,6 +708,11 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       return;
     }
 
+    if (selectedProposalApplication) {
+      setMessages([]);
+      return;
+    }
+
     if (!selectedProjectChatRef.current) {
       setMessages([]);
       return;
@@ -652,7 +736,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       void loadUsers();
       void loadProjectChats();
 
-      if (view === 'detail' && (selectedUser || selectedProjectChat)) {
+      if (view === 'detail' && (selectedUser || selectedProjectChat || selectedProposalApplication)) {
         void loadSelectedMessages();
       } else {
         void loadConversations();
@@ -683,10 +767,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   }, [allUsers, user?.id, view]);
 
   useEffect(() => {
-    if (view === 'detail' && (selectedUser || selectedProjectChat)) {
+    if (view === 'detail' && (selectedUser || selectedProjectChat || selectedProposalApplication)) {
       void loadSelectedMessages();
     }
-  }, [selectedProjectChat, selectedUser, user?.id, view]);
+  }, [selectedProjectChat, selectedUser, selectedProposalApplication, user?.id, view]);
 
   useEffect(() => {
     if (!user?.id) {
@@ -802,6 +886,17 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       setSelectedProjectChat(refreshedProjectChat);
     }
   }, [projectChats, selectedProjectChat]);
+
+  useEffect(() => {
+    if (user?.role === 'admin' || !selectedProposalApplication) {
+      return;
+    }
+
+    setSelectedProposalApplication(null);
+    if (!selectedUser && !selectedProjectChat) {
+      setView('conversations');
+    }
+  }, [selectedProjectChat, selectedProposalApplication, selectedUser, user?.role]);
 
   const handlePickAttachment = async () => {
     try {
@@ -1030,6 +1125,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   const handleSelectUser = (chatUser: User) => {
     setSelectedUser(chatUser);
     setSelectedProjectChat(null);
+    setSelectedProposalApplication(null);
     setMessages([]);
     resetComposer();
     setView('detail');
@@ -1039,9 +1135,74 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   const handleSelectProjectChat = (projectChat: ProjectChatItem) => {
     setSelectedProjectChat(projectChat);
     setSelectedUser(null);
+    setSelectedProposalApplication(null);
     setMessages([]);
     resetComposer();
     setView('detail');
+  };
+
+  const handleSelectProposalApplication = (application: PartnerProjectApplication) => {
+    if (user?.role !== 'admin') {
+      return;
+    }
+
+    setSelectedProposalApplication(application);
+    setSelectedUser(null);
+    setSelectedProjectChat(null);
+    setMessages([]);
+    resetComposer();
+    setView('detail');
+  };
+
+  const getProposalPartnerUser = (application: PartnerProjectApplication): User | undefined => {
+    return allUsersRef.current.find(chatUser => chatUser.id === application.partnerUserId);
+  };
+
+  const handleReviewPartnerProposal = async (
+    application: PartnerProjectApplication,
+    nextStatus: 'Approved' | 'Rejected'
+  ) => {
+    if (!user?.id || user.role !== 'admin') {
+      return;
+    }
+
+    try {
+      await reviewPartnerProjectApplication(application.id, nextStatus, user.id);
+      const reviewedAt = new Date().toISOString();
+      Alert.alert(
+        nextStatus === 'Approved' ? 'Proposal Approved' : 'Proposal Rejected',
+        nextStatus === 'Approved'
+          ? 'The partner proposal has been updated and the partner will be notified.'
+          : 'The partner proposal has been rejected. The partner will be notified.'
+      );
+      setSelectedProposalApplication(prev =>
+        prev && prev.id === application.id
+          ? { ...prev, status: nextStatus, reviewedBy: user.id, reviewedAt }
+          : prev
+      );
+      setProposalChats(current =>
+        sortProposalChatItems(
+          current.map(item =>
+            item.application.id === application.id
+              ? {
+                  ...item,
+                  application: {
+                    ...item.application,
+                    status: nextStatus,
+                    reviewedBy: user.id,
+                    reviewedAt,
+                  },
+                }
+              : item
+          )
+        )
+      );
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to update the partner proposal.')
+      );
+    }
   };
 
   // Resolves the sender name shown above each group chat message.
@@ -1054,14 +1215,21 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   };
 
   const detailCanPostNeeds = Boolean(selectedProjectChat);
+  const showComposer = Boolean(selectedUser || selectedProjectChat);
 
-  const selectedChatTitle = selectedUser?.name || selectedProjectChat?.project.title || '';
+  const selectedChatTitle =
+    selectedUser?.name ||
+    selectedProjectChat?.project.title ||
+    selectedProposalApplication?.proposalDetails?.proposedTitle ||
+    '';
   const selectedChatSubtitle = selectedUser
     ? formatRoleLabel(selectedUser)
     : selectedProjectChat
     ? `${selectedProjectChat.project.isEvent ? 'Event' : 'Project'} coordination space with ${selectedProjectChat.participantCount} participant${
         selectedProjectChat.participantCount === 1 ? '' : 's'
       }`
+    : selectedProposalApplication
+    ? `Proposal from ${selectedProposalApplication.partnerName} - ${selectedProposalApplication.status}`
     : '';
 
   const totalUnreadCount = conversations.reduce((total, item) => total + item.unreadCount, 0);
@@ -1114,6 +1282,52 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     });
   }, [conversations, searchText]);
 
+  const filteredProposalChats = useMemo(() => {
+    if (user?.role !== 'admin') {
+      return [];
+    }
+
+    const query = searchText.trim().toLowerCase();
+    return proposalChats.filter(chat => {
+      if (proposalStatusFilter !== 'All' && chat.application.status !== proposalStatusFilter) {
+        return false;
+      }
+
+      if (!query) {
+        return true;
+      }
+
+      const proposalTitle = String(chat.application.proposalDetails?.proposedTitle || '').toLowerCase();
+      const partnerName = chat.application.partnerName.toLowerCase();
+      const programModule = chat.programModule.toLowerCase();
+      const status = chat.application.status.toLowerCase();
+      const summary = String(
+        chat.application.proposalDetails?.communityNeed ||
+          chat.application.proposalDetails?.proposedDescription ||
+          ''
+      ).toLowerCase();
+
+      return (
+        chat.projectTitle.toLowerCase().includes(query) ||
+        proposalTitle.includes(query) ||
+        partnerName.includes(query) ||
+        programModule.includes(query) ||
+        status.includes(query) ||
+        summary.includes(query)
+      );
+    });
+  }, [proposalChats, proposalStatusFilter, searchText, user?.role]);
+
+  const proposalStatusCounts = useMemo(
+    () => ({
+      All: proposalChats.length,
+      Pending: proposalChats.filter(chat => chat.application.status === 'Pending').length,
+      Approved: proposalChats.filter(chat => chat.application.status === 'Approved').length,
+      Rejected: proposalChats.filter(chat => chat.application.status === 'Rejected').length,
+    }),
+    [proposalChats]
+  );
+
   const projectChatSectionTitle =
     user?.role === 'admin'
       ? 'Project coordination spaces'
@@ -1127,6 +1341,25 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       : user?.role === 'partner'
       ? 'Coordinate approved projects with admin and volunteers, then manage needs in one planning group chat.'
       : 'Stay updated with the events you joined, post needs, and coordinate with your team.';
+
+  const renderProposalFilterChips = () => (
+    <View style={styles.proposalFilterRow}>
+      {PROPOSAL_REVIEW_FILTERS.map(filterValue => {
+        const isActive = proposalStatusFilter === filterValue;
+        return (
+          <TouchableOpacity
+            key={filterValue}
+            style={[styles.proposalFilterChip, isActive && styles.proposalFilterChipActive]}
+            onPress={() => setProposalStatusFilter(filterValue)}
+          >
+            <Text style={[styles.proposalFilterChipText, isActive && styles.proposalFilterChipTextActive]}>
+              {filterValue} ({proposalStatusCounts[filterValue]})
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
 
   const needPosts = useMemo(
     () =>
@@ -1219,7 +1452,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   const showEmptyState =
     filteredProjectChats.length === 0 &&
     filteredConversations.length === 0 &&
-    filteredSuggestedUsers.length === 0;
+    filteredSuggestedUsers.length === 0 &&
+    filteredProposalChats.length === 0;
 
   if (!user) {
     return (
@@ -1232,7 +1466,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     );
   }
 
-  if (view === 'detail' && (selectedUser || selectedProjectChat)) {
+  if (view === 'detail' && (selectedUser || selectedProjectChat || selectedProposalApplication)) {
     return (
       <KeyboardAvoidingView
         style={styles.screen}
@@ -1242,69 +1476,227 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         <View
           style={[
             styles.detailShell,
+            isWide && styles.detailShellWide,
             isCompactLayout && styles.detailShellCompact,
             isWide && styles.centeredShell,
           ]}
         >
-          <View style={[styles.detailHero, isVolunteerCompact && styles.detailHeroCompact]}>
-            <TouchableOpacity
-              onPress={() => {
-                setView('conversations');
-                setSelectedUser(null);
-                setSelectedProjectChat(null);
-                setMessages([]);
-                resetComposer();
-              }}
-              style={styles.backButton}
-            >
-              <MaterialIcons name="arrow-back" size={22} color="#0f172a" />
-            </TouchableOpacity>
-
-            <View style={[styles.detailHeroCopy, isVolunteerCompact && styles.detailHeroCopyCompact]}>
-              <Text style={styles.detailEyebrow}>
-                {selectedProjectChat ? 'Project group chat' : 'Direct conversation'}
-              </Text>
-              <Text style={[styles.detailTitle, isVolunteerCompact && styles.detailTitleCompact]}>
-                {selectedChatTitle}
-              </Text>
-              <Text style={[styles.detailSubtitle, isVolunteerCompact && styles.detailSubtitleCompact]}>
-                {selectedChatSubtitle}
-              </Text>
-            </View>
-
-            {selectedProjectChat ? (
-              <View style={[styles.detailBadge, isVolunteerCompact && styles.detailBadgeCompact]}>
-                <MaterialIcons
-                  name={selectedProjectChat.project.isEvent ? 'event' : 'groups'}
-                  size={18}
-                  color="#166534"
-                />
-                <Text style={styles.detailBadgeText}>
-                  {selectedProjectChat.project.isEvent ? 'Event' : 'Project'}
+          <View style={[styles.detailSidebar, isVolunteerCompact && styles.detailSidebarCompact]}>
+            <Text style={styles.sidebarGroupLabel}>Planning Threads</Text>
+            <View style={[styles.sectionCard, isVolunteerCompact && styles.sectionCardCompact]}>
+              <View style={styles.sectionHeader}>
+                <Text style={[styles.sectionTitle, isVolunteerCompact && styles.sectionTitleCompact]}>
+                  {user.role === 'admin' ? 'Project rooms' : 'Shared rooms'}
+                </Text>
+                <Text style={styles.sectionDescription}>
+                  Open the right planning space from one left rail.
                 </Text>
               </View>
+
+              {filteredProjectChats.length === 0 ? (
+                <Text style={styles.emptyInlineText}>No project chats found.</Text>
+              ) : (
+                filteredProjectChats.map(projectChat => (
+                  <TouchableOpacity
+                    key={projectChat.project.id}
+                    style={[
+                      styles.projectChatCard,
+                      isVolunteerCompact && styles.projectChatCardCompact,
+                      selectedProjectChat?.project.id === projectChat.project.id && styles.projectChatCardSelected,
+                    ]}
+                    onPress={() => handleSelectProjectChat(projectChat)}
+                  >
+                    <View style={styles.projectChatIcon}>
+                      <MaterialIcons
+                        name={projectChat.project.isEvent ? 'event' : 'groups'}
+                        size={20}
+                        color="#166534"
+                      />
+                    </View>
+                    <View style={styles.projectChatCopy}>
+                      <Text style={styles.projectChatTitle}>{projectChat.project.title}</Text>
+                      <Text style={styles.projectChatMeta} numberOfLines={1}>
+                        {projectChat.project.isEvent ? 'Event chat' : 'Project chat'}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                ))
+              )}
+            </View>
+
+            {user?.role === 'admin' ? (
+              <View style={[styles.sectionCard, isVolunteerCompact && styles.sectionCardCompact]}>
+                <View style={styles.sectionHeader}>
+                  <Text style={[styles.sectionTitle, isVolunteerCompact && styles.sectionTitleCompact]}>
+                    Partner proposal inbox
+                  </Text>
+                  <Text style={styles.sectionDescription}>
+                    All partner project proposals land here so admins can approve, reject, and follow up in one place.
+                  </Text>
+                </View>
+
+                {renderProposalFilterChips()}
+
+                {filteredProposalChats.length === 0 ? (
+                  <Text style={styles.emptyInlineText}>No proposals match this filter right now.</Text>
+                ) : (
+                  filteredProposalChats.map(chat => (
+                    (() => {
+                      const statusPalette = getProposalReviewStatusPalette(chat.application.status);
+                      return (
+                        <TouchableOpacity
+                          key={chat.application.id}
+                          style={[
+                            styles.projectChatCard,
+                            isVolunteerCompact && styles.projectChatCardCompact,
+                            selectedProposalApplication?.id === chat.application.id &&
+                              styles.projectChatCardSelected,
+                          ]}
+                          onPress={() => handleSelectProposalApplication(chat.application)}
+                        >
+                          <View style={styles.projectChatIcon}>
+                            <MaterialIcons name="campaign" size={20} color="#166534" />
+                          </View>
+                          <View style={styles.projectChatCopy}>
+                            <View style={styles.proposalListTitleRow}>
+                              <Text style={styles.projectChatTitle}>
+                                {chat.application.proposalDetails?.proposedTitle || chat.projectTitle}
+                              </Text>
+                              <View
+                                style={[
+                                  styles.proposalListStatusBadge,
+                                  {
+                                    backgroundColor: statusPalette.backgroundColor,
+                                    borderColor: statusPalette.borderColor,
+                                  },
+                                ]}
+                              >
+                                <MaterialIcons name={statusPalette.icon} size={12} color={statusPalette.textColor} />
+                                <Text style={[styles.proposalListStatusText, { color: statusPalette.textColor }]}>
+                                  {chat.application.status}
+                                </Text>
+                              </View>
+                            </View>
+                            <Text style={styles.projectChatMeta} numberOfLines={1}>
+                              {chat.application.partnerName} - {chat.programModule}
+                            </Text>
+                            <Text style={styles.projectChatMetaMuted} numberOfLines={1}>
+                              Submitted {formatDateLabel(chat.application.requestedAt)}
+                            </Text>
+                            <Text style={styles.projectChatDescription} numberOfLines={2}>
+                              {chat.application.proposalDetails?.communityNeed ||
+                                chat.application.proposalDetails?.proposedDescription ||
+                                'Pending partner project proposal.'}
+                            </Text>
+                          </View>
+                        </TouchableOpacity>
+                      );
+                    })()
+                  ))
+                )}
+              </View>
             ) : null}
+
+            <Text style={styles.sidebarGroupLabel}>General</Text>
+            <View style={[styles.sectionCard, isVolunteerCompact && styles.sectionCardCompact]}>
+              <View style={styles.sectionHeader}>
+                <Text style={[styles.sectionTitle, isVolunteerCompact && styles.sectionTitleCompact]}>
+                  Direct conversations
+                </Text>
+                <Text style={styles.sectionDescription}>
+                  Reach a partner, volunteer, or admin directly.
+                </Text>
+              </View>
+
+              {filteredConversations.length === 0 ? (
+                <Text style={styles.emptyInlineText}>No direct messages found.</Text>
+              ) : (
+                filteredConversations.map(item => (
+                  <TouchableOpacity
+                    key={item.user.id}
+                    style={[
+                      styles.projectChatCard,
+                      isVolunteerCompact && styles.projectChatCardCompact,
+                      selectedUser?.id === item.user.id && styles.projectChatCardSelected,
+                    ]}
+                    onPress={() => handleSelectUser(item.user)}
+                  >
+                    <View style={styles.projectChatIcon}>
+                      <Text style={styles.userAvatarText}>{item.user.name.charAt(0)}</Text>
+                    </View>
+                    <View style={styles.projectChatCopy}>
+                      <Text style={styles.projectChatTitle}>{item.user.name}</Text>
+                      <Text style={styles.projectChatMeta} numberOfLines={1}>
+                        {formatRoleLabel(item.user)}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                ))
+              )}
+            </View>
           </View>
 
-          {loadError ? (
-            <View style={styles.inlineErrorWrap}>
-              <InlineLoadError
-                title={loadError.title}
-                message={loadError.message}
-                onRetry={() => void loadSelectedMessages()}
-              />
-            </View>
-          ) : null}
+          <View style={styles.detailMain}>
+            <View style={[styles.detailHero, isVolunteerCompact && styles.detailHeroCompact]}>
+              <TouchableOpacity
+                onPress={() => {
+                  setView('conversations');
+                  setSelectedUser(null);
+                  setSelectedProjectChat(null);
+                  setSelectedProposalApplication(null);
+                  setMessages([]);
+                  resetComposer();
+                }}
+                style={styles.backButton}
+              >
+                <MaterialIcons name="arrow-back" size={22} color="#0f172a" />
+              </TouchableOpacity>
 
-          <ScrollView
-            style={styles.messagesScroll}
-            contentContainerStyle={[
-              styles.messagesContent,
-              isCompactLayout && styles.messagesContentCompact,
-            ]}
-            showsVerticalScrollIndicator={false}
-          >
-            {selectedProjectChat ? (
+              <View style={[styles.detailHeroCopy, isVolunteerCompact && styles.detailHeroCopyCompact]}>
+                <Text style={styles.detailEyebrow}>
+                  {selectedProjectChat ? 'Project group chat' : selectedProposalApplication ? 'Partner proposal review' : 'Direct conversation'}
+                </Text>
+                <Text style={[styles.detailTitle, isVolunteerCompact && styles.detailTitleCompact]}>
+                  {selectedChatTitle}
+                </Text>
+                <Text style={[styles.detailSubtitle, isVolunteerCompact && styles.detailSubtitleCompact]}>
+                  {selectedChatSubtitle}
+                </Text>
+              </View>
+
+              {selectedProjectChat ? (
+                <View style={[styles.detailBadge, isVolunteerCompact && styles.detailBadgeCompact]}>
+                  <MaterialIcons
+                    name={selectedProjectChat.project.isEvent ? 'event' : 'groups'}
+                    size={18}
+                    color="#166534"
+                  />
+                  <Text style={styles.detailBadgeText}>
+                    {selectedProjectChat.project.isEvent ? 'Event' : 'Project'}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+
+            {loadError ? (
+              <View style={styles.inlineErrorWrap}>
+                <InlineLoadError
+                  title={loadError.title}
+                  message={loadError.message}
+                  onRetry={() => void loadSelectedMessages()}
+                />
+              </View>
+            ) : null}
+
+            <ScrollView
+              style={styles.messagesScroll}
+              contentContainerStyle={[
+                styles.messagesContent,
+                isCompactLayout && styles.messagesContentCompact,
+              ]}
+              showsVerticalScrollIndicator={false}
+            >
+              {selectedProjectChat ? (
               <View style={[styles.planningBoardCard, isVolunteerCompact && styles.planningBoardCardCompact]}>
                 <View style={styles.planningBoardHeader}>
                   <View style={styles.planningBoardCopy}>
@@ -1389,25 +1781,200 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
               </View>
             ) : null}
 
-            {messages.length === 0 ? (
-              <View style={styles.emptyStateCard}>
-                <MaterialIcons
-                  name={selectedProjectChat ? 'groups' : 'mail-outline'}
-                  size={42}
-                  color="#94a3b8"
-                />
-                <Text style={styles.emptyStateTitle}>
-                  {selectedProjectChat ? 'No messages in this group yet' : 'No direct messages yet'}
-                </Text>
-                <Text style={styles.emptyStateText}>
-                  {selectedProjectChat
-                    ? 'Start with a quick update, post a planning need, or respond to one already in the board.'
-                    : 'Start the conversation with a short message.'}
-                </Text>
+            {selectedProposalApplication ? (
+              (() => {
+                const statusPalette = getProposalReviewStatusPalette(selectedProposalApplication.status);
+                return (
+              <View style={styles.proposalReviewCard}>
+                <View style={styles.proposalReviewIntroBubble}>
+                  <Text style={styles.proposalReviewIntroSender}>
+                    {selectedProposalApplication.partnerName}
+                  </Text>
+                  <Text style={styles.proposalReviewIntroText}>
+                    Submitted a project proposal into the admin-only Communication Hub review inbox.
+                  </Text>
+                </View>
+
+                <View style={styles.proposalReviewHeader}>
+                  <View style={[styles.proposalReviewHeaderIcon, { backgroundColor: statusPalette.textColor }]}>
+                    <MaterialIcons name="campaign" size={20} color="#ffffff" />
+                  </View>
+                  <View style={styles.proposalReviewHeaderCopy}>
+                    <Text style={styles.proposalReviewTitle}>
+                      {selectedProposalApplication.proposalDetails?.proposedTitle || 'Partner proposal'}
+                    </Text>
+                    <Text style={styles.proposalReviewSubtitle}>
+                      Review the proposed project details, align on scope, and decide whether to approve or reject.
+                    </Text>
+                  </View>
+                  <View
+                    style={[
+                      styles.proposalStatusBadge,
+                      {
+                        backgroundColor: statusPalette.backgroundColor,
+                        borderColor: statusPalette.borderColor,
+                      },
+                    ]}
+                  >
+                    <MaterialIcons name={statusPalette.icon} size={14} color={statusPalette.textColor} />
+                    <Text style={[styles.proposalStatusBadgeText, { color: statusPalette.textColor }]}>
+                      {selectedProposalApplication.status}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.proposalReviewMetaRow}>
+                  <View style={styles.proposalReviewMetaPill}>
+                    <Text style={styles.proposalReviewMetaLabel}>Submitted by</Text>
+                    <Text style={styles.proposalReviewMetaValue}>
+                      {selectedProposalApplication.partnerName}
+                    </Text>
+                  </View>
+                  <View style={styles.proposalReviewMetaPill}>
+                    <Text style={styles.proposalReviewMetaLabel}>Program</Text>
+                    <Text style={styles.proposalReviewMetaValue}>
+                      {selectedProposalApplication.proposalDetails?.requestedProgramModule || 'Program'}
+                    </Text>
+                  </View>
+                  <View style={styles.proposalReviewMetaPill}>
+                    <Text style={styles.proposalReviewMetaLabel}>Volunteers needed</Text>
+                    <Text style={styles.proposalReviewMetaValue}>
+                      {selectedProposalApplication.proposalDetails?.proposedVolunteersNeeded ?? 0}
+                    </Text>
+                  </View>
+                  <View style={styles.proposalReviewMetaPill}>
+                    <Text style={styles.proposalReviewMetaLabel}>Submitted</Text>
+                    <Text style={styles.proposalReviewMetaValue}>
+                      {formatDateLabel(selectedProposalApplication.requestedAt)}
+                    </Text>
+                  </View>
+                  {selectedProposalApplication.reviewedAt ? (
+                    <View style={styles.proposalReviewMetaPill}>
+                      <Text style={styles.proposalReviewMetaLabel}>Reviewed</Text>
+                      <Text style={styles.proposalReviewMetaValue}>
+                        {formatDateLabel(selectedProposalApplication.reviewedAt)}
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
+
+                <View style={styles.proposalReviewSection}>
+                  <Text style={styles.proposalReviewLabel}>Proposal description</Text>
+                  <Text style={styles.proposalReviewValue}>
+                    {selectedProposalApplication.proposalDetails?.proposedDescription}
+                  </Text>
+                </View>
+
+                <View style={styles.proposalReviewSectionGrid}>
+                  <View style={styles.proposalReviewColumn}>
+                    <Text style={styles.proposalReviewLabel}>Start date</Text>
+                    <Text style={styles.proposalReviewValue}>
+                      {formatDateLabel(selectedProposalApplication.proposalDetails?.proposedStartDate)}
+                    </Text>
+                  </View>
+                  <View style={styles.proposalReviewColumn}>
+                    <Text style={styles.proposalReviewLabel}>End date</Text>
+                    <Text style={styles.proposalReviewValue}>
+                      {formatDateLabel(selectedProposalApplication.proposalDetails?.proposedEndDate)}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.proposalReviewSection}>
+                  <Text style={styles.proposalReviewLabel}>Location</Text>
+                  <Text style={styles.proposalReviewValue}>
+                    {selectedProposalApplication.proposalDetails?.proposedLocation}
+                  </Text>
+                </View>
+
+                <View style={styles.proposalReviewSection}>
+                  <Text style={styles.proposalReviewLabel}>Community need</Text>
+                  <Text style={styles.proposalReviewValue}>
+                    {selectedProposalApplication.proposalDetails?.communityNeed}
+                  </Text>
+                </View>
+
+                <View style={styles.proposalReviewSection}>
+                  <Text style={styles.proposalReviewLabel}>Expected deliverables</Text>
+                  <Text style={styles.proposalReviewValue}>
+                    {selectedProposalApplication.proposalDetails?.expectedDeliverables}
+                  </Text>
+                </View>
+
+                {getProposalPartnerUser(selectedProposalApplication) ? (
+                  <TouchableOpacity
+                    style={styles.proposalReviewActionButton}
+                    onPress={() => handleSelectUser(getProposalPartnerUser(selectedProposalApplication)!)}
+                  >
+                    <MaterialIcons name="message" size={16} color="#fff" />
+                    <Text style={styles.proposalReviewActionText}>Message partner</Text>
+                  </TouchableOpacity>
+                ) : null}
+
+                {selectedProposalApplication.status === 'Pending' ? (
+                  <View style={styles.proposalReviewActions}>
+                    <TouchableOpacity
+                      style={[styles.approveButton, styles.proposalActionButton]}
+                      onPress={() => void handleReviewPartnerProposal(selectedProposalApplication, 'Approved')}
+                    >
+                      <MaterialIcons name="check-circle" size={16} color="#ffffff" />
+                      <Text style={styles.approveButtonText}>Approve proposal</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.proposalRejectButton, styles.proposalActionButton]}
+                      onPress={() => void handleReviewPartnerProposal(selectedProposalApplication, 'Rejected')}
+                    >
+                      <MaterialIcons name="cancel" size={16} color="#991b1b" />
+                      <Text style={styles.proposalRejectButtonText}>Reject proposal</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <View
+                    style={[
+                      styles.proposalReviewOutcome,
+                      {
+                        backgroundColor: statusPalette.backgroundColor,
+                        borderColor: statusPalette.borderColor,
+                      },
+                    ]}
+                  >
+                    <MaterialIcons
+                      name={statusPalette.icon}
+                      size={18}
+                      color={statusPalette.textColor}
+                    />
+                    <Text style={[styles.proposalReviewOutcomeText, { color: statusPalette.textColor }]}>
+                      {selectedProposalApplication.status === 'Approved'
+                        ? 'This proposal has been approved and moved forward for project creation.'
+                        : 'This proposal has been rejected and kept out of the shared project spaces.'}
+                    </Text>
+                  </View>
+                )}
               </View>
-            ) : (
-              messages.map(message => {
-                const isOwnMessage = message.senderId === user.id;
+                );
+              })()
+            ) : null}
+
+            {!selectedProposalApplication ? (
+              messages.length === 0 ? (
+                <View style={styles.emptyStateCard}>
+                  <MaterialIcons
+                    name={selectedProjectChat ? 'groups' : 'mail-outline'}
+                    size={42}
+                    color="#94a3b8"
+                  />
+                  <Text style={styles.emptyStateTitle}>
+                    {selectedProjectChat ? 'No messages in this group yet' : 'No direct messages yet'}
+                  </Text>
+                  <Text style={styles.emptyStateText}>
+                    {selectedProjectChat
+                      ? 'Start with a quick update, post a planning need, or respond to one already in the board.'
+                      : 'Start the conversation with a short message.'}
+                  </Text>
+                </View>
+              ) : (
+                messages.map(message => {
+                  const isOwnMessage = message.senderId === user.id;
                 const groupMessage = selectedProjectChat ? (message as ProjectGroupMessage) : null;
                 const senderLabel = getSenderLabel(message.senderId);
                 const imageAttachments = (message.attachments || []).filter(isImageMediaUri);
@@ -1576,6 +2143,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                 }
 
                 if (selectedProjectChat && scopeProposal) {
+                  if (user?.role === 'volunteer') {
+                    return null;
+                  }
+
                   const statusPalette = getScopeProposalStatusPalette(scopeProposal.status);
                   const isAdmin = user?.role === 'admin';
                   const isProposer = message.senderId === user?.id;
@@ -1859,12 +2430,14 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                   </View>
                 );
               })
-            )}
+            )
+          ) : null}
           </ScrollView>
 
-          <View style={[styles.composerShell, isVolunteerCompact && styles.composerShellCompact]}>
-            {detailCanPostNeeds ? (
-              <View style={[styles.modeToggleRow, isVolunteerCompact && styles.modeToggleRowCompact]}>
+          {showComposer ? (
+            <View style={[styles.composerShell, isVolunteerCompact && styles.composerShellCompact]}>
+              {detailCanPostNeeds ? (
+                <View style={[styles.modeToggleRow, isVolunteerCompact && styles.modeToggleRowCompact]}>
                 <TouchableOpacity
                   style={[
                     styles.modeToggleButton,
@@ -2257,11 +2830,13 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                 </Text>
               </TouchableOpacity>
             </View>
-          </View>
+            </View>
+          ) : null}
         </View>
-      </KeyboardAvoidingView>
-    );
-  }
+      </View>
+  </KeyboardAvoidingView>
+  );
+}
 
   return (
     <View style={styles.screen}>
@@ -2402,6 +2977,81 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                     ))
                   )}
                 </View>
+
+                {user?.role === 'admin' ? (
+                  <View style={[styles.sectionCard, isVolunteerCompact && styles.sectionCardCompact]}>
+                    <View style={styles.sectionHeader}>
+                      <View>
+                        <Text style={[styles.sectionTitle, isVolunteerCompact && styles.sectionTitleCompact]}>
+                          Partner proposal inbox
+                        </Text>
+                        <Text style={styles.sectionDescription}>
+                          Review every partner submission here, then approve or reject without leaving the hub.
+                        </Text>
+                      </View>
+                    </View>
+
+                    {renderProposalFilterChips()}
+
+                    {filteredProposalChats.length === 0 ? (
+                      <Text style={styles.emptyInlineText}>No proposals match this filter right now.</Text>
+                    ) : (
+                      filteredProposalChats.map(chat => (
+                        (() => {
+                          const statusPalette = getProposalReviewStatusPalette(chat.application.status);
+                          return (
+                            <TouchableOpacity
+                              key={chat.application.id}
+                              style={[styles.projectChatCard, isVolunteerCompact && styles.projectChatCardCompact]}
+                              onPress={() => handleSelectProposalApplication(chat.application)}
+                            >
+                              <View style={styles.projectChatIcon}>
+                                <MaterialIcons name="campaign" size={20} color="#166534" />
+                              </View>
+
+                              <View style={styles.projectChatCopy}>
+                                <View style={styles.proposalListTitleRow}>
+                                  <Text style={styles.projectChatTitle}>
+                                    {chat.application.proposalDetails?.proposedTitle || chat.projectTitle}
+                                  </Text>
+                                  <View
+                                    style={[
+                                      styles.proposalListStatusBadge,
+                                      {
+                                        backgroundColor: statusPalette.backgroundColor,
+                                        borderColor: statusPalette.borderColor,
+                                      },
+                                    ]}
+                                  >
+                                    <MaterialIcons
+                                      name={statusPalette.icon}
+                                      size={12}
+                                      color={statusPalette.textColor}
+                                    />
+                                    <Text style={[styles.proposalListStatusText, { color: statusPalette.textColor }]}>
+                                      {chat.application.status}
+                                    </Text>
+                                  </View>
+                                </View>
+                                <Text style={styles.projectChatMeta} numberOfLines={1}>
+                                  Proposal from {chat.application.partnerName} - {chat.programModule}
+                                </Text>
+                                <Text style={styles.projectChatMetaMuted} numberOfLines={1}>
+                                  Submitted {formatDateLabel(chat.application.requestedAt)}
+                                </Text>
+                                <Text numberOfLines={2} style={styles.projectChatDescription}>
+                                  {chat.application.proposalDetails?.communityNeed || chat.application.proposalDetails?.proposedDescription}
+                                </Text>
+                              </View>
+
+                              <MaterialIcons name="arrow-forward" size={20} color="#64748b" />
+                            </TouchableOpacity>
+                          );
+                        })()
+                      ))
+                    )}
+                  </View>
+                ) : null}
 
                 <View style={[styles.sectionCard, isVolunteerCompact && styles.sectionCardCompact]}>
                   <View style={styles.sectionHeader}>
@@ -2767,6 +3417,31 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     color: '#64748b',
   },
+  proposalFilterRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  proposalFilterChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#d7ead8',
+    backgroundColor: '#f8fff7',
+  },
+  proposalFilterChipActive: {
+    backgroundColor: '#166534',
+    borderColor: '#166534',
+  },
+  proposalFilterChipText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#166534',
+  },
+  proposalFilterChipTextActive: {
+    color: '#ffffff',
+  },
   projectChatCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2780,6 +3455,10 @@ const styles = StyleSheet.create({
   projectChatCardCompact: {
     alignItems: 'flex-start',
     padding: 14,
+  },
+  projectChatCardSelected: {
+    backgroundColor: '#eefaf2',
+    borderColor: '#d1f3de',
   },
   projectChatIcon: {
     width: 46,
@@ -2804,10 +3483,35 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#166534',
   },
+  projectChatMetaMuted: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748b',
+  },
   projectChatDescription: {
     fontSize: 13,
     lineHeight: 19,
     color: '#64748b',
+  },
+  proposalListTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  proposalListStatusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  proposalListStatusText: {
+    fontSize: 10,
+    fontWeight: '800',
+    textTransform: 'uppercase',
   },
   conversationRow: {
     flexDirection: 'row',
@@ -2976,15 +3680,44 @@ const styles = StyleSheet.create({
     padding: 10,
     gap: 10,
   },
+  detailShellWide: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 20,
+  },
+  detailSidebar: {
+    width: 320,
+    minWidth: 280,
+    gap: 20,
+    flexShrink: 0,
+    alignSelf: 'stretch',
+  },
+  detailSidebarCompact: {
+    width: '100%',
+  },
+  sidebarGroupLabel: {
+    marginBottom: -8,
+    paddingHorizontal: 4,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    color: '#64748b',
+  },
+  detailMain: {
+    flex: 1,
+    gap: 20,
+    minWidth: 0,
+  },
   detailHero: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 16,
-    backgroundColor: '#1e3a8a',
+    backgroundColor: '#0f766e',
     borderRadius: 16,
     padding: 24,
     borderWidth: 0,
-    shadowColor: '#1e3a8a',
+    shadowColor: '#0f766e',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.12,
     shadowRadius: 12,
@@ -3003,7 +3736,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#3b82f6',
+    backgroundColor: '#0b5f59',
   },
   detailHeroCopy: {
     flex: 1,
@@ -3018,7 +3751,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 1.2,
     textTransform: 'uppercase',
-    color: '#93c5fd',
+    color: '#ccfbf1',
   },
   detailTitle: {
     fontSize: 26,
@@ -3031,7 +3764,7 @@ const styles = StyleSheet.create({
   detailSubtitle: {
     fontSize: 14,
     lineHeight: 20,
-    color: '#dbeafe',
+    color: '#d1fae5',
   },
   detailSubtitleCompact: {
     fontSize: 13,
@@ -3044,7 +3777,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 8,
-    backgroundColor: '#dbeafe',
+    backgroundColor: '#dcfce7',
   },
   detailBadgeCompact: {
     alignSelf: 'flex-start',
@@ -3052,7 +3785,7 @@ const styles = StyleSheet.create({
   detailBadgeText: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#1e3a8a',
+    color: '#166534',
   },
   planningBoardCard: {
     borderRadius: 16,
@@ -3825,6 +4558,187 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-end',
     backgroundColor: '#1e3a8a',
   },
+  proposalReviewCard: {
+    width: '100%',
+    backgroundColor: '#ffffff',
+    borderRadius: 24,
+    padding: 20,
+    gap: 16,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#dbe7d5',
+  },
+  proposalReviewIntroBubble: {
+    alignSelf: 'flex-start',
+    maxWidth: '92%',
+    borderRadius: 18,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    gap: 4,
+  },
+  proposalReviewIntroSender: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#475569',
+  },
+  proposalReviewIntroText: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#334155',
+  },
+  proposalReviewHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  proposalReviewHeaderIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#0f766e',
+  },
+  proposalReviewHeaderCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  proposalReviewTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  proposalReviewSubtitle: {
+    fontSize: 13,
+    color: '#475569',
+    lineHeight: 18,
+  },
+  proposalStatusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  proposalStatusBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  proposalReviewMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  proposalReviewMetaPill: {
+    minWidth: 150,
+    flexGrow: 1,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    gap: 4,
+  },
+  proposalReviewMetaLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+    color: '#64748b',
+  },
+  proposalReviewMetaValue: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  proposalReviewSection: {
+    gap: 4,
+  },
+  proposalReviewLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    color: '#0f766e',
+  },
+  proposalReviewValue: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#0f172a',
+  },
+  proposalReviewSectionGrid: {
+    flexDirection: 'row',
+    gap: 16,
+  },
+  proposalReviewColumn: {
+    flex: 1,
+    gap: 4,
+  },
+  proposalReviewActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 12,
+    flexWrap: 'wrap',
+  },
+  proposalReviewActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    backgroundColor: '#0f766e',
+  },
+  proposalReviewActionText: {
+    color: '#ffffff',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  proposalActionButton: {
+    flex: 1,
+  },
+  proposalRejectButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+  },
+  proposalRejectButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#991b1b',
+  },
+  proposalReviewOutcome: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  proposalReviewOutcomeText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#334155',
+  },
   scopeProposalHeader: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -4047,7 +4961,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 14,
     borderRadius: 8,
-    backgroundColor: '#2563eb',
+    backgroundColor: '#0f766e',
   },
   approveButtonText: {
     fontSize: 12,
@@ -4063,14 +4977,14 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 12,
     borderRadius: 8,
-    backgroundColor: '#eff6ff',
+    backgroundColor: '#ecfdf5',
     borderWidth: 1,
-    borderColor: '#bfdbfe',
+    borderColor: '#bbf7d0',
   },
   downloadButtonText: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#1d4ed8',
+    color: '#0f766e',
   },
   editButton: {
     flex: 0.5,
@@ -4088,7 +5002,7 @@ const styles = StyleSheet.create({
   editButtonText: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#1d4ed8',
+    color: '#0f766e',
   },
   approvalBadge: {
     flexDirection: 'row',

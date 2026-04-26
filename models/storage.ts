@@ -424,7 +424,7 @@ async function notifyAdminAboutPartnerProjectJoin(
   await sendSystemMessage(
     partnerUser.id,
     adminUser.id,
-    `${partnerUser.name}${partnerEmail} submitted a project proposal for ${targetLabel}. Review it in the Program Management Suite to approve or reject.`
+    `${partnerUser.name}${partnerEmail} submitted a project proposal for ${targetLabel}. Review it in the Communication Hub to approve or reject.`
   );
 }
 

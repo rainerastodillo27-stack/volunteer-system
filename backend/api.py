@@ -1060,6 +1060,11 @@ def _build_projects_snapshot(
 
     if role == "partner":
         snapshot["partnerApplications"] = _postgres_get_partner_project_applications_by_user(connection, user_id)
+    elif role == "admin":
+        snapshot["partnerApplications"] = _sort_iso_desc(
+            get_postgres_hot_storage_collection(connection, "partnerProjectApplications"),
+            "requestedAt",
+        )
 
     return snapshot
 
