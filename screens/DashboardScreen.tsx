@@ -64,11 +64,32 @@ function getMonthGrid(date: Date): Array<number | null> {
   return cells;
 }
 
+// Custom hook to memoize projects by content, not reference, preventing re-renders when projects data is the same
+function useStableProjects(projects: Project[]): Project[] {
+  const prevProjectsRef = useRef<Project[]>([]);
+  const prevHashRef = useRef<string>('');
+
+  const currentHash = JSON.stringify(
+    projects.map(p => [p.id, p.location?.latitude, p.location?.longitude])
+  );
+
+  if (prevHashRef.current !== currentHash) {
+    prevHashRef.current = currentHash;
+    prevProjectsRef.current = projects;
+  }
+
+  return prevProjectsRef.current;
+}
+
 // Shows the latest dashboard metrics and shortcuts for the logged-in user.
 export default function DashboardScreen({ navigation }: any) {
   const { user, isAdmin, logout } = useAuth();
   const { width } = useWindowDimensions();
   const isDesktop = Platform.OS === 'web' || width >= 1100;
+  const perfNow = () =>
+    typeof performance !== 'undefined' && typeof performance.now === 'function'
+      ? performance.now()
+      : Date.now();
 
   const [projectStats, setProjectStats] = useState({ total: 0, active: 0, completed: 0 });
   const [partnerStats, setPartnerStats] = useState({ total: 0, approved: 0, pending: 0 });
@@ -96,6 +117,7 @@ export default function DashboardScreen({ navigation }: any) {
 
   // Loads dashboard totals and recent status updates from storage.
   const loadDashboardData = React.useCallback(async () => {
+    const startedAt = perfNow();
     try {
       const [{ projects, partners, users, volunteers, statusUpdates }, volunteerTimeLogs, partnerReports, volunteerMatches] =
         await Promise.all([
@@ -161,6 +183,8 @@ export default function DashboardScreen({ navigation }: any) {
         .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 
       setRecentUpdates(allUpdates.slice(0, 6));
+      const elapsedMs = perfNow() - startedAt;
+      console.log(`[perf] DashboardScreen data ready in ${Math.round(elapsedMs)}ms`);
     } catch (error) {
       const errorMessage = getRequestErrorMessage(
         error,
@@ -311,6 +335,9 @@ export default function DashboardScreen({ navigation }: any) {
     [projectsData]
   );
 
+  // Memoize mapProjects by content to prevent unnecessary map re-renders from WebSocket updates
+  const stableMapProjects = useStableProjects(mapProjects);
+
   const volunteerMapAccounts = useMemo(
     () =>
       [...volunteersData]
@@ -435,12 +462,18 @@ export default function DashboardScreen({ navigation }: any) {
 
           {mapProjects.length ? (
             <VolunteerImpactMap
-              projects={mapProjects}
+              projects={stableMapProjects}
               title="Community Impact Map"
               subtitle="Switch between admin, volunteer, and partner views to inspect mapped project activity."
               initialMapStyleKey="admin-overview"
               volunteerAccounts={volunteerMapAccounts}
               partnerAccounts={partnerMapAccounts}
+              onVolunteerPress={(volunteerId: string) => {
+                navigateToAvailableRoute(navigation, 'Volunteers', { volunteerId }, { routeName: 'Dashboard' });
+              }}
+              onPartnerPress={(partnerId: string) => {
+                navigateToAvailableRoute(navigation, 'Partners', { partnerId }, { routeName: 'Dashboard' });
+              }}
             />
           ) : (
             <View style={styles.mapFallback}>

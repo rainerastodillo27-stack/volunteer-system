@@ -40,6 +40,17 @@ from .relational_mirror import (
 
 load_dotenv()
 
+# Initialize FastAPI application
+app = FastAPI(title="NVC CONNECT API")
+
+# Add CORS middleware to allow frontend requests
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.getenv("ALLOWED_ORIGINS", "*").split(","),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Simple TTL-based cache for query results to improve performance
 class TTLCache:
@@ -258,19 +269,8 @@ def _normalize_partner_proposal_details(
         "skillsNeeded": payload.get("skillsNeeded") or [],
         "communityNeed": str(payload.get("communityNeed") or "").strip(),
         "expectedDeliverables": str(payload.get("expectedDeliverables") or "").strip(),
+        "attachments": payload.get("attachments") or [],
     }
-
-
-app = FastAPI(title="NVC CONNECT Storage API")
-
-allowed_origins = [origin.strip() for origin in os.getenv("ALLOWED_ORIGINS", "*").split(",") if origin.strip()]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins or ["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 
 # Tracks active websocket clients for messages and shared storage updates.

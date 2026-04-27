@@ -1,7 +1,48 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { Alert, Platform } from 'react-native';
 import { User } from '../models/types';
-import { getCurrentUser, setCurrentUser as saveCurrentUser } from '../models/storage';
+import { getCurrentUser, getStorageItemsFast, setCurrentUser as saveCurrentUser } from '../models/storage';
+
+const PREFETCH_KEYS_BY_ROLE = {
+  admin: [
+    'users',
+    'projects',
+    'events',
+    'partners',
+    'volunteers',
+    'statusUpdates',
+    'volunteerMatches',
+    'volunteerTimeLogs',
+    'partnerReports',
+  ],
+  volunteer: [
+    'projects',
+    'events',
+    'volunteers',
+    'volunteerMatches',
+    'volunteerTimeLogs',
+    'adminPlanningItems',
+  ],
+  partner: [
+    'projects',
+    'events',
+    'partners',
+    'partnerProjectApplications',
+    'partnerReports',
+    'publishedImpactReports',
+  ],
+} as const satisfies Record<string, string[]>;
+
+async function prefetchForUser(user: User | null): Promise<void> {
+  if (!user?.role) {
+    return;
+  }
+  const keys = PREFETCH_KEYS_BY_ROLE[user.role];
+  if (!keys) {
+    return;
+  }
+  await getStorageItemsFast(Array.from(keys));
+}
 
 interface AuthContextType {
   user: User | null;
@@ -43,6 +84,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         if (currentUser) {
           setUser(currentUser);
+          void prefetchForUser(currentUser).catch(() => null);
         }
       } catch (error) {
         console.error('Error checking auth:', error);
@@ -69,6 +111,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       void saveCurrentUser(userData).catch((error) => {
         console.error('Error persisting current user:', error);
       });
+      void prefetchForUser(userData).catch(() => null);
     } catch (error) {
       console.error('Error during login:', error);
       throw error;

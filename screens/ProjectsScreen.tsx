@@ -463,6 +463,10 @@ export default function ProjectsScreen({ navigation, route }: any) {
   const { user } = useAuth();
   const { width } = useWindowDimensions();
   const isDesktop = Platform.OS === 'web' || width >= 1100;
+  const perfNow = () =>
+    typeof performance !== 'undefined' && typeof performance.now === 'function'
+      ? performance.now()
+      : Date.now();
   const projectListRef = useRef<FlatList<ProjectCategoryGroup> | null>(null);
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [now, setNow] = useState<Date>(new Date());
@@ -520,6 +524,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
 
   // Loads projects plus role-specific volunteer or partner data for this screen.
   const loadProjectsData = useCallback(async () => {
+    const startedAt = perfNow();
     try {
       const [snapshot, volunteers] = await Promise.all([
         getProjectsScreenSnapshot(user),
@@ -534,6 +539,8 @@ export default function ProjectsScreen({ navigation, route }: any) {
       } else {
         setVolunteerMatches([]);
       }
+      const elapsedMs = perfNow() - startedAt;
+      console.log(`[perf] ProjectsScreen data ready in ${Math.round(elapsedMs)}ms`);
     } catch (error) {
       const nextLoadError = {
         title: 'Database Unavailable',
@@ -1113,7 +1120,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
     const isOnHold = displayStatus === 'On Hold';
 
     const startDate = project.startDate ? new Date(project.startDate) : null;
-    const eventHasNotStarted = !hasEventStartedForToday(project.startDate);
+    const eventHasNotStarted = project.isEvent ? !hasEventStartedForToday(project.startDate) : false;
     const canTimeIn =
       isAssigned &&
       !completedParticipation &&
@@ -1182,6 +1189,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
       canTimeIn,
       statusMessage,
       wasRejected,
+      eventHasNotStarted,
     };
   }, [isJoined, volunteerJoinRecordByProjectId, volunteerMatchByProjectId, volunteerProfile?.id]);
 
@@ -1550,11 +1558,21 @@ export default function ProjectsScreen({ navigation, route }: any) {
                                     style={[
                                       styles.timeButton,
                                       eventActiveLog ? styles.timeOutButton : styles.timeInButton,
-                                      !eventActiveLog && !linkedEventAction.canTimeIn && styles.timeButtonDisabled,
+                                      (!eventActiveLog && !linkedEventAction.canTimeIn) || linkedEventAction.eventHasNotStarted ? styles.timeButtonDisabled : null,
                                     ]}
                                     onPress={() => {
                                       if (eventActiveLog) {
                                         return openTimeOutModal(event.id);
+                                      }
+
+                                      if (linkedEventAction.eventHasNotStarted) {
+                                        const startDate = event.startDate ? new Date(event.startDate) : null;
+                                        return Alert.alert(
+                                          'Event not started',
+                                          startDate
+                                            ? `This event starts on ${format(startDate, 'MMM d')}. Time in will be available then.`
+                                            : 'This event has not started yet. Please refresh when the event begins.'
+                                        );
                                       }
 
                                       if (linkedEventAction.canTimeIn) {
@@ -1578,7 +1596,8 @@ export default function ProjectsScreen({ navigation, route }: any) {
                                     }}
                                     disabled={
                                       loadingProjectId === event.id ||
-                                      (!eventActiveLog && !linkedEventAction.canTimeIn)
+                                      (!eventActiveLog && !linkedEventAction.canTimeIn && !linkedEventAction.eventHasNotStarted) ||
+                                      linkedEventAction.eventHasNotStarted
                                     }
                                   >
                                     <MaterialIcons
@@ -1597,6 +1616,8 @@ export default function ProjectsScreen({ navigation, route }: any) {
                                         ? 'Time Out'
                                         : linkedEventAction.canTimeIn
                                         ? 'Time In'
+                                        : linkedEventAction.eventHasNotStarted
+                                        ? 'Await Start'
                                         : eventLifecycleStatus === 'Planning' && linkedEventAction.isAssigned
                                         ? 'Await Start'
                                         : 'Await Assignment'}
@@ -1802,19 +1823,33 @@ export default function ProjectsScreen({ navigation, route }: any) {
                             style={[
                               styles.timeButton,
                               activeLog ? styles.timeOutButton : styles.timeInButton,
-                              !activeLog && item.isEvent && !eventActionState?.isAssigned && styles.timeButtonDisabled,
+                              (!activeLog && item.isEvent && !eventActionState?.isAssigned) || eventActionState?.eventHasNotStarted ? styles.timeButtonDisabled : null,
                             ]}
-                            onPress={() =>
-                              activeLog
-                                ? openTimeOutModal(item.id)
-                                : item.isEvent && !eventActionState?.isAssigned
-                                ? Alert.alert(
-                                    'Assignment Required',
-                                    'You need to be assigned to an event task before you can time in.'
-                                  )
-                                : handleTimeIn(item.id)
-                            }
-                            disabled={loadingProjectId === item.id || (!activeLog && item.isEvent && !eventActionState?.isAssigned)}
+                            onPress={() => {
+                              if (eventActionState?.eventHasNotStarted) {
+                                const startDate = item.startDate ? new Date(item.startDate) : null;
+                                return Alert.alert(
+                                  'Event not started',
+                                  startDate
+                                    ? `This event starts on ${format(startDate, 'MMM d')}. Time in will be available then.`
+                                    : 'This event has not started yet. Please refresh when the event begins.'
+                                );
+                              }
+
+                              if (activeLog) {
+                                return openTimeOutModal(item.id);
+                              }
+
+                              if (item.isEvent && !eventActionState?.isAssigned) {
+                                return Alert.alert(
+                                  'Assignment Required',
+                                  'You need to be assigned to an event task before you can time in.'
+                                );
+                              }
+
+                              return handleTimeIn(item.id);
+                            }}
+                            disabled={loadingProjectId === item.id || ((!activeLog && item.isEvent && !eventActionState?.isAssigned) || eventActionState?.eventHasNotStarted) && !activeLog}
                           >
                             <MaterialIcons
                               name={activeLog ? 'logout' : item.isEvent && !eventActionState?.isAssigned ? 'lock' : 'login'}
@@ -1822,9 +1857,18 @@ export default function ProjectsScreen({ navigation, route }: any) {
                               color="#fff"
                             />
                             <Text style={styles.timeButtonText}>
-                              {activeLog ? 'Time Out' : item.isEvent && !eventActionState?.isAssigned ? 'Await Assignment' : 'Time In'}
+                              {activeLog ? 'Time Out' : eventActionState?.eventHasNotStarted ? 'Await Start' : item.isEvent && !eventActionState?.isAssigned ? 'Await Assignment' : 'Time In'}
                             </Text>
                           </TouchableOpacity>
+                        )}
+
+                        {joined && !completedParticipation && eventActionState?.eventHasNotStarted && (
+                          <View style={styles.logMeta}>
+                            <Text style={styles.logMetaLabel}>Time in availability</Text>
+                            <Text style={styles.logMetaValue}>
+                              {item.startDate ? `Available from ${format(new Date(item.startDate), 'MMM d')}` : 'Awaiting event start'}
+                            </Text>
+                          </View>
                         )}
                       </View>
 
@@ -2877,7 +2921,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
           <Pressable style={styles.proposalFormCard} onPress={() => undefined}>
             <View style={styles.proposalFormHeader}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.proposalFormTitle}>Submit Project Proposal</Text>
+                <Text style={styles.proposalFormTitle}>Partner Project Proposal</Text>
                 <Text style={styles.proposalFormSubtitle}>
                   {activeProposalProject?.title || 'Selected program'}
                 </Text>
@@ -2897,7 +2941,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
               showsVerticalScrollIndicator={Platform.OS === 'web'}
             >
               <View style={styles.proposalReferenceCard}>
-                <Text style={styles.proposalReferenceLabel}>Based on Program</Text>
+                <Text style={styles.proposalReferenceLabel}>Program Template</Text>
                 <Text style={styles.proposalReferenceTitle}>{activeProposalProject?.title}</Text>
                 <Text style={styles.proposalReferenceMeta}>
                   {(activeProposalProject?.programModule || activeProposalProject?.category) ?? 'Program'}
@@ -3025,7 +3069,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
             >
               <MaterialIcons name="campaign" size={18} color="#fff" />
               <Text style={styles.proposalSubmitButtonText}>
-                {loadingProjectId === activeProposalProject?.id ? 'Submitting...' : 'Send Proposal to Admin'}
+                {loadingProjectId === activeProposalProject?.id ? 'Submitting...' : 'Submit Partner Proposal'}
               </Text>
             </TouchableOpacity>
           </Pressable>

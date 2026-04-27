@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, Platform, TouchableOpacity, Modal, ScrollView } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
+import MapView, { Callout, Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import PhotoMapMarker from './PhotoMapMarker';
 import { Project } from '../models/types';
 import {
@@ -9,6 +9,164 @@ import {
   getInitialProjectRegion,
   getProjectMarkerColor,
 } from '../utils/projectMap';
+
+type AccountOption = {
+  id: string;
+  label: string;
+  projectIds: string[];
+};
+
+type MapMarkerProps = {
+  project: Project;
+  onPress: (project: Project) => void;
+  partnerAccounts?: AccountOption[];
+  volunteerAccounts?: AccountOption[];
+  onPartnerPress?: (partnerId: string) => void;
+  onVolunteerPress?: (volunteerId: string) => void;
+};
+
+type MapContentProps = {
+  displayProjects: Project[];
+  mapRegion: Region;
+  nativeMapType: any;
+  onSelectProject: (project: Project) => void;
+  partnerAccounts?: AccountOption[];
+  volunteerAccounts?: AccountOption[];
+  onPartnerPress?: (partnerId: string) => void;
+  onVolunteerPress?: (volunteerId: string) => void;
+};
+
+const MapContent = React.memo<MapContentProps>(
+  ({ displayProjects, mapRegion, nativeMapType, onSelectProject, partnerAccounts, volunteerAccounts, onPartnerPress, onVolunteerPress }) => (
+    <MapView
+      style={styles.map}
+      initialRegion={displayProjects.length ? mapRegion : PHILIPPINES_REGION}
+      provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
+      showsCompass
+      scrollEnabled
+      zoomEnabled
+      rotateEnabled={false}
+      mapType={nativeMapType}
+    >
+      {displayProjects.map(project => (
+        <MapMarker
+          key={project.id}
+          project={project}
+          onPress={onSelectProject}
+          partnerAccounts={partnerAccounts}
+          volunteerAccounts={volunteerAccounts}
+          onPartnerPress={onPartnerPress}
+          onVolunteerPress={onVolunteerPress}
+        />
+      ))}
+    </MapView>
+  ),
+  (prevProps, nextProps) => {
+    // Deep equality check for memoization
+    if (prevProps.displayProjects.length !== nextProps.displayProjects.length) return false;
+    if (prevProps.displayProjects.some((p, i) => p.id !== nextProps.displayProjects[i]?.id)) return false;
+    if (prevProps.nativeMapType !== nextProps.nativeMapType) return false;
+    if (prevProps.mapRegion.latitude !== nextProps.mapRegion.latitude) return false;
+    if (prevProps.mapRegion.longitude !== nextProps.mapRegion.longitude) return false;
+    if (prevProps.mapRegion.latitudeDelta !== nextProps.mapRegion.latitudeDelta) return false;
+    if (prevProps.mapRegion.longitudeDelta !== nextProps.mapRegion.longitudeDelta) return false;
+    return true;
+  }
+);
+
+MapContent.displayName = 'MapContent';
+
+const MapMarker = React.memo<MapMarkerProps>(
+  ({
+    project,
+    onPress,
+    partnerAccounts,
+    volunteerAccounts,
+    onPartnerPress,
+    onVolunteerPress,
+  }) => {
+    const partnerHit = useMemo(() => 
+      (partnerAccounts || []).find(account => (account.projectIds || []).includes(project.id)),
+      [partnerAccounts, project.id]
+    );
+
+    const volunteerHits = useMemo(() => 
+      (volunteerAccounts || [])
+        .filter(account => (account.projectIds || []).includes(project.id))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+      [volunteerAccounts, project.id]
+    );
+
+  return (
+    <Marker
+      coordinate={{
+        latitude: project.location.latitude,
+        longitude: project.location.longitude,
+      }}
+      anchor={{ x: 0.5, y: 1 }}
+      title={project.title}
+      description={project.location.address}
+      onPress={() => onPress(project)}
+    >
+      <PhotoMapMarker accentColor={getProjectMarkerColor(project)} />
+      <Callout tooltip>
+        <View style={styles.calloutCard}>
+          <Text style={styles.calloutTitle} numberOfLines={2}>
+            {project.title}
+          </Text>
+
+          {partnerHit && (
+            <TouchableOpacity
+              disabled={!onPartnerPress}
+              onPress={() => onPartnerPress?.(partnerHit.id)}
+              style={styles.calloutRow}
+            >
+              <MaterialIcons name="business" size={16} color="#0f766e" />
+              <Text style={styles.calloutRowText} numberOfLines={1}>
+                {partnerHit.label}
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          <Text style={styles.calloutSectionLabel}>
+            Volunteers
+          </Text>
+          {volunteerHits.length === 0 ? (
+            <Text style={styles.calloutEmpty}>
+              No volunteers joined yet.
+            </Text>
+          ) : (
+            volunteerHits.slice(0, 6).map(volunteer => (
+              <TouchableOpacity
+                key={volunteer.id}
+                disabled={!onVolunteerPress}
+                onPress={() => onVolunteerPress?.(volunteer.id)}
+                style={styles.calloutRow}
+              >
+                <MaterialIcons name="person-outline" size={16} color="#166534" />
+                <Text style={styles.calloutRowText} numberOfLines={1}>
+                  {volunteer.label}
+                </Text>
+              </TouchableOpacity>
+            ))
+          )}
+        </View>
+      </Callout>
+    </Marker>
+  );
+}, (prevProps, nextProps) => {
+  // Custom equality check for memo - return true if props are equal (skip re-render)
+  // Only compare project data - this is what matters for rendering the marker
+  if (prevProps.project.id !== nextProps.project.id) return false;
+  if (prevProps.project.location.latitude !== nextProps.project.location.latitude) return false;
+  if (prevProps.project.location.longitude !== nextProps.project.location.longitude) return false;
+  if (prevProps.project.title !== nextProps.project.title) return false;
+  if (prevProps.project.description !== nextProps.project.description) return false;
+  if (prevProps.project.location.address !== nextProps.project.location.address) return false;
+  
+  return true; // Project data hasn't changed, skip re-render
+});
+
 
 type MapStylePresetKey = 'admin-overview' | 'volunteer-view' | 'partner-view';
 
@@ -78,6 +236,8 @@ type VolunteerImpactMapProps = {
   initialMapStyleKey?: MapStylePresetKey;
   volunteerAccounts?: MapAccountOption[];
   partnerAccounts?: MapAccountOption[];
+  onVolunteerPress?: (volunteerId: string) => void;
+  onPartnerPress?: (partnerId: string) => void;
 };
 
 function getMappedProjects(projects: Project[]) {
@@ -168,6 +328,8 @@ export default function VolunteerImpactMap({
   initialMapStyleKey = 'volunteer-view',
   volunteerAccounts,
   partnerAccounts,
+  onVolunteerPress,
+  onPartnerPress,
 }: VolunteerImpactMapProps) {
   const mappedProjects = useMemo(() => getMappedProjects(projects), [projects]);
   const hasVolunteerScope = Array.isArray(volunteerAccounts);
@@ -220,28 +382,56 @@ export default function VolunteerImpactMap({
       : selectedMapStyleKey === 'partner-view'
       ? partnerOptions
       : [];
-  const selectedAccountOption =
+  const selectedAccountOption = useMemo(() =>
     selectedMapStyleKey === 'volunteer-view'
       ? volunteerOptions.find(option => option.id === selectedVolunteerId) || volunteerOptions[0] || null
       : selectedMapStyleKey === 'partner-view'
       ? partnerOptions.find(option => option.id === selectedPartnerId) || partnerOptions[0] || null
-      : null;
-  const displayProjects =
-    selectedMapStyleKey === 'admin-overview'
-      ? mappedProjects
-      : selectedMapStyleKey === 'volunteer-view'
-      ? hasVolunteerScope
-        ? selectedAccountOption?.mappedProjects || []
-        : mappedProjects
-      : hasPartnerScope
-      ? selectedAccountOption?.mappedProjects || []
-      : mappedProjects;
+      : null,
+    [selectedMapStyleKey, selectedVolunteerId, selectedPartnerId, volunteerOptions, partnerOptions]
+  );
+  const displayProjects = useMemo(() => {
+    if (selectedMapStyleKey === 'admin-overview') {
+      return mappedProjects;
+    }
+
+    if (selectedMapStyleKey === 'volunteer-view') {
+      if (hasVolunteerScope) {
+        const selectedVolunteer = volunteerOptions.find(option => option.id === selectedVolunteerId);
+        return selectedVolunteer?.mappedProjects || [];
+      }
+      return mappedProjects;
+    }
+
+    if (selectedMapStyleKey === 'partner-view') {
+      if (hasPartnerScope) {
+        const selectedPartner = partnerOptions.find(option => option.id === selectedPartnerId);
+        return selectedPartner?.mappedProjects || [];
+      }
+      return mappedProjects;
+    }
+
+    return mappedProjects;
+  }, [selectedMapStyleKey, hasVolunteerScope, hasPartnerScope, selectedVolunteerId, selectedPartnerId, volunteerOptions, partnerOptions, mappedProjects]);
   const hasAnyMapData =
     mappedProjects.length > 0 || volunteerOptions.length > 0 || partnerOptions.length > 0;
 
   useEffect(() => {
     setSelectedProject(displayProjects[0] || null);
   }, [displayProjects]);
+
+  // Memoize callbacks to prevent unnecessary re-renders of child components
+  const handleSelectProject = useCallback((project: Project) => {
+    setSelectedProject(project);
+  }, []);
+
+  const handlePartnerPress = useCallback((partnerId: string) => {
+    onPartnerPress?.(partnerId);
+  }, [onPartnerPress]);
+
+  const handleVolunteerPress = useCallback((volunteerId: string) => {
+    onVolunteerPress?.(volunteerId);
+  }, [onVolunteerPress]);
 
   if (!hasAnyMapData) {
     return null;
@@ -257,7 +447,7 @@ export default function VolunteerImpactMap({
     selectedAccountOption
   );
   const nativeMapType = getNativeMapType(selectedMapStyle);
-  const mapRegion = getInitialProjectRegion(displayProjects) as Region;
+  const mapRegion = useMemo(() => getInitialProjectRegion(displayProjects) as Region, [displayProjects]);
 
   return (
     <View style={styles.section}>
@@ -328,33 +518,16 @@ export default function VolunteerImpactMap({
           },
         ]}
       >
-        <MapView
-          key={`${selectedMapStyleKey}-${selectedAccountOption?.id || 'all'}-${displayProjects.map(project => project.id).join('-')}`}
-          style={styles.map}
-          initialRegion={displayProjects.length ? mapRegion : PHILIPPINES_REGION}
-          provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
-          showsCompass
-          scrollEnabled
-          zoomEnabled
-          rotateEnabled={false}
-          mapType={nativeMapType}
-        >
-          {displayProjects.map(project => (
-            <Marker
-              key={project.id}
-              coordinate={{
-                latitude: project.location.latitude,
-                longitude: project.location.longitude,
-              }}
-              anchor={{ x: 0.5, y: 1 }}
-              title={project.title}
-              description={project.location.address}
-              onPress={() => setSelectedProject(project)}
-            >
-              <PhotoMapMarker accentColor={getProjectMarkerColor(project)} />
-            </Marker>
-          ))}
-        </MapView>
+        <MapContent
+          displayProjects={displayProjects}
+          mapRegion={mapRegion}
+          nativeMapType={nativeMapType}
+          onSelectProject={handleSelectProject}
+          partnerAccounts={partnerAccounts}
+          volunteerAccounts={volunteerAccounts}
+          onPartnerPress={handlePartnerPress}
+          onVolunteerPress={handleVolunteerPress}
+        />
 
         {displayProjects.length === 0 ? (
           <View style={styles.emptyOverlay}>
@@ -547,6 +720,43 @@ const styles = StyleSheet.create({
     borderColor: '#dbeafe',
     backgroundColor: '#e0f2fe',
     position: 'relative',
+  },
+  calloutCard: {
+    width: 240,
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  calloutTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0f172a',
+    marginBottom: 8,
+  },
+  calloutSectionLabel: {
+    marginTop: 8,
+    marginBottom: 4,
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#166534',
+  },
+  calloutRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 5,
+  },
+  calloutRowText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#0f172a',
+  },
+  calloutEmpty: {
+    fontSize: 12,
+    color: '#64748b',
+    paddingVertical: 4,
   },
   map: {
     height: 280,

@@ -50,7 +50,11 @@ export function getProjectDisplayStatus(
   projectOrStatus?: StatusProjectLike | Project['status'] | string | null,
   now: Date = new Date()
 ): Project['status'] {
-  if (!projectOrStatus || typeof projectOrStatus === 'string') {
+  if (!projectOrStatus) {
+    return normalizeProjectStatusValue(null);
+  }
+
+  if (typeof projectOrStatus === 'string') {
     return normalizeProjectStatusValue(projectOrStatus);
   }
 

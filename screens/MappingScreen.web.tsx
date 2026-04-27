@@ -13,8 +13,13 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { useAuth } from '../contexts/AuthContext';
-import { Project } from '../models/types';
-import { getProjectsScreenSnapshot, subscribeToStorageChanges } from '../models/storage';
+import { Partner, Project, Volunteer } from '../models/types';
+import {
+  getAllPartners,
+  getAllVolunteers,
+  getProjectsScreenSnapshot,
+  subscribeToStorageChanges,
+} from '../models/storage';
 import { navigateToAvailableRoute } from '../utils/navigation';
 import {
   PHILIPPINES_BOUNDS,
@@ -28,6 +33,9 @@ import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestEr
 import { createGoogleMapsMarkerIcon, loadGoogleMaps } from '../utils/webGoogleMaps';
 
 const MapHost = 'div' as any;
+const MAP_FIT_PADDING_PX = 64;
+const MAP_MAX_FIT_ZOOM = 12;
+const MAP_SINGLE_MARKER_ZOOM = 10;
 
 type MapStylePresetKey = 'admin-overview' | 'volunteer-view' | 'partner-view';
 
@@ -44,6 +52,21 @@ type MapStylePreset = {
   errorBg: string;
   errorBorder: string;
 };
+
+type VolunteerMapAccountOption = {
+  id: string;
+  label: string;
+  projectIds: string[];
+};
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
 
 const MAP_STYLE_PRESETS: MapStylePreset[] = [
   {
@@ -120,17 +143,86 @@ function getGoogleMapsErrorMessage(error: unknown, apiKey: string) {
 export default function MappingScreen({ navigation }: any) {
   const { user } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
+  const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
+  const [partners, setPartners] = useState<Partner[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [showDetails, setShowDetails] = useState(false);
   const [showMapStyleMenu, setShowMapStyleMenu] = useState(false);
+  const [showVolunteerMenu, setShowVolunteerMenu] = useState(false);
   const [selectedMapStyleKey, setSelectedMapStyleKey] = useState<MapStylePresetKey>('admin-overview');
+  const [selectedVolunteerId, setSelectedVolunteerId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [mapError, setMapError] = useState<string | null>(null);
   const mapElementRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<any>(null);
   const markerRefs = useRef<Array<{ marker: any; listener: { remove: () => void } }>>([]);
+  const infoWindowRef = useRef<any>(null);
+  const infoWindowCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const infoWindowHoveringRef = useRef(false);
+  const markerHoveringRef = useRef(false);
+  const openInfoWindowProjectIdRef = useRef<string | null>(null);
   const webGoogleMapsApiKey = getWebGoogleMapsApiKey();
-  const mappedProjects = React.useMemo(() => getMappedProjects(projects), [projects]);
+  const volunteerMapAccounts: VolunteerMapAccountOption[] = React.useMemo(
+    () =>
+      [...volunteers]
+        .sort((left, right) => left.name.localeCompare(right.name))
+        .map(volunteer => {
+          const joinedEventProjectIds = projects
+            .filter(
+              project =>
+                project.isEvent &&
+                (
+                  (project.joinedUserIds || []).includes(volunteer.userId) ||
+                  (project.volunteers || []).includes(volunteer.id) ||
+                  (project.internalTasks || []).some(task => task.assignedVolunteerId === volunteer.id)
+                )
+            )
+            .map(project => project.id);
+
+          return {
+            id: volunteer.id,
+            label: volunteer.name,
+            projectIds: joinedEventProjectIds,
+          };
+        }),
+    [projects, volunteers]
+  );
+
+  const availableVolunteerMapAccounts = React.useMemo(() => {
+    const mappedIds = new Set(getMappedProjects(projects).map(project => project.id));
+    return volunteerMapAccounts
+      .map(account => ({
+        ...account,
+        projectIds: Array.from(new Set((account.projectIds || []).filter(id => mappedIds.has(id)))),
+      }))
+      .filter(account => account.projectIds.length > 0);
+  }, [projects, volunteerMapAccounts]);
+
+  useEffect(() => {
+    setSelectedVolunteerId(current =>
+      current && availableVolunteerMapAccounts.some(account => account.id === current)
+        ? current
+        : availableVolunteerMapAccounts[0]?.id || null
+    );
+  }, [availableVolunteerMapAccounts]);
+
+  const selectedVolunteerAccount =
+    selectedVolunteerId
+      ? availableVolunteerMapAccounts.find(account => account.id === selectedVolunteerId) || null
+      : availableVolunteerMapAccounts[0] || null;
+
+  const displayProjects = React.useMemo(() => {
+    if (selectedMapStyleKey !== 'volunteer-view') {
+      return projects;
+    }
+    if (!selectedVolunteerAccount) {
+      return [];
+    }
+    const allowedProjectIds = new Set(selectedVolunteerAccount.projectIds);
+    return projects.filter(project => allowedProjectIds.has(project.id));
+  }, [projects, selectedMapStyleKey, selectedVolunteerAccount]);
+
+  const mappedProjects = React.useMemo(() => getMappedProjects(displayProjects), [displayProjects]);
   const selectedMapStyle =
     MAP_STYLE_PRESETS.find(preset => preset.key === selectedMapStyleKey) || MAP_STYLE_PRESETS[0];
 
@@ -148,6 +240,13 @@ export default function MappingScreen({ navigation }: any) {
   }, [user]);
 
   const clearMarkers = () => {
+    if (infoWindowRef.current) {
+      try {
+        infoWindowRef.current.close();
+      } catch {
+        // ignore
+      }
+    }
     markerRefs.current.forEach(({ marker, listener }) => {
       listener.remove();
       marker.setMap(null);
@@ -191,6 +290,9 @@ export default function MappingScreen({ navigation }: any) {
         const map = mapInstanceRef.current;
         clearMarkers();
         setMapError(null);
+        if (!infoWindowRef.current) {
+          infoWindowRef.current = new googleMaps.maps.InfoWindow();
+        }
 
         if (mappedProjects.length === 0) {
           map.setCenter(PHILIPPINES_WEB_CENTER);
@@ -216,14 +318,201 @@ export default function MappingScreen({ navigation }: any) {
             setShowDetails(true);
           });
 
+          const buildHoverContent = () => {
+            const projectVolunteerNames = volunteers
+              .filter(volunteer =>
+                (project.joinedUserIds || []).includes(volunteer.userId) ||
+                (project.volunteers || []).includes(volunteer.id) ||
+                (project.internalTasks || []).some(task => task.assignedVolunteerId === volunteer.id)
+              )
+              .sort((a, b) => a.name.localeCompare(b.name))
+              .map(volunteer => ({
+                id: volunteer.id,
+                name: volunteer.name,
+              }));
+
+            const partner = project.partnerId
+              ? partners.find(entry => entry.id === project.partnerId) || null
+              : null;
+
+            const container = document.createElement('div');
+            container.style.minWidth = '220px';
+            container.style.maxWidth = '280px';
+            container.style.fontFamily = 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+            container.style.fontSize = '12px';
+            container.style.lineHeight = '16px';
+
+            const header = document.createElement('div');
+            header.innerHTML = `<div style="font-weight:700;color:#0f172a;margin-bottom:6px;">${escapeHtml(project.title)}</div>`;
+            container.appendChild(header);
+
+            if (partner) {
+              const partnerRow = document.createElement('button');
+              partnerRow.type = 'button';
+              partnerRow.dataset.kind = 'partner';
+              partnerRow.dataset.id = partner.id;
+              partnerRow.style.display = 'block';
+              partnerRow.style.width = '100%';
+              partnerRow.style.textAlign = 'left';
+              partnerRow.style.border = '0';
+              partnerRow.style.background = 'transparent';
+              partnerRow.style.padding = '6px 0';
+              partnerRow.style.cursor = 'pointer';
+              partnerRow.innerHTML = `<span style="font-weight:600;color:#0f766e;">Partner:</span> <span style="color:#0f172a;text-decoration:underline;">${escapeHtml(partner.name)}</span>`;
+              container.appendChild(partnerRow);
+            }
+
+            const volunteerHeader = document.createElement('div');
+            volunteerHeader.style.marginTop = partner ? '6px' : '0';
+            volunteerHeader.style.fontWeight = '600';
+            volunteerHeader.style.color = '#166534';
+            volunteerHeader.textContent = `Volunteers (${projectVolunteerNames.length})`;
+            container.appendChild(volunteerHeader);
+
+            if (projectVolunteerNames.length === 0) {
+              const empty = document.createElement('div');
+              empty.style.color = '#64748b';
+              empty.style.paddingTop = '4px';
+              empty.textContent = 'No volunteers joined yet.';
+              container.appendChild(empty);
+            } else {
+              projectVolunteerNames.slice(0, 8).forEach(item => {
+                const row = document.createElement('button');
+                row.type = 'button';
+                row.dataset.kind = 'volunteer';
+                row.dataset.id = item.id;
+                row.style.display = 'block';
+                row.style.width = '100%';
+                row.style.textAlign = 'left';
+                row.style.border = '0';
+                row.style.background = 'transparent';
+                row.style.padding = '5px 0';
+                row.style.cursor = 'pointer';
+                row.style.color = '#0f172a';
+                row.style.textDecoration = 'underline';
+                row.textContent = item.name;
+                container.appendChild(row);
+              });
+              if (projectVolunteerNames.length > 8) {
+                const more = document.createElement('div');
+                more.style.color = '#64748b';
+                more.style.paddingTop = '4px';
+                more.textContent = `+${projectVolunteerNames.length - 8} more`;
+                container.appendChild(more);
+              }
+            }
+
+            container.addEventListener('click', (event) => {
+              const target = event.target as HTMLElement | null;
+              const button = target?.closest?.('button') as HTMLButtonElement | null;
+              const kind = button?.dataset?.kind;
+              const id = button?.dataset?.id;
+              if (!kind || !id) {
+                return;
+              }
+              if (kind === 'volunteer') {
+                navigateToAvailableRoute(navigation, 'Volunteers', { volunteerId: id }, { routeName: 'Map' });
+              } else if (kind === 'partner') {
+                navigateToAvailableRoute(navigation, 'Partners', { partnerId: id }, { routeName: 'Map' });
+              }
+              try {
+                infoWindowRef.current?.close?.();
+              } catch {
+                // ignore
+              }
+            });
+
+            // Keep the popup open when hovering it.
+            container.addEventListener('mouseenter', () => {
+              infoWindowHoveringRef.current = true;
+              if (infoWindowCloseTimerRef.current) {
+                clearTimeout(infoWindowCloseTimerRef.current);
+                infoWindowCloseTimerRef.current = null;
+              }
+            });
+            container.addEventListener('mouseleave', () => {
+              infoWindowHoveringRef.current = false;
+              if (infoWindowCloseTimerRef.current) {
+                clearTimeout(infoWindowCloseTimerRef.current);
+              }
+              infoWindowCloseTimerRef.current = setTimeout(() => {
+                if (markerHoveringRef.current) {
+                  return;
+                }
+                try {
+                  infoWindowRef.current?.close?.();
+                  openInfoWindowProjectIdRef.current = null;
+                } catch {
+                  // ignore
+                }
+              }, 200);
+            });
+
+            return container;
+          };
+
+          const hoverOpenListener = marker.addListener('mouseover', () => {
+            if (!infoWindowRef.current) {
+              return;
+            }
+            markerHoveringRef.current = true;
+            if (infoWindowCloseTimerRef.current) {
+              clearTimeout(infoWindowCloseTimerRef.current);
+              infoWindowCloseTimerRef.current = null;
+            }
+            if (openInfoWindowProjectIdRef.current === project.id) {
+              return;
+            }
+            const content = buildHoverContent();
+            infoWindowRef.current.setContent(content);
+            infoWindowRef.current.open({ map, anchor: marker });
+            openInfoWindowProjectIdRef.current = project.id;
+          });
+
+          const hoverCloseListener = marker.addListener('mouseout', () => {
+            markerHoveringRef.current = false;
+            if (infoWindowCloseTimerRef.current) {
+              clearTimeout(infoWindowCloseTimerRef.current);
+            }
+            infoWindowCloseTimerRef.current = setTimeout(() => {
+              if (infoWindowHoveringRef.current || markerHoveringRef.current) {
+                return;
+              }
+              try {
+                infoWindowRef.current?.close?.();
+                openInfoWindowProjectIdRef.current = null;
+              } catch {
+                // ignore
+              }
+            }, 150);
+          });
+
           markerRefs.current.push({ marker, listener });
+          markerRefs.current.push({ marker, listener: hoverOpenListener });
+          markerRefs.current.push({ marker, listener: hoverCloseListener });
           bounds.extend({
             lat: project.location.latitude,
             lng: project.location.longitude,
           });
         });
 
-        map.fitBounds(bounds, 64);
+        if (mappedProjects.length === 1) {
+          const onlyProject = mappedProjects[0];
+          map.setCenter({
+            lat: onlyProject.location.latitude,
+            lng: onlyProject.location.longitude,
+          });
+          map.setZoom(MAP_SINGLE_MARKER_ZOOM);
+          return;
+        }
+
+        map.fitBounds(bounds, MAP_FIT_PADDING_PX);
+        setTimeout(() => {
+          const zoom = map.getZoom?.();
+          if (typeof zoom === 'number' && zoom > MAP_MAX_FIT_ZOOM) {
+            map.setZoom(MAP_MAX_FIT_ZOOM);
+          }
+        }, 0);
       } catch (error) {
         if (!cancelled) {
           clearMarkers();
@@ -243,7 +532,11 @@ export default function MappingScreen({ navigation }: any) {
   // Loads map projects and narrows visibility based on the active role.
   const loadProjects = async () => {
     try {
-      const snapshot = await getProjectsScreenSnapshot(user);
+      const [snapshot, allVolunteers, allPartners] = await Promise.all([
+        getProjectsScreenSnapshot(user),
+        getAllVolunteers(),
+        getAllPartners(),
+      ]);
       const approvedPartnerProjectIds = new Set(
         snapshot.partnerApplications
           .filter(application => application.status === 'Approved')
@@ -271,10 +564,14 @@ export default function MappingScreen({ navigation }: any) {
           : snapshot.projects;
 
       setProjects(visibleProjects);
+      setVolunteers(allVolunteers);
+      setPartners(allPartners);
       setLoading(false);
     } catch (error) {
       console.error('Error loading projects for map:', error);
       setProjects([]);
+      setVolunteers([]);
+      setPartners([]);
       Alert.alert(
         getRequestErrorTitle(error, 'Database Unavailable'),
         getRequestErrorMessage(error, 'Failed to load projects from Postgres.')
@@ -343,6 +640,35 @@ export default function MappingScreen({ navigation }: any) {
           </TouchableOpacity>
         </View>
       </View>
+
+      {selectedMapStyleKey === 'volunteer-view' && availableVolunteerMapAccounts.length > 0 ? (
+        <View style={styles.volunteerPickerRow}>
+          <TouchableOpacity
+            style={[
+              styles.mapStyleButton,
+              styles.volunteerPickerButton,
+              {
+                backgroundColor: selectedMapStyle.chipBg,
+                borderColor: selectedMapStyle.chipBorder,
+              },
+            ]}
+            onPress={() => setShowVolunteerMenu(true)}
+          >
+            <MaterialIcons name="person-outline" size={18} color={selectedMapStyle.accentColor} />
+            <Text
+              style={[styles.mapStyleButtonText, styles.volunteerPickerText, { color: selectedMapStyle.accentColor }]}
+              numberOfLines={1}
+            >
+              {selectedVolunteerAccount?.label || 'Choose volunteer'}
+            </Text>
+            <MaterialIcons
+              name="keyboard-arrow-down"
+              size={22}
+              color={selectedMapStyle.accentColor}
+            />
+          </TouchableOpacity>
+        </View>
+      ) : null}
 
       <View
         style={[
@@ -469,6 +795,47 @@ export default function MappingScreen({ navigation }: any) {
                 </TouchableOpacity>
               );
             })}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        transparent
+        visible={showVolunteerMenu}
+        onRequestClose={() => setShowVolunteerMenu(false)}
+      >
+        <TouchableOpacity
+          style={styles.menuBackdrop}
+          activeOpacity={1}
+          onPress={() => setShowVolunteerMenu(false)}
+        >
+          <View style={styles.mapStyleMenu}>
+            <Text style={styles.mapStyleMenuTitle}>Choose volunteer</Text>
+            <ScrollView style={styles.accountList} showsVerticalScrollIndicator={false}>
+              {availableVolunteerMapAccounts.map(account => {
+                const isActive = account.id === selectedVolunteerAccount?.id;
+                return (
+                  <TouchableOpacity
+                    key={account.id}
+                    style={[styles.mapStyleMenuItem, isActive && styles.mapStyleMenuItemActive]}
+                    onPress={() => {
+                      setSelectedVolunteerId(account.id);
+                      setShowVolunteerMenu(false);
+                    }}
+                  >
+                    <View style={styles.mapStyleMenuItemTextWrap}>
+                      <Text style={styles.mapStyleMenuItemTitle}>{account.label}</Text>
+                      <Text style={styles.mapStyleMenuItemDescription}>
+                        {account.projectIds.length} mapped
+                        {account.projectIds.length === 1 ? ' project' : ' projects'}
+                      </Text>
+                    </View>
+                    {isActive ? <MaterialIcons name="check" size={20} color={selectedMapStyle.accentColor} /> : null}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
           </View>
         </TouchableOpacity>
       </Modal>
@@ -684,6 +1051,20 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     paddingTop: 78,
     paddingRight: 16,
+  },
+  volunteerPickerRow: {
+    paddingHorizontal: 18,
+    paddingBottom: 12,
+    alignItems: 'flex-end',
+  },
+  volunteerPickerButton: {
+    maxWidth: 320,
+  },
+  volunteerPickerText: {
+    flex: 1,
+  },
+  accountList: {
+    maxHeight: 340,
   },
   mapStyleMenu: {
     width: 290,

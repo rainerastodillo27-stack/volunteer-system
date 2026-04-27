@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import {
   Alert,
   Image,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -21,17 +22,20 @@ import {
   submitPartnerProgramProposal,
   submitPartnerReport,
   subscribeToStorageChanges,
+  buildProgramProposalProjectId,
 } from '../models/storage';
 import {
   AdminPlanningCalendar,
   AdminPlanningItem,
+  AdvocacyFocus,
   Partner,
   PartnerProjectApplication,
+  PartnerProjectProposalDetails,
   PartnerReport,
   PartnerReportType,
   Project,
 } from '../models/types';
-import { isImageMediaUri, pickImageFromDevice } from '../utils/media';
+import { isImageMediaUri, pickImageFromDevice, pickDocumentFromDevice } from '../utils/media';
 import { navigateToAvailableRoute } from '../utils/navigation';
 import { getProjectDisplayStatus as getDerivedProjectStatus } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
@@ -44,6 +48,20 @@ type ReportFormState = {
   mediaFile: string;
 };
 
+type ProposalFormState = {
+  requestedProgramModule: AdvocacyFocus;
+  proposedTitle: string;
+  proposedDescription: string;
+  proposedStartDate: string;
+  proposedEndDate: string;
+  proposedLocation: string;
+  proposedVolunteersNeeded: string;
+  communityNeed: string;
+  expectedDeliverables: string;
+  photoAttachment: string;
+  attachmentUrl: string;
+};
+
 function createEmptyReportForm(projectId = ''): ReportFormState {
   return {
     projectId,
@@ -51,6 +69,22 @@ function createEmptyReportForm(projectId = ''): ReportFormState {
     description: '',
     impactCount: '',
     mediaFile: '',
+  };
+}
+
+function createEmptyProposalForm(module: AdvocacyFocus): ProposalFormState {
+  return {
+    requestedProgramModule: module,
+    proposedTitle: '',
+    proposedDescription: '',
+    proposedStartDate: '',
+    proposedEndDate: '',
+    proposedLocation: '',
+    proposedVolunteersNeeded: '',
+    communityNeed: '',
+    expectedDeliverables: '',
+    photoAttachment: '',
+    attachmentUrl: '',
   };
 }
 
@@ -68,6 +102,7 @@ function getDisplayProjectStatus(project: Project): 'Planned' | 'Active' | 'Comp
 }
 
 const REPORT_TYPE_OPTIONS: PartnerReportType[] = ['General', 'Medical', 'Logistics'];
+const FEATURED_PROGRAM_MODULES: AdvocacyFocus[] = ['Nutrition', 'Education', 'Livelihood'];
 
 function getProjectStatusColor(status: ReturnType<typeof getDisplayProjectStatus>) {
   switch (status) {
@@ -82,6 +117,36 @@ function getProjectStatusColor(status: ReturnType<typeof getDisplayProjectStatus
   }
 }
 
+function getProgramModuleColor(module: AdvocacyFocus): string {
+  switch (module) {
+    case 'Nutrition':
+      return '#dc2626';
+    case 'Education':
+      return '#2563eb';
+    case 'Livelihood':
+      return '#7c3aed';
+    case 'Disaster':
+      return '#ea580c';
+    default:
+      return '#64748b';
+  }
+}
+
+function getProgramModuleDescription(module: AdvocacyFocus): string {
+  switch (module) {
+    case 'Nutrition':
+      return 'Food security and health programs';
+    case 'Education':
+      return 'Learning and skill development programs';
+    case 'Livelihood':
+      return 'Economic empowerment programs';
+    case 'Disaster':
+      return 'Emergency relief programs';
+    default:
+      return 'Community program';
+  }
+}
+
 // Shows the partner workspace for program proposals and report uploads.
 export default function PartnerDashboardScreen({ navigation }: any) {
   const { user, logout } = useAuth();
@@ -93,6 +158,9 @@ export default function PartnerDashboardScreen({ navigation }: any) {
   const [partnerReports, setPartnerReports] = useState<PartnerReport[]>([]);
   const [actionProjectId, setActionProjectId] = useState<string | null>(null);
   const [reportForm, setReportForm] = useState<ReportFormState>(createEmptyReportForm());
+  const [proposalForm, setProposalForm] = useState<ProposalFormState>(createEmptyProposalForm(FEATURED_PROGRAM_MODULES[0]));
+  const [showProposalModal, setShowProposalModal] = useState(false);
+  const [activeProposalModule, setActiveProposalModule] = useState<AdvocacyFocus | null>(null);
   const [planningCalendars, setPlanningCalendars] = useState<AdminPlanningCalendar[]>([]);
   const [planningItems, setPlanningItems] = useState<AdminPlanningItem[]>([]);
 
@@ -184,6 +252,19 @@ export default function PartnerDashboardScreen({ navigation }: any) {
     [partnerApplications]
   );
 
+  const programApplicationByModule = useMemo(() => {
+    const byModule = new Map<string, PartnerProjectApplication>();
+    partnerApplications.forEach(application => {
+      const programModule = application.projectId.startsWith('program:')
+        ? application.projectId.slice('program:'.length).trim()
+        : application.proposalDetails?.requestedProgramModule || '';
+      if (programModule) {
+        byModule.set(programModule, application);
+      }
+    });
+    return byModule;
+  }, [partnerApplications]);
+
   const attendingProjects = useMemo(
     () =>
       projects.filter(project => {
@@ -223,6 +304,121 @@ export default function PartnerDashboardScreen({ navigation }: any) {
     }));
   };
 
+  const openProposalForm = (module: AdvocacyFocus) => {
+    setActiveProposalModule(module);
+    setProposalForm(current =>
+      current.requestedProgramModule === module ? current : createEmptyProposalForm(module)
+    );
+    setShowProposalModal(true);
+  };
+
+  const closeProposalForm = () => {
+    setShowProposalModal(false);
+    setActiveProposalModule(null);
+  };
+
+  const updateProposalForm = (updates: Partial<Omit<ProposalFormState, 'requestedProgramModule'>>) => {
+    setProposalForm(current => ({
+      ...current,
+      ...updates,
+    }));
+  };
+
+  const handlePickProposalPhoto = async () => {
+    try {
+      const pickedImage = await pickImageFromDevice();
+      if (!pickedImage) {
+        return;
+      }
+      updateProposalForm({ photoAttachment: pickedImage });
+    } catch (error: any) {
+      Alert.alert('Photo Access Needed', error?.message || 'Unable to open your photo library.');
+    }
+  };
+
+  const handleRemoveProposalPhoto = () => {
+    updateProposalForm({ photoAttachment: '' });
+  };
+
+  const handlePickProposalDocument = async () => {
+    try {
+      const pickedDocument = await pickDocumentFromDevice();
+      if (!pickedDocument) {
+        return;
+      }
+      updateProposalForm({ attachmentUrl: pickedDocument });
+    } catch (error: any) {
+      const errorMessage = error?.message || 'Unable to access your file library. Please check app permissions in settings.';
+      Alert.alert('Permission Required', errorMessage);
+    }
+  };
+
+  const handleRemoveProposalDocument = () => {
+    updateProposalForm({ attachmentUrl: '' });
+  };
+
+  const handleSubmitProgramProposal = async () => {
+    if (!user || !activeProposalModule) {
+      return;
+    }
+
+    const proposalProjectId = buildProgramProposalProjectId(activeProposalModule);
+    const volunteersNeeded = Number(proposalForm.proposedVolunteersNeeded);
+    const proposalDetails: PartnerProjectProposalDetails = {
+      requestedProgramModule: activeProposalModule,
+      proposedTitle: proposalForm.proposedTitle.trim(),
+      proposedDescription: proposalForm.proposedDescription.trim(),
+      proposedStartDate: proposalForm.proposedStartDate.trim(),
+      proposedEndDate: proposalForm.proposedEndDate.trim(),
+      proposedLocation: proposalForm.proposedLocation.trim(),
+      proposedVolunteersNeeded: Number.isNaN(volunteersNeeded) ? 0 : volunteersNeeded,
+      communityNeed: proposalForm.communityNeed.trim(),
+      expectedDeliverables: proposalForm.expectedDeliverables.trim(),
+      targetProjectId: undefined,
+      targetProjectTitle: undefined,
+      targetProjectDescription: undefined,
+      targetProjectAddress: undefined,
+      skillsNeeded: [],
+      attachments: [
+        ...(proposalForm.photoAttachment
+          ? [{ url: proposalForm.photoAttachment, type: 'image' as const }]
+          : []),
+        ...(proposalForm.attachmentUrl.trim()
+          ? [{ url: proposalForm.attachmentUrl.trim(), type: 'document' as const }]
+          : []),
+      ],
+    };
+
+    if (!proposalDetails.proposedTitle || !proposalDetails.proposedDescription) {
+      Alert.alert('Proposal Details Required', 'Please provide a title and description for this proposal.');
+      return;
+    }
+
+    if (!proposalDetails.communityNeed || !proposalDetails.expectedDeliverables) {
+      Alert.alert('Proposal Details Required', 'Please describe the community need and expected deliverables.');
+      return;
+    }
+
+    try {
+      setActionProjectId(proposalProjectId);
+      setShowProposalModal(false);
+      await submitPartnerProgramProposal(proposalProjectId, user, {
+        programModule: activeProposalModule,
+        proposalDetails,
+      });
+      Alert.alert('Proposal Sent', 'Your proposal has been sent to the admin for review.');
+      void loadDashboardData();
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to send the program proposal.')
+      );
+    } finally {
+      setActionProjectId(null);
+      setActiveProposalModule(null);
+    }
+  };
+
   const handleLogout = async () => {
     if (Platform.OS === 'web') {
       const confirmed =
@@ -237,30 +433,6 @@ export default function PartnerDashboardScreen({ navigation }: any) {
       { text: 'Cancel' },
       { text: 'Logout', onPress: async () => await logout() },
     ]);
-  };
-
-  const handleJoinProject = async (projectId: string) => {
-    if (!user) {
-      return;
-    }
-
-    try {
-      setActionProjectId(projectId);
-      const selectedProject = projects.find(project => project.id === projectId);
-      const selectedProgramModule = selectedProject?.programModule || selectedProject?.category;
-      await submitPartnerProgramProposal(projectId, user, {
-        programModule: selectedProgramModule,
-      });
-      Alert.alert('Proposal Sent', 'Your project proposal has been sent to the admin for approval.');
-      void loadDashboardData();
-    } catch (error) {
-      Alert.alert(
-        getRequestErrorTitle(error),
-        getRequestErrorMessage(error, 'Failed to send the project proposal.')
-      );
-    } finally {
-      setActionProjectId(null);
-    }
   };
 
   const handleUploadReport = async (projectId: string) => {
@@ -417,153 +589,48 @@ export default function PartnerDashboardScreen({ navigation }: any) {
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Project Proposals</Text>
-        {activeProjects.map(project => {
-          const displayStatus = getDisplayProjectStatus(project);
-          const application = applicationByProjectId.get(project.id);
-          const projectReportsForCard = partnerReports.filter(report => report.projectId === project.id);
-          const latestProjectReport = projectReportsForCard[0];
-          const reportFormOpen = reportForm.projectId === project.id;
-          const attending = application?.status === 'Approved';
-          const buttonLabel = attending
+        <Text style={styles.sectionTitle}>Browse Programs</Text>
+        <Text style={styles.sectionSubtitle}>
+          Choose one of the three core program tracks and submit a project proposal based on that program.
+        </Text>
+        {FEATURED_PROGRAM_MODULES.map(module => {
+          const application = programApplicationByModule.get(module);
+          const status = application?.status;
+          const isApproved = status === 'Approved';
+          const isPending = status === 'Pending';
+          const isRejected = status === 'Rejected';
+          const proposalProjectId = buildProgramProposalProjectId(module);
+          const buttonLabel = isApproved
             ? 'Proposal Approved'
-            : application?.status === 'Pending'
+            : isPending
             ? 'Proposal Pending'
-            : application?.status === 'Rejected'
+            : isRejected
             ? 'Submit Again'
             : 'Submit Project Proposal';
 
           return (
-            <View key={project.id} style={styles.projectCard}>
-              <View style={styles.cardHeader}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.cardTitle}>{project.title}</Text>
-                  <Text style={styles.cardMeta}>{project.description}</Text>
+            <View key={module} style={[styles.card, styles.programCard, { borderColor: getProgramModuleColor(module) }]}> 
+              <View style={styles.programCardHeader}>
+                <View style={[styles.programIcon, { backgroundColor: getProgramModuleColor(module) }]}> 
+                  <MaterialIcons name="school" size={20} color="#fff" />
                 </View>
-                <View style={[styles.statusBadge, { backgroundColor: getProjectStatusColor(displayStatus) }]}>
-                  <Text style={styles.statusBadgeText}>{displayStatus}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cardTitle}>{module}</Text>
+                  <Text style={styles.cardMeta}>{getProgramModuleDescription(module)}</Text>
+                </View>
+                <View style={[styles.statusBadge, { backgroundColor: getProgramModuleColor(module) }]}> 
+                  <Text style={styles.statusBadgeText}>{isApproved ? 'Approved' : isPending ? 'Pending' : 'Open'}</Text>
                 </View>
               </View>
-
               <TouchableOpacity
-                style={[styles.primaryButton, attending && styles.secondaryButton]}
-                onPress={() => handleJoinProject(project.id)}
-                disabled={application?.status === 'Pending' || application?.status === 'Approved' || actionProjectId === project.id}
+                style={[styles.primaryButton, isApproved && styles.secondaryButton, isPending && styles.timeButtonDisabled]}
+                onPress={() => openProposalForm(module)}
+                disabled={actionProjectId === proposalProjectId || isApproved || isPending}
               >
-                <Text style={[styles.primaryButtonText, attending && styles.secondaryButtonText]}>
-                  {actionProjectId === project.id ? 'Sending...' : buttonLabel}
+                <Text style={[styles.primaryButtonText, isApproved && styles.secondaryButtonText]}>
+                  {actionProjectId === proposalProjectId ? 'Sending...' : buttonLabel}
                 </Text>
               </TouchableOpacity>
-
-              {attending ? (
-                <>
-                  <View style={styles.inlineReportCard}>
-                    <View style={styles.inlineReportHeader}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.inlineReportTitle}>Data Submission Form</Text>
-                        <Text style={styles.inlineReportMeta}>
-                          {projectReportsForCard.length === 0
-                            ? `Upload a report inside this ${project.isEvent ? 'event' : 'project'} after your proposal is approved.`
-                            : `${projectReportsForCard.length} submitted report${
-                                projectReportsForCard.length === 1 ? '' : 's'
-                              } for this ${project.isEvent ? 'event' : 'project'}.`}
-                        </Text>
-                        {latestProjectReport ? (
-                          <Text style={styles.inlineReportMeta}>
-                            Latest: {latestProjectReport.reportType} report on{' '}
-                            {new Date(latestProjectReport.createdAt).toLocaleDateString()}
-                          </Text>
-                        ) : null}
-                      </View>
-                      <TouchableOpacity
-                        style={styles.inlineReportToggle}
-                        onPress={() =>
-                          reportFormOpen ? closeReportForm() : openReportForm(project.id)
-                        }
-                      >
-                        <Text style={styles.inlineReportToggleText}>
-                          {reportFormOpen ? 'Hide Form' : 'Open Form'}
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-
-                    {reportFormOpen ? (
-                      <View style={styles.inlineReportForm}>
-                        <Text style={styles.fieldLabel}>Report Type</Text>
-                        <View style={styles.selectorGrid}>
-                          {REPORT_TYPE_OPTIONS.map(type => {
-                            const selected = reportForm.reportType === type;
-                            return (
-                              <TouchableOpacity
-                                key={type}
-                                style={[styles.selectorChip, selected && styles.selectorChipActive]}
-                                onPress={() => updateReportFormForProject(project.id, { reportType: type })}
-                              >
-                                <Text style={[styles.selectorChipText, selected && styles.selectorChipTextActive]}>
-                                  {type}
-                                </Text>
-                              </TouchableOpacity>
-                            );
-                          })}
-                        </View>
-
-                        <TextInput
-                          style={[styles.input, styles.inputMultiline]}
-                          placeholder="Description"
-                          value={reportForm.description}
-                          onChangeText={value =>
-                            updateReportFormForProject(project.id, { description: value })
-                          }
-                          multiline
-                        />
-                        <TextInput
-                          style={styles.input}
-                          placeholder="Impact Count"
-                          value={reportForm.impactCount}
-                          onChangeText={value =>
-                            updateReportFormForProject(project.id, { impactCount: value })
-                          }
-                          keyboardType="number-pad"
-                        />
-                        <TouchableOpacity
-                          style={styles.photoPickerButton}
-                          onPress={() => handlePickReportImage(project.id)}
-                        >
-                          <MaterialIcons name="photo-library" size={18} color="#166534" />
-                          <Text style={styles.photoPickerButtonText}>
-                            {reportForm.mediaFile ? 'Replace Photo' : 'Choose Photo From Phone'}
-                          </Text>
-                        </TouchableOpacity>
-
-                        {reportForm.mediaFile ? (
-                          <View style={styles.photoPreviewCard}>
-                            {isImageMediaUri(reportForm.mediaFile) ? (
-                              <Image
-                                source={{ uri: reportForm.mediaFile }}
-                                style={styles.photoPreview}
-                                resizeMode="cover"
-                              />
-                            ) : null}
-                            <View style={styles.photoPreviewMeta}>
-                              <Text style={styles.photoPreviewLabel}>Photo ready to upload</Text>
-                              <TouchableOpacity onPress={() => handleRemoveReportImage(project.id)}>
-                                <Text style={styles.photoRemoveText}>Remove Photo</Text>
-                              </TouchableOpacity>
-                            </View>
-                          </View>
-                        ) : null}
-
-                        <TouchableOpacity
-                          style={styles.primaryButton}
-                          onPress={() => handleUploadReport(project.id)}
-                        >
-                          <Text style={styles.primaryButtonText}>Upload Report</Text>
-                        </TouchableOpacity>
-                      </View>
-                    ) : null}
-                  </View>
-                </>
-              ) : null}
             </View>
           );
         })}
@@ -597,6 +664,139 @@ export default function PartnerDashboardScreen({ navigation }: any) {
               </View>
         )}
       </View>
+
+      <Modal
+        visible={showProposalModal}
+        animationType="slide"
+        transparent
+        onRequestClose={closeProposalForm}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <ScrollView contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Submit Program Proposal</Text>
+                <TouchableOpacity onPress={closeProposalForm} style={styles.modalCloseButton}>
+                  <MaterialIcons name="close" size={20} color="#475569" />
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.fieldLabel}>Proposal Title</Text>
+              <TextInput
+                style={styles.input}
+                value={proposalForm.proposedTitle}
+                onChangeText={value => updateProposalForm({ proposedTitle: value })}
+                placeholder="Short proposal title"
+                placeholderTextColor="#94a3b8"
+              />
+              <Text style={styles.fieldLabel}>Proposal Description</Text>
+              <TextInput
+                style={[styles.input, styles.inputMultiline]}
+                value={proposalForm.proposedDescription}
+                onChangeText={value => updateProposalForm({ proposedDescription: value })}
+                placeholder="What will this project deliver?"
+                placeholderTextColor="#94a3b8"
+                multiline
+              />
+              <Text style={styles.fieldLabel}>Start / End Date</Text>
+              <View style={styles.dateRow}>
+                <TextInput
+                  style={[styles.input, styles.dateInput]}
+                  value={proposalForm.proposedStartDate}
+                  onChangeText={value => updateProposalForm({ proposedStartDate: value })}
+                  placeholder="YYYY-MM-DD"
+                  placeholderTextColor="#94a3b8"
+                />
+                <TextInput
+                  style={[styles.input, styles.dateInput]}
+                  value={proposalForm.proposedEndDate}
+                  onChangeText={value => updateProposalForm({ proposedEndDate: value })}
+                  placeholder="YYYY-MM-DD"
+                  placeholderTextColor="#94a3b8"
+                />
+              </View>
+              <Text style={styles.fieldLabel}>Location</Text>
+              <TextInput
+                style={styles.input}
+                value={proposalForm.proposedLocation}
+                onChangeText={value => updateProposalForm({ proposedLocation: value })}
+                placeholder="Address or barangay"
+                placeholderTextColor="#94a3b8"
+              />
+              <Text style={styles.fieldLabel}>Volunteers Needed</Text>
+              <TextInput
+                style={styles.input}
+                value={proposalForm.proposedVolunteersNeeded}
+                onChangeText={value => updateProposalForm({ proposedVolunteersNeeded: value.replace(/[^0-9]/g, '') })}
+                placeholder="Number of volunteers"
+                placeholderTextColor="#94a3b8"
+                keyboardType="numeric"
+              />
+              <Text style={styles.fieldLabel}>Community Need</Text>
+              <TextInput
+                style={[styles.input, styles.inputMultiline]}
+                value={proposalForm.communityNeed}
+                onChangeText={value => updateProposalForm({ communityNeed: value })}
+                placeholder="Describe the community need"
+                placeholderTextColor="#94a3b8"
+                multiline
+              />
+              <Text style={styles.fieldLabel}>Expected Deliverables</Text>
+              <TextInput
+                style={[styles.input, styles.inputMultiline]}
+                value={proposalForm.expectedDeliverables}
+                onChangeText={value => updateProposalForm({ expectedDeliverables: value })}
+                placeholder="What will the project deliver?"
+                placeholderTextColor="#94a3b8"
+                multiline
+              />
+              <Text style={styles.fieldLabel}>Document Attachment</Text>
+              {proposalForm.attachmentUrl ? (
+                <View style={styles.photoPreviewCard}>
+                  <View style={styles.documentPreview}>
+                    <MaterialIcons name="description" size={24} color="#166534" />
+                  </View>
+                  <View style={styles.photoPreviewMeta}>
+                    <Text style={styles.photoPreviewLabel}>Document attached</Text>
+                    <TouchableOpacity onPress={handleRemoveProposalDocument}>
+                      <Text style={styles.photoRemoveText}>Remove</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ) : (
+                <TouchableOpacity style={styles.photoPickerButton} onPress={handlePickProposalDocument}>
+                  <MaterialIcons name="attach-file" size={18} color="#166534" />
+                  <Text style={styles.photoPickerButtonText}>Add document attachment</Text>
+                </TouchableOpacity>
+              )}
+              <Text style={[styles.fieldLabel, { marginTop: 12 }]}>Photo Attachment</Text>
+              {proposalForm.photoAttachment ? (
+                <View style={styles.photoPreviewCard}>
+                  <Image source={{ uri: proposalForm.photoAttachment }} style={styles.photoPreview} />
+                  <View style={styles.photoPreviewMeta}>
+                    <Text style={styles.photoPreviewLabel}>Selected photo attachment</Text>
+                    <TouchableOpacity onPress={handleRemoveProposalPhoto}>
+                      <Text style={styles.photoRemoveText}>Remove</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ) : (
+                <TouchableOpacity style={styles.photoPickerButton} onPress={handlePickProposalPhoto}>
+                  <MaterialIcons name="photo" size={18} color="#166534" />
+                  <Text style={styles.photoPickerButtonText}>Add project photo</Text>
+                </TouchableOpacity>
+              )}
+              <View style={styles.modalActionRow}>
+                <TouchableOpacity style={[styles.primaryButton, styles.modalCancelButton]} onPress={closeProposalForm}>
+                  <Text style={[styles.primaryButtonText, styles.modalCancelText]}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.primaryButton} onPress={handleSubmitProgramProposal}>
+                  <Text style={styles.primaryButtonText}>Send Proposal</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -680,11 +880,36 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#0f172a',
   },
+  sectionSubtitle: {
+    fontSize: 13,
+    color: '#475569',
+    lineHeight: 18,
+    marginBottom: 8,
+  },
   card: {
     backgroundColor: '#fff',
     borderRadius: 16,
     padding: 16,
     gap: 10,
+  },
+  programCard: {
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  programCardHeader: {
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'center',
+  },
+  programIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  timeButtonDisabled: {
+    opacity: 0.6,
   },
   projectCard: {
     backgroundColor: '#fff',
@@ -844,6 +1069,15 @@ const styles = StyleSheet.create({
     height: 180,
     backgroundColor: '#e2e8f0',
   },
+  documentPreview: {
+    width: '100%',
+    height: 100,
+    backgroundColor: '#f0fdf4',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#dbe2ea',
+  },
   photoPreviewMeta: {
     padding: 12,
     flexDirection: 'row',
@@ -861,6 +1095,54 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#dc2626',
     fontWeight: '700',
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.55)',
+    justifyContent: 'center',
+    padding: 16,
+  },
+  modalCard: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    maxHeight: '90%',
+    overflow: 'hidden',
+  },
+  modalContent: {
+    padding: 20,
+    gap: 16,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  modalCloseButton: {
+    padding: 6,
+  },
+  modalActionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginTop: 12,
+  },
+  modalCancelButton: {
+    backgroundColor: '#f8fafc',
+  },
+  modalCancelText: {
+    color: '#475569',
+  },
+  dateRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  dateInput: {
+    flex: 1,
   },
   historyItem: {
     paddingTop: 10,

@@ -35,7 +35,8 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [view, setView] = useState<'list' | 'detail'>('list');
+  const hasInitialVolunteerId = Boolean(route?.params?.volunteerId);
+  const [view, setView] = useState<'list' | 'detail'>(hasInitialVolunteerId ? 'detail' : 'list');
   const [selectedVolunteer, setSelectedVolunteer] = useState<Volunteer | null>(null);
   const [selectedVolunteerCompletedProjectIds, setSelectedVolunteerCompletedProjectIds] = useState<string[]>([]);
   const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
@@ -57,7 +58,12 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
 
   useEffect(() => {
     const volunteerId = route?.params?.volunteerId;
-    if (!isAdmin || !volunteerId || volunteers.length === 0) {
+    if (!isAdmin || !volunteerId) {
+      return;
+    }
+
+    // If volunteers haven't loaded yet, wait for them
+    if (volunteers.length === 0) {
       return;
     }
 
@@ -66,7 +72,11 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
       return;
     }
 
-    void handleSelectVolunteer(targetVolunteer);
+    // Select the volunteer and load their details
+    setSelectedVolunteer(targetVolunteer);
+    void loadSelectedVolunteerDetails(targetVolunteer.id);
+    setView('detail');
+    // Clear the param after processing
     navigation.setParams({ volunteerId: undefined });
   }, [isAdmin, navigation, route?.params?.volunteerId, volunteers]);
 
@@ -151,14 +161,14 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   };
 
   // Opens the detail view for the chosen volunteer.
-  const handleSelectVolunteer = async (volunteer: Volunteer) => {
+  const handleSelectVolunteer = (volunteer: Volunteer) => {
     if (!isAdmin) {
       Alert.alert('Access Restricted', 'Only admin accounts can manage volunteers.');
       return;
     }
 
     setSelectedVolunteer(volunteer);
-    await loadSelectedVolunteerDetails(volunteer.id);
+    void loadSelectedVolunteerDetails(volunteer.id);
     setView('detail');
   };
 

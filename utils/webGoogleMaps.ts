@@ -50,7 +50,7 @@ type GoogleMapInstance = {
 };
 
 type GoogleMarkerInstance = {
-  addListener: (eventName: 'click', handler: () => void) => GoogleMapsEventListener;
+  addListener: (eventName: 'click' | 'mouseover' | 'mouseout', handler: () => void) => GoogleMapsEventListener;
   setMap: (map: GoogleMapInstance | null) => void;
 };
 
@@ -61,6 +61,16 @@ type GoogleLatLngBounds = {
 type GoogleSize = object;
 type GooglePoint = object;
 
+type GoogleInfoWindowOptions = {
+  content?: string | Node;
+};
+
+type GoogleInfoWindowInstance = {
+  setContent: (content: string | Node) => void;
+  open: (options: { map: GoogleMapInstance; anchor: GoogleMarkerInstance }) => void;
+  close: () => void;
+};
+
 export type GoogleMapsGlobal = {
   maps: {
     Map: new (element: HTMLElement, options: GoogleMapOptions) => GoogleMapInstance;
@@ -68,6 +78,7 @@ export type GoogleMapsGlobal = {
     LatLngBounds: new () => GoogleLatLngBounds;
     Size: new (width: number, height: number) => GoogleSize;
     Point: new (x: number, y: number) => GooglePoint;
+    InfoWindow: new (options?: GoogleInfoWindowOptions) => GoogleInfoWindowInstance;
   };
 };
 

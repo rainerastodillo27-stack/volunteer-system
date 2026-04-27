@@ -12,12 +12,14 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
-import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
+import MapView, { Callout, Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import InlineLoadError from '../components/InlineLoadError';
 import { useAuth } from '../contexts/AuthContext';
-import { PartnerReport, Project } from '../models/types';
+import { Partner, PartnerReport, Project, Volunteer } from '../models/types';
 import {
+  getAllPartners,
   getAllPartnerReports,
+  getAllVolunteers,
   getProjectsScreenSnapshot,
   subscribeToStorageChanges,
 } from '../models/storage';
@@ -36,6 +38,8 @@ export default function MappingScreen({ navigation }: any) {
   const { user } = useAuth();
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
+  const [partners, setPartners] = useState<Partner[]>([]);
   const [partnerReports, setPartnerReports] = useState<PartnerReport[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [showDetails, setShowDetails] = useState(false);
@@ -69,9 +73,11 @@ export default function MappingScreen({ navigation }: any) {
   // Loads map data and narrows project visibility based on the active role.
   const loadProjects = async () => {
     try {
-      const [snapshot, allReports] = await Promise.all([
+      const [snapshot, allReports, allVolunteers, allPartners] = await Promise.all([
         getProjectsScreenSnapshot(user),
         getAllPartnerReports(),
+        getAllVolunteers(),
+        getAllPartners(),
       ]);
 
       const approvedPartnerProjectIds = new Set(
@@ -104,12 +110,16 @@ export default function MappingScreen({ navigation }: any) {
 
       setProjects(visibleProjects);
       setPartnerReports(allReports.filter(report => visibleProjectIds.has(report.projectId)));
+      setVolunteers(allVolunteers);
+      setPartners(allPartners);
       setLoadError(null);
       setLoading(false);
     } catch (error) {
       console.error('Error loading projects for map:', error);
       setProjects([]);
       setPartnerReports([]);
+      setVolunteers([]);
+      setPartners([]);
       setLoadError({
         title: getRequestErrorTitle(error, 'Database Unavailable'),
         message: getRequestErrorMessage(error, 'Failed to load projects from Postgres.'),
@@ -216,7 +226,81 @@ export default function MappingScreen({ navigation }: any) {
               title={`${index + 1}. ${project.title}`}
               description={`${project.isEvent ? 'Event' : 'Program'} | ${getProjectDisplayStatus(project)}`}
               onPress={() => handleProjectSelection(project.id)}
-            />
+            >
+              <Callout tooltip>
+                <View style={styles.calloutCard}>
+                  <Text style={styles.calloutTitle} numberOfLines={2}>
+                    {project.title}
+                  </Text>
+
+                  {(() => {
+                    const partner = project.partnerId
+                      ? partners.find(entry => entry.id === project.partnerId) || null
+                      : null;
+                    if (!partner) {
+                      return null;
+                    }
+                    return (
+                      <TouchableOpacity
+                        activeOpacity={0.6}
+                        onPress={() => {
+                          navigateToAvailableRoute(
+                            navigation,
+                            'Partners',
+                            { partnerId: partner.id },
+                            { routeName: 'Map' }
+                          );
+                        }}
+                        style={styles.calloutProfileRow}
+                      >
+                        <MaterialIcons name="business" size={18} color="#0f766e" />
+                        <Text style={styles.calloutProfileText} numberOfLines={1}>
+                          {partner.name}
+                        </Text>
+                        <MaterialIcons name="chevron-right" size={18} color="#cbd5e1" />
+                      </TouchableOpacity>
+                    );
+                  })()}
+
+                  <Text style={styles.calloutSectionLabel}>Volunteers</Text>
+                  {(() => {
+                    const joinedVolunteers = volunteers
+                      .filter(volunteer =>
+                        (project.joinedUserIds || []).includes(volunteer.userId) ||
+                        (project.volunteers || []).includes(volunteer.id) ||
+                        (project.internalTasks || []).some(task => task.assignedVolunteerId === volunteer.id)
+                      )
+                      .sort((a, b) => a.name.localeCompare(b.name));
+
+                    if (joinedVolunteers.length === 0) {
+                      return <Text style={styles.calloutEmpty}>No volunteers joined yet.</Text>;
+                    }
+
+                    return joinedVolunteers.slice(0, 6).map(volunteer => (
+                      <TouchableOpacity
+                        key={volunteer.id}
+                        activeOpacity={0.6}
+                        onPress={() => {
+                          navigateToAvailableRoute(
+                            navigation,
+                            'Volunteers',
+                            { volunteerId: volunteer.id },
+                            { routeName: 'Map' }
+                          );
+                        }}
+                        style={styles.calloutProfileRow}
+                      >
+                        <MaterialIcons name="person-outline" size={18} color="#166534" />
+                        <Text style={styles.calloutProfileText} numberOfLines={1}>
+                          {volunteer.name}
+                        </Text>
+                        <MaterialIcons name="chevron-right" size={18} color="#cbd5e1" />
+                      </TouchableOpacity>
+                    ));
+                  })()}
+                </View>
+              </Callout>
+            </Marker>
           ))}
         </MapView>
 
@@ -468,6 +552,60 @@ const styles = StyleSheet.create({
   },
   mapView: {
     flex: 1,
+  },
+  calloutCard: {
+    width: 240,
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  calloutTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0f172a',
+    marginBottom: 8,
+  },
+  calloutSectionLabel: {
+    marginTop: 8,
+    marginBottom: 4,
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#166534',
+  },
+  calloutRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 5,
+  },
+  calloutRowText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#0f172a',
+  },
+  calloutProfileRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 10,
+    marginVertical: 4,
+    borderRadius: 8,
+    backgroundColor: '#f8fafc',
+    minHeight: 40,
+  },
+  calloutProfileText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#0f172a',
+  },
+  calloutEmpty: {
+    fontSize: 12,
+    color: '#64748b',
+    paddingVertical: 4,
   },
   volunteerInlineErrorWrap: {
     position: 'absolute',

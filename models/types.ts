@@ -300,6 +300,11 @@ export interface PartnerProjectProposalDetails {
   skillsNeeded?: string[]; // Skills required for this project/event
   communityNeed: string;
   expectedDeliverables: string;
+  attachments?: {
+    url: string;
+    type: 'image' | 'document';
+    description?: string;
+  }[];
 }
 
 // Represents a partner's request to join a project or event.

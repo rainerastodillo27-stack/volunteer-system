@@ -17,6 +17,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import CalendarDatePicker from '../components/CalendarDatePicker';
 import { useFocusEffect } from '@react-navigation/native';
 import InlineLoadError from '../components/InlineLoadError';
 import { TASK_SKILL_OPTIONS } from '../utils/skills';
@@ -441,6 +442,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [selectedProgramProposalModule, setSelectedProgramProposalModule] = useState<ProgramSuiteModule | null>(null);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [datePickerMode, setDatePickerMode] = useState<'startDate' | 'endDate'>('startDate');
+  const [selectedDate, setSelectedDate] = useState(new Date());
   const [selectedSchedulerYear, setSelectedSchedulerYear] = useState(new Date().getFullYear());
   const [selectedSchedulerMonth, setSelectedSchedulerMonth] = useState(new Date().getMonth());
   const [isSchedulerMonthHovered, setIsSchedulerMonthHovered] = useState(false);
@@ -2092,24 +2096,48 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           </View>
 
           <View style={[styles.formRow, styles.formRowReverse]}>
-            <TextInput
-              style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
-              placeholder="YYYY-MM-DD"
-              placeholderTextColor="#999"
-              value={projectDraft.startDate}
-              onChangeText={value => handleProjectDraftChange('startDate', value)}
-            />
+            <TouchableOpacity
+              style={[styles.datePickerButton, styles.inputWithLabel]}
+              onPress={() => {
+                setDatePickerMode('startDate');
+                setSelectedDate(projectDraft.startDate ? new Date(projectDraft.startDate) : new Date());
+                setShowDatePicker(true);
+              }}
+            >
+              <MaterialIcons name="calendar-today" size={20} color="#4CAF50" />
+              <Text style={styles.datePickerButtonText}>
+                {projectDraft.startDate
+                  ? new Date(projectDraft.startDate).toLocaleDateString('en-US', {
+                      year: 'numeric',
+                      month: 'long',
+                      day: 'numeric',
+                    })
+                  : 'Select start date'}
+              </Text>
+            </TouchableOpacity>
             <Text style={styles.labelRight}>Start Date</Text>
           </View>
 
           <View style={[styles.formRow, styles.formRowReverse]}>
-            <TextInput
-              style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
-              placeholder="YYYY-MM-DD"
-              placeholderTextColor="#999"
-              value={projectDraft.endDate}
-              onChangeText={value => handleProjectDraftChange('endDate', value)}
-            />
+            <TouchableOpacity
+              style={[styles.datePickerButton, styles.inputWithLabel]}
+              onPress={() => {
+                setDatePickerMode('endDate');
+                setSelectedDate(projectDraft.endDate ? new Date(projectDraft.endDate) : new Date());
+                setShowDatePicker(true);
+              }}
+            >
+              <MaterialIcons name="calendar-today" size={20} color="#4CAF50" />
+              <Text style={styles.datePickerButtonText}>
+                {projectDraft.endDate
+                  ? new Date(projectDraft.endDate).toLocaleDateString('en-US', {
+                      year: 'numeric',
+                      month: 'long',
+                      day: 'numeric',
+                    })
+                  : 'Select end date'}
+              </Text>
+            </TouchableOpacity>
             <Text style={styles.labelRight}>End Date</Text>
           </View>
 
@@ -2166,6 +2194,29 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           </TouchableOpacity>
         </ScrollView>
       </View>
+
+      {/* Date Picker Modal */}
+      <Modal
+        visible={showDatePicker}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowDatePicker(false)}
+      >
+        <View style={styles.datePickerOverlay}>
+          <CalendarDatePicker
+            selectedDate={selectedDate}
+            onDateSelect={(date) => {
+              setSelectedDate(date);
+              const year = date.getFullYear();
+              const month = String(date.getMonth() + 1).padStart(2, '0');
+              const day = String(date.getDate()).padStart(2, '0');
+              const dateString = `${year}-${month}-${day}`;
+              handleProjectDraftChange(datePickerMode, dateString);
+            }}
+            onClose={() => setShowDatePicker(false)}
+          />
+        </View>
+      </Modal>
     </Modal>
   );
 
@@ -6230,6 +6281,46 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  datePickerButton: {
+    backgroundColor: '#fff',
+    borderRadius: 6,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    minHeight: 48,
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  datePickerButtonText: {
+    fontSize: 14,
+    color: '#333',
+    flex: 1,
+  },
+  iosDatePickerActions: {
+    backgroundColor: '#fff',
+    borderTopWidth: 1,
+    borderTopColor: '#ddd',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+  },
+  iosDatePickerButton: {
+    color: '#4CAF50',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  datePickerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 });
 

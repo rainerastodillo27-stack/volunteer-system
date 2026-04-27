@@ -1455,6 +1455,7 @@ def get_relational_collection(connection: Any, key: str) -> list[dict[str, Any]]
         raise KeyError(f"Unsupported relational mirror key: {key}")
 
     from psycopg.rows import dict_row
+    from psycopg.errors import UndefinedColumn, UndefinedTable
 
     column_names = [column_name for column_name, _ in spec["columns"]]
     filter_clause = _row_filter_clause(key)
@@ -1463,7 +1464,15 @@ def get_relational_collection(connection: Any, key: str) -> list[dict[str, Any]]
         if filter_clause:
             query += f" where {filter_clause}"
         query += " order by id asc"
-        cursor.execute(query)
+        try:
+            cursor.execute(query)
+        except (UndefinedColumn, UndefinedTable):
+            # Some environments may have an older DB schema (or missing tables)
+            # even though the code expects the latest relational mirror columns.
+            # Make reads resilient by ensuring tables/columns then retrying once.
+            ensure_relational_mirror_tables(connection)
+            connection.commit()
+            cursor.execute(query)
         rows = cursor.fetchall()
     return [_row_to_item(key, row) for row in rows]
 
@@ -1474,6 +1483,7 @@ def get_relational_item_by_id(connection: Any, key: str, item_id: str) -> dict[s
         raise KeyError(f"Unsupported relational mirror key: {key}")
 
     from psycopg.rows import dict_row
+    from psycopg.errors import UndefinedColumn, UndefinedTable
 
     column_names = [column_name for column_name, _ in spec["columns"]]
     filter_clause = _row_filter_clause(key)
@@ -1481,7 +1491,12 @@ def get_relational_item_by_id(connection: Any, key: str, item_id: str) -> dict[s
         query = f"select {', '.join(column_names)} from {spec['table']} where id = %s"
         if filter_clause:
             query += f" and {filter_clause}"
-        cursor.execute(query, (item_id,))
+        try:
+            cursor.execute(query, (item_id,))
+        except (UndefinedColumn, UndefinedTable):
+            ensure_relational_mirror_tables(connection)
+            connection.commit()
+            cursor.execute(query, (item_id,))
         row = cursor.fetchone()
     return None if row is None else _row_to_item(key, row)
 
@@ -1497,6 +1512,7 @@ def get_relational_items_by_field(
         raise KeyError(f"Unsupported relational mirror key: {key}")
 
     from psycopg.rows import dict_row
+    from psycopg.errors import UndefinedColumn, UndefinedTable
 
     column_name = _field_column_name(key, field_name)
     valid_columns = {column_name for column_name, _ in spec["columns"]}
@@ -1510,7 +1526,12 @@ def get_relational_items_by_field(
         if filter_clause:
             query += f" and {filter_clause}"
         query += " order by id asc"
-        cursor.execute(query, (field_value,))
+        try:
+            cursor.execute(query, (field_value,))
+        except (UndefinedColumn, UndefinedTable):
+            ensure_relational_mirror_tables(connection)
+            connection.commit()
+            cursor.execute(query, (field_value,))
         rows = cursor.fetchall()
     return [_row_to_item(key, row) for row in rows]
 

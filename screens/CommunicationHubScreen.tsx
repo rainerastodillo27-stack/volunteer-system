@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Image,
@@ -1216,6 +1216,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   const detailCanPostNeeds = Boolean(selectedProjectChat);
   const showComposer = Boolean(selectedUser || selectedProjectChat);
+  const deferredSearchText = useDeferredValue(searchText);
 
   const selectedChatTitle =
     selectedUser?.name ||
@@ -1239,7 +1240,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   );
 
   const filteredProjectChats = useMemo(() => {
-    const query = searchText.trim().toLowerCase();
+    const query = deferredSearchText.trim().toLowerCase();
     if (!query) {
       return projectChats;
     }
@@ -1250,10 +1251,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       const location = projectChat.project.location?.address?.toLowerCase() || '';
       return title.includes(query) || description.includes(query) || location.includes(query);
     });
-  }, [projectChats, searchText]);
+  }, [projectChats, deferredSearchText]);
 
   const filteredSuggestedUsers = useMemo(() => {
-    const query = searchText.trim().toLowerCase();
+    const query = deferredSearchText.trim().toLowerCase();
     return allUsers.filter(chatUser => {
       if (conversationUserIds.has(chatUser.id)) {
         return false;
@@ -1268,10 +1269,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         formatRoleLabel(chatUser).toLowerCase().includes(query)
       );
     });
-  }, [allUsers, conversationUserIds, searchText]);
+  }, [allUsers, conversationUserIds, deferredSearchText]);
 
   const filteredConversations = useMemo(() => {
-    const query = searchText.trim().toLowerCase();
+    const query = deferredSearchText.trim().toLowerCase();
     if (!query) {
       return conversations;
     }
@@ -1280,14 +1281,14 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       const lastPreview = item.lastMessage ? getMessagePreview(item.lastMessage).toLowerCase() : '';
       return item.user.name.toLowerCase().includes(query) || lastPreview.includes(query);
     });
-  }, [conversations, searchText]);
+  }, [conversations, deferredSearchText]);
 
   const filteredProposalChats = useMemo(() => {
     if (user?.role !== 'admin') {
       return [];
     }
 
-    const query = searchText.trim().toLowerCase();
+    const query = deferredSearchText.trim().toLowerCase();
     return proposalChats.filter(chat => {
       if (proposalStatusFilter !== 'All' && chat.application.status !== proposalStatusFilter) {
         return false;
@@ -1316,7 +1317,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         summary.includes(query)
       );
     });
-  }, [proposalChats, proposalStatusFilter, searchText, user?.role]);
+  }, [proposalChats, proposalStatusFilter, deferredSearchText, user?.role]);
 
   const proposalStatusCounts = useMemo(
     () => ({

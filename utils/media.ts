@@ -78,3 +78,36 @@ export async function pickImageFromDevice(): Promise<string | null> {
 
   return asset.uri;
 }
+
+// Opens the device file picker for documents and returns a persistable file URI/data URI.
+export async function pickDocumentFromDevice(): Promise<string | null> {
+  try {
+    if (Platform.OS !== 'web') {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        throw new Error('File library access is required. Please enable photo library permissions in settings.');
+      }
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images', 'videos'],
+      quality: 1,
+      base64: true,
+      allowsMultiple: false,
+    });
+
+    if (result.canceled || !result.assets?.length) {
+      return null;
+    }
+
+    const asset = result.assets[0];
+    if (asset.base64) {
+      return `data:${asset.mimeType || 'application/octet-stream'};base64,${asset.base64}`;
+    }
+
+    return asset.uri;
+  } catch (error: any) {
+    // Re-throw with better error message
+    throw error;
+  }
+}

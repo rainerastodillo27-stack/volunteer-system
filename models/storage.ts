@@ -1,5 +1,6 @@
 import Constants from 'expo-constants';
 import { NativeModules, Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   AdminPlanningCalendar,
   AdminPlanningItem,
@@ -62,7 +63,7 @@ const API_READY_CACHE_MS = 5000;
 const API_REQUEST_MAX_ATTEMPTS = 4;
 const API_REQUEST_RETRY_BASE_MS = 1000;
 const API_REQUEST_RETRY_MAX_MS = 8000;
-const SHARED_STORAGE_CACHE_TTL_MS = 3000;
+const SHARED_STORAGE_CACHE_TTL_MS = 60000;
 const STORAGE_CHANGE_POLL_INTERVAL_MS = 3000;
 const STORAGE_CHANGE_DEBOUNCE_MS = 120;
 const STORAGE_CHANGE_CALLBACK_COOLDOWN_MS = 180;
@@ -76,6 +77,31 @@ const NEGROS_OCCIDENTAL_BOUNDS = {
 let apiReadyConfirmedAt = 0;
 let apiReadyCheckPromise: Promise<void> | null = null;
 const inFlightJsonRequests = new Map<string, Promise<unknown>>();
+
+const PERSISTED_CACHE_KEY_PREFIX = 'volcre:cache:';
+const PERSISTED_CACHE_TS_PREFIX = 'volcre:cacheTs:';
+const PERSISTED_CACHE_PENDING_WRITES = new Map<string, ReturnType<typeof setTimeout>>();
+const PERSISTED_CACHE_WRITE_DEBOUNCE_MS = 200;
+
+function getPersistedCacheKey(key: string): string {
+  return `${PERSISTED_CACHE_KEY_PREFIX}${key}`;
+}
+
+function getPersistedCacheTimestampKey(key: string): string {
+  return `${PERSISTED_CACHE_TS_PREFIX}${key}`;
+}
+
+function schedulePersistedWrite(key: string, task: () => Promise<void>): void {
+  const existing = PERSISTED_CACHE_PENDING_WRITES.get(key);
+  if (existing) {
+    clearTimeout(existing);
+  }
+  const timer = setTimeout(() => {
+    PERSISTED_CACHE_PENDING_WRITES.delete(key);
+    void task().catch(() => null);
+  }, PERSISTED_CACHE_WRITE_DEBOUNCE_MS);
+  PERSISTED_CACHE_PENDING_WRITES.set(key, timer);
+}
 type StorageChangeEvent = { type: string; keys: string[] };
 type StorageChangeSubscriber = {
   watchedKeys: Set<string>;
@@ -852,15 +878,98 @@ async function requestApiJson<T>(
 }
 
 async function getLocalStorageItem<T>(key: string): Promise<T | null> {
-  return (memoryStorageCache.get(key) as T) ?? null;
+  if (memoryStorageCache.has(key)) {
+    return (memoryStorageCache.get(key) as T) ?? null;
+  }
+
+  // Web: localStorage
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const raw = window.localStorage.getItem(getPersistedCacheKey(key));
+      const rawTs = window.localStorage.getItem(getPersistedCacheTimestampKey(key));
+      const parsed = raw ? (JSON.parse(raw) as T) : null;
+      const ts = rawTs ? Number(rawTs) : 0;
+      if (rawTs && Number.isFinite(ts) && ts > 0) {
+        sharedStorageCacheTimestamps.set(key, ts);
+      }
+      memoryStorageCache.set(key, parsed);
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+
+  // Native: AsyncStorage
+  try {
+    const [raw, rawTs] = await AsyncStorage.multiGet([
+      getPersistedCacheKey(key),
+      getPersistedCacheTimestampKey(key),
+    ]);
+    const valueRaw = raw?.[1] ?? null;
+    const tsRaw = rawTs?.[1] ?? null;
+    const parsed = valueRaw ? (JSON.parse(valueRaw) as T) : null;
+    const ts = tsRaw ? Number(tsRaw) : 0;
+    if (tsRaw && Number.isFinite(ts) && ts > 0) {
+      sharedStorageCacheTimestamps.set(key, ts);
+    }
+    memoryStorageCache.set(key, parsed);
+    return parsed;
+  } catch {
+    return null;
+  }
 }
 
 async function setLocalStorageItem<T>(key: string, value: T): Promise<void> {
   memoryStorageCache.set(key, value);
+
+  const serialized = JSON.stringify(value);
+  const ts = String(Date.now());
+
+  // Web: localStorage
+  if (typeof window !== 'undefined' && window.localStorage) {
+    schedulePersistedWrite(key, async () => {
+      window.localStorage.setItem(getPersistedCacheKey(key), serialized);
+      window.localStorage.setItem(getPersistedCacheTimestampKey(key), ts);
+    });
+    return;
+  }
+
+  // Native: AsyncStorage
+  schedulePersistedWrite(key, async () => {
+    await AsyncStorage.multiSet([
+      [getPersistedCacheKey(key), serialized],
+      [getPersistedCacheTimestampKey(key), ts],
+    ]);
+  });
 }
 
 async function deleteLocalStorageItem(key: string): Promise<void> {
   memoryStorageCache.delete(key);
+
+  const existing = PERSISTED_CACHE_PENDING_WRITES.get(key);
+  if (existing) {
+    clearTimeout(existing);
+    PERSISTED_CACHE_PENDING_WRITES.delete(key);
+  }
+
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      window.localStorage.removeItem(getPersistedCacheKey(key));
+      window.localStorage.removeItem(getPersistedCacheTimestampKey(key));
+    } catch {
+      // ignore
+    }
+    return;
+  }
+
+  try {
+    await AsyncStorage.multiRemove([
+      getPersistedCacheKey(key),
+      getPersistedCacheTimestampKey(key),
+    ]);
+  } catch {
+    // ignore
+  }
 }
 
 // Marks keys that should remain local instead of syncing through shared backend storage.
@@ -910,6 +1019,86 @@ function invalidateSharedStorageCache(keys?: string[]): void {
 // Exported function to allow screens to invalidate the storage cache
 export function clearStorageCache(keys?: string[]): void {
   invalidateSharedStorageCache(keys);
+}
+
+function triggerBackgroundStorageRefresh(keys: string[]): void {
+  if (keys.length === 0) {
+    return;
+  }
+
+  void (async () => {
+    try {
+      const sharedKeys = keys.filter(key => !isLocalOnlyStorageKey(key));
+      if (sharedKeys.length === 0) {
+        return;
+      }
+      const remoteResults = await fetchRemoteStorageItems(sharedKeys);
+      for (const key of sharedKeys) {
+        const value = remoteResults[key] ?? null;
+        setSharedStorageCacheValue(key, value);
+      }
+      queueSharedStorageChangedKeys(sharedKeys);
+    } catch {
+      // Ignore background refresh failures; UI can retry on focus/change events.
+    }
+  })();
+}
+
+// Returns cached data immediately (if available) and refreshes in the background.
+export async function getStorageItemFast<T>(key: string): Promise<T | null> {
+  try {
+    const cached = await getLocalStorageItem<T>(key);
+    const cachedAt = sharedStorageCacheTimestamps.get(key);
+    const isFresh = cachedAt !== undefined && Date.now() - cachedAt <= SHARED_STORAGE_CACHE_TTL_MS;
+
+    if (cachedAt !== undefined) {
+      triggerBackgroundStorageRefresh([key]);
+    }
+
+    if (cached !== null && (isFresh || cachedAt !== undefined)) {
+      return cached;
+    }
+
+    const value = await getStorageItem<T>(key);
+    return value;
+  } catch {
+    return getStorageItem<T>(key);
+  }
+}
+
+// Returns cached data for all keys immediately (when available) and refreshes in background.
+export async function getStorageItemsFast(keys: string[]): Promise<Record<string, unknown | null>> {
+  const results: Record<string, unknown | null> = {};
+  const keysToRefresh: string[] = [];
+  const missingKeys: string[] = [];
+
+  const cachedEntries = await Promise.all(
+    keys.map(async key => {
+      const cached = await getLocalStorageItem(key);
+      const cachedAt = sharedStorageCacheTimestamps.get(key);
+      return { key, cached, cachedAt };
+    })
+  );
+
+  for (const entry of cachedEntries) {
+    if (entry.cachedAt !== undefined) {
+      keysToRefresh.push(entry.key);
+    }
+    if (entry.cachedAt !== undefined && entry.cached !== null) {
+      results[entry.key] = entry.cached;
+    } else {
+      missingKeys.push(entry.key);
+    }
+  }
+
+  triggerBackgroundStorageRefresh(keysToRefresh);
+
+  if (missingKeys.length === 0) {
+    return results;
+  }
+
+  const fetched = await getStorageItems(missingKeys);
+  return { ...results, ...fetched };
 }
 
 async function saveRemoteStorageItem<T>(key: string, value: T): Promise<void> {
@@ -1036,7 +1225,7 @@ export async function getDashboardSnapshot(): Promise<{
   volunteers: Volunteer[];
   statusUpdates: StatusUpdate[];
 }> {
-  const items = await getStorageItems([
+  const items = await getStorageItemsFast([
     STORAGE_KEYS.USERS,
     STORAGE_KEYS.PROJECTS,
     STORAGE_KEYS.EVENTS,
@@ -1070,7 +1259,7 @@ export async function getPartnerDashboardSnapshot(): Promise<{
   sectorNeeds: SectorNeed[];
 }> {
   await ensurePartnerOwnershipLinks();
-  const items = await getStorageItems([
+  const items = await getStorageItemsFast([
     STORAGE_KEYS.PROJECTS,
     STORAGE_KEYS.EVENTS,
     STORAGE_KEYS.PARTNERS,
@@ -1100,30 +1289,40 @@ export async function getPartnerDashboardSnapshot(): Promise<{
 
 // Loads the shared planning calendar data used by volunteer and partner dashboards.
 export async function getDashboardTimelineSnapshot(): Promise<DashboardTimelineSnapshot> {
-  const planningCalendars = await ensureAdminPlanningCalendarsSeeded();
-  const items = await getStorageItems([
-    STORAGE_KEYS.PROJECTS,
-    STORAGE_KEYS.EVENTS,
-    STORAGE_KEYS.ADMIN_PLANNING_ITEMS,
-  ]);
+  try {
+    const planningCalendars = await ensureAdminPlanningCalendarsSeeded();
+    const items = await getStorageItemsFast([
+      STORAGE_KEYS.PROJECTS,
+      STORAGE_KEYS.EVENTS,
+      STORAGE_KEYS.ADMIN_PLANNING_ITEMS,
+    ]);
 
-  const projects = mergeProjectAndEventRecords(
-    items[STORAGE_KEYS.PROJECTS] as Project[] | null,
-    items[STORAGE_KEYS.EVENTS] as Project[] | null
-  );
-  const planningItems = ((items[STORAGE_KEYS.ADMIN_PLANNING_ITEMS] as AdminPlanningItem[] | null) || [])
-    .map(normalizeAdminPlanningItemRecord)
-    .sort(
-      (a, b) =>
-        new Date(a.startDate).getTime() - new Date(b.startDate).getTime() ||
-        new Date(a.endDate).getTime() - new Date(b.endDate).getTime()
+    const projects = mergeProjectAndEventRecords(
+      items[STORAGE_KEYS.PROJECTS] as Project[] | null,
+      items[STORAGE_KEYS.EVENTS] as Project[] | null
     );
+    const planningItems = ((items[STORAGE_KEYS.ADMIN_PLANNING_ITEMS] as AdminPlanningItem[] | null) || [])
+      .map(normalizeAdminPlanningItemRecord)
+      .sort(
+        (a, b) =>
+          new Date(a.startDate).getTime() - new Date(b.startDate).getTime() ||
+          new Date(a.endDate).getTime() - new Date(b.endDate).getTime()
+      );
 
-  return {
-    projects,
-    planningCalendars,
-    planningItems,
-  };
+    return {
+      projects,
+      planningCalendars,
+      planningItems,
+    };
+  } catch (error) {
+    console.error('Error fetching dashboard timeline snapshot:', error);
+    // Gracefully return empty data if backend is unavailable
+    return {
+      projects: [],
+      planningCalendars: DEFAULT_ADMIN_PLANNING_CALENDARS,
+      planningItems: [],
+    };
+  }
 }
 
 // Loads the combined project, volunteer, and application data for the projects screen.
@@ -1851,7 +2050,7 @@ export async function loginWithCredentials(
 
 // Returns all user accounts from shared storage.
 export async function getAllUsers(): Promise<User[]> {
-  return (await getStorageItem<User[]>(STORAGE_KEYS.USERS)) || [];
+  return (await getStorageItemFast<User[]>(STORAGE_KEYS.USERS)) || [];
 }
 
 // Deletes a user account and related volunteer data when necessary.
@@ -2138,7 +2337,7 @@ export async function savePartner(partner: Partner): Promise<void> {
 
 // Looks up a single partner organization by id.
 export async function getPartner(id: string): Promise<Partner | null> {
-  const partners = await getStorageItem<Partner[]>(STORAGE_KEYS.PARTNERS) || [];
+  const partners = (await getStorageItemFast<Partner[]>(STORAGE_KEYS.PARTNERS)) || [];
   const partner = partners.find(p => p.id === id) || null;
   return partner ? normalizePartnerRecord(partner) : null;
 }
@@ -2152,7 +2351,7 @@ export async function getPartnersByOwnerUserId(ownerUserId: string): Promise<Par
 // Returns all partner organization records.
 export async function getAllPartners(): Promise<Partner[]> {
   await ensurePartnerOwnershipLinks();
-  const partners = (await getStorageItem<Partner[]>(STORAGE_KEYS.PARTNERS)) || [];
+  const partners = (await getStorageItemFast<Partner[]>(STORAGE_KEYS.PARTNERS)) || [];
   return partners
     .map(normalizePartnerRecord)
     .filter(p => !p.contactEmail?.toLowerCase().includes('eduindia.org'));
@@ -2216,16 +2415,22 @@ function normalizeAdminPlanningItemRecord(item: AdminPlanningItem): AdminPlannin
 }
 
 async function ensureAdminPlanningCalendarsSeeded(): Promise<AdminPlanningCalendar[]> {
-  const existingCalendars =
-    (await getStorageItem<AdminPlanningCalendar[]>(STORAGE_KEYS.ADMIN_PLANNING_CALENDARS)) || [];
+  try {
+    const existingCalendars =
+      (await getStorageItem<AdminPlanningCalendar[]>(STORAGE_KEYS.ADMIN_PLANNING_CALENDARS)) || [];
 
-  if (existingCalendars.length > 0) {
-    return existingCalendars.map(normalizeAdminPlanningCalendarRecord);
+    if (existingCalendars.length > 0) {
+      return existingCalendars.map(normalizeAdminPlanningCalendarRecord);
+    }
+
+    const seededCalendars = DEFAULT_ADMIN_PLANNING_CALENDARS.map(calendar => ({ ...calendar }));
+    await setStorageItem(STORAGE_KEYS.ADMIN_PLANNING_CALENDARS, seededCalendars);
+    return seededCalendars;
+  } catch (error) {
+    console.error('Failed to seed admin planning calendars:', error);
+    // Gracefully fall back to default calendars if backend is unavailable
+    return DEFAULT_ADMIN_PLANNING_CALENDARS.map(calendar => ({ ...calendar }));
   }
-
-  const seededCalendars = DEFAULT_ADMIN_PLANNING_CALENDARS.map(calendar => ({ ...calendar }));
-  await setStorageItem(STORAGE_KEYS.ADMIN_PLANNING_CALENDARS, seededCalendars);
-  return seededCalendars;
 }
 
 // Returns all admin planning calendars, seeding a default set on first load.
@@ -2480,8 +2685,8 @@ export async function getProject(id: string): Promise<Project | null> {
 // Returns all projects and events from shared storage.
 export async function getAllProjects(): Promise<Project[]> {
   return mergeProjectAndEventRecords(
-    await getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS),
-    await getStorageItem<Project[]>(STORAGE_KEYS.EVENTS)
+    await getStorageItemFast<Project[]>(STORAGE_KEYS.PROJECTS),
+    await getStorageItemFast<Project[]>(STORAGE_KEYS.EVENTS)
   );
 }
 
@@ -2556,14 +2761,14 @@ export async function saveVolunteer(volunteer: Volunteer): Promise<void> {
 
 // Looks up a single volunteer profile by id.
 export async function getVolunteer(id: string): Promise<Volunteer | null> {
-  const volunteers = await getStorageItem<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS) || [];
+  const volunteers = (await getStorageItemFast<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS)) || [];
   const volunteer = volunteers.find(v => v.id === id) || null;
   return volunteer ? normalizeVolunteerRecord(volunteer) : null;
 }
 
 // Returns all volunteer profiles from shared storage.
 export async function getAllVolunteers(): Promise<Volunteer[]> {
-  return ((await getStorageItem<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS)) || []).map(
+  return ((await getStorageItemFast<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS)) || []).map(
     normalizeVolunteerRecord
   );
 }
@@ -2656,7 +2861,7 @@ export async function getVolunteerTimeLogs(volunteerId: string): Promise<Volunte
 
 // Returns every volunteer time log stored in the system.
 export async function getAllVolunteerTimeLogs(): Promise<VolunteerTimeLog[]> {
-  const logs = await getStorageItem<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS) || [];
+  const logs = (await getStorageItemFast<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS)) || [];
   return logs.sort((a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime());
 }
 
@@ -3015,7 +3220,8 @@ export async function saveVolunteerProjectMatch(match: VolunteerProjectMatch): P
 
 // Returns match records for one volunteer profile.
 export async function getVolunteerProjectMatches(volunteerId: string): Promise<VolunteerProjectMatch[]> {
-  const matches = await getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES) || [];
+  const matches =
+    (await getStorageItemFast<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES)) || [];
   return matches
     .filter(m => m.volunteerId === volunteerId)
     .sort((a, b) => new Date(b.matchedAt).getTime() - new Date(a.matchedAt).getTime());
@@ -3023,13 +3229,15 @@ export async function getVolunteerProjectMatches(volunteerId: string): Promise<V
 
 // Returns every volunteer-project match record in storage.
 export async function getAllVolunteerProjectMatches(): Promise<VolunteerProjectMatch[]> {
-  const matches = await getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES) || [];
+  const matches =
+    (await getStorageItemFast<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES)) || [];
   return matches.sort((a, b) => new Date(b.matchedAt).getTime() - new Date(a.matchedAt).getTime());
 }
 
 // Returns volunteer match records filtered by project id.
 export async function getProjectMatches(projectId: string): Promise<VolunteerProjectMatch[]> {
-  const matches = await getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES) || [];
+  const matches =
+    (await getStorageItemFast<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES)) || [];
   return matches
     .filter(m => m.projectId === projectId)
     .sort((a, b) => new Date(b.matchedAt).getTime() - new Date(a.matchedAt).getTime());

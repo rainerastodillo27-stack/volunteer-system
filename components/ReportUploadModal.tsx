@@ -10,11 +10,14 @@ import {
   Platform,
   Alert,
   Image,
+  Keyboard,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import type { SubmittedReport } from '../screens/ReportsScreen';
 import type { VolunteerTimeLog } from '../models/types';
 import { isImageMediaUri, pickImageFromDevice } from '../utils/media';
+
+import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 type MaterialIconName = keyof typeof MaterialIcons.glyphMap;
 
@@ -280,7 +283,7 @@ export default function ReportUploadModal({
     }));
   };
 
-  const handleSubmit = useCallback(() => {
+  const handleSubmit = useCallback(async () => {
     if (!validateForm()) {
       return;
     }
@@ -364,8 +367,16 @@ export default function ReportUploadModal({
       status: 'Submitted',
     };
 
-    onSubmit(reportData);
-    handleReset();
+    try {
+      Keyboard.dismiss();
+      await onSubmit(reportData);
+      handleReset();
+      Alert.alert('Report Sent', 'Your report has been successfully submitted.');
+      onClose();
+    } catch (error) {
+      Alert.alert(getRequestErrorTitle(error), getRequestErrorMessage(error, 'Failed to submit your report. Please try again.'));
+    }
+
   }, [
     description,
     handleReset,
@@ -380,7 +391,9 @@ export default function ReportUploadModal({
     volunteerContribution,
     volunteerExperience,
     volunteerFollowUp,
-    volunteerSummary,
+    volunteerSummary, // Added volunteerSummary to dependencies
+    volunteerTimeLogs, // Added volunteerTimeLogs to dependencies
+    onClose, // Added onClose to dependencies
   ]);
 
   const renderVolunteerFields = () => (

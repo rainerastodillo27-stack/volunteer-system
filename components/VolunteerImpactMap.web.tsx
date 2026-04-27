@@ -88,6 +88,8 @@ type VolunteerImpactMapProps = {
   initialMapStyleKey?: MapStylePresetKey;
   volunteerAccounts?: MapAccountOption[];
   partnerAccounts?: MapAccountOption[];
+  onVolunteerPress?: (volunteerId: string) => void;
+  onPartnerPress?: (partnerId: string) => void;
 };
 
 function getWebGoogleMapsApiKey() {
@@ -194,6 +196,8 @@ export default function VolunteerImpactMap({
   initialMapStyleKey = 'volunteer-view',
   volunteerAccounts,
   partnerAccounts,
+  onVolunteerPress,
+  onPartnerPress,
 }: VolunteerImpactMapProps) {
   const mappedProjects = useMemo(() => getMappedProjects(projects), [projects]);
   const hasVolunteerScope = Array.isArray(volunteerAccounts);
@@ -221,6 +225,10 @@ export default function VolunteerImpactMap({
   const mapElementRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<any>(null);
   const markerRefs = useRef<Array<{ marker: any; listener: { remove: () => void } }>>([]);
+  const infoWindowCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const infoWindowHoveringRef = useRef(false);
+  const markerHoveringRef = useRef(false);
+  const openInfoWindowProjectIdRef = useRef<string | null>(null);
   const webGoogleMapsApiKey = getWebGoogleMapsApiKey();
   const selectedMapStyle =
     MAP_STYLE_PRESETS.find(preset => preset.key === selectedMapStyleKey) || MAP_STYLE_PRESETS[1];
@@ -326,6 +334,7 @@ export default function VolunteerImpactMap({
         }
 
         const bounds = new googleMaps.maps.LatLngBounds();
+        const infoWindow = new googleMaps.maps.InfoWindow();
 
         displayProjects.forEach(project => {
           const marker = new googleMaps.maps.Marker({
@@ -342,7 +351,152 @@ export default function VolunteerImpactMap({
             setSelectedProject(project);
           });
 
+          const hoverOpenListener = marker.addListener('mouseover', () => {
+            if (infoWindowCloseTimerRef.current) {
+              clearTimeout(infoWindowCloseTimerRef.current);
+              infoWindowCloseTimerRef.current = null;
+            }
+            markerHoveringRef.current = true;
+            if (openInfoWindowProjectIdRef.current === project.id) {
+              return;
+            }
+            const volunteerHits = (volunteerAccounts || [])
+              .filter(account => (account.projectIds || []).includes(project.id))
+              .sort((a, b) => a.label.localeCompare(b.label));
+            const partnerHits = (partnerAccounts || [])
+              .filter(account => (account.projectIds || []).includes(project.id))
+              .sort((a, b) => a.label.localeCompare(b.label));
+
+            const container = document.createElement('div');
+            container.style.minWidth = '220px';
+            container.style.maxWidth = '280px';
+            container.style.fontFamily = 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+            container.style.fontSize = '12px';
+            container.style.lineHeight = '16px';
+
+            const titleDiv = document.createElement('div');
+            titleDiv.style.fontWeight = '700';
+            titleDiv.style.color = '#0f172a';
+            titleDiv.style.marginBottom = '6px';
+            titleDiv.textContent = project.title;
+            container.appendChild(titleDiv);
+
+            if (partnerHits.length > 0) {
+              const partner = partnerHits[0];
+              const partnerRow = document.createElement('button');
+              partnerRow.type = 'button';
+              partnerRow.dataset.kind = 'partner';
+              partnerRow.dataset.id = partner.id;
+              partnerRow.style.display = 'block';
+              partnerRow.style.width = '100%';
+              partnerRow.style.textAlign = 'left';
+              partnerRow.style.border = '0';
+              partnerRow.style.background = 'transparent';
+              partnerRow.style.padding = '6px 0';
+              partnerRow.style.cursor = onPartnerPress ? 'pointer' : 'default';
+              partnerRow.innerHTML = `<span style="font-weight:600;color:#0f766e;">Partner:</span> <span style="color:#0f172a;text-decoration:${onPartnerPress ? 'underline' : 'none'};">${partner.label}</span>`;
+              container.appendChild(partnerRow);
+            }
+
+            const volunteerHeader = document.createElement('div');
+            volunteerHeader.style.marginTop = partnerHits.length ? '6px' : '0';
+            volunteerHeader.style.fontWeight = '600';
+            volunteerHeader.style.color = '#166534';
+            volunteerHeader.textContent = `Volunteers (${volunteerHits.length})`;
+            container.appendChild(volunteerHeader);
+
+            if (volunteerHits.length === 0) {
+              const empty = document.createElement('div');
+              empty.style.color = '#64748b';
+              empty.style.paddingTop = '4px';
+              empty.textContent = 'No volunteers joined yet.';
+              container.appendChild(empty);
+            } else {
+              volunteerHits.slice(0, 8).forEach(volunteer => {
+                const row = document.createElement('button');
+                row.type = 'button';
+                row.dataset.kind = 'volunteer';
+                row.dataset.id = volunteer.id;
+                row.style.display = 'block';
+                row.style.width = '100%';
+                row.style.textAlign = 'left';
+                row.style.border = '0';
+                row.style.background = 'transparent';
+                row.style.padding = '5px 0';
+                row.style.cursor = onVolunteerPress ? 'pointer' : 'default';
+                row.style.color = '#0f172a';
+                row.style.textDecoration = onVolunteerPress ? 'underline' : 'none';
+                row.textContent = volunteer.label;
+                container.appendChild(row);
+              });
+              if (volunteerHits.length > 8) {
+                const more = document.createElement('div');
+                more.style.color = '#64748b';
+                more.style.paddingTop = '4px';
+                more.textContent = `+${volunteerHits.length - 8} more`;
+                container.appendChild(more);
+              }
+            }
+
+            container.addEventListener('click', (event) => {
+              const target = event.target as HTMLElement | null;
+              const button = target?.closest?.('button') as HTMLButtonElement | null;
+              const kind = button?.dataset?.kind;
+              const id = button?.dataset?.id;
+              if (!kind || !id) {
+                return;
+              }
+              if (kind === 'volunteer') {
+                onVolunteerPress?.(id);
+              } else if (kind === 'partner') {
+                onPartnerPress?.(id);
+              }
+              infoWindow.close();
+            });
+
+            container.addEventListener('mouseenter', () => {
+              infoWindowHoveringRef.current = true;
+              if (infoWindowCloseTimerRef.current) {
+                clearTimeout(infoWindowCloseTimerRef.current);
+                infoWindowCloseTimerRef.current = null;
+              }
+            });
+            container.addEventListener('mouseleave', () => {
+              infoWindowHoveringRef.current = false;
+              if (infoWindowCloseTimerRef.current) {
+                clearTimeout(infoWindowCloseTimerRef.current);
+              }
+              infoWindowCloseTimerRef.current = setTimeout(() => {
+                if (markerHoveringRef.current) {
+                  return;
+                }
+                infoWindow.close();
+                openInfoWindowProjectIdRef.current = null;
+              }, 200);
+            });
+
+            infoWindow.setContent(container);
+            infoWindow.open({ map, anchor: marker });
+            openInfoWindowProjectIdRef.current = project.id;
+          });
+
+          const hoverCloseListener = marker.addListener('mouseout', () => {
+            markerHoveringRef.current = false;
+            if (infoWindowCloseTimerRef.current) {
+              clearTimeout(infoWindowCloseTimerRef.current);
+            }
+            infoWindowCloseTimerRef.current = setTimeout(() => {
+              if (infoWindowHoveringRef.current || markerHoveringRef.current) {
+                return;
+              }
+              infoWindow.close();
+              openInfoWindowProjectIdRef.current = null;
+            }, 150);
+          });
+
           markerRefs.current.push({ marker, listener });
+          markerRefs.current.push({ marker, listener: hoverOpenListener });
+          markerRefs.current.push({ marker, listener: hoverCloseListener });
           bounds.extend({
             lat: project.location.latitude,
             lng: project.location.longitude,

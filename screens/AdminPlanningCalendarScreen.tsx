@@ -478,6 +478,7 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
       });
       setShowItemModal(false);
       await loadPlannerData();
+      Alert.alert('Saved', itemDraft.id ? 'Plan item updated.' : 'Plan item added.');
     } catch (error) {
       Alert.alert(
         getRequestErrorTitle(error),
@@ -546,6 +547,7 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
       });
       setShowCalendarModal(false);
       await loadPlannerData();
+      Alert.alert('Saved', calendarDraft.id ? 'Calendar updated.' : 'Calendar created.');
     } catch (error) {
       Alert.alert(
         getRequestErrorTitle(error),
