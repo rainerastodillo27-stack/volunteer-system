@@ -68,7 +68,7 @@ export interface ProjectInternalTask {
   assignedVolunteerId?: string;
   assignedVolunteerName?: string;
   isFieldOfficer?: boolean;
-  skillsNeeded?: string[]; // Skills required for this specific task
+  skillsNeeded: string[]; // Skills required for this specific task
   createdAt: string;
   updatedAt: string;
 }

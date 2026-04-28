@@ -1633,6 +1633,28 @@ function normalizeProjectInternalTask(
   };
 }
 
+function normalizeProjectSkillsNeeded(
+  project: Project,
+  normalizedTasks: ProjectInternalTask[]
+): string[] {
+  const rawSkills = [
+    ...(project.skillsNeeded || []),
+    ...normalizedTasks.flatMap(task => task.skillsNeeded || []),
+  ]
+    .map(skill => skill.trim())
+    .filter(Boolean);
+
+  const seen = new Set<string>();
+  return rawSkills.filter(skill => {
+    const key = skill.toLowerCase();
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
 function normalizeProjectRecord(project: Project): Project {
   const normalizedTasks =
     project.internalTasks && project.internalTasks.length > 0
@@ -1658,6 +1680,7 @@ function normalizeProjectRecord(project: Project): Project {
     parentProjectId: project.parentProjectId?.trim() || undefined,
     joinedUserIds: project.isEvent ? (project.joinedUserIds || []) : [],
     volunteers: project.isEvent ? (project.volunteers || []) : [],
+    skillsNeeded: normalizeProjectSkillsNeeded(project, normalizedTasks),
     statusUpdates: project.statusUpdates || [],
     internalTasks: normalizedTasks,
   };

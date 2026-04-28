@@ -438,6 +438,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [showAssignmentDropdown, setShowAssignmentDropdown] = useState(false);
+  const [showSkillsDropdown, setShowSkillsDropdown] = useState(false);
   const [showProgramProposalModal, setShowProgramProposalModal] = useState(false);
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
@@ -1519,7 +1520,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       assignedVolunteerId: taskDraft.assignedVolunteerId || undefined,
       assignedVolunteerName: assignedVolunteer?.name,
       isFieldOfficer: taskDraft.isFieldOfficer,
-      skillsNeeded: normalizedSkills.length > 0 ? normalizedSkills : undefined,
+      skillsNeeded: normalizedSkills,
       createdAt:
         currentSelectedProject.internalTasks?.find(task => task.id === editingTaskId)?.createdAt || now,
       updatedAt: now,
@@ -3532,45 +3533,60 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               </View>
 
               <View style={[styles.formRow, styles.formRowReverse, styles.formRowTop]}>
-                <View style={[styles.statusOptionsCard, styles.skillSelectionCard]}>
-                  <View style={styles.skillOptionGrid}>
-                    {TASK_SKILL_OPTIONS.map(skill => {
-                      const isSelected = taskDraft.skillsNeeded.includes(skill);
-
-                      return (
-                        <TouchableOpacity
-                          key={skill}
-                          style={styles.skillOptionRow}
-                          onPress={() => toggleTaskSkill(skill)}
-                        >
-                          <MaterialIcons
-                            name={isSelected ? 'check-box' : 'check-box-outline-blank'}
-                            size={20}
-                            color={isSelected ? '#0F766E' : '#9ca3af'}
-                          />
-                          <Text style={[styles.skillOptionText, isSelected && styles.skillOptionTextSelected]}>
-                            {skill}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-
-                  <View style={styles.customSkillRow}>
-                    <TextInput
-                      style={styles.customSkillInput}
-                      placeholder="Add custom skill"
-                      placeholderTextColor="#9ca3af"
-                      value={customTaskSkill}
-                      onChangeText={setCustomTaskSkill}
-                      onSubmitEditing={handleAddCustomTaskSkill}
-                      returnKeyType="done"
+                <View style={styles.dropdownWrapper}>
+                  <TouchableOpacity
+                    style={styles.dropdownButton}
+                    onPress={() => setShowSkillsDropdown(!showSkillsDropdown)}
+                  >
+                    <Text style={styles.dropdownButtonText}>
+                      {taskDraft.skillsNeeded.length > 0
+                        ? `${taskDraft.skillsNeeded.length} skill(s) selected`
+                        : 'Select Skills'}
+                    </Text>
+                    <MaterialIcons
+                      name={showSkillsDropdown ? 'expand-less' : 'expand-more'}
+                      size={24}
+                      color="#666"
                     />
-                    <TouchableOpacity style={styles.customSkillAddButton} onPress={handleAddCustomTaskSkill}>
-                      <MaterialIcons name="add" size={18} color="#fff" />
-                      <Text style={styles.customSkillAddButtonText}>Add</Text>
-                    </TouchableOpacity>
-                  </View>
+                  </TouchableOpacity>
+
+                  {showSkillsDropdown && (
+                    <View style={styles.dropdownContent}>
+                      <ScrollView style={{ maxHeight: 200 }}>
+                        {TASK_SKILL_OPTIONS.map(skill => {
+                          const isSelected = taskDraft.skillsNeeded.includes(skill);
+                          return (
+                            <TouchableOpacity
+                              key={skill}
+                              style={[styles.dropdownOption, isSelected && styles.dropdownOptionSelected]}
+                              onPress={() => toggleTaskSkill(skill)}
+                            >
+                              <MaterialIcons
+                                name={isSelected ? 'check-box' : 'check-box-outline-blank'}
+                                size={20}
+                                color={isSelected ? '#0F766E' : '#ccc'}
+                              />
+                              <Text style={styles.dropdownOptionText}>{skill}</Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </ScrollView>
+                      <View style={[styles.customSkillRow, { padding: 8, borderTopWidth: 1, borderColor: '#f3f4f6' }]}>
+                        <TextInput
+                          style={styles.customSkillInput}
+                          placeholder="Add custom skill"
+                          placeholderTextColor="#9ca3af"
+                          value={customTaskSkill}
+                          onChangeText={setCustomTaskSkill}
+                          onSubmitEditing={handleAddCustomTaskSkill}
+                          returnKeyType="done"
+                        />
+                        <TouchableOpacity style={styles.customSkillAddButton} onPress={handleAddCustomTaskSkill}>
+                          <MaterialIcons name="add" size={18} color="#fff" />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  )}
 
                   {taskDraft.skillsNeeded.length > 0 ? (
                     <View style={styles.selectedSkillChips}>
@@ -3585,9 +3601,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                         </TouchableOpacity>
                       ))}
                     </View>
-                  ) : (
-                    <Text style={styles.helperText}>Select at least one skill when needed for better volunteer matching.</Text>
-                  )}
+                  ) : null}
                 </View>
                 <Text style={[styles.labelRight, styles.labelTop]}>Skills</Text>
               </View>

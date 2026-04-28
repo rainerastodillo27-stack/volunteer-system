@@ -37,6 +37,8 @@ These are the primary tables used by the running system.
 - Purpose: Stores top-level operational project records that represent programs in the main workflow.
 - Used for: project lifecycle, scheduling, locations, volunteer requirements, and status progression.
 - Key links: linked from status updates, matches, joins, reports, and group messages.
+- **skills_needed**: JSONB column containing an array of skill strings required for the project as a whole.
+- **Internal Tasks Structure**: The `internal_tasks` JSONB column contains an array of task objects with the following structure (see section 6 for detailed structure definition). Projects with `is_event = true` use this field for event-specific task assignment.
 
 ### 5) programs
 - Purpose: Stores a dedicated program table synchronized from top-level `projects` rows where `is_event = false`.
@@ -47,6 +49,25 @@ These are the primary tables used by the running system.
 - Purpose: Stores event-level records linked to programs through `parent_project_id`.
 - Used for: event scheduling, volunteer deployment, internal task assignment, and event-specific participation tracking.
 - Key links: linked back to the owning program via `parent_project_id`.
+- **skills_needed**: JSONB column containing an array of skill strings required for the event as a whole.
+- **Internal Tasks Structure**: The `internal_tasks` JSONB column contains an array of task objects with the following structure:
+  ```json
+  {
+    "id": "string (unique task ID)",
+    "title": "string (task name)",
+    "description": "string (task details)",
+    "category": "string (e.g., 'Field Officer', 'Logistics', 'Front Desk')",
+    "priority": "High | Medium | Low",
+    "status": "Unassigned | Assigned | In Progress | Completed",
+    "assignedVolunteerId": "string (optional, volunteer profile ID)",
+    "assignedVolunteerName": "string (optional, volunteer name)",
+    "isFieldOfficer": "boolean (optional, true if task requires field officer role)",
+    "skillsNeeded": ["array of skill strings (required for matching volunteers)"],
+    "createdAt": "string (ISO timestamp)",
+    "updatedAt": "string (ISO timestamp)"
+  }
+  ```
+  - **skillsNeeded**: Required array of skill identifiers needed for this task. Used to match qualified volunteers during task assignment.
 
 ### 7) status_updates
 - Purpose: Stores timeline/status change entries for projects.
