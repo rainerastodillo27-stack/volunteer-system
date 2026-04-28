@@ -1327,7 +1327,8 @@ export async function getDashboardTimelineSnapshot(): Promise<DashboardTimelineS
 
 // Loads the combined project, volunteer, and application data for the projects screen.
 export async function getProjectsScreenSnapshot(
-  user?: Pick<User, 'id' | 'role'> | null
+  user?: Pick<User, 'id' | 'role'> | null,
+  fields?: string[]
 ): Promise<ProjectsScreenSnapshot> {
   const params = new URLSearchParams();
   if (user?.id) {
@@ -1335,6 +1336,9 @@ export async function getProjectsScreenSnapshot(
   }
   if (user?.role) {
     params.set('role', user.role);
+  }
+  if (fields && fields.length > 0) {
+    params.set('fields', fields.join(','));
   }
 
   const query = params.toString();
