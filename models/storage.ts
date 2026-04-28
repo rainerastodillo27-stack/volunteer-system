@@ -55,7 +55,7 @@ const sharedStorageCacheTimestamps = new Map<string, number>();
 let mockDataInitializationPromise: Promise<void> | null = null;
 // Shared reads should fail fast enough to keep the UI responsive when the
 // backend is slow or unavailable.
-const REMOTE_STORAGE_TIMEOUT_MS = 45000;
+const REMOTE_STORAGE_TIMEOUT_MS = 60000;
 const API_HEALTH_TIMEOUT_MS = 10000;
 const API_READY_RETRY_MS = 1000;
 const API_READY_MAX_ATTEMPTS = 4;
