@@ -1,7 +1,17 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, Platform, TouchableOpacity, Modal, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Modal, ScrollView } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import MapView, { Callout, Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
+
+// Safe Platform accessor for web environments
+function getPlatformOS(): string {
+  try {
+    const { Platform } = require('react-native');
+    return Platform?.OS || 'web';
+  } catch {
+    return 'web';
+  }
+}
 import PhotoMapMarker from './PhotoMapMarker';
 import { Project } from '../models/types';
 import {
@@ -41,7 +51,7 @@ const MapContent = React.memo<MapContentProps>(
     <MapView
       style={styles.map}
       initialRegion={displayProjects.length ? mapRegion : PHILIPPINES_REGION}
-      provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
+      provider={getPlatformOS() === 'android' ? PROVIDER_GOOGLE : undefined}
       showsCompass
       scrollEnabled
       zoomEnabled
@@ -313,7 +323,7 @@ function getAccountIconName(selectedMapStyleKey: MapStylePresetKey): 'person-out
 }
 
 function getNativeMapType(selectedMapStyle: MapStylePreset) {
-  if (Platform.OS === 'ios' && selectedMapStyle.mapType === 'terrain') {
+  if (getPlatformOS() === 'ios' && selectedMapStyle.mapType === 'terrain') {
     return 'standard';
   }
 

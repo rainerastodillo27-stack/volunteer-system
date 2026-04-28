@@ -416,7 +416,7 @@ function formatProjectDateRangeLabel(startDate?: string, endDate?: string): stri
 export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const { user, isAdmin } = useAuth();
   const { width } = useWindowDimensions();
-  const isDesktop = Platform.OS === 'web' || width >= 1100;
+  const isDesktop = getPlatformOS() === 'web' || width >= 1100;
   const listScrollViewRef = React.useRef<ScrollView | null>(null);
   const listScrollOffsetRef = React.useRef(0);
   const windowScrollOffsetRef = React.useRef(0);

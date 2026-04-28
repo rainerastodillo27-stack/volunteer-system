@@ -1,5 +1,14 @@
 import * as ImagePicker from 'expo-image-picker';
-import { Platform } from 'react-native';
+
+// Safe Platform accessor for web environments
+function getPlatformOS(): string {
+  try {
+    const { Platform } = require('react-native');
+    return Platform?.OS || 'web';
+  } catch {
+    return 'web';
+  }
+}
 
 const IMAGE_FILE_PATTERN = /\.(png|jpe?g|gif|webp|bmp|heic|heif)(\?.*)?$/i;
 
@@ -53,7 +62,7 @@ export function getPrimaryReportMediaUri(
 
 // Opens the device photo picker and returns a persistable image URI/data URI.
 export async function pickImageFromDevice(): Promise<string | null> {
-  if (Platform.OS !== 'web') {
+  if (getPlatformOS() !== 'web') {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
       throw new Error('Photo library access is required to upload an image.');

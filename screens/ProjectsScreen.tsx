@@ -1,5 +1,15 @@
 import React, { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { View, FlatList, StyleSheet, Text, TouchableOpacity, Alert, Pressable, Image, Platform, ImageSourcePropType, Modal, TextInput, ScrollView, useWindowDimensions } from 'react-native';
+import { View, FlatList, StyleSheet, Text, TouchableOpacity, Alert, Pressable, Image, ImageSourcePropType, Modal, TextInput, ScrollView, useWindowDimensions } from 'react-native';
+
+// Safe Platform accessor for web environments
+function getPlatformOS(): string {
+  try {
+    const { Platform } = require('react-native');
+    return Platform?.OS || 'web';
+  } catch {
+    return 'web';
+  }
+}
 import { MaterialIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
 import { useFocusEffect } from '@react-navigation/native';
@@ -462,7 +472,7 @@ function CategoryHeader({
 export default function ProjectsScreen({ navigation, route }: any) {
   const { user } = useAuth();
   const { width } = useWindowDimensions();
-  const isDesktop = Platform.OS === 'web' || width >= 1100;
+  const isDesktop = getPlatformOS() === 'web' || width >= 1100;
   const perfNow = () =>
     typeof performance !== 'undefined' && typeof performance.now === 'function'
       ? performance.now()
@@ -2938,7 +2948,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
             <ScrollView
               style={styles.proposalFormScroll}
               contentContainerStyle={styles.proposalFormContent}
-              showsVerticalScrollIndicator={Platform.OS === 'web'}
+              showsVerticalScrollIndicator={getPlatformOS() === 'web'}
             >
               <View style={styles.proposalReferenceCard}>
                 <Text style={styles.proposalReferenceLabel}>Program Template</Text>
@@ -3015,7 +3025,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                 value={partnerProposalDraft?.proposedVolunteersNeeded || ''}
                 onChangeText={value => handlePartnerProposalDraftChange('proposedVolunteersNeeded', value)}
                 placeholder="Number of volunteers needed"
-                keyboardType={Platform.OS === 'ios' ? 'number-pad' : 'numeric'}
+                keyboardType={getPlatformOS() === 'ios' ? 'number-pad' : 'numeric'}
                 placeholderTextColor="#94a3b8"
                 editable={loadingProjectId !== activeProposalProject?.id}
               />

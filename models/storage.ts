@@ -1,6 +1,16 @@
 import Constants from 'expo-constants';
-import { NativeModules, Platform } from 'react-native';
+import { NativeModules } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// Safe Platform accessor for web environments
+function getPlatformOS(): string {
+  try {
+    const { Platform } = require('react-native');
+    return Platform?.OS || 'web';
+  } catch {
+    return 'web';
+  }
+}
 import {
   AdminPlanningCalendar,
   AdminPlanningItem,
@@ -559,7 +569,7 @@ function resolveConfiguredApiBaseUrl(configuredBaseUrl: string): string {
       parsedUrl.hostname === 'localhost' ||
       parsedUrl.hostname === '10.0.2.2';
 
-    if (bundlerHost && isLoopbackHost && Platform.OS !== 'web') {
+    if (bundlerHost && isLoopbackHost && getPlatformOS() !== 'web') {
       parsedUrl.hostname = bundlerHost;
       return parsedUrl.toString().replace(/\/$/, '');
     }
@@ -625,7 +635,7 @@ function resolveNativeApiBaseUrl(configuredBaseUrl?: string): string {
     return `http://${bundlerHost}:8000`;
   }
 
-  if (Platform.OS === 'android') {
+  if (getPlatformOS() === 'android') {
     return 'http://10.0.2.2:8000';
   }
 

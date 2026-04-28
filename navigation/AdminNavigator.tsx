@@ -1,7 +1,17 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { createBottomTabNavigator, BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { MaterialIcons } from '@expo/vector-icons';
-import { Platform, ScrollView, StyleSheet, TouchableOpacity, View, Text } from 'react-native';
+import { ScrollView, StyleSheet, TouchableOpacity, View, Text } from 'react-native';
+
+// Safe Platform accessor for web environments
+function getPlatformOS(): string {
+  try {
+    const { Platform } = require('react-native');
+    return Platform?.OS || 'web';
+  } catch {
+    return 'web';
+  }
+}
 import { useAuth } from '../contexts/AuthContext';
 import AppLogo from '../components/AppLogo';
 import ScreenBrandHeader from '../components/ScreenBrandHeader';
@@ -135,7 +145,7 @@ export default function AdminNavigator() {
   const [collapsed, setCollapsed] = useState(true);
   const [tabBarProps, setTabBarProps] = useState<BottomTabBarProps | null>(null);
   const [tabBarSignature, setTabBarSignature] = useState('');
-  const isWeb = Platform.OS === 'web';
+  const isWeb = getPlatformOS() === 'web';
 
   useEffect(() => {
     if (!user?.id) return;

@@ -1,7 +1,17 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { Alert, Platform } from 'react-native';
+import { Alert } from 'react-native';
 import { User } from '../models/types';
 import { getCurrentUser, getStorageItemsFast, setCurrentUser as saveCurrentUser } from '../models/storage';
+
+// Safe Platform accessor for web environments
+function getPlatformOS(): string {
+  try {
+    const { Platform } = require('react-native');
+    return Platform?.OS || 'web';
+  } catch {
+    return 'web';
+  }
+}
 
 const PREFETCH_KEYS_BY_ROLE = {
   admin: [
@@ -70,7 +80,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const currentUser = await getCurrentUser();
 
         // Enforce that only admin accounts stay signed in on web
-        if (Platform.OS === 'web' && currentUser && currentUser.role !== 'admin') {
+        if (getPlatformOS() === 'web' && currentUser && currentUser.role !== 'admin') {
           await saveCurrentUser(null);
           setUser(null);
           if (typeof window !== 'undefined') {
@@ -99,7 +109,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Saves the active user in memory and persistent storage after login.
   const login = async (userData: User) => {
     try {
-      if (Platform.OS === 'web' && userData.role !== 'admin') {
+      if (getPlatformOS() === 'web' && userData.role !== 'admin') {
         Alert.alert(
           'Access Restricted',
           'Only the admin account can be opened on web. Please use the mobile app for volunteer or partner access.'

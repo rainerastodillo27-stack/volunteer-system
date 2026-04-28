@@ -1,5 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, TextInput, TouchableOpacity, Text, StyleSheet, Alert, ActivityIndicator, Platform, ScrollView, Modal } from 'react-native';
+import { View, TextInput, TouchableOpacity, Text, StyleSheet, Alert, ActivityIndicator, ScrollView, Modal } from 'react-native';
+
+// Safe Platform accessor for web environments
+function getPlatformOS(): string {
+  try {
+    const { Platform } = require('react-native');
+    return Platform?.OS || 'web';
+  } catch {
+    return 'web';
+  }
+}
 import { Picker } from '@react-native-picker/picker';
 import { MaterialIcons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -214,7 +224,7 @@ function getMobileRoleMismatchMessage(selectedRole: MobileEntryRole, actualRole:
 
 // Handles account login and volunteer or partner self-registration.
 export default function LoginScreen() {
-  const isWeb = Platform.OS === 'web';
+  const isWeb = getPlatformOS() === 'web';
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(true);
@@ -1666,9 +1676,9 @@ export default function LoginScreen() {
           <DateTimePicker
             value={selectedDate}
             mode="date"
-            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+            display={getPlatformOS() === 'ios' ? 'spinner' : 'default'}
             onChange={(event, date) => {
-              if (Platform.OS === 'android') {
+              if (getPlatformOS() === 'android') {
                 setShowDatePicker(false);
               }
               if (date) {
@@ -1684,7 +1694,7 @@ export default function LoginScreen() {
         )}
         
         {/* iOS Date Picker Close Button */}
-        {Platform.OS === 'ios' && showDatePicker && (
+        {getPlatformOS() === 'ios' && showDatePicker && (
           <View style={styles.iosDatePickerActions}>
             <TouchableOpacity onPress={() => setShowDatePicker(false)}>
               <Text style={styles.iosDatePickerButton}>Done</Text>
