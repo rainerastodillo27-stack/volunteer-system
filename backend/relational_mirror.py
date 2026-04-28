@@ -1470,6 +1470,7 @@ def get_relational_collection(connection: Any, key: str) -> list[dict[str, Any]]
             # Some environments may have an older DB schema (or missing tables)
             # even though the code expects the latest relational mirror columns.
             # Make reads resilient by ensuring tables/columns then retrying once.
+            connection.rollback()
             ensure_relational_mirror_tables(connection)
             connection.commit()
             cursor.execute(query)
@@ -1494,6 +1495,7 @@ def get_relational_item_by_id(connection: Any, key: str, item_id: str) -> dict[s
         try:
             cursor.execute(query, (item_id,))
         except (UndefinedColumn, UndefinedTable):
+            connection.rollback()
             ensure_relational_mirror_tables(connection)
             connection.commit()
             cursor.execute(query, (item_id,))
@@ -1529,6 +1531,7 @@ def get_relational_items_by_field(
         try:
             cursor.execute(query, (field_value,))
         except (UndefinedColumn, UndefinedTable):
+            connection.rollback()
             ensure_relational_mirror_tables(connection)
             connection.commit()
             cursor.execute(query, (field_value,))
