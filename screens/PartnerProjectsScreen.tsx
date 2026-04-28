@@ -4,10 +4,9 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import {
   getProjectsScreenSnapshot,
-  submitPartnerProgramProposal,
   subscribeToStorageChanges,
 } from '../models/storage';
-import { Project, PartnerProjectApplication, PartnerProjectProposalDetails } from '../models/types';
+import { Project, PartnerProjectApplication } from '../models/types';
 import { getRequestErrorMessage } from '../utils/requestErrors';
 
 const PROGRAM_PHOTO_BY_TITLE: Record<string, ImageSourcePropType> = {
@@ -27,8 +26,6 @@ export default function PartnerProjectsScreen() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [partnerApplications, setPartnerApplications] = useState<PartnerProjectApplication[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showProposalModal, setShowProposalModal] = useState(false);
-  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
 
   const loadData = useCallback(async () => {
     if (!user) return;
@@ -60,7 +57,7 @@ export default function PartnerProjectsScreen() {
           <Text style={styles.cardDescription} numberOfLines={2}>{item.description}</Text>
           <TouchableOpacity 
             style={[styles.button, hasProposed && styles.buttonDisabled]} 
-            onPress={() => !hasProposed && (setSelectedProject(item), setShowProposalModal(true))}
+            onPress={() => !hasProposed && Alert.alert('Propose', 'Proposal flow initiated')}
             disabled={hasProposed}
           >
             <Text style={styles.buttonText}>

@@ -31,13 +31,6 @@ const PROGRAM_PHOTO_BY_TITLE: Record<string, ImageSourcePropType> = {
   'Peter Project': require('../assets/programs/peter-project.jpg'),
 };
 
-const FALLBACK_ICON_BY_CATEGORY: Record<Project['category'], keyof typeof MaterialIcons.glyphMap> = {
-  Nutrition: 'restaurant',
-  Education: 'school',
-  Livelihood: 'volunteer-activism',
-  Disaster: 'warning',
-};
-
 function formatProjectDateRange(startValue?: string, endValue?: string): string {
   const startDate = startValue ? new Date(startValue) : null;
   const endDate = endValue ? new Date(endValue) : null;
@@ -50,10 +43,8 @@ function formatProjectDateRange(startValue?: string, endValue?: string): string 
 
 export default function VolunteerProjectsScreen() {
   const { user } = useAuth();
-  const { width } = useWindowDimensions();
   const [projects, setProjects] = useState<Project[]>([]);
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
-  const [timeLogs, setTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingProjectId, setLoadingProjectId] = useState<string | null>(null);
@@ -64,7 +55,6 @@ export default function VolunteerProjectsScreen() {
       const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'volunteerProfile', 'timeLogs', 'volunteerJoinRecords']);
       setProjects(snapshot.projects);
       setVolunteerProfile(snapshot.volunteerProfile);
-      setTimeLogs(snapshot.timeLogs);
       if (snapshot.volunteerProfile?.id) {
         const matches = await getVolunteerProjectMatches(snapshot.volunteerProfile.id);
         setVolunteerMatches(matches);
