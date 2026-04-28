@@ -1,2 +1,2 @@
-import ProjectsScreen from './ProjectsScreen';
-export default ProjectsScreen;
+import ProjectLifecycleScreen from './ProjectLifecycleScreen';
+export default ProjectLifecycleScreen;
