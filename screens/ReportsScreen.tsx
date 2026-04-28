@@ -106,7 +106,7 @@ export default function ReportsScreen({ navigation, route }: any) {
 
   const loadProjects = useCallback(async () => {
     if (user?.role === 'volunteer' && user.id) {
-      const snapshot = await getProjectsScreenSnapshot(user);
+      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'timeLogs']);
       setProjects(snapshot.projects);
       setVolunteerTimeLogs(snapshot.timeLogs);
       setVolunteerTimedInProjectIds(

@@ -117,7 +117,7 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
 
     try {
       const [projectSnapshot, timelineSnapshot, messages] = await Promise.all([
-        getProjectsScreenSnapshot(user),
+        getProjectsScreenSnapshot(user, ['projects', 'volunteerProfile', 'timeLogs']),
         getDashboardTimelineSnapshot(),
         getMessagesForUser(user.id),
       ]);

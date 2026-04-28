@@ -74,7 +74,7 @@ export default function MappingScreen({ navigation }: any) {
   const loadProjects = async () => {
     try {
       const [snapshot, allReports, allVolunteers, allPartners] = await Promise.all([
-        getProjectsScreenSnapshot(user),
+        getProjectsScreenSnapshot(user, ['projects', 'partnerProjectApplications', 'volunteerJoinRecords', 'volunteerProfile']),
         getAllPartnerReports(),
         getAllVolunteers(),
         getAllPartners(),

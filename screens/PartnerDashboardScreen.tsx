@@ -549,7 +549,7 @@ export default function PartnerDashboardScreen({ navigation }: any) {
         accentColor="#166534"
         emptyText="No partner timeline items yet."
         onOpenProject={projectId =>
-          navigateToAvailableRoute(navigation, 'Projects', {
+          navigateToAvailableRoute(navigation, 'Programs', {
             projectId,
           })
         }
@@ -591,7 +591,7 @@ export default function PartnerDashboardScreen({ navigation }: any) {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Browse Programs</Text>
         <Text style={styles.sectionSubtitle}>
-          Choose one of the three core program tracks and submit a project proposal based on that program.
+          Select a program to view its projects or submit a proposal.
         </Text>
         {FEATURED_PROGRAM_MODULES.map(module => {
           const application = programApplicationByModule.get(module);
@@ -609,10 +609,14 @@ export default function PartnerDashboardScreen({ navigation }: any) {
             : 'Submit Project Proposal';
 
           return (
-            <View key={module} style={[styles.card, styles.programCard, { borderColor: getProgramModuleColor(module) }]}> 
+            <TouchableOpacity 
+              key={module} 
+              style={[styles.card, styles.programCard, { borderColor: getProgramModuleColor(module) }]}
+              onPress={() => navigateToAvailableRoute(navigation, 'Programs', { programModule: module })}
+            > 
               <View style={styles.programCardHeader}>
                 <View style={[styles.programIcon, { backgroundColor: getProgramModuleColor(module) }]}> 
-                  <MaterialIcons name="school" size={20} color="#fff" />
+                  <MaterialIcons name={module === 'Nutrition' ? 'restaurant' : module === 'Education' ? 'school' : 'work'} size={20} color="#fff" />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.cardTitle}>{module}</Text>
@@ -631,7 +635,7 @@ export default function PartnerDashboardScreen({ navigation }: any) {
                   {actionProjectId === proposalProjectId ? 'Sending...' : buttonLabel}
                 </Text>
               </TouchableOpacity>
-            </View>
+            </TouchableOpacity>
           );
         })}
       </View>

@@ -36,7 +36,8 @@
     "db:maintenance:report": "node ./scripts/run-python.js -m backend.database_manager --report",
     "db:init": "node ./scripts/run-python.js -m backend.init_supabase",
     "db:migrate": "node ./scripts/run-python.js -m backend.migrate_database",
-    "db:migrate:direct": "node ./scripts/run-python.js -m backend.migrate_database_direct"
+    "db:migrate:direct": "node ./scripts/run-python.js -m backend.migrate_database_direct",
+    "deploy:bundle": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/create-deployment-bundle.ps1"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",

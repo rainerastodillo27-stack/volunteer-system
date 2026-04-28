@@ -527,7 +527,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
     const startedAt = perfNow();
     try {
       const [snapshot, volunteers] = await Promise.all([
-        getProjectsScreenSnapshot(user),
+        getProjectsScreenSnapshot(user, ['projects', 'volunteerProfile']),
         user?.role === 'volunteer' ? getAllVolunteers() : Promise.resolve([] as Volunteer[]),
       ]);
       applySnapshot(snapshot);

@@ -30,9 +30,9 @@ export default function PartnerProjectsScreen() {
   const loadData = useCallback(async () => {
     if (!user) return;
     try {
-      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'partnerApplications']);
+      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'partnerProjectApplications']);
       setProjects(snapshot.projects);
-      setPartnerApplications(snapshot.partnerApplications);
+      setPartnerApplications(snapshot.partnerProjectApplications);
       setLoading(false);
     } catch (e) {
       console.error(e);
@@ -45,8 +45,34 @@ export default function PartnerProjectsScreen() {
     return subscribeToStorageChanges(['projects', 'partnerProjectApplications'], loadData);
   }, [loadData]));
 
-  const renderProject = ({ item }: { item: Project }) => {
-    const application = partnerApplications.find(a => a.targetProjectId === item.id);
+  // Filter approved projects (partner has approved application for them)
+  const approvedProjects = projects.filter(project => {
+    const application = partnerApplications.find(a => a.projectId === project.id);
+    return application?.status === 'Approved';
+  });
+
+  // Filter template programs (project IDs starting with 'program:')
+  const templatePrograms = projects.filter(project => project.id.startsWith('program:'));
+
+  const renderApprovedProject = ({ item }: { item: Project }) => {
+    const application = partnerApplications.find(a => a.projectId === item.id);
+    
+    return (
+      <View style={styles.card}>
+        <Image source={PROGRAM_PHOTO_BY_TITLE[item.title] || { uri: item.imageUrl }} style={styles.cardImage} />
+        <View style={styles.cardContent}>
+          <Text style={styles.cardTitle}>{item.title}</Text>
+          <Text style={styles.cardDescription} numberOfLines={2}>{item.description}</Text>
+          <View style={styles.statusRow}>
+            <Text style={styles.approvedBadge}>✓ Approved</Text>
+          </View>
+        </View>
+      </View>
+    );
+  };
+
+  const renderTemplateProgram = ({ item }: { item: Project }) => {
+    const application = partnerApplications.find(a => a.projectId === item.id);
     const hasProposed = !!application;
     
     return (
@@ -61,7 +87,7 @@ export default function PartnerProjectsScreen() {
             disabled={hasProposed}
           >
             <Text style={styles.buttonText}>
-              {hasProposed ? `Status: ${application.status}` : 'Propose Program'}
+              {hasProposed ? `Status: ${application?.status || 'Pending'}` : 'Propose Program'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -72,9 +98,33 @@ export default function PartnerProjectsScreen() {
   return (
     <View style={styles.container}>
       <FlatList
-        data={projects}
-        renderItem={renderProject}
-        keyExtractor={item => item.id}
+        data={approvedProjects.length > 0 ? 
+          [
+            { type: 'header', title: 'Approved Projects' },
+            ...approvedProjects.map(p => ({ type: 'approved', project: p })),
+            { type: 'header', title: 'Available Programs' },
+            ...templatePrograms.map(p => ({ type: 'program', project: p }))
+          ] : 
+          [
+            { type: 'header', title: 'Available Programs' },
+            ...templatePrograms.map(p => ({ type: 'program', project: p }))
+          ]
+        }
+        renderItem={(({ item }: any) => {
+          if (item.type === 'header') {
+            return (
+              <Text style={styles.sectionHeader}>{item.title}</Text>
+            );
+          }
+          if (item.type === 'approved') {
+            return renderApprovedProject({ item: item.project });
+          }
+          return renderTemplateProgram({ item: item.project });
+        })}
+        keyExtractor={(item, index) => {
+          if (item.type === 'header') return `header-${item.title}`;
+          return item.project.id;
+        }}
         contentContainerStyle={styles.listContent}
       />
     </View>
@@ -84,11 +134,29 @@ export default function PartnerProjectsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f5f5' },
   listContent: { padding: 16 },
+  sectionHeader: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+    marginTop: 16,
+    marginBottom: 8,
+    paddingHorizontal: 8,
+  },
   card: { backgroundColor: '#fff', borderRadius: 12, marginBottom: 16, overflow: 'hidden', elevation: 2 },
   cardImage: { width: '100%', height: 150 },
   cardContent: { padding: 16 },
   cardTitle: { fontSize: 18, fontWeight: 'bold', color: '#333' },
   cardDescription: { fontSize: 14, color: '#444', marginTop: 4 },
+  statusRow: { marginTop: 12, flexDirection: 'row', alignItems: 'center' },
+  approvedBadge: {
+    backgroundColor: '#4CAF50',
+    color: '#fff',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    fontWeight: 'bold',
+    fontSize: 12,
+  },
   button: { backgroundColor: '#4CAF50', padding: 12, borderRadius: 8, marginTop: 12, alignItems: 'center' },
   buttonDisabled: { backgroundColor: '#81c784' },
   buttonText: { color: '#fff', fontWeight: 'bold' }

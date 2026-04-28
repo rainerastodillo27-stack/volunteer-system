@@ -447,7 +447,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [messageText, setMessageText] = useState('');
   const [searchText, setSearchText] = useState('');
-  const [proposalStatusFilter, setProposalStatusFilter] = useState<ProposalReviewFilter>('Pending');
+  const [proposalStatusFilter, setProposalStatusFilter] = useState<ProposalReviewFilter>('All');
   const [selectedAttachmentUri, setSelectedAttachmentUri] = useState<string | null>(null);
   const [composerMode, setComposerMode] = useState<'message' | 'need-post' | 'scope-proposal'>('message');
   const [needDraft, setNeedDraft] = useState<NeedPostDraft>(createNeedPostDraft);
@@ -572,7 +572,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     }
 
     try {
-      const snapshot = await getProjectsScreenSnapshot(user);
+      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'partnerProjectApplications', 'volunteerJoinRecords']);
 
       if (user.role === 'admin') {
         const nextProjectChats = snapshot.projects
@@ -623,8 +623,17 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
           }))
           .sort((left, right) => left.project.title.localeCompare(right.project.title));
 
+        // Partner can see their own proposals to track approval status
+        const partnerProposals = snapshot.partnerApplications
+          .filter(application => application.partnerUserId === user.id)
+          .map(application => ({
+            application,
+            projectTitle: application.proposalDetails?.targetProjectTitle || 'Program proposal',
+            programModule: String(application.proposalDetails?.requestedProgramModule || application.projectId || 'Program'),
+          }));
+
         setProjectChats(nextProjectChats);
-        setProposalChats([]);
+        setProposalChats(sortProposalChatItems(partnerProposals));
         setLoadError(null);
         lastLoadAlertMessageRef.current = null;
         return;
@@ -1598,6 +1607,54 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
               </View>
             ) : null}
 
+            {user?.role === 'partner' && filteredProposalChats.length > 0 ? (
+              <View style={[styles.sectionCard, isVolunteerCompact && styles.sectionCardCompact]}>
+                <View style={styles.sectionHeader}>
+                  <Text style={[styles.sectionTitle, isVolunteerCompact && styles.sectionTitleCompact]}>
+                    My proposal status
+                  </Text>
+                  <Text style={styles.sectionDescription}>
+                    Track the approval status of your program proposals.
+                  </Text>
+                </View>
+
+                {filteredProposalChats.map(chat => (
+                  (() => {
+                    const statusPalette = getProposalReviewStatusPalette(chat.application.status);
+                    return (
+                      <TouchableOpacity
+                        key={chat.application.id}
+                        style={[
+                          styles.projectChatCard,
+                          isVolunteerCompact && styles.projectChatCardCompact,
+                          selectedProposalApplication?.id === chat.application.id &&
+                            styles.projectChatCardSelected,
+                        ]}
+                        onPress={() => handleSelectProposalApplication(chat.application)}
+                      >
+                        <View
+                          style={[
+                            styles.projectChatIcon,
+                            { backgroundColor: statusPalette.backgroundColor },
+                          ]}
+                        >
+                          <MaterialIcons name={statusPalette.icon} size={20} color={statusPalette.textColor} />
+                        </View>
+                        <View style={styles.projectChatCopy}>
+                          <Text style={styles.projectChatTitle}>
+                            {chat.application.proposalDetails?.proposedTitle || chat.projectTitle}
+                          </Text>
+                          <Text style={[styles.projectChatMeta, { color: statusPalette.textColor }]} numberOfLines={1}>
+                            {chat.application.status} • {chat.programModule}
+                          </Text>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })()
+                ))}
+              </View>
+            ) : null}
+
             <Text style={styles.sidebarGroupLabel}>General</Text>
             <View style={[styles.sectionCard, isVolunteerCompact && styles.sectionCardCompact]}>
               <View style={styles.sectionHeader}>
@@ -1912,7 +1969,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                   </TouchableOpacity>
                 ) : null}
 
-                {selectedProposalApplication.status === 'Pending' ? (
+                {selectedProposalApplication.status === 'Pending' && user?.role === 'admin' ? (
                   <View style={styles.proposalReviewActions}>
                     <TouchableOpacity
                       style={[styles.approveButton, styles.proposalActionButton]}
@@ -3051,6 +3108,80 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                         })()
                       ))
                     )}
+                  </View>
+                ) : null}
+
+                {user?.role === 'partner' && filteredProposalChats.length > 0 ? (
+                  <View style={[styles.sectionCard, isVolunteerCompact && styles.sectionCardCompact]}>
+                    <View style={styles.sectionHeader}>
+                      <View>
+                        <Text style={[styles.sectionTitle, isVolunteerCompact && styles.sectionTitleCompact]}>
+                          My proposal status
+                        </Text>
+                        <Text style={styles.sectionDescription}>
+                          Track the approval status of your program proposals here.
+                        </Text>
+                      </View>
+                    </View>
+
+                    {filteredProposalChats.map(chat => (
+                      (() => {
+                        const statusPalette = getProposalReviewStatusPalette(chat.application.status);
+                        return (
+                          <TouchableOpacity
+                            key={chat.application.id}
+                            style={[styles.projectChatCard, isVolunteerCompact && styles.projectChatCardCompact]}
+                            onPress={() => handleSelectProposalApplication(chat.application)}
+                          >
+                            <View
+                              style={[
+                                styles.projectChatIcon,
+                                { backgroundColor: statusPalette.backgroundColor },
+                              ]}
+                            >
+                              <MaterialIcons name={statusPalette.icon} size={20} color={statusPalette.textColor} />
+                            </View>
+
+                            <View style={styles.projectChatCopy}>
+                              <View style={styles.proposalListTitleRow}>
+                                <Text style={styles.projectChatTitle}>
+                                  {chat.application.proposalDetails?.proposedTitle || chat.projectTitle}
+                                </Text>
+                                <View
+                                  style={[
+                                    styles.proposalListStatusBadge,
+                                    {
+                                      backgroundColor: statusPalette.backgroundColor,
+                                      borderColor: statusPalette.borderColor,
+                                    },
+                                  ]}
+                                >
+                                  <MaterialIcons
+                                    name={statusPalette.icon}
+                                    size={12}
+                                    color={statusPalette.textColor}
+                                  />
+                                  <Text style={[styles.proposalListStatusText, { color: statusPalette.textColor }]}>
+                                    {chat.application.status}
+                                  </Text>
+                                </View>
+                              </View>
+                              <Text style={styles.projectChatMeta} numberOfLines={1}>
+                                {chat.programModule}
+                              </Text>
+                              <Text style={styles.projectChatMetaMuted} numberOfLines={1}>
+                                Submitted {formatDateLabel(chat.application.requestedAt)}
+                              </Text>
+                              <Text numberOfLines={2} style={styles.projectChatDescription}>
+                                {chat.application.proposalDetails?.communityNeed || chat.application.proposalDetails?.proposedDescription}
+                              </Text>
+                            </View>
+
+                            <MaterialIcons name="arrow-forward" size={20} color="#64748b" />
+                          </TouchableOpacity>
+                        );
+                      })()
+                    ))}
                   </View>
                 ) : null}
 
