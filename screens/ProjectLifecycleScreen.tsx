@@ -64,6 +64,16 @@ import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/project
 import { getPrimaryReportMediaUri, isImageMediaUri, pickImageFromDevice } from '../utils/media';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
+// Safe Platform accessor for web environments (kept local to this screen)
+function getPlatformOS(): string {
+  try {
+    const { Platform } = require('react-native');
+    return Platform?.OS || 'web';
+  } catch {
+    return 'web';
+  }
+}
+
 const statuses = ['Planning', 'In Progress', 'On Hold', 'Completed', 'Cancelled'];
 const projectModules: AdvocacyFocus[] = ['Nutrition', 'Education', 'Livelihood', 'Disaster'];
 const featuredProgramModules = ['Livelihood', 'Education', 'Nutrition'] as const;
@@ -501,15 +511,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   useFocusEffect(
     React.useCallback(() => {
-      const refresh = async () => {
-        await Promise.all([
-          loadProjects(),
-          loadPartners(),
-          loadVolunteers(),
-          loadAllVolunteerMatches(),
-          loadVolunteerTimeLogs(),
-          loadAllPartnerApplications(),
-        ]);
+      // Split refresh into a lightweight immediate load and deferred heavy loads
+      const refreshLight = async () => {
+        // Essential UI data loaded first to render the screen quickly
+        await Promise.all([loadProjects(), loadPartners()]);
+
+        // Load selected-project details synchronously so selection works immediately
         if (selectedProject?.id) {
           await Promise.all([
             loadStatusUpdates(selectedProject.id),
@@ -520,11 +527,33 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         }
       };
 
+      const refreshDeferred = async () => {
+        // Defer heavier collections so UI can mount. Failures are non-fatal.
+        void loadVolunteers();
+        void loadAllVolunteerMatches();
+        void loadVolunteerTimeLogs();
+        void loadAllPartnerApplications();
+      };
+
+      const refresh = async () => {
+        await refreshLight();
+        // schedule deferred loads without blocking render
+        setTimeout(() => {
+          void refreshDeferred();
+        }, 50);
+      };
+
       void refresh();
+
       const unsubscribe = subscribeToStorageChanges(
-        ['projects', 'events', 'partners', 'volunteers', 'statusUpdates', 'partnerProjectApplications', 'partnerReports', 'volunteerProjectJoins', 'volunteerMatches', 'volunteerTimeLogs'],
+        // Keep subscriptions focused on keys that affect the visible UI first.
+        ['projects', 'events', 'partners', 'statusUpdates', 'partnerReports', 'volunteerProjectJoins', 'volunteerMatches'],
         () => {
-          void refresh();
+          // For storage updates, update light data immediately and defer heavy refreshes
+          void refreshLight();
+          setTimeout(() => {
+            void refreshDeferred();
+          }, 200);
         }
       );
 

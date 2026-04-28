@@ -224,11 +224,22 @@ export default function VolunteerTasksScreen() {
         return;
       }
 
-      const [projects, volunteers, currentVolunteerProfile] = await Promise.all([
+      // Load projects and current volunteer quickly; defer full volunteer list
+      const [projects, currentVolunteerProfile] = await Promise.all([
         getAllProjects(),
-        getAllVolunteers(),
         getVolunteerByUserId(user.id),
       ]);
+      setAllProjects(projects);
+      setVolunteerProfile(currentVolunteerProfile || null);
+
+      // defer loading full volunteers list
+      setAllVolunteers([]);
+      setTimeout(async () => {
+        try {
+          const volunteers = await getAllVolunteers();
+          setAllVolunteers(volunteers);
+        } catch {}
+      }, 50);
 
       let nextVolunteerTimeLogs: VolunteerTimeLog[] = [];
       let nextVolunteerJoinRecords: VolunteerProjectJoinRecord[] = [];

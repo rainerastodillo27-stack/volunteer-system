@@ -1,2 +1,10 @@
 import ProjectLifecycleScreen from './ProjectLifecycleScreen';
-export default ProjectLifecycleScreen;
+import ErrorBoundary from '../components/ErrorBoundary';
+
+export default function AdminProjectsScreen(props: any) {
+	return (
+		<ErrorBoundary>
+			<ProjectLifecycleScreen {...props} />
+		</ErrorBoundary>
+	);
+}

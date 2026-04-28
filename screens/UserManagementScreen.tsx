@@ -64,12 +64,21 @@ export default function UserManagementScreen() {
   // Loads and sorts all user accounts for the admin management table.
   const loadUsers = useCallback(async () => {
     try {
-      const [allUsers, allPartners, allVolunteers, pending] = await Promise.all([
-        getAllUsers(),
-        getAllPartners(),
-        getAllVolunteers(),
-        getPendingUserApprovals(),
-      ]);
+      // Load users and partners quickly; defer volunteers and pending approvals
+      const [allUsers, allPartners] = await Promise.all([getAllUsers(), getAllPartners()]);
+      let pending: User[] = [];
+      setVolunteers([]);
+      setPendingUserApprovals([]);
+      setTimeout(async () => {
+        try {
+          const [allVolunteers, pendingApprovals] = await Promise.all([
+            getAllVolunteers(),
+            getPendingUserApprovals(),
+          ]);
+          setVolunteers(allVolunteers);
+          setPendingUserApprovals(pendingApprovals);
+        } catch {}
+      }, 50);
       const sortedUsers = [...allUsers].sort((a, b) => {
         const createdAtDiff =
           new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
@@ -80,8 +89,6 @@ export default function UserManagementScreen() {
       });
       setUsers(sortedUsers);
       setPartners(allPartners);
-      setVolunteers(allVolunteers);
-      setPendingUserApprovals(pending);
       setLastSyncedAt(new Date().toISOString());
       setLoadError(null);
     } catch (error) {

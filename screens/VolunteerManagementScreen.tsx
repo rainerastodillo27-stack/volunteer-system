@@ -51,9 +51,12 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
       return;
     }
 
+    // Load volunteers and projects quickly; defer heavy time-log audit
     void loadVolunteers();
     void loadProjects();
-    void loadTimeLogs();
+    setTimeout(() => {
+      void loadTimeLogs();
+    }, 50);
   }, [isAdmin]);
 
   useEffect(() => {
@@ -90,7 +93,9 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
       () => {
         void loadVolunteers();
         void loadProjects();
-        void loadTimeLogs();
+        setTimeout(() => {
+          void loadTimeLogs();
+        }, 100);
         if (selectedVolunteer) {
           void loadSelectedVolunteerDetails(selectedVolunteer.id);
         }
@@ -152,12 +157,21 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
 
   // Loads match history and completed projects for the selected volunteer.
   const loadSelectedVolunteerDetails = async (volunteerId: string) => {
-    const [matches, completedProjectIds] = await Promise.all([
-      getVolunteerProjectMatches(volunteerId),
-      getVolunteerCompletedProjectIds(volunteerId),
-    ]);
-    setVolunteerMatches(matches);
-    setSelectedVolunteerCompletedProjectIds(completedProjectIds);
+    // Load matches first for immediate UI; fetch completed project ids deferred
+    try {
+      const matches = await getVolunteerProjectMatches(volunteerId);
+      setVolunteerMatches(matches);
+    } catch (err) {
+      setVolunteerMatches([]);
+    }
+
+    setSelectedVolunteerCompletedProjectIds([]);
+    setTimeout(async () => {
+      try {
+        const completedProjectIds = await getVolunteerCompletedProjectIds(volunteerId);
+        setSelectedVolunteerCompletedProjectIds(completedProjectIds);
+      } catch {}
+    }, 50);
   };
 
   // Opens the detail view for the chosen volunteer.

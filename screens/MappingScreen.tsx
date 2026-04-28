@@ -73,11 +73,12 @@ export default function MappingScreen({ navigation }: any) {
   // Loads map data and narrows project visibility based on the active role.
   const loadProjects = async () => {
     try {
-      const [snapshot, allReports, allVolunteers, allPartners] = await Promise.all([
-        getProjectsScreenSnapshot(user, ['projects', 'partnerProjectApplications', 'volunteerJoinRecords', 'volunteerProfile']),
-        getAllPartnerReports(),
-        getAllVolunteers(),
-        getAllPartners(),
+      // Load snapshot first to render map quickly, defer large collections
+      const snapshot = await getProjectsScreenSnapshot(user, [
+        'projects',
+        'partnerProjectApplications',
+        'volunteerJoinRecords',
+        'volunteerProfile',
       ]);
 
       const approvedPartnerProjectIds = new Set(
@@ -109,9 +110,24 @@ export default function MappingScreen({ navigation }: any) {
       const visibleProjectIds = new Set(visibleProjects.map(project => project.id));
 
       setProjects(visibleProjects);
-      setPartnerReports(allReports.filter(report => visibleProjectIds.has(report.projectId)));
-      setVolunteers(allVolunteers);
-      setPartners(allPartners);
+      setPartnerReports([]);
+      setVolunteers([]);
+      setPartners([]);
+      // Deferred loads for reports, volunteers and partners
+      setTimeout(async () => {
+        try {
+          const [allReports, allVolunteers, allPartners] = await Promise.all([
+            getAllPartnerReports(),
+            getAllVolunteers(),
+            getAllPartners(),
+          ]);
+          setPartnerReports(allReports.filter(report => visibleProjectIds.has(report.projectId)));
+          setVolunteers(allVolunteers);
+          setPartners(allPartners);
+        } catch (err) {
+          // ignore — keep map responsive
+        }
+      }, 50);
       setLoadError(null);
       setLoading(false);
     } catch (error) {

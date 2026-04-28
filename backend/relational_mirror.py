@@ -1420,9 +1420,13 @@ def refresh_program_rows_from_projects(connection: Any) -> None:
 
 
 def ensure_relational_mirror_tables(connection: Any) -> None:
+    import time as _time
     with connection.cursor() as cursor:
-        for statement in RELATIONAL_TABLE_DDL:
+        for idx, statement in enumerate(RELATIONAL_TABLE_DDL):
+            _t0 = _time.perf_counter()
+            print(f"[TRACE] ensure_relational_mirror_tables: executing DDL #{idx} (len={len(statement):d})")
             cursor.execute(statement)
+            print(f"[TRACE] ensure_relational_mirror_tables: finished DDL #{idx} in {_time.perf_counter() - _t0:.3f}s")
     refresh_program_rows_from_projects(connection)
 
 
@@ -1470,21 +1474,35 @@ def get_relational_collection(connection: Any, key: str) -> list[dict[str, Any]]
     column_names = [column_name for column_name, _ in spec["columns"]]
     filter_clause = _row_filter_clause(key)
     with connection.cursor(row_factory=dict_row) as cursor:
+        # Set a per-query timeout to prevent indefinite hangs during large table scans
+        try:
+            cursor.execute("SET statement_timeout = '180s'")
+        except Exception:
+            pass  # If timeout setting fails, continue with default
         query = f"select {', '.join(column_names)} from {spec['table']}"
         if filter_clause:
             query += f" where {filter_clause}"
         query += " order by id asc"
         try:
+            print(f"[TRACE] get_relational_collection: executing query on {spec['table']}")
+            print(f"[TRACE] get_relational_collection: query length: {len(query)}")
             cursor.execute(query)
-        except (UndefinedColumn, UndefinedTable):
+        except (UndefinedColumn, UndefinedTable) as exc:
             # Some environments may have an older DB schema (or missing tables)
             # even though the code expects the latest relational mirror columns.
-            # Make reads resilient by ensuring tables/columns then retrying once.
+            # Avoid running potentially long DDL sync here (can time out and block
+            # the request). Instead, log the issue and return an empty payload so
+            # callers can continue to operate with degraded data.
             connection.rollback()
-            ensure_relational_mirror_tables(connection)
-            connection.commit()
-            cursor.execute(query)
+            print(f"[WARN] get_relational_collection: schema mismatch for {spec['table']}: {exc}; returning empty list")
+            return []
+        except Exception as exc:
+            # Handle query timeouts and other errors gracefully
+            connection.rollback()
+            print(f"[WARN] get_relational_collection: query error for {spec['table']}: {type(exc).__name__}: {exc}; returning empty list")
+            return []
         rows = cursor.fetchall()
+        print(f"[TRACE] get_relational_collection: fetched {len(rows)} rows from {spec['table']}")
     return [_row_to_item(key, row) for row in rows]
 
 

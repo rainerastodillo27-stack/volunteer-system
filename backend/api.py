@@ -26,6 +26,7 @@ from .db import (
     get_configured_db_mode,
     get_db_mode,
     get_postgres_connection,
+    get_connection,
     get_postgres_diagnostics,
     get_postgres_status,
     init_postgres_pool,
@@ -327,7 +328,7 @@ class ConnectionManager:
         self, project_id: str, message: dict[str, Any]
     ) -> None:
         payload = {"type": "project-group-message.changed", "message": message}
-        with get_postgres_connection() as connection:
+        with get_connection() as connection:
             recipients = _get_project_chat_participant_user_ids(connection, project_id)
         recipients.add(message["senderId"])
         for user_id in recipients:
@@ -357,7 +358,7 @@ connection_manager = ConnectionManager()
 
 # Ensures the direct-message table exists before message APIs are used.
 def ensure_message_storage() -> None:
-    with get_postgres_connection() as connection:
+    with get_connection() as connection:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -378,7 +379,7 @@ def ensure_message_storage() -> None:
 
 # Ensures the project group message table exists before group chat APIs are used.
 def ensure_project_group_message_storage() -> None:
-    with get_postgres_connection() as connection:
+    with get_connection() as connection:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -1008,8 +1009,13 @@ def _build_projects_snapshot(
     user_id: str | None,
     role: str | None,
 ) -> dict[str, Any]:
+    import time as _time
+    t0 = _time.perf_counter()
+    print(f"[TRACE] _build_projects_snapshot: starting hot storage reads at {_time.perf_counter():.3f}")
     raw_projects = get_postgres_hot_storage_collection(connection, "projects")
+    print(f"[TRACE] _build_projects_snapshot: read projects after {_time.perf_counter() - t0:.3f}s (count={len(raw_projects)})")
     raw_events = get_postgres_hot_storage_collection(connection, "events")
+    print(f"[TRACE] _build_projects_snapshot: read events after {_time.perf_counter() - t0:.3f}s (count={len(raw_events)})")
     
     # Create a set of event project IDs for O(1) lookup instead of N+1 queries
     event_project_ids = {event.get("id") for event in raw_events if event.get("isEvent")}
@@ -1195,7 +1201,7 @@ def _get_user_by_identifier(identifier: str, connection: Any | None = None) -> d
     if connection is not None:
         return query_user(connection)
 
-    with get_postgres_connection() as active_connection:
+    with get_connection() as active_connection:
         return query_user(active_connection)
 
 
@@ -1396,7 +1402,7 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
     if user is None:
         try:
             print("[DEBUG] Demo account not found, trying database...")
-            with get_postgres_connection() as connection:
+            with get_connection() as connection:
                 user = _get_user_by_identifier(payload.identifier, connection)
         except Exception as db_error:
             print(f"[DEBUG] Database lookup failed: {db_error}")
@@ -1419,7 +1425,7 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
     else:
         # Real account from database - do approval checks
         try:
-            with get_postgres_connection() as connection:
+            with get_connection() as connection:
                 block_reason = (
                     _get_volunteer_login_block_reason(connection, user)
                     or _get_partner_login_block_reason(connection, user)
@@ -1437,7 +1443,7 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
 @app.post("/auth/users/{user_id}/approve")
 # API endpoint for admin to approve a pending user account.
 def approve_user(user_id: str, payload: UserApprovalPayload, admin_id: str) -> dict[str, Any]:
-    with get_postgres_connection() as connection:
+    with get_connection() as connection:
         user = _get_user_by_id(user_id, connection)
         if user is None:
             raise HTTPException(status_code=404, detail="User not found.")
@@ -1462,7 +1468,7 @@ def approve_user(user_id: str, payload: UserApprovalPayload, admin_id: str) -> d
 @app.get("/auth/users/pending")
 # API endpoint to get all pending user approvals (admin only).
 def get_pending_users() -> dict[str, Any]:
-    with get_postgres_connection() as connection:
+    with get_connection() as connection:
         all_users = _get_all_users_from_storage(connection)
         pending_users = [
             u for u in all_users 
@@ -1494,7 +1500,7 @@ async def delete_user_account(user_id: str) -> dict[str, Any]:
         "events",
     ]
 
-    with get_postgres_connection() as connection:
+    with get_connection() as connection:
         users = get_postgres_hot_storage_collection(connection, "users")
         user = next((candidate for candidate in users if str(candidate.get("id") or "") == user_id), None)
         if user is None:
@@ -1665,6 +1671,9 @@ async def delete_user_account(user_id: str) -> dict[str, Any]:
 # API endpoint that returns the projects screen snapshot.
 def get_projects_snapshot(user_id: str | None = None, role: str | None = None) -> dict[str, Any]:
     _require_postgres()
+    import time as _time
+    _start = _time.perf_counter()
+    print(f"[TRACE] /projects/snapshot start user_id={user_id} role={role}")
     
     # Create cache key from parameters
     cache_key = f"snapshot:{user_id}:{role}"
@@ -1675,11 +1684,14 @@ def get_projects_snapshot(user_id: str | None = None, role: str | None = None) -
         return cached_result
     
     # Not in cache, fetch from database
-    with get_postgres_connection() as connection:
+    with get_connection() as connection:
+        print(f"[TRACE] /projects/snapshot got connection after {_time.perf_counter() - _start:.3f}s")
         result = _build_projects_snapshot(connection, user_id, role)
+        print(f"[TRACE] /projects/snapshot built snapshot after {_time.perf_counter() - _start:.3f}s")
     
     # Store in cache
     _projects_snapshot_cache.set(cache_key, result)
+    print(f"[TRACE] /projects/snapshot returning after {_time.perf_counter() - _start:.3f}s")
     return result
 
 
@@ -1687,7 +1699,7 @@ def get_projects_snapshot(user_id: str | None = None, role: str | None = None) -
 # API endpoint that returns a volunteer profile by user id.
 def get_volunteer_by_user(user_id: str) -> dict[str, Any]:
     _require_postgres()
-    with get_postgres_connection() as connection:
+    with get_connection() as connection:
         volunteer = _postgres_get_volunteer_by_user_id(connection, user_id)
     return {"volunteer": volunteer}
 
@@ -1696,7 +1708,7 @@ def get_volunteer_by_user(user_id: str) -> dict[str, Any]:
 # API endpoint that returns volunteer recognition metrics.
 def get_volunteer_recognition_status(volunteer_id: str) -> dict[str, Any]:
     _require_postgres()
-    with get_postgres_connection() as connection:
+    with get_connection() as connection:
         recognition = _postgres_get_volunteer_recognition_status(connection, volunteer_id)
     return {"recognition": recognition}
 
@@ -1705,7 +1717,7 @@ def get_volunteer_recognition_status(volunteer_id: str) -> dict[str, Any]:
 # API endpoint that returns a volunteer's time logs.
 def get_volunteer_logs(volunteer_id: str) -> dict[str, Any]:
     _require_postgres()
-    with get_postgres_connection() as connection:
+    with get_connection() as connection:
         logs = _postgres_get_volunteer_time_logs(connection, volunteer_id)
     return {"logs": logs}
 
@@ -1714,7 +1726,7 @@ def get_volunteer_logs(volunteer_id: str) -> dict[str, Any]:
 # API endpoint that starts a volunteer time log.
 async def start_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogStartPayload) -> dict[str, Any]:
     _require_postgres()
-    with get_postgres_connection() as connection:
+    with get_connection() as connection:
         volunteer = _postgres_get_hot_item_by_id(connection, "volunteers", volunteer_id)
         if volunteer is None:
             raise HTTPException(status_code=404, detail="Volunteer not found.")
@@ -1762,7 +1774,7 @@ async def start_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogStartP
 # API endpoint that ends a volunteer time log.
 async def end_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogEndPayload) -> dict[str, Any]:
     _require_postgres()
-    with get_postgres_connection() as connection:
+    with get_connection() as connection:
         existing_logs = _postgres_get_volunteer_time_logs(connection, volunteer_id)
         active_log = next(
             (
@@ -1800,7 +1812,7 @@ async def end_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogEndPaylo
 # API endpoint that returns partner applications by partner user id.
 def get_partner_applications_by_user(partner_user_id: str) -> dict[str, Any]:
     _require_postgres()
-    with get_postgres_connection() as connection:
+    with get_connection() as connection:
         applications = _postgres_get_partner_project_applications_by_user(connection, partner_user_id)
     return {"applications": applications}
 
@@ -1812,7 +1824,7 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
     requested_program_module = str(payload.programModule or "").strip()
     proposal_project_id = f"program:{requested_program_module}" if requested_program_module else payload.projectId
 
-    with get_postgres_connection() as connection:
+    with get_connection() as connection:
         target_project: dict[str, Any] | None = None
         target_project_id = str((payload.proposalDetails or {}).get("targetProjectId") or "").strip()
         if target_project_id:
@@ -1875,7 +1887,7 @@ async def review_partner_project_application(
         raise HTTPException(status_code=400, detail="A reviewer id is required.")
 
     broadcast_keys = ["partnerProjectApplications"]
-    with get_postgres_connection() as connection:
+    with get_connection() as connection:
         application = _postgres_get_hot_item_by_id(connection, "partnerProjectApplications", application_id)
         if application is None:
             raise HTTPException(status_code=404, detail="Application not found.")
@@ -1979,7 +1991,7 @@ async def review_volunteer_match(match_id: str, payload: VolunteerMatchReviewPay
         raise HTTPException(status_code=400, detail="A reviewer id is required.")
 
     broadcast_keys = ["volunteerMatches"]
-    with get_postgres_connection() as connection:
+    with get_connection() as connection:
         match = _postgres_get_hot_item_by_id(connection, "volunteerMatches", match_id)
         if match is None:
             raise HTTPException(status_code=404, detail="Volunteer request not found.")
@@ -2042,7 +2054,7 @@ async def review_volunteer_match(match_id: str, payload: VolunteerMatchReviewPay
 # API endpoint that joins a user directly to a project or event.
 async def join_project(project_id: str, payload: ProjectJoinPayload) -> dict[str, Any]:
     _require_postgres()
-    with get_postgres_connection() as connection:
+    with get_connection() as connection:
         project, project_storage_key = _postgres_get_project_like_item_by_id(connection, project_id)
         if project is None or project_storage_key is None:
             raise HTTPException(status_code=404, detail="Project not found.")
@@ -2084,7 +2096,7 @@ def get_messages(user_id: str) -> dict[str, list[dict[str, Any]]]:
     ensure_message_storage()
     from psycopg.rows import dict_row
 
-    with get_postgres_connection() as connection:
+    with get_connection() as connection:
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 """
@@ -2105,7 +2117,7 @@ def get_conversation(user1: str, user2: str) -> dict[str, list[dict[str, Any]]]:
     ensure_message_storage()
     from psycopg.rows import dict_row
 
-    with get_postgres_connection() as connection:
+    with get_connection() as connection:
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 """
@@ -2127,7 +2139,7 @@ def get_project_group_messages(project_id: str, user_id: str) -> dict[str, list[
     ensure_project_group_message_storage()
     from psycopg.rows import dict_row
 
-    with get_postgres_connection() as connection:
+    with get_connection() as connection:
         _assert_project_group_chat_access(connection, project_id, user_id)
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
@@ -2161,7 +2173,7 @@ async def create_message(payload: MessagePayload) -> dict[str, Any]:
     attachments = payload.attachments or []
     from psycopg.rows import dict_row
 
-    with get_postgres_connection() as connection:
+    with get_connection() as connection:
         if _get_user_by_id(payload.senderId, connection) is None:
             raise HTTPException(status_code=404, detail="Sender not found.")
         if _get_user_by_id(payload.recipientId, connection) is None:
@@ -2209,7 +2221,7 @@ async def create_project_group_message(
     if payload.projectId != project_id:
         raise HTTPException(status_code=400, detail="Project message payload does not match route.")
 
-    with get_postgres_connection() as connection:
+    with get_connection() as connection:
         _assert_project_group_chat_access(connection, project_id, payload.senderId)
         sender_user = _postgres_get_hot_item_by_id(connection, "users", payload.senderId)
         sender_role = str(sender_user.get("role") or "") if sender_user else ""
@@ -2303,7 +2315,7 @@ async def mark_message_read(message_id: str) -> dict[str, Any]:
     ensure_message_storage()
     from psycopg.rows import dict_row
 
-    with get_postgres_connection() as connection:
+    with get_connection() as connection:
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 """
@@ -2353,10 +2365,10 @@ async def storage_websocket(websocket: WebSocket) -> None:
 def get_storage_item(key: str) -> dict[str, Any]:
     _require_postgres()
     if is_hot_storage_key(key):
-        with get_postgres_connection() as connection:
+        with get_connection() as connection:
             return {"key": key, "value": get_postgres_hot_storage_collection(connection, key)}
     if key in SPECIAL_STORAGE_KEYS:
-        with get_postgres_connection() as connection:
+        with get_connection() as connection:
             return {"key": key, "value": _get_special_storage_collection(connection, key)}
     return {"key": key, "value": None}
 
@@ -2370,7 +2382,7 @@ def get_storage_items_batch(payload: StorageBatchPayload) -> dict[str, dict[str,
     if not keys:
         return {"items": items}
 
-    with get_postgres_connection() as connection:
+    with get_connection() as connection:
         hot_keys = [key for key in keys if is_hot_storage_key(key)]
         special_keys = [key for key in keys if key in SPECIAL_STORAGE_KEYS]
         cold_keys = [key for key in keys if not is_hot_storage_key(key) and key not in SPECIAL_STORAGE_KEYS]
@@ -2393,7 +2405,7 @@ async def put_storage_item(key: str, payload: StoragePayload) -> dict[str, str]:
         if not isinstance(payload.value, list):
             raise HTTPException(status_code=400, detail=f"Storage key '{key}' expects a list payload.")
 
-        with get_postgres_connection() as connection:
+        with get_connection() as connection:
             replace_postgres_hot_storage_collection(connection, key, payload.value)
             connection.commit()
         
@@ -2402,7 +2414,7 @@ async def put_storage_item(key: str, payload: StoragePayload) -> dict[str, str]:
         await connection_manager.broadcast_storage_event([key])
         return {"status": "ok"}
     if key in SPECIAL_STORAGE_KEYS:
-        with get_postgres_connection() as connection:
+        with get_connection() as connection:
             _replace_special_storage_collection(connection, key, payload.value)
             connection.commit()
         
@@ -2476,7 +2488,7 @@ async def submit_report(payload: ReportSubmitPayload) -> dict[str, Any]:
 
     try:
         broadcast_keys = ["partnerReports"]
-        with get_postgres_connection() as connection:
+        with get_connection() as connection:
             if submitter_role == "volunteer":
                 volunteer = _postgres_get_volunteer_by_user_id(connection, submitter_user_id)
                 if volunteer is None:
@@ -2539,7 +2551,7 @@ async def submit_report(payload: ReportSubmitPayload) -> dict[str, Any]:
 async def delete_storage_item(key: str) -> dict[str, str]:
     _require_postgres()
     if is_hot_storage_key(key):
-        with get_postgres_connection() as connection:
+        with get_connection() as connection:
             clear_postgres_hot_storage_collection(connection, key)
             connection.commit()
         
@@ -2548,7 +2560,7 @@ async def delete_storage_item(key: str) -> dict[str, str]:
         await connection_manager.broadcast_storage_event([key])
         return {"status": "ok"}
     if key in SPECIAL_STORAGE_KEYS:
-        with get_postgres_connection() as connection:
+        with get_connection() as connection:
             _clear_special_storage_collection(connection, key)
             connection.commit()
         
@@ -2563,7 +2575,7 @@ async def delete_storage_item(key: str) -> dict[str, str]:
 # API endpoint that clears all app storage and hot-storage collections.
 async def clear_storage() -> dict[str, str]:
     _require_postgres()
-    with get_postgres_connection() as connection:
+    with get_connection() as connection:
         clear_all_postgres_hot_storage(connection)
         for key in SPECIAL_STORAGE_KEYS:
             _clear_special_storage_collection(connection, key)

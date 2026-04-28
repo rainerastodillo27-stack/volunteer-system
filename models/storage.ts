@@ -652,7 +652,7 @@ export function getApiBaseUrl(): string {
 
     const protocol = document.location.protocol || 'http:';
     const host = document.location.hostname || '127.0.0.1';
-    return `${protocol}//${host}:8000`;
+    return `${protocol}//${host}:8001`;
   }
 
   const configuredNativeBaseUrl = getExpoExtraValue('apiBaseUrl');

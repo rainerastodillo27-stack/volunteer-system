@@ -532,10 +532,10 @@ export default function MappingScreen({ navigation }: any) {
   // Loads map projects and narrows visibility based on the active role.
   const loadProjects = async () => {
     try {
-      const [snapshot, allVolunteers, allPartners] = await Promise.all([
-        getProjectsScreenSnapshot(user, ['projects', 'partnerProjectApplications', 'volunteerJoinRecords']),
-        getAllVolunteers(),
-        getAllPartners(),
+      const snapshot = await getProjectsScreenSnapshot(user, [
+        'projects',
+        'partnerProjectApplications',
+        'volunteerJoinRecords',
       ]);
       const approvedPartnerProjectIds = new Set(
         snapshot.partnerApplications
@@ -564,8 +564,15 @@ export default function MappingScreen({ navigation }: any) {
           : snapshot.projects;
 
       setProjects(visibleProjects);
-      setVolunteers(allVolunteers);
-      setPartners(allPartners);
+      setVolunteers([]);
+      setPartners([]);
+      setTimeout(async () => {
+        try {
+          const [allVolunteers, allPartners] = await Promise.all([getAllVolunteers(), getAllPartners()]);
+          setVolunteers(allVolunteers);
+          setPartners(allPartners);
+        } catch {}
+      }, 50);
       setLoading(false);
     } catch (error) {
       console.error('Error loading projects for map:', error);

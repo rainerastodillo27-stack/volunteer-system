@@ -119,27 +119,13 @@ export default function DashboardScreen({ navigation }: any) {
   const loadDashboardData = React.useCallback(async () => {
     const startedAt = perfNow();
     try {
-      const [{ projects, partners, users, volunteers, statusUpdates }, volunteerTimeLogs, partnerReports, volunteerMatches] =
-        await Promise.all([
-          getDashboardSnapshot(),
-          getAllVolunteerTimeLogs(),
-          getAllPartnerReports(),
-          getAllVolunteerProjectMatches(),
-        ]);
-      const volunteerCompletedProjectEntries = await Promise.all(
-        volunteers.map(async volunteer => [
-          volunteer.id,
-          await getVolunteerCompletedProjectIds(volunteer.id),
-        ] as const)
-      );
+      // Load snapshot first (essential UI data)
+      const { projects, partners, users, volunteers, statusUpdates } = await getDashboardSnapshot();
 
       setLoadError(null);
       setProjectsData(projects);
       setPartnersData(partners);
       setVolunteersData(volunteers);
-      setVolunteerCompletedProjectIdsByVolunteerId(
-        Object.fromEntries(volunteerCompletedProjectEntries)
-      );
 
       setProjectStats({
         total: projects.length,
@@ -153,26 +139,7 @@ export default function DashboardScreen({ navigation }: any) {
         pending: partners.filter(p => p.status === 'Pending').length,
       });
 
-      setUserStats({
-        total: users.length,
-      });
-
-      setWorkflowStats({
-        inboundInquiries: partners.filter(p => p.status === 'Pending').length,
-        timeIns: volunteerTimeLogs.length,
-        timeOuts: volunteerTimeLogs.filter(log => Boolean(log.timeOut)).length,
-        pendingReports: partnerReports.filter(report => report.status === 'Submitted').length,
-      });
-      setPendingVolunteerJoinRequests(
-        volunteerMatches.filter(match => match.status === 'Requested').length
-      );
-
-      const latestTimeInLog = volunteerTimeLogs[0];
-      const latestTimeOutLog = volunteerTimeLogs.find(log => Boolean(log.timeOut)) || null;
-      setTimeTrackingTarget({
-        latestTimeInProjectId: latestTimeInLog?.projectId,
-        latestTimeOutProjectId: latestTimeOutLog?.projectId,
-      });
+      setUserStats({ total: users.length });
 
       const projectNamesById = new Map(projects.map(project => [project.id, project.title]));
       const allUpdates = statusUpdates
@@ -183,6 +150,49 @@ export default function DashboardScreen({ navigation }: any) {
         .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 
       setRecentUpdates(allUpdates.slice(0, 6));
+
+      // Defer heavy collections (time logs, partner reports, volunteer matches, and per-volunteer completed ids)
+      setTimeout(async () => {
+        try {
+          const [volunteerTimeLogs, partnerReports, volunteerMatches] = await Promise.all([
+            getAllVolunteerTimeLogs(),
+            getAllPartnerReports(),
+            getAllVolunteerProjectMatches(),
+          ]);
+
+          setWorkflowStats({
+            inboundInquiries: partners.filter(p => p.status === 'Pending').length,
+            timeIns: volunteerTimeLogs.length,
+            timeOuts: volunteerTimeLogs.filter(log => Boolean(log.timeOut)).length,
+            pendingReports: partnerReports.filter(report => report.status === 'Submitted').length,
+          });
+
+          setPendingVolunteerJoinRequests(
+            volunteerMatches.filter(match => match.status === 'Requested').length
+          );
+
+          const latestTimeInLog = volunteerTimeLogs[0];
+          const latestTimeOutLog = volunteerTimeLogs.find(log => Boolean(log.timeOut)) || null;
+          setTimeTrackingTarget({
+            latestTimeInProjectId: latestTimeInLog?.projectId,
+            latestTimeOutProjectId: latestTimeOutLog?.projectId,
+          });
+
+          const volunteerCompletedProjectEntries = await Promise.all(
+            volunteers.map(async volunteer => [
+              volunteer.id,
+              await getVolunteerCompletedProjectIds(volunteer.id),
+            ] as const)
+          );
+          setVolunteerCompletedProjectIdsByVolunteerId(
+            Object.fromEntries(volunteerCompletedProjectEntries)
+          );
+        } catch (err) {
+          // non-fatal; keep UI responsive
+          // eslint-disable-next-line no-console
+          console.warn('Deferred dashboard loads failed', err);
+        }
+      }, 50);
       const elapsedMs = perfNow() - startedAt;
       console.log(`[perf] DashboardScreen data ready in ${Math.round(elapsedMs)}ms`);
     } catch (error) {

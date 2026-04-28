@@ -82,12 +82,16 @@ export default function ProfileScreen() {
       const profile = await getVolunteerByUserId(user.id);
       setVolunteerProfile(profile);
       if (profile?.id) {
-        const [completedIds, recognition] = await Promise.all([
-          getVolunteerCompletedProjectIds(profile.id),
-          getVolunteerRecognitionStatus(profile.id),
-        ]);
+        const completedIds = await getVolunteerCompletedProjectIds(profile.id);
         setCompletedProjectIds(completedIds);
-        setRecognitionStatus(recognition);
+        setRecognitionStatus({ joinedProgramCount: 0, isTopVolunteer: false });
+        // defer heavier recognition check
+        setTimeout(async () => {
+          try {
+            const recognition = await getVolunteerRecognitionStatus(profile.id);
+            setRecognitionStatus(recognition);
+          } catch {}
+        }, 50);
       } else {
         setCompletedProjectIds([]);
         setRecognitionStatus({

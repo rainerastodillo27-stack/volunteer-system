@@ -177,7 +177,10 @@ export default function ReportsScreen({ navigation, route }: any) {
 
   useEffect(() => {
     void loadReportsCoalesced();
-    void loadVolunteers();
+    // defer volunteers to avoid blocking initial reports render
+    setTimeout(() => {
+      void loadVolunteers();
+    }, 50);
   }, [loadReportsCoalesced, loadVolunteers]);
 
   useEffect(() => {
@@ -214,7 +217,11 @@ export default function ReportsScreen({ navigation, route }: any) {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([loadReportsCoalesced(), loadVolunteers()]);
+    await loadReportsCoalesced();
+    // refresh volunteers without blocking the UI
+    setTimeout(() => {
+      void loadVolunteers();
+    }, 50);
     setRefreshing(false);
   }, [loadReportsCoalesced, loadVolunteers]);
 

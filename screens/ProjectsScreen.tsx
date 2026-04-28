@@ -536,12 +536,17 @@ export default function ProjectsScreen({ navigation, route }: any) {
   const loadProjectsData = useCallback(async () => {
     const startedAt = perfNow();
     try {
-      const [snapshot, volunteers] = await Promise.all([
-        getProjectsScreenSnapshot(user, ['projects', 'volunteerProfile']),
-        user?.role === 'volunteer' ? getAllVolunteers() : Promise.resolve([] as Volunteer[]),
-      ]);
+      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'volunteerProfile']);
       applySnapshot(snapshot);
-      setAllVolunteers(volunteers);
+      setAllVolunteers([]);
+      if (user?.role === 'volunteer') {
+        setTimeout(async () => {
+          try {
+            const volunteers = await getAllVolunteers();
+            setAllVolunteers(volunteers);
+          } catch {}
+        }, 50);
+      }
       setLoadError(null);
       if (snapshot.volunteerProfile?.id) {
         const matches = await getVolunteerProjectMatches(snapshot.volunteerProfile.id);

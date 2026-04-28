@@ -245,17 +245,25 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
 
   const loadPlannerData = async () => {
     try {
-      const [calendars, items, allProjects, applications] = await Promise.all([
+      // Load essential data first so UI can render quickly
+      const [calendars, items, allProjects] = await Promise.all([
         getAllAdminPlanningCalendars(),
         getAllAdminPlanningItems(),
         getAllProjects(),
-        getAllPartnerProjectApplications(),
       ]);
 
       setPlanningCalendars(calendars);
       setPlanningItems(items);
       setProjects(allProjects);
-      setPartnerProjectApplications(applications);
+
+      // Defer heavier collection (partner applications)
+      setPartnerProjectApplications([]);
+      setTimeout(async () => {
+        try {
+          const applications = await getAllPartnerProjectApplications();
+          setPartnerProjectApplications(applications);
+        } catch {}
+      }, 50);
       setSelectedCalendarIds(currentSelection => {
         const validIds = calendars.map(calendar => calendar.id);
         if (currentSelection.length === 0) {
