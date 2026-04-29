@@ -1540,6 +1540,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       new Set(taskDraft.skillsNeeded.map(skill => skill.trim()).filter(Boolean))
     );
 
+    if (normalizedSkills.length === 0) {
+      Alert.alert('Validation Error', 'Select at least one skill for this task.');
+      return;
+    }
+
     const nextTask: ProjectInternalTask = {
       id: editingTaskId || `${currentSelectedProject.id}-task-${Date.now()}`,
       title: taskDraft.title.trim(),
