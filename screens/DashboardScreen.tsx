@@ -85,6 +85,7 @@ function useStableProjects(projects: Project[]): Project[] {
 export default function DashboardScreen({ navigation }: any) {
   const { user, isAdmin, logout } = useAuth();
   const { width } = useWindowDimensions();
+  const isCompact = width < 420;
   const isDesktop = Platform.OS === 'web' || width >= 1100;
   const perfNow = () =>
     typeof performance !== 'undefined' && typeof performance.now === 'function'
@@ -388,7 +389,7 @@ export default function DashboardScreen({ navigation }: any) {
     [partnersData, projectsData]
   );
 
-  const upcomingPrograms = useMemo(() => {
+  const upcomingProjects = useMemo(() => {
     return [...projectsData]
       .filter(project => {
         const status = getProjectDisplayStatus(project);
@@ -434,20 +435,24 @@ export default function DashboardScreen({ navigation }: any) {
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
       <View style={styles.header}>
-        <View style={styles.userSection}>
-          <View style={styles.avatar}>
+        <View style={[styles.userSection, isCompact && styles.userSectionCompact]}>
+          <View style={[styles.avatar, isCompact && styles.avatarCompact]}>
             <Text style={styles.avatarText}>{displayName?.charAt(0) ?? 'N'}</Text>
           </View>
-          <View style={styles.userCopy}>
-            <Text style={styles.greeting}>Welcome, {displayName}</Text>
+          <View style={[styles.userCopy, isCompact && styles.userCopyCompact]}>
+            <Text style={[styles.greeting, isCompact && styles.greetingCompact]} numberOfLines={2}>
+              Welcome, {displayName}
+            </Text>
             <Text style={styles.role}>{roleLabel}</Text>
           </View>
-          <TouchableOpacity onPress={handleRefresh} style={{ marginRight: 12 }}>
-            <MaterialIcons name="refresh" size={22} color="#335a42" />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={handleLogout}>
-            <MaterialIcons name="logout" size={22} color="#335a42" />
-          </TouchableOpacity>
+          <View style={[styles.headerActions, isCompact && styles.headerActionsCompact]}>
+            <TouchableOpacity onPress={handleRefresh} style={styles.headerActionButton}>
+              <MaterialIcons name="refresh" size={22} color="#335a42" />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={handleLogout} style={styles.headerActionButton}>
+              <MaterialIcons name="logout" size={22} color="#335a42" />
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
 
@@ -495,21 +500,22 @@ export default function DashboardScreen({ navigation }: any) {
 
         <View style={styles.calendarCard}>
           <View style={styles.upcomingPane}>
-            <Text style={styles.upcomingTitle}>Upcoming Programs</Text>
-            {upcomingPrograms.length ? (
-              upcomingPrograms.map(program => (
+            <Text style={styles.upcomingTitle}>Upcoming Projects</Text>
+            {upcomingProjects.length ? (
+              upcomingProjects.map(project => (
                 <TouchableOpacity
-                  key={program.id}
+                  key={project.id}
                   style={styles.upcomingRow}
-                  onPress={() => openProjects(program.id)}
+                  onPress={() => openProjects(project.id)}
                   activeOpacity={0.85}
                 >
-                  <Text style={styles.upcomingName} numberOfLines={1}>{program.title}</Text>
-                  <Text style={styles.upcomingDate}>{formatShortDate(program.startDate)}</Text>
+                  <Text style={styles.upcomingName} numberOfLines={1}>{project.title}</Text>
+                  <Text style={styles.upcomingCategory} numberOfLines={1}>{project.category}</Text>
+                  <Text style={styles.upcomingDate}>{formatShortDate(project.startDate)}</Text>
                 </TouchableOpacity>
               ))
             ) : (
-              <Text style={styles.upcomingEmpty}>No upcoming programs yet.</Text>
+              <Text style={styles.upcomingEmpty}>No upcoming projects yet.</Text>
             )}
           </View>
 
@@ -585,7 +591,7 @@ export default function DashboardScreen({ navigation }: any) {
                     <View style={styles.volunteerTrack}>
                       <View style={[styles.volunteerFill, { width: `${progress}%` }]} />
                     </View>
-                    <Text style={styles.volunteerMeta}>{(volunteer.pastProjects || []).length} programs joined</Text>
+                    <Text style={styles.volunteerMeta}>{(volunteer.pastProjects || []).length} projects joined</Text>
                   </View>
                 </View>
               );
@@ -612,8 +618,8 @@ export default function DashboardScreen({ navigation }: any) {
               <Text style={styles.statNumber}>{pendingVolunteerJoinRequests}</Text>
             </View>
           ) : null}
-          <View style={styles.statLine}><Text style={styles.statKey}>Upcoming Programs</Text><Text style={styles.statNumber}>{upcomingPrograms.length}</Text></View>
-          <View style={[styles.statLine, styles.statLineLast]}><Text style={styles.statKey}>Total Programs</Text><Text style={styles.statNumber}>{projectStats.total}</Text></View>
+          <View style={styles.statLine}><Text style={styles.statKey}>Upcoming Projects</Text><Text style={styles.statNumber}>{upcomingProjects.length}</Text></View>
+          <View style={[styles.statLine, styles.statLineLast]}><Text style={styles.statKey}>Total Projects</Text><Text style={styles.statNumber}>{projectStats.total}</Text></View>
         </View>
 
         <View style={styles.newsCard}>
@@ -679,8 +685,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
   },
+  userSectionCompact: {
+    flexWrap: 'wrap',
+    alignItems: 'flex-start',
+  },
   userCopy: {
     flex: 1,
+  },
+  userCopyCompact: {
+    flexBasis: '100%',
   },
   avatar: {
     width: 44,
@@ -690,10 +703,18 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  avatarCompact: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+  },
   avatarText: {
     color: '#fff',
     fontWeight: '700',
     fontSize: 18,
+  },
+  greetingCompact: {
+    fontSize: 14,
   },
   greeting: {
     fontSize: 15,
@@ -704,6 +725,18 @@ const styles = StyleSheet.create({
     marginTop: 2,
     fontSize: 12,
     color: green.muted,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  headerActionsCompact: {
+    width: '100%',
+    justifyContent: 'flex-end',
+  },
+  headerActionButton: {
+    padding: 4,
   },
   errorBanner: {
     marginHorizontal: 14,
@@ -816,6 +849,11 @@ const styles = StyleSheet.create({
     color: '#f7fff8',
     fontSize: 12,
     fontWeight: '600',
+  },
+  upcomingCategory: {
+    marginTop: 2,
+    color: '#e4f5d9',
+    fontSize: 11,
   },
   upcomingDate: {
     marginTop: 2,

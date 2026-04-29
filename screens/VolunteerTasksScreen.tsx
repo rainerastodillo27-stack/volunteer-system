@@ -288,7 +288,6 @@ export default function VolunteerTasksScreen() {
       );
 
       setAllProjects(projects);
-      setAllVolunteers(volunteers);
       setVolunteerProfile(currentVolunteerProfile);
       setVolunteerTimeLogs(nextVolunteerTimeLogs);
       setVolunteerJoinRecords(nextVolunteerJoinRecords);

@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import AppLogo from './AppLogo';
 
 type ScreenBrandHeaderProps = {
@@ -8,15 +8,20 @@ type ScreenBrandHeaderProps = {
 
 // Shows the shared branded header used above most top-level screens.
 export default function ScreenBrandHeader({ title }: ScreenBrandHeaderProps) {
+  const { width } = useWindowDimensions();
+  const isCompact = width < 380;
+
   return (
     <View style={styles.container}>
-      <View style={styles.brandBlock}>
-        <View style={styles.logoWrap}>
-          <AppLogo width={78} />
+      <View style={[styles.brandBlock, isCompact && styles.brandBlockCompact]}>
+        <View style={[styles.logoWrap, isCompact && styles.logoWrapCompact]}>
+          <AppLogo width={isCompact ? 62 : 78} />
         </View>
-        <View style={styles.copyBlock}>
-          <Text style={styles.brandName}>NVC CONNECT</Text>
-          <Text style={styles.screenTitle}>{title}</Text>
+        <View style={[styles.copyBlock, isCompact && styles.copyBlockCompact]}>
+          <Text style={[styles.brandName, isCompact && styles.brandNameCompact]}>NVC CONNECT</Text>
+          <Text style={[styles.screenTitle, isCompact && styles.screenTitleCompact]} numberOfLines={2}>
+            {title}
+          </Text>
         </View>
       </View>
     </View>
@@ -44,6 +49,12 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     elevation: 2,
   },
+  brandBlockCompact: {
+    flexDirection: 'column',
+    alignItems: 'center',
+    paddingVertical: 12,
+    gap: 8,
+  },
   logoWrap: {
     width: 108,
     height: 72,
@@ -54,8 +65,15 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#dcfce7',
   },
+  logoWrapCompact: {
+    width: 86,
+    height: 58,
+  },
   copyBlock: {
     flex: 1,
+  },
+  copyBlockCompact: {
+    alignItems: 'center',
   },
   brandName: {
     fontSize: 22,
@@ -63,10 +81,18 @@ const styles = StyleSheet.create({
     color: '#166534',
     letterSpacing: 0.3,
   },
+  brandNameCompact: {
+    fontSize: 19,
+    textAlign: 'center',
+  },
   screenTitle: {
     marginTop: 2,
     fontSize: 13,
     color: '#4b5563',
     fontWeight: '600',
+  },
+  screenTitleCompact: {
+    textAlign: 'center',
+    fontSize: 12,
   },
 });

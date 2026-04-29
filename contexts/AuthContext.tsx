@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { Alert } from 'react-native';
 import { User } from '../models/types';
-import { getCurrentUser, getStorageItemsFast, setCurrentUser as saveCurrentUser } from '../models/storage';
+import { getStorageItemsFast, setCurrentUser as saveCurrentUser } from '../models/storage';
 
 // Safe Platform accessor for web environments
 function getPlatformOS(): string {
@@ -31,7 +31,7 @@ const PREFETCH_KEYS_BY_ROLE = {
     'volunteers',
     'volunteerMatches',
     'volunteerTimeLogs',
-    'adminPlanningItems',
+    'adminPlanningCalendars',
   ],
   partner: [
     'projects',
@@ -51,7 +51,17 @@ async function prefetchForUser(user: User | null): Promise<void> {
   if (!keys) {
     return;
   }
-  await getStorageItemsFast(Array.from(keys));
+  // Fire-and-forget prefetch: do not wait for completion to avoid blocking auth gate.
+  // Cache will be populated in the background for faster first screen load.
+  const prefetchStart = Date.now();
+  console.time(`[App] Prefetch (${user.role})`);
+  void getStorageItemsFast(Array.from(keys)).then(() => {
+    console.timeEnd(`[App] Prefetch (${user.role})`);
+    console.log(`[App] Prefetch completed in ${Date.now() - prefetchStart}ms`);
+  }).catch(error => {
+    console.debug(`[App] Background prefetch failed (non-blocking):`, error);
+    console.timeEnd(`[App] Prefetch (${user.role})`);
+  });
 }
 
 interface AuthContextType {
@@ -73,37 +83,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Check if user is already logged in
-    // Restores the previously signed-in user from storage when the app launches.
-    const checkAuth = async () => {
-      try {
-        const currentUser = await getCurrentUser();
+    // Always open the portal chooser first for a predictable app entry point.
+    // We intentionally clear any persisted session so launch never skips Login.
+    setLoading(false);
+    setUser(null);
 
-        // Enforce that only admin accounts stay signed in on web
-        if (getPlatformOS() === 'web' && currentUser && currentUser.role !== 'admin') {
-          await saveCurrentUser(null);
-          setUser(null);
-          if (typeof window !== 'undefined') {
-            Alert.alert(
-              'Access Restricted',
-              'Volunteer and partner accounts can only be opened on mobile. Please sign in with the admin account on web.'
-            );
-          }
-          return;
-        }
+    void saveCurrentUser(null)
+      .catch(error => {
+        console.error('[App] Error clearing persisted session on launch:', error);
+      });
 
-        if (currentUser) {
-          setUser(currentUser);
-          void prefetchForUser(currentUser).catch(() => null);
-        }
-      } catch (error) {
-        console.error('Error checking auth:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    checkAuth();
+    return () => undefined;
   }, []);
 
   // Saves the active user in memory and persistent storage after login.

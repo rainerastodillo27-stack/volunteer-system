@@ -2,6 +2,21 @@ type RequestErrorOptions = {
   backendUrl?: string;
 };
 
+export function isAbortLikeError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  const maybeError = error as { name?: string; message?: string };
+  const normalizedMessage = (maybeError.message || '').toLowerCase();
+
+  return (
+    maybeError.name === 'AbortError' ||
+    normalizedMessage.includes('aborted') ||
+    normalizedMessage.includes('canceled')
+  );
+}
+
 function isDatabaseUnavailableMessage(message: string): boolean {
   const normalizedMessage = message.toLowerCase();
 
@@ -39,7 +54,7 @@ export function getRequestErrorMessage(
     const normalizedMessage = message.toLowerCase();
 
     if (
-      error.name === 'AbortError' ||
+      isAbortLikeError(error) ||
       normalizedMessage.includes('timed out') ||
       normalizedMessage.includes('timeout') ||
       normalizedMessage.includes('aborted')
@@ -85,7 +100,7 @@ export function getRequestErrorTitle(error: unknown, fallback = 'Error'): string
       normalizedMessage.includes('timed out') ||
       normalizedMessage.includes('timeout') ||
       normalizedMessage.includes('aborted') ||
-      (error instanceof Error && error.name === 'AbortError')
+      isAbortLikeError(error)
     ) {
       return 'Request Timed Out';
     }

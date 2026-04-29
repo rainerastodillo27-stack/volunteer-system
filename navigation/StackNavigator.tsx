@@ -1,5 +1,6 @@
+import { useEffect, useRef } from "react";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
-import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Platform, StyleSheet, Text, View } from "react-native";
 import { useAuth } from "../contexts/AuthContext";
 import AppLogo from "../components/AppLogo";
 import LoginScreen from "../screens/LoginScreen";
@@ -15,6 +16,26 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 // Switches between the login flow and the authenticated tab navigator.
 export default function StackNavigator() {
   const { user, loading } = useAuth();
+  const startupLoggedRef = useRef(false);
+
+  useEffect(() => {
+    if (loading || startupLoggedRef.current) {
+      return;
+    }
+
+    startupLoggedRef.current = true;
+    const bootTs = (globalThis as { __NVC_APP_BOOT_TS__?: number }).__NVC_APP_BOOT_TS__;
+    if (!bootTs) {
+      return;
+    }
+
+    const elapsedMs = Date.now() - bootTs;
+    const platformLabel = Platform.OS === "web" ? "web" : "mobile";
+    console.log(`[Perf] ${platformLabel} launch to first screen: ${elapsedMs}ms`);
+    if (elapsedMs > 2000) {
+      console.warn(`[Perf] Slow ${platformLabel} launch detected (>2000ms).`);
+    }
+  }, [loading]);
 
   if (loading) {
     return (

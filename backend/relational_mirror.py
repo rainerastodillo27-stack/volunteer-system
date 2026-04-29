@@ -88,6 +88,9 @@ RELATIONAL_TABLE_DDL = [
     """,
     "create index if not exists volunteers_user_id_idx on volunteers (user_id)",
     "create unique index if not exists volunteers_user_id_unique_idx on volunteers (user_id) where user_id is not null",
+    "create index if not exists volunteers_registration_status_idx on volunteers (registration_status)",
+    "create index if not exists volunteers_engagement_status_idx on volunteers (engagement_status)",
+    "create index if not exists volunteers_created_at_idx on volunteers (created_at)",
     "alter table volunteers add column if not exists registration_status text",
     "alter table volunteers add column if not exists reviewed_by text",
     "alter table volunteers add column if not exists reviewed_at text",
@@ -128,6 +131,9 @@ RELATIONAL_TABLE_DDL = [
     "alter table projects add column if not exists skills_needed jsonb not null default '[]'::jsonb",
     "create index if not exists projects_partner_id_idx on projects (partner_id)",
     "create index if not exists projects_parent_project_id_idx on projects (parent_project_id)",
+    "create index if not exists projects_status_idx on projects (status)",
+    "create index if not exists projects_category_idx on projects (category)",
+    "create index if not exists projects_created_at_idx on projects (created_at)",
     f"""
     create table if not exists programs (
       id text primary key,
@@ -157,6 +163,8 @@ RELATIONAL_TABLE_DDL = [
     "create index if not exists programs_partner_id_idx on programs (partner_id)",
     "create index if not exists programs_program_module_idx on programs (program_module)",
     "create index if not exists programs_category_idx on programs (category)",
+    "create index if not exists programs_status_idx on programs (status)",
+    "create index if not exists programs_created_at_idx on programs (created_at)",
     f"""
     create table if not exists events (
       id text primary key,
@@ -190,6 +198,9 @@ RELATIONAL_TABLE_DDL = [
     "alter table events add column if not exists skills_needed jsonb not null default '[]'::jsonb",
     "create index if not exists events_partner_id_idx on events (partner_id)",
     "create index if not exists events_parent_project_id_idx on events (parent_project_id)",
+    "create index if not exists events_status_idx on events (status)",
+    "create index if not exists events_category_idx on events (category)",
+    "create index if not exists events_created_at_idx on events (created_at)",
     f"""
     create table if not exists status_updates (
       id text primary key,
@@ -216,6 +227,7 @@ RELATIONAL_TABLE_DDL = [
     """,
     "create index if not exists volunteer_matches_volunteer_id_idx on volunteer_matches (volunteer_id)",
     "create index if not exists volunteer_matches_project_id_idx on volunteer_matches (project_id)",
+    "create index if not exists volunteer_matches_status_idx on volunteer_matches (status)",
     "alter table volunteer_matches add column if not exists requested_at text",
     "alter table volunteer_matches add column if not exists reviewed_at text",
     "alter table volunteer_matches add column if not exists reviewed_by text",
@@ -233,6 +245,7 @@ RELATIONAL_TABLE_DDL = [
     """,
     "create index if not exists volunteer_time_logs_volunteer_id_idx on volunteer_time_logs (volunteer_id)",
     "create index if not exists volunteer_time_logs_project_id_idx on volunteer_time_logs (project_id)",
+    "create index if not exists volunteer_time_logs_time_in_idx on volunteer_time_logs (time_in)",
     """
     do $$
     begin
@@ -283,8 +296,10 @@ RELATIONAL_TABLE_DDL = [
     "alter table partner_project_applications add column if not exists proposal_details jsonb not null default '{}'::jsonb",
     "create index if not exists partner_project_applications_project_id_idx on partner_project_applications (project_id)",
     "create index if not exists partner_project_applications_partner_user_id_idx on partner_project_applications (partner_user_id)",
-        f"""
-        create table if not exists reports (
+    "create index if not exists partner_project_applications_status_idx on partner_project_applications (status)",
+    "create index if not exists partner_project_applications_requested_at_idx on partner_project_applications (requested_at)",
+    f"""
+    create table if not exists reports (
       id text primary key,
       project_id text,
       partner_id text,
@@ -303,44 +318,49 @@ RELATIONAL_TABLE_DDL = [
       created_at text,
       status text,
       reviewed_at text,
-            reviewed_by text,
-            generated_by text,
-            generated_at text,
-            report_file text,
-            format text,
-            published_at text,
-            download_content text,
-            download_mime_type text,
-            source_report_ids jsonb not null default {JSON_ARRAY}
+      reviewed_by text,
+      generated_by text,
+      generated_at text,
+      report_file text,
+      format text,
+      published_at text,
+      download_content text,
+      download_mime_type text,
+      source_report_ids jsonb not null default {JSON_ARRAY}
     )
     """,
-        "create index if not exists reports_project_id_idx on reports (project_id)",
-        "create index if not exists reports_partner_user_id_idx on reports (partner_user_id)",
-                "create index if not exists reports_generated_at_idx on reports (generated_at)",
-        "alter table reports add column if not exists submitter_user_id text",
-        "alter table reports add column if not exists submitter_name text",
-        "alter table reports add column if not exists submitter_role text",
-        "alter table reports add column if not exists title text",
-        "alter table reports add column if not exists metrics jsonb not null default '{}'::jsonb",
-        "alter table reports add column if not exists attachments jsonb not null default '[]'::jsonb",
-        "alter table reports add column if not exists generated_by text",
-        "alter table reports add column if not exists generated_at text",
-        "alter table reports add column if not exists report_file text",
-        "alter table reports add column if not exists format text",
-        "alter table reports add column if not exists published_at text",
-        "alter table reports add column if not exists download_content text",
-        "alter table reports add column if not exists download_mime_type text",
-        "alter table reports add column if not exists source_report_ids jsonb not null default '[]'::jsonb",
+    "create index if not exists reports_project_id_idx on reports (project_id)",
+    "create index if not exists reports_partner_user_id_idx on reports (partner_user_id)",
+    "create index if not exists reports_generated_at_idx on reports (generated_at)",
+    "create index if not exists reports_status_idx on reports (status)",
+    "alter table reports add column if not exists submitter_user_id text",
+    "alter table reports add column if not exists submitter_name text",
+    "alter table reports add column if not exists submitter_role text",
+    "alter table reports add column if not exists title text",
+    "alter table reports add column if not exists metrics jsonb not null default '{}'::jsonb",
+    "alter table reports add column if not exists attachments jsonb not null default '[]'::jsonb",
+    "alter table reports add column if not exists generated_by text",
+    "alter table reports add column if not exists generated_at text",
+    "alter table reports add column if not exists report_file text",
+    "alter table reports add column if not exists format text",
+    "alter table reports add column if not exists published_at text",
+    "alter table reports add column if not exists download_content text",
+    "alter table reports add column if not exists download_mime_type text",
+    "alter table reports add column if not exists source_report_ids jsonb not null default '[]'::jsonb",
     f"""
     create table if not exists admin_planning_calendars (
       id text primary key,
       name text not null,
       color text not null,
       description text,
+            planning_items jsonb not null default {JSON_ARRAY},
       created_at text not null,
       updated_at text not null
     )
     """,
+        "alter table admin_planning_calendars add column if not exists planning_items jsonb not null default '[]'::jsonb",
+    "create index if not exists admin_planning_calendars_created_at_idx on admin_planning_calendars (created_at)",
+    "create index if not exists admin_planning_calendars_updated_at_idx on admin_planning_calendars (updated_at)",
     f"""
     create table if not exists admin_planning_items (
       id text primary key,
@@ -630,6 +650,7 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("name", False),
             ("color", False),
             ("description", False),
+            ("planning_items", True),
             ("created_at", False),
             ("updated_at", False),
         ],
@@ -765,6 +786,7 @@ FIELD_NAME_MAPS: dict[str, dict[str, str]] = {
         "publishedAt": "published_at",
     },
     "adminPlanningCalendars": {
+        "planningItems": "planning_items",
         "createdAt": "created_at",
         "updatedAt": "updated_at",
     },
@@ -799,6 +821,28 @@ def _to_int(value: Any) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _normalize_skills_needed(item: dict[str, Any]) -> list[str]:
+    skills = [skill for skill in (item.get("skillsNeeded") or []) if isinstance(skill, str)]
+    internal_tasks = item.get("internalTasks") or []
+    if isinstance(internal_tasks, list):
+        for task in internal_tasks:
+            if isinstance(task, dict):
+                skills.extend([skill for skill in (task.get("skillsNeeded") or []) if isinstance(skill, str)])
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for skill in skills:
+        trimmed = skill.strip()
+        if not trimmed:
+            continue
+        key = trimmed.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(trimmed)
+    return normalized
 
 
 def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
@@ -895,7 +939,7 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             _to_int(item.get("volunteersNeeded")),
             _json_dump(item.get("volunteers"), []),
             _json_dump(item.get("joinedUserIds"), []),
-            _json_dump(item.get("skillsNeeded"), []),
+            _json_dump(_normalize_skills_needed(item), []),
             _json_dump(item.get("internalTasks"), []),
             item.get("createdAt"),
             item.get("updatedAt"),
@@ -942,7 +986,7 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             _to_int(item.get("volunteersNeeded")),
             _json_dump(item.get("volunteers"), []),
             _json_dump(item.get("joinedUserIds"), []),
-            _json_dump(item.get("skillsNeeded"), []),
+            _json_dump(_normalize_skills_needed(item), []),
             _json_dump(item.get("internalTasks"), []),
             item.get("createdAt"),
             item.get("updatedAt"),
@@ -1055,6 +1099,7 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("name") or "",
             item.get("color") or "#0F766E",
             item.get("description"),
+            _json_dump(item.get("planningItems"), []),
             item.get("createdAt") or "",
             item.get("updatedAt") or "",
         )
@@ -1184,6 +1229,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "volunteersNeeded": row["volunteers_needed"],
             "volunteers": row["volunteers"] or [],
             "joinedUserIds": row["joined_user_ids"] or [],
+            "skillsNeeded": row["skills_needed"] or [],
             "internalTasks": row["internal_tasks"] or [],
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
@@ -1230,6 +1276,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "volunteersNeeded": row["volunteers_needed"],
             "volunteers": row["volunteers"] or [],
             "joinedUserIds": row["joined_user_ids"] or [],
+            "skillsNeeded": row["skills_needed"] or [],
             "internalTasks": row["internal_tasks"] or [],
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
@@ -1342,6 +1389,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "name": row["name"],
             "color": row["color"],
             "description": row["description"],
+            "planningItems": row["planning_items"] or [],
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
         }
@@ -1419,6 +1467,105 @@ def refresh_program_rows_from_projects(connection: Any) -> None:
         )
 
 
+def migrate_admin_planning_items_into_calendars(connection: Any) -> None:
+        with connection.cursor() as cursor:
+                cursor.execute(
+                        """
+                        with legacy_items as (
+                            select
+                                calendar_id,
+                                jsonb_agg(
+                                    jsonb_build_object(
+                                        'id', id,
+                                        'title', title,
+                                        'description', description,
+                                        'calendarId', calendar_id,
+                                        'linkedProjectId', linked_project_id,
+                                        'startDate', start_date,
+                                        'endDate', end_date,
+                                        'location', location,
+                                        'participantsLabel', participants_label,
+                                        'createdBy', created_by,
+                                        'createdAt', created_at,
+                                        'updatedAt', updated_at
+                                    )
+                                    order by created_at, updated_at, id
+                                ) as planning_items,
+                                min(created_at) as created_at,
+                                max(updated_at) as updated_at
+                            from admin_planning_items
+                            group by calendar_id
+                        ),
+                        calendar_rows as (
+                            select
+                                c.id,
+                                coalesce(c.planning_items, '[]'::jsonb) as planning_items,
+                                c.name,
+                                c.color,
+                                c.description,
+                                c.created_at,
+                                c.updated_at
+                            from admin_planning_calendars c
+                        )
+                        update admin_planning_calendars c
+                        set planning_items = coalesce(c.planning_items, '[]'::jsonb) || coalesce(li.planning_items, '[]'::jsonb)
+                        from legacy_items li
+                        where c.id = li.calendar_id
+                        """
+                )
+                cursor.execute(
+                        """
+                        insert into admin_planning_calendars (
+                            id,
+                            name,
+                            color,
+                            description,
+                            planning_items,
+                            created_at,
+                            updated_at
+                        )
+                        select
+                            li.calendar_id,
+                            li.calendar_id,
+                            '#0F766E',
+                            'Migrated planning lane.',
+                            li.planning_items,
+                            li.created_at,
+                            li.updated_at
+                        from (
+                            select
+                                calendar_id,
+                                jsonb_agg(
+                                    jsonb_build_object(
+                                        'id', id,
+                                        'title', title,
+                                        'description', description,
+                                        'calendarId', calendar_id,
+                                        'linkedProjectId', linked_project_id,
+                                        'startDate', start_date,
+                                        'endDate', end_date,
+                                        'location', location,
+                                        'participantsLabel', participants_label,
+                                        'createdBy', created_by,
+                                        'createdAt', created_at,
+                                        'updatedAt', updated_at
+                                    )
+                                    order by created_at, updated_at, id
+                                ) as planning_items,
+                                min(created_at) as created_at,
+                                max(updated_at) as updated_at
+                            from admin_planning_items
+                            group by calendar_id
+                        ) li
+                        left join admin_planning_calendars c on c.id = li.calendar_id
+                        where c.id is null
+                        on conflict (id) do update set
+                            planning_items = excluded.planning_items,
+                            updated_at = excluded.updated_at
+                        """
+                )
+
+
 def ensure_relational_mirror_tables(connection: Any) -> None:
     import time as _time
     with connection.cursor() as cursor:
@@ -1427,6 +1574,7 @@ def ensure_relational_mirror_tables(connection: Any) -> None:
             print(f"[TRACE] ensure_relational_mirror_tables: executing DDL #{idx} (len={len(statement):d})")
             cursor.execute(statement)
             print(f"[TRACE] ensure_relational_mirror_tables: finished DDL #{idx} in {_time.perf_counter() - _t0:.3f}s")
+            migrate_admin_planning_items_into_calendars(connection)
     refresh_program_rows_from_projects(connection)
 
 

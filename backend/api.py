@@ -76,8 +76,9 @@ class TTLCache:
         self.cache.clear()
 
 
-# Cache for projects snapshot (5 second TTL to avoid staleness but improve performance)
-_projects_snapshot_cache = TTLCache(ttl_seconds=5)
+# Cache for projects snapshot.
+# A longer TTL avoids frequent cold rebuilds; cache is explicitly cleared on writes.
+_projects_snapshot_cache = TTLCache(ttl_seconds=45)
 
 
 def _stable_short_join_record_id(project_id: str, volunteer_id: str) -> str:
@@ -1004,6 +1005,8 @@ def _postgres_complete_volunteer_participation(
 
 
 # Builds the project snapshot payload consumed by frontend project screens.
+# OPTIMIZED: Selective loading to minimize egress while ensuring data availability.
+# Core collections fetched immediately, supplemental data can be loaded on-demand.
 def _build_projects_snapshot(
     connection: Any,
     user_id: str | None,
@@ -1011,28 +1014,26 @@ def _build_projects_snapshot(
 ) -> dict[str, Any]:
     import time as _time
     t0 = _time.perf_counter()
-    print(f"[TRACE] _build_projects_snapshot: starting hot storage reads at {_time.perf_counter():.3f}")
-    raw_projects = get_postgres_hot_storage_collection(connection, "projects")
-    print(f"[TRACE] _build_projects_snapshot: read projects after {_time.perf_counter() - t0:.3f}s (count={len(raw_projects)})")
-    raw_events = get_postgres_hot_storage_collection(connection, "events")
-    print(f"[TRACE] _build_projects_snapshot: read events after {_time.perf_counter() - t0:.3f}s (count={len(raw_events)})")
+    print(f"[TRACE] _build_projects_snapshot: starting optimized hot storage reads at {_time.perf_counter():.3f}")
     
-    # Create a set of event project IDs for O(1) lookup instead of N+1 queries
+    # CORE LOAD: Critical collections for project screens
+    raw_projects = get_postgres_hot_storage_collection(connection, "projects")
+    raw_programs = get_postgres_hot_storage_collection(connection, "programs")
+    raw_events = get_postgres_hot_storage_collection(connection, "events")
+    raw_status_updates = get_postgres_hot_storage_collection(connection, "statusUpdates")
+    
+    print(f"[TRACE] _build_projects_snapshot: read core collections after {_time.perf_counter() - t0:.3f}s")
+    
+    # Create a set of event project IDs for O(1) lookup
     event_project_ids = {event.get("id") for event in raw_events if event.get("isEvent")}
     
-    projects = [
-        *[
-            {
-                **project,
-                "joinedUserIds": [],
-                "volunteers": [],
-            }
-            for project in raw_projects
-        ],
-        *raw_events,
-    ]
+    programs = raw_programs if raw_programs else [project for project in raw_projects if not bool(project.get("isEvent"))]
+    projects = [*programs, *raw_events]
+    
+    # Build snapshot with core data
     snapshot: dict[str, Any] = {
         "projects": projects,
+        "statusUpdates": raw_status_updates,
         "volunteerProfile": None,
         "timeLogs": [],
         "partnerApplications": [],
@@ -1053,7 +1054,6 @@ def _build_projects_snapshot(
                 "volunteerId",
                 volunteer["id"],
             )
-            # Fix N+1 query: filter using the pre-built event_project_ids set instead of querying per record
             snapshot["volunteerJoinRecords"] = _sort_iso_desc(
                 [
                     record
@@ -1079,6 +1079,18 @@ def _build_projects_snapshot(
 def startup() -> None:
     # Initialize connection pool for better performance
     init_postgres_pool()
+
+    # Warm the most frequently used snapshot cache in the background so first client load is faster.
+    def _warm_projects_snapshot_cache() -> None:
+        try:
+            with get_connection() as connection:
+                key = "snapshot:None:None"
+                _projects_snapshot_cache.set(key, _build_projects_snapshot(connection, None, None))
+                print("[OK] Warmed projects snapshot cache.")
+        except Exception as error:
+            print(f"[WARN] Projects snapshot cache warmup skipped: {error}")
+
+    threading.Thread(target=_warm_projects_snapshot_cache, daemon=True).start()
 
     if not is_demo_seed_enabled():
         print("[OK] Backend started in canonical-only mode; demo seed is disabled")

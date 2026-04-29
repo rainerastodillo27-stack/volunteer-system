@@ -91,7 +91,7 @@ export async function pickImageFromDevice(): Promise<string | null> {
 // Opens the device file picker for documents and returns a persistable file URI/data URI.
 export async function pickDocumentFromDevice(): Promise<string | null> {
   try {
-    if (Platform.OS !== 'web') {
+    if (getPlatformOS() !== 'web') {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!permission.granted) {
         throw new Error('File library access is required. Please enable photo library permissions in settings.');
@@ -99,10 +99,10 @@ export async function pickDocumentFromDevice(): Promise<string | null> {
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images', 'videos'],
+      mediaTypes: ImagePicker.MediaTypeOptions.All,
       quality: 1,
       base64: true,
-      allowsMultiple: false,
+      allowsMultipleSelection: false,
     });
 
     if (result.canceled || !result.assets?.length) {

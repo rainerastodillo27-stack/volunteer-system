@@ -151,7 +151,6 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
           'volunteerMatches',
           'volunteerTimeLogs',
           'adminPlanningCalendars',
-          'adminPlanningItems',
         ],
         () => {
           void loadDashboardData();
@@ -320,7 +319,12 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
 
   const openProjects = React.useCallback(
     (projectId?: string) => {
-      navigateToAvailableRoute(navigation, 'Projects', projectId ? { projectId } : undefined);
+      if (projectId) {
+        navigateToAvailableRoute(navigation, 'Lifecycle', { projectId });
+        return;
+      }
+
+      navigateToAvailableRoute(navigation, 'Projects');
     },
     [navigation]
   );

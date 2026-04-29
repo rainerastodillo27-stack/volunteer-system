@@ -17,7 +17,7 @@ import {
 import { Project, Volunteer, VolunteerProjectJoinRecord, VolunteerProjectMatch, VolunteerTimeLog } from '../models/types';
 import { isImageMediaUri, pickImageFromDevice } from '../utils/media';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
-import { getRequestErrorMessage } from '../utils/requestErrors';
+import { getRequestErrorMessage, isAbortLikeError } from '../utils/requestErrors';
 
 const PROGRAM_PHOTO_BY_TITLE: Record<string, ImageSourcePropType> = {
   'Farm to Fork Program': require('../assets/programs/farm-to-fork.jpg'),
@@ -41,7 +41,7 @@ function formatProjectDateRange(startValue?: string, endValue?: string): string 
   return startLabel === endLabel ? startLabel : `${startLabel} - ${endLabel}`;
 }
 
-export default function VolunteerProjectsScreen() {
+export default function VolunteerProjectsScreen({ navigation }: { navigation: any }) {
   const { user } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
@@ -53,6 +53,9 @@ export default function VolunteerProjectsScreen() {
     if (!user) return;
     try {
       const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'volunteerProfile', 'timeLogs', 'volunteerJoinRecords']);
+      console.log('VolunteerProjectsScreen data received:', {
+        projectCount: snapshot.projects?.length
+      });
       setProjects(snapshot.projects);
       setVolunteerProfile(snapshot.volunteerProfile);
       if (snapshot.volunteerProfile?.id) {
@@ -61,7 +64,11 @@ export default function VolunteerProjectsScreen() {
       }
       setLoading(false);
     } catch (e) {
-      console.error(e);
+      if (isAbortLikeError(e)) {
+        return;
+      }
+
+      console.error('VolunteerProjectsScreen loadData error:', e);
       setLoading(false);
     }
   }, [user]);
@@ -79,7 +86,7 @@ export default function VolunteerProjectsScreen() {
       setVolunteerMatches(prev => [match, ...prev.filter(m => m.projectId !== projectId)]);
       Alert.alert('Success', 'Join request sent.');
     } catch (e) {
-      Alert.alert('Error', getRequestErrorMessage(e));
+      Alert.alert('Error', getRequestErrorMessage(e, 'Unable to send join request. Please try again.'));
     } finally {
       setLoadingProjectId(null);
     }
@@ -91,8 +98,10 @@ export default function VolunteerProjectsScreen() {
     const isPending = match?.status === 'Requested';
     
     return (
-      <View style={styles.card}>
-        <Image source={PROGRAM_PHOTO_BY_TITLE[item.title] || { uri: item.imageUrl }} style={styles.cardImage} />
+      <TouchableOpacity
+        style={styles.card}
+        onPress={() => (navigation as any).navigate('ProjectDetails', { projectId: item.id })}
+      >        <Image source={PROGRAM_PHOTO_BY_TITLE[item.title] || { uri: item.imageUrl }} style={styles.cardImage} />
         <View style={styles.cardContent}>
           <Text style={styles.cardTitle}>{item.title}</Text>
           <Text style={styles.cardDate}>{formatProjectDateRange(item.startDate, item.endDate)}</Text>
@@ -108,7 +117,7 @@ export default function VolunteerProjectsScreen() {
             </Text>
           </TouchableOpacity>
         </View>
-      </View>
+      </TouchableOpacity>
     );
   };
 

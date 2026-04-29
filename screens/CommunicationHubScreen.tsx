@@ -88,6 +88,15 @@ type ProposalChatItem = {
 
 type ProposalReviewFilter = (typeof PROPOSAL_REVIEW_FILTERS)[number];
 
+type HubMetricAction = 'projectChats' | 'unreadMessages' | 'reachableUsers';
+
+type HubMetricCard = {
+  label: string;
+  value: number;
+  hint: string;
+  action: HubMetricAction;
+};
+
 type ChatMessage = Message | ProjectGroupMessage;
 
 type NeedPostDraft = {
@@ -463,6 +472,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   const viewRef = useRef<'conversations' | 'detail'>('conversations');
   const allUsersRef = useRef<User[]>([]);
   const lastLoadAlertMessageRef = useRef<string | null>(null);
+  const lastFullListRefreshAtRef = useRef(0);
 
   useEffect(() => {
     selectedUserRef.current = selectedUser;
@@ -479,6 +489,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   useEffect(() => {
     allUsersRef.current = allUsers;
   }, [allUsers]);
+
+  useEffect(() => {
+    lastFullListRefreshAtRef.current = 0;
+  }, [user?.id, user?.role]);
 
   const resetComposer = useCallback(() => {
     setMessageText('');
@@ -742,8 +756,14 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   useFocusEffect(
     useCallback(() => {
-      void loadUsers();
-      void loadProjectChats();
+      const shouldRefreshFullLists =
+        lastFullListRefreshAtRef.current === 0 || Date.now() - lastFullListRefreshAtRef.current > 15000;
+
+      if (shouldRefreshFullLists) {
+        lastFullListRefreshAtRef.current = Date.now();
+        void loadUsers();
+        void loadProjectChats();
+      }
 
       if (view === 'detail' && (selectedUser || selectedProjectChat || selectedProposalApplication)) {
         void loadSelectedMessages();
@@ -766,7 +786,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         unsubscribeUsers();
         unsubscribeProjectChats();
       };
-    }, [selectedProjectChat, selectedUser, user?.id, user?.role, view])
+    }, [selectedProjectChat, selectedUser, selectedProposalApplication, user?.id, user?.role, view])
   );
 
   useEffect(() => {
@@ -1163,6 +1183,30 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     setView('detail');
   };
 
+  const handleMetricCardPress = (action: HubMetricAction) => {
+    if (action === 'projectChats') {
+      const nextProjectChat = filteredProjectChats[0] || projectChats[0];
+      if (nextProjectChat) {
+        handleSelectProjectChat(nextProjectChat);
+      }
+      return;
+    }
+
+    if (action === 'unreadMessages') {
+      const nextConversation =
+        filteredConversations.find(conversation => conversation.unreadCount > 0) || filteredConversations[0];
+      if (nextConversation) {
+        handleSelectUser(nextConversation.user);
+      }
+      return;
+    }
+
+    const nextUser = filteredSuggestedUsers[0] || allUsers[0];
+    if (nextUser) {
+      handleSelectUser(nextUser);
+    }
+  };
+
   const getProposalPartnerUser = (application: PartnerProjectApplication): User | undefined => {
     return allUsersRef.current.find(chatUser => chatUser.id === application.partnerUserId);
   };
@@ -1429,33 +1473,38 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     [activeNeedPosts, selectedNeedMessageId]
   );
   const isVolunteerCompact = user?.role === 'volunteer' && !isMedium;
-  const compactMetricCards = [
+  const compactMetricCards: HubMetricCard[] = [
     {
       label: 'Joined chats',
       value: projectChats.length,
       hint: 'Your event spaces',
+      action: 'projectChats',
     },
     {
       label: 'Unread',
       value: totalUnreadCount,
       hint: 'Messages to review',
+      action: 'unreadMessages',
     },
   ];
-  const fullMetricCards = [
+  const fullMetricCards: HubMetricCard[] = [
     {
       label: 'Project Chats',
       value: projectChats.length,
       hint: 'Shared coordination spaces',
+      action: 'projectChats',
     },
     {
       label: 'Unread',
       value: totalUnreadCount,
       hint: 'Direct messages awaiting review',
+      action: 'unreadMessages',
     },
     {
       label: 'Reachable Users',
       value: allUsers.length,
       hint: 'Admins, partners, and volunteers',
+      action: 'reachableUsers',
     },
   ];
 
@@ -2930,16 +2979,27 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
               ]}
             >
               {(isVolunteerCompact ? compactMetricCards : fullMetricCards).map(card => (
-                <View
+                <TouchableOpacity
                   key={card.label}
-                  style={[styles.metricCard, isVolunteerCompact && styles.metricCardCompact]}
+                  style={[
+                    styles.metricCard,
+                    styles.metricCardInteractive,
+                    isVolunteerCompact && styles.metricCardCompact,
+                  ]}
+                  onPress={() => handleMetricCardPress(card.action)}
+                  activeOpacity={0.88}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${card.label}: ${card.hint}`}
                 >
-                  <Text style={styles.metricLabel}>{card.label}</Text>
-                  <Text style={[styles.metricValue, isVolunteerCompact && styles.metricValueCompact]}>
-                    {card.value}
-                  </Text>
-                  <Text style={styles.metricHint}>{card.hint}</Text>
-                </View>
+                  <View style={styles.metricCardCopy}>
+                    <Text style={styles.metricLabel}>{card.label}</Text>
+                    <Text style={[styles.metricValue, isVolunteerCompact && styles.metricValueCompact]}>
+                      {card.value}
+                    </Text>
+                    <Text style={styles.metricHint}>{card.hint}</Text>
+                  </View>
+                  <MaterialIcons name="arrow-forward-ios" size={14} color="#94a3b8" />
+                </TouchableOpacity>
               ))}
             </View>
 
@@ -3429,6 +3489,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fff7',
     borderWidth: 1,
     borderColor: '#cde8ce',
+  },
+  metricCardInteractive: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  metricCardCopy: {
+    flex: 1,
+    gap: 0,
+    minWidth: 0,
   },
   metricCardCompact: {
     borderRadius: 18,

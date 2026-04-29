@@ -79,6 +79,7 @@ export interface AdminPlanningCalendar {
   name: string;
   color: string;
   description?: string;
+  planningItems?: AdminPlanningItem[];
   createdAt: string;
   updatedAt: string;
 }
@@ -346,6 +347,7 @@ export interface PartnerReport {
   status: 'Submitted' | 'Reviewed' | 'Rejected';
   reviewedAt?: string;
   reviewedBy?: string;
+  viewedBy?: string[];
   reviewNotes?: string;
 }
 

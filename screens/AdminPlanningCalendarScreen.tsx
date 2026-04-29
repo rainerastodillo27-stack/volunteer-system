@@ -287,7 +287,7 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
   useEffect(() => {
     void loadPlannerData();
     const unsubscribe = subscribeToStorageChanges(
-      ['adminPlanningCalendars', 'adminPlanningItems', 'projects', 'partnerProjectApplications'],
+      ['adminPlanningCalendars', 'projects', 'partnerProjectApplications'],
       () => {
         void loadPlannerData();
       }

@@ -10,11 +10,13 @@ import MappingScreen from '../screens/MappingScreen';
 import CommunicationHubScreen from '../screens/CommunicationHubScreen';
 import VolunteerReportsScreen from '../screens/VolunteerReportsScreen';
 import ProfileScreen from '../screens/ProfileScreen';
+import VolunteerProjectDetailsScreen from '../screens/VolunteerProjectDetailsScreen';
 import { getMessagesForUser, subscribeToMessages } from '../models/storage';
 
 export type VolunteerTabParamList = {
   Dashboard: undefined;
   Projects: { projectId?: string } | undefined;
+  ProjectDetails: { projectId: string };
   Tasks: undefined;
   Map: undefined;
   Messages: { projectId?: string } | undefined;
@@ -46,7 +48,7 @@ export default function VolunteerNavigator() {
     const loadUnreadCount = async () => {
       try {
         const messages = await getMessagesForUser(user.id);
-        setMessageUnreadCount(messages.filter(m => !m.read && m.receiverUserId === user.id).length);
+        setMessageUnreadCount(messages.filter(m => !m.read && m.recipientId === user.id).length);
       } catch {}
     };
     loadUnreadCount();
@@ -66,6 +68,7 @@ export default function VolunteerNavigator() {
     >
       <Tab.Screen name="Dashboard" component={VolunteerDashboardScreen} options={{ title: 'Volunteer Dashboard' }} />
       <Tab.Screen name="Projects" component={VolunteerProjectsScreen} options={{ title: 'Projects' }} />
+      <Tab.Screen name="ProjectDetails" component={VolunteerProjectDetailsScreen} options={{ title: 'Project Details', tabBarButton: () => null }} />
       <Tab.Screen name="Tasks" component={VolunteerTasksScreen} options={{ title: 'My Tasks' }} />
       <Tab.Screen name="Map" component={MappingScreen} options={{ title: 'Impact Map' }} />
       <Tab.Screen name="Messages" component={CommunicationHubScreen} options={{ title: 'Messages', tabBarBadge: messageUnreadCount > 0 ? messageUnreadCount : undefined }} />

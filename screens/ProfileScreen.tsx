@@ -33,7 +33,7 @@ import {
 import { VolunteerRecognitionStatus } from '../models/storage';
 import { NVCSector, Partner, Project, User, UserType, Volunteer } from '../models/types';
 import { isImageMediaUri, pickImageFromDevice } from '../utils/media';
-import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
+import { getRequestErrorMessage, getRequestErrorTitle, isAbortLikeError } from '../utils/requestErrors';
 
 const USER_TYPES: UserType[] = ['Student', 'Adult', 'Senior'];
 const PILLAR_OPTIONS: NVCSector[] = ['Nutrition', 'Education', 'Livelihood'];
@@ -101,6 +101,10 @@ export default function ProfileScreen() {
       }
       setLoadError(null);
     } catch (error) {
+      if (isAbortLikeError(error)) {
+        return;
+      }
+
       console.error('Error loading volunteer profile:', error);
       setLoadError({
         title: getRequestErrorTitle(error),
@@ -124,6 +128,10 @@ export default function ProfileScreen() {
       setPartnerProfiles(sortedPartners);
       setLoadError(null);
     } catch (error) {
+      if (isAbortLikeError(error)) {
+        return;
+      }
+
       console.error('Error loading partner profile:', error);
       setLoadError({
         title: getRequestErrorTitle(error),
@@ -139,6 +147,10 @@ export default function ProfileScreen() {
       setProjects(allProjects);
       setLoadError(null);
     } catch (error) {
+      if (isAbortLikeError(error)) {
+        return;
+      }
+
       console.error('Error loading projects for profile:', error);
       setLoadError({
         title: getRequestErrorTitle(error),

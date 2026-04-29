@@ -43,7 +43,7 @@ export default function PartnerNavigator() {
     const loadUnreadCount = async () => {
       try {
         const messages = await getMessagesForUser(user.id);
-        setMessageUnreadCount(messages.filter(m => !m.read && m.receiverUserId === user.id).length);
+        setMessageUnreadCount(messages.filter(m => !m.read && m.recipientId === user.id).length);
       } catch {}
     };
     loadUnreadCount();

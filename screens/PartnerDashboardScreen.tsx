@@ -233,7 +233,6 @@ export default function PartnerDashboardScreen({ navigation }: any) {
           'partnerProjectApplications',
           'partnerReports',
           'adminPlanningCalendars',
-          'adminPlanningItems',
         ],
         () => {
           void loadDashboardData();

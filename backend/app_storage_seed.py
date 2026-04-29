@@ -599,7 +599,6 @@ def build_demo_app_storage() -> dict[str, Any]:
         "partnerReports": [],
         "publishedImpactReports": [],
         "adminPlanningCalendars": [],
-        "adminPlanningItems": [],
     }
 
 

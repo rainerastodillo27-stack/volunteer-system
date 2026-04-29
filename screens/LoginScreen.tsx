@@ -12,7 +12,6 @@ function getPlatformOS(): string {
 }
 import { Picker } from '@react-native-picker/picker';
 import { MaterialIcons } from '@expo/vector-icons';
-import DateTimePicker from '@react-native-community/datetimepicker';
 import {
   createUserAccount,
   getAllProjects,
@@ -42,7 +41,12 @@ import {
   PHRegions,
 } from '../utils/philippineAddressData';
 
-const BACKEND_HEALTH_TIMEOUT_MS = 5000;
+const BACKEND_HEALTH_TIMEOUT_MS = 1200;
+
+function LazyDateTimePicker(props: Record<string, unknown>) {
+  const DateTimePickerComponent = require('@react-native-community/datetimepicker').default;
+  return <DateTimePickerComponent {...props} />;
+}
 
 type SignupVolunteerSheetState = {
   gender: string;
@@ -371,9 +375,12 @@ export default function LoginScreen() {
       }
     };
 
-    void checkBackend();
+    const schedule = setTimeout(() => {
+      void checkBackend();
+    }, 900);
     return () => {
       cancelled = true;
+      clearTimeout(schedule);
     };
   }, []);
 
@@ -1066,8 +1073,9 @@ export default function LoginScreen() {
         )}
       </View>
 
+      {showSignupModal ? (
       <Modal
-        visible={showSignupModal}
+        visible
         animationType="slide"
         transparent
         onRequestClose={closeSignupModal}
@@ -1524,7 +1532,7 @@ export default function LoginScreen() {
                     }}
                     disabled={signupLoading}
                   >
-                    <Text style={styles.uploadButtonText}>📎 Upload Certificates</Text>
+                    <Text style={styles.uploadButtonText}>Upload Certificates</Text>
                   </TouchableOpacity>
 
                   <Text style={styles.modalSectionSubLabel}>Video Briefing</Text>
@@ -1591,27 +1599,27 @@ export default function LoginScreen() {
                     <Text style={styles.commitmentParagraph}>
                       I {signupName.trim() || '_______________________________'}, voluntarily and
                       freely commit myself to be a member of the NVC Foundation, Inc. I believe
-                      in the foundation&apos;s ideals, objectives and directions which are aimed to
+                      in the foundation's ideals, objectives and directions which are aimed to
                       fight hunger and poverty by providing nutrition, access to quality education
                       for children and livelihood opportunities for the poor.
                     </Text>
                     <Text style={styles.commitmentParagraph}>
-                      As a full pledged member, I have read the NVC&apos;s volunteers manual and I
+                      As a full pledged member, I have read the NVC's volunteers manual and I
                       commit:
                     </Text>
                     <Text style={styles.commitmentBullet}>
-                      • To actively participate in the Foundation&apos;s projects and activities.
+                      - To actively participate in the Foundation's projects and activities.
                     </Text>
                     <Text style={styles.commitmentBullet}>
-                      • To willingly work towards positive and peaceful change.
+                      - To willingly work towards positive and peaceful change.
                     </Text>
                     <Text style={styles.commitmentBullet}>
-                      • To refrain from using one&apos;s personal participation in NVC, or using
-                      NVC&apos;s collective activities, for partisan politics, whether it be for
+                      - To refrain from using one's personal participation in NVC, or using
+                      NVC's collective activities, for partisan politics, whether it be for
                       personal advantage or endorsement of any politician or political party.
                     </Text>
                     <Text style={styles.commitmentBullet}>
-                      • To insure that my personal interests do not conflict with those of NVC&apos;s.
+                      - To insure that my personal interests do not conflict with those of NVC's.
                     </Text>
                   </View>
 
@@ -1673,11 +1681,11 @@ export default function LoginScreen() {
         
         {/* Date Picker Modal */}
         {showDatePicker && (
-          <DateTimePicker
+          <LazyDateTimePicker
             value={selectedDate}
             mode="date"
             display={getPlatformOS() === 'ios' ? 'spinner' : 'default'}
-            onChange={(event, date) => {
+            onChange={(event: unknown, date: Date | undefined) => {
               if (getPlatformOS() === 'android') {
                 setShowDatePicker(false);
               }
@@ -1702,6 +1710,7 @@ export default function LoginScreen() {
           </View>
         )}
       </Modal>
+      ) : null}
     </ScrollView>
   );
 }

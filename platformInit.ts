@@ -23,4 +23,9 @@ try {
 // Make Platform globally available  
 (globalThis as any).Platform = PlatformModule;
 
+// Capture the earliest possible app boot timestamp for startup performance logs.
+if (!(globalThis as any).__NVC_APP_BOOT_TS__) {
+  (globalThis as any).__NVC_APP_BOOT_TS__ = Date.now();
+}
+
 export {};

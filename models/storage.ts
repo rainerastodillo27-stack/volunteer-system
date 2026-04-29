@@ -1,6 +1,7 @@
 import Constants from 'expo-constants';
 import { NativeModules } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { isAbortLikeError } from '../utils/requestErrors';
 
 // Safe Platform accessor for web environments
 function getPlatformOS(): string {
@@ -44,6 +45,7 @@ const STORAGE_KEYS = {
   CURRENT_USER: 'currentUser',
   PARTNERS: 'partners',
   PROJECTS: 'projects',
+  PROGRAMS: 'programs',
   EVENTS: 'events',
   VOLUNTEERS: 'volunteers',
   MESSAGES: 'messages',
@@ -65,18 +67,19 @@ const sharedStorageCacheTimestamps = new Map<string, number>();
 let mockDataInitializationPromise: Promise<void> | null = null;
 // Shared reads should fail fast enough to keep the UI responsive when the
 // backend is slow or unavailable.
-const REMOTE_STORAGE_TIMEOUT_MS = 60000;
-const API_HEALTH_TIMEOUT_MS = 10000;
+const REMOTE_STORAGE_TIMEOUT_MS = 15000;
+const API_HEALTH_TIMEOUT_MS = 4000;
 const API_READY_RETRY_MS = 1000;
-const API_READY_MAX_ATTEMPTS = 4;
+const API_READY_MAX_ATTEMPTS = 2;
 const API_READY_CACHE_MS = 5000;
 const API_REQUEST_MAX_ATTEMPTS = 4;
 const API_REQUEST_RETRY_BASE_MS = 1000;
 const API_REQUEST_RETRY_MAX_MS = 8000;
-const SHARED_STORAGE_CACHE_TTL_MS = 60000;
+const SHARED_STORAGE_CACHE_TTL_MS = 300000; // Increased from 90s to 5m
+const PROJECTS_SNAPSHOT_CACHE_TTL_MS = 60000; // Increased from 20s to 1m
 const STORAGE_CHANGE_POLL_INTERVAL_MS = 3000;
-const STORAGE_CHANGE_DEBOUNCE_MS = 120;
-const STORAGE_CHANGE_CALLBACK_COOLDOWN_MS = 180;
+const STORAGE_CHANGE_DEBOUNCE_MS = 500; // Increased from 120ms
+const STORAGE_CHANGE_CALLBACK_COOLDOWN_MS = 1000; // Increased from 180ms
 const LOCAL_ONLY_STORAGE_KEYS = new Set([STORAGE_KEYS.CURRENT_USER]);
 const NEGROS_OCCIDENTAL_BOUNDS = {
   minLatitude: 9.85,
@@ -87,6 +90,7 @@ const NEGROS_OCCIDENTAL_BOUNDS = {
 let apiReadyConfirmedAt = 0;
 let apiReadyCheckPromise: Promise<void> | null = null;
 const inFlightJsonRequests = new Map<string, Promise<unknown>>();
+const projectsSnapshotCache = new Map<string, { data: unknown; timestamp: number }>();
 
 const PERSISTED_CACHE_KEY_PREFIX = 'volcre:cache:';
 const PERSISTED_CACHE_TS_PREFIX = 'volcre:cacheTs:';
@@ -351,6 +355,7 @@ const DEFAULT_ADMIN_PLANNING_CALENDARS: AdminPlanningCalendar[] = [
     name: 'Project Plans',
     color: '#0F766E',
     description: 'Project scheduling blocks and delivery windows.',
+    planningItems: [],
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
   },
@@ -359,6 +364,7 @@ const DEFAULT_ADMIN_PLANNING_CALENDARS: AdminPlanningCalendar[] = [
     name: 'Meetings',
     color: '#3B82F6',
     description: 'Coordination meetings, reviews, and check-ins.',
+    planningItems: [],
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
   },
@@ -367,6 +373,7 @@ const DEFAULT_ADMIN_PLANNING_CALENDARS: AdminPlanningCalendar[] = [
     name: 'Training',
     color: '#65A30D',
     description: 'Volunteer onboarding, safety briefings, and workshops.',
+    planningItems: [],
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
   },
@@ -375,6 +382,7 @@ const DEFAULT_ADMIN_PLANNING_CALENDARS: AdminPlanningCalendar[] = [
     name: 'Field Work',
     color: '#F97316',
     description: 'Community visits, deployment, and field coordination.',
+    planningItems: [],
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
   },
@@ -383,10 +391,106 @@ const DEFAULT_ADMIN_PLANNING_CALENDARS: AdminPlanningCalendar[] = [
     name: 'Deadlines',
     color: '#DC2626',
     description: 'Submission deadlines, approvals, and milestone cutoffs.',
+    planningItems: [],
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
   },
 ];
+
+function normalizeAdminPlanningItemRecord(item: AdminPlanningItem): AdminPlanningItem {
+  return {
+    ...item,
+    title: item.title.trim(),
+    description: item.description?.trim() || undefined,
+    location: item.location?.trim() || undefined,
+    participantsLabel: item.participantsLabel?.trim() || undefined,
+    linkedProjectId: item.linkedProjectId?.trim() || undefined,
+  };
+}
+
+function normalizeAdminPlanningCalendarRecord(calendar: AdminPlanningCalendar): AdminPlanningCalendar {
+  return {
+    ...calendar,
+    name: calendar.name.trim(),
+    color: calendar.color.trim() || '#0F766E',
+    description: calendar.description?.trim() || undefined,
+    planningItems: (calendar.planningItems || []).map(normalizeAdminPlanningItemRecord),
+  };
+}
+
+function collectPlanningItemsFromCalendars(calendars: AdminPlanningCalendar[]): AdminPlanningItem[] {
+  return calendars
+    .flatMap(calendar => (calendar.planningItems || []).map(item => normalizeAdminPlanningItemRecord(item)))
+    .sort(
+      (a, b) =>
+        new Date(a.startDate).getTime() - new Date(b.startDate).getTime() ||
+        new Date(a.endDate).getTime() - new Date(b.endDate).getTime()
+    );
+}
+
+function attachPlanningItemToCalendars(
+  calendars: AdminPlanningCalendar[],
+  item: AdminPlanningItem
+): AdminPlanningCalendar[] {
+  const normalizedItem = normalizeAdminPlanningItemRecord(item);
+  const nextCalendars = calendars.map(calendar => ({
+    ...normalizeAdminPlanningCalendarRecord(calendar),
+    planningItems: (calendar.planningItems || []).filter(entry => entry.id !== normalizedItem.id),
+  }));
+
+  const targetIndex = nextCalendars.findIndex(calendar => calendar.id === normalizedItem.calendarId);
+  if (targetIndex >= 0) {
+    nextCalendars[targetIndex] = {
+      ...nextCalendars[targetIndex],
+      planningItems: [...(nextCalendars[targetIndex].planningItems || []), normalizedItem],
+    };
+  }
+
+  return nextCalendars;
+}
+
+async function migrateLegacyPlanningItemsIntoCalendars(
+  calendars: AdminPlanningCalendar[]
+): Promise<AdminPlanningCalendar[]> {
+  const legacyItems = (await getStorageItem<AdminPlanningItem[]>(STORAGE_KEYS.ADMIN_PLANNING_ITEMS)) || [];
+  const nextCalendars = calendars.map(calendar => normalizeAdminPlanningCalendarRecord(calendar));
+
+  if (legacyItems.length === 0) {
+    return nextCalendars;
+  }
+
+  for (const legacyItem of legacyItems) {
+    const normalizedItem = normalizeAdminPlanningItemRecord(legacyItem);
+    let targetIndex = nextCalendars.findIndex(calendar => calendar.id === normalizedItem.calendarId);
+
+    if (targetIndex < 0) {
+      const fallbackCalendarId = normalizedItem.calendarId || nextCalendars[0]?.id || 'planner-projects';
+      targetIndex = nextCalendars.findIndex(calendar => calendar.id === fallbackCalendarId);
+
+      if (targetIndex < 0) {
+        nextCalendars.push({
+          id: fallbackCalendarId,
+          name: fallbackCalendarId,
+          color: '#0F766E',
+          description: 'Migrated planning lane.',
+          planningItems: [],
+          createdAt: normalizedItem.createdAt,
+          updatedAt: normalizedItem.updatedAt,
+        });
+        targetIndex = nextCalendars.length - 1;
+      }
+    }
+
+    const targetCalendar = nextCalendars[targetIndex];
+    targetCalendar.planningItems = [
+      ...(targetCalendar.planningItems || []).filter(entry => entry.id !== normalizedItem.id),
+      normalizedItem,
+    ];
+  }
+
+  await setStorageItem(STORAGE_KEYS.ADMIN_PLANNING_CALENDARS, nextCalendars);
+  return nextCalendars;
+}
 
 // Broadcasts a local storage timestamp so web tabs refresh message state.
 function notifyWebMessageUpdate(): void {
@@ -871,12 +975,21 @@ async function requestApiJson<T>(
   const requestKey = `${method}:${path}:${timeoutMs}`;
   const existingRequest = inFlightJsonRequests.get(requestKey);
   if (existingRequest) {
+    console.log(`[Network] Deduplicating request: ${path.slice(0, 50)}`);
     return existingRequest as Promise<T>;
   }
 
   const nextRequest = (async () => {
-    const response = await fetchApiResponse(path, init, timeoutMs);
-    return (await response.json()) as T;
+    try {
+      const reqStart = Date.now();
+      const response = await fetchApiResponse(path, init, timeoutMs);
+      const result = (await response.json()) as T;
+      console.log(`[Network] ${method} ${path.slice(0, 50)} completed in ${Date.now() - reqStart}ms`);
+      return result;
+    } catch (error) {
+      inFlightJsonRequests.delete(requestKey);
+      throw error;
+    }
   })();
 
   inFlightJsonRequests.set(requestKey, nextRequest as Promise<unknown>);
@@ -885,7 +998,9 @@ async function requestApiJson<T>(
   } finally {
     inFlightJsonRequests.delete(requestKey);
   }
+
 }
+
 
 async function getLocalStorageItem<T>(key: string): Promise<T | null> {
   if (memoryStorageCache.has(key)) {
@@ -1065,8 +1180,16 @@ export async function getStorageItemFast<T>(key: string): Promise<T | null> {
       triggerBackgroundStorageRefresh([key]);
     }
 
-    if (cached !== null && (isFresh || cachedAt !== undefined)) {
+    if (cached !== null && (isFresh || cachedAt === undefined)) {
       return cached;
+    }
+
+    if (cached !== null && cachedAt !== undefined && !isFresh) {
+      try {
+        return await getStorageItem<T>(key);
+      } catch {
+        return cached;
+      }
     }
 
     const value = await getStorageItem<T>(key);
@@ -1076,28 +1199,92 @@ export async function getStorageItemFast<T>(key: string): Promise<T | null> {
   }
 }
 
+// Retrieves multiple storage items from local cache (localStorage or AsyncStorage) in a single batch.
+async function getLocalStorageItems(keys: string[]): Promise<Record<string, unknown | null>> {
+  const results: Record<string, unknown | null> = {};
+  const keysToFetch: string[] = [];
+
+  for (const key of keys) {
+    if (memoryStorageCache.has(key)) {
+      results[key] = memoryStorageCache.get(key) ?? null;
+    } else {
+      keysToFetch.push(key);
+    }
+  }
+
+  if (keysToFetch.length === 0) {
+    return results;
+  }
+
+  // Web: localStorage
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      for (const key of keysToFetch) {
+        const raw = window.localStorage.getItem(getPersistedCacheKey(key));
+        const rawTs = window.localStorage.getItem(getPersistedCacheTimestampKey(key));
+        const parsed = raw ? JSON.parse(raw) : null;
+        const ts = rawTs ? Number(rawTs) : 0;
+        if (rawTs && Number.isFinite(ts) && ts > 0) {
+          sharedStorageCacheTimestamps.set(key, ts);
+        }
+        memoryStorageCache.set(key, parsed);
+        results[key] = parsed;
+      }
+    } catch {
+      // Fallback: results initialized with nulls for remaining keys
+      for (const key of keysToFetch) { results[key] = null; }
+    }
+    return results;
+  }
+
+  // Native: AsyncStorage
+  try {
+    const multiGetKeys = keysToFetch.flatMap(key => [
+      getPersistedCacheKey(key),
+      getPersistedCacheTimestampKey(key),
+    ]);
+    const rawPairs = await AsyncStorage.multiGet(multiGetKeys);
+    
+    for (let i = 0; i < keysToFetch.length; i++) {
+      const key = keysToFetch[i];
+      const valueRaw = rawPairs[i * 2]?.[1] ?? null;
+      const tsRaw = rawPairs[i * 2 + 1]?.[1] ?? null;
+      const parsed = valueRaw ? JSON.parse(valueRaw) : null;
+      const ts = tsRaw ? Number(tsRaw) : 0;
+      
+      if (tsRaw && Number.isFinite(ts) && ts > 0) {
+        sharedStorageCacheTimestamps.set(key, ts);
+      }
+      memoryStorageCache.set(key, parsed);
+      results[key] = parsed;
+    }
+  } catch {
+    for (const key of keysToFetch) { results[key] = null; }
+  }
+  return results;
+}
+
 // Returns cached data for all keys immediately (when available) and refreshes in background.
 export async function getStorageItemsFast(keys: string[]): Promise<Record<string, unknown | null>> {
   const results: Record<string, unknown | null> = {};
   const keysToRefresh: string[] = [];
   const missingKeys: string[] = [];
 
-  const cachedEntries = await Promise.all(
-    keys.map(async key => {
-      const cached = await getLocalStorageItem(key);
-      const cachedAt = sharedStorageCacheTimestamps.get(key);
-      return { key, cached, cachedAt };
-    })
-  );
-
-  for (const entry of cachedEntries) {
-    if (entry.cachedAt !== undefined) {
-      keysToRefresh.push(entry.key);
+  const localResults = await getLocalStorageItems(keys);
+  
+  for (const key of keys) {
+    const cached = localResults[key];
+    const cachedAt = sharedStorageCacheTimestamps.get(key);
+    const isFresh = cachedAt !== undefined && Date.now() - cachedAt <= SHARED_STORAGE_CACHE_TTL_MS;
+    
+    if (cachedAt !== undefined) {
+      keysToRefresh.push(key);
     }
-    if (entry.cachedAt !== undefined && entry.cached !== null) {
-      results[entry.key] = entry.cached;
+    
+    if (cached !== null && (isFresh || cachedAt === undefined)) {
+      results[key] = cached;
     } else {
-      missingKeys.push(entry.key);
+      missingKeys.push(key);
     }
   }
 
@@ -1107,8 +1294,12 @@ export async function getStorageItemsFast(keys: string[]): Promise<Record<string
     return results;
   }
 
-  const fetched = await getStorageItems(missingKeys);
-  return { ...results, ...fetched };
+  try {
+    const fetched = await getStorageItems(missingKeys);
+    return { ...results, ...fetched };
+  } catch {
+    return results;
+  }
 }
 
 async function saveRemoteStorageItem<T>(key: string, value: T): Promise<void> {
@@ -1172,6 +1363,15 @@ export async function getStorageItem<T>(key: string): Promise<T | null> {
     setSharedStorageCacheValue(key, remoteValue);
     return remoteValue;
   } catch (error) {
+    // Abort/timeouts can happen during concurrent startup fetches and should not
+    // surface as console errors or crash-like LogBox noise.
+    if (isExpectedRemoteStorageError(error) || isAbortLikeError(error)) {
+      if (hasStorageChangeSubscribers()) {
+        connectSharedStorageSocket();
+      }
+      return null;
+    }
+
     console.error(`Error reading shared ${key} from backend:`, error);
     throw error;
   }
@@ -1222,102 +1422,226 @@ export async function getStorageItems(
     }
     return results;
   } catch (error) {
+    if (isAbortLikeError(error)) {
+      if (hasStorageChangeSubscribers()) {
+        connectSharedStorageSocket();
+      }
+
+      return results;
+    }
+
     console.error(`Error reading shared storage batch from backend:`, error);
     throw error;
   }
 }
 
 // Loads the combined data set required by the admin dashboard screen.
+// OPTIMIZED: Selective loading to minimize egress while ensuring all data is available.
+// Core collections fetched immediately, supplemental data loaded on-demand.
 export async function getDashboardSnapshot(): Promise<{
-  projects: Project[];
-  partners: Partner[];
   users: User[];
+  partners: Partner[];
+  projects: Project[];
+  programs: Project[];
+  events: Project[];
   volunteers: Volunteer[];
   statusUpdates: StatusUpdate[];
+  volunteerMatches: VolunteerProjectMatch[];
+  volunteerTimeLogs: VolunteerTimeLog[];
+  volunteerProjectJoins: VolunteerProjectJoinRecord[];
+  partnerProjectApplications: PartnerProjectApplication[];
+  partnerReports: PartnerReport[];
+  publishedImpactReports: PublishedImpactReport[];
+  adminPlanningCalendars: AdminPlanningCalendar[];
+  adminPlanningItems: AdminPlanningItem[];
 }> {
-  const items = await getStorageItemsFast([
+  // CORE LOAD: Essential data for dashboard (minimizes egress)
+  const coreItems = await getStorageItemsFast([
     STORAGE_KEYS.USERS,
     STORAGE_KEYS.PROJECTS,
+    STORAGE_KEYS.PROGRAMS,
     STORAGE_KEYS.EVENTS,
     STORAGE_KEYS.PARTNERS,
     STORAGE_KEYS.VOLUNTEERS,
     STORAGE_KEYS.STATUS_UPDATES,
+    STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
   ]);
 
-  const partners = ((items[STORAGE_KEYS.PARTNERS] as Partner[] | null) || [])
+  // LAZY LOAD: Supplemental data on background thread to not block UI
+  // These are fetched but don't block initial render
+  let supplementalItems: Record<string, unknown | null> = {};
+  (async () => {
+    try {
+      supplementalItems = await getStorageItemsFast([
+        STORAGE_KEYS.VOLUNTEER_MATCHES,
+        STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
+        STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
+        STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
+        STORAGE_KEYS.PARTNER_REPORTS,
+        STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS,
+      ]);
+    } catch (error) {
+      console.warn('Supplemental data failed to load (non-blocking):', error);
+    }
+  })();
+
+  const partners = ((coreItems[STORAGE_KEYS.PARTNERS] as Partner[] | null) || [])
     .filter(p => !p.contactEmail?.toLowerCase().includes('eduindia.org'));
 
+  const programs = (coreItems[STORAGE_KEYS.PROGRAMS] as Project[] | null) || [];
+  const projects = (coreItems[STORAGE_KEYS.PROJECTS] as Project[] | null) || [];
+
   return {
-    users: (items[STORAGE_KEYS.USERS] as User[] | null) || [],
+    users: (coreItems[STORAGE_KEYS.USERS] as User[] | null) || [],
     projects: mergeProjectAndEventRecords(
-      items[STORAGE_KEYS.PROJECTS] as Project[] | null,
-      items[STORAGE_KEYS.EVENTS] as Project[] | null
+      programs.length > 0 ? programs : projects,
+      coreItems[STORAGE_KEYS.EVENTS] as Project[] | null
     ),
+    programs: (coreItems[STORAGE_KEYS.PROGRAMS] as Project[] | null) || [],
+    events: (coreItems[STORAGE_KEYS.EVENTS] as Project[] | null) || [],
     partners,
-    volunteers: (items[STORAGE_KEYS.VOLUNTEERS] as Volunteer[] | null) || [],
-    statusUpdates: (items[STORAGE_KEYS.STATUS_UPDATES] as StatusUpdate[] | null) || [],
+    volunteers: (coreItems[STORAGE_KEYS.VOLUNTEERS] as Volunteer[] | null) || [],
+    statusUpdates: (coreItems[STORAGE_KEYS.STATUS_UPDATES] as StatusUpdate[] | null) || [],
+    volunteerMatches: (supplementalItems[STORAGE_KEYS.VOLUNTEER_MATCHES] as VolunteerProjectMatch[] | null) || [],
+    volunteerTimeLogs: (supplementalItems[STORAGE_KEYS.VOLUNTEER_TIME_LOGS] as VolunteerTimeLog[] | null) || [],
+    volunteerProjectJoins: (supplementalItems[STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS] as VolunteerProjectJoinRecord[] | null) || [],
+    partnerProjectApplications: (supplementalItems[STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS] as PartnerProjectApplication[] | null) || [],
+    partnerReports: (supplementalItems[STORAGE_KEYS.PARTNER_REPORTS] as PartnerReport[] | null) || [],
+    publishedImpactReports: (supplementalItems[STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS] as PublishedImpactReport[] | null) || [],
+    adminPlanningCalendars: (coreItems[STORAGE_KEYS.ADMIN_PLANNING_CALENDARS] as AdminPlanningCalendar[] | null) || [],
+    adminPlanningItems: collectPlanningItemsFromCalendars(
+      (coreItems[STORAGE_KEYS.ADMIN_PLANNING_CALENDARS] as AdminPlanningCalendar[] | null) || []
+    ),
   };
 }
 
 // Loads the combined data set required by the partner dashboard screen.
+// OPTIMIZED: Selective loading to minimize egress while ensuring all data is available.
+// Core collections fetched immediately, supplemental data loaded on-demand.
 export async function getPartnerDashboardSnapshot(): Promise<{
-  projects: Project[];
+  users: User[];
   partners: Partner[];
+  projects: Project[];
+  programs: Project[];
+  events: Project[];
+  volunteers: Volunteer[];
+  statusUpdates: StatusUpdate[];
   partnerApplications: PartnerProjectApplication[];
   partnerReports: PartnerReport[];
   publishedImpactReports: PublishedImpactReport[];
-  sectorNeeds: SectorNeed[];
+  volunteerMatches: VolunteerProjectMatch[];
+  volunteerTimeLogs: VolunteerTimeLog[];
+  volunteerProjectJoins: VolunteerProjectJoinRecord[];
+  adminPlanningCalendars: AdminPlanningCalendar[];
+  adminPlanningItems: AdminPlanningItem[];
 }> {
   await ensurePartnerOwnershipLinks();
-  const items = await getStorageItemsFast([
+  
+  // CORE LOAD: Essential data for partner dashboard (minimizes egress)
+  const coreItems = await getStorageItemsFast([
+    STORAGE_KEYS.USERS,
     STORAGE_KEYS.PROJECTS,
+    STORAGE_KEYS.PROGRAMS,
     STORAGE_KEYS.EVENTS,
     STORAGE_KEYS.PARTNERS,
+    STORAGE_KEYS.VOLUNTEERS,
+    STORAGE_KEYS.STATUS_UPDATES,
     STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
     STORAGE_KEYS.PARTNER_REPORTS,
     STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS,
+    STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
   ]);
 
-  const partners = ((items[STORAGE_KEYS.PARTNERS] as Partner[] | null) || [])
+  // LAZY LOAD: Supplemental data on background thread to not block UI
+  let supplementalItems: Record<string, unknown | null> = {};
+  (async () => {
+    try {
+      supplementalItems = await getStorageItemsFast([
+        STORAGE_KEYS.VOLUNTEER_MATCHES,
+        STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
+        STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
+      ]);
+    } catch (error) {
+      console.warn('Supplemental data failed to load (non-blocking):', error);
+    }
+  })();
+
+  const partners = ((coreItems[STORAGE_KEYS.PARTNERS] as Partner[] | null) || [])
     .filter(p => !p.contactEmail?.toLowerCase().includes('eduindia.org'));
 
+  const programs = (coreItems[STORAGE_KEYS.PROGRAMS] as Project[] | null) || [];
+  const projects = (coreItems[STORAGE_KEYS.PROJECTS] as Project[] | null) || [];
+
   return {
+    users: (coreItems[STORAGE_KEYS.USERS] as User[] | null) || [],
     projects: mergeProjectAndEventRecords(
-      items[STORAGE_KEYS.PROJECTS] as Project[] | null,
-      items[STORAGE_KEYS.EVENTS] as Project[] | null
+      programs.length > 0 ? programs : projects,
+      coreItems[STORAGE_KEYS.EVENTS] as Project[] | null
     ),
+    programs: (coreItems[STORAGE_KEYS.PROGRAMS] as Project[] | null) || [],
+    events: (coreItems[STORAGE_KEYS.EVENTS] as Project[] | null) || [],
     partners,
+    volunteers: (coreItems[STORAGE_KEYS.VOLUNTEERS] as Volunteer[] | null) || [],
+    statusUpdates: (coreItems[STORAGE_KEYS.STATUS_UPDATES] as StatusUpdate[] | null) || [],
     partnerApplications:
-      (items[STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS] as PartnerProjectApplication[] | null) ||
+      (coreItems[STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS] as PartnerProjectApplication[] | null) ||
       [],
-    partnerReports: (items[STORAGE_KEYS.PARTNER_REPORTS] as PartnerReport[] | null) || [],
+    partnerReports: (coreItems[STORAGE_KEYS.PARTNER_REPORTS] as PartnerReport[] | null) || [],
     publishedImpactReports:
-      (items[STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS] as PublishedImpactReport[] | null) || [],
-    sectorNeeds: [],
+      (coreItems[STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS] as PublishedImpactReport[] | null) || [],
+    volunteerMatches: (supplementalItems[STORAGE_KEYS.VOLUNTEER_MATCHES] as VolunteerProjectMatch[] | null) || [],
+    volunteerTimeLogs: (supplementalItems[STORAGE_KEYS.VOLUNTEER_TIME_LOGS] as VolunteerTimeLog[] | null) || [],
+    volunteerProjectJoins: (supplementalItems[STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS] as VolunteerProjectJoinRecord[] | null) || [],
+    adminPlanningCalendars: (coreItems[STORAGE_KEYS.ADMIN_PLANNING_CALENDARS] as AdminPlanningCalendar[] | null) || [],
+    adminPlanningItems: collectPlanningItemsFromCalendars(
+      (coreItems[STORAGE_KEYS.ADMIN_PLANNING_CALENDARS] as AdminPlanningCalendar[] | null) || []
+    ),
   };
 }
 
 // Loads the shared planning calendar data used by volunteer and partner dashboards.
+// OPTIMIZED: Selective loading to minimize egress usage.
+// Core collections fetched immediately, supplemental data loaded on-demand in background.
 export async function getDashboardTimelineSnapshot(): Promise<DashboardTimelineSnapshot> {
   try {
     const planningCalendars = await ensureAdminPlanningCalendarsSeeded();
-    const items = await getStorageItemsFast([
+    
+    // CORE LOAD: Timeline critical data only
+    const coreItems = await getStorageItemsFast([
       STORAGE_KEYS.PROJECTS,
+      STORAGE_KEYS.PROGRAMS,
       STORAGE_KEYS.EVENTS,
-      STORAGE_KEYS.ADMIN_PLANNING_ITEMS,
+      STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
     ]);
+    
+    // LAZY LOAD: Supplemental data in background, non-blocking
+    (async () => {
+      try {
+        await getStorageItemsFast([
+          STORAGE_KEYS.USERS,
+          STORAGE_KEYS.PARTNERS,
+          STORAGE_KEYS.VOLUNTEERS,
+          STORAGE_KEYS.STATUS_UPDATES,
+          STORAGE_KEYS.VOLUNTEER_MATCHES,
+          STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
+          STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
+          STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
+          STORAGE_KEYS.PARTNER_REPORTS,
+          STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS,
+        ]);
+      } catch (error) {
+        console.warn('Supplemental timeline data failed to load (non-blocking):', error);
+      }
+    })();
 
+    const programs = (coreItems[STORAGE_KEYS.PROGRAMS] as Project[] | null) || [];
     const projects = mergeProjectAndEventRecords(
-      items[STORAGE_KEYS.PROJECTS] as Project[] | null,
-      items[STORAGE_KEYS.EVENTS] as Project[] | null
+      programs.length > 0 ? programs : (coreItems[STORAGE_KEYS.PROJECTS] as Project[] | null),
+      coreItems[STORAGE_KEYS.EVENTS] as Project[] | null
     );
-    const planningItems = ((items[STORAGE_KEYS.ADMIN_PLANNING_ITEMS] as AdminPlanningItem[] | null) || [])
-      .map(normalizeAdminPlanningItemRecord)
-      .sort(
-        (a, b) =>
-          new Date(a.startDate).getTime() - new Date(b.startDate).getTime() ||
-          new Date(a.endDate).getTime() - new Date(b.endDate).getTime()
-      );
+    const planningItems = collectPlanningItemsFromCalendars(
+      (coreItems[STORAGE_KEYS.ADMIN_PLANNING_CALENDARS] as AdminPlanningCalendar[] | null) || []
+    );
 
     return {
       projects,
@@ -1351,12 +1675,23 @@ export async function getProjectsScreenSnapshot(
     params.set('fields', fields.join(','));
   }
 
+  const cacheKey = `snapshot:${params.toString()}`;
+  const cached = projectsSnapshotCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < PROJECTS_SNAPSHOT_CACHE_TTL_MS) {
+    console.log(`[Data] ProjectsSnapshot cache hit (${cacheKey.slice(0, 40)}...)`);
+    return cached.data as ProjectsScreenSnapshot;
+  }
+
   const query = params.toString();
+  const timerLabel = `[Data] ProjectsSnapshot (${user?.role || 'unknown'})`;
+  console.time(timerLabel);
+  const snapshotStart = Date.now();
+
   const payload = await requestApiJson<Partial<ProjectsScreenSnapshot>>(
     `/projects/snapshot${query ? `?${query}` : ''}`
   );
 
-  return {
+  const result = {
     projects: (payload.projects || []).map(project =>
       project?.isEvent ? normalizeEventRecord(project) : normalizeProjectRecord(project)
     ),
@@ -1365,6 +1700,11 @@ export async function getProjectsScreenSnapshot(
     partnerApplications: payload.partnerApplications || [],
     volunteerJoinRecords: payload.volunteerJoinRecords || [],
   };
+
+  projectsSnapshotCache.set(cacheKey, { data: result, timestamp: Date.now() });
+  console.timeEnd(timerLabel);
+  console.log(`[Data] ProjectsSnapshot fetched ${result.projects?.length || 0} projects in ${Date.now() - snapshotStart}ms`);
+  return result;
 }
 
 // Writes one storage value to the backend and local cache.
@@ -1507,7 +1847,7 @@ function buildSampleProjectTasks(project: Project): ProjectInternalTask[] {
     category,
     priority,
     status: 'Unassigned',
-    skillsNeeded,
+    skillsNeeded: skillsNeeded || [],
     createdAt: now,
     updatedAt: now,
   });
@@ -1736,7 +2076,7 @@ function mergeProjectAndEventRecords(
 }
 
 export async function getAllEvents(): Promise<Project[]> {
-  return ((await getStorageItem<Project[]>(STORAGE_KEYS.EVENTS)) || []).map(
+  return ((await getStorageItemFast<Project[]>(STORAGE_KEYS.EVENTS)) || []).map(
     normalizeEventRecord
   );
 }
@@ -1909,8 +2249,9 @@ export async function createUserAccount(input: {
 }
 
 // Looks up a single user by id.
+// OPTIMIZED: Use cached getStorageItemFast instead of slow getStorageItem
 export async function getUser(id: string): Promise<User | null> {
-  const users = await getStorageItem<User[]>(STORAGE_KEYS.USERS) || [];
+  const users = await getStorageItemFast<User[]>(STORAGE_KEYS.USERS) || [];
   return users.find(u => u.id === id) || null;
 }
 
@@ -1929,7 +2270,6 @@ function getLoginIdentifierUsernameAlias(identifier: string): string {
   if (/^\d+$/.test(phoneLikeIdentifier)) {
     return '';
   }
-
   return normalizedIdentifier;
 }
 
@@ -2429,26 +2769,33 @@ export async function getPartnersByStatus(status: string): Promise<Partner[]> {
   return partners.filter(p => p.status === status);
 }
 
-function normalizeAdminPlanningCalendarRecord(
-  calendar: AdminPlanningCalendar
-): AdminPlanningCalendar {
-  return {
-    ...calendar,
-    name: calendar.name.trim(),
-    color: calendar.color.trim() || '#0F766E',
-    description: calendar.description?.trim() || undefined,
-  };
-}
+// Deletes a partner organization and cleans up related records.
+export async function deletePartner(partnerId: string): Promise<void> {
+  const [partners, applications, reports] = await Promise.all([
+    getStorageItem<Partner[]>(STORAGE_KEYS.PARTNERS),
+    getStorageItem<PartnerProjectApplication[]>(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS),
+    getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS),
+  ]);
 
-function normalizeAdminPlanningItemRecord(item: AdminPlanningItem): AdminPlanningItem {
-  return {
-    ...item,
-    title: item.title.trim(),
-    description: item.description?.trim() || undefined,
-    location: item.location?.trim() || undefined,
-    participantsLabel: item.participantsLabel?.trim() || undefined,
-    linkedProjectId: item.linkedProjectId?.trim() || undefined,
-  };
+  const partnerToDelete = (partners || []).find(p => p.id === partnerId);
+  const ownerUserId = partnerToDelete?.ownerUserId;
+
+  await Promise.all([
+    setStorageItem(
+      STORAGE_KEYS.PARTNERS,
+      (partners || []).filter(partner => partner.id !== partnerId)
+    ),
+    setStorageItem(
+      STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
+      (applications || []).filter(app => 
+        ownerUserId ? app.partnerUserId !== ownerUserId : true
+      )
+    ),
+    setStorageItem(
+      STORAGE_KEYS.PARTNER_REPORTS,
+      (reports || []).filter(report => report.partnerId !== partnerId)
+    ),
+  ]);
 }
 
 async function ensureAdminPlanningCalendarsSeeded(): Promise<AdminPlanningCalendar[]> {
@@ -2457,16 +2804,18 @@ async function ensureAdminPlanningCalendarsSeeded(): Promise<AdminPlanningCalend
       (await getStorageItem<AdminPlanningCalendar[]>(STORAGE_KEYS.ADMIN_PLANNING_CALENDARS)) || [];
 
     if (existingCalendars.length > 0) {
-      return existingCalendars.map(normalizeAdminPlanningCalendarRecord);
+      return migrateLegacyPlanningItemsIntoCalendars(existingCalendars);
     }
 
     const seededCalendars = DEFAULT_ADMIN_PLANNING_CALENDARS.map(calendar => ({ ...calendar }));
     await setStorageItem(STORAGE_KEYS.ADMIN_PLANNING_CALENDARS, seededCalendars);
-    return seededCalendars;
+    return migrateLegacyPlanningItemsIntoCalendars(seededCalendars);
   } catch (error) {
-    console.error('Failed to seed admin planning calendars:', error);
+    if (!isAbortLikeError(error)) {
+      console.error('Failed to seed admin planning calendars:', error);
+    }
     // Gracefully fall back to default calendars if backend is unavailable
-    return DEFAULT_ADMIN_PLANNING_CALENDARS.map(calendar => ({ ...calendar }));
+    return DEFAULT_ADMIN_PLANNING_CALENDARS.map(calendar => normalizeAdminPlanningCalendarRecord({ ...calendar }));
   }
 }
 
@@ -2482,7 +2831,11 @@ export async function saveAdminPlanningCalendar(
 ): Promise<void> {
   const calendars = await getAllAdminPlanningCalendars();
   const existingIndex = calendars.findIndex(entry => entry.id === calendar.id);
-  const normalizedCalendar = normalizeAdminPlanningCalendarRecord(calendar);
+  const existingPlanningItems = existingIndex >= 0 ? calendars[existingIndex].planningItems || [] : [];
+  const normalizedCalendar = normalizeAdminPlanningCalendarRecord({
+    ...calendar,
+    planningItems: calendar.planningItems || existingPlanningItems,
+  });
 
   if (existingIndex >= 0) {
     calendars[existingIndex] = normalizedCalendar;
@@ -2495,16 +2848,13 @@ export async function saveAdminPlanningCalendar(
 
 // Deletes one admin planning calendar when it has no scheduled items.
 export async function deleteAdminPlanningCalendar(calendarId: string): Promise<void> {
-  const [calendars, items] = await Promise.all([
-    getAllAdminPlanningCalendars(),
-    getAllAdminPlanningItems(),
-  ]);
+  const calendars = await getAllAdminPlanningCalendars();
 
   if (DEFAULT_ADMIN_PLANNING_CALENDARS.some(calendar => calendar.id === calendarId)) {
     throw new Error('Default planning calendars cannot be deleted, but you can rename or recolor them.');
   }
 
-  if (items.some(item => item.calendarId === calendarId)) {
+  if ((calendars.find(calendar => calendar.id === calendarId)?.planningItems || []).length > 0) {
     throw new Error('Move or delete planner entries before removing this calendar.');
   }
 
@@ -2516,39 +2866,26 @@ export async function deleteAdminPlanningCalendar(calendarId: string): Promise<v
 
 // Returns every admin planner item sorted by start date.
 export async function getAllAdminPlanningItems(): Promise<AdminPlanningItem[]> {
-  const items =
-    (await getStorageItem<AdminPlanningItem[]>(STORAGE_KEYS.ADMIN_PLANNING_ITEMS)) || [];
-  return items
-    .map(normalizeAdminPlanningItemRecord)
-    .sort(
-      (a, b) =>
-        new Date(a.startDate).getTime() - new Date(b.startDate).getTime() ||
-        new Date(a.endDate).getTime() - new Date(b.endDate).getTime()
-    );
+  const calendars = await getAllAdminPlanningCalendars();
+  return collectPlanningItemsFromCalendars(calendars);
 }
 
 // Inserts or updates one scheduled planner entry.
 export async function saveAdminPlanningItem(item: AdminPlanningItem): Promise<void> {
-  const items = await getAllAdminPlanningItems();
-  const existingIndex = items.findIndex(entry => entry.id === item.id);
-  const normalizedItem = normalizeAdminPlanningItemRecord(item);
-
-  if (existingIndex >= 0) {
-    items[existingIndex] = normalizedItem;
-  } else {
-    items.push(normalizedItem);
-  }
-
-  await setStorageItem(STORAGE_KEYS.ADMIN_PLANNING_ITEMS, items);
+  const calendars = await getAllAdminPlanningCalendars();
+  const nextCalendars = attachPlanningItemToCalendars(calendars, item);
+  await setStorageItem(STORAGE_KEYS.ADMIN_PLANNING_CALENDARS, nextCalendars);
 }
 
 // Deletes one scheduled planner entry.
 export async function deleteAdminPlanningItem(itemId: string): Promise<void> {
-  const items = await getAllAdminPlanningItems();
-  await setStorageItem(
-    STORAGE_KEYS.ADMIN_PLANNING_ITEMS,
-    items.filter(item => item.id !== itemId)
-  );
+  const calendars = await getAllAdminPlanningCalendars();
+  const nextCalendars = calendars.map(calendar => ({
+    ...calendar,
+    planningItems: (calendar.planningItems || []).filter(item => item.id !== itemId),
+  }));
+
+  await setStorageItem(STORAGE_KEYS.ADMIN_PLANNING_CALENDARS, nextCalendars);
 }
 
 // Project Storage
@@ -2560,6 +2897,7 @@ export async function saveProject(project: Project): Promise<void> {
     ...project,
     isEvent: false,
     parentProjectId: undefined,
+    skillsNeeded: normalizeProjectSkillsNeeded(project, project.internalTasks || []),
   });
   if (existingIndex >= 0) {
     projects[existingIndex] = normalizedProject;
@@ -2573,7 +2911,10 @@ export async function saveProject(project: Project): Promise<void> {
 export async function saveEvent(event: Project): Promise<void> {
   const events = await getStorageItem<Project[]>(STORAGE_KEYS.EVENTS) || [];
   const existingIndex = events.findIndex(entry => entry.id === event.id);
-  const normalizedEvent = normalizeEventRecord(event);
+  const normalizedEvent = normalizeEventRecord({
+    ...event,
+    skillsNeeded: normalizeProjectSkillsNeeded(event, event.internalTasks || []),
+  });
   if (existingIndex >= 0) {
     events[existingIndex] = normalizedEvent;
   } else {
@@ -2586,6 +2927,7 @@ export async function saveEvent(event: Project): Promise<void> {
 export async function deleteProject(projectId: string): Promise<void> {
   const [
     projects,
+    programs,
     events,
     statusUpdates,
     partnerApplications,
@@ -2597,6 +2939,7 @@ export async function deleteProject(projectId: string): Promise<void> {
   ] =
     await Promise.all([
       getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS),
+      getStorageItem<Project[]>(STORAGE_KEYS.PROGRAMS),
       getStorageItem<Project[]>(STORAGE_KEYS.EVENTS),
       getStorageItem<StatusUpdate[]>(STORAGE_KEYS.STATUS_UPDATES),
       getStorageItem<PartnerProjectApplication[]>(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS),
@@ -2618,6 +2961,10 @@ export async function deleteProject(projectId: string): Promise<void> {
     setStorageItem(
       STORAGE_KEYS.PROJECTS,
       (projects || []).filter(project => project.id !== projectId)
+    ),
+    setStorageItem(
+      STORAGE_KEYS.PROGRAMS,
+      (programs || []).filter(project => project.id !== projectId)
     ),
     setStorageItem(
       STORAGE_KEYS.EVENTS,
@@ -2721,9 +3068,15 @@ export async function getProject(id: string): Promise<Project | null> {
 
 // Returns all projects and events from shared storage.
 export async function getAllProjects(): Promise<Project[]> {
+  const [programs, projects, events] = await Promise.all([
+    getStorageItemFast<Project[]>(STORAGE_KEYS.PROGRAMS),
+    getStorageItemFast<Project[]>(STORAGE_KEYS.PROJECTS),
+    getStorageItemFast<Project[]>(STORAGE_KEYS.EVENTS),
+  ]);
+
   return mergeProjectAndEventRecords(
-    await getStorageItemFast<Project[]>(STORAGE_KEYS.PROJECTS),
-    await getStorageItemFast<Project[]>(STORAGE_KEYS.EVENTS)
+    programs?.length ? programs : projects,
+    events
   );
 }
 
@@ -3591,6 +3944,16 @@ export async function getPartnerProjectApplicationsByUser(
   return payload.applications || [];
 }
 
+// Deletes a partner project application by id.
+export async function deletePartnerProjectApplication(applicationId: string): Promise<void> {
+  const applications =
+    await getStorageItem<PartnerProjectApplication[]>(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS) || [];
+  await setStorageItem(
+    STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
+    applications.filter(app => app.id !== applicationId)
+  );
+}
+
 // Creates a partner program proposal for admin review.
 export async function submitPartnerProgramProposal(
   projectId: string,
@@ -3754,16 +4117,18 @@ export async function savePartnerReport(report: PartnerReport): Promise<void> {
 }
 
 // Returns partner reports associated with one project.
+// OPTIMIZED: Use cached getStorageItemFast instead of slow getStorageItem
 export async function getPartnerReportsByProject(projectId: string): Promise<PartnerReport[]> {
-  const reports = await getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [];
+  const reports = await getStorageItemFast<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [];
   return reports
     .filter(report => report.projectId === projectId)
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 
 // Returns partner reports submitted by one partner user.
+// OPTIMIZED: Use cached getStorageItemFast instead of slow getStorageItem
 export async function getPartnerReportsByUser(partnerUserId: string): Promise<PartnerReport[]> {
-  const reports = await getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [];
+  const reports = await getStorageItemFast<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [];
   return reports
     .filter(
       report =>
@@ -3774,14 +4139,16 @@ export async function getPartnerReportsByUser(partnerUserId: string): Promise<Pa
 }
 
 // Returns every partner report stored in the system.
+// OPTIMIZED: Use cached getStorageItemFast instead of slow getStorageItem
 export async function getAllPartnerReports(): Promise<PartnerReport[]> {
-  const reports = await getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [];
+  const reports = await getStorageItemFast<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [];
   return reports.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 
 // Returns every impact-hub report submitted by one user regardless of role.
+// OPTIMIZED: Use cached getStorageItemFast instead of slow getStorageItem
 export async function getImpactHubReportsByUser(userId: string): Promise<PartnerReport[]> {
-  const reports = await getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [];
+  const reports = await getStorageItemFast<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [];
   return reports
     .filter(report => report.submitterUserId === userId || report.partnerUserId === userId)
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -4597,4 +4964,3 @@ async function ensurePartnerOwnershipLinks(): Promise<void> {
     await setStorageItem(STORAGE_KEYS.PARTNERS, nextPartners);
   }
 }
-

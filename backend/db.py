@@ -382,11 +382,11 @@ def init_postgres_pool() -> None:
             database_url,
             min_size=_POSTGRES_POOL_MIN_SIZE,
             max_size=_POSTGRES_POOL_MAX_SIZE,
-            connect_timeout=_get_connect_timeout(),
             timeout=_get_connect_timeout() * 2,  # Timeout waiting for available connection
             kwargs={
                 "application_name": "volcre-backend-pool",
                 "prepare_threshold": None,  # Disable prepared statements for pooler compatibility
+                "connect_timeout": _get_connect_timeout(),
             }
         )
         print(f"[OK] Postgres connection pool initialized (min={_POSTGRES_POOL_MIN_SIZE}, max={_POSTGRES_POOL_MAX_SIZE})")

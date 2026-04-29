@@ -9,6 +9,11 @@ import {
 import { Project, PartnerProjectApplication } from '../models/types';
 import { getRequestErrorMessage } from '../utils/requestErrors';
 
+type PartnerProjectsListItem =
+  | { type: 'header'; title: string }
+  | { type: 'approved'; project: Project }
+  | { type: 'program'; project: Project };
+
 const PROGRAM_PHOTO_BY_TITLE: Record<string, ImageSourcePropType> = {
   'Farm to Fork Program': require('../assets/programs/farm-to-fork.jpg'),
   'Mingo for Nutritional Support': require('../assets/programs/nutrition.jpg'),
@@ -30,9 +35,9 @@ export default function PartnerProjectsScreen() {
   const loadData = useCallback(async () => {
     if (!user) return;
     try {
-      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'partnerProjectApplications']);
+      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'partnerApplications']);
       setProjects(snapshot.projects);
-      setPartnerApplications(snapshot.partnerProjectApplications);
+      setPartnerApplications(snapshot.partnerApplications);
       setLoading(false);
     } catch (e) {
       console.error(e);
@@ -42,9 +47,8 @@ export default function PartnerProjectsScreen() {
 
   useFocusEffect(useCallback(() => {
     loadData();
-    return subscribeToStorageChanges(['projects', 'partnerProjectApplications'], loadData);
+    return subscribeToStorageChanges(['projects', 'partnerApplications'], loadData);
   }, [loadData]));
-
   // Filter approved projects (partner has approved application for them)
   const approvedProjects = projects.filter(project => {
     const application = partnerApplications.find(a => a.projectId === project.id);
@@ -55,8 +59,6 @@ export default function PartnerProjectsScreen() {
   const templatePrograms = projects.filter(project => project.id.startsWith('program:'));
 
   const renderApprovedProject = ({ item }: { item: Project }) => {
-    const application = partnerApplications.find(a => a.projectId === item.id);
-    
     return (
       <View style={styles.card}>
         <Image source={PROGRAM_PHOTO_BY_TITLE[item.title] || { uri: item.imageUrl }} style={styles.cardImage} />
@@ -122,7 +124,7 @@ export default function PartnerProjectsScreen() {
           return renderTemplateProgram({ item: item.project });
         })}
         keyExtractor={(item, index) => {
-          if (item.type === 'header') return `header-${item.title}`;
+          if ('title' in item) return `header-${item.title}`;
           return item.project.id;
         }}
         contentContainerStyle={styles.listContent}

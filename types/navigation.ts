@@ -1,5 +1,4 @@
 import { RootStackParamList } from '../navigation/StackNavigator';
-import { TabParamList } from '../navigation/TabNavigator';
 
 // Extends React Navigation's global route typing with this app's stack params.
 declare global {
@@ -9,4 +8,4 @@ declare global {
 }
 
 // Re-exports navigation param types for shared use across screens and helpers.
-export type { RootStackParamList, TabParamList };
+export type { RootStackParamList };

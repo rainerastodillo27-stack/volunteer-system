@@ -1080,6 +1080,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       volunteersNeeded,
       volunteers: existingProject?.volunteers || [],
       joinedUserIds: existingProject?.joinedUserIds || [],
+      skillsNeeded: existingProject?.skillsNeeded || [],
       createdAt: existingProject?.createdAt || now,
       updatedAt: now,
       statusUpdates: existingProject?.statusUpdates || [],
@@ -2751,6 +2752,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             label: 'Parent Program',
             value: parentProject?.title || detailModuleLabel,
             meta: 'Used for context and reporting',
+          },
+          {
+            label: 'Skills Needed',
+            value: (activeSelectedProject.skillsNeeded || []).length > 0
+              ? (activeSelectedProject.skillsNeeded || []).join(', ')
+              : 'No skills tagged',
+            meta: 'Aggregated from this event’s task skills and event skill tags',
           },
           {
             label: 'Task Board',
@@ -5992,6 +6000,7 @@ const styles = StyleSheet.create({
   labelRight: {
     marginBottom: 0,
     minWidth: 140,
+    flexShrink: 1,
     textAlign: 'right',
     backgroundColor: '#e0f2fe',
     paddingHorizontal: 12,
@@ -6006,6 +6015,7 @@ const styles = StyleSheet.create({
   },
   formRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     gap: 12,
     marginBottom: 18,

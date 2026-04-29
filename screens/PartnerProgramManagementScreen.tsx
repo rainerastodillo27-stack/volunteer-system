@@ -8,6 +8,8 @@ import {
   Alert,
   Image,
   ImageSourcePropType,
+  Modal,
+  Platform,
   ScrollView,
   Dimensions,
 } from 'react-native';
@@ -20,6 +22,7 @@ import {
 } from '../models/storage';
 import { Project, PartnerProjectApplication, AdvocacyFocus } from '../models/types';
 import { getRequestErrorMessage } from '../utils/requestErrors';
+import { isAbortLikeError } from '../utils/requestErrors';
 import ProjectLifecycleScreen from './ProjectLifecycleScreen';
 
 const { width, height } = Dimensions.get('window');
@@ -93,21 +96,28 @@ export default function PartnerProgramManagementScreen() {
   const loadData = useCallback(async () => {
     if (!user) return;
     try {
-      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'partnerProjectApplications']);
+      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'partnerApplications']);
+      console.log('PartnerProgramManagementScreen data received:', {
+        projectCount: snapshot.projects?.length,
+        applicationCount: snapshot.partnerApplications?.length
+      });
       setProjects(snapshot.projects);
-      setPartnerApplications(snapshot.partnerProjectApplications);
+      setPartnerApplications(snapshot.partnerApplications);
       setLoading(false);
     } catch (e) {
-      console.error(e);
+      if (isAbortLikeError(e)) {
+        return;
+      }
+
+      console.error('PartnerProgramManagementScreen loadData error:', e);
       setLoading(false);
     }
   }, [user]);
 
   useFocusEffect(useCallback(() => {
     loadData();
-    return subscribeToStorageChanges(['projects', 'partnerProjectApplications'], loadData);
+    return subscribeToStorageChanges(['projects', 'partnerApplications'], loadData);
   }, [loadData]));
-
   useEffect(() => {
     if (route.params?.programModule) {
       setActiveTab('programs');

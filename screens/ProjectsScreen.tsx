@@ -1,5 +1,5 @@
 import React, { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { View, FlatList, StyleSheet, Text, TouchableOpacity, Alert, Pressable, Image, ImageSourcePropType, Modal, TextInput, ScrollView, useWindowDimensions } from 'react-native';
+import { View, FlatList, StyleSheet, Text, TouchableOpacity, Alert, Pressable, Image, ImageSourcePropType, Modal, Platform, TextInput, ScrollView, useWindowDimensions } from 'react-native';
 
 // Safe Platform accessor for web environments
 function getPlatformOS(): string {
@@ -1796,6 +1796,14 @@ export default function ProjectsScreen({ navigation, route }: any) {
                     </Text>
                   ) : null}
 
+                  <TouchableOpacity
+                    style={styles.detailButton}
+                    onPress={() => handleOpenEventDetails(item.id)}
+                  >
+                    <MaterialIcons name="info-outline" size={18} color="#166534" />
+                    <Text style={styles.detailButtonText}>View Details</Text>
+                  </TouchableOpacity>
+
                   {item.isEvent ? (
                     <>
                       <View style={styles.joinRow}>
@@ -1962,6 +1970,13 @@ export default function ProjectsScreen({ navigation, route }: any) {
                   <Text style={styles.matchReason}>
                     Partner orgs can submit a project proposal for admin approval.
                   </Text>
+                  <TouchableOpacity
+                    style={styles.detailButton}
+                    onPress={() => (item.isEvent ? handleOpenEventDetails(item.id) : handleOpenProgramDetails(item.id))}
+                  >
+                    <MaterialIcons name="info-outline" size={18} color="#166534" />
+                    <Text style={styles.detailButtonText}>View Details</Text>
+                  </TouchableOpacity>
                   <TouchableOpacity
                     style={[
                       styles.joinButton,
@@ -4212,6 +4227,23 @@ const styles = StyleSheet.create({
     backgroundColor: '#dcfce7',
     borderWidth: 1,
     borderColor: '#16a34a',
+  },
+  detailButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 6,
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+  },
+  detailButtonText: {
+    color: '#166534',
+    fontWeight: '700',
+    fontSize: 12,
   },
   joinButtonLoading: {
     opacity: 0.7,
