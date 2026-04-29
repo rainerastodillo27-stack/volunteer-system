@@ -1700,17 +1700,29 @@ def get_relational_items_by_field(
     column_names = [column_name for column_name, _ in spec["columns"]]
     filter_clause = _row_filter_clause(key)
     with connection.cursor(row_factory=dict_row) as cursor:
-        query = f"select {', '.join(column_names)} from {spec['table']} where coalesce({column_name}, '') = %s"
+        if field_value is None:
+            query = f"select {', '.join(column_names)} from {spec['table']} where {column_name} is null"
+            params: tuple[Any, ...] = ()
+        elif field_value == "":
+            query = (
+                f"select {', '.join(column_names)} from {spec['table']} "
+                f"where ({column_name} is null or {column_name} = '')"
+            )
+            params = ()
+        else:
+            query = f"select {', '.join(column_names)} from {spec['table']} where {column_name} = %s"
+            params = (field_value,)
+
         if filter_clause:
             query += f" and {filter_clause}"
         query += " order by id asc"
         try:
-            cursor.execute(query, (field_value,))
+            cursor.execute(query, params)
         except (UndefinedColumn, UndefinedTable):
             connection.rollback()
             ensure_relational_mirror_tables(connection)
             connection.commit()
-            cursor.execute(query, (field_value,))
+            cursor.execute(query, params)
         rows = cursor.fetchall()
     return [_row_to_item(key, row) for row in rows]
 

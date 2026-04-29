@@ -782,8 +782,9 @@ def _postgres_get_volunteer_recognition_status(
             with joined_projects as (
                 select distinct project_id
                 from volunteer_event_joins
-                where coalesce(volunteer_id, '') = %s
-                  and coalesce(project_id, '') <> ''
+                where volunteer_id = %s
+                  and project_id is not null
+                  and project_id <> ''
             ),
             past_projects as (
                 select distinct jsonb_array_elements_text(
