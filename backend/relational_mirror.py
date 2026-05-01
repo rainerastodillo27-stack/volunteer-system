@@ -4,6 +4,7 @@ from typing import Any
 
 JSON_ARRAY = "'[]'::jsonb"
 JSON_OBJECT = "'{}'::jsonb"
+TEXT_ARRAY = "'{}'::text[]"
 
 
 RELATIONAL_TABLE_DDL = [
@@ -16,7 +17,7 @@ RELATIONAL_TABLE_DDL = [
       name text not null,
       phone text,
       user_type text,
-      pillars_of_interest jsonb not null default {JSON_ARRAY},
+      pillars_of_interest text[] not null default {TEXT_ARRAY},
       created_at text
     )
     """,
@@ -32,7 +33,7 @@ RELATIONAL_TABLE_DDL = [
       sector_type text,
       dswd_accreditation_no text,
       sec_registration_no text,
-      advocacy_focus jsonb not null default {JSON_ARRAY},
+      advocacy_focus text[] not null default {TEXT_ARRAY},
       contact_email text,
       contact_phone text,
       address text,
@@ -56,10 +57,10 @@ RELATIONAL_TABLE_DDL = [
       name text not null,
       email text,
       phone text,
-      skills jsonb not null default {JSON_ARRAY},
+      skills text[] not null default {TEXT_ARRAY},
       skills_description text,
       availability jsonb not null default {JSON_OBJECT},
-      past_projects jsonb not null default {JSON_ARRAY},
+      past_projects text[] not null default {TEXT_ARRAY},
       total_hours_contributed double precision not null default 0,
       rating double precision not null default 0,
       engagement_status text,
@@ -116,9 +117,9 @@ RELATIONAL_TABLE_DDL = [
       end_date text,
       location jsonb not null default {JSON_OBJECT},
       volunteers_needed integer not null default 0,
-      volunteers jsonb not null default {JSON_ARRAY},
-      joined_user_ids jsonb not null default {JSON_ARRAY},
-      skills_needed jsonb not null default {JSON_ARRAY},
+      volunteers text[] not null default {TEXT_ARRAY},
+      joined_user_ids text[] not null default {TEXT_ARRAY},
+      skills_needed text[] not null default {TEXT_ARRAY},
       internal_tasks jsonb not null default {JSON_ARRAY},
       created_at text,
       updated_at text
@@ -128,7 +129,7 @@ RELATIONAL_TABLE_DDL = [
     "alter table projects add column if not exists image_url text",
     "alter table projects add column if not exists image_hidden boolean not null default false",
     "alter table projects add column if not exists internal_tasks jsonb not null default '[]'::jsonb",
-    "alter table projects add column if not exists skills_needed jsonb not null default '[]'::jsonb",
+    "alter table projects add column if not exists skills_needed text[] not null default '{}'::text[]",
     "create index if not exists projects_partner_id_idx on projects (partner_id)",
     "create index if not exists projects_parent_project_id_idx on projects (parent_project_id)",
     "create index if not exists projects_status_idx on projects (status)",
@@ -149,8 +150,8 @@ RELATIONAL_TABLE_DDL = [
       end_date text,
       location jsonb not null default {JSON_OBJECT},
       volunteers_needed integer not null default 0,
-      volunteers jsonb not null default {JSON_ARRAY},
-      joined_user_ids jsonb not null default {JSON_ARRAY},
+      volunteers text[] not null default {TEXT_ARRAY},
+      joined_user_ids text[] not null default {TEXT_ARRAY},
       linked_event_count integer not null default 0,
       created_at text,
       updated_at text
@@ -158,7 +159,7 @@ RELATIONAL_TABLE_DDL = [
     """,
     "alter table programs add column if not exists image_url text",
     "alter table programs add column if not exists image_hidden boolean not null default false",
-    "alter table programs add column if not exists joined_user_ids jsonb not null default '[]'::jsonb",
+    "alter table programs add column if not exists joined_user_ids text[] not null default '{}'::text[]",
     "alter table programs add column if not exists linked_event_count integer not null default 0",
     "create index if not exists programs_partner_id_idx on programs (partner_id)",
     "create index if not exists programs_program_module_idx on programs (program_module)",
@@ -182,9 +183,9 @@ RELATIONAL_TABLE_DDL = [
       end_date text,
       location jsonb not null default {JSON_OBJECT},
       volunteers_needed integer not null default 0,
-      volunteers jsonb not null default {JSON_ARRAY},
-      joined_user_ids jsonb not null default {JSON_ARRAY},
-      skills_needed jsonb not null default {JSON_ARRAY},
+      volunteers text[] not null default {TEXT_ARRAY},
+      joined_user_ids text[] not null default {TEXT_ARRAY},
+      skills_needed text[] not null default {TEXT_ARRAY},
       internal_tasks jsonb not null default {JSON_ARRAY},
       created_at text,
       updated_at text
@@ -195,7 +196,7 @@ RELATIONAL_TABLE_DDL = [
     "alter table events add column if not exists image_url text",
     "alter table events add column if not exists image_hidden boolean not null default false",
     "alter table events add column if not exists internal_tasks jsonb not null default '[]'::jsonb",
-    "alter table events add column if not exists skills_needed jsonb not null default '[]'::jsonb",
+    "alter table events add column if not exists skills_needed text[] not null default '{}'::text[]",
     "create index if not exists events_partner_id_idx on events (partner_id)",
     "create index if not exists events_parent_project_id_idx on events (parent_project_id)",
     "create index if not exists events_status_idx on events (status)",
@@ -326,7 +327,7 @@ RELATIONAL_TABLE_DDL = [
       published_at text,
       download_content text,
       download_mime_type text,
-      source_report_ids jsonb not null default {JSON_ARRAY}
+      source_report_ids text[] not null default {TEXT_ARRAY}
     )
     """,
     "create index if not exists reports_project_id_idx on reports (project_id)",
@@ -346,7 +347,7 @@ RELATIONAL_TABLE_DDL = [
     "alter table reports add column if not exists published_at text",
     "alter table reports add column if not exists download_content text",
     "alter table reports add column if not exists download_mime_type text",
-    "alter table reports add column if not exists source_report_ids jsonb not null default '[]'::jsonb",
+    "alter table reports add column if not exists source_report_ids text[] not null default '{}'::text[]",
     f"""
     create table if not exists admin_planning_calendars (
       id text primary key,
@@ -393,7 +394,7 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("name", False),
             ("phone", False),
             ("user_type", False),
-            ("pillars_of_interest", True),
+            ("pillars_of_interest", False),
             ("created_at", False),
         ],
     },
@@ -408,7 +409,7 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("sector_type", False),
             ("dswd_accreditation_no", False),
             ("sec_registration_no", False),
-            ("advocacy_focus", True),
+            ("advocacy_focus", False),
             ("contact_email", False),
             ("contact_phone", False),
             ("address", False),
@@ -430,10 +431,10 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("name", False),
             ("email", False),
             ("phone", False),
-            ("skills", True),
+            ("skills", False),
             ("skills_description", False),
             ("availability", True),
-            ("past_projects", True),
+            ("past_projects", False),
             ("total_hours_contributed", False),
             ("rating", False),
             ("engagement_status", False),
@@ -478,9 +479,9 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("end_date", False),
             ("location", True),
             ("volunteers_needed", False),
-            ("volunteers", True),
-            ("joined_user_ids", True),
-            ("skills_needed", True),
+            ("volunteers", False),
+            ("joined_user_ids", False),
+            ("skills_needed", False),
             ("internal_tasks", True),
             ("created_at", False),
             ("updated_at", False),
@@ -502,8 +503,8 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("end_date", False),
             ("location", True),
             ("volunteers_needed", False),
-            ("volunteers", True),
-            ("joined_user_ids", True),
+            ("volunteers", False),
+            ("joined_user_ids", False),
             ("linked_event_count", False),
             ("created_at", False),
             ("updated_at", False),
@@ -527,9 +528,9 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("end_date", False),
             ("location", True),
             ("volunteers_needed", False),
-            ("volunteers", True),
-            ("joined_user_ids", True),
-            ("skills_needed", True),
+            ("volunteers", False),
+            ("joined_user_ids", False),
+            ("skills_needed", False),
             ("internal_tasks", True),
             ("created_at", False),
             ("updated_at", False),
@@ -640,7 +641,7 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("published_at", False),
             ("download_content", False),
             ("download_mime_type", False),
-            ("source_report_ids", True),
+            ("source_report_ids", False),
         ],
     },
     "adminPlanningCalendars": {
@@ -823,6 +824,33 @@ def _to_int(value: Any) -> int:
         return 0
 
 
+def _normalize_string_list(value: Any) -> list[str]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    normalized: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        trimmed = item.strip()
+        if trimmed:
+            normalized.append(trimmed)
+    return normalized
+
+
+def _normalize_short_id(value: Any, prefix: str) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if len(raw) <= 64:
+        return raw
+
+    hash_value = 2166136261
+    for char in raw:
+        hash_value ^= ord(char)
+        hash_value = (hash_value * 16777619) & 0xFFFFFFFF
+    return f"{prefix}-{format(hash_value, 'x')}"
+
+
 def _normalize_skills_needed(item: dict[str, Any]) -> list[str]:
     skills = [skill for skill in (item.get("skillsNeeded") or []) if isinstance(skill, str)]
     internal_tasks = item.get("internalTasks") or []
@@ -855,7 +883,7 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("name") or "",
             item.get("phone"),
             item.get("userType"),
-            _json_dump(item.get("pillarsOfInterest"), []),
+            _normalize_string_list(item.get("pillarsOfInterest")),
             item.get("createdAt"),
         )
 
@@ -869,7 +897,7 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("sectorType"),
             item.get("dswdAccreditationNo"),
             item.get("secRegistrationNo"),
-            _json_dump(item.get("advocacyFocus"), []),
+            _normalize_string_list(item.get("advocacyFocus")),
             item.get("contactEmail"),
             item.get("contactPhone"),
             item.get("address"),
@@ -890,10 +918,10 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("name") or "",
             item.get("email"),
             item.get("phone"),
-            _json_dump(item.get("skills"), []),
+            _normalize_string_list(item.get("skills")),
             item.get("skillsDescription"),
             _json_dump(item.get("availability"), {}),
-            _json_dump(item.get("pastProjects"), []),
+            _normalize_string_list(item.get("pastProjects")),
             _to_float(item.get("totalHoursContributed")),
             _to_float(item.get("rating")),
             item.get("engagementStatus"),
@@ -937,9 +965,9 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("endDate"),
             _json_dump(item.get("location"), {}),
             _to_int(item.get("volunteersNeeded")),
-            _json_dump(item.get("volunteers"), []),
-            _json_dump(item.get("joinedUserIds"), []),
-            _json_dump(_normalize_skills_needed(item), []),
+            _normalize_string_list(item.get("volunteers")),
+            _normalize_string_list(item.get("joinedUserIds")),
+            _normalize_skills_needed(item),
             _json_dump(item.get("internalTasks"), []),
             item.get("createdAt"),
             item.get("updatedAt"),
@@ -960,8 +988,8 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("endDate"),
             _json_dump(item.get("location"), {}),
             _to_int(item.get("volunteersNeeded")),
-            _json_dump(item.get("volunteers"), []),
-            _json_dump(item.get("joinedUserIds"), []),
+            _normalize_string_list(item.get("volunteers")),
+            _normalize_string_list(item.get("joinedUserIds")),
             _to_int(item.get("linkedEventCount")),
             item.get("createdAt"),
             item.get("updatedAt"),
@@ -984,9 +1012,9 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("endDate"),
             _json_dump(item.get("location"), {}),
             _to_int(item.get("volunteersNeeded")),
-            _json_dump(item.get("volunteers"), []),
-            _json_dump(item.get("joinedUserIds"), []),
-            _json_dump(_normalize_skills_needed(item), []),
+            _normalize_string_list(item.get("volunteers")),
+            _normalize_string_list(item.get("joinedUserIds")),
+            _normalize_skills_needed(item),
             _json_dump(item.get("internalTasks"), []),
             item.get("createdAt"),
             item.get("updatedAt"),
@@ -1029,7 +1057,7 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
 
     if key == "volunteerProjectJoins":
         return (
-            item.get("id"),
+            _normalize_short_id(item.get("id"), "voljoin"),
             item.get("projectId"),
             item.get("volunteerId"),
             item.get("volunteerUserId"),
@@ -1090,7 +1118,7 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("publishedAt"),
             item.get("downloadContent"),
             item.get("downloadMimeType"),
-            _json_dump(item.get("sourceReportIds"), []),
+            _normalize_string_list(item.get("sourceReportIds")),
         )
 
     if key == "adminPlanningCalendars":
@@ -1452,8 +1480,8 @@ def refresh_program_rows_from_projects(connection: Any) -> None:
               p.end_date,
               coalesce(p.location, '{}'::jsonb),
               coalesce(p.volunteers_needed, 0),
-              coalesce(p.volunteers, '[]'::jsonb),
-              coalesce(p.joined_user_ids, '[]'::jsonb),
+              coalesce(p.volunteers, '{}'::text[]),
+              coalesce(p.joined_user_ids, '{}'::text[]),
               (
                 select count(*)
                 from events e
@@ -1574,7 +1602,7 @@ def ensure_relational_mirror_tables(connection: Any) -> None:
             print(f"[TRACE] ensure_relational_mirror_tables: executing DDL #{idx} (len={len(statement):d})")
             cursor.execute(statement)
             print(f"[TRACE] ensure_relational_mirror_tables: finished DDL #{idx} in {_time.perf_counter() - _t0:.3f}s")
-            migrate_admin_planning_items_into_calendars(connection)
+    migrate_admin_planning_items_into_calendars(connection)
     refresh_program_rows_from_projects(connection)
 
 

@@ -16,6 +16,7 @@ import {
   Platform,
   useWindowDimensions,
 } from 'react-native';
+import { Picker } from '@react-native-picker/picker';
 import { MaterialIcons } from '@expo/vector-icons';
 import CalendarDatePicker from '../components/CalendarDatePicker';
 import { useFocusEffect } from '@react-navigation/native';
@@ -59,10 +60,22 @@ import { Volunteer, VolunteerProjectJoinRecord, VolunteerProjectMatch } from '..
 import { useAuth } from '../contexts/AuthContext';
 import { format } from 'date-fns';
 import { navigateToAvailableRoute } from '../utils/navigation';
-import { getPrimaryProjectImageSource, inferCoordinatesFromPlace } from '../utils/projectMap';
+import {
+  getPrimaryProjectImageSource,
+  inferCoordinatesFromPlace,
+  PHILIPPINES_REGION,
+} from '../utils/projectMap';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getPrimaryReportMediaUri, isImageMediaUri, pickImageFromDevice } from '../utils/media';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
+import {
+  composePhilippineAddress,
+  getBarangaysByCity,
+  getCitiesByRegion,
+  PHBarangay,
+  PHCityMunicipality,
+  PHRegions,
+} from '../utils/philippineAddressData';
 
 // Safe Platform accessor for web environments (kept local to this screen)
 function getPlatformOS(): string {
@@ -422,6 +435,59 @@ function formatProjectDateRangeLabel(startDate?: string, endDate?: string): stri
   return `${formattedStartDate} - ${formattedEndDate}`;
 }
 
+function normalizeAddressToken(value: string): string {
+  return value.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+}
+
+function parsePhilippineAddressSelection(address: string): {
+  regionCode: string;
+  cityCode: string;
+  barangayCode: string;
+} {
+  const tokens = address
+    .split(',')
+    .map(token => token.trim())
+    .filter(Boolean);
+
+  if (tokens.length < 3) {
+    return { regionCode: '', cityCode: '', barangayCode: '' };
+  }
+
+  const regionToken = normalizeAddressToken(tokens[tokens.length - 1]);
+  const cityToken = normalizeAddressToken(tokens[tokens.length - 2]);
+  const barangayToken = normalizeAddressToken(tokens[tokens.length - 3]);
+
+  const region = PHRegions.find(
+    item => normalizeAddressToken(item.name) === regionToken
+  );
+  if (!region) {
+    return { regionCode: '', cityCode: '', barangayCode: '' };
+  }
+
+  const cities = getCitiesByRegion(region.code);
+  const city = cities.find(
+    item =>
+      normalizeAddressToken(item.displayName) === cityToken ||
+      normalizeAddressToken(item.name) === cityToken
+  );
+  if (!city) {
+    return { regionCode: region.code, cityCode: '', barangayCode: '' };
+  }
+
+  const barangays = getBarangaysByCity(city.code);
+  const barangay = barangays.find(
+    item =>
+      normalizeAddressToken(item.name) === barangayToken ||
+      normalizeAddressToken(item.displayName) === barangayToken
+  );
+
+  return {
+    regionCode: region.code,
+    cityCode: city.code,
+    barangayCode: barangay?.code || '',
+  };
+}
+
 // Gives admins a unified project operations workspace for planning, delivery, and approvals.
 export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const { user, isAdmin } = useAuth();
@@ -463,6 +529,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [newStatus, setNewStatus] = useState<Project['status']>('Planning');
   const [updateDescription, setUpdateDescription] = useState('');
   const [projectDraft, setProjectDraft] = useState<ProjectDraft>(createEmptyProjectDraft());
+  const [projectRegionCode, setProjectRegionCode] = useState('');
+  const [projectCityCode, setProjectCityCode] = useState('');
+  const [projectBarangayCode, setProjectBarangayCode] = useState('');
+  const [projectLocationCities, setProjectLocationCities] = useState<PHCityMunicipality[]>([]);
+  const [projectLocationBarangays, setProjectLocationBarangays] = useState<PHBarangay[]>([]);
   const [taskDraft, setTaskDraft] = useState<ProjectTaskDraft>(createEmptyProjectTaskDraft());
   const [customTaskSkill, setCustomTaskSkill] = useState('');
   const [expandedProgramModules, setExpandedProgramModules] = useState<Set<ProgramSuiteModule>>(
@@ -480,6 +551,30 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         : null,
     [projectDraft.isEvent, projectDraft.parentProjectId, projects]
   );
+  const resetProjectLocationSelection = () => {
+    setProjectRegionCode('');
+    setProjectCityCode('');
+    setProjectBarangayCode('');
+    setProjectLocationCities([]);
+    setProjectLocationBarangays([]);
+  };
+
+  const applyProjectLocationSelectionFromAddress = (address: string) => {
+    const parsedSelection = parsePhilippineAddressSelection(address);
+    setProjectRegionCode(parsedSelection.regionCode);
+
+    const cities = parsedSelection.regionCode
+      ? getCitiesByRegion(parsedSelection.regionCode)
+      : [];
+    setProjectLocationCities(cities);
+    setProjectCityCode(parsedSelection.cityCode);
+
+    const barangays = parsedSelection.cityCode
+      ? getBarangaysByCity(parsedSelection.cityCode)
+      : [];
+    setProjectLocationBarangays(barangays);
+    setProjectBarangayCode(parsedSelection.barangayCode);
+  };
 
   const shiftSchedulerMonth = (delta: number) => {
     setSelectedSchedulerMonth(currentMonth => {
@@ -739,6 +834,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const openCreateProjectModal = () => {
     setEditingProjectId(null);
     setProjectDraft(createEmptyProjectDraft());
+    resetProjectLocationSelection();
     setShowProjectModal(true);
   };
 
@@ -756,6 +852,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     nextDraft.imageUrl = parentProject.imageUrl || '';
     nextDraft.imageHidden = Boolean(parentProject.imageHidden);
     setProjectDraft(nextDraft);
+    resetProjectLocationSelection();
     setShowProjectModal(true);
   };
 
@@ -786,6 +883,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       volunteersNeeded: String(project.volunteersNeeded),
       isEvent: !!project.isEvent,
     });
+    applyProjectLocationSelectionFromAddress(project.location.address);
     setShowProjectModal(true);
   };
 
@@ -810,6 +908,46 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   // Updates a single project draft field without replacing the entire object.
   const handleProjectDraftChange = <K extends keyof ProjectDraft>(key: K, value: ProjectDraft[K]) => {
     setProjectDraft(current => ({ ...current, [key]: value }));
+  };
+
+  const handleProjectRegionChange = (regionCode: string) => {
+    setProjectRegionCode(regionCode);
+    setProjectCityCode('');
+    setProjectBarangayCode('');
+    setProjectLocationBarangays([]);
+    setProjectLocationCities(regionCode ? getCitiesByRegion(regionCode) : []);
+    handleProjectDraftChange('address', '');
+  };
+
+  const handleProjectCityChange = (cityCode: string) => {
+    setProjectCityCode(cityCode);
+    setProjectBarangayCode('');
+    setProjectLocationBarangays(cityCode ? getBarangaysByCity(cityCode) : []);
+    handleProjectDraftChange('address', '');
+  };
+
+  const handleProjectBarangayChange = (barangayCode: string) => {
+    setProjectBarangayCode(barangayCode);
+
+    if (!projectRegionCode || !projectCityCode || !barangayCode) {
+      handleProjectDraftChange('address', '');
+      return;
+    }
+
+    const selectedRegion = PHRegions.find(region => region.code === projectRegionCode);
+    const selectedCity = projectLocationCities.find(city => city.code === projectCityCode);
+    const selectedBarangay = projectLocationBarangays.find(
+      barangay => barangay.code === barangayCode
+    );
+
+    handleProjectDraftChange(
+      'address',
+      composePhilippineAddress(
+        selectedRegion?.name || '',
+        selectedCity?.displayName || '',
+        selectedBarangay?.name || ''
+      )
+    );
   };
 
   const handleTaskDraftChange = <K extends keyof ProjectTaskDraft>(
@@ -1027,12 +1165,20 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       Boolean(projectDraft.longitude.trim()) &&
       Number.isFinite(parsedLatitude) &&
       Number.isFinite(parsedLongitude);
+    const hasStructuredPhilippineAddress =
+      Boolean(projectRegionCode) && Boolean(projectCityCode) && Boolean(projectBarangayCode);
 
     const resolvedCoordinates =
       (hasManualCoordinates
         ? { latitude: parsedLatitude, longitude: parsedLongitude }
         : null) ||
       inferCoordinatesFromPlace(projectDraft.address, projects) ||
+      (hasStructuredPhilippineAddress
+        ? {
+            latitude: PHILIPPINES_REGION.latitude,
+            longitude: PHILIPPINES_REGION.longitude,
+          }
+        : null) ||
       (existingProject
         ? {
             latitude: existingProject.location.latitude,
@@ -2191,15 +2337,61 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             </View>
           ) : null}
 
-          <View style={[styles.formRow, styles.formRowReverse]}>
-            <TextInput
-              style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
-              placeholder="Barangay, city, municipality, or venue"
-              placeholderTextColor="#999"
-              value={projectDraft.address}
-              onChangeText={value => handleProjectDraftChange('address', value)}
-            />
-            <Text style={styles.labelRight}>Place</Text>
+          <View style={[styles.formRow, styles.formRowTop, styles.formRowReverse]}>
+            <View style={[styles.statusOptionsCard, styles.inputWithLabel]}>
+              <Text style={styles.locationPickerLabel}>Region</Text>
+              <View style={styles.locationPickerContainer}>
+                <Picker
+                  selectedValue={projectRegionCode}
+                  onValueChange={(itemValue: string) => handleProjectRegionChange(itemValue)}
+                  style={styles.locationPicker}
+                >
+                  <Picker.Item label="Select Region..." value="" />
+                  {PHRegions.map(region => (
+                    <Picker.Item key={region.code} label={region.name} value={region.code} />
+                  ))}
+                </Picker>
+              </View>
+
+              <Text style={styles.locationPickerLabel}>City / Municipality</Text>
+              <View style={styles.locationPickerContainer}>
+                <Picker
+                  selectedValue={projectCityCode}
+                  onValueChange={(itemValue: string) => handleProjectCityChange(itemValue)}
+                  enabled={projectRegionCode !== ''}
+                  style={styles.locationPicker}
+                >
+                  <Picker.Item label="Select City/Municipality..." value="" />
+                  {projectLocationCities.map(city => (
+                    <Picker.Item key={city.code} label={city.displayName} value={city.code} />
+                  ))}
+                </Picker>
+              </View>
+
+              <Text style={styles.locationPickerLabel}>Barangay</Text>
+              <View style={styles.locationPickerContainer}>
+                <Picker
+                  selectedValue={projectBarangayCode}
+                  onValueChange={(itemValue: string) => handleProjectBarangayChange(itemValue)}
+                  enabled={projectCityCode !== ''}
+                  style={styles.locationPicker}
+                >
+                  <Picker.Item label="Select Barangay..." value="" />
+                  {projectLocationBarangays.map(barangay => (
+                    <Picker.Item
+                      key={barangay.code}
+                      label={barangay.displayName}
+                      value={barangay.code}
+                    />
+                  ))}
+                </Picker>
+              </View>
+
+              <Text style={styles.locationPickerHelperText}>
+                {projectDraft.address || 'Choose region, city/municipality, and barangay to set the place.'}
+              </Text>
+            </View>
+            <Text style={[styles.labelRight, styles.labelTop]}>Place</Text>
           </View>
 
           <View style={[styles.formRow, styles.formRowReverse]}>
@@ -6327,6 +6519,30 @@ const styles = StyleSheet.create({
     color: '#64748b',
     lineHeight: 18,
     marginBottom: 16,
+  },
+  locationPickerLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#334155',
+    marginBottom: 6,
+  },
+  locationPickerContainer: {
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 10,
+    overflow: 'hidden',
+    marginBottom: 10,
+    backgroundColor: '#f8fafc',
+  },
+  locationPicker: {
+    height: 50,
+    color: '#334155',
+  },
+  locationPickerHelperText: {
+    marginTop: 2,
+    fontSize: 12,
+    color: '#475569',
+    lineHeight: 18,
   },
   submitButton: {
     backgroundColor: '#4CAF50',

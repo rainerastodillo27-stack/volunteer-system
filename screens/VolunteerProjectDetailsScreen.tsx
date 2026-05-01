@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   ScrollView,
@@ -56,12 +56,16 @@ export default function VolunteerProjectDetailsScreen({
   const [loading, setLoading] = useState(true);
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const [activeTimeLog, setActiveTimeLog] = useState<VolunteerTimeLog | null>(null);
+  const hasLoadedOnceRef = useRef(false);
 
   const loadData = useCallback(async () => {
     if (!projectId || !user?.id) return;
+    const shouldShowBlockingLoader = !hasLoadedOnceRef.current;
 
     try {
-      setLoading(true);
+      if (shouldShowBlockingLoader) {
+        setLoading(true);
+      }
       const [projectData, matches, timeLogs] = await Promise.all([
         getProject(projectId),
         getVolunteerProjectMatches(user.id).catch(() => []),
@@ -79,10 +83,13 @@ export default function VolunteerProjectDetailsScreen({
 
       const active = projectTimeLogs.find((log) => !log.timeOut);
       setActiveTimeLog(active || null);
+      hasLoadedOnceRef.current = true;
     } catch (error) {
       console.error('Error loading project details:', error);
     } finally {
-      setLoading(false);
+      if (shouldShowBlockingLoader) {
+        setLoading(false);
+      }
     }
   }, [projectId, user?.id]);
 
@@ -122,7 +129,7 @@ export default function VolunteerProjectDetailsScreen({
 
     try {
       setLoadingAction('startTime');
-      const timeLog = await startVolunteerTimeLog(user.id, project.id);
+      const timeLog = await startVolunteerTimeLog(project.id, user.id);
       setActiveTimeLog(timeLog);
       setTimeLogs((prev) => [...prev, timeLog]);
       Alert.alert('Success', 'Time logging started');
@@ -137,14 +144,16 @@ export default function VolunteerProjectDetailsScreen({
   };
 
   const handleEndTimeLog = async () => {
-    if (!activeTimeLog || !user?.id || !project?.id) return;
+    if (!activeTimeLog || !user?.id || !project) return;
 
     try {
       setLoadingAction('endTime');
-      const updatedLog = await endVolunteerTimeLog(user.id, project.id);
-      setTimeLogs((prev) =>
-        prev.map((log) => (log.id === updatedLog.log?.id ? (updatedLog.log || log) : log))
-      );
+      const result = await endVolunteerTimeLog(user.id, project.id);
+      if (result.log) {
+        setTimeLogs((prev) =>
+          prev.map((log) => (log.id === result.log!.id ? result.log! : log))
+        );
+      }
       setActiveTimeLog(null);
       Alert.alert('Success', 'Time logging stopped');
     } catch (error) {

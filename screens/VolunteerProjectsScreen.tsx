@@ -1,22 +1,15 @@
-import React, { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
-import { View, FlatList, StyleSheet, Text, TouchableOpacity, Alert, Image, ImageSourcePropType, Modal, TextInput, ScrollView, useWindowDimensions } from 'react-native';
-import { MaterialIcons } from '@expo/vector-icons';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { View, FlatList, StyleSheet, Text, TouchableOpacity, Alert, Image, ImageSourcePropType, ActivityIndicator } from 'react-native';
 import { format } from 'date-fns';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import {
-  getAllVolunteers,
   getProjectsScreenSnapshot,
   getVolunteerProjectMatches,
   requestVolunteerProjectJoin,
-  startVolunteerTimeLog,
-  endVolunteerTimeLog,
-  submitVolunteerTimeOutReport,
   subscribeToStorageChanges,
 } from '../models/storage';
-import { Project, Volunteer, VolunteerProjectJoinRecord, VolunteerProjectMatch, VolunteerTimeLog } from '../models/types';
-import { isImageMediaUri, pickImageFromDevice } from '../utils/media';
-import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
+import { Project, VolunteerProjectMatch } from '../models/types';
 import { getRequestErrorMessage, isAbortLikeError } from '../utils/requestErrors';
 
 const PROGRAM_PHOTO_BY_TITLE: Record<string, ImageSourcePropType> = {
@@ -44,37 +37,47 @@ function formatProjectDateRange(startValue?: string, endValue?: string): string 
 export default function VolunteerProjectsScreen({ navigation }: { navigation: any }) {
   const { user } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
-  const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
   const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingProjectId, setLoadingProjectId] = useState<string | null>(null);
+  const hasLoadedOnceRef = useRef(false);
 
   const loadData = useCallback(async () => {
     if (!user) return;
+    const shouldShowBlockingLoader = !hasLoadedOnceRef.current;
     try {
-      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'volunteerProfile', 'timeLogs', 'volunteerJoinRecords']);
+      if (shouldShowBlockingLoader) {
+        setLoading(true);
+      }
+      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'volunteerProfile', 'volunteerMatches']);
       console.log('VolunteerProjectsScreen data received:', {
         projectCount: snapshot.projects?.length
       });
       setProjects(snapshot.projects);
-      setVolunteerProfile(snapshot.volunteerProfile);
-      if (snapshot.volunteerProfile?.id) {
+      if (Array.isArray(snapshot.volunteerMatches)) {
+        setVolunteerMatches(snapshot.volunteerMatches);
+      } else if (snapshot.volunteerProfile?.id) {
         const matches = await getVolunteerProjectMatches(snapshot.volunteerProfile.id);
         setVolunteerMatches(matches);
+      } else {
+        setVolunteerMatches([]);
       }
-      setLoading(false);
+      hasLoadedOnceRef.current = true;
     } catch (e) {
       if (isAbortLikeError(e)) {
         return;
       }
 
       console.error('VolunteerProjectsScreen loadData error:', e);
-      setLoading(false);
+    } finally {
+      if (shouldShowBlockingLoader) {
+        setLoading(false);
+      }
     }
   }, [user]);
 
   useFocusEffect(useCallback(() => {
-    loadData();
+    void loadData();
     return subscribeToStorageChanges(['projects', 'volunteerMatches', 'volunteerTimeLogs'], loadData);
   }, [loadData]));
 
@@ -91,9 +94,13 @@ export default function VolunteerProjectsScreen({ navigation }: { navigation: an
       setLoadingProjectId(null);
     }
   };
+  const matchByProjectId = useMemo(
+    () => new Map(volunteerMatches.map(match => [match.projectId, match])),
+    [volunteerMatches]
+  );
 
-  const renderProject = ({ item }: { item: Project }) => {
-    const match = volunteerMatches.find(m => m.projectId === item.id);
+  const renderProject = useCallback(({ item }: { item: Project }) => {
+    const match = matchByProjectId.get(item.id);
     const isJoined = !!match;
     const isPending = match?.status === 'Requested';
     
@@ -119,7 +126,18 @@ export default function VolunteerProjectsScreen({ navigation }: { navigation: an
         </View>
       </TouchableOpacity>
     );
-  };
+  }, [handleJoin, loadingProjectId, matchByProjectId, navigation]);
+
+  if (loading) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.centerContent}>
+          <ActivityIndicator size="large" color="#4CAF50" />
+          <Text style={styles.loadingText}>Loading projects...</Text>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -128,6 +146,15 @@ export default function VolunteerProjectsScreen({ navigation }: { navigation: an
         renderItem={renderProject}
         keyExtractor={item => item.id}
         contentContainerStyle={styles.listContent}
+        initialNumToRender={6}
+        maxToRenderPerBatch={8}
+        windowSize={7}
+        removeClippedSubviews
+        ListEmptyComponent={
+          <View style={styles.centerContent}>
+            <Text style={styles.loadingText}>No projects available right now.</Text>
+          </View>
+        }
       />
     </View>
   );
@@ -136,6 +163,8 @@ export default function VolunteerProjectsScreen({ navigation }: { navigation: an
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f5f5' },
   listContent: { padding: 16 },
+  centerContent: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
+  loadingText: { marginTop: 10, fontSize: 14, color: '#64748b', fontWeight: '600' },
   card: { backgroundColor: '#fff', borderRadius: 12, marginBottom: 16, overflow: 'hidden', elevation: 2 },
   cardImage: { width: '100%', height: 150 },
   cardContent: { padding: 16 },

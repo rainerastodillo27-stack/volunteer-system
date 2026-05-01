@@ -59,9 +59,9 @@ def add_event_dates():
               end_date text,
               location jsonb not null default '{}'::jsonb,
               volunteers_needed integer not null default 0,
-              volunteers jsonb not null default '[]'::jsonb,
-              joined_user_ids jsonb not null default '[]'::jsonb,
-              skills_needed jsonb not null default '[]'::jsonb,
+              volunteers text[] not null default '{}'::text[],
+              joined_user_ids text[] not null default '{}'::text[],
+              skills_needed text[] not null default '{}'::text[],
               internal_tasks jsonb not null default '[]'::jsonb,
               created_at text,
               updated_at text

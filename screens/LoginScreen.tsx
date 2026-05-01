@@ -21,6 +21,7 @@ import {
   isValidDswdAccreditationNo,
   loginWithCredentials,
   subscribeToStorageChanges,
+  validateDswdAccreditationNo,
 } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
 import AppLogo from '../components/AppLogo';
@@ -651,8 +652,18 @@ export default function LoginScreen() {
         return;
       }
 
-      if (!isValidDswdAccreditationNo(signupPartnerApplication.dswdAccreditationNo)) {
-        Alert.alert('Validation Error', 'Enter a valid DSWD accreditation number.');
+      // Validate DSWD accreditation number against database
+      const dswdValidation = await validateDswdAccreditationNo(signupPartnerApplication.dswdAccreditationNo);
+      if (!dswdValidation.valid) {
+        let errorMessage = 'Enter a valid DSWD accreditation number.';
+        if (dswdValidation.reason === 'Accreditation number not found in database') {
+          errorMessage = 'This DSWD accreditation number is not recognized. Please use one of the unassigned accreditation numbers provided by the system.';
+        } else if (dswdValidation.reason === 'Accreditation number already assigned') {
+          errorMessage = 'This DSWD accreditation number is already assigned to another partner. Please use an unassigned number.';
+        } else if (dswdValidation.reason === 'Invalid format') {
+          errorMessage = 'Invalid DSWD accreditation number format. Please check the format and try again.';
+        }
+        Alert.alert('Validation Error', errorMessage);
         return;
       }
 
@@ -1247,9 +1258,13 @@ export default function LoginScreen() {
                       })}
                     </View>
 
+                    <Text style={styles.fieldLabel}>DSWD Accreditation Number</Text>
+                    <Text style={styles.fieldHelpText}>
+                      Enter one of the unassigned DSWD accreditation numbers. Contact admin if you need an assigned number.
+                    </Text>
                     <TextInput
                       style={styles.input}
-                      placeholder="DSWD Registration No. e.g. DSWD-SB-SP-00001-2026"
+                      placeholder="DSWD Accreditation No. (must be unassigned)"
                       placeholderTextColor="#999"
                       value={signupPartnerApplication.dswdAccreditationNo}
                       onChangeText={value => updateSignupPartnerApplication('dswdAccreditationNo', value)}
@@ -2086,6 +2101,18 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#334155',
     marginBottom: 8,
+  },
+  fieldLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginBottom: 6,
+  },
+  fieldHelpText: {
+    fontSize: 12,
+    color: '#64748b',
+    marginBottom: 8,
+    lineHeight: 18,
   },
   modalSectionSubLabel: {
     fontSize: 12,

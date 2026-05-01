@@ -112,7 +112,7 @@ if ($backendStarted) {
 } else {
   Write-Host "BACKEND: unavailable (see .dev-pids\\backend.log)"
 }
-Write-Host "WEB APP: press 'w' in Expo after startup"
+Write-Host "WEB APP: http://localhost:8081 (auto-opens after startup)"
 Write-Host ""
 Write-Host "==========================================="
 Write-Host ""

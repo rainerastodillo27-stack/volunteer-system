@@ -388,13 +388,44 @@ export default function PartnerDashboardScreen({ navigation }: any) {
       ],
     };
 
-    if (!proposalDetails.proposedTitle || !proposalDetails.proposedDescription) {
-      Alert.alert('Proposal Details Required', 'Please provide a title and description for this proposal.');
+    // Comprehensive validation for all required proposal details
+    if (!proposalDetails.proposedTitle || !proposalDetails.proposedTitle.trim()) {
+      Alert.alert('Missing Information', 'Please enter the proposal title.');
       return;
     }
 
-    if (!proposalDetails.communityNeed || !proposalDetails.expectedDeliverables) {
-      Alert.alert('Proposal Details Required', 'Please describe the community need and expected deliverables.');
+    if (!proposalDetails.proposedDescription || !proposalDetails.proposedDescription.trim()) {
+      Alert.alert('Missing Information', 'Please enter the proposal description.');
+      return;
+    }
+
+    if (!proposalDetails.proposedStartDate || !proposalDetails.proposedStartDate.trim()) {
+      Alert.alert('Missing Information', 'Please enter the start date (YYYY-MM-DD format).');
+      return;
+    }
+
+    if (!proposalDetails.proposedEndDate || !proposalDetails.proposedEndDate.trim()) {
+      Alert.alert('Missing Information', 'Please enter the end date (YYYY-MM-DD format).');
+      return;
+    }
+
+    if (!proposalDetails.proposedLocation || !proposalDetails.proposedLocation.trim()) {
+      Alert.alert('Missing Information', 'Please enter the project location.');
+      return;
+    }
+
+    if (proposalDetails.proposedVolunteersNeeded <= 0) {
+      Alert.alert('Missing Information', 'Please enter the number of volunteers needed (must be greater than 0).');
+      return;
+    }
+
+    if (!proposalDetails.communityNeed || !proposalDetails.communityNeed.trim()) {
+      Alert.alert('Missing Information', 'Please describe the community need.');
+      return;
+    }
+
+    if (!proposalDetails.expectedDeliverables || !proposalDetails.expectedDeliverables.trim()) {
+      Alert.alert('Missing Information', 'Please describe the expected deliverables.');
       return;
     }
 

@@ -14,6 +14,7 @@
     "start": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/start-all.ps1",
     "stop": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/stop-all.ps1",
     "info": "node ./scripts/show-startup-info.js",
+    "qa:smoke": "node ./scripts/qa-smoke-e2e.js",
     "all": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/start-all.ps1",
     "all:bg": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/supervise-dev.ps1",
     "all:stop": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/stop-all.ps1",

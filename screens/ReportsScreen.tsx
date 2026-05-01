@@ -103,6 +103,7 @@ export default function ReportsScreen({ navigation, route }: any) {
   const [volunteerTimeLogs, setVolunteerTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const reportsLoadInFlightRef = useRef<Promise<void> | null>(null);
   const reportsReloadQueuedRef = useRef(false);
+  const hasLoadedReportsRef = useRef(false);
 
   const loadProjects = useCallback(async () => {
     if (user?.role === 'volunteer' && user.id) {
@@ -139,7 +140,11 @@ export default function ReportsScreen({ navigation, route }: any) {
       return;
     }
 
-    setLoading(true);
+    const shouldShowBlockingLoader = !hasLoadedReportsRef.current;
+    if (shouldShowBlockingLoader) {
+      setLoading(true);
+    }
+
     try {
       const allProjects = await loadProjects();
       const rawReports = user.role === 'admin' ? await getAllPartnerReports() : await getImpactHubReportsByUser(user.id);
@@ -149,11 +154,14 @@ export default function ReportsScreen({ navigation, route }: any) {
           .map(report => normalizeImpactHubReport(report, allProjects))
           .sort((left, right) => new Date(right.submittedAt).getTime() - new Date(left.submittedAt).getTime())
       );
+      hasLoadedReportsRef.current = true;
     } catch (error) {
       console.error('Error loading reports:', error);
       Alert.alert('Error', 'Failed to load reports');
     } finally {
-      setLoading(false);
+      if (shouldShowBlockingLoader) {
+        setLoading(false);
+      }
     }
   }, [loadProjects, user?.id, user?.role]);
 

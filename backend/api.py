@@ -79,6 +79,15 @@ class TTLCache:
 # Cache for projects snapshot.
 # A longer TTL avoids frequent cold rebuilds; cache is explicitly cleared on writes.
 _projects_snapshot_cache = TTLCache(ttl_seconds=45)
+_DEFAULT_SNAPSHOT_FIELDS = {
+    "projects",
+    "statusUpdates",
+    "volunteerProfile",
+    "volunteerMatches",
+    "timeLogs",
+    "partnerApplications",
+    "volunteerJoinRecords",
+}
 
 
 def _stable_short_join_record_id(project_id: str, volunteer_id: str) -> str:
@@ -787,8 +796,8 @@ def _postgres_get_volunteer_recognition_status(
                   and project_id <> ''
             ),
             past_projects as (
-                select distinct jsonb_array_elements_text(
-                    coalesce(past_projects, '[]'::jsonb)
+                select distinct unnest(
+                    coalesce(past_projects, '{}'::text[])
                 ) as project_id
                 from volunteers
                 where id = %s
@@ -1005,6 +1014,26 @@ def _postgres_complete_volunteer_participation(
     return updated_record
 
 
+# Normalizes optional snapshot field filters from query strings.
+def _normalize_snapshot_fields(raw_fields: str | None) -> set[str] | None:
+    if not raw_fields:
+        return None
+
+    alias_map = {
+        "partnerProjectApplications": "partnerApplications",
+        "volunteerProjectJoins": "volunteerJoinRecords",
+        "volunteerTimeLogs": "timeLogs",
+    }
+    normalized_fields: set[str] = set()
+    for raw_field in raw_fields.split(","):
+        field = raw_field.strip()
+        if not field:
+            continue
+        normalized_fields.add(alias_map.get(field, field))
+
+    return normalized_fields or None
+
+
 # Builds the project snapshot payload consumed by frontend project screens.
 # OPTIMIZED: Selective loading to minimize egress while ensuring data availability.
 # Core collections fetched immediately, supplemental data can be loaded on-demand.
@@ -1012,30 +1041,58 @@ def _build_projects_snapshot(
     connection: Any,
     user_id: str | None,
     role: str | None,
+    requested_fields: set[str] | None = None,
 ) -> dict[str, Any]:
     import time as _time
     t0 = _time.perf_counter()
     print(f"[TRACE] _build_projects_snapshot: starting optimized hot storage reads at {_time.perf_counter():.3f}")
-    
-    # CORE LOAD: Critical collections for project screens
-    raw_projects = get_postgres_hot_storage_collection(connection, "projects")
-    raw_programs = get_postgres_hot_storage_collection(connection, "programs")
-    raw_events = get_postgres_hot_storage_collection(connection, "events")
-    raw_status_updates = get_postgres_hot_storage_collection(connection, "statusUpdates")
-    
+
+    includes = requested_fields if requested_fields is not None else _DEFAULT_SNAPSHOT_FIELDS
+    include_projects = "projects" in includes
+    include_status_updates = "statusUpdates" in includes
+    include_volunteer_profile = "volunteerProfile" in includes
+    include_volunteer_matches = "volunteerMatches" in includes
+    include_time_logs = "timeLogs" in includes
+    include_partner_applications = "partnerApplications" in includes
+    include_join_records = "volunteerJoinRecords" in includes
+
+    raw_projects: list[dict[str, Any]] = []
+    raw_programs: list[dict[str, Any]] = []
+    raw_events: list[dict[str, Any]] = []
+    raw_status_updates: list[dict[str, Any]] = []
+
+    # CORE LOAD: Only fetch the collections requested by the screen.
+    if include_projects or include_join_records:
+        raw_projects = get_postgres_hot_storage_collection(connection, "projects")
+        raw_programs = get_postgres_hot_storage_collection(connection, "programs")
+        raw_events = get_postgres_hot_storage_collection(connection, "events")
+    if include_status_updates:
+        raw_status_updates = get_postgres_hot_storage_collection(connection, "statusUpdates")
+
     print(f"[TRACE] _build_projects_snapshot: read core collections after {_time.perf_counter() - t0:.3f}s")
-    
-    # Create a set of event project IDs for O(1) lookup
-    event_project_ids = {event.get("id") for event in raw_events if event.get("isEvent")}
-    
-    programs = raw_programs if raw_programs else [project for project in raw_projects if not bool(project.get("isEvent"))]
-    projects = [*programs, *raw_events]
-    
+
+    # Create a set of event project IDs for O(1) lookup when needed.
+    event_project_ids = (
+        {event.get("id") for event in raw_events if event.get("isEvent")}
+        if include_join_records
+        else set()
+    )
+
+    projects: list[dict[str, Any]] = []
+    if include_projects:
+        programs = (
+            raw_programs
+            if raw_programs
+            else [project for project in raw_projects if not bool(project.get("isEvent"))]
+        )
+        projects = [*programs, *raw_events]
+
     # Build snapshot with core data
     snapshot: dict[str, Any] = {
         "projects": projects,
         "statusUpdates": raw_status_updates,
         "volunteerProfile": None,
+        "volunteerMatches": [],
         "timeLogs": [],
         "partnerApplications": [],
         "volunteerJoinRecords": [],
@@ -1046,28 +1103,41 @@ def _build_projects_snapshot(
 
     if role == "volunteer":
         volunteer = _postgres_get_volunteer_by_user_id(connection, user_id)
-        snapshot["volunteerProfile"] = volunteer
+        if include_volunteer_profile:
+            snapshot["volunteerProfile"] = volunteer
         if volunteer is not None:
-            snapshot["timeLogs"] = _postgres_get_volunteer_time_logs(connection, volunteer["id"])
-            volunteer_join_records = _postgres_get_hot_items_by_field(
-                connection,
-                "volunteerProjectJoins",
-                "volunteerId",
-                volunteer["id"],
-            )
-            snapshot["volunteerJoinRecords"] = _sort_iso_desc(
-                [
-                    record
-                    for record in volunteer_join_records
-                    if record.get("projectId") in event_project_ids
-                ],
-                "joinedAt",
-            )
+            if include_volunteer_matches:
+                snapshot["volunteerMatches"] = _sort_iso_desc(
+                    _postgres_get_hot_items_by_field(
+                        connection,
+                        "volunteerMatches",
+                        "volunteerId",
+                        volunteer["id"],
+                    ),
+                    "matchedAt",
+                )
+            if include_time_logs:
+                snapshot["timeLogs"] = _postgres_get_volunteer_time_logs(connection, volunteer["id"])
+            if include_join_records:
+                volunteer_join_records = _postgres_get_hot_items_by_field(
+                    connection,
+                    "volunteerProjectJoins",
+                    "volunteerId",
+                    volunteer["id"],
+                )
+                snapshot["volunteerJoinRecords"] = _sort_iso_desc(
+                    [
+                        record
+                        for record in volunteer_join_records
+                        if record.get("projectId") in event_project_ids
+                    ],
+                    "joinedAt",
+                )
         return snapshot
 
-    if role == "partner":
+    if role == "partner" and include_partner_applications:
         snapshot["partnerApplications"] = _postgres_get_partner_project_applications_by_user(connection, user_id)
-    elif role == "admin":
+    elif role == "admin" and include_partner_applications:
         snapshot["partnerApplications"] = _sort_iso_desc(
             get_postgres_hot_storage_collection(connection, "partnerProjectApplications"),
             "requestedAt",
@@ -1085,13 +1155,29 @@ def startup() -> None:
     def _warm_projects_snapshot_cache() -> None:
         try:
             with get_connection() as connection:
-                key = "snapshot:None:None"
-                _projects_snapshot_cache.set(key, _build_projects_snapshot(connection, None, None))
+                full_snapshot = _build_projects_snapshot(connection, None, None, None)
+                _projects_snapshot_cache.set("snapshot:None:None:*", full_snapshot)
+                _projects_snapshot_cache.set(
+                    "snapshot:None:None:projects",
+                    _build_projects_snapshot(connection, None, None, {"projects"}),
+                )
+                _projects_snapshot_cache.set(
+                    "snapshot:None:None:projects,statusUpdates",
+                    {
+                        "projects": full_snapshot.get("projects", []),
+                        "statusUpdates": full_snapshot.get("statusUpdates", []),
+                        "volunteerProfile": None,
+                        "volunteerMatches": [],
+                        "timeLogs": [],
+                        "partnerApplications": [],
+                        "volunteerJoinRecords": [],
+                    },
+                )
                 print("[OK] Warmed projects snapshot cache.")
         except Exception as error:
             print(f"[WARN] Projects snapshot cache warmup skipped: {error}")
 
-    threading.Thread(target=_warm_projects_snapshot_cache, daemon=True).start()
+    _warm_projects_snapshot_cache()
 
     if not is_demo_seed_enabled():
         print("[OK] Backend started in canonical-only mode; demo seed is disabled")
@@ -1680,28 +1766,97 @@ async def delete_user_account(user_id: str) -> dict[str, Any]:
     return {"status": "ok", "deletedUserId": user_id}
 
 
+@app.get("/validation/dswd-accreditation/{accreditation_no}")
+# API endpoint that validates if a DSWD accreditation number is valid and unassigned.
+def validate_dswd_accreditation(accreditation_no: str) -> dict[str, Any]:
+    _require_postgres()
+    
+    # Basic format validation
+    normalized_value = accreditation_no.strip().upper()
+    if not normalized_value or not normalized_value[0].isalnum():
+        return {"valid": False, "reason": "Invalid format"}
+    
+    # Check regex pattern
+    import re
+    if not re.match(r'^[A-Z0-9][A-Z0-9\-\/]{5,}$', normalized_value):
+        return {"valid": False, "reason": "Invalid format"}
+    
+    # Check against database
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT is_assigned, assigned_to_partner_id 
+                FROM dswd_accreditation_numbers 
+                WHERE accreditation_no = %s
+            """, (normalized_value,))
+            
+            result = cursor.fetchone()
+            if not result:
+                return {"valid": False, "reason": "Accreditation number not found in database"}
+            
+            is_assigned, assigned_to_partner_id = result
+            if is_assigned:
+                return {"valid": False, "reason": "Accreditation number already assigned"}
+            
+            return {"valid": True}
+
+
 @app.get("/projects/snapshot")
 # API endpoint that returns the projects screen snapshot.
-def get_projects_snapshot(user_id: str | None = None, role: str | None = None) -> dict[str, Any]:
+def get_projects_snapshot(
+    user_id: str | None = None,
+    role: str | None = None,
+    fields: str | None = None,
+) -> dict[str, Any]:
     _require_postgres()
     import time as _time
     _start = _time.perf_counter()
-    print(f"[TRACE] /projects/snapshot start user_id={user_id} role={role}")
-    
+    normalized_fields = _normalize_snapshot_fields(fields)
+    includes = normalized_fields if normalized_fields is not None else _DEFAULT_SNAPSHOT_FIELDS
+    normalized_fields_token = (
+        ",".join(sorted(normalized_fields)) if normalized_fields is not None else "*"
+    )
+    print(
+        f"[TRACE] /projects/snapshot start user_id={user_id} role={role} fields={normalized_fields_token}"
+    )
+
     # Create cache key from parameters
-    cache_key = f"snapshot:{user_id}:{role}"
-    
+    cache_key = f"snapshot:{user_id}:{role}:{normalized_fields_token}"
+
     # Check cache first
     cached_result = _projects_snapshot_cache.get(cache_key)
     if cached_result is not None:
         return cached_result
-    
+
     # Not in cache, fetch from database
     with get_connection() as connection:
         print(f"[TRACE] /projects/snapshot got connection after {_time.perf_counter() - _start:.3f}s")
-        result = _build_projects_snapshot(connection, user_id, role)
+        # Reuse shared project/status snapshot for user-scoped requests to avoid
+        # re-fetching the heaviest collections on first screen load.
+        should_reuse_shared_core = bool(user_id and role and "projects" in includes)
+        if not should_reuse_shared_core:
+            result = _build_projects_snapshot(connection, user_id, role, normalized_fields)
+        else:
+            base_fields: set[str] = {"projects"}
+            if "statusUpdates" in includes:
+                base_fields.add("statusUpdates")
+            base_fields_token = ",".join(sorted(base_fields))
+            base_cache_key = f"snapshot:None:None:{base_fields_token}"
+            base_snapshot = _projects_snapshot_cache.get(base_cache_key)
+            if base_snapshot is None:
+                base_snapshot = _build_projects_snapshot(connection, None, None, base_fields)
+                _projects_snapshot_cache.set(base_cache_key, base_snapshot)
+
+            user_fields = set(includes)
+            user_fields.discard("projects")
+            user_fields.discard("statusUpdates")
+            user_snapshot = _build_projects_snapshot(connection, user_id, role, user_fields)
+            user_snapshot["projects"] = base_snapshot.get("projects", [])
+            if "statusUpdates" in includes:
+                user_snapshot["statusUpdates"] = base_snapshot.get("statusUpdates", [])
+            result = user_snapshot
         print(f"[TRACE] /projects/snapshot built snapshot after {_time.perf_counter() - _start:.3f}s")
-    
+
     # Store in cache
     _projects_snapshot_cache.set(cache_key, result)
     print(f"[TRACE] /projects/snapshot returning after {_time.perf_counter() - _start:.3f}s")

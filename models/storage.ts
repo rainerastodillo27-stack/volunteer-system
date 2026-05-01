@@ -92,8 +92,8 @@ let apiReadyCheckPromise: Promise<void> | null = null;
 const inFlightJsonRequests = new Map<string, Promise<unknown>>();
 const projectsSnapshotCache = new Map<string, { data: unknown; timestamp: number }>();
 
-const PERSISTED_CACHE_KEY_PREFIX = 'volcre:cache:';
-const PERSISTED_CACHE_TS_PREFIX = 'volcre:cacheTs:';
+const PERSISTED_CACHE_KEY_PREFIX = 'volcre:v2:cache:';
+const PERSISTED_CACHE_TS_PREFIX = 'volcre:v2:cacheTs:';
 const PERSISTED_CACHE_PENDING_WRITES = new Map<string, ReturnType<typeof setTimeout>>();
 const PERSISTED_CACHE_WRITE_DEBOUNCE_MS = 200;
 
@@ -308,6 +308,7 @@ function connectSharedStorageSocket() {
 type ProjectsScreenSnapshot = {
   projects: Project[];
   volunteerProfile: Volunteer | null;
+  volunteerMatches?: VolunteerProjectMatch[];
   timeLogs: VolunteerTimeLog[];
   partnerApplications: PartnerProjectApplication[];
   volunteerJoinRecords: VolunteerProjectJoinRecord[];
@@ -748,18 +749,23 @@ function resolveNativeApiBaseUrl(configuredBaseUrl?: string): string {
 
 // Returns the effective HTTP base URL used by the frontend storage layer.
 export function getApiBaseUrl(): string {
+  const envWebBaseUrl = process.env.EXPO_PUBLIC_WEB_API_BASE_URL;
+  const envNativeBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL;
   const configuredWebBaseUrl = getExpoExtraValue('webApiBaseUrl');
   if (typeof document !== 'undefined') {
+    if (envWebBaseUrl && envWebBaseUrl.trim().length > 0) {
+      return envWebBaseUrl.trim().replace(/\/$/, '');
+    }
     if (configuredWebBaseUrl && configuredWebBaseUrl.trim().length > 0) {
       return configuredWebBaseUrl.trim().replace(/\/$/, '');
     }
 
     const protocol = document.location.protocol || 'http:';
     const host = document.location.hostname || '127.0.0.1';
-    return `${protocol}//${host}:8001`;
+    return `${protocol}//${host}:8000`;
   }
 
-  const configuredNativeBaseUrl = getExpoExtraValue('apiBaseUrl');
+  const configuredNativeBaseUrl = getExpoExtraValue('apiBaseUrl') || envNativeBaseUrl;
   return resolveNativeApiBaseUrl(configuredNativeBaseUrl);
 }
 
@@ -1176,15 +1182,13 @@ export async function getStorageItemFast<T>(key: string): Promise<T | null> {
     const cachedAt = sharedStorageCacheTimestamps.get(key);
     const isFresh = cachedAt !== undefined && Date.now() - cachedAt <= SHARED_STORAGE_CACHE_TTL_MS;
 
-    if (cachedAt !== undefined) {
-      triggerBackgroundStorageRefresh([key]);
-    }
+    triggerBackgroundStorageRefresh([key]);
 
-    if (cached !== null && (isFresh || cachedAt === undefined)) {
+    if (cached !== null && isFresh) {
       return cached;
     }
 
-    if (cached !== null && cachedAt !== undefined && !isFresh) {
+    if (cached !== null && !isFresh) {
       try {
         return await getStorageItem<T>(key);
       } catch {
@@ -1277,13 +1281,14 @@ export async function getStorageItemsFast(keys: string[]): Promise<Record<string
     const cachedAt = sharedStorageCacheTimestamps.get(key);
     const isFresh = cachedAt !== undefined && Date.now() - cachedAt <= SHARED_STORAGE_CACHE_TTL_MS;
     
-    if (cachedAt !== undefined) {
-      keysToRefresh.push(key);
-    }
-    
-    if (cached !== null && (isFresh || cachedAt === undefined)) {
+    keysToRefresh.push(key);
+
+    if (cached !== null && isFresh) {
       results[key] = cached;
     } else {
+      if (cached !== null) {
+        results[key] = cached;
+      }
       missingKeys.push(key);
     }
   }
@@ -1696,6 +1701,7 @@ export async function getProjectsScreenSnapshot(
       project?.isEvent ? normalizeEventRecord(project) : normalizeProjectRecord(project)
     ),
     volunteerProfile: payload.volunteerProfile || null,
+    volunteerMatches: Array.isArray(payload.volunteerMatches) ? payload.volunteerMatches : undefined,
     timeLogs: payload.timeLogs || [],
     partnerApplications: payload.partnerApplications || [],
     volunteerJoinRecords: payload.volunteerJoinRecords || [],
@@ -1755,6 +1761,27 @@ export async function saveUser(user: User): Promise<void> {
 export function isValidDswdAccreditationNo(value: string): boolean {
   const normalizedValue = value.trim().toUpperCase();
   return /^[A-Z0-9][A-Z0-9\-\/]{5,}$/.test(normalizedValue);
+}
+
+export async function validateDswdAccreditationNo(value: string): Promise<{valid: boolean, reason?: string}> {
+  const normalizedValue = value.trim().toUpperCase();
+  
+  // First check basic format
+  if (!isValidDswdAccreditationNo(value)) {
+    return {valid: false, reason: "Invalid format"};
+  }
+  
+  try {
+    const response = await fetch(`${getApiBaseUrl()}/validation/dswd-accreditation/${encodeURIComponent(normalizedValue)}`);
+    if (!response.ok) {
+      return {valid: false, reason: "Network error"};
+    }
+    const result = await response.json();
+    return result;
+  } catch (error) {
+    console.error("Error validating DSWD accreditation number:", error);
+    return {valid: false, reason: "Network error"};
+  }
 }
 
 function isValidEmailAddress(value: string): boolean {
@@ -1840,17 +1867,21 @@ function buildSampleProjectTasks(project: Project): ProjectInternalTask[] {
     category: string,
     priority: ProjectInternalTask['priority'],
     skillsNeeded?: string[]
-  ): ProjectInternalTask => ({
-    id: `${project.id}-task-${idSuffix}`,
-    title,
-    description,
-    category,
-    priority,
-    status: 'Unassigned',
-    skillsNeeded: skillsNeeded || [],
-    createdAt: now,
-    updatedAt: now,
-  });
+  ): ProjectInternalTask => {
+    // Use 'event-' prefix for event tasks, 'task-' for project tasks
+    const prefix = project.isEvent ? 'event-' : 'task-';
+    return {
+      id: `${prefix}${project.id}-${idSuffix}`,
+      title,
+      description,
+      category,
+      priority,
+      status: 'Unassigned',
+      skillsNeeded: skillsNeeded || [],
+      createdAt: now,
+      updatedAt: now,
+    };
+  };
 
   const normalizedTitle = project.title.trim().toLowerCase();
 
@@ -1968,7 +1999,7 @@ function normalizeProjectInternalTask(
   const now = new Date().toISOString();
   return {
     ...task,
-    id: task.id || `${projectId}-task-${Date.now()}`,
+    id: task.id || `task-${projectId}-${Date.now()}`,
     title: task.title?.trim() || 'Untitled Task',
     description: task.description?.trim() || '',
     category: task.category?.trim() || 'General',

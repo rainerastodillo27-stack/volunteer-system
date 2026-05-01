@@ -183,6 +183,125 @@ const KNOWN_PLACE_COORDINATES: Array<{
     latitude: 10.5,
     longitude: 123.0,
   },
+  {
+    keywords: ['philippines', 'philippine', 'pinas'],
+    latitude: 12.8797,
+    longitude: 121.7740,
+  },
+  {
+    keywords: ['metro manila', 'manila', 'ncr', 'national capital region'],
+    latitude: 14.5995,
+    longitude: 120.9842,
+  },
+  {
+    keywords: ['cebu city', 'cebu'],
+    latitude: 10.3157,
+    longitude: 123.8854,
+  },
+  {
+    keywords: ['davao city', 'davao'],
+    latitude: 7.1907,
+    longitude: 125.4553,
+  },
+  {
+    keywords: ['iloilo city', 'iloilo'],
+    latitude: 10.7202,
+    longitude: 122.5621,
+  },
+  {
+    keywords: ['cagayan de oro', 'cdo'],
+    latitude: 8.4542,
+    longitude: 124.6319,
+  },
+  {
+    keywords: ['zamboanga city', 'zamboanga'],
+    latitude: 6.9214,
+    longitude: 122.0790,
+  },
+];
+
+const PHILIPPINES_PLACE_KEYWORDS = [
+  'philippines',
+  'philippine',
+  'pinas',
+  'metro manila',
+  'manila',
+  'ncr',
+  'national capital region',
+  'luzon',
+  'visayas',
+  'mindanao',
+  'barangay',
+  'brgy',
+  'brgy.',
+  'purok',
+  'sitio',
+  'poblacion',
+  'barangay',
+  'municipality',
+  'mun',
+  'mun.',
+  'province',
+  'city',
+  'city.',
+  'batangas',
+  'cavite',
+  'laguna',
+  'rizal',
+  'quezon',
+  'pampanga',
+  'bulacan',
+  'pangasinan',
+  'nova ecija',
+  'tarlac',
+  'zambales',
+  'bataan',
+  'albay',
+  'camarines',
+  'sorsogon',
+  'naga',
+  'cebu',
+  'davao',
+  'cagayan de oro',
+  'zamboanga',
+  'iligan',
+  'general santos',
+  'bukidnon',
+  'surigao',
+  'cotabato',
+  'palawan',
+  'siargao',
+  'batangas',
+  'biliran',
+  'basilan',
+  'batanes',
+  'border',
+  'dinagat',
+  'guimaras',
+  'ifugao',
+  'kalinga',
+  'mountain province',
+  'occidental mindoro',
+  'oriental mindoro',
+  'marinduque',
+  'romblon',
+  'samar',
+  'leyte',
+  'biliran',
+  'southern leyte',
+  'northern samar',
+  'western samar',
+  'agusan',
+  'sultan kudarat',
+  'south cotabato',
+  'north cotabato',
+  'sarangani',
+  'dinagat islands',
+  'tawi tawi',
+  'sulu',
+  'lamitan',
+  'marawi',
+  'iriga',
 ];
 
 function normalizePlaceValue(value: string | undefined | null): string {
@@ -243,12 +362,22 @@ export function inferCoordinatesFromPlace(
     entry.keywords.some(keyword => normalizedPlace.includes(keyword))
   );
 
-  return keywordMatch
-    ? {
-        latitude: keywordMatch.latitude,
-        longitude: keywordMatch.longitude,
-      }
-    : null;
+  if (keywordMatch) {
+    return {
+      latitude: keywordMatch.latitude,
+      longitude: keywordMatch.longitude,
+    };
+  }
+
+  const isPhilippinePlace = PHILIPPINES_PLACE_KEYWORDS.some(keyword => normalizedPlace.includes(keyword));
+  if (isPhilippinePlace) {
+    return {
+      latitude: 12.8797,
+      longitude: 121.7740,
+    };
+  }
+
+  return null;
 }
 
 // Shared map constants and helpers for project and event map screens.

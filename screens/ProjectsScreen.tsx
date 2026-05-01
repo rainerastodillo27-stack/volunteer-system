@@ -519,6 +519,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
   const applySnapshot = useCallback((snapshot: {
     projects: Project[];
     volunteerProfile: Volunteer | null;
+    volunteerMatches?: VolunteerProjectMatch[];
     timeLogs: VolunteerTimeLog[];
     partnerApplications: PartnerProjectApplication[];
     volunteerJoinRecords: VolunteerProjectJoinRecord[];
@@ -526,6 +527,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
     startTransition(() => {
       setProjects(snapshot.projects);
       setVolunteerProfile(snapshot.volunteerProfile);
+      setVolunteerMatches(snapshot.volunteerMatches || []);
       setTimeLogs(snapshot.timeLogs);
       setPartnerApplications(snapshot.partnerApplications);
       setVolunteerJoinRecords(snapshot.volunteerJoinRecords);
@@ -548,11 +550,9 @@ export default function ProjectsScreen({ navigation, route }: any) {
         }, 50);
       }
       setLoadError(null);
-      if (snapshot.volunteerProfile?.id) {
+      if (snapshot.volunteerProfile?.id && !Array.isArray(snapshot.volunteerMatches)) {
         const matches = await getVolunteerProjectMatches(snapshot.volunteerProfile.id);
         setVolunteerMatches(matches);
-      } else {
-        setVolunteerMatches([]);
       }
       const elapsedMs = perfNow() - startedAt;
       console.log(`[perf] ProjectsScreen data ready in ${Math.round(elapsedMs)}ms`);
@@ -845,6 +845,17 @@ export default function ProjectsScreen({ navigation, route }: any) {
         return new Date(left.startDate).getTime() - new Date(right.startDate).getTime();
       });
   }, [contentFilter, deferredSearchQuery, projects, statusFilter]);
+  const suggestionByProjectId = useMemo(() => {
+    const suggestions = new Map<string, Recommendation>();
+    if (user?.role !== 'volunteer') {
+      return suggestions;
+    }
+
+    projects.forEach(project => {
+      suggestions.set(project.id, getProjectSuggestion(project, volunteerProfile));
+    });
+    return suggestions;
+  }, [projects, user?.role, volunteerProfile]);
 
   const linkedEventsByProgramId = useMemo(() => {
     const map = new Map<string, Project[]>();
@@ -955,6 +966,10 @@ export default function ProjectsScreen({ navigation, route }: any) {
     () => projects.find(project => project.id === selectedEventId && project.isEvent) || null,
     [projects, selectedEventId]
   );
+  const allVolunteersById = useMemo(
+    () => new Map(allVolunteers.map(volunteer => [volunteer.id, volunteer])),
+    [allVolunteers]
+  );
 
   const isFieldOfficerForEvent = useCallback((event: Project) => {
     if (!volunteerProfile?.id || !event.isEvent) {
@@ -968,10 +983,10 @@ export default function ProjectsScreen({ navigation, route }: any) {
 
   const getAssignableVolunteersForEvent = useCallback((event: Project) => {
     return event.volunteers
-      .map(volunteerId => allVolunteers.find(volunteer => volunteer.id === volunteerId) || null)
+      .map(volunteerId => allVolunteersById.get(volunteerId) || null)
       .filter((volunteer): volunteer is Volunteer => volunteer !== null)
       .sort((left, right) => left.name.localeCompare(right.name));
-  }, [allVolunteers]);
+  }, [allVolunteersById]);
 
   const handleAssignEventTask = useCallback(async (
     eventProject: Project,
@@ -1306,7 +1321,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
 
   // Renders a single project card with role-specific actions.
   const renderProjectItem = useCallback(({ item }: { item: Project }) => {
-          const suggestion = getProjectSuggestion(item, volunteerProfile);
+          const suggestion = suggestionByProjectId.get(item.id) || getProjectSuggestion(item, volunteerProfile);
           const eventActionState = item.isEvent ? getVolunteerEventActionState(item) : null;
           const joined = eventActionState?.joined || false;
           const activeLog = activeLogByProjectId.get(item.id);
@@ -2076,6 +2091,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
           user,
           volunteerJoinRecordByProjectId,
           volunteerProfile,
+          suggestionByProjectId,
         ]);
 
   // Ends the active volunteer time log after proof-of-work is submitted.
@@ -2612,7 +2628,10 @@ export default function ProjectsScreen({ navigation, route }: any) {
                   <View style={styles.volunteerInsightCard}>
                     <Text style={styles.volunteerInsightLabel}>Why this event may fit you</Text>
                     <Text style={styles.volunteerInsightText}>
-                      {formatSuggestionReasons(getProjectSuggestion(selectedEvent, volunteerProfile).reasons)}
+                      {formatSuggestionReasons(
+                        (suggestionByProjectId.get(selectedEvent.id) ||
+                          getProjectSuggestion(selectedEvent, volunteerProfile)).reasons
+                      )}
                     </Text>
                   </View>
 

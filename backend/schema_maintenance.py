@@ -153,6 +153,23 @@ def _public_table_column_exists(connection: Any, table_name: str, column_name: s
     return bool(row and row[0])
 
 
+def _public_table_column_udt_name(connection: Any, table_name: str, column_name: str) -> str | None:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            select udt_name
+            from information_schema.columns
+            where table_schema = 'public'
+              and table_name = %s
+              and column_name = %s
+            limit 1
+            """,
+            (table_name, column_name),
+        )
+        row = cursor.fetchone()
+    return str(row[0]) if row and row[0] is not None else None
+
+
 def migrate_legacy_report_tables_to_reports(connection: Any) -> list[str]:
     if not _public_table_exists(connection, "reports"):
         return []
@@ -219,7 +236,7 @@ def migrate_legacy_report_tables_to_reports(connection: Any) -> list[str]:
                   null::text,
                   null::text,
                   null::text,
-                  '[]'::jsonb
+                  '{}'::text[]
                 from partner_reports
                 on conflict (id) do nothing
                 """
@@ -239,11 +256,19 @@ def migrate_legacy_report_tables_to_reports(connection: Any) -> list[str]:
                 if _public_table_column_exists(connection, "published_impact_reports", "download_mime_type")
                 else "null::text"
             )
-            source_report_ids_expr = (
-                "source_report_ids"
-                if _public_table_column_exists(connection, "published_impact_reports", "source_report_ids")
-                else "'[]'::jsonb"
+            source_report_ids_udt = _public_table_column_udt_name(
+                connection,
+                "published_impact_reports",
+                "source_report_ids",
             )
+            if source_report_ids_udt == "jsonb":
+                source_report_ids_expr = (
+                    "coalesce(array(select jsonb_array_elements_text(source_report_ids)), '{}'::text[])"
+                )
+            elif source_report_ids_udt == "_text":
+                source_report_ids_expr = "coalesce(source_report_ids, '{}'::text[])"
+            else:
+                source_report_ids_expr = "'{}'::text[]"
 
             cursor.execute(
                 f"""

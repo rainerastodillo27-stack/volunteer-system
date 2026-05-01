@@ -63,8 +63,8 @@ def main() -> None:
             cursor.execute(
                 """
                 update projects
-                set joined_user_ids = '[]'::jsonb,
-                    volunteers = '[]'::jsonb,
+                set joined_user_ids = '{}'::text[],
+                    volunteers = '{}'::text[],
                     internal_tasks = '[]'::jsonb,
                     updated_at = %s
                 """,
@@ -88,16 +88,16 @@ def main() -> None:
             cursor.execute(
                 """
                 update events
-                set joined_user_ids = %s::jsonb,
-                    volunteers = %s::jsonb,
+                set joined_user_ids = %s::text[],
+                    volunteers = %s::text[],
                     internal_tasks = %s::jsonb,
                     updated_at = %s,
                     description = %s
                 where id = %s
                 """,
                 (
-                    json.dumps([SAMPLE_VOLUNTEER_USER_ID]),
-                    json.dumps([SAMPLE_VOLUNTEER_ID]),
+                    [SAMPLE_VOLUNTEER_USER_ID],
+                    [SAMPLE_VOLUNTEER_ID],
                     json.dumps(sample_tasks),
                     now_iso,
                     "Quarterly Assessment event for Mingo nutrition coordination, announcements, and assigning tasks to the event team.",

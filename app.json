@@ -5,7 +5,8 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "extra": {
-      "webApiBaseUrl": "http://127.0.0.1:8001"
+      "apiBaseUrl": "http://127.0.0.1:8000",
+      "webApiBaseUrl": "http://127.0.0.1:8000"
     },
     "assetBundlePatterns": [
       "**/*"
