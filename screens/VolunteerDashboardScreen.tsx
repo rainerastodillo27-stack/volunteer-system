@@ -20,7 +20,7 @@ import {
 } from '../models/storage';
 import type { AdminPlanningCalendar, AdminPlanningItem, Project, Volunteer, VolunteerTimeLog } from '../models/types';
 import { navigateToAvailableRoute } from '../utils/navigation';
-import { getProjectDisplayStatus } from '../utils/projectStatus';
+import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 const CORE_PROGRAM_MODULES = ['Livelihood', 'Education', 'Nutrition'] as const;
@@ -76,6 +76,11 @@ function getUpcomingProject(projects: Project[]): Project | null {
       })
       .sort((left, right) => new Date(left.startDate).getTime() - new Date(right.startDate).getTime())[0] || null
   );
+}
+
+function isVolunteerOpportunityOpen(project: Project): boolean {
+  const status = getProjectDisplayStatus(project);
+  return status !== 'Completed' && status !== 'Cancelled';
 }
 
 function getVolunteerStatusTone(status?: Volunteer['registrationStatus']) {
@@ -189,6 +194,7 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
       projects.filter(
         project =>
           project.isEvent &&
+          isVolunteerOpportunityOpen(project) &&
           !(
             (project.joinedUserIds || []).includes(user?.id || '') ||
             (volunteerProfile ? project.volunteers.includes(volunteerProfile.id) : false) ||
@@ -217,6 +223,7 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
       projects.filter(
         project =>
           !project.isEvent &&
+          isVolunteerOpportunityOpen(project) &&
           !(
             (project.joinedUserIds || []).includes(user?.id || '') ||
             (volunteerProfile ? project.volunteers.includes(volunteerProfile.id) : false) ||
@@ -229,7 +236,10 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
     () =>
       CORE_PROGRAM_MODULES.map(module => {
         const moduleProjectCount = projects.filter(
-          project => !project.isEvent && (project.programModule || project.category) === module
+          project =>
+            !project.isEvent &&
+            isVolunteerOpportunityOpen(project) &&
+            (project.programModule || project.category) === module
         ).length;
 
         return {
@@ -549,8 +559,28 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
               >
                 <View style={styles.projectItemHeader}>
                   <Text style={styles.projectItemTitle}>{project.title}</Text>
-                  <View style={styles.projectItemBadge}>
-                    <Text style={styles.projectItemBadgeText}>{project.category}</Text>
+                  <View style={styles.projectItemBadges}>
+                    <View style={styles.projectItemBadge}>
+                      <Text style={styles.projectItemBadgeText}>{project.category}</Text>
+                    </View>
+                    <View
+                      style={[
+                        styles.projectItemStatusBadge,
+                        {
+                          borderColor: getProjectStatusColor(project),
+                          backgroundColor: `${getProjectStatusColor(project)}1F`,
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.projectItemStatusBadgeText,
+                          { color: getProjectStatusColor(project) },
+                        ]}
+                      >
+                        {getProjectDisplayStatus(project)}
+                      </Text>
+                    </View>
                   </View>
                 </View>
 
@@ -566,7 +596,7 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
                   <View style={styles.projectItemMetaItem}>
                     <MaterialIcons name="location-on" size={14} color="#64748b" />
                     <Text style={styles.projectItemMetaText}>
-                      {project.location.address || 'Location TBA'}
+                      {project.location?.address || 'Location TBA'}
                     </Text>
                   </View>
                 </View>
@@ -596,8 +626,28 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
               >
                 <View style={styles.projectItemHeader}>
                   <Text style={styles.projectItemTitle}>{project.title}</Text>
-                  <View style={styles.projectItemBadge}>
-                    <Text style={styles.projectItemBadgeText}>{project.category}</Text>
+                  <View style={styles.projectItemBadges}>
+                    <View style={styles.projectItemBadge}>
+                      <Text style={styles.projectItemBadgeText}>{project.category}</Text>
+                    </View>
+                    <View
+                      style={[
+                        styles.projectItemStatusBadge,
+                        {
+                          borderColor: getProjectStatusColor(project),
+                          backgroundColor: `${getProjectStatusColor(project)}1F`,
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.projectItemStatusBadgeText,
+                          { color: getProjectStatusColor(project) },
+                        ]}
+                      >
+                        {getProjectDisplayStatus(project)}
+                      </Text>
+                    </View>
                   </View>
                 </View>
 
@@ -613,7 +663,7 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
                   <View style={styles.projectItemMetaItem}>
                     <MaterialIcons name="location-on" size={14} color="#64748b" />
                     <Text style={styles.projectItemMetaText}>
-                      {project.location.address || 'Location TBA'}
+                      {project.location?.address || 'Location TBA'}
                     </Text>
                   </View>
                 </View>
@@ -662,8 +712,28 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
               >
                 <View style={styles.projectItemHeader}>
                   <Text style={styles.projectItemTitle}>{project.title}</Text>
-                  <View style={styles.projectItemBadge}>
-                    <Text style={styles.projectItemBadgeText}>{project.category}</Text>
+                  <View style={styles.projectItemBadges}>
+                    <View style={styles.projectItemBadge}>
+                      <Text style={styles.projectItemBadgeText}>{project.category}</Text>
+                    </View>
+                    <View
+                      style={[
+                        styles.projectItemStatusBadge,
+                        {
+                          borderColor: getProjectStatusColor(project),
+                          backgroundColor: `${getProjectStatusColor(project)}1F`,
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.projectItemStatusBadgeText,
+                          { color: getProjectStatusColor(project) },
+                        ]}
+                      >
+                        {getProjectDisplayStatus(project)}
+                      </Text>
+                    </View>
                   </View>
                 </View>
 
@@ -679,7 +749,7 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
                   <View style={styles.projectItemMetaItem}>
                     <MaterialIcons name="location-on" size={14} color="#64748b" />
                     <Text style={styles.projectItemMetaText}>
-                      {project.location.address || 'Location TBA'}
+                      {project.location?.address || 'Location TBA'}
                     </Text>
                   </View>
                 </View>
@@ -709,8 +779,28 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
               >
                 <View style={styles.projectItemHeader}>
                   <Text style={styles.projectItemTitle}>{project.title}</Text>
-                  <View style={styles.projectItemBadge}>
-                    <Text style={styles.projectItemBadgeText}>{project.category}</Text>
+                  <View style={styles.projectItemBadges}>
+                    <View style={styles.projectItemBadge}>
+                      <Text style={styles.projectItemBadgeText}>{project.category}</Text>
+                    </View>
+                    <View
+                      style={[
+                        styles.projectItemStatusBadge,
+                        {
+                          borderColor: getProjectStatusColor(project),
+                          backgroundColor: `${getProjectStatusColor(project)}1F`,
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.projectItemStatusBadgeText,
+                          { color: getProjectStatusColor(project) },
+                        ]}
+                      >
+                        {getProjectDisplayStatus(project)}
+                      </Text>
+                    </View>
                   </View>
                 </View>
 
@@ -726,7 +816,7 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
                   <View style={styles.projectItemMetaItem}>
                     <MaterialIcons name="location-on" size={14} color="#64748b" />
                     <Text style={styles.projectItemMetaText}>
-                      {project.location.address || 'Location TBA'}
+                      {project.location?.address || 'Location TBA'}
                     </Text>
                   </View>
                 </View>
@@ -1130,6 +1220,10 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     gap: 10,
   },
+  projectItemBadges: {
+    alignItems: 'flex-end',
+    gap: 6,
+  },
   projectItemTitle: {
     flex: 1,
     fontSize: 15,
@@ -1146,6 +1240,16 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     color: '#166534',
+  },
+  projectItemStatusBadge: {
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  projectItemStatusBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
   },
   projectItemDescription: {
     fontSize: 12,

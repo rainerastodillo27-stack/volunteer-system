@@ -17,6 +17,7 @@ import { Project } from '../models/types';
 import {
   PHILIPPINES_REGION,
   getInitialProjectRegion,
+  getMappedProjects,
   getProjectMarkerColor,
 } from '../utils/projectMap';
 
@@ -250,14 +251,6 @@ type VolunteerImpactMapProps = {
   onPartnerPress?: (partnerId: string) => void;
 };
 
-function getMappedProjects(projects: Project[]) {
-  return projects.filter(
-    project =>
-      Number.isFinite(project.location?.latitude) &&
-      Number.isFinite(project.location?.longitude)
-  );
-}
-
 function buildAvailableAccountOptions(
   accounts: MapAccountOption[],
   mappedProjects: Project[]
@@ -458,6 +451,10 @@ export default function VolunteerImpactMap({
   );
   const nativeMapType = getNativeMapType(selectedMapStyle);
   const mapRegion = useMemo(() => getInitialProjectRegion(displayProjects) as Region, [displayProjects]);
+  const mapContentKey = useMemo(
+    () => `${selectedMapStyleKey}:${displayProjects.map(project => project.id).join('|')}`,
+    [displayProjects, selectedMapStyleKey]
+  );
 
   return (
     <View style={styles.section}>

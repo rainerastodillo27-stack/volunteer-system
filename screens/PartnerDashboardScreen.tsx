@@ -431,11 +431,11 @@ export default function PartnerDashboardScreen({ navigation }: any) {
 
     try {
       setActionProjectId(proposalProjectId);
-      setShowProposalModal(false);
       await submitPartnerProgramProposal(proposalProjectId, user, {
         programModule: activeProposalModule,
         proposalDetails,
       });
+      setShowProposalModal(false);
       Alert.alert('Proposal Sent', 'Your proposal has been sent to the admin for review.');
       void loadDashboardData();
     } catch (error) {
@@ -503,8 +503,8 @@ export default function PartnerDashboardScreen({ navigation }: any) {
         mediaFile: activeReportForm.mediaFile,
       });
       setReportForm(createEmptyReportForm(projectId));
-      void loadDashboardData();
       Alert.alert('Uploaded', 'Your report was submitted to the admin impact hub.');
+      void loadDashboardData();
     } catch (error) {
       Alert.alert(
         getRequestErrorTitle(error, 'Upload Failed'),

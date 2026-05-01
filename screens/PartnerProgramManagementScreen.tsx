@@ -20,66 +20,37 @@ import {
   getProjectsScreenSnapshot,
   subscribeToStorageChanges,
 } from '../models/storage';
-import { Project, PartnerProjectApplication, AdvocacyFocus } from '../models/types';
+import { Project, PartnerProjectApplication, ProgramTrack } from '../models/types';
 import { getRequestErrorMessage } from '../utils/requestErrors';
 import { isAbortLikeError } from '../utils/requestErrors';
 import ProjectLifecycleScreen from './ProjectLifecycleScreen';
 
 const { width, height } = Dimensions.get('window');
 
-const PROGRAM_DATA: Array<{
-  id: AdvocacyFocus;
+const DEFAULT_PROGRAM_IMAGE = require('../assets/programs/education.jpg');
+const DEFAULT_PROGRAM_ICON: keyof typeof MaterialIcons.glyphMap = 'category';
+const DEFAULT_PROGRAM_COLOR = '#166534';
+const CORE_PROGRAM_IDS = new Set(['Nutrition', 'Education', 'Livelihood']);
+
+type ProgramTrackCard = {
+  id: string;
   title: string;
   description: string;
   icon: keyof typeof MaterialIcons.glyphMap;
   color: string;
   image: ImageSourcePropType;
-}> = [
-  {
-    id: 'Nutrition',
-    title: 'Nutrition',
-    description: 'Food security and health programs for children and families.',
-    icon: 'restaurant',
-    color: '#dc2626',
-    image: require('../assets/programs/nutrition.jpg'),
-  },
-  {
-    id: 'Education',
-    title: 'Education',
-    description: 'Learning, literacy, and skill development for students.',
-    icon: 'school',
-    color: '#2563eb',
-    image: require('../assets/programs/education.jpg'),
-  },
-  {
-    id: 'Livelihood',
-    title: 'Livelihood',
-    description: 'Economic empowerment and vocational training programs.',
-    icon: 'work',
-    color: '#7c3aed',
-    image: require('../assets/programs/livelihood.jpg'),
-  },
-  {
-    id: 'Disaster',
-    title: 'Disaster Relief',
-    description: 'Emergency response and recovery for affected communities.',
-    icon: 'warning',
-    color: '#ea580c',
-    image: require('../assets/programs/mingo-relief.jpg'),
-  },
-];
-
-const PROGRAM_PHOTO_BY_TITLE: Record<string, ImageSourcePropType> = {
-  'Farm to Fork Program': require('../assets/programs/farm-to-fork.jpg'),
-  'Mingo for Nutritional Support': require('../assets/programs/nutrition.jpg'),
-  'Mingo for Emergency Relief': require('../assets/programs/mingo-relief.jpg'),
-  LoveBags: require('../assets/programs/lovebags.jpg'),
-  'School Support': require('../assets/programs/school-support.jpg'),
-  'Artisans of Hope': require('../assets/programs/artisans-of-hope.jpg'),
-  'Project Joseph': require('../assets/programs/project-joseph.jpg'),
-  'Growing Hope': require('../assets/programs/growing-hope.jpg'),
-  'Peter Project': require('../assets/programs/peter-project.jpg'),
 };
+
+function normalizeProgramIcon(icon: string | undefined): keyof typeof MaterialIcons.glyphMap {
+  if (!icon) return DEFAULT_PROGRAM_ICON;
+  return icon in MaterialIcons.glyphMap ? (icon as keyof typeof MaterialIcons.glyphMap) : DEFAULT_PROGRAM_ICON;
+}
+
+function normalizeProgramColor(color: string | undefined): string {
+  const trimmed = String(color || '').trim();
+  if (!trimmed) return DEFAULT_PROGRAM_COLOR;
+  return /^#[0-9A-Fa-f]{6}$/.test(trimmed) ? trimmed : DEFAULT_PROGRAM_COLOR;
+}
 
 export default function PartnerProgramManagementScreen() {
   const { user } = useAuth();
@@ -88,21 +59,24 @@ export default function PartnerProgramManagementScreen() {
   
   const [projects, setProjects] = useState<Project[]>([]);
   const [partnerApplications, setPartnerApplications] = useState<PartnerProjectApplication[]>([]);
+  const [programTracks, setProgramTracks] = useState<ProgramTrack[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'programs' | 'my-projects'>('programs');
-  const [selectedProgram, setSelectedProgram] = useState<AdvocacyFocus | null>(null);
+  const [selectedProgram, setSelectedProgram] = useState<string | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
     if (!user) return;
     try {
-      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'partnerApplications']);
+      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'partnerApplications', 'programTracks']);
       console.log('PartnerProgramManagementScreen data received:', {
         projectCount: snapshot.projects?.length,
-        applicationCount: snapshot.partnerApplications?.length
+        applicationCount: snapshot.partnerApplications?.length,
+        trackCount: snapshot.programTracks?.length,
       });
       setProjects(snapshot.projects);
       setPartnerApplications(snapshot.partnerApplications);
+      setProgramTracks(snapshot.programTracks || []);
       setLoading(false);
     } catch (e) {
       if (isAbortLikeError(e)) {
@@ -116,12 +90,12 @@ export default function PartnerProgramManagementScreen() {
 
   useFocusEffect(useCallback(() => {
     loadData();
-    return subscribeToStorageChanges(['projects', 'partnerApplications'], loadData);
+    return subscribeToStorageChanges(['projects', 'partnerApplications', 'programTracks'], loadData);
   }, [loadData]));
   useEffect(() => {
-    if (route.params?.programModule) {
+    if (typeof route.params?.programModule === 'string' && route.params.programModule.trim()) {
       setActiveTab('programs');
-      setSelectedProgram(route.params.programModule);
+      setSelectedProgram(route.params.programModule.trim());
     }
     
     if (route.params?.projectId) {
@@ -148,7 +122,82 @@ export default function PartnerProgramManagementScreen() {
     return projects.filter(p => p.id.startsWith('program:') && (p.programModule === selectedProgram || p.category === selectedProgram));
   }, [projects, selectedProgram]);
 
-  const renderProgramCard = (program: typeof PROGRAM_DATA[0]) => (
+  const availablePrograms = useMemo(() => {
+    const tracksById = new Map(
+      (programTracks || [])
+        .filter(track => track?.id)
+        .map(track => [track.id, track])
+    );
+    const programIds = new Set<string>();
+    tracksById.forEach((track, trackId) => {
+      if (track.isActive === false || !CORE_PROGRAM_IDS.has(trackId)) {
+        return;
+      }
+      programIds.add(trackId);
+    });
+
+    if (programIds.size === 0) {
+      projects.forEach(project => {
+        const trackId = String(project.programModule || project.category || '').trim();
+        if (CORE_PROGRAM_IDS.has(trackId)) {
+          programIds.add(trackId);
+        }
+      });
+    }
+
+    const cards: ProgramTrackCard[] = [];
+    programIds.forEach(programId => {
+      const track = tracksById.get(programId);
+      if (track && track.isActive === false) {
+        return;
+      }
+
+      const sampleProjectWithImage = projects.find(
+        project =>
+          (project.programModule === programId || project.category === programId) &&
+          !project.imageHidden &&
+          Boolean(project.imageUrl)
+      );
+
+      cards.push({
+        id: programId,
+        title: String(track?.title || programId),
+        description: String(track?.description || 'Community programs under this track.'),
+        icon: normalizeProgramIcon(track?.icon),
+        color: normalizeProgramColor(track?.color),
+        image: sampleProjectWithImage?.imageUrl
+          ? { uri: sampleProjectWithImage.imageUrl }
+          : track?.imageUrl
+          ? { uri: track.imageUrl }
+          : DEFAULT_PROGRAM_IMAGE,
+      });
+    });
+
+    cards.sort((left, right) => {
+      const leftTrack = tracksById.get(left.id);
+      const rightTrack = tracksById.get(right.id);
+      const leftSort = Number(leftTrack?.sortOrder || 0);
+      const rightSort = Number(rightTrack?.sortOrder || 0);
+      if (leftSort !== rightSort) return leftSort - rightSort;
+      return left.title.localeCompare(right.title);
+    });
+    return cards;
+  }, [programTracks, projects]);
+
+  const programCardById = useMemo(
+    () => new Map(availablePrograms.map(program => [program.id, program])),
+    [availablePrograms]
+  );
+
+  const getProjectImageSource = useCallback((project: Project): ImageSourcePropType => {
+    if (!project.imageHidden && project.imageUrl) {
+      return { uri: project.imageUrl };
+    }
+    const programId = project.programModule || project.category;
+    return programCardById.get(programId)?.image || DEFAULT_PROGRAM_IMAGE;
+  }, [programCardById]);
+
+  const renderProgramCard = (program: ProgramTrackCard) => (
     <TouchableOpacity 
       key={program.id}
       style={styles.programCard}
@@ -178,7 +227,7 @@ export default function PartnerProgramManagementScreen() {
     return (
       <View key={project.id} style={styles.projectCard}>
         <Image 
-          source={PROGRAM_PHOTO_BY_TITLE[project.title] || { uri: project.imageUrl }} 
+          source={getProjectImageSource(project)}
           style={styles.projectCardImage} 
         />
         <View style={styles.projectCardContent}>
@@ -223,7 +272,7 @@ export default function PartnerProgramManagementScreen() {
 
   const renderProgramsView = () => {
     if (selectedProgram) {
-      const program = PROGRAM_DATA.find(p => p.id === selectedProgram)!;
+      const program = availablePrograms.find(p => p.id === selectedProgram);
       return (
         <ScrollView style={styles.detailsContainer} showsVerticalScrollIndicator={false}>
           <TouchableOpacity 
@@ -234,9 +283,9 @@ export default function PartnerProgramManagementScreen() {
             <Text style={styles.backButtonText}>Back to Programs</Text>
           </TouchableOpacity>
 
-          <View style={[styles.programHeaderInfo, { borderLeftColor: program.color }]}>
-            <Text style={styles.detailsTitle}>{program.title} Program</Text>
-            <Text style={styles.detailsSubtitle}>{program.description}</Text>
+          <View style={[styles.programHeaderInfo, { borderLeftColor: (program?.color || DEFAULT_PROGRAM_COLOR) }]}>
+            <Text style={styles.detailsTitle}>{(program?.title || selectedProgram)} Program</Text>
+            <Text style={styles.detailsSubtitle}>{program?.description || 'Community programs under this track.'}</Text>
           </View>
 
           {programTemplates.length > 0 && (
@@ -248,7 +297,17 @@ export default function PartnerProgramManagementScreen() {
           )}
 
           <View style={styles.listSection}>
-            <Text style={styles.listSectionTitle}>Active Projects</Text>
+            <View style={[styles.projectHeader, { marginBottom: 12 }]}>
+                <Text style={styles.listSectionTitle}>Active Projects</Text>
+                {user?.role === 'admin' && (
+                    <TouchableOpacity 
+                        style={styles.addButton}
+                        onPress={() => navigation.navigate('ProjectLifecycle', { programModule: selectedProgram, projectId: 'new' })}
+                    >
+                        <Text style={styles.addButtonText}>+ Create</Text>
+                    </TouchableOpacity>
+                )}
+            </View>
             <Text style={styles.listSectionSubtitle}>Ongoing activities within this program track.</Text>
             {filteredProjects.length > 0 ? (
               filteredProjects.map(p => renderProjectItem(p))
@@ -267,7 +326,14 @@ export default function PartnerProgramManagementScreen() {
       <ScrollView contentContainerStyle={styles.programsGrid} showsVerticalScrollIndicator={false}>
         <Text style={styles.tabIntroTitle}>Explore Program Tracks</Text>
         <Text style={styles.tabIntroSubtitle}>Select a core program to view available templates and active projects you can propose or join.</Text>
-        {PROGRAM_DATA.map(renderProgramCard)}
+        {availablePrograms.length > 0 ? (
+          availablePrograms.map(renderProgramCard)
+        ) : (
+          <View style={styles.emptyState}>
+            <MaterialIcons name="info-outline" size={40} color="#cbd5e1" />
+            <Text style={styles.emptyText}>No program tracks are available yet.</Text>
+          </View>
+        )}
       </ScrollView>
     );
   };
@@ -438,6 +504,8 @@ const styles = StyleSheet.create({
   projectCardImage: { width: '100%', height: 160 },
   projectCardContent: { padding: 16, gap: 8 },
   projectHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  addButton: { backgroundColor: '#166534', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
+  addButtonText: { color: '#fff', fontSize: 12, fontWeight: '700' },
   projectTitle: { fontSize: 16, fontWeight: '800', color: '#0f172a', flex: 1 },
   templateBadge: { backgroundColor: '#f0fdf4', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, borderWidth: 1, borderColor: '#dcfce7' },
   templateBadgeText: { fontSize: 10, fontWeight: '800', color: '#166534', textTransform: 'uppercase' },

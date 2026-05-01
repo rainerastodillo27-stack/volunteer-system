@@ -6,6 +6,7 @@ import { Project } from '../models/types';
 import {
   PHILIPPINES_BOUNDS,
   PHILIPPINES_WEB_CENTER,
+  getMappedProjects,
   getProjectMarkerColor,
 } from '../utils/projectMap';
 import { createGoogleMapsMarkerIcon, loadGoogleMaps } from '../utils/webGoogleMaps';
@@ -113,15 +114,6 @@ function getGoogleMapsErrorMessage(apiKey: string) {
   }
 
   return `Google Maps could not load for the impact map. Allow ${currentOrigin} in your Google Maps web key referrers and make sure the Maps JavaScript API is enabled.`;
-}
-
-function getMappedProjects(projects: Project[]) {
-  return projects.filter(
-    project =>
-      Number.isFinite(project.location?.latitude) &&
-      Number.isFinite(project.location?.longitude) &&
-      !(project.location?.latitude === 0 && project.location?.longitude === 0)
-  );
 }
 
 function buildAvailableAccountOptions(
@@ -532,6 +524,10 @@ export default function VolunteerImpactMap({
     currentAccountOptions,
     selectedAccountOption
   );
+  const mapHostKey = useMemo(
+    () => `${selectedMapStyleKey}:${displayProjects.map(project => project.id).join('|')}`,
+    [displayProjects, selectedMapStyleKey]
+  );
   const showAccountPicker = selectedMapStyleKey !== 'admin-overview' && currentAccountOptions.length > 0;
   const selectedAccountLabel = getAccountPickerLabel(selectedMapStyleKey, selectedAccountOption);
   const accountPickerTitle = getAccountPickerTitle(selectedMapStyleKey);
@@ -614,7 +610,7 @@ export default function VolunteerImpactMap({
           },
         ]}
       >
-        <MapHost ref={mapElementRef} style={styles.mapHost} />
+        <MapHost key={mapHostKey} ref={mapElementRef} style={styles.mapHost} />
         {mapError ? (
           <View style={[styles.errorOverlay, { backgroundColor: selectedMapStyle.errorBg }]}>
             <View style={[styles.errorCard, { borderColor: selectedMapStyle.errorBorder }]}>

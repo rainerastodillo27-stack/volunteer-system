@@ -40,6 +40,12 @@ from .relational_mirror import (
 
 
 load_dotenv()
+TRACE_STORAGE = str(os.getenv("VOLCRE_TRACE_STORAGE", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _trace(message: str) -> None:
+    if TRACE_STORAGE:
+        print(message)
 
 # Initialize FastAPI application
 app = FastAPI(title="NVC CONNECT API")
@@ -75,12 +81,17 @@ class TTLCache:
     def clear(self) -> None:
         self.cache.clear()
 
+    def delete(self, key: str) -> None:
+        self.cache.pop(key, None)
+
 
 # Cache for projects snapshot.
 # A longer TTL avoids frequent cold rebuilds; cache is explicitly cleared on writes.
 _projects_snapshot_cache = TTLCache(ttl_seconds=45)
+_storage_collection_cache = TTLCache(ttl_seconds=20)
 _DEFAULT_SNAPSHOT_FIELDS = {
     "projects",
+    "programTracks",
     "statusUpdates",
     "volunteerProfile",
     "volunteerMatches",
@@ -380,7 +391,7 @@ def ensure_message_storage() -> None:
                   content text not null,
                   timestamp timestamptz not null,
                   read boolean not null default false,
-                  attachments jsonb not null default '[]'::jsonb
+                  attachments text not null default '[]'
                 )
                 """
             )
@@ -400,12 +411,12 @@ def ensure_project_group_message_storage() -> None:
                   content text not null,
                   timestamp timestamptz not null,
                   kind text not null default 'message',
-                  need_post jsonb,
-                  scope_proposal jsonb,
+                  need_post text,
+                  scope_proposal text,
                   response_to_message_id text,
                   response_action text,
                   response_to_title text,
-                  attachments jsonb not null default '[]'::jsonb
+                  attachments text not null default '[]'
                 )
                 """
             )
@@ -413,10 +424,10 @@ def ensure_project_group_message_storage() -> None:
                 "alter table project_group_messages add column if not exists kind text not null default 'message'"
             )
             cursor.execute(
-                "alter table project_group_messages add column if not exists need_post jsonb"
+                "alter table project_group_messages add column if not exists need_post text"
             )
             cursor.execute(
-                "alter table project_group_messages add column if not exists scope_proposal jsonb"
+                "alter table project_group_messages add column if not exists scope_proposal text"
             )
             cursor.execute(
                 "alter table project_group_messages add column if not exists response_to_message_id text"
@@ -559,7 +570,7 @@ def _replace_special_storage_collection(connection: Any, key: str, value: Any) -
                     insert into messages (
                       messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                     )
-                    values (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                    values (%s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         item["id"],
@@ -593,7 +604,7 @@ def _replace_special_storage_collection(connection: Any, key: str, value: Any) -
                       response_to_title,
                       attachments
                     )
-                    values (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s::jsonb)
+                    values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         item["id"],
@@ -692,12 +703,48 @@ def _sort_iso_desc(items: list[dict[str, Any]], field: str) -> list[dict[str, An
     return sorted(items, key=lambda item: str(item.get(field) or ""), reverse=True)
 
 
+def _to_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 # Maps hot-storage keys to their backing table names.
 def _hot_table_name(key: str) -> str:
     table_name = HOT_STORAGE_TABLES.get(key)
     if not table_name:
         raise HTTPException(status_code=400, detail=f"Unsupported hot storage key '{key}'.")
     return table_name
+
+
+def _collection_cache_key(key: str) -> str:
+    return f"collection:{key}"
+
+
+def _invalidate_collection_cache(keys: list[str] | set[str] | tuple[str, ...] | None = None) -> None:
+    if keys is None:
+        _storage_collection_cache.clear()
+        return
+    for key in keys:
+        _storage_collection_cache.delete(_collection_cache_key(str(key)))
+
+
+def _get_cached_collection(connection: Any, key: str) -> Any:
+    cache_key = _collection_cache_key(key)
+    cached = _storage_collection_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    if is_hot_storage_key(key):
+        value = get_postgres_hot_storage_collection(connection, key)
+    elif key in SPECIAL_STORAGE_KEYS:
+        value = _get_special_storage_collection(connection, key)
+    else:
+        value = None
+
+    _storage_collection_cache.set(cache_key, value)
+    return value
 
 
 # Fetches a single hot-storage row by item id.
@@ -724,7 +771,10 @@ def _postgres_get_hot_items_by_field(
 # Inserts or updates one hot-storage item row.
 def _postgres_upsert_hot_item(connection: Any, key: str, item: dict[str, Any]) -> dict[str, Any]:
     try:
-        return upsert_relational_item(connection, key, item)
+        result = upsert_relational_item(connection, key, item)
+        _invalidate_collection_cache([key])
+        _projects_snapshot_cache.clear()
+        return result
     except KeyError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except ValueError as error:
@@ -1023,6 +1073,7 @@ def _normalize_snapshot_fields(raw_fields: str | None) -> set[str] | None:
         "partnerProjectApplications": "partnerApplications",
         "volunteerProjectJoins": "volunteerJoinRecords",
         "volunteerTimeLogs": "timeLogs",
+        "programCatalog": "programTracks",
     }
     normalized_fields: set[str] = set()
     for raw_field in raw_fields.split(","):
@@ -1045,11 +1096,12 @@ def _build_projects_snapshot(
 ) -> dict[str, Any]:
     import time as _time
     t0 = _time.perf_counter()
-    print(f"[TRACE] _build_projects_snapshot: starting optimized hot storage reads at {_time.perf_counter():.3f}")
+    _trace(f"[TRACE] _build_projects_snapshot: starting optimized hot storage reads at {_time.perf_counter():.3f}")
 
     includes = requested_fields if requested_fields is not None else _DEFAULT_SNAPSHOT_FIELDS
     include_projects = "projects" in includes
     include_status_updates = "statusUpdates" in includes
+    include_program_tracks = "programTracks" in includes
     include_volunteer_profile = "volunteerProfile" in includes
     include_volunteer_matches = "volunteerMatches" in includes
     include_time_logs = "timeLogs" in includes
@@ -1057,19 +1109,20 @@ def _build_projects_snapshot(
     include_join_records = "volunteerJoinRecords" in includes
 
     raw_projects: list[dict[str, Any]] = []
-    raw_programs: list[dict[str, Any]] = []
     raw_events: list[dict[str, Any]] = []
     raw_status_updates: list[dict[str, Any]] = []
+    raw_program_tracks: list[dict[str, Any]] = []
 
     # CORE LOAD: Only fetch the collections requested by the screen.
     if include_projects or include_join_records:
         raw_projects = get_postgres_hot_storage_collection(connection, "projects")
-        raw_programs = get_postgres_hot_storage_collection(connection, "programs")
         raw_events = get_postgres_hot_storage_collection(connection, "events")
     if include_status_updates:
         raw_status_updates = get_postgres_hot_storage_collection(connection, "statusUpdates")
+    if include_program_tracks:
+        raw_program_tracks = get_postgres_hot_storage_collection(connection, "programTracks")
 
-    print(f"[TRACE] _build_projects_snapshot: read core collections after {_time.perf_counter() - t0:.3f}s")
+    _trace(f"[TRACE] _build_projects_snapshot: read core collections after {_time.perf_counter() - t0:.3f}s")
 
     # Create a set of event project IDs for O(1) lookup when needed.
     event_project_ids = (
@@ -1080,16 +1133,16 @@ def _build_projects_snapshot(
 
     projects: list[dict[str, Any]] = []
     if include_projects:
-        programs = (
-            raw_programs
-            if raw_programs
-            else [project for project in raw_projects if not bool(project.get("isEvent"))]
-        )
+        programs = [project for project in raw_projects if not bool(project.get("isEvent"))]
         projects = [*programs, *raw_events]
 
     # Build snapshot with core data
     snapshot: dict[str, Any] = {
         "projects": projects,
+        "programTracks": sorted(
+            raw_program_tracks,
+            key=lambda item: (_to_int(item.get("sortOrder")), str(item.get("title") or str(item.get("id") or ""))),
+        ),
         "statusUpdates": raw_status_updates,
         "volunteerProfile": None,
         "volunteerMatches": [],
@@ -1177,7 +1230,8 @@ def startup() -> None:
         except Exception as error:
             print(f"[WARN] Projects snapshot cache warmup skipped: {error}")
 
-    _warm_projects_snapshot_cache()
+    # Run warmup in a background thread to avoid blocking server startup
+    threading.Thread(target=_warm_projects_snapshot_cache, daemon=True).start()
 
     if not is_demo_seed_enabled():
         print("[OK] Backend started in canonical-only mode; demo seed is disabled")
@@ -1816,7 +1870,7 @@ def get_projects_snapshot(
     normalized_fields_token = (
         ",".join(sorted(normalized_fields)) if normalized_fields is not None else "*"
     )
-    print(
+    _trace(
         f"[TRACE] /projects/snapshot start user_id={user_id} role={role} fields={normalized_fields_token}"
     )
 
@@ -1830,7 +1884,7 @@ def get_projects_snapshot(
 
     # Not in cache, fetch from database
     with get_connection() as connection:
-        print(f"[TRACE] /projects/snapshot got connection after {_time.perf_counter() - _start:.3f}s")
+        _trace(f"[TRACE] /projects/snapshot got connection after {_time.perf_counter() - _start:.3f}s")
         # Reuse shared project/status snapshot for user-scoped requests to avoid
         # re-fetching the heaviest collections on first screen load.
         should_reuse_shared_core = bool(user_id and role and "projects" in includes)
@@ -1840,6 +1894,8 @@ def get_projects_snapshot(
             base_fields: set[str] = {"projects"}
             if "statusUpdates" in includes:
                 base_fields.add("statusUpdates")
+            if "programTracks" in includes:
+                base_fields.add("programTracks")
             base_fields_token = ",".join(sorted(base_fields))
             base_cache_key = f"snapshot:None:None:{base_fields_token}"
             base_snapshot = _projects_snapshot_cache.get(base_cache_key)
@@ -1850,16 +1906,18 @@ def get_projects_snapshot(
             user_fields = set(includes)
             user_fields.discard("projects")
             user_fields.discard("statusUpdates")
+            user_fields.discard("programTracks")
             user_snapshot = _build_projects_snapshot(connection, user_id, role, user_fields)
             user_snapshot["projects"] = base_snapshot.get("projects", [])
+            user_snapshot["programTracks"] = base_snapshot.get("programTracks", [])
             if "statusUpdates" in includes:
                 user_snapshot["statusUpdates"] = base_snapshot.get("statusUpdates", [])
             result = user_snapshot
-        print(f"[TRACE] /projects/snapshot built snapshot after {_time.perf_counter() - _start:.3f}s")
+        _trace(f"[TRACE] /projects/snapshot built snapshot after {_time.perf_counter() - _start:.3f}s")
 
     # Store in cache
     _projects_snapshot_cache.set(cache_key, result)
-    print(f"[TRACE] /projects/snapshot returning after {_time.perf_counter() - _start:.3f}s")
+    _trace(f"[TRACE] /projects/snapshot returning after {_time.perf_counter() - _start:.3f}s")
     return result
 
 
@@ -2107,6 +2165,8 @@ async def review_partner_project_application(
                 or f"Partner-initiated {requested_program_module} program approved by admin.",
                 "partnerId": partner_id,
                 "programModule": requested_program_module,
+                "statusMode": "System",
+                "manualStatus": None,
                 "status": "Planning",
                 "category": requested_program_module,
                 "startDate": generated_start_date,
@@ -2352,7 +2412,7 @@ async def create_message(payload: MessagePayload) -> dict[str, Any]:
                 insert into messages (
                   messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                 )
-                values (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                values (%s, %s, %s, %s, %s, %s, %s, %s)
                 returning messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                 """,
                 (
@@ -2369,6 +2429,7 @@ async def create_message(payload: MessagePayload) -> dict[str, Any]:
             row = cursor.fetchone()
         connection.commit()
 
+    _invalidate_collection_cache(["messages"])
     message = serialize_message_row(row)
     await connection_manager.broadcast_message_event(message)
     return message
@@ -2439,7 +2500,7 @@ async def create_project_group_message(
                   response_to_title,
                   attachments
                 )
-                values (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s::jsonb)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 returning
                   project_group_messages_id,
                   project_id,
@@ -2472,6 +2533,7 @@ async def create_project_group_message(
             row = cursor.fetchone()
         connection.commit()
 
+    _invalidate_collection_cache(["projectGroupMessages"])
     message = serialize_project_group_message_row(row)
     await connection_manager.broadcast_project_group_message_event(project_id, message)
     return message
@@ -2497,6 +2559,7 @@ async def mark_message_read(message_id: str) -> dict[str, Any]:
             row = cursor.fetchone()
         connection.commit()
 
+    _invalidate_collection_cache(["messages"])
     message = serialize_message_row(row)
     await connection_manager.broadcast_message_event(message)
     return message
@@ -2532,13 +2595,10 @@ async def storage_websocket(websocket: WebSocket) -> None:
 # API endpoint that reads one storage key from app storage or hot storage.
 def get_storage_item(key: str) -> dict[str, Any]:
     _require_postgres()
-    if is_hot_storage_key(key):
-        with get_connection() as connection:
-            return {"key": key, "value": get_postgres_hot_storage_collection(connection, key)}
-    if key in SPECIAL_STORAGE_KEYS:
-        with get_connection() as connection:
-            return {"key": key, "value": _get_special_storage_collection(connection, key)}
-    return {"key": key, "value": None}
+    if not is_hot_storage_key(key) and key not in SPECIAL_STORAGE_KEYS:
+        return {"key": key, "value": None}
+    with get_connection() as connection:
+        return {"key": key, "value": _get_cached_collection(connection, key)}
 
 
 @app.post("/storage/batch")
@@ -2551,16 +2611,8 @@ def get_storage_items_batch(payload: StorageBatchPayload) -> dict[str, dict[str,
         return {"items": items}
 
     with get_connection() as connection:
-        hot_keys = [key for key in keys if is_hot_storage_key(key)]
-        special_keys = [key for key in keys if key in SPECIAL_STORAGE_KEYS]
-        cold_keys = [key for key in keys if not is_hot_storage_key(key) and key not in SPECIAL_STORAGE_KEYS]
-
-        for key in hot_keys:
-            items[key] = get_postgres_hot_storage_collection(connection, key)
-        for key in special_keys:
-            items[key] = _get_special_storage_collection(connection, key)
-        for key in cold_keys:
-            items[key] = None
+        for key in keys:
+            items[key] = _get_cached_collection(connection, key)
 
     return {"items": items}
 
@@ -2577,7 +2629,7 @@ async def put_storage_item(key: str, payload: StoragePayload) -> dict[str, str]:
             replace_postgres_hot_storage_collection(connection, key, payload.value)
             connection.commit()
         
-        # Clear cache when data is modified
+        _invalidate_collection_cache([key])
         _projects_snapshot_cache.clear()
         await connection_manager.broadcast_storage_event([key])
         return {"status": "ok"}
@@ -2586,7 +2638,7 @@ async def put_storage_item(key: str, payload: StoragePayload) -> dict[str, str]:
             _replace_special_storage_collection(connection, key, payload.value)
             connection.commit()
         
-        # Clear cache when data is modified
+        _invalidate_collection_cache([key])
         _projects_snapshot_cache.clear()
         await connection_manager.broadcast_storage_event([key])
         return {"status": "ok"}
@@ -2723,7 +2775,7 @@ async def delete_storage_item(key: str) -> dict[str, str]:
             clear_postgres_hot_storage_collection(connection, key)
             connection.commit()
         
-        # Clear cache when data is modified
+        _invalidate_collection_cache([key])
         _projects_snapshot_cache.clear()
         await connection_manager.broadcast_storage_event([key])
         return {"status": "ok"}
@@ -2732,7 +2784,7 @@ async def delete_storage_item(key: str) -> dict[str, str]:
             _clear_special_storage_collection(connection, key)
             connection.commit()
         
-        # Clear cache when data is modified
+        _invalidate_collection_cache([key])
         _projects_snapshot_cache.clear()
         await connection_manager.broadcast_storage_event([key])
         return {"status": "ok"}
@@ -2749,7 +2801,7 @@ async def clear_storage() -> dict[str, str]:
             _clear_special_storage_collection(connection, key)
         connection.commit()
 
-    # Clear cache when all data is cleared
+    _invalidate_collection_cache()
     _projects_snapshot_cache.clear()
     await connection_manager.broadcast_storage_event(list(HOT_STORAGE_TABLES.keys()) + list(SPECIAL_STORAGE_KEYS))
     return {"status": "ok"}
@@ -2769,5 +2821,7 @@ def bootstrap_storage() -> dict[str, str]:
             detail="Demo bootstrap is locked. Set VOLCRE_ALLOW_DEMO_SEED=true only for intentional shared-database seeding.",
         )
     ensure_app_storage_seeded()
+    _invalidate_collection_cache()
+    _projects_snapshot_cache.clear()
     return {"status": "ok"}
 

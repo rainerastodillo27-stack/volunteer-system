@@ -320,6 +320,108 @@ function hasUsableCoordinates(location?: Partial<Project['location']> | null): l
   );
 }
 
+function getProjectLocationAddress(project: Pick<Project, 'location'>): string {
+  return project.location?.address?.trim() || '';
+}
+
+function inferCoordinatesFromRelatedProject(
+  project: Project,
+  projects: Project[]
+): { coordinates: ProjectCoordinates; address?: string } | null {
+  const otherProjects = projects.filter(candidate => candidate.id !== project.id);
+  const normalizedTitle = normalizePlaceValue(project.title);
+
+  if (normalizedTitle) {
+    const sameTitleMatch = otherProjects.find(candidate =>
+      normalizePlaceValue(candidate.title) === normalizedTitle && hasUsableCoordinates(candidate.location)
+    );
+
+    if (sameTitleMatch) {
+      return {
+        coordinates: {
+          latitude: sameTitleMatch.location.latitude,
+          longitude: sameTitleMatch.location.longitude,
+        },
+        address: getProjectLocationAddress(sameTitleMatch),
+      };
+    }
+  }
+
+  if (project.parentProjectId) {
+    const parentMatch = otherProjects.find(candidate =>
+      candidate.id === project.parentProjectId && hasUsableCoordinates(candidate.location)
+    );
+
+    if (parentMatch) {
+      return {
+        coordinates: {
+          latitude: parentMatch.location.latitude,
+          longitude: parentMatch.location.longitude,
+        },
+        address: getProjectLocationAddress(parentMatch),
+      };
+    }
+
+    const siblingMatch = otherProjects.find(candidate =>
+      candidate.parentProjectId === project.parentProjectId && hasUsableCoordinates(candidate.location)
+    );
+
+    if (siblingMatch) {
+      return {
+        coordinates: {
+          latitude: siblingMatch.location.latitude,
+          longitude: siblingMatch.location.longitude,
+        },
+        address: getProjectLocationAddress(siblingMatch),
+      };
+    }
+  }
+
+  const childMatch = otherProjects.find(candidate =>
+    candidate.parentProjectId === project.id && hasUsableCoordinates(candidate.location)
+  );
+
+  if (childMatch) {
+    return {
+      coordinates: {
+        latitude: childMatch.location.latitude,
+        longitude: childMatch.location.longitude,
+      },
+      address: getProjectLocationAddress(childMatch),
+    };
+  }
+
+  const inferredFromAddress = inferCoordinatesFromPlace(getProjectLocationAddress(project), otherProjects);
+  if (inferredFromAddress) {
+    return {
+      coordinates: inferredFromAddress,
+      address: getProjectLocationAddress(project),
+    };
+  }
+
+  return null;
+}
+
+function resolveProjectMapPlacement(project: Project, projects: Project[]): Project {
+  if (hasUsableCoordinates(project.location)) {
+    return project;
+  }
+
+  const inferredPlacement = inferCoordinatesFromRelatedProject(project, projects);
+  if (!inferredPlacement) {
+    return project;
+  }
+
+  return {
+    ...project,
+    location: {
+      address: getProjectLocationAddress(project) || inferredPlacement.address || 'Location to be finalized',
+      latitude: inferredPlacement.coordinates.latitude,
+      longitude: inferredPlacement.coordinates.longitude,
+    },
+  };
+}
+
 export function inferCoordinatesFromPlace(
   place: string,
   projects: Array<Pick<Project, 'location'>> = []
@@ -415,13 +517,10 @@ export function getProjectMarkerColor(
   return getProjectStatusColor(project);
 }
 
-export function getMappedProjects<T extends Pick<Project, 'location'>>(projects: T[]): T[] {
-  return projects.filter(
-    project =>
-      Number.isFinite(project.location?.latitude) &&
-      Number.isFinite(project.location?.longitude) &&
-      !(project.location?.latitude === 0 && project.location?.longitude === 0)
-  );
+export function getMappedProjects(projects: Project[]): Project[] {
+  return projects
+    .map(project => resolveProjectMapPlacement(project, projects))
+    .filter(project => hasUsableCoordinates(project.location));
 }
 
 // Computes an initial map region that keeps all known projects in view.

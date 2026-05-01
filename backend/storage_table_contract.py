@@ -10,6 +10,7 @@ CANONICAL_STORAGE_TABLES = {
     "partners": "partners",
     "projects": "projects",
     "programs": "programs",
+    "programTracks": "program_tracks",
     "events": "events",
     "volunteers": "volunteers",
     "statusUpdates": "status_updates",

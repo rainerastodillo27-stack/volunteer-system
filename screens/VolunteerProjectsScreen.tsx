@@ -12,17 +12,19 @@ import {
 import { Project, VolunteerProjectMatch } from '../models/types';
 import { getRequestErrorMessage, isAbortLikeError } from '../utils/requestErrors';
 
-const PROGRAM_PHOTO_BY_TITLE: Record<string, ImageSourcePropType> = {
-  'Farm to Fork Program': require('../assets/programs/farm-to-fork.jpg'),
-  'Mingo for Nutritional Support': require('../assets/programs/nutrition.jpg'),
-  'Mingo for Emergency Relief': require('../assets/programs/mingo-relief.jpg'),
-  LoveBags: require('../assets/programs/lovebags.jpg'),
-  'School Support': require('../assets/programs/school-support.jpg'),
-  'Artisans of Hope': require('../assets/programs/artisans-of-hope.jpg'),
-  'Project Joseph': require('../assets/programs/project-joseph.jpg'),
-  'Growing Hope': require('../assets/programs/growing-hope.jpg'),
-  'Peter Project': require('../assets/programs/peter-project.jpg'),
+const PROGRAM_IMAGE_BY_CATEGORY: Record<Project['category'], ImageSourcePropType> = {
+  Nutrition: require('../assets/programs/nutrition.jpg'),
+  Education: require('../assets/programs/education.jpg'),
+  Livelihood: require('../assets/programs/livelihood.jpg'),
+  Disaster: require('../assets/programs/mingo-relief.jpg'),
 };
+
+function getProjectImageSource(project: Project): ImageSourcePropType {
+  if (!project.imageHidden && project.imageUrl) {
+    return { uri: project.imageUrl };
+  }
+  return PROGRAM_IMAGE_BY_CATEGORY[project.programModule || project.category];
+}
 
 function formatProjectDateRange(startValue?: string, endValue?: string): string {
   const startDate = startValue ? new Date(startValue) : null;
@@ -108,7 +110,8 @@ export default function VolunteerProjectsScreen({ navigation }: { navigation: an
       <TouchableOpacity
         style={styles.card}
         onPress={() => (navigation as any).navigate('ProjectDetails', { projectId: item.id })}
-      >        <Image source={PROGRAM_PHOTO_BY_TITLE[item.title] || { uri: item.imageUrl }} style={styles.cardImage} />
+      >
+        <Image source={getProjectImageSource(item)} style={styles.cardImage} />
         <View style={styles.cardContent}>
           <Text style={styles.cardTitle}>{item.title}</Text>
           <Text style={styles.cardDate}>{formatProjectDateRange(item.startDate, item.endDate)}</Text>

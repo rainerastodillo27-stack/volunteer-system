@@ -14,17 +14,19 @@ type PartnerProjectsListItem =
   | { type: 'approved'; project: Project }
   | { type: 'program'; project: Project };
 
-const PROGRAM_PHOTO_BY_TITLE: Record<string, ImageSourcePropType> = {
-  'Farm to Fork Program': require('../assets/programs/farm-to-fork.jpg'),
-  'Mingo for Nutritional Support': require('../assets/programs/nutrition.jpg'),
-  'Mingo for Emergency Relief': require('../assets/programs/mingo-relief.jpg'),
-  LoveBags: require('../assets/programs/lovebags.jpg'),
-  'School Support': require('../assets/programs/school-support.jpg'),
-  'Artisans of Hope': require('../assets/programs/artisans-of-hope.jpg'),
-  'Project Joseph': require('../assets/programs/project-joseph.jpg'),
-  'Growing Hope': require('../assets/programs/growing-hope.jpg'),
-  'Peter Project': require('../assets/programs/peter-project.jpg'),
+const PROGRAM_IMAGE_BY_CATEGORY: Record<Project['category'], ImageSourcePropType> = {
+  Nutrition: require('../assets/programs/nutrition.jpg'),
+  Education: require('../assets/programs/education.jpg'),
+  Livelihood: require('../assets/programs/livelihood.jpg'),
+  Disaster: require('../assets/programs/mingo-relief.jpg'),
 };
+
+function getProjectImageSource(project: Project): ImageSourcePropType {
+  if (!project.imageHidden && project.imageUrl) {
+    return { uri: project.imageUrl };
+  }
+  return PROGRAM_IMAGE_BY_CATEGORY[project.programModule || project.category];
+}
 
 export default function PartnerProjectsScreen() {
   const { user } = useAuth();
@@ -61,7 +63,7 @@ export default function PartnerProjectsScreen() {
   const renderApprovedProject = ({ item }: { item: Project }) => {
     return (
       <View style={styles.card}>
-        <Image source={PROGRAM_PHOTO_BY_TITLE[item.title] || { uri: item.imageUrl }} style={styles.cardImage} />
+        <Image source={getProjectImageSource(item)} style={styles.cardImage} />
         <View style={styles.cardContent}>
           <Text style={styles.cardTitle}>{item.title}</Text>
           <Text style={styles.cardDescription} numberOfLines={2}>{item.description}</Text>
@@ -79,7 +81,7 @@ export default function PartnerProjectsScreen() {
     
     return (
       <View style={styles.card}>
-        <Image source={PROGRAM_PHOTO_BY_TITLE[item.title] || { uri: item.imageUrl }} style={styles.cardImage} />
+        <Image source={getProjectImageSource(item)} style={styles.cardImage} />
         <View style={styles.cardContent}>
           <Text style={styles.cardTitle}>{item.title}</Text>
           <Text style={styles.cardDescription} numberOfLines={2}>{item.description}</Text>

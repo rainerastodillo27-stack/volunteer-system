@@ -1222,17 +1222,14 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     try {
       await reviewPartnerProjectApplication(application.id, nextStatus, user.id);
       const reviewedAt = new Date().toISOString();
+      setView('list');
       Alert.alert(
         nextStatus === 'Approved' ? 'Proposal Approved' : 'Proposal Rejected',
         nextStatus === 'Approved'
           ? 'The partner proposal has been updated and the partner will be notified.'
           : 'The partner proposal has been rejected. The partner will be notified.'
       );
-      setSelectedProposalApplication(prev =>
-        prev && prev.id === application.id
-          ? { ...prev, status: nextStatus, reviewedBy: user.id, reviewedAt }
-          : prev
-      );
+      setSelectedProposalApplication(null);
       setProposalChats(current =>
         sortProposalChatItems(
           current.map(item =>

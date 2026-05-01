@@ -88,6 +88,8 @@ function getPlatformOS(): string {
 }
 
 const statuses = ['Planning', 'In Progress', 'On Hold', 'Completed', 'Cancelled'];
+const lifecycleStatusModes = ['System', 'Manual'] as const;
+type LifecycleStatusMode = (typeof lifecycleStatusModes)[number];
 const projectModules: AdvocacyFocus[] = ['Nutrition', 'Education', 'Livelihood', 'Disaster'];
 const featuredProgramModules = ['Livelihood', 'Education', 'Nutrition'] as const;
 
@@ -526,9 +528,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [selectedSchedulerMonth, setSelectedSchedulerMonth] = useState(new Date().getMonth());
   const [isSchedulerMonthHovered, setIsSchedulerMonthHovered] = useState(false);
   const [currentDate, setCurrentDate] = useState(() => new Date());
+  const [statusUpdateMode, setStatusUpdateMode] = useState<LifecycleStatusMode>('System');
   const [newStatus, setNewStatus] = useState<Project['status']>('Planning');
   const [updateDescription, setUpdateDescription] = useState('');
-  const [projectDraft, setProjectDraft] = useState<ProjectDraft>(createEmptyProjectDraft());
+  const [projectDraft, setProjectDraft] = useState<ProjectDraft>(() => {
+    const initialModule = (route.params?.programModule as AdvocacyFocus) || 'Education';
+    return createEmptyProjectDraft('', initialModule);
+  });
   const [projectRegionCode, setProjectRegionCode] = useState('');
   const [projectCityCode, setProjectCityCode] = useState('');
   const [projectBarangayCode, setProjectBarangayCode] = useState('');
@@ -711,7 +717,24 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const loadStatusUpdates = async (projectId: string) => {
     try {
       const updates = await getStatusUpdatesByProject(projectId);
-      setStatusUpdates(updates);
+      const targetProject = projects.find(project => project.id === projectId);
+      if (!targetProject) {
+        setStatusUpdates(updates);
+        return;
+      }
+
+      const derivedSystemStatus = getSystemDerivedProjectStatus(targetProject);
+      const syntheticSystemUpdate: StatusUpdate = {
+        id: `system-status-${projectId}`,
+        projectId,
+        status: derivedSystemStatus,
+        description: 'System-derived lifecycle status based on start and end dates.',
+        source: 'System',
+        updatedBy: 'system',
+        updatedAt: targetProject.updatedAt || targetProject.startDate || new Date().toISOString(),
+      };
+
+      setStatusUpdates([syntheticSystemUpdate, ...updates.filter(update => update.id !== syntheticSystemUpdate.id)]);
     } catch (error) {
       setLoadError({
         title: getRequestErrorTitle(error),
@@ -1071,6 +1094,30 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     return projects.find(project => project.id === selectedProject.id) || selectedProject;
   };
 
+  const getSystemDerivedProjectStatus = (project: Project): Project['status'] =>
+    getProjectDisplayStatus({
+      ...project,
+      statusMode: 'System',
+      manualStatus: undefined,
+    });
+
+  const openStatusUpdateModal = () => {
+    const currentSelectedProject = getCurrentSelectedProject();
+    const nextMode: LifecycleStatusMode = currentSelectedProject?.statusMode === 'Manual' ? 'Manual' : 'System';
+    const derivedSystemStatus = currentSelectedProject
+      ? getSystemDerivedProjectStatus(currentSelectedProject)
+      : 'Planning';
+
+    setStatusUpdateMode(nextMode);
+    setNewStatus(
+      nextMode === 'Manual'
+        ? (currentSelectedProject?.manualStatus || currentSelectedProject?.status || 'Planning')
+        : derivedSystemStatus
+    );
+    setUpdateDescription('');
+    setShowStatusModal(true);
+  };
+
   // Opens the volunteer management route for one volunteer when available.
   const openVolunteerProfile = (volunteerId: string) => {
     navigateToAvailableRoute(navigation, 'Volunteers', { volunteerId }, {
@@ -1108,12 +1155,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       !projectDraft.description.trim() ||
       !projectDraft.startDate.trim() ||
       !projectDraft.endDate.trim() ||
-      !projectDraft.address.trim() ||
-      Number.isNaN(volunteersNeeded) ||
-      Number.isNaN(startDateValue.getTime()) ||
-      Number.isNaN(endDateValue.getTime())
+      !projectDraft.address.trim()
     ) {
-      Alert.alert('Validation Error', 'Fill in all required project fields with valid values.');
+      Alert.alert('Validation Error', 'Fill in all required project fields, including a detailed location/address.');
       return;
     }
 
@@ -1201,7 +1245,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     }
 
     const now = new Date().toISOString();
-    const savedProject: Project = {
+    const inheritedStatusMode: Project['statusMode'] =
+      existingProject?.statusMode === 'Manual' ? 'Manual' : 'System';
+    const inheritedManualStatus: Project['manualStatus'] =
+      inheritedStatusMode === 'Manual'
+        ? (existingProject?.manualStatus || existingProject?.status || 'Planning')
+        : undefined;
+
+    const draftBaseProject: Project = {
       id:
         existingProject?.id ||
         existingEventByTitle?.id ||
@@ -1214,6 +1265,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       programModule: projectDraft.programModule,
       isEvent: projectDraft.isEvent,
       parentProjectId: projectDraft.isEvent ? projectDraft.parentProjectId : undefined,
+      statusMode: inheritedStatusMode,
+      manualStatus: inheritedManualStatus,
       status: projectDraft.status,
       category: getProjectCategoryFromModule(projectDraft.programModule),
       startDate: startDateValue.toISOString(),
@@ -1233,10 +1286,20 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       internalTasks: existingProject?.internalTasks || [],
     };
 
+    const resolvedLifecycleStatus =
+      draftBaseProject.statusMode === 'Manual'
+        ? (draftBaseProject.manualStatus || draftBaseProject.status)
+        : getSystemDerivedProjectStatus(draftBaseProject);
+
+    const savedProject: Project = {
+      ...draftBaseProject,
+      status: resolvedLifecycleStatus,
+    };
+
     try {
       await saveProjectLikeRecord(savedProject);
       await loadProjects();
-      setSelectedProject(savedProject);
+      handleReturnToProjectList();
       closeProjectModal();
       Alert.alert(
         'Saved',
@@ -1249,10 +1312,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             : 'Program created.'
       );
       await Promise.all([
-        loadStatusUpdates(savedProject.id),
         loadAllPartnerApplications(),
-        loadPartnerReportsForProject(savedProject.id),
-        loadVolunteerJoinsForProject(savedProject.id),
       ]);
     } catch (error) {
       Alert.alert(
@@ -1306,24 +1366,42 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     }
 
     const currentSelectedProject = getCurrentSelectedProject();
-    if (!currentSelectedProject || !updateDescription.trim()) {
-      Alert.alert('Error', 'Please enter a description');
+    const trimmedDescription = updateDescription.trim();
+    if (!currentSelectedProject) {
+      Alert.alert('Error', 'Please select a project first.');
+      return;
+    }
+    if (statusUpdateMode === 'Manual' && !trimmedDescription) {
+      Alert.alert('Error', 'Please enter a description for manual overrides.');
       return;
     }
 
     try {
       const now = new Date().toISOString();
+      const derivedSystemStatus = getSystemDerivedProjectStatus(currentSelectedProject);
+      const resolvedStatus =
+        statusUpdateMode === 'Manual'
+          ? newStatus
+          : derivedSystemStatus;
+      const resolvedDescription =
+        trimmedDescription ||
+        (statusUpdateMode === 'System'
+          ? 'System-derived lifecycle status based on start and end dates.'
+          : '');
       const updatedProject = {
         ...currentSelectedProject,
-        status: newStatus,
+        statusMode: statusUpdateMode,
+        manualStatus: statusUpdateMode === 'Manual' ? newStatus : undefined,
+        status: resolvedStatus,
         updatedAt: now,
       };
 
       const statusUpdate: StatusUpdate = {
         id: `status-${Date.now()}`,
         projectId: currentSelectedProject.id,
-        status: newStatus,
-        description: updateDescription,
+        status: resolvedStatus,
+        description: resolvedDescription,
+        source: statusUpdateMode,
         updatedBy: user?.id || '',
         updatedAt: now,
       };
@@ -1331,11 +1409,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       await saveProjectLikeRecord(updatedProject);
       await saveStatusUpdate(statusUpdate);
 
-      Alert.alert('Success', 'Status update added');
       setShowStatusModal(false);
       setUpdateDescription('');
+      setStatusUpdateMode('System');
       setNewStatus('Planning');
       setSelectedProject(updatedProject);
+      Alert.alert('Success', 'Status update added');
       await Promise.all([
         loadStatusUpdates(currentSelectedProject.id),
         loadProjects(),
@@ -2590,8 +2669,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                     <TouchableOpacity
                       style={[styles.applicationButton, styles.approveButton]}
                       onPress={async () => {
-                        await handleReviewPartnerApplication(pendingProposal.id, 'Approved');
                         closeProgramProposalModal();
+                        await handleReviewPartnerApplication(pendingProposal.id, 'Approved');
                       }}
                     >
                       <Text style={styles.applicationButtonText}>Approve</Text>
@@ -2599,8 +2678,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                     <TouchableOpacity
                       style={[styles.applicationButton, styles.rejectButton]}
                       onPress={async () => {
-                        await handleReviewPartnerApplication(pendingProposal.id, 'Rejected');
                         closeProgramProposalModal();
+                        await handleReviewPartnerApplication(pendingProposal.id, 'Rejected');
                       }}
                     >
                       <Text style={styles.applicationButtonText}>Reject</Text>
@@ -3597,7 +3676,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               {isAdmin && (
                 <TouchableOpacity
                   style={styles.addButton}
-                  onPress={() => setShowStatusModal(true)}
+                  onPress={openStatusUpdateModal}
                 >
                   <MaterialIcons name="add" size={20} color="#fff" />
                 </TouchableOpacity>
@@ -3620,7 +3699,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                       ]}
                     />
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.updateStatus}>{update.status}</Text>
+                      <Text style={styles.updateStatus}>
+                        {update.status}
+                        {update.source ? ` (${update.source})` : ''}
+                      </Text>
                       <Text style={styles.updateDescription}>{update.description}</Text>
                       <Text style={styles.updateDate}>
                         {format(new Date(update.updatedAt), 'PPpp')}
@@ -3937,11 +4019,56 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               <TouchableOpacity onPress={() => setShowStatusModal(false)}>
                 <MaterialIcons name="close" size={24} color="#333" />
               </TouchableOpacity>
-              <Text style={styles.modalTitle}>Add Status Update</Text>
+              <Text style={styles.modalTitle}>Update Lifecycle Status</Text>
               <View style={{ width: 24 }} />
             </View>
 
             <ScrollView style={styles.modalContent}>
+              <View style={[styles.formRow, styles.formRowTop]}>
+                <View style={[styles.statusOptions, styles.statusOptionsCard]}>
+                  {lifecycleStatusModes.map(mode => (
+                    <TouchableOpacity
+                      key={mode}
+                      style={[
+                        styles.statusOption,
+                        statusUpdateMode === mode && styles.statusOptionSelected,
+                      ]}
+                      onPress={() => {
+                        setStatusUpdateMode(mode);
+                        if (mode === 'System') {
+                          const currentSelectedProject = getCurrentSelectedProject();
+                          if (currentSelectedProject) {
+                            setNewStatus(getSystemDerivedProjectStatus(currentSelectedProject));
+                          }
+                        }
+                      }}
+                    >
+                      <Text
+                        style={[
+                          styles.statusOptionText,
+                          statusUpdateMode === mode && styles.statusOptionTextSelected,
+                        ]}
+                      >
+                        {mode}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <Text style={[styles.label, styles.labelRight, styles.labelTop]}>Mode</Text>
+              </View>
+
+              {statusUpdateMode === 'System' && (
+                <View style={[styles.formRow, styles.formRowTop]}>
+                  <View style={[styles.statusOptions, styles.statusOptionsCard]}>
+                    <Text style={styles.helperText}>
+                      Status is computed automatically from schedule progress (Planning, In Progress, Completed).
+                    </Text>
+                  </View>
+                  <Text style={[styles.label, styles.labelRight, styles.labelTop]}>System Rule</Text>
+                </View>
+              )}
+
+              {statusUpdateMode === 'Manual' && (
               <View style={[styles.formRow, styles.formRowTop]}>
                 <View style={[styles.statusOptions, styles.statusOptionsCard]}>
                   {statuses.map(status => (
@@ -3966,11 +4093,16 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                 </View>
                 <Text style={[styles.label, styles.labelRight, styles.labelTop]}>New Status</Text>
               </View>
+              )}
 
               <View style={[styles.formRow, styles.formRowTop]}>
                 <TextInput
                   style={[styles.textArea, styles.inputWithLabel]}
-                  placeholder="Describe the status update..."
+                  placeholder={
+                    statusUpdateMode === 'Manual'
+                      ? 'Describe why this manual override is needed...'
+                      : 'Optional note for this system update...'
+                  }
                   placeholderTextColor="#999"
                   multiline
                   numberOfLines={4}

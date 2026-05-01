@@ -498,6 +498,8 @@ export default function VolunteerTasksScreen() {
         );
       });
       void loadVolunteerTasks();
+      setShowFieldOfficerBoard(false);
+      setShowDetails(false);
       Alert.alert('Saved', 'Event task assignment updated.');
     } catch (error) {
       console.error('Error assigning event task:', error);

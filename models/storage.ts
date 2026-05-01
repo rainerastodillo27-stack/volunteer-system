@@ -25,6 +25,7 @@ import {
   Partner,
   Project,
   ProjectInternalTask,
+  ProgramTrack,
   Volunteer,
   Message,
   ProjectGroupMessage,
@@ -67,8 +68,8 @@ const sharedStorageCacheTimestamps = new Map<string, number>();
 let mockDataInitializationPromise: Promise<void> | null = null;
 // Shared reads should fail fast enough to keep the UI responsive when the
 // backend is slow or unavailable.
-const REMOTE_STORAGE_TIMEOUT_MS = 15000;
-const API_HEALTH_TIMEOUT_MS = 4000;
+const REMOTE_STORAGE_TIMEOUT_MS = 30000;
+const API_HEALTH_TIMEOUT_MS = 8000;
 const API_READY_RETRY_MS = 1000;
 const API_READY_MAX_ATTEMPTS = 2;
 const API_READY_CACHE_MS = 5000;
@@ -307,6 +308,7 @@ function connectSharedStorageSocket() {
 
 type ProjectsScreenSnapshot = {
   projects: Project[];
+  programTracks?: ProgramTrack[];
   volunteerProfile: Volunteer | null;
   volunteerMatches?: VolunteerProjectMatch[];
   timeLogs: VolunteerTimeLog[];
@@ -1441,8 +1443,6 @@ export async function getStorageItems(
 }
 
 // Loads the combined data set required by the admin dashboard screen.
-// OPTIMIZED: Selective loading to minimize egress while ensuring all data is available.
-// Core collections fetched immediately, supplemental data loaded on-demand.
 export async function getDashboardSnapshot(): Promise<{
   users: User[];
   partners: Partner[];
@@ -1460,69 +1460,43 @@ export async function getDashboardSnapshot(): Promise<{
   adminPlanningCalendars: AdminPlanningCalendar[];
   adminPlanningItems: AdminPlanningItem[];
 }> {
-  // CORE LOAD: Essential data for dashboard (minimizes egress)
   const coreItems = await getStorageItemsFast([
     STORAGE_KEYS.USERS,
     STORAGE_KEYS.PROJECTS,
-    STORAGE_KEYS.PROGRAMS,
     STORAGE_KEYS.EVENTS,
     STORAGE_KEYS.PARTNERS,
     STORAGE_KEYS.VOLUNTEERS,
     STORAGE_KEYS.STATUS_UPDATES,
-    STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
   ]);
-
-  // LAZY LOAD: Supplemental data on background thread to not block UI
-  // These are fetched but don't block initial render
-  let supplementalItems: Record<string, unknown | null> = {};
-  (async () => {
-    try {
-      supplementalItems = await getStorageItemsFast([
-        STORAGE_KEYS.VOLUNTEER_MATCHES,
-        STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
-        STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
-        STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
-        STORAGE_KEYS.PARTNER_REPORTS,
-        STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS,
-      ]);
-    } catch (error) {
-      console.warn('Supplemental data failed to load (non-blocking):', error);
-    }
-  })();
 
   const partners = ((coreItems[STORAGE_KEYS.PARTNERS] as Partner[] | null) || [])
     .filter(p => !p.contactEmail?.toLowerCase().includes('eduindia.org'));
 
-  const programs = (coreItems[STORAGE_KEYS.PROGRAMS] as Project[] | null) || [];
   const projects = (coreItems[STORAGE_KEYS.PROJECTS] as Project[] | null) || [];
 
   return {
     users: (coreItems[STORAGE_KEYS.USERS] as User[] | null) || [],
     projects: mergeProjectAndEventRecords(
-      programs.length > 0 ? programs : projects,
+      projects,
       coreItems[STORAGE_KEYS.EVENTS] as Project[] | null
     ),
-    programs: (coreItems[STORAGE_KEYS.PROGRAMS] as Project[] | null) || [],
+    programs: [],
     events: (coreItems[STORAGE_KEYS.EVENTS] as Project[] | null) || [],
     partners,
     volunteers: (coreItems[STORAGE_KEYS.VOLUNTEERS] as Volunteer[] | null) || [],
     statusUpdates: (coreItems[STORAGE_KEYS.STATUS_UPDATES] as StatusUpdate[] | null) || [],
-    volunteerMatches: (supplementalItems[STORAGE_KEYS.VOLUNTEER_MATCHES] as VolunteerProjectMatch[] | null) || [],
-    volunteerTimeLogs: (supplementalItems[STORAGE_KEYS.VOLUNTEER_TIME_LOGS] as VolunteerTimeLog[] | null) || [],
-    volunteerProjectJoins: (supplementalItems[STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS] as VolunteerProjectJoinRecord[] | null) || [],
-    partnerProjectApplications: (supplementalItems[STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS] as PartnerProjectApplication[] | null) || [],
-    partnerReports: (supplementalItems[STORAGE_KEYS.PARTNER_REPORTS] as PartnerReport[] | null) || [],
-    publishedImpactReports: (supplementalItems[STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS] as PublishedImpactReport[] | null) || [],
-    adminPlanningCalendars: (coreItems[STORAGE_KEYS.ADMIN_PLANNING_CALENDARS] as AdminPlanningCalendar[] | null) || [],
-    adminPlanningItems: collectPlanningItemsFromCalendars(
-      (coreItems[STORAGE_KEYS.ADMIN_PLANNING_CALENDARS] as AdminPlanningCalendar[] | null) || []
-    ),
+    volunteerMatches: [],
+    volunteerTimeLogs: [],
+    volunteerProjectJoins: [],
+    partnerProjectApplications: [],
+    partnerReports: [],
+    publishedImpactReports: [],
+    adminPlanningCalendars: [],
+    adminPlanningItems: [],
   };
 }
 
 // Loads the combined data set required by the partner dashboard screen.
-// OPTIMIZED: Selective loading to minimize egress while ensuring all data is available.
-// Core collections fetched immediately, supplemental data loaded on-demand.
 export async function getPartnerDashboardSnapshot(): Promise<{
   users: User[];
   partners: Partner[];
@@ -1542,106 +1516,56 @@ export async function getPartnerDashboardSnapshot(): Promise<{
 }> {
   await ensurePartnerOwnershipLinks();
   
-  // CORE LOAD: Essential data for partner dashboard (minimizes egress)
   const coreItems = await getStorageItemsFast([
-    STORAGE_KEYS.USERS,
     STORAGE_KEYS.PROJECTS,
-    STORAGE_KEYS.PROGRAMS,
     STORAGE_KEYS.EVENTS,
     STORAGE_KEYS.PARTNERS,
-    STORAGE_KEYS.VOLUNTEERS,
-    STORAGE_KEYS.STATUS_UPDATES,
     STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
     STORAGE_KEYS.PARTNER_REPORTS,
-    STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS,
-    STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
   ]);
-
-  // LAZY LOAD: Supplemental data on background thread to not block UI
-  let supplementalItems: Record<string, unknown | null> = {};
-  (async () => {
-    try {
-      supplementalItems = await getStorageItemsFast([
-        STORAGE_KEYS.VOLUNTEER_MATCHES,
-        STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
-        STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
-      ]);
-    } catch (error) {
-      console.warn('Supplemental data failed to load (non-blocking):', error);
-    }
-  })();
 
   const partners = ((coreItems[STORAGE_KEYS.PARTNERS] as Partner[] | null) || [])
     .filter(p => !p.contactEmail?.toLowerCase().includes('eduindia.org'));
 
-  const programs = (coreItems[STORAGE_KEYS.PROGRAMS] as Project[] | null) || [];
   const projects = (coreItems[STORAGE_KEYS.PROJECTS] as Project[] | null) || [];
 
   return {
-    users: (coreItems[STORAGE_KEYS.USERS] as User[] | null) || [],
+    users: [],
     projects: mergeProjectAndEventRecords(
-      programs.length > 0 ? programs : projects,
+      projects,
       coreItems[STORAGE_KEYS.EVENTS] as Project[] | null
     ),
-    programs: (coreItems[STORAGE_KEYS.PROGRAMS] as Project[] | null) || [],
+    programs: [],
     events: (coreItems[STORAGE_KEYS.EVENTS] as Project[] | null) || [],
     partners,
-    volunteers: (coreItems[STORAGE_KEYS.VOLUNTEERS] as Volunteer[] | null) || [],
-    statusUpdates: (coreItems[STORAGE_KEYS.STATUS_UPDATES] as StatusUpdate[] | null) || [],
+    volunteers: [],
+    statusUpdates: [],
     partnerApplications:
       (coreItems[STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS] as PartnerProjectApplication[] | null) ||
       [],
     partnerReports: (coreItems[STORAGE_KEYS.PARTNER_REPORTS] as PartnerReport[] | null) || [],
-    publishedImpactReports:
-      (coreItems[STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS] as PublishedImpactReport[] | null) || [],
-    volunteerMatches: (supplementalItems[STORAGE_KEYS.VOLUNTEER_MATCHES] as VolunteerProjectMatch[] | null) || [],
-    volunteerTimeLogs: (supplementalItems[STORAGE_KEYS.VOLUNTEER_TIME_LOGS] as VolunteerTimeLog[] | null) || [],
-    volunteerProjectJoins: (supplementalItems[STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS] as VolunteerProjectJoinRecord[] | null) || [],
-    adminPlanningCalendars: (coreItems[STORAGE_KEYS.ADMIN_PLANNING_CALENDARS] as AdminPlanningCalendar[] | null) || [],
-    adminPlanningItems: collectPlanningItemsFromCalendars(
-      (coreItems[STORAGE_KEYS.ADMIN_PLANNING_CALENDARS] as AdminPlanningCalendar[] | null) || []
-    ),
+    publishedImpactReports: [],
+    volunteerMatches: [],
+    volunteerTimeLogs: [],
+    volunteerProjectJoins: [],
+    adminPlanningCalendars: [],
+    adminPlanningItems: [],
   };
 }
 
 // Loads the shared planning calendar data used by volunteer and partner dashboards.
-// OPTIMIZED: Selective loading to minimize egress usage.
-// Core collections fetched immediately, supplemental data loaded on-demand in background.
 export async function getDashboardTimelineSnapshot(): Promise<DashboardTimelineSnapshot> {
   try {
     const planningCalendars = await ensureAdminPlanningCalendarsSeeded();
-    
-    // CORE LOAD: Timeline critical data only
+
     const coreItems = await getStorageItemsFast([
       STORAGE_KEYS.PROJECTS,
-      STORAGE_KEYS.PROGRAMS,
       STORAGE_KEYS.EVENTS,
       STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
     ]);
-    
-    // LAZY LOAD: Supplemental data in background, non-blocking
-    (async () => {
-      try {
-        await getStorageItemsFast([
-          STORAGE_KEYS.USERS,
-          STORAGE_KEYS.PARTNERS,
-          STORAGE_KEYS.VOLUNTEERS,
-          STORAGE_KEYS.STATUS_UPDATES,
-          STORAGE_KEYS.VOLUNTEER_MATCHES,
-          STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
-          STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
-          STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
-          STORAGE_KEYS.PARTNER_REPORTS,
-          STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS,
-        ]);
-      } catch (error) {
-        console.warn('Supplemental timeline data failed to load (non-blocking):', error);
-      }
-    })();
 
-    const programs = (coreItems[STORAGE_KEYS.PROGRAMS] as Project[] | null) || [];
     const projects = mergeProjectAndEventRecords(
-      programs.length > 0 ? programs : (coreItems[STORAGE_KEYS.PROJECTS] as Project[] | null),
+      coreItems[STORAGE_KEYS.PROJECTS] as Project[] | null,
       coreItems[STORAGE_KEYS.EVENTS] as Project[] | null
     );
     const planningItems = collectPlanningItemsFromCalendars(
@@ -1700,6 +1624,7 @@ export async function getProjectsScreenSnapshot(
     projects: (payload.projects || []).map(project =>
       project?.isEvent ? normalizeEventRecord(project) : normalizeProjectRecord(project)
     ),
+    programTracks: Array.isArray(payload.programTracks) ? payload.programTracks : [],
     volunteerProfile: payload.volunteerProfile || null,
     volunteerMatches: Array.isArray(payload.volunteerMatches) ? payload.volunteerMatches : undefined,
     timeLogs: payload.timeLogs || [],
@@ -2051,6 +1976,18 @@ function normalizeProjectRecord(project: Project): Project {
       ? 'Disaster'
       : (project.category as AdvocacyFocus | undefined)) ||
     'Disaster';
+  const rawStatusMode = String(project.statusMode || '').trim().toLowerCase();
+  const hasExplicitStatusMode = rawStatusMode === 'manual' || rawStatusMode === 'system';
+  const normalizedStatusMode: Project['statusMode'] =
+    rawStatusMode === 'manual' ? 'Manual' : 'System';
+  const legacyManualStatus =
+    !hasExplicitStatusMode && (project.status === 'On Hold' || project.status === 'Cancelled')
+      ? project.status
+      : undefined;
+  const normalizedManualStatus =
+    normalizedStatusMode === 'Manual'
+      ? (project.manualStatus || project.status)
+      : legacyManualStatus;
 
   return {
     ...project,
@@ -2058,6 +1995,8 @@ function normalizeProjectRecord(project: Project): Project {
     imageHidden: Boolean(project.imageHidden),
     category: normalizedCategory,
     programModule: normalizedProgramModule,
+    statusMode: normalizedManualStatus ? 'Manual' : normalizedStatusMode,
+    manualStatus: normalizedManualStatus || undefined,
     parentProjectId: project.parentProjectId?.trim() || undefined,
     joinedUserIds: project.isEvent ? (project.joinedUserIds || []) : [],
     volunteers: project.isEvent ? (project.volunteers || []) : [],
@@ -3099,14 +3038,13 @@ export async function getProject(id: string): Promise<Project | null> {
 
 // Returns all projects and events from shared storage.
 export async function getAllProjects(): Promise<Project[]> {
-  const [programs, projects, events] = await Promise.all([
-    getStorageItemFast<Project[]>(STORAGE_KEYS.PROGRAMS),
+  const [projects, events] = await Promise.all([
     getStorageItemFast<Project[]>(STORAGE_KEYS.PROJECTS),
     getStorageItemFast<Project[]>(STORAGE_KEYS.EVENTS),
   ]);
 
   return mergeProjectAndEventRecords(
-    programs?.length ? programs : projects,
+    projects,
     events
   );
 }

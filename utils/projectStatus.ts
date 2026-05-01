@@ -1,6 +1,8 @@
 import { Project } from '../models/types';
 
 type StatusProjectLike = Pick<Project, 'status' | 'startDate' | 'endDate'>;
+type StatusProjectWithModeLike = StatusProjectLike &
+  Partial<Pick<Project, 'statusMode' | 'manualStatus'>>;
 
 function normalizeProjectStatusValue(status?: Project['status'] | string | null): Project['status'] {
   const normalizedStatus = String(status || '')
@@ -47,7 +49,7 @@ function getComparableDate(value?: string, endOfDay = false): Date | null {
 }
 
 export function getProjectDisplayStatus(
-  projectOrStatus?: StatusProjectLike | Project['status'] | string | null,
+  projectOrStatus?: StatusProjectWithModeLike | Project['status'] | string | null,
   now: Date = new Date()
 ): Project['status'] {
   if (!projectOrStatus) {
@@ -58,16 +60,29 @@ export function getProjectDisplayStatus(
     return normalizeProjectStatusValue(projectOrStatus);
   }
 
-  const manualStatus = normalizeProjectStatusValue(projectOrStatus.status);
-  if (manualStatus === 'Cancelled' || manualStatus === 'On Hold') {
-    return manualStatus;
+  const normalizedStatus = normalizeProjectStatusValue(projectOrStatus.status);
+  const normalizedManualStatus = projectOrStatus.manualStatus
+    ? normalizeProjectStatusValue(projectOrStatus.manualStatus)
+    : null;
+  const normalizedStatusMode = String(projectOrStatus.statusMode || '')
+    .trim()
+    .toLowerCase();
+
+  // Explicit manual overrides always win.
+  if (normalizedStatusMode === 'manual' && normalizedManualStatus) {
+    return normalizedManualStatus;
+  }
+
+  // Backward-compatibility: legacy records used `status` directly for paused/cancelled states.
+  if (!projectOrStatus.statusMode && (normalizedStatus === 'Cancelled' || normalizedStatus === 'On Hold')) {
+    return normalizedStatus;
   }
 
   const startDate = getComparableDate(projectOrStatus.startDate);
   const endDate = getComparableDate(projectOrStatus.endDate || projectOrStatus.startDate, true);
 
   if (!startDate || !endDate) {
-    return manualStatus;
+    return normalizedManualStatus || normalizedStatus;
   }
 
   if (now < startDate) {

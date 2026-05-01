@@ -48,18 +48,6 @@ const PROGRAM_IMAGE_BY_CATEGORY: Partial<Record<Project['category'], ImageSource
   Disaster: require('../assets/programs/mingo-relief.jpg'),
 };
 
-const PROGRAM_PHOTO_BY_TITLE: Record<string, ImageSourcePropType> = {
-  'Farm to Fork Program': require('../assets/programs/farm-to-fork.jpg'),
-  'Mingo for Nutritional Support': require('../assets/programs/nutrition.jpg'),
-  'Mingo for Emergency Relief': require('../assets/programs/mingo-relief.jpg'),
-  LoveBags: require('../assets/programs/lovebags.jpg'),
-  'School Support': require('../assets/programs/school-support.jpg'),
-  'Artisans of Hope': require('../assets/programs/artisans-of-hope.jpg'),
-  'Project Joseph': require('../assets/programs/project-joseph.jpg'),
-  'Growing Hope': require('../assets/programs/growing-hope.jpg'),
-  'Peter Project': require('../assets/programs/peter-project.jpg'),
-};
-
 const FALLBACK_ICON_BY_CATEGORY: Record<Project['category'], keyof typeof MaterialIcons.glyphMap> = {
   Nutrition: 'restaurant',
   Education: 'school',
@@ -251,66 +239,6 @@ function getProjectSuggestion(project: Project, volunteer: Volunteer | null): Re
   };
 }
 
-const PROGRAM_PHOTO_MATCHERS: Array<{
-  matches: (project: Project, normalizedTitle: string) => boolean;
-  source: ImageSourcePropType;
-}> = [
-  {
-    matches: (_project, normalizedTitle) =>
-      normalizedTitle.includes('farm to fork'),
-    source: require('../assets/programs/farm-to-fork.jpg'),
-  },
-  {
-    matches: (_project, normalizedTitle) =>
-      normalizedTitle.includes('emergency') || normalizedTitle.includes('relief'),
-    source: require('../assets/programs/mingo-relief.jpg'),
-  },
-  {
-    matches: (_project, normalizedTitle) =>
-      normalizedTitle.includes('lovebag') || normalizedTitle.includes('school bag'),
-    source: require('../assets/programs/lovebags.jpg'),
-  },
-  {
-    matches: (_project, normalizedTitle) =>
-      normalizedTitle.includes('school'),
-    source: require('../assets/programs/school-support.jpg'),
-  },
-  {
-    matches: (_project, normalizedTitle) =>
-      normalizedTitle.includes('artisans'),
-    source: require('../assets/programs/artisans-of-hope.jpg'),
-  },
-  {
-    matches: (_project, normalizedTitle) =>
-      normalizedTitle.includes('joseph') || normalizedTitle.includes('sewing'),
-    source: require('../assets/programs/project-joseph.jpg'),
-  },
-  {
-    matches: (_project, normalizedTitle) =>
-      normalizedTitle.includes('growing hope') || normalizedTitle.includes('garden'),
-    source: require('../assets/programs/growing-hope.jpg'),
-  },
-  {
-    matches: (_project, normalizedTitle) =>
-      normalizedTitle.includes('peter'),
-    source: require('../assets/programs/peter-project.jpg'),
-  },
-  {
-    matches: (project, normalizedTitle) =>
-      normalizedTitle.includes('mingo') || normalizedTitle.includes('masiglang') || project.category === 'Nutrition',
-    source: require('../assets/programs/nutrition.jpg'),
-  },
-];
-
-function getProgramPhotoSource(project: Project): ImageSourcePropType | undefined {
-  if (PROGRAM_PHOTO_BY_TITLE[project.title]) {
-    return PROGRAM_PHOTO_BY_TITLE[project.title];
-  }
-
-  const normalizedTitle = project.title.trim().toLowerCase();
-  return PROGRAM_PHOTO_MATCHERS.find((entry) => entry.matches(project, normalizedTitle))?.source;
-}
-
 // Returns image candidates for a project card, prioritizing bundled local program photos.
 function getProjectImageSources(project: Project): ImageSourcePropType[] {
   if (project.imageHidden) {
@@ -320,11 +248,6 @@ function getProjectImageSources(project: Project): ImageSourcePropType[] {
   const imageSources: ImageSourcePropType[] = [];
   if (isImageMediaUri(project.imageUrl)) {
     imageSources.push({ uri: project.imageUrl });
-  }
-  const programPhotoSource = getProgramPhotoSource(project);
-
-  if (programPhotoSource) {
-    imageSources.push(programPhotoSource);
   }
 
   if (project.programModule && project.programModule in PROGRAM_IMAGE_BY_CATEGORY) {
@@ -875,18 +798,21 @@ export default function ProjectsScreen({ navigation, route }: any) {
 
   // Groups projects by category
   const projectsByCategory = useMemo<ProjectCategoryGroup[]>(() => {
-    const categories: Project['category'][] = ['Education', 'Livelihood', 'Nutrition', 'Disaster'];
-    const groupedPrograms: Record<Project['category'], Project[]> = {
-      Education: [],
-      Livelihood: [],
-      Nutrition: [],
-      Disaster: [],
-    };
+    const categories = Array.from(
+      new Set(
+        projects
+          .filter(project => !project.isEvent)
+          .map(project => project.category)
+      )
+    );
+    const groupedPrograms = new Map<Project['category'], Project[]>();
+    categories.forEach(category => groupedPrograms.set(category, []));
 
     projects
       .filter(project => !project.isEvent)
       .forEach(project => {
-        if (!groupedPrograms[project.category]) {
+        const categoryProjects = groupedPrograms.get(project.category);
+        if (!categoryProjects) {
           return;
         }
 
@@ -900,16 +826,16 @@ export default function ProjectsScreen({ navigation, route }: any) {
             : programMatches || hasVisibleEvents;
 
         if (shouldInclude) {
-          groupedPrograms[project.category].push(project);
+          categoryProjects.push(project);
         }
       });
     
-    Object.values(groupedPrograms).forEach(group =>
+    groupedPrograms.forEach(group =>
       group.sort((left, right) => new Date(left.startDate).getTime() - new Date(right.startDate).getTime())
     );
 
     return categories.map(category => {
-      const categoryPrograms = groupedPrograms[category];
+      const categoryPrograms = groupedPrograms.get(category) || [];
       const visibleEventCount = categoryPrograms.reduce(
         (count, project) => count + (linkedEventsByProgramId.get(project.id) || []).length,
         0

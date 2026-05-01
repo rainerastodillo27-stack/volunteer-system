@@ -373,10 +373,13 @@ def init_postgres_pool() -> None:
         return  # Connection pooling not available
 
     try:
-        database_url = _get_raw_database_url()
-        if not database_url:
+        candidates = _get_database_url_candidates()
+        if not candidates:
             return
 
+        # Prefer the session pooler candidate if available for the long-lived connection pool
+        database_url = candidates[0]
+        
         # Create connection pool with optimized settings
         _POSTGRES_CONNECTION_POOL = ConnectionPool(
             database_url,
@@ -389,7 +392,7 @@ def init_postgres_pool() -> None:
                 "connect_timeout": _get_connect_timeout(),
             }
         )
-        print(f"[OK] Postgres connection pool initialized (min={_POSTGRES_POOL_MIN_SIZE}, max={_POSTGRES_POOL_MAX_SIZE})")
+        print(f"[OK] Postgres connection pool initialized (min={_POSTGRES_POOL_MIN_SIZE}, max={_POSTGRES_POOL_MAX_SIZE}) using {urlsplit(database_url).hostname}")
     except Exception as exc:
         print(f"[WARN] Failed to initialize Postgres connection pool: {exc}")
         _POSTGRES_CONNECTION_POOL = None

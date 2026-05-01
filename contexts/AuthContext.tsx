@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { Alert } from 'react-native';
 import { User } from '../models/types';
-import { getStorageItemsFast, setCurrentUser as saveCurrentUser } from '../models/storage';
+import { getStorageItemsFast, setCurrentUser as saveCurrentUser, getCurrentUser } from '../models/storage';
 
 // Safe Platform accessor for web environments
 function getPlatformOS(): string {
@@ -83,17 +83,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Always open the portal chooser first for a predictable app entry point.
-    // We intentionally clear any persisted session so launch never skips Login.
-    setLoading(false);
-    setUser(null);
+    // Restore persistent session on mobile for faster startup.
+    // We only clear sessions on web to maintain a predictable entry point for admin tools.
+    const platform = getPlatformOS();
+    
+    if (platform === 'web') {
+      setUser(null);
+      setLoading(false);
+      void saveCurrentUser(null).catch(() => null);
+      return;
+    }
 
-    void saveCurrentUser(null)
-      .catch(error => {
-        console.error('[App] Error clearing persisted session on launch:', error);
-      });
+    // On mobile, try to restore the last active session.
+    const restoreSession = async () => {
+      try {
+        const savedUser = await getCurrentUser();
+        if (savedUser) {
+          setUser(savedUser);
+          void prefetchForUser(savedUser).catch(() => null);
+        }
+      } catch (error) {
+        console.error('[App] Failed to restore session:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
 
-    return () => undefined;
+    void restoreSession();
   }, []);
 
   // Saves the active user in memory and persistent storage after login.

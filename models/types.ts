@@ -100,6 +100,20 @@ export interface AdminPlanningItem {
   updatedAt: string;
 }
 
+// Represents one database-backed program track shown in program management UIs.
+export interface ProgramTrack {
+  id: string;
+  title: string;
+  description?: string;
+  icon?: string;
+  color?: string;
+  imageUrl?: string;
+  sortOrder?: number;
+  isActive?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 // Represents a project or event managed inside the volunteer system.
 export interface Project {
   id: string;
@@ -111,6 +125,8 @@ export interface Project {
   programModule?: AdvocacyFocus;
   isEvent?: boolean;
   parentProjectId?: string;
+  statusMode?: 'System' | 'Manual';
+  manualStatus?: 'Planning' | 'In Progress' | 'On Hold' | 'Completed' | 'Cancelled';
   status: 'Planning' | 'In Progress' | 'On Hold' | 'Completed' | 'Cancelled';
   category: 'Education' | 'Livelihood' | 'Nutrition' | 'Disaster';
   startDate: string;
@@ -136,6 +152,7 @@ export interface StatusUpdate {
   projectId: string;
   status: Project['status'];
   description: string;
+  source?: 'System' | 'Manual';
   updatedBy: string; // User ID
   updatedAt: string;
 }

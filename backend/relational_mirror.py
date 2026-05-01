@@ -1,10 +1,17 @@
 import json
+import os
 from typing import Any
 
 
-JSON_ARRAY = "'[]'::jsonb"
-JSON_OBJECT = "'{}'::jsonb"
+JSON_ARRAY = "'[]'"
+JSON_OBJECT = "'{}'"
 TEXT_ARRAY = "'{}'::text[]"
+TRACE_STORAGE = str(os.getenv("VOLCRE_TRACE_STORAGE", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _trace(message: str) -> None:
+    if TRACE_STORAGE:
+        print(message)
 
 
 RELATIONAL_TABLE_DDL = [
@@ -44,7 +51,7 @@ RELATIONAL_TABLE_DDL = [
       validated_at text,
       credentials_unlocked_at text,
       created_at text,
-      registration_documents jsonb not null default {JSON_ARRAY}
+      registration_documents text not null default {JSON_ARRAY}
     )
     """,
     "create index if not exists partners_owner_user_id_idx on partners (owner_user_id)",
@@ -59,7 +66,7 @@ RELATIONAL_TABLE_DDL = [
       phone text,
       skills text[] not null default {TEXT_ARRAY},
       skills_description text,
-      availability jsonb not null default {JSON_OBJECT},
+      availability text not null default {JSON_OBJECT},
       past_projects text[] not null default {TEXT_ARRAY},
       total_hours_contributed double precision not null default 0,
       rating double precision not null default 0,
@@ -79,7 +86,7 @@ RELATIONAL_TABLE_DDL = [
       hobbies_and_interests text,
       special_skills text,
       video_briefing_url text,
-      affiliations jsonb not null default {JSON_ARRAY},
+      affiliations text not null default {JSON_ARRAY},
       registration_status text,
       reviewed_by text,
       reviewed_at text,
@@ -111,16 +118,18 @@ RELATIONAL_TABLE_DDL = [
       program_module text,
       is_event boolean not null default false,
       parent_project_id text,
+      status_mode text,
+      manual_status text,
       status text,
       category text,
       start_date text,
       end_date text,
-      location jsonb not null default {JSON_OBJECT},
+      location text not null default {JSON_OBJECT},
       volunteers_needed integer not null default 0,
       volunteers text[] not null default {TEXT_ARRAY},
       joined_user_ids text[] not null default {TEXT_ARRAY},
       skills_needed text[] not null default {TEXT_ARRAY},
-      internal_tasks jsonb not null default {JSON_ARRAY},
+      internal_tasks text not null default {JSON_ARRAY},
       created_at text,
       updated_at text
     )
@@ -128,7 +137,9 @@ RELATIONAL_TABLE_DDL = [
     "alter table projects add column if not exists parent_project_id text",
     "alter table projects add column if not exists image_url text",
     "alter table projects add column if not exists image_hidden boolean not null default false",
-    "alter table projects add column if not exists internal_tasks jsonb not null default '[]'::jsonb",
+    "alter table projects add column if not exists status_mode text",
+    "alter table projects add column if not exists manual_status text",
+    "alter table projects add column if not exists internal_tasks text not null default '[]'",
     "alter table projects add column if not exists skills_needed text[] not null default '{}'::text[]",
     "create index if not exists projects_partner_id_idx on projects (partner_id)",
     "create index if not exists projects_parent_project_id_idx on projects (parent_project_id)",
@@ -144,11 +155,13 @@ RELATIONAL_TABLE_DDL = [
       image_url text,
       image_hidden boolean not null default false,
       program_module text,
+      status_mode text,
+      manual_status text,
       status text,
       category text,
       start_date text,
       end_date text,
-      location jsonb not null default {JSON_OBJECT},
+      location text not null default {JSON_OBJECT},
       volunteers_needed integer not null default 0,
       volunteers text[] not null default {TEXT_ARRAY},
       joined_user_ids text[] not null default {TEXT_ARRAY},
@@ -159,6 +172,8 @@ RELATIONAL_TABLE_DDL = [
     """,
     "alter table programs add column if not exists image_url text",
     "alter table programs add column if not exists image_hidden boolean not null default false",
+    "alter table programs add column if not exists status_mode text",
+    "alter table programs add column if not exists manual_status text",
     "alter table programs add column if not exists joined_user_ids text[] not null default '{}'::text[]",
     "alter table programs add column if not exists linked_event_count integer not null default 0",
     "create index if not exists programs_partner_id_idx on programs (partner_id)",
@@ -166,6 +181,22 @@ RELATIONAL_TABLE_DDL = [
     "create index if not exists programs_category_idx on programs (category)",
     "create index if not exists programs_status_idx on programs (status)",
     "create index if not exists programs_created_at_idx on programs (created_at)",
+    f"""
+    create table if not exists program_tracks (
+      id text primary key,
+      title text not null,
+      description text,
+      icon text,
+      color text,
+      image_url text,
+      sort_order integer not null default 0,
+      is_active boolean not null default true,
+      created_at text,
+      updated_at text
+    )
+    """,
+    "create index if not exists program_tracks_sort_order_idx on program_tracks (sort_order)",
+    "create index if not exists program_tracks_is_active_idx on program_tracks (is_active)",
     f"""
     create table if not exists events (
       id text primary key,
@@ -177,16 +208,18 @@ RELATIONAL_TABLE_DDL = [
       program_module text,
       is_event boolean not null default true,
       parent_project_id text,
+      status_mode text,
+      manual_status text,
       status text,
       category text,
       start_date text,
       end_date text,
-      location jsonb not null default {JSON_OBJECT},
+      location text not null default {JSON_OBJECT},
       volunteers_needed integer not null default 0,
       volunteers text[] not null default {TEXT_ARRAY},
       joined_user_ids text[] not null default {TEXT_ARRAY},
       skills_needed text[] not null default {TEXT_ARRAY},
-      internal_tasks jsonb not null default {JSON_ARRAY},
+      internal_tasks text not null default {JSON_ARRAY},
       created_at text,
       updated_at text
     )
@@ -195,7 +228,9 @@ RELATIONAL_TABLE_DDL = [
     "alter table events add column if not exists parent_project_id text",
     "alter table events add column if not exists image_url text",
     "alter table events add column if not exists image_hidden boolean not null default false",
-    "alter table events add column if not exists internal_tasks jsonb not null default '[]'::jsonb",
+    "alter table events add column if not exists status_mode text",
+    "alter table events add column if not exists manual_status text",
+    "alter table events add column if not exists internal_tasks text not null default '[]'",
     "alter table events add column if not exists skills_needed text[] not null default '{}'::text[]",
     "create index if not exists events_partner_id_idx on events (partner_id)",
     "create index if not exists events_parent_project_id_idx on events (parent_project_id)",
@@ -207,11 +242,13 @@ RELATIONAL_TABLE_DDL = [
       id text primary key,
       project_id text,
       status text,
+      source text,
       description text,
       updated_by text,
       updated_at text
     )
     """,
+    "alter table status_updates add column if not exists source text",
     "create index if not exists status_updates_project_id_idx on status_updates (project_id)",
     f"""
     create table if not exists volunteer_matches (
@@ -287,14 +324,14 @@ RELATIONAL_TABLE_DDL = [
       partner_user_id text,
       partner_name text,
       partner_email text,
-      proposal_details jsonb not null default {JSON_OBJECT},
+      proposal_details text not null default {JSON_OBJECT},
       status text,
       requested_at text,
       reviewed_at text,
       reviewed_by text
     )
     """,
-    "alter table partner_project_applications add column if not exists proposal_details jsonb not null default '{}'::jsonb",
+    "alter table partner_project_applications add column if not exists proposal_details text not null default '{}'",
     "create index if not exists partner_project_applications_project_id_idx on partner_project_applications (project_id)",
     "create index if not exists partner_project_applications_partner_user_id_idx on partner_project_applications (partner_user_id)",
     "create index if not exists partner_project_applications_status_idx on partner_project_applications (status)",
@@ -313,8 +350,8 @@ RELATIONAL_TABLE_DDL = [
       report_type text,
       description text,
       impact_count integer not null default 0,
-      metrics jsonb not null default {JSON_OBJECT},
-      attachments jsonb not null default {JSON_ARRAY},
+      metrics text not null default {JSON_OBJECT},
+      attachments text not null default {JSON_ARRAY},
       media_file text,
       created_at text,
       status text,
@@ -338,8 +375,8 @@ RELATIONAL_TABLE_DDL = [
     "alter table reports add column if not exists submitter_name text",
     "alter table reports add column if not exists submitter_role text",
     "alter table reports add column if not exists title text",
-    "alter table reports add column if not exists metrics jsonb not null default '{}'::jsonb",
-    "alter table reports add column if not exists attachments jsonb not null default '[]'::jsonb",
+    "alter table reports add column if not exists metrics text not null default '{}'",
+    "alter table reports add column if not exists attachments text not null default '[]'",
     "alter table reports add column if not exists generated_by text",
     "alter table reports add column if not exists generated_at text",
     "alter table reports add column if not exists report_file text",
@@ -354,12 +391,12 @@ RELATIONAL_TABLE_DDL = [
       name text not null,
       color text not null,
       description text,
-            planning_items jsonb not null default {JSON_ARRAY},
+            planning_items text not null default {JSON_ARRAY},
       created_at text not null,
       updated_at text not null
     )
     """,
-        "alter table admin_planning_calendars add column if not exists planning_items jsonb not null default '[]'::jsonb",
+        "alter table admin_planning_calendars add column if not exists planning_items text not null default '[]'",
     "create index if not exists admin_planning_calendars_created_at_idx on admin_planning_calendars (created_at)",
     "create index if not exists admin_planning_calendars_updated_at_idx on admin_planning_calendars (updated_at)",
     f"""
@@ -420,7 +457,7 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("validated_at", False),
             ("credentials_unlocked_at", False),
             ("created_at", False),
-            ("registration_documents", True),
+            ("registration_documents", False),
         ],
     },
     "volunteers": {
@@ -433,7 +470,7 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("phone", False),
             ("skills", False),
             ("skills_description", False),
-            ("availability", True),
+            ("availability", False),
             ("past_projects", False),
             ("total_hours_contributed", False),
             ("rating", False),
@@ -453,7 +490,7 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("hobbies_and_interests", False),
             ("special_skills", False),
             ("video_briefing_url", False),
-            ("affiliations", True),
+            ("affiliations", False),
             ("registration_status", False),
             ("reviewed_by", False),
             ("reviewed_at", False),
@@ -473,16 +510,18 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("program_module", False),
             ("is_event", False),
             ("parent_project_id", False),
+            ("status_mode", False),
+            ("manual_status", False),
             ("status", False),
             ("category", False),
             ("start_date", False),
             ("end_date", False),
-            ("location", True),
+            ("location", False),
             ("volunteers_needed", False),
             ("volunteers", False),
             ("joined_user_ids", False),
             ("skills_needed", False),
-            ("internal_tasks", True),
+            ("internal_tasks", False),
             ("created_at", False),
             ("updated_at", False),
         ],
@@ -497,15 +536,32 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("image_url", False),
             ("image_hidden", False),
             ("program_module", False),
+            ("status_mode", False),
+            ("manual_status", False),
             ("status", False),
             ("category", False),
             ("start_date", False),
             ("end_date", False),
-            ("location", True),
+            ("location", False),
             ("volunteers_needed", False),
             ("volunteers", False),
             ("joined_user_ids", False),
             ("linked_event_count", False),
+            ("created_at", False),
+            ("updated_at", False),
+        ],
+    },
+    "programTracks": {
+        "table": "program_tracks",
+        "columns": [
+            ("id", False),
+            ("title", False),
+            ("description", False),
+            ("icon", False),
+            ("color", False),
+            ("image_url", False),
+            ("sort_order", False),
+            ("is_active", False),
             ("created_at", False),
             ("updated_at", False),
         ],
@@ -522,16 +578,18 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("program_module", False),
             ("is_event", False),
             ("parent_project_id", False),
+            ("status_mode", False),
+            ("manual_status", False),
             ("status", False),
             ("category", False),
             ("start_date", False),
             ("end_date", False),
-            ("location", True),
+            ("location", False),
             ("volunteers_needed", False),
             ("volunteers", False),
             ("joined_user_ids", False),
             ("skills_needed", False),
-            ("internal_tasks", True),
+            ("internal_tasks", False),
             ("created_at", False),
             ("updated_at", False),
         ],
@@ -542,6 +600,7 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("id", False),
             ("project_id", False),
             ("status", False),
+            ("source", False),
             ("description", False),
             ("updated_by", False),
             ("updated_at", False),
@@ -598,7 +657,7 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("partner_user_id", False),
             ("partner_name", False),
             ("partner_email", False),
-            ("proposal_details", True),
+            ("proposal_details", False),
             ("status", False),
             ("requested_at", False),
             ("reviewed_at", False),
@@ -620,8 +679,8 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("report_type", False),
             ("description", False),
             ("impact_count", False),
-            ("metrics", True),
-            ("attachments", True),
+            ("metrics", False),
+            ("attachments", False),
             ("media_file", False),
             ("created_at", False),
             ("status", False),
@@ -651,7 +710,7 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("name", False),
             ("color", False),
             ("description", False),
-            ("planning_items", True),
+            ("planning_items", False),
             ("created_at", False),
             ("updated_at", False),
         ],
@@ -683,6 +742,8 @@ FIELD_NAME_MAPS: dict[str, dict[str, str]] = {
         "programModule": "program_module",
         "isEvent": "is_event",
         "parentProjectId": "parent_project_id",
+        "statusMode": "status_mode",
+        "manualStatus": "manual_status",
         "startDate": "start_date",
         "endDate": "end_date",
         "volunteersNeeded": "volunteers_needed",
@@ -697,11 +758,20 @@ FIELD_NAME_MAPS: dict[str, dict[str, str]] = {
         "imageUrl": "image_url",
         "imageHidden": "image_hidden",
         "programModule": "program_module",
+        "statusMode": "status_mode",
+        "manualStatus": "manual_status",
         "startDate": "start_date",
         "endDate": "end_date",
         "volunteersNeeded": "volunteers_needed",
         "joinedUserIds": "joined_user_ids",
         "linkedEventCount": "linked_event_count",
+        "createdAt": "created_at",
+        "updatedAt": "updated_at",
+    },
+    "programTracks": {
+        "imageUrl": "image_url",
+        "sortOrder": "sort_order",
+        "isActive": "is_active",
         "createdAt": "created_at",
         "updatedAt": "updated_at",
     },
@@ -712,6 +782,8 @@ FIELD_NAME_MAPS: dict[str, dict[str, str]] = {
         "programModule": "program_module",
         "isEvent": "is_event",
         "parentProjectId": "parent_project_id",
+        "statusMode": "status_mode",
+        "manualStatus": "manual_status",
         "startDate": "start_date",
         "endDate": "end_date",
         "volunteersNeeded": "volunteers_needed",
@@ -722,7 +794,11 @@ FIELD_NAME_MAPS: dict[str, dict[str, str]] = {
         "updatedAt": "updated_at",
     },
     "volunteers": {"userId": "user_id"},
-    "statusUpdates": {"projectId": "project_id", "updatedBy": "updated_by", "updatedAt": "updated_at"},
+    "statusUpdates": {
+        "projectId": "project_id",
+        "updatedBy": "updated_by",
+        "updatedAt": "updated_at",
+    },
     "volunteerMatches": {
         "volunteerId": "volunteer_id",
         "projectId": "project_id",
@@ -808,6 +884,23 @@ def _json_dump(value: Any, default: Any) -> str:
     if value is None:
         value = default
     return json.dumps(value)
+
+
+def _json_load(value: Any, default: Any) -> Any:
+    if value is None:
+        return default
+    if isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, str):
+        raw_value = value.strip()
+        if not raw_value:
+            return default
+        try:
+            parsed = json.loads(raw_value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return default
+        return default if parsed is None else parsed
+    return default
 
 
 def _to_float(value: Any) -> float:
@@ -959,6 +1052,8 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("programModule"),
             bool(item.get("isEvent", False)),
             item.get("parentProjectId"),
+            item.get("statusMode"),
+            item.get("manualStatus"),
             item.get("status"),
             item.get("category"),
             item.get("startDate"),
@@ -982,6 +1077,8 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("imageUrl"),
             bool(item.get("imageHidden", False)),
             item.get("programModule"),
+            item.get("statusMode"),
+            item.get("manualStatus"),
             item.get("status"),
             item.get("category"),
             item.get("startDate"),
@@ -991,6 +1088,20 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             _normalize_string_list(item.get("volunteers")),
             _normalize_string_list(item.get("joinedUserIds")),
             _to_int(item.get("linkedEventCount")),
+            item.get("createdAt"),
+            item.get("updatedAt"),
+        )
+
+    if key == "programTracks":
+        return (
+            item.get("id"),
+            item.get("title") or "",
+            item.get("description"),
+            item.get("icon"),
+            item.get("color"),
+            item.get("imageUrl"),
+            _to_int(item.get("sortOrder")),
+            bool(item.get("isActive", True)),
             item.get("createdAt"),
             item.get("updatedAt"),
         )
@@ -1006,6 +1117,8 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("programModule"),
             bool(item.get("isEvent", True)),
             item.get("parentProjectId"),
+            item.get("statusMode"),
+            item.get("manualStatus"),
             item.get("status"),
             item.get("category"),
             item.get("startDate"),
@@ -1025,6 +1138,7 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("id"),
             item.get("projectId"),
             item.get("status"),
+            item.get("source"),
             item.get("description"),
             item.get("updatedBy"),
             item.get("updatedAt"),
@@ -1198,7 +1312,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "validatedAt": row["validated_at"],
             "credentialsUnlockedAt": row["credentials_unlocked_at"],
             "createdAt": row["created_at"],
-            "registrationDocuments": row["registration_documents"] or [],
+            "registrationDocuments": _json_load(row["registration_documents"], []),
         }
 
     if key == "volunteers":
@@ -1210,7 +1324,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "phone": row["phone"],
             "skills": row["skills"] or [],
             "skillsDescription": row["skills_description"],
-            "availability": row["availability"] or {},
+            "availability": _json_load(row["availability"], {}),
             "pastProjects": row["past_projects"] or [],
             "totalHoursContributed": row["total_hours_contributed"],
             "rating": row["rating"],
@@ -1230,7 +1344,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "hobbiesAndInterests": row["hobbies_and_interests"],
             "specialSkills": row["special_skills"],
             "videoBriefingUrl": row["video_briefing_url"],
-            "affiliations": row["affiliations"] or [],
+            "affiliations": _json_load(row["affiliations"], []),
             "registrationStatus": row["registration_status"],
             "reviewedBy": row["reviewed_by"],
             "reviewedAt": row["reviewed_at"],
@@ -1249,16 +1363,18 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "programModule": row["program_module"],
             "isEvent": bool(row["is_event"]),
             "parentProjectId": row["parent_project_id"],
+            "statusMode": row["status_mode"],
+            "manualStatus": row["manual_status"],
             "status": row["status"],
             "category": row["category"],
             "startDate": row["start_date"],
             "endDate": row["end_date"],
-            "location": row["location"] or {},
+            "location": _json_load(row["location"], {}),
             "volunteersNeeded": row["volunteers_needed"],
             "volunteers": row["volunteers"] or [],
             "joinedUserIds": row["joined_user_ids"] or [],
             "skillsNeeded": row["skills_needed"] or [],
-            "internalTasks": row["internal_tasks"] or [],
+            "internalTasks": _json_load(row["internal_tasks"], []),
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
         }
@@ -1272,15 +1388,31 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "imageUrl": row["image_url"],
             "imageHidden": bool(row["image_hidden"]),
             "programModule": row["program_module"],
+            "statusMode": row["status_mode"],
+            "manualStatus": row["manual_status"],
             "status": row["status"],
             "category": row["category"],
             "startDate": row["start_date"],
             "endDate": row["end_date"],
-            "location": row["location"] or {},
+            "location": _json_load(row["location"], {}),
             "volunteersNeeded": row["volunteers_needed"],
             "volunteers": row["volunteers"] or [],
             "joinedUserIds": row["joined_user_ids"] or [],
             "linkedEventCount": row["linked_event_count"],
+            "createdAt": row["created_at"],
+            "updatedAt": row["updated_at"],
+        }
+
+    if key == "programTracks":
+        return {
+            "id": row["id"],
+            "title": row["title"],
+            "description": row["description"],
+            "icon": row["icon"],
+            "color": row["color"],
+            "imageUrl": row["image_url"],
+            "sortOrder": row["sort_order"],
+            "isActive": bool(row["is_active"]),
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
         }
@@ -1296,16 +1428,18 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "programModule": row["program_module"],
             "isEvent": True,
             "parentProjectId": row["parent_project_id"],
+            "statusMode": row["status_mode"],
+            "manualStatus": row["manual_status"],
             "status": row["status"],
             "category": row["category"],
             "startDate": row["start_date"],
             "endDate": row["end_date"],
-            "location": row["location"] or {},
+            "location": _json_load(row["location"], {}),
             "volunteersNeeded": row["volunteers_needed"],
             "volunteers": row["volunteers"] or [],
             "joinedUserIds": row["joined_user_ids"] or [],
             "skillsNeeded": row["skills_needed"] or [],
-            "internalTasks": row["internal_tasks"] or [],
+            "internalTasks": _json_load(row["internal_tasks"], []),
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
         }
@@ -1315,6 +1449,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "id": row["id"],
             "projectId": row["project_id"],
             "status": row["status"],
+            "source": row["source"],
             "description": row["description"],
             "updatedBy": row["updated_by"],
             "updatedAt": row["updated_at"],
@@ -1367,7 +1502,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "partnerUserId": row["partner_user_id"],
             "partnerName": row["partner_name"],
             "partnerEmail": row["partner_email"],
-            "proposalDetails": row["proposal_details"] or {},
+            "proposalDetails": _json_load(row["proposal_details"], {}),
             "status": row["status"],
             "requestedAt": row["requested_at"],
             "reviewedAt": row["reviewed_at"],
@@ -1388,8 +1523,8 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "reportType": row["report_type"],
             "description": row["description"],
             "impactCount": row["impact_count"],
-            "metrics": row["metrics"] or {},
-            "attachments": row["attachments"] or [],
+            "metrics": _json_load(row["metrics"], {}),
+            "attachments": _json_load(row["attachments"], []),
             "mediaFile": row["media_file"],
             "createdAt": row["created_at"],
             "status": row["status"],
@@ -1417,7 +1552,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "name": row["name"],
             "color": row["color"],
             "description": row["description"],
-            "planningItems": row["planning_items"] or [],
+            "planningItems": _json_load(row["planning_items"], []),
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
         }
@@ -1441,7 +1576,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
     raise KeyError(f"Unsupported relational mirror key: {key}")
 
 
-def refresh_program_rows_from_projects(connection: Any) -> None:
+def refresh_program_rows_from_tracks(connection: Any) -> None:
     with connection.cursor() as cursor:
         cursor.execute("delete from programs")
         cursor.execute(
@@ -1454,6 +1589,8 @@ def refresh_program_rows_from_projects(connection: Any) -> None:
               image_url,
               image_hidden,
               program_module,
+              status_mode,
+              manual_status,
               status,
               category,
               start_date,
@@ -1467,30 +1604,69 @@ def refresh_program_rows_from_projects(connection: Any) -> None:
               updated_at
             )
             select
-              p.id,
-              p.title,
-              p.description,
-              p.partner_id,
-              p.image_url,
-              coalesce(p.image_hidden, false),
-              p.program_module,
-              p.status,
-              p.category,
-              p.start_date,
-              p.end_date,
-              coalesce(p.location, '{}'::jsonb),
-              coalesce(p.volunteers_needed, 0),
-              coalesce(p.volunteers, '{}'::text[]),
-              coalesce(p.joined_user_ids, '{}'::text[]),
-              (
-                select count(*)
-                from events e
-                where coalesce(e.parent_project_id, '') = p.id
-              ),
-              p.created_at,
-              p.updated_at
-            from projects p
-            where coalesce(p.is_event, false) = false
+              t.id,
+              t.title,
+              t.description,
+              '' as partner_id,
+              nullif(t.image_url, '') as image_url,
+              false as image_hidden,
+              t.id as program_module,
+              'System' as status_mode,
+              null::text as manual_status,
+              'Planning' as status,
+              t.id as category,
+              null::text as start_date,
+              null::text as end_date,
+              '{}'::text as location,
+              0 as volunteers_needed,
+              '{}'::text[] as volunteers,
+              '{}'::text[] as joined_user_ids,
+              0 as linked_event_count,
+              coalesce(t.created_at, now()::text),
+              coalesce(t.updated_at, now()::text)
+            from program_tracks t
+            where coalesce(t.is_active, true) = true
+              and t.id in ('Nutrition', 'Education', 'Livelihood')
+            order by coalesce(t.sort_order, 0), t.id
+            """
+        )
+
+
+def ensure_default_program_tracks(connection: Any) -> None:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            insert into program_tracks (
+              id,
+              title,
+              description,
+              icon,
+              color,
+              image_url,
+              sort_order,
+              is_active,
+              created_at,
+              updated_at
+            )
+            values
+              ('Nutrition', 'Nutrition', 'Food security and health programs for children and families.', 'restaurant', '#dc2626', '', 10, true, now()::text, now()::text),
+              ('Education', 'Education', 'Learning, literacy, and skill development for students.', 'school', '#2563eb', '', 20, true, now()::text, now()::text),
+              ('Livelihood', 'Livelihood', 'Economic empowerment and vocational training programs.', 'work', '#7c3aed', '', 30, true, now()::text, now()::text)
+            on conflict (id) do update set
+              title = excluded.title,
+              description = excluded.description,
+              icon = excluded.icon,
+              color = excluded.color,
+              image_url = excluded.image_url,
+              sort_order = excluded.sort_order,
+              is_active = true,
+              updated_at = excluded.updated_at
+            """
+        )
+        cursor.execute(
+            """
+            delete from program_tracks
+            where id not in ('Nutrition', 'Education', 'Livelihood')
             """
         )
 
@@ -1527,7 +1703,7 @@ def migrate_admin_planning_items_into_calendars(connection: Any) -> None:
                         calendar_rows as (
                             select
                                 c.id,
-                                coalesce(c.planning_items, '[]'::jsonb) as planning_items,
+                                coalesce(c.planning_items, '[]')::jsonb as planning_items,
                                 c.name,
                                 c.color,
                                 c.description,
@@ -1536,7 +1712,9 @@ def migrate_admin_planning_items_into_calendars(connection: Any) -> None:
                             from admin_planning_calendars c
                         )
                         update admin_planning_calendars c
-                        set planning_items = coalesce(c.planning_items, '[]'::jsonb) || coalesce(li.planning_items, '[]'::jsonb)
+                        set planning_items = (
+                            coalesce(c.planning_items, '[]')::jsonb || coalesce(li.planning_items, '[]'::jsonb)
+                        )::text
                         from legacy_items li
                         where c.id = li.calendar_id
                         """
@@ -1557,7 +1735,7 @@ def migrate_admin_planning_items_into_calendars(connection: Any) -> None:
                             li.calendar_id,
                             '#0F766E',
                             'Migrated planning lane.',
-                            li.planning_items,
+                            li.planning_items::text,
                             li.created_at,
                             li.updated_at
                         from (
@@ -1597,13 +1775,20 @@ def migrate_admin_planning_items_into_calendars(connection: Any) -> None:
 def ensure_relational_mirror_tables(connection: Any) -> None:
     import time as _time
     with connection.cursor() as cursor:
+        # Increase statement timeout for DDL operations as they can be slow on remote databases.
+        try:
+            cursor.execute("SET statement_timeout = '300s'")
+        except Exception:
+            pass
+
         for idx, statement in enumerate(RELATIONAL_TABLE_DDL):
             _t0 = _time.perf_counter()
-            print(f"[TRACE] ensure_relational_mirror_tables: executing DDL #{idx} (len={len(statement):d})")
+            _trace(f"[TRACE] ensure_relational_mirror_tables: executing DDL #{idx} (len={len(statement):d})")
             cursor.execute(statement)
-            print(f"[TRACE] ensure_relational_mirror_tables: finished DDL #{idx} in {_time.perf_counter() - _t0:.3f}s")
+            _trace(f"[TRACE] ensure_relational_mirror_tables: finished DDL #{idx} in {_time.perf_counter() - _t0:.3f}s")
     migrate_admin_planning_items_into_calendars(connection)
-    refresh_program_rows_from_projects(connection)
+    ensure_default_program_tracks(connection)
+    refresh_program_rows_from_tracks(connection)
 
 
 def sync_relational_mirror_collection(connection: Any, key: str, items: list[Any]) -> None:
@@ -1614,7 +1799,7 @@ def sync_relational_mirror_collection(connection: Any, key: str, items: list[Any
     normalized_items = [item for item in items if isinstance(item, dict) and item.get("id")]
     rows = [_normalize_row(key, item) for item in normalized_items]
     column_names = [column_name for column_name, _ in spec["columns"]]
-    placeholders = [("%s::jsonb" if is_json else "%s") for _, is_json in spec["columns"]]
+    placeholders = ["%s" for _ in spec["columns"]]
     filter_clause = _row_filter_clause(key)
 
     with connection.cursor() as cursor:
@@ -1630,8 +1815,8 @@ def sync_relational_mirror_collection(connection: Any, key: str, items: list[Any
                 """,
                 rows,
             )
-    if key in {"projects", "events"}:
-        refresh_program_rows_from_projects(connection)
+    if key in {"programTracks", "projects", "events"}:
+        refresh_program_rows_from_tracks(connection)
 
 
 def sync_all_relational_mirror_tables(connection: Any, collections: dict[str, list[Any]]) -> None:
@@ -1660,8 +1845,8 @@ def get_relational_collection(connection: Any, key: str) -> list[dict[str, Any]]
             query += f" where {filter_clause}"
         query += " order by id asc"
         try:
-            print(f"[TRACE] get_relational_collection: executing query on {spec['table']}")
-            print(f"[TRACE] get_relational_collection: query length: {len(query)}")
+            _trace(f"[TRACE] get_relational_collection: executing query on {spec['table']}")
+            _trace(f"[TRACE] get_relational_collection: query length: {len(query)}")
             cursor.execute(query)
         except (UndefinedColumn, UndefinedTable) as exc:
             # Some environments may have an older DB schema (or missing tables)
@@ -1670,15 +1855,15 @@ def get_relational_collection(connection: Any, key: str) -> list[dict[str, Any]]
             # the request). Instead, log the issue and return an empty payload so
             # callers can continue to operate with degraded data.
             connection.rollback()
-            print(f"[WARN] get_relational_collection: schema mismatch for {spec['table']}: {exc}; returning empty list")
+            _trace(f"[WARN] get_relational_collection: schema mismatch for {spec['table']}: {exc}; returning empty list")
             return []
         except Exception as exc:
             # Handle query timeouts and other errors gracefully
             connection.rollback()
-            print(f"[WARN] get_relational_collection: query error for {spec['table']}: {type(exc).__name__}: {exc}; returning empty list")
+            _trace(f"[WARN] get_relational_collection: query error for {spec['table']}: {type(exc).__name__}: {exc}; returning empty list")
             return []
         rows = cursor.fetchall()
-        print(f"[TRACE] get_relational_collection: fetched {len(rows)} rows from {spec['table']}")
+        _trace(f"[TRACE] get_relational_collection: fetched {len(rows)} rows from {spec['table']}")
     return [_row_to_item(key, row) for row in rows]
 
 
@@ -1770,7 +1955,7 @@ def upsert_relational_item(connection: Any, key: str, item: dict[str, Any]) -> d
 
     row = _normalize_row(key, item)
     column_names = [column_name for column_name, _ in spec["columns"]]
-    placeholders = [("%s::jsonb" if is_json else "%s") for _, is_json in spec["columns"]]
+    placeholders = ["%s" for _ in spec["columns"]]
     update_assignments = [f"{column_name} = excluded.{column_name}" for column_name in column_names if column_name != "id"]
 
     with connection.cursor() as cursor:
@@ -1783,7 +1968,7 @@ def upsert_relational_item(connection: Any, key: str, item: dict[str, Any]) -> d
             """,
             row,
         )
-    if key in {"projects", "events"}:
-        refresh_program_rows_from_projects(connection)
+    if key in {"programTracks", "projects", "events"}:
+        refresh_program_rows_from_tracks(connection)
 
     return item

@@ -232,8 +232,8 @@ export default function LoginScreen() {
   const isWeb = getPlatformOS() === 'web';
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [initialized, setInitialized] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [initialized, setInitialized] = useState(true);
   const [loginError, setLoginError] = useState<{ title: string; message: string } | null>(null);
   const [showSignupModal, setShowSignupModal] = useState(false);
   const [signupStep, setSignupStep] = useState<SignupStep>('role');
@@ -378,7 +378,7 @@ export default function LoginScreen() {
 
     const schedule = setTimeout(() => {
       void checkBackend();
-    }, 900);
+    }, 100);
     return () => {
       cancelled = true;
       clearTimeout(schedule);

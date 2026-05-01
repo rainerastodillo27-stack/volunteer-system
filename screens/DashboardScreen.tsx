@@ -23,6 +23,7 @@ import {
 import type { Partner, Project, Volunteer } from '../models/types';
 import { useAuth } from '../contexts/AuthContext';
 import { navigateToAvailableRoute } from '../utils/navigation';
+import { getMappedProjects } from '../utils/projectMap';
 import { getProjectDisplayStatus } from '../utils/projectStatus';
 import VolunteerImpactMap from '../components/VolunteerImpactMap';
 import { getRequestErrorMessage } from '../utils/requestErrors';
@@ -337,12 +338,7 @@ export default function DashboardScreen({ navigation }: any) {
   );
 
   const mapProjects = useMemo(
-    () =>
-      projectsData.filter(
-        project =>
-          Number.isFinite(project.location?.latitude) &&
-          Number.isFinite(project.location?.longitude)
-      ),
+    () => getMappedProjects(projectsData),
     [projectsData]
   );
 

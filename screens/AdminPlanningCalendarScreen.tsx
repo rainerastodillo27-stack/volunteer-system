@@ -547,13 +547,13 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
       };
 
       await saveAdminPlanningCalendar(savedCalendar);
+      setShowCalendarModal(false);
       setSelectedCalendarIds(currentSelection => {
         if (currentSelection.includes(savedCalendar.id)) {
           return currentSelection;
         }
         return [...currentSelection, savedCalendar.id];
       });
-      setShowCalendarModal(false);
       await loadPlannerData();
       Alert.alert('Saved', calendarDraft.id ? 'Calendar updated.' : 'Calendar created.');
     } catch (error) {
