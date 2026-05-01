@@ -47,7 +47,13 @@ async function prefetchForUser(user: User | null): Promise<void> {
   if (!user?.role) {
     return;
   }
-  const keys = PREFETCH_KEYS_BY_ROLE[user.role];
+  
+  const platform = getPlatformOS();
+  // On web, be extremely conservative with prefetches to ensure fast boot.
+  const keys = platform === 'web' 
+    ? ['statusUpdates'] // Only fetch status on web initially
+    : PREFETCH_KEYS_BY_ROLE[user.role];
+    
   if (!keys) {
     return;
   }

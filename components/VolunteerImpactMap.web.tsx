@@ -261,7 +261,7 @@ export default function VolunteerImpactMap({
 
   const displayProjects =
     selectedMapStyleKey === 'admin-overview'
-      ? mappedProjects
+      ? mappedProjects.filter(project => project.isEvent)
       : selectedMapStyleKey === 'volunteer-view'
       ? hasVolunteerScope
         ? selectedAccountOption?.mappedProjects || []

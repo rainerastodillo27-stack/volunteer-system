@@ -558,7 +558,7 @@ export default function MappingScreen({ navigation }: any) {
                 (snapshot.volunteerProfile && (project.volunteers || []).includes(snapshot.volunteerProfile.id)) ||
                 (snapshot.volunteerProfile && (project.internalTasks || []).some(task => task.assignedVolunteerId === snapshot.volunteerProfile?.id))
             )
-          : snapshot.projects;
+          : snapshot.projects.filter(project => project.isEvent);
 
       setProjects(visibleProjects);
       setVolunteers([]);

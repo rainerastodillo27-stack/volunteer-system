@@ -102,29 +102,26 @@ export default function MappingScreen({ navigation }: any) {
                 (snapshot.volunteerProfile && (project.volunteers || []).includes(snapshot.volunteerProfile.id)) ||
                 (snapshot.volunteerProfile && (project.internalTasks || []).some(task => task.assignedVolunteerId === snapshot.volunteerProfile?.id))
             )
-          : snapshot.projects;
+          : snapshot.projects.filter(project => project.isEvent);
 
       const visibleProjectIds = new Set(visibleProjects.map(project => project.id));
 
       setProjects(visibleProjects);
-      setPartnerReports([]);
-      setVolunteers([]);
-      setPartners([]);
-      // Deferred loads for reports, volunteers and partners
-      setTimeout(async () => {
-        try {
-          const [allReports, allVolunteers, allPartners] = await Promise.all([
-            getAllPartnerReports(),
-            getAllVolunteers(),
-            getAllPartners(),
-          ]);
-          setPartnerReports(allReports.filter(report => visibleProjectIds.has(report.projectId)));
-          setVolunteers(allVolunteers);
-          setPartners(allPartners);
-        } catch (err) {
-          // ignore — keep map responsive
-        }
-      }, 50);
+      
+      // Load secondary data immediately without the artificial delay
+      try {
+        const [allReports, allVolunteers, allPartners] = await Promise.all([
+          getAllPartnerReports(),
+          getAllVolunteers(),
+          getAllPartners(),
+        ]);
+        setPartnerReports(allReports.filter(report => visibleProjectIds.has(report.projectId)));
+        setVolunteers(allVolunteers);
+        setPartners(allPartners);
+      } catch (err) {
+        // ignore — keep map responsive
+      }
+      
       setLoadError(null);
       setLoading(false);
     } catch (error) {

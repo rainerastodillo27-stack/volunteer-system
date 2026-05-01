@@ -395,7 +395,7 @@ export default function VolunteerImpactMap({
   );
   const displayProjects = useMemo(() => {
     if (selectedMapStyleKey === 'admin-overview') {
-      return mappedProjects;
+      return mappedProjects.filter(project => project.isEvent);
     }
 
     if (selectedMapStyleKey === 'volunteer-view') {
