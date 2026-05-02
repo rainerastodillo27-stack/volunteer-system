@@ -88,6 +88,7 @@ class TTLCache:
 # Cache for projects snapshot.
 # A longer TTL avoids frequent cold rebuilds; cache is explicitly cleared on writes.
 _projects_snapshot_cache = TTLCache(ttl_seconds=45)
+_projects_snapshot_lock = threading.Lock()
 _storage_collection_cache = TTLCache(ttl_seconds=20)
 _DEFAULT_SNAPSHOT_FIELDS = {
     "projects",
@@ -1112,6 +1113,7 @@ def _build_projects_snapshot(
     raw_events: list[dict[str, Any]] = []
     raw_status_updates: list[dict[str, Any]] = []
     raw_program_tracks: list[dict[str, Any]] = []
+    raw_programs_table: list[dict[str, Any]] = []
 
     # CORE LOAD: Only fetch the collections requested by the screen.
     if include_projects or include_join_records:
@@ -1120,7 +1122,17 @@ def _build_projects_snapshot(
     if include_status_updates:
         raw_status_updates = _get_cached_collection(connection, "statusUpdates")
     if include_program_tracks:
-        raw_program_tracks = _get_cached_collection(connection, "programTracks")
+        raw_program_tracks = get_postgres_hot_storage_collection(connection, "programTracks")
+        raw_programs_table = get_postgres_hot_storage_collection(connection, "programs")
+        
+        # Merge programs table into program tracks to support the new program creation workflow
+        # while maintaining compatibility with legacy tracks.
+        track_ids = {str(t.get("id") or "").strip() for t in raw_program_tracks}
+        for p in raw_programs_table:
+            p_id = str(p.get("id") or "").strip()
+            if p_id and p_id not in track_ids:
+                raw_program_tracks.append(p)
+                track_ids.add(p_id)
 
     _trace(f"[TRACE] _build_projects_snapshot: read core collections after {_time.perf_counter() - t0:.3f}s")
     t1 = _time.perf_counter()
@@ -1941,48 +1953,54 @@ def get_projects_snapshot(
     # Create cache key from parameters
     cache_key = f"snapshot:{user_id}:{role}:{normalized_fields_token}"
 
-    # Check cache first
+    # Check cache first (outside lock for fast path)
     cached_result = _projects_snapshot_cache.get(cache_key)
     if cached_result is not None:
         return cached_result
 
-    # Not in cache, fetch from database
-    with get_connection() as connection:
-        _trace(f"[TRACE] /projects/snapshot got connection after {_time.perf_counter() - _start:.3f}s")
-        # Reuse shared project/status snapshot for user-scoped requests to avoid
-        # re-fetching the heaviest collections on first screen load.
-        should_reuse_shared_core = bool(user_id and role and "projects" in includes)
-        if not should_reuse_shared_core:
-            result = _build_projects_snapshot(connection, user_id, role, normalized_fields)
-        else:
-            base_fields: set[str] = {"projects"}
-            if "statusUpdates" in includes:
-                base_fields.add("statusUpdates")
-            if "programTracks" in includes:
-                base_fields.add("programTracks")
-            base_fields_token = ",".join(sorted(base_fields))
-            base_cache_key = f"snapshot:None:None:{base_fields_token}"
-            base_snapshot = _projects_snapshot_cache.get(base_cache_key)
-            if base_snapshot is None:
-                base_snapshot = _build_projects_snapshot(connection, None, None, base_fields)
-                _projects_snapshot_cache.set(base_cache_key, base_snapshot)
+    with _projects_snapshot_lock:
+        # Check again inside lock
+        cached_result = _projects_snapshot_cache.get(cache_key)
+        if cached_result is not None:
+            return cached_result
 
-            user_fields = set(includes)
-            user_fields.discard("projects")
-            user_fields.discard("statusUpdates")
-            user_fields.discard("programTracks")
-            user_snapshot = _build_projects_snapshot(connection, user_id, role, user_fields)
-            user_snapshot["projects"] = base_snapshot.get("projects", [])
-            user_snapshot["programTracks"] = base_snapshot.get("programTracks", [])
-            if "statusUpdates" in includes:
-                user_snapshot["statusUpdates"] = base_snapshot.get("statusUpdates", [])
-            result = user_snapshot
-        _trace(f"[TRACE] /projects/snapshot built snapshot after {_time.perf_counter() - _start:.3f}s")
-
-    # Store in cache
-    _projects_snapshot_cache.set(cache_key, result)
-    _trace(f"[TRACE] /projects/snapshot returning after {_time.perf_counter() - _start:.3f}s")
-    return result
+        # Not in cache, fetch from database
+        with get_connection() as connection:
+            _trace(f"[TRACE] /projects/snapshot got connection after {_time.perf_counter() - _start:.3f}s")
+            # Reuse shared project/status snapshot for user-scoped requests to avoid
+            # re-fetching the heaviest collections on first screen load.
+            should_reuse_shared_core = bool(user_id and role and "projects" in includes)
+            if not should_reuse_shared_core:
+                result = _build_projects_snapshot(connection, user_id, role, normalized_fields)
+            else:
+                base_fields: set[str] = {"projects"}
+                if "statusUpdates" in includes:
+                    base_fields.add("statusUpdates")
+                if "programTracks" in includes:
+                    base_fields.add("programTracks")
+                base_fields_token = ",".join(sorted(base_fields))
+                base_cache_key = f"snapshot:None:None:{base_fields_token}"
+                base_snapshot = _projects_snapshot_cache.get(base_cache_key)
+                if base_snapshot is None:
+                    base_snapshot = _build_projects_snapshot(connection, None, None, base_fields)
+                    _projects_snapshot_cache.set(base_cache_key, base_snapshot)
+    
+                user_fields = set(includes)
+                user_fields.discard("projects")
+                user_fields.discard("statusUpdates")
+                user_fields.discard("programTracks")
+                user_snapshot = _build_projects_snapshot(connection, user_id, role, user_fields)
+                user_snapshot["projects"] = base_snapshot.get("projects", [])
+                user_snapshot["programTracks"] = base_snapshot.get("programTracks", [])
+                if "statusUpdates" in includes:
+                    user_snapshot["statusUpdates"] = base_snapshot.get("statusUpdates", [])
+                result = user_snapshot
+            _trace(f"[TRACE] /projects/snapshot built snapshot after {_time.perf_counter() - _start:.3f}s")
+    
+        # Store in cache
+        _projects_snapshot_cache.set(cache_key, result)
+        _trace(f"[TRACE] /projects/snapshot returning after {_time.perf_counter() - _start:.3f}s")
+        return result
 
 
 @app.get("/volunteers/by-user/{user_id}")

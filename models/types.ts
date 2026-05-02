@@ -123,6 +123,7 @@ export interface Project {
   imageUrl?: string;
   imageHidden?: boolean;
   programModule?: AdvocacyFocus;
+  program_id?: string;
   isEvent?: boolean;
   parentProjectId?: string;
   statusMode?: 'System' | 'Manual';

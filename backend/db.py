@@ -1,5 +1,6 @@
 import os
 import time
+import contextlib
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -396,46 +397,44 @@ def init_postgres_pool() -> None:
 
 
 # Returns a connection from the pool if available, otherwise creates a direct connection
+@contextlib.contextmanager
 def get_pooled_postgres_connection():
     """Get a database connection from the pool if available, otherwise create a direct connection."""
     if _POSTGRES_CONNECTION_POOL is not None:
         try:
-            return _POSTGRES_CONNECTION_POOL.getconn()
+            # psycopg_pool's connection() context manager handles putconn and transactions
+            with _POSTGRES_CONNECTION_POOL.connection() as conn:
+                yield conn
+            return
         except Exception as exc:
             print(f"[WARN] Failed to get connection from pool: {exc}")
             # Fall back to direct connection
-            return get_postgres_connection()
-    return get_postgres_connection()
+            
+    conn = get_postgres_connection()
+    try:
+        # Use connection as context manager for transaction handling
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
-# Returns a connection from the pool if available, otherwise creates a direct connection
-# Returns a context manager that automatically releases the connection back to the pool.
-from contextlib import contextmanager
-
-@contextmanager
-def get_connection(is_priority: bool = False):
-    """Get a pooled connection, with automatic release. High-priority requests are prioritized."""
+# Returns the default backend database connection.
+@contextlib.contextmanager
+def get_connection():
+    """Get a pooled connection if available, otherwise a direct connection."""
     if _POSTGRES_CONNECTION_POOL is not None:
         try:
-            # We can't easily jump the queue in psycopg_pool without custom logic,
-            # but we can at least log if a priority request is waiting.
-            conn = _POSTGRES_CONNECTION_POOL.getconn()
+            with _POSTGRES_CONNECTION_POOL.connection() as conn:
+                yield conn
+            return
+        except Exception:
+            pass
             
-            try:
-                yield conn
-            finally:
-                _POSTGRES_CONNECTION_POOL.putconn(conn)
-        except Exception as exc:
-            print(f"[WARN] Failed to get/return connection from pool: {exc}")
-            conn = get_postgres_connection()
-            try:
-                yield conn
-            finally:
-                conn.close()
-    else:
-        conn = get_postgres_connection()
-        try:
+    conn = get_postgres_connection()
+    try:
+        with conn:
             yield conn
-        finally:
-            conn.close()
+    finally:
+        conn.close()
 

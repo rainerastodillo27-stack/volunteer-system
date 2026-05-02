@@ -180,14 +180,7 @@ RELATIONAL_TABLE_DDL = [
     "alter table projects add column if not exists image_hidden boolean not null default false",
     "alter table projects add column if not exists status_mode text",
     "alter table projects add column if not exists manual_status text",
-    "alter table projects add column if not exists status text",
-    "alter table projects add column if not exists category text",
-    "alter table projects add column if not exists start_date text",
-    "alter table projects add column if not exists end_date text",
-    "alter table projects add column if not exists location text not null default '{}'",
-    "alter table projects add column if not exists volunteers_needed integer not null default 0",
-    "alter table projects add column if not exists volunteers text[] not null default '{}'::text[]",
-    "alter table projects add column if not exists joined_user_ids text[] not null default '{}'::text[]",
+    "alter table projects add column if not exists program_id text",
     "alter table projects add column if not exists internal_tasks text not null default '[]'",
     "alter table projects add column if not exists skills_needed text[] not null default '{}'::text[]",
     "alter table projects add column if not exists updated_at text",
@@ -202,6 +195,8 @@ RELATIONAL_TABLE_DDL = [
       id text primary key,
       title text not null,
       description text,
+      icon text,
+      color text,
       partner_id text,
       image_url text,
       image_hidden boolean not null default false,
@@ -221,57 +216,14 @@ RELATIONAL_TABLE_DDL = [
       updated_at text
     )
     """,
-    """
-    do $$
-    begin
-      if exists (
-        select 1
-        from information_schema.columns
-        where table_schema = 'public' and table_name = 'programs' and column_name = 'program_id'
-      ) and not exists (
-        select 1
-        from information_schema.columns
-        where table_schema = 'public' and table_name = 'programs' and column_name = 'id'
-      ) then
-        alter table programs rename column program_id to id;
-      end if;
-    end $$;
-    """,
-    """
-    do $$
-    begin
-      if exists (
-        select 1
-        from information_schema.columns
-        where table_schema = 'public' and table_name = 'programs' and column_name = 'id'
-      ) then
-        alter table programs alter column id drop identity if exists;
-        alter table programs alter column id type text using id::text;
-      end if;
-      if exists (
-        select 1
-        from information_schema.columns
-        where table_schema = 'public' and table_name = 'programs' and column_name = 'created_at'
-      ) then
-        alter table programs alter column created_at type text using created_at::text;
-      end if;
-    end $$;
-    """,
-    "alter table programs add column if not exists title text not null default ''",
-    "alter table programs add column if not exists description text",
-    "alter table programs add column if not exists partner_id text",
+    "alter table programs add column if not exists icon text",
+    "alter table programs add column if not exists color text",
     "alter table programs add column if not exists image_url text",
     "alter table programs add column if not exists image_hidden boolean not null default false",
     "alter table programs add column if not exists program_module text",
     "alter table programs add column if not exists status_mode text",
     "alter table programs add column if not exists manual_status text",
-    "alter table programs add column if not exists status text",
-    "alter table programs add column if not exists category text",
-    "alter table programs add column if not exists start_date text",
-    "alter table programs add column if not exists end_date text",
-    "alter table programs add column if not exists location text not null default '{}'",
-    "alter table programs add column if not exists volunteers_needed integer not null default 0",
-    "alter table programs add column if not exists volunteers text[] not null default '{}'::text[]",
+    "alter table programs add column if not exists program_id text",
     "alter table programs add column if not exists joined_user_ids text[] not null default '{}'::text[]",
     "alter table programs add column if not exists linked_event_count integer not null default 0",
     "alter table programs add column if not exists updated_at text",
@@ -330,6 +282,7 @@ RELATIONAL_TABLE_DDL = [
     "alter table events add column if not exists image_hidden boolean not null default false",
     "alter table events add column if not exists status_mode text",
     "alter table events add column if not exists manual_status text",
+    "alter table events add column if not exists program_id text",
     "alter table events add column if not exists internal_tasks text not null default '[]'",
     "alter table events add column if not exists skills_needed text[] not null default '{}'::text[]",
     "create index if not exists events_partner_id_idx on events (partner_id)",
@@ -612,6 +565,7 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("parent_project_id", False),
             ("status_mode", False),
             ("manual_status", False),
+            ("program_id", False),
             ("status", False),
             ("category", False),
             ("start_date", False),
@@ -632,12 +586,15 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("id", False),
             ("title", False),
             ("description", False),
+            ("icon", False),
+            ("color", False),
             ("partner_id", False),
             ("image_url", False),
             ("image_hidden", False),
             ("program_module", False),
             ("status_mode", False),
             ("manual_status", False),
+            ("program_id", False),
             ("status", False),
             ("category", False),
             ("start_date", False),
@@ -680,6 +637,7 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("parent_project_id", False),
             ("status_mode", False),
             ("manual_status", False),
+            ("program_id", False),
             ("status", False),
             ("category", False),
             ("start_date", False),
@@ -1003,9 +961,11 @@ def _json_dump(value: Any, default: Any) -> str:
 def _json_load(value: Any, default: Any) -> Any:
     if value is None:
         return default
+
+    parsed = default
     if isinstance(value, (dict, list)):
-        return value
-    if isinstance(value, str):
+        parsed = value
+    elif isinstance(value, str):
         raw_value = value.strip()
         if not raw_value:
             return default
@@ -1013,8 +973,17 @@ def _json_load(value: Any, default: Any) -> Any:
             parsed = json.loads(raw_value)
         except (TypeError, ValueError, json.JSONDecodeError):
             return default
-        return default if parsed is None else parsed
-    return default
+
+    if parsed is None:
+        return default
+
+    # Ensure return type matches default if default is a container
+    if isinstance(default, list) and not isinstance(parsed, list):
+        return default
+    if isinstance(default, dict) and not isinstance(parsed, dict):
+        return default
+
+    return parsed
 
 
 def _to_float(value: Any) -> float:
@@ -1168,6 +1137,7 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("parentProjectId"),
             item.get("statusMode"),
             item.get("manualStatus"),
+            item.get("program_id"),
             item.get("status"),
             item.get("category"),
             item.get("startDate"),
@@ -1187,12 +1157,15 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("id"),
             item.get("title") or "",
             item.get("description"),
+            item.get("icon"),
+            item.get("color"),
             item.get("partnerId"),
             item.get("imageUrl"),
             bool(item.get("imageHidden", False)),
             item.get("programModule"),
             item.get("statusMode"),
             item.get("manualStatus"),
+            item.get("program_id"),
             item.get("status"),
             item.get("category"),
             item.get("startDate"),
@@ -1233,6 +1206,7 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("parentProjectId"),
             item.get("statusMode"),
             item.get("manualStatus"),
+            item.get("program_id"),
             item.get("status"),
             item.get("category"),
             item.get("startDate"),
@@ -1487,6 +1461,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "parentProjectId": row["parent_project_id"],
             "statusMode": row["status_mode"],
             "manualStatus": row["manual_status"],
+            "program_id": row["program_id"],
             "status": row["status"],
             "category": row["category"],
             "startDate": row["start_date"],
@@ -1506,12 +1481,15 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "id": row_id,
             "title": row["title"],
             "description": row["description"],
+            "icon": row["icon"],
+            "color": row["color"],
             "partnerId": row["partner_id"],
             "imageUrl": row["image_url"],
             "imageHidden": bool(row["image_hidden"]),
             "programModule": row["program_module"],
             "statusMode": row["status_mode"],
             "manualStatus": row["manual_status"],
+            "program_id": row["program_id"],
             "status": row["status"],
             "category": row["category"],
             "startDate": row["start_date"],
@@ -1699,59 +1677,8 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
 
 
 def refresh_program_rows_from_tracks(connection: Any) -> None:
-    with connection.cursor() as cursor:
-        cursor.execute("delete from programs")
-        cursor.execute(
-            """
-            insert into programs (
-              programs_id,
-              title,
-              description,
-              partner_id,
-              image_url,
-              image_hidden,
-              program_module,
-              status_mode,
-              manual_status,
-              status,
-              category,
-              start_date,
-              end_date,
-              location,
-              volunteers_needed,
-              volunteers,
-              joined_user_ids,
-              linked_event_count,
-              created_at,
-              updated_at
-            )
-            select
-              t.program_tracks_id,
-              t.title,
-              t.description,
-              '' as partner_id,
-              nullif(t.image_url, '') as image_url,
-              false as image_hidden,
-              t.program_tracks_id as program_module,
-              'System' as status_mode,
-              null::text as manual_status,
-              'Planning' as status,
-              t.program_tracks_id as category,
-              null::text as start_date,
-              null::text as end_date,
-              '{}'::text as location,
-              0 as volunteers_needed,
-              '{}'::text[] as volunteers,
-              '{}'::text[] as joined_user_ids,
-              0 as linked_event_count,
-              coalesce(t.created_at, now()::text),
-              coalesce(t.updated_at, now()::text)
-            from program_tracks t
-            where coalesce(t.is_active, true) = true
-              and t.program_tracks_id in ('Nutrition', 'Education', 'Livelihood')
-            order by coalesce(t.sort_order, 0), t.program_tracks_id
-            """
-        )
+    # program_tracks is the authoritative table; no secondary sync needed.
+    pass
 
 
 def ensure_default_program_tracks(connection: Any) -> None:
