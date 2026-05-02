@@ -27,6 +27,7 @@ import {
   Partner,
   PartnerProjectApplication,
   PartnerReport,
+  ProgramTrack,
   Project,
   ProjectInternalTask,
   StatusUpdate,
@@ -46,12 +47,15 @@ import {
   getPartnerReportsByProject,
   getPartnerProjectApplications,
   getProjectMatches,
+  getProjectsScreenSnapshot,
   getStatusUpdatesByProject,
   getVolunteerProjectJoinRecords,
   reviewPartnerReport,
   reviewPartnerProjectApplication,
   reviewVolunteerProjectMatch,
+  deleteProgram,
   saveEvent,
+  saveProgram,
   saveProject,
   saveStatusUpdate,
   subscribeToStorageChanges,
@@ -91,52 +95,38 @@ const statuses = ['Planning', 'In Progress', 'On Hold', 'Completed', 'Cancelled'
 const lifecycleStatusModes = ['System', 'Manual'] as const;
 type LifecycleStatusMode = (typeof lifecycleStatusModes)[number];
 const projectModules: AdvocacyFocus[] = ['Nutrition', 'Education', 'Livelihood', 'Disaster'];
-const featuredProgramModules = ['Livelihood', 'Education', 'Nutrition'] as const;
+type ProgramSuiteModule = string;
 
-type ProgramSuiteModule = (typeof featuredProgramModules)[number];
-
-const programSuiteConfig: Record<
-  ProgramSuiteModule,
-  {
-    title: string;
-    description: string;
-    icon: keyof typeof MaterialIcons.glyphMap;
-    accent: string;
-    surface: string;
-    border: string;
+function normalizeProgramTrackIcon(icon?: string): keyof typeof MaterialIcons.glyphMap {
+  if (!icon) {
+    return 'category';
   }
-> = {
-  Livelihood: {
-    title: 'Livelihood',
-    description: 'Skills training, income opportunities, and sustainable work programs.',
-    icon: 'volunteer-activism',
-    accent: '#7c3aed',
-    surface: '#f5f3ff',
-    border: '#ddd6fe',
-  },
-  Education: {
-    title: 'Education',
-    description: 'Learning support, school programs, and community education initiatives.',
-    icon: 'school',
-    accent: '#2563eb',
-    surface: '#eff6ff',
-    border: '#bfdbfe',
-  },
-  Nutrition: {
-    title: 'Nutrition',
-    description: 'Feeding, wellness, and nutritional support across the community.',
-    icon: 'restaurant',
-    accent: '#ea580c',
-    surface: '#fff7ed',
-    border: '#fed7aa',
-  },
-};
+  return icon in MaterialIcons.glyphMap ? (icon as keyof typeof MaterialIcons.glyphMap) : 'category';
+}
+
+function normalizeProgramTrackColor(color?: string): string {
+  const trimmed = String(color || '').trim();
+  if (!trimmed) {
+    return '#2563eb';
+  }
+  return /^#[0-9A-Fa-f]{6}$/.test(trimmed) ? trimmed : '#2563eb';
+}
+
+function getProjectProgramId(project: Project): string {
+  return String((project as any).program_id || project.programModule || project.category || '').trim();
+}
+
+function getProgramSuiteModuleForProject(project: Project, activeProgramTrackIds: Set<string>): string | null {
+  const programId = getProjectProgramId(project);
+  return activeProgramTrackIds.has(programId) ? programId : null;
+}
 
 type ProjectDraft = {
   id?: string;
   title: string;
   description: string;
   programModule: AdvocacyFocus;
+  program_id?: string;
   parentProjectId?: string;
   status: Project['status'];
   partnerId: string;
@@ -327,6 +317,7 @@ const createEmptyProjectDraft = (
   title,
   description,
   programModule,
+  program_id: programModule,
   parentProjectId,
   status: 'Planning',
   partnerId,
@@ -379,13 +370,6 @@ function getProjectDraftModule(project: Project): AdvocacyFocus {
 
 function normalizeProjectTitle(title: string): string {
   return title.trim().toLowerCase();
-}
-
-function getProgramSuiteModule(project: Project): ProgramSuiteModule | null {
-  const module = getProjectDraftModule(project);
-  return featuredProgramModules.includes(module as ProgramSuiteModule)
-    ? (module as ProgramSuiteModule)
-    : null;
 }
 
 function getProgramSuiteChevron(isExpanded: boolean): keyof typeof MaterialIcons.glyphMap {
@@ -518,6 +502,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [showAssignmentDropdown, setShowAssignmentDropdown] = useState(false);
   const [showSkillsDropdown, setShowSkillsDropdown] = useState(false);
   const [showProgramProposalModal, setShowProgramProposalModal] = useState(false);
+  const [showAddProgramModal, setShowAddProgramModal] = useState(false);
+  const [newProgramName, setNewProgramName] = useState('');
+  const [isAddProgramSuccess, setIsAddProgramSuccess] = useState(false);
+  const [editingProgramId, setEditingProgramId] = useState<string | null>(null);
+  const [programDraft, setProgramDraft] = useState({ title: '', description: '', icon: 'folder', color: '#6366f1', imageUrl: '' });
+  const [showProgramCrudModal, setShowProgramCrudModal] = useState(false);
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [selectedProgramProposalModule, setSelectedProgramProposalModule] = useState<ProgramSuiteModule | null>(null);
@@ -531,6 +521,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [statusUpdateMode, setStatusUpdateMode] = useState<LifecycleStatusMode>('System');
   const [newStatus, setNewStatus] = useState<Project['status']>('Planning');
   const [updateDescription, setUpdateDescription] = useState('');
+  const [programTracks, setProgramTracks] = useState<ProgramTrack[]>([]);
   const [projectDraft, setProjectDraft] = useState<ProjectDraft>(() => {
     const initialModule = (route.params?.programModule as AdvocacyFocus) || 'Education';
     return createEmptyProjectDraft('', initialModule);
@@ -545,11 +536,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [expandedProgramModules, setExpandedProgramModules] = useState<Set<ProgramSuiteModule>>(
     () => new Set()
   );
-  const programSectionAnimations = React.useRef<Record<ProgramSuiteModule, Animated.Value>>({
-    Livelihood: new Animated.Value(0),
-    Education: new Animated.Value(0),
-    Nutrition: new Animated.Value(0),
-  });
+  const programSectionAnimations = React.useRef<Record<string, Animated.Value>>({});
+  const getProgramSectionAnimation = (module: string) => {
+    if (!programSectionAnimations.current[module]) {
+      programSectionAnimations.current[module] = new Animated.Value(0);
+    }
+    return programSectionAnimations.current[module];
+  };
   const projectDraftParentProject = useMemo(
     () =>
       projectDraft.isEvent && projectDraft.parentProjectId
@@ -648,7 +641,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       const unsubscribe = subscribeToStorageChanges(
         // Keep subscriptions focused on keys that affect the visible UI first.
-        ['projects', 'events', 'partners', 'statusUpdates', 'partnerReports', 'volunteerProjectJoins', 'volunteerMatches'],
+        ['projects', 'events', 'partners', 'statusUpdates', 'partnerReports', 'volunteerProjectJoins', 'volunteerMatches', 'programTracks'],
         () => {
           // For storage updates, update light data immediately and defer heavy refreshes
           void refreshLight();
@@ -667,8 +660,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   // Loads all projects and refreshes the currently selected project reference.
   const loadProjects = async () => {
     try {
-      const allProjects = await getAllProjects();
+      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'programTracks']);
+      const allProjects = snapshot.projects || [];
       setProjects(allProjects);
+      setProgramTracks(snapshot.programTracks || []);
       setLoadError(null);
       setSelectedProject(currentSelectedProject => {
         if (!currentSelectedProject) {
@@ -810,6 +805,151 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     }
   };
 
+  // Saves a new program (folder) and refreshes the snapshot.
+  const handleAddProgram = async () => {
+    if (!newProgramName.trim()) {
+      Alert.alert('Error', 'Please enter a program name.');
+      return;
+    }
+
+    setActionLoadingKey('addProgram');
+    try {
+      const newProgram: ProgramTrack = {
+        id: newProgramName.trim(),
+        title: newProgramName.trim(),
+        description: `Folder for ${newProgramName.trim()} projects.`,
+        icon: 'folder',
+        color: '#6366f1', // Default indigo
+        imageUrl: 'https://images.unsplash.com/photo-1497366216548-37526070297c?q=80&w=1470&auto=format&fit=crop',
+        isActive: true,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      await saveProgram(newProgram);
+      setIsAddProgramSuccess(true);
+
+      // Delay closing to show success checkmark
+      setTimeout(async () => {
+        await loadProjects();
+        setIsAddProgramSuccess(false);
+        setNewProgramName('');
+        setShowAddProgramModal(false);
+      }, 1800);
+    } catch (error) {
+      Alert.alert('Error', getRequestErrorMessage(error, 'Failed to create program.'));
+    } finally {
+      setActionLoadingKey(null);
+    }
+  };
+
+  const openCreateProgramModal = () => {
+    setEditingProgramId(null);
+    setProgramDraft({ title: '', description: '', icon: 'folder', color: '#6366f1', imageUrl: '' });
+    setShowProgramCrudModal(true);
+  };
+
+  const openEditProgramModal = (track: ProgramTrack) => {
+    setEditingProgramId(track.id);
+    setProgramDraft({
+      title: track.title,
+      description: track.description || '',
+      icon: track.icon || 'folder',
+      color: track.color || '#6366f1',
+      imageUrl: track.imageUrl || '',
+    });
+    setShowProgramCrudModal(true);
+  };
+
+  const handleSaveProgramCrud = async () => {
+    if (!programDraft.title.trim()) {
+      Alert.alert('Error', 'Program name is required.');
+      return;
+    }
+    setActionLoadingKey('saveProgramCrud');
+    try {
+      const now = new Date().toISOString();
+      const id = editingProgramId || programDraft.title.trim();
+      const program: ProgramTrack = {
+        id,
+        title: programDraft.title.trim(),
+        description: programDraft.description.trim() || `Folder for ${programDraft.title.trim()} projects.`,
+        icon: programDraft.icon || 'folder',
+        color: programDraft.color || '#6366f1',
+        imageUrl: programDraft.imageUrl.trim() || undefined,
+        isActive: true,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      // Optimistic update: show card immediately before server confirms
+      setProgramTracks(current => {
+        const existing = current.findIndex(t => t.id === id);
+        if (existing >= 0) {
+          const updated = [...current];
+          updated[existing] = program;
+          return updated;
+        }
+        return [...current, program];
+      });
+
+      // Persist to backend (program_tracks table)
+      await saveProgram(program);
+
+      // Show success then close modal
+      setIsAddProgramSuccess(true);
+      setTimeout(async () => {
+        // Sync from server to confirm data is persisted
+        await loadProjects();
+        setIsAddProgramSuccess(false);
+        setShowProgramCrudModal(false);
+        // System notification after modal closes
+        Alert.alert(
+          editingProgramId ? '✅ Program Updated' : '✅ Program Created',
+          editingProgramId
+            ? `"${program.title}" has been updated and saved to the database.`
+            : `"${program.title}" is now live in the dashboard and saved to program_tracks.`
+        );
+      }, 1200);
+    } catch (error) {
+      // Rollback optimistic update on error
+      await loadProjects();
+      Alert.alert('Error', getRequestErrorMessage(error, 'Failed to save program. Please try again.'));
+    } finally {
+      setActionLoadingKey(null);
+    }
+  };
+
+  const handleDeleteProgram = (trackId: string, trackTitle: string) => {
+    const doDelete = async () => {
+      setActionLoadingKey(`deleteProgram-${trackId}`);
+      try {
+        await deleteProgram(trackId);
+        await loadProjects();
+      } catch (error) {
+        Alert.alert('Error', getRequestErrorMessage(error, 'Failed to delete program.'));
+      } finally {
+        setActionLoadingKey(null);
+      }
+    };
+
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof window.confirm === 'function') {
+      if (window.confirm(`Delete program "${trackTitle}"? This cannot be undone.`)) {
+        void doDelete();
+      }
+      return;
+    }
+
+    Alert.alert(
+      'Delete Program',
+      `Delete "${trackTitle}"? This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: () => void doDelete() },
+      ]
+    );
+  };
+
   // Loads all volunteer time-in and time-out records for project monitoring.
   const loadVolunteerTimeLogs = async () => {
     try {
@@ -857,6 +997,23 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const openCreateProjectModal = () => {
     setEditingProjectId(null);
     setProjectDraft(createEmptyProjectDraft());
+    resetProjectLocationSelection();
+    setShowProjectModal(true);
+  };
+
+  // Opens the project editor pre-wired to a specific program track.
+  const openCreateProjectInProgramModal = (trackId: string, trackTitle: string) => {
+    setEditingProjectId(null);
+    // Map trackId to an AdvocacyFocus if possible, else use the trackId itself
+    const knownModules: AdvocacyFocus[] = ['Education', 'Livelihood', 'Nutrition', 'Disaster'];
+    const module: AdvocacyFocus = knownModules.includes(trackId as AdvocacyFocus)
+      ? (trackId as AdvocacyFocus)
+      : 'Education';
+    const draft = createEmptyProjectDraft('', module, false, '', '', undefined);
+    // Override program_id so the project shows inside the correct program section
+    draft.program_id = trackId;
+    draft.programModule = trackId as AdvocacyFocus;
+    setProjectDraft(draft);
     resetProjectLocationSelection();
     setShowProjectModal(true);
   };
@@ -1143,11 +1300,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     const existingEventByTitle =
       projectDraft.isEvent && !editingProjectId
         ? projects.find(
-            project =>
-              project.isEvent &&
-              project.parentProjectId === projectDraft.parentProjectId &&
-              normalizeProjectTitle(project.title) === normalizeProjectTitle(projectDraft.title)
-          ) || null
+          project =>
+            project.isEvent &&
+            project.parentProjectId === projectDraft.parentProjectId &&
+            normalizeProjectTitle(project.title) === normalizeProjectTitle(projectDraft.title)
+        ) || null
         : null;
 
     if (
@@ -1219,21 +1376,21 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       inferCoordinatesFromPlace(projectDraft.address, projects) ||
       (hasStructuredPhilippineAddress
         ? {
-            latitude: PHILIPPINES_REGION.latitude,
-            longitude: PHILIPPINES_REGION.longitude,
-          }
+          latitude: PHILIPPINES_REGION.latitude,
+          longitude: PHILIPPINES_REGION.longitude,
+        }
         : null) ||
       (existingProject
         ? {
-            latitude: existingProject.location.latitude,
-            longitude: existingProject.location.longitude,
-          }
+          latitude: existingProject.location.latitude,
+          longitude: existingProject.location.longitude,
+        }
         : null) ||
       (existingEventByTitle
         ? {
-            latitude: existingEventByTitle.location.latitude,
-            longitude: existingEventByTitle.location.longitude,
-          }
+          latitude: existingEventByTitle.location.latitude,
+          longitude: existingEventByTitle.location.longitude,
+        }
         : null);
 
     if (!resolvedCoordinates) {
@@ -1283,7 +1440,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       createdAt: existingProject?.createdAt || now,
       updatedAt: now,
       statusUpdates: existingProject?.statusUpdates || [],
-      internalTasks: existingProject?.internalTasks || [],
+      internalTasks: Array.isArray(existingProject?.internalTasks) ? existingProject?.internalTasks : [],
     };
 
     const resolvedLifecycleStatus =
@@ -1782,15 +1939,15 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       isFieldOfficer: taskDraft.isFieldOfficer,
       skillsNeeded: normalizedSkills,
       createdAt:
-        currentSelectedProject.internalTasks?.find(task => task.id === editingTaskId)?.createdAt || now,
+        (Array.isArray(currentSelectedProject.internalTasks) ? currentSelectedProject.internalTasks : []).find(task => task.id === editingTaskId)?.createdAt || now,
       updatedAt: now,
     };
 
     const nextInternalTasks = editingTaskId
-      ? (currentSelectedProject.internalTasks || []).map(task =>
-          task.id === editingTaskId ? nextTask : task
-        )
-      : [...(currentSelectedProject.internalTasks || []), nextTask];
+      ? (Array.isArray(currentSelectedProject.internalTasks) ? currentSelectedProject.internalTasks : []).map(task =>
+        task.id === editingTaskId ? nextTask : task
+      )
+      : [...(Array.isArray(currentSelectedProject.internalTasks) ? currentSelectedProject.internalTasks : []), nextTask];
 
     const updatedProject: Project = {
       ...currentSelectedProject,
@@ -1828,7 +1985,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           onPress: async () => {
             const updatedProject: Project = {
               ...currentSelectedProject,
-              internalTasks: (currentSelectedProject.internalTasks || []).filter(task => task.id !== taskId),
+              internalTasks: (Array.isArray(currentSelectedProject.internalTasks) ? currentSelectedProject.internalTasks : []).filter(task => task.id !== taskId),
               updatedAt: new Date().toISOString(),
             };
 
@@ -2025,138 +2182,308 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     const sectionProjects = section.projects.filter(project => !project.isEvent);
 
     return (
-    <View key={section.module} style={styles.programSuiteSection}>
-      <TouchableOpacity
-        style={[
-          styles.programSuiteHeaderCard,
-          { backgroundColor: section.surface, borderColor: section.border },
-        ]}
-        onPress={() => toggleProgramSection(section.module)}
-        activeOpacity={0.88}
-      >
-        <View style={styles.programSuiteHeaderTopRow}>
-          <View style={styles.programSuiteHeaderCopy}>
-            <View
-              style={[
-                styles.programSuiteIconWrap,
-                { backgroundColor: '#ffffff', borderColor: section.border },
-              ]}
-            >
-              <MaterialIcons name={section.icon} size={26} color={section.accent} />
+      <View key={section.module} style={styles.programSuiteSection}>
+        <Animated.View
+          style={[
+            styles.programSuiteProjectsAnimatedWrap,
+            {
+              opacity: getProgramSectionAnimation(section.module),
+              maxHeight: getProgramSectionAnimation(section.module).interpolate({
+                inputRange: [0, 1],
+                outputRange: [0, 5000],
+              }),
+              transform: [
+                {
+                  translateY: getProgramSectionAnimation(section.module).interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [-14, 0],
+                  }),
+                },
+
+              ],
+            },
+          ]}
+          pointerEvents={expandedProgramModules.has(section.module) ? 'auto' : 'none'}
+        >
+          <View style={styles.programSuiteProjectsBlock}>
+            {/* Section header with Create Project button */}
+            <View style={[styles.programSuiteProjectsHeader, { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }]}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.programSuiteProjectsTitle}>{section.title} Projects</Text>
+                <Text style={styles.programSuiteProjectsMeta}>
+                  Open a project to see its event list, event dashboard, and event task board.
+                </Text>
+              </View>
+              {isAdmin && (
+                <TouchableOpacity
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 6,
+                    backgroundColor: section.accent,
+                    borderRadius: 8,
+                    paddingVertical: 8,
+                    paddingHorizontal: 14,
+                    marginLeft: 12,
+                    shadowColor: section.accent,
+                    shadowOpacity: 0.25,
+                    shadowRadius: 6,
+                    shadowOffset: { width: 0, height: 2 },
+                    elevation: 3,
+                  }}
+                  onPress={() => openCreateProjectInProgramModal(section.module, section.title)}
+                  activeOpacity={0.82}
+                >
+                  <MaterialIcons name="add" size={16} color="#fff" />
+                  <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>Create Project</Text>
+                </TouchableOpacity>
+              )}
             </View>
-            <View style={styles.programSuiteTitleWrap}>
-              <Text style={styles.programSuiteTitle}>{section.title}</Text>
-              <Text style={styles.programSuiteDescription}>{section.description}</Text>
-            </View>
-          </View>
-          <MaterialIcons
-            name={getProgramSuiteChevron(expandedProgramModules.has(section.module))}
-            size={30}
-            color={section.accent}
-          />
-        </View>
 
-        <View style={styles.programSuiteMetrics}>
-          <View style={[styles.programSuiteMetricPill, { borderColor: section.border }]}>
-            <Text style={[styles.programSuiteMetricValue, { color: section.accent }]}>
-              {section.totalPrograms}
-            </Text>
-            <Text style={styles.programSuiteMetricLabel}>Projects</Text>
-          </View>
-          <View style={[styles.programSuiteMetricPill, { borderColor: section.border }]}>
-            <Text style={[styles.programSuiteMetricValue, { color: section.accent }]}>
-              {section.inProgressCount}
-            </Text>
-            <Text style={styles.programSuiteMetricLabel}>In progress</Text>
-          </View>
-          <View style={[styles.programSuiteMetricPill, { borderColor: getProjectStatusColor('Planning') }]}>
-            <Text style={[styles.programSuiteMetricValue, { color: getProjectStatusColor('Planning') }]}>
-              {section.planningCount}
-            </Text>
-            <Text style={styles.programSuiteMetricLabel}>Planning</Text>
-          </View>
-          <View style={[styles.programSuiteMetricPill, { borderColor: section.border }]}>
-            <Text style={[styles.programSuiteMetricValue, { color: section.accent }]}>
-              {section.eventCount}
-            </Text>
-            <Text style={styles.programSuiteMetricLabel}>Events</Text>
-          </View>
-          <TouchableOpacity
-            style={[
-              styles.programSuiteMetricPill,
-              {
-                borderColor: section.pendingProposalCount ? '#fb923c' : section.border,
-                backgroundColor: section.pendingProposalCount ? '#fff7ed' : '#ffffff',
-                opacity: section.pendingProposalCount ? 1 : 0.72,
-              },
-            ]}
-            onPress={() => {
-              openProgramProposalModal(section.module);
-            }}
-            activeOpacity={0.86}
-          >
-            <Text
-              style={[
-                styles.programSuiteMetricValue,
-                { color: section.pendingProposalCount ? '#c2410c' : section.accent },
-              ]}
-            >
-              {section.pendingProposalCount}
-            </Text>
-            <Text style={styles.programSuiteMetricLabel}>Proposal</Text>
-          </TouchableOpacity>
-        </View>
-        <Text style={[styles.programSuiteTapHint, { color: section.accent }]}>
-          Tap to {expandedProgramModules.has(section.module) ? 'hide' : 'show'} projects
-        </Text>
-      </TouchableOpacity>
+            {sectionProjects.length === 0 ? (
+              <View style={[styles.programSuiteEmptyState, { paddingBottom: 8 }]}>
+                <MaterialIcons name="inventory-2" size={28} color="#94a3b8" />
+                <Text style={styles.programSuiteEmptyTitle}>No {section.title.toLowerCase()} projects yet</Text>
+                <Text style={styles.programSuiteEmptyMeta}>
+                  Tap "Create Project" to add the first project to this program.
+                </Text>
+                {isAdmin && (
+                  <TouchableOpacity
+                    style={{
+                      marginTop: 16,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 8,
+                      backgroundColor: section.accent,
+                      borderRadius: 10,
+                      paddingVertical: 12,
+                      paddingHorizontal: 24,
+                    }}
+                    onPress={() => openCreateProjectInProgramModal(section.module, section.title)}
+                    activeOpacity={0.82}
+                  >
+                    <MaterialIcons name="add-circle-outline" size={20} color="#fff" />
+                    <Text style={{ color: '#fff', fontWeight: '700', fontSize: 15 }}>Create First Project</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            ) : (
+              <View>
+                <View style={styles.list}>
+                  {sectionProjects.map(project => (
+                    <View key={project.id} style={{ position: 'relative' }}>
+                      {renderProjectCard(project)}
+                      {isAdmin && (
+                        <View style={{ position: 'absolute', top: 10, right: 10, flexDirection: 'row', gap: 6 }}>
+                          <TouchableOpacity
+                            style={{ backgroundColor: 'rgba(255,255,255,0.93)', borderRadius: 6, padding: 5, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4, elevation: 2 }}
+                            onPress={() => openEditProjectModal(project)}
+                            activeOpacity={0.8}
+                          >
+                            <MaterialIcons name="edit" size={16} color="#6366f1" />
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={{ backgroundColor: 'rgba(255,255,255,0.93)', borderRadius: 6, padding: 5, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4, elevation: 2 }}
+                            onPress={() => {
+                              const doDelete = async () => {
+                                try {
+                                  await deleteProjectLikeRecord(project);
+                                  await loadProjects();
+                                } catch (e) {
+                                  Alert.alert('Error', 'Failed to delete project.');
+                                }
+                              };
+                              Alert.alert(
+                                'Delete Project',
+                                `Delete "${project.title}"? This cannot be undone.`,
+                                [
+                                  { text: 'Cancel', style: 'cancel' },
+                                  { text: 'Delete', style: 'destructive', onPress: () => void doDelete() },
+                                ]
+                              );
+                            }}
+                            activeOpacity={0.8}
+                          >
+                            <MaterialIcons name="delete" size={16} color="#ef4444" />
+                          </TouchableOpacity>
+                        </View>
+                      )}
+                    </View>
+                  ))}
+                </View>
+                {isAdmin && (
+                  <TouchableOpacity
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 8,
+                      marginTop: 12,
+                      marginBottom: 4,
+                      paddingVertical: 14,
+                      borderRadius: 10,
+                      borderWidth: 2,
+                      borderStyle: 'dashed',
+                      borderColor: section.accent,
+                      backgroundColor: section.surface,
+                    }}
+                    onPress={() => openCreateProjectInProgramModal(section.module, section.title)}
+                    activeOpacity={0.8}
+                  >
+                    <MaterialIcons name="add" size={20} color={section.accent} />
+                    <Text style={{ color: section.accent, fontWeight: '700', fontSize: 14 }}>Add Another Project</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
 
-      <Animated.View
-        style={[
-          styles.programSuiteProjectsAnimatedWrap,
-          {
-            opacity: programSectionAnimations.current[section.module],
-            maxHeight: programSectionAnimations.current[section.module].interpolate({
-              inputRange: [0, 1],
-              outputRange: [0, 5000],
-            }),
-            transform: [
-              {
-                translateY: programSectionAnimations.current[section.module].interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [-14, 0],
-                }),
-              },
-            ],
-          },
-        ]}
-        pointerEvents={expandedProgramModules.has(section.module) ? 'auto' : 'none'}
-      >
-        <View style={styles.programSuiteProjectsBlock}>
-          <View style={styles.programSuiteProjectsHeader}>
-            <Text style={styles.programSuiteProjectsTitle}>{section.title} Projects</Text>
-            <Text style={styles.programSuiteProjectsMeta}>
-              Open a project to see its event list, event dashboard, and event task board.
-            </Text>
           </View>
-
-          {sectionProjects.length === 0 ? (
-            <View style={styles.programSuiteEmptyState}>
-              <MaterialIcons name="inventory-2" size={28} color="#94a3b8" />
-              <Text style={styles.programSuiteEmptyTitle}>No {section.title.toLowerCase()} projects yet</Text>
-              <Text style={styles.programSuiteEmptyMeta}>
-                Create a new initiative and assign it to {section.title} to show it here.
-              </Text>
-            </View>
-          ) : (
-            <View style={styles.list}>{sectionProjects.map(renderProjectCard)}</View>
-          )}
-
-        </View>
-      </Animated.View>
-    </View>
+        </Animated.View>
+      </View>
     );
   };
+
+
+  const renderAddProgramModal = () => null;
+
+  const PROGRAM_ICON_OPTIONS: Array<keyof typeof MaterialIcons.glyphMap> = [
+    'folder', 'school', 'local-hospital', 'restaurant', 'volunteer-activism',
+    'nature-people', 'home', 'groups', 'eco', 'star', 'favorite', 'work',
+  ];
+  const PROGRAM_COLOR_OPTIONS = [
+    '#6366f1', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444',
+    '#8b5cf6', '#06b6d4', '#84cc16', '#f97316', '#ec4899',
+  ];
+
+  const renderProgramCrudModal = () => (
+    <Modal
+      visible={showProgramCrudModal}
+      animationType="fade"
+      transparent
+      onRequestClose={() => setShowProgramCrudModal(false)}
+    >
+      <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+        {isAddProgramSuccess ? (
+          <View style={{ backgroundColor: '#fff', width: '100%', maxWidth: 460, borderRadius: 16, padding: 32, alignItems: 'center' }}>
+            <MaterialIcons name="check-circle" size={80} color="#10b981" />
+            <Text style={{ fontSize: 20, fontWeight: '800', color: '#1e293b', marginTop: 16 }}>
+              {editingProgramId ? 'Program Updated!' : 'Program Created!'}
+            </Text>
+            <Text style={{ fontSize: 14, color: '#64748b', marginTop: 8, textAlign: 'center' }}>
+              Changes saved to program_tracks successfully.
+            </Text>
+          </View>
+        ) : (
+          <View style={{ backgroundColor: '#fff', width: '100%', maxWidth: 460, borderRadius: 16, padding: 24 }}>
+            {/* Header */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+              <Text style={{ fontSize: 18, fontWeight: '700', color: '#1e293b' }}>
+                {editingProgramId ? 'Edit Program' : 'Create Program'}
+              </Text>
+              <TouchableOpacity onPress={() => setShowProgramCrudModal(false)}>
+                <MaterialIcons name="close" size={22} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 480 }}>
+              {/* Name */}
+              <Text style={{ fontSize: 13, fontWeight: '600', color: '#374151', marginBottom: 6 }}>Program Name *</Text>
+              <TextInput
+                style={{ borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, padding: 12, fontSize: 15, color: '#1e293b', marginBottom: 16 }}
+                placeholder="e.g. Community Health 2026"
+                value={programDraft.title}
+                onChangeText={v => setProgramDraft(d => ({ ...d, title: v }))}
+                autoFocus={!editingProgramId}
+              />
+
+              {/* Description */}
+              <Text style={{ fontSize: 13, fontWeight: '600', color: '#374151', marginBottom: 6 }}>Description</Text>
+              <TextInput
+                style={{ borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, padding: 12, fontSize: 14, color: '#1e293b', marginBottom: 16, minHeight: 72, textAlignVertical: 'top' }}
+                placeholder="Brief description of this program..."
+                value={programDraft.description}
+                onChangeText={v => setProgramDraft(d => ({ ...d, description: v }))}
+                multiline
+              />
+
+              {/* Color */}
+              <Text style={{ fontSize: 13, fontWeight: '600', color: '#374151', marginBottom: 8 }}>Accent Color</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
+                <View style={{ flexDirection: 'row', gap: 8, paddingRight: 8 }}>
+                  {PROGRAM_COLOR_OPTIONS.map(color => (
+                    <TouchableOpacity
+                      key={color}
+                      onPress={() => setProgramDraft(d => ({ ...d, color }))}
+                      style={{
+                        width: 32, height: 32, borderRadius: 16,
+                        backgroundColor: color,
+                        borderWidth: programDraft.color === color ? 3 : 0,
+                        borderColor: '#1e293b',
+                      }}
+                    />
+                  ))}
+                </View>
+              </ScrollView>
+
+              {/* Icon */}
+              <Text style={{ fontSize: 13, fontWeight: '600', color: '#374151', marginBottom: 8 }}>Icon</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
+                <View style={{ flexDirection: 'row', gap: 8, paddingRight: 8 }}>
+                  {PROGRAM_ICON_OPTIONS.map(icon => (
+                    <TouchableOpacity
+                      key={icon}
+                      onPress={() => setProgramDraft(d => ({ ...d, icon }))}
+                      style={{
+                        width: 44, height: 44, borderRadius: 10,
+                        backgroundColor: programDraft.icon === icon ? programDraft.color : '#f1f5f9',
+                        alignItems: 'center', justifyContent: 'center',
+                        borderWidth: programDraft.icon === icon ? 2 : 1,
+                        borderColor: programDraft.icon === icon ? programDraft.color : '#e2e8f0',
+                      }}
+                    >
+                      <MaterialIcons name={icon} size={22} color={programDraft.icon === icon ? '#fff' : '#475569'} />
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </ScrollView>
+
+              {/* Image URL */}
+              <Text style={{ fontSize: 13, fontWeight: '600', color: '#374151', marginBottom: 6 }}>Background Image URL (optional)</Text>
+              <TextInput
+                style={{ borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, padding: 12, fontSize: 13, color: '#1e293b', marginBottom: 4 }}
+                placeholder="https://..."
+                value={programDraft.imageUrl}
+                onChangeText={v => setProgramDraft(d => ({ ...d, imageUrl: v }))}
+                autoCapitalize="none"
+                keyboardType="url"
+              />
+              <Text style={{ fontSize: 11, color: '#94a3b8', marginBottom: 20 }}>Used as a subtle card background texture.</Text>
+            </ScrollView>
+
+            {/* Actions */}
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 4 }}>
+              <TouchableOpacity
+                style={{ paddingVertical: 11, paddingHorizontal: 18, borderRadius: 8, backgroundColor: '#f1f5f9' }}
+                onPress={() => setShowProgramCrudModal(false)}
+              >
+                <Text style={{ color: '#475569', fontWeight: '600' }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={{ paddingVertical: 11, paddingHorizontal: 20, borderRadius: 8, backgroundColor: programDraft.color || '#6366f1', opacity: actionLoadingKey === 'saveProgramCrud' ? 0.7 : 1, flexDirection: 'row', alignItems: 'center', gap: 6 }}
+                onPress={handleSaveProgramCrud}
+                disabled={actionLoadingKey === 'saveProgramCrud'}
+              >
+                {actionLoadingKey === 'saveProgramCrud'
+                  ? <ActivityIndicator size="small" color="#fff" />
+                  : <MaterialIcons name={editingProgramId ? 'save' : 'add'} size={16} color="#fff" />}
+                <Text style={{ color: '#fff', fontWeight: '700' }}>{editingProgramId ? 'Save Changes' : 'Create Program'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+      </View>
+    </Modal>
+  );
 
   const renderProjectEditorModal = () => (
     <Modal
@@ -2369,10 +2696,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               <Text style={styles.datePickerButtonText}>
                 {projectDraft.startDate
                   ? new Date(projectDraft.startDate).toLocaleDateString('en-US', {
-                      year: 'numeric',
-                      month: 'long',
-                      day: 'numeric',
-                    })
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric',
+                  })
                   : 'Select start date'}
               </Text>
             </TouchableOpacity>
@@ -2392,10 +2719,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               <Text style={styles.datePickerButtonText}>
                 {projectDraft.endDate
                   ? new Date(projectDraft.endDate).toLocaleDateString('en-US', {
-                      year: 'numeric',
-                      month: 'long',
-                      day: 'numeric',
-                    })
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric',
+                  })
                   : 'Select end date'}
               </Text>
             </TouchableOpacity>
@@ -2533,9 +2860,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     const pendingProposal =
       module && showProgramProposalModal
         ? allPartnerApplications.find(
-            application =>
-              application.projectId === proposalProjectId && application.status === 'Pending'
-          ) || null
+          application =>
+            application.projectId === proposalProjectId && application.status === 'Pending'
+        ) || null
         : null;
 
     return (
@@ -2566,126 +2893,126 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             >
               {pendingProposal ? (
                 <View style={styles.applicationCard}>
-                <View style={styles.applicationHeader}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.applicationName}>{pendingProposal.partnerName}</Text>
-                    <Text style={styles.applicationMeta}>{pendingProposal.partnerEmail}</Text>
-                    <Text style={styles.applicationMeta}>
-                      Requested {format(new Date(pendingProposal.requestedAt), 'PPpp')}
-                    </Text>
-                  </View>
-                  <View style={[styles.applicationStatusBadge, styles.applicationStatusPending]}>
-                    <Text style={styles.applicationStatusText}>{pendingProposal.status}</Text>
-                  </View>
-                </View>
-
-                <View style={styles.proposalDetailSection}>
-                  <Text style={styles.proposalDetailSectionTitle}>Proposal Overview</Text>
-                  <View style={styles.proposalHighlightCard}>
-                    <Text style={styles.proposalHighlightLabel}>Based on existing program</Text>
-                    <Text style={styles.proposalHighlightTitle}>
-                      {pendingProposal.proposalDetails?.targetProjectTitle || 'Not specified'}
-                    </Text>
-                    <Text style={styles.proposalHighlightMeta}>
-                      {pendingProposal.proposalDetails?.requestedProgramModule || module || 'Program module'}
-                    </Text>
-                    {pendingProposal.proposalDetails?.targetProjectDescription ? (
-                      <Text style={styles.proposalHighlightBody}>
-                        {pendingProposal.proposalDetails.targetProjectDescription}
-                      </Text>
-                    ) : null}
-                  </View>
-
-                  <View style={styles.proposalInfoGrid}>
-                    <View style={styles.proposalInfoCard}>
-                      <Text style={styles.proposalInfoLabel}>Proposal Title</Text>
-                      <Text style={styles.proposalInfoValue}>
-                        {pendingProposal.proposalDetails?.proposedTitle || 'Not provided'}
+                  <View style={styles.applicationHeader}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.applicationName}>{pendingProposal.partnerName}</Text>
+                      <Text style={styles.applicationMeta}>{pendingProposal.partnerEmail}</Text>
+                      <Text style={styles.applicationMeta}>
+                        Requested {format(new Date(pendingProposal.requestedAt), 'PPpp')}
                       </Text>
                     </View>
-
-                    <View style={styles.proposalInfoCard}>
-                      <Text style={styles.proposalInfoLabel}>Volunteers Needed</Text>
-                      <Text style={styles.proposalInfoValue}>
-                        {pendingProposal.proposalDetails?.proposedVolunteersNeeded ?? 'Not provided'}
-                      </Text>
-                    </View>
-
-                    <View style={styles.proposalInfoCard}>
-                      <Text style={styles.proposalInfoLabel}>Skills Needed</Text>
-                      <Text style={styles.proposalInfoValue}>
-                        {pendingProposal.proposalDetails?.skillsNeeded?.length
-                          ? pendingProposal.proposalDetails.skillsNeeded.join(', ')
-                          : 'Not specified'}
-                      </Text>
-                    </View>
-
-                    <View style={styles.proposalInfoCard}>
-                      <Text style={styles.proposalInfoLabel}>Start Date</Text>
-                      <Text style={styles.proposalInfoValue}>
-                        {formatProposalDateValue(pendingProposal.proposalDetails?.proposedStartDate)}
-                      </Text>
-                    </View>
-
-                    <View style={styles.proposalInfoCard}>
-                      <Text style={styles.proposalInfoLabel}>End Date</Text>
-                      <Text style={styles.proposalInfoValue}>
-                        {formatProposalDateValue(pendingProposal.proposalDetails?.proposedEndDate)}
-                      </Text>
+                    <View style={[styles.applicationStatusBadge, styles.applicationStatusPending]}>
+                      <Text style={styles.applicationStatusText}>{pendingProposal.status}</Text>
                     </View>
                   </View>
 
-                  <View style={styles.proposalNarrativeCard}>
-                    <Text style={styles.proposalInfoLabel}>Proposed Description</Text>
-                    <Text style={styles.proposalNarrativeText}>
-                      {pendingProposal.proposalDetails?.proposedDescription || 'Not provided'}
-                    </Text>
+                  <View style={styles.proposalDetailSection}>
+                    <Text style={styles.proposalDetailSectionTitle}>Proposal Overview</Text>
+                    <View style={styles.proposalHighlightCard}>
+                      <Text style={styles.proposalHighlightLabel}>Based on existing program</Text>
+                      <Text style={styles.proposalHighlightTitle}>
+                        {pendingProposal.proposalDetails?.targetProjectTitle || 'Not specified'}
+                      </Text>
+                      <Text style={styles.proposalHighlightMeta}>
+                        {pendingProposal.proposalDetails?.requestedProgramModule || module || 'Program module'}
+                      </Text>
+                      {pendingProposal.proposalDetails?.targetProjectDescription ? (
+                        <Text style={styles.proposalHighlightBody}>
+                          {pendingProposal.proposalDetails.targetProjectDescription}
+                        </Text>
+                      ) : null}
+                    </View>
+
+                    <View style={styles.proposalInfoGrid}>
+                      <View style={styles.proposalInfoCard}>
+                        <Text style={styles.proposalInfoLabel}>Proposal Title</Text>
+                        <Text style={styles.proposalInfoValue}>
+                          {pendingProposal.proposalDetails?.proposedTitle || 'Not provided'}
+                        </Text>
+                      </View>
+
+                      <View style={styles.proposalInfoCard}>
+                        <Text style={styles.proposalInfoLabel}>Volunteers Needed</Text>
+                        <Text style={styles.proposalInfoValue}>
+                          {pendingProposal.proposalDetails?.proposedVolunteersNeeded ?? 'Not provided'}
+                        </Text>
+                      </View>
+
+                      <View style={styles.proposalInfoCard}>
+                        <Text style={styles.proposalInfoLabel}>Skills Needed</Text>
+                        <Text style={styles.proposalInfoValue}>
+                          {pendingProposal.proposalDetails?.skillsNeeded?.length
+                            ? pendingProposal.proposalDetails.skillsNeeded.join(', ')
+                            : 'Not specified'}
+                        </Text>
+                      </View>
+
+                      <View style={styles.proposalInfoCard}>
+                        <Text style={styles.proposalInfoLabel}>Start Date</Text>
+                        <Text style={styles.proposalInfoValue}>
+                          {formatProposalDateValue(pendingProposal.proposalDetails?.proposedStartDate)}
+                        </Text>
+                      </View>
+
+                      <View style={styles.proposalInfoCard}>
+                        <Text style={styles.proposalInfoLabel}>End Date</Text>
+                        <Text style={styles.proposalInfoValue}>
+                          {formatProposalDateValue(pendingProposal.proposalDetails?.proposedEndDate)}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.proposalNarrativeCard}>
+                      <Text style={styles.proposalInfoLabel}>Proposed Description</Text>
+                      <Text style={styles.proposalNarrativeText}>
+                        {pendingProposal.proposalDetails?.proposedDescription || 'Not provided'}
+                      </Text>
+                    </View>
+
+                    <View style={styles.proposalNarrativeCard}>
+                      <Text style={styles.proposalInfoLabel}>Proposed Location</Text>
+                      <Text style={styles.proposalNarrativeText}>
+                        {pendingProposal.proposalDetails?.proposedLocation || 'Not provided'}
+                      </Text>
+                    </View>
+
+                    <View style={styles.proposalNarrativeCard}>
+                      <Text style={styles.proposalInfoLabel}>Community Need</Text>
+                      <Text style={styles.proposalNarrativeText}>
+                        {pendingProposal.proposalDetails?.communityNeed || 'Not provided'}
+                      </Text>
+                    </View>
+
+                    <View style={styles.proposalNarrativeCard}>
+                      <Text style={styles.proposalInfoLabel}>Expected Deliverables</Text>
+                      <Text style={styles.proposalNarrativeText}>
+                        {pendingProposal.proposalDetails?.expectedDeliverables || 'Not provided'}
+                      </Text>
+                    </View>
                   </View>
 
-                  <View style={styles.proposalNarrativeCard}>
-                    <Text style={styles.proposalInfoLabel}>Proposed Location</Text>
-                    <Text style={styles.proposalNarrativeText}>
-                      {pendingProposal.proposalDetails?.proposedLocation || 'Not provided'}
-                    </Text>
-                  </View>
-
-                  <View style={styles.proposalNarrativeCard}>
-                    <Text style={styles.proposalInfoLabel}>Community Need</Text>
-                    <Text style={styles.proposalNarrativeText}>
-                      {pendingProposal.proposalDetails?.communityNeed || 'Not provided'}
-                    </Text>
-                  </View>
-
-                  <View style={styles.proposalNarrativeCard}>
-                    <Text style={styles.proposalInfoLabel}>Expected Deliverables</Text>
-                    <Text style={styles.proposalNarrativeText}>
-                      {pendingProposal.proposalDetails?.expectedDeliverables || 'Not provided'}
-                    </Text>
-                  </View>
-                </View>
-
-                {isAdmin && (
-                  <View style={styles.applicationActions}>
-                    <TouchableOpacity
-                      style={[styles.applicationButton, styles.approveButton]}
-                      onPress={async () => {
-                        closeProgramProposalModal();
-                        await handleReviewPartnerApplication(pendingProposal.id, 'Approved');
-                      }}
-                    >
-                      <Text style={styles.applicationButtonText}>Approve</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.applicationButton, styles.rejectButton]}
-                      onPress={async () => {
-                        closeProgramProposalModal();
-                        await handleReviewPartnerApplication(pendingProposal.id, 'Rejected');
-                      }}
-                    >
-                      <Text style={styles.applicationButtonText}>Reject</Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
+                  {isAdmin && (
+                    <View style={styles.applicationActions}>
+                      <TouchableOpacity
+                        style={[styles.applicationButton, styles.approveButton]}
+                        onPress={async () => {
+                          closeProgramProposalModal();
+                          await handleReviewPartnerApplication(pendingProposal.id, 'Approved');
+                        }}
+                      >
+                        <Text style={styles.applicationButtonText}>Approve</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.applicationButton, styles.rejectButton]}
+                        onPress={async () => {
+                          closeProgramProposalModal();
+                          await handleReviewPartnerApplication(pendingProposal.id, 'Rejected');
+                        }}
+                      >
+                        <Text style={styles.applicationButtonText}>Reject</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
                 </View>
               ) : (
                 <View style={styles.proposalModalEmpty}>
@@ -2749,11 +3076,30 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     return `${format(rangeStart, 'MMM d')} - ${format(rangeEnd, 'MMM d, yyyy')}`;
   }, [schedulerAnchorDate, schedulerCalendarDays]);
 
+  const activeProgramTracks = useMemo(
+    () =>
+      programTracks
+        .filter(track => track.isActive !== false)
+        .sort(
+          (left, right) =>
+            (Number(left.sortOrder || 0) - Number(right.sortOrder || 0)) ||
+            String(left.id).localeCompare(String(right.id))
+        ),
+    [programTracks]
+  );
+
+  const activeProgramTrackIds = useMemo(
+    () => new Set(activeProgramTracks.map(track => String(track.id).trim())),
+    [activeProgramTracks]
+  );
+
+  const availableProgramCount = activeProgramTracks.length;
+
   const suiteScheduledProjects = useMemo(
     () =>
       projects
         .filter(project => {
-          const module = getProgramSuiteModule(project);
+          const module = getProgramSuiteModuleForProject(project, activeProgramTrackIds);
           if (!module) {
             return false;
           }
@@ -2809,28 +3155,17 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       [...projects]
         .filter(project => !project.isEvent)
         .sort(
-        (left, right) =>
-          new Date(left.startDate).getTime() - new Date(right.startDate).getTime() ||
-          left.title.localeCompare(right.title)
+          (left, right) =>
+            new Date(left.startDate).getTime() - new Date(right.startDate).getTime() ||
+            left.title.localeCompare(right.title)
         ),
-    [projects]
-  );
-
-  const availableProgramCount = useMemo(
-    () =>
-      new Set(
-        projects
-          .filter(project => !project.isEvent)
-          .map(project => getProgramSuiteModule(project))
-          .filter((module): module is ProgramSuiteModule => Boolean(module))
-      ).size,
     [projects]
   );
 
   const programSections = useMemo(
     () =>
-      featuredProgramModules.map(module => {
-        const details = programSuiteConfig[module];
+      activeProgramTracks.map(track => {
+        const module = String(track.id).trim();
         const proposalProjectId = buildProgramProposalProjectId(module);
         const pendingProposalApplication =
           allPartnerApplications.find(
@@ -2838,12 +3173,18 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               application.projectId === proposalProjectId && application.status === 'Pending'
           ) || null;
         const sectionProjects = projects
-          .filter(project => getProgramSuiteModule(project) === module)
+          .filter(project => getProgramSuiteModuleForProject(project, activeProgramTrackIds) === module)
           .sort((left, right) => new Date(left.startDate).getTime() - new Date(right.startDate).getTime());
 
         return {
           module,
-          ...details,
+          title: track.title || module,
+          description: track.description || '',
+          icon: normalizeProgramTrackIcon(track.icon),
+          accent: normalizeProgramTrackColor(track.color),
+          surface: '#f5f3ff',
+          border: '#ddd6fe',
+          imageUrl: track.imageUrl,
           projects: sectionProjects,
           totalPrograms: sectionProjects.filter(project => !project.isEvent).length,
           inProgressCount: sectionProjects.filter(project => getProjectDisplayStatus(project) === 'In Progress').length,
@@ -2852,19 +3193,19 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           pendingProposalCount: pendingProposalApplication ? 1 : 0,
         };
       }),
-    [allPartnerApplications, projects]
+    [activeProgramTracks, allPartnerApplications, projects]
   );
 
   useEffect(() => {
-    featuredProgramModules.forEach(module => {
-      Animated.timing(programSectionAnimations.current[module], {
-        toValue: expandedProgramModules.has(module) ? 1 : 0,
+    programSections.forEach(section => {
+      Animated.timing(getProgramSectionAnimation(section.module), {
+        toValue: expandedProgramModules.has(section.module) ? 1 : 0,
         duration: 260,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: false,
       }).start();
     });
-  }, [expandedProgramModules]);
+  }, [expandedProgramModules, programSections]);
 
   const activeSelectedProject = getCurrentSelectedProject();
 
@@ -2898,7 +3239,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     const activeProjectImageSource = getPrimaryProjectImageSource(activeSelectedProject);
     const hasCustomProjectImage = Boolean(activeSelectedProject.imageUrl && isImageMediaUri(activeSelectedProject.imageUrl));
     const hasVisibleProjectImage = Boolean(activeProjectImageSource);
-    const internalTasks = activeSelectedProject.internalTasks || [];
+    const internalTasks = Array.isArray(activeSelectedProject.internalTasks) ? activeSelectedProject.internalTasks : [];
     const parentProject =
       activeSelectedProject.parentProjectId
         ? projects.find(project => project.id === activeSelectedProject.parentProjectId) || null
@@ -2929,12 +3270,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       },
       ...(hasPartneredOrg
         ? [
-            {
-              label: 'Partner',
-              value: selectedPartnerName,
-              meta: 'Coordinating organization',
-            },
-          ]
+          {
+            label: 'Partner',
+            value: selectedPartnerName,
+            meta: 'Coordinating organization',
+          },
+        ]
         : []),
       {
         label: 'Schedule',
@@ -2974,12 +3315,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       },
       ...(hasPartneredOrg
         ? [
-            {
-              label: 'Partnered Organization',
-              value: selectedPartnerName,
-              meta: 'Primary delivery partner for this work.',
-            },
-          ]
+          {
+            label: 'Partnered Organization',
+            value: selectedPartnerName,
+            meta: 'Primary delivery partner for this work.',
+          },
+        ]
         : []),
     ];
     const logisticsDetails = [
@@ -3009,47 +3350,47 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     ];
     const eventOperationsDetails = activeSelectedProject.isEvent
       ? [
-          {
-            label: 'Start Date',
-            value: formattedStartDate,
-            meta: 'Admins can customize this in Edit Event',
-          },
-          {
-            label: 'End Date',
-            value: formattedEndDate,
-            meta: 'Admins can customize this in Edit Event',
-          },
-          {
-            label: 'Event Name',
-            value: activeSelectedProject.title,
-            meta: 'Displayed across volunteer and admin views',
-          },
-          {
-            label: 'Parent Program',
-            value: parentProject?.title || detailModuleLabel,
-            meta: 'Used for context and reporting',
-          },
-          {
-            label: 'Skills Needed',
-            value: (activeSelectedProject.skillsNeeded || []).length > 0
-              ? (activeSelectedProject.skillsNeeded || []).join(', ')
-              : 'No skills tagged',
-            meta: 'Aggregated from this event’s task skills and event skill tags',
-          },
-          {
-            label: 'Task Board',
-            value: `${internalTasks.length} task${internalTasks.length === 1 ? '' : 's'}`,
-            meta: internalTasks.length ? 'Assignments are ready to review' : 'No tasks created yet',
-          },
-          {
-            label: 'Join Requests',
-            value: `${pendingVolunteerRequestCount}`,
-            meta:
-              pendingVolunteerRequestCount > 0
-                ? 'Requests are waiting for review'
-                : 'No requests currently pending',
-          },
-        ]
+        {
+          label: 'Start Date',
+          value: formattedStartDate,
+          meta: 'Admins can customize this in Edit Event',
+        },
+        {
+          label: 'End Date',
+          value: formattedEndDate,
+          meta: 'Admins can customize this in Edit Event',
+        },
+        {
+          label: 'Event Name',
+          value: activeSelectedProject.title,
+          meta: 'Displayed across volunteer and admin views',
+        },
+        {
+          label: 'Parent Program',
+          value: parentProject?.title || detailModuleLabel,
+          meta: 'Used for context and reporting',
+        },
+        {
+          label: 'Skills Needed',
+          value: (activeSelectedProject.skillsNeeded || []).length > 0
+            ? (activeSelectedProject.skillsNeeded || []).join(', ')
+            : 'No skills tagged',
+          meta: 'Aggregated from this event’s task skills and event skill tags',
+        },
+        {
+          label: 'Task Board',
+          value: `${internalTasks.length} task${internalTasks.length === 1 ? '' : 's'}`,
+          meta: internalTasks.length ? 'Assignments are ready to review' : 'No tasks created yet',
+        },
+        {
+          label: 'Join Requests',
+          value: `${pendingVolunteerRequestCount}`,
+          meta:
+            pendingVolunteerRequestCount > 0
+              ? 'Requests are waiting for review'
+              : 'No requests currently pending',
+        },
+      ]
       : [];
 
     return (
@@ -3105,8 +3446,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                   {hasCustomProjectImage
                     ? 'Custom image saved for this project.'
                     : hasVisibleProjectImage
-                    ? 'Using the default fallback image for this program.'
-                    : 'No image will be shown for this project right now.'}
+                      ? 'Using the default fallback image for this program.'
+                      : 'No image will be shown for this project right now.'}
                 </Text>
 
                 {isAdmin ? (
@@ -3304,10 +3645,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                           task.status === 'Completed'
                             ? styles.taskStatusCompleted
                             : task.status === 'In Progress'
-                            ? styles.taskStatusInProgress
-                            : task.status === 'Assigned'
-                            ? styles.taskStatusAssigned
-                            : styles.taskStatusUnassigned,
+                              ? styles.taskStatusInProgress
+                              : task.status === 'Assigned'
+                                ? styles.taskStatusAssigned
+                                : styles.taskStatusUnassigned,
                         ]}
                       >
                         <Text style={styles.taskStatusText}>{task.status}</Text>
@@ -3812,7 +4153,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                         style={[
                           styles.statusOptionText,
                           taskDraft.isFieldOfficer === option.value &&
-                            styles.statusOptionTextSelected,
+                          styles.statusOptionTextSelected,
                         ]}
                       >
                         {option.label}
@@ -4069,30 +4410,30 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               )}
 
               {statusUpdateMode === 'Manual' && (
-              <View style={[styles.formRow, styles.formRowTop]}>
-                <View style={[styles.statusOptions, styles.statusOptionsCard]}>
-                  {statuses.map(status => (
-                    <TouchableOpacity
-                      key={status}
-                      style={[
-                        styles.statusOption,
-                        newStatus === status && styles.statusOptionSelected,
-                      ]}
-                      onPress={() => setNewStatus(status as Project['status'])}
-                    >
-                      <Text
+                <View style={[styles.formRow, styles.formRowTop]}>
+                  <View style={[styles.statusOptions, styles.statusOptionsCard]}>
+                    {statuses.map(status => (
+                      <TouchableOpacity
+                        key={status}
                         style={[
-                          styles.statusOptionText,
-                          newStatus === status && styles.statusOptionTextSelected,
+                          styles.statusOption,
+                          newStatus === status && styles.statusOptionSelected,
                         ]}
+                        onPress={() => setNewStatus(status as Project['status'])}
                       >
-                        {status}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
+                        <Text
+                          style={[
+                            styles.statusOptionText,
+                            newStatus === status && styles.statusOptionTextSelected,
+                          ]}
+                        >
+                          {status}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  <Text style={[styles.label, styles.labelRight, styles.labelTop]}>New Status</Text>
                 </View>
-                <Text style={[styles.label, styles.labelRight, styles.labelTop]}>New Status</Text>
-              </View>
               )}
 
               <View style={[styles.formRow, styles.formRowTop]}>
@@ -4141,7 +4482,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           <Text style={styles.lifecycleEyebrow}>Lifecycle workspace</Text>
           <Text style={styles.title}>Program Management Suite</Text>
           <Text style={styles.listSubtitle}>
-            Open the three core programs below and manage each scheduler, project list, volunteers, and approvals in one place.
+            Open the active programs below and manage each scheduler, project list, volunteers, and approvals in one place.
           </Text>
         </View>
         {isAdmin && (
@@ -4196,6 +4537,104 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       ) : null}
       {!loadError ? (
         <>
+          <View style={{ marginBottom: 24 }}>
+            <Text style={{ fontSize: 20, fontWeight: '700', color: '#1e293b', marginBottom: 16 }}>Programs</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 16, paddingRight: 20 }}>
+              {programSections.map(section => {
+                const track = activeProgramTracks.find(t => t.id === section.module);
+                return (
+                  <View key={section.module} style={{ position: 'relative' }}>
+                    <TouchableOpacity
+                      style={[
+                        styles.programSuiteHeaderCard,
+                        {
+                          backgroundColor: section.surface,
+                          borderColor: expandedProgramModules.has(section.module) ? section.accent : section.border,
+                          width: 260,
+                          height: 140,
+                          justifyContent: 'space-between',
+                        },
+                      ]}
+                      onPress={() => toggleProgramSection(section.module)}
+                      activeOpacity={0.88}
+                    >
+                      {section.imageUrl && (
+                        <Image
+                          source={{ uri: section.imageUrl }}
+                          style={[StyleSheet.absoluteFill, { borderRadius: 8, opacity: 0.12 }]}
+                          resizeMode="cover"
+                        />
+                      )}
+                      <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', width: '100%' }}>
+                        <View style={[styles.programSuiteIconWrap, { backgroundColor: '#ffffff', borderColor: section.border }]}>
+                          <MaterialIcons name={section.icon} size={26} color={section.accent} />
+                        </View>
+                        <MaterialIcons
+                          name={getProgramSuiteChevron(expandedProgramModules.has(section.module))}
+                          size={24}
+                          color={section.accent}
+                          style={{ opacity: 0.6 }}
+                        />
+                      </View>
+                      <View>
+                        <Text style={[styles.programSuiteTitle, { fontSize: 16, marginBottom: 4 }]}>{section.title}</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                          <Text style={{ fontSize: 13, fontWeight: '600', color: section.accent }}>{section.totalPrograms} Projects</Text>
+                          <Text style={{ fontSize: 13, color: '#64748b' }}>•</Text>
+                          <Text style={{ fontSize: 13, color: '#64748b' }}>{section.inProgressCount} Active</Text>
+                        </View>
+                      </View>
+                    </TouchableOpacity>
+                    {isAdmin && track && (
+                      <View style={{ position: 'absolute', top: 6, right: 6, flexDirection: 'row', gap: 4 }}>
+                        <TouchableOpacity
+                          style={{ backgroundColor: 'rgba(255,255,255,0.92)', borderRadius: 6, padding: 4 }}
+                          onPress={() => openEditProgramModal(track)}
+                          activeOpacity={0.8}
+                        >
+                          <MaterialIcons name="edit" size={16} color="#6366f1" />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={{ backgroundColor: 'rgba(255,255,255,0.92)', borderRadius: 6, padding: 4, opacity: actionLoadingKey === `deleteProgram-${track.id}` ? 0.5 : 1 }}
+                          onPress={() => handleDeleteProgram(track.id, track.title)}
+                          disabled={actionLoadingKey === `deleteProgram-${track.id}`}
+                          activeOpacity={0.8}
+                        >
+                          <MaterialIcons name="delete" size={16} color="#ef4444" />
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                  </View>
+                );
+              })}
+
+              {isAdmin && (
+                <TouchableOpacity
+                  style={{
+                    width: 200,
+                    height: 140,
+                    borderWidth: 2,
+                    borderColor: '#cbd5e1',
+                    borderStyle: 'dashed',
+                    borderRadius: 8,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: '#f8fafc',
+                  }}
+                  onPress={openCreateProgramModal}
+                  activeOpacity={0.8}
+                >
+                  <MaterialIcons name="add" size={32} color="#64748b" />
+                  <Text style={{ color: '#64748b', fontWeight: '600', marginTop: 8 }}>Add program +</Text>
+                </TouchableOpacity>
+              )}
+            </ScrollView>
+          </View>
+
+          <View style={styles.programSuiteStack}>
+            {programSections.map(renderProgramSection)}
+          </View>
+
           <View
             style={[
               styles.programSuiteSchedulerCard,
@@ -4390,7 +4829,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                           {formatCalendarItemDateRange(project.startDate, project.endDate)}
                         </Text>
                         <Text style={styles.schedulerProjectCalendarCardMeta} numberOfLines={1}>
-                          {getProgramSuiteModule(project) || project.category}
+                          {getProgramSuiteModuleForProject(project, activeProgramTrackIds) || project.category}
                         </Text>
                       </TouchableOpacity>
                     ))}
@@ -4406,10 +4845,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               </View>
             </View>
           </View>
-
-          <View style={styles.programSuiteStack}>
-            {programSections.map(renderProgramSection)}
-          </View>
         </>
       ) : null}
       {!loadError && projects.length === 0 ? (
@@ -4420,6 +4855,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       ) : null}
 
       {renderProgramProposalModal()}
+      {renderProgramCrudModal()}
       {renderProjectEditorModal()}
     </ScrollView>
   );
@@ -4443,7 +4879,7 @@ const styles = StyleSheet.create({
   headerSpacer: {
     width: 24,
     height: 24,
-  },  lifecycleHero: {
+  }, lifecycleHero: {
     marginBottom: 14,
     backgroundColor: '#ffffff',
     borderWidth: 1,

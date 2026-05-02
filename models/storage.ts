@@ -60,6 +60,7 @@ const STORAGE_KEYS = {
   PUBLISHED_IMPACT_REPORTS: 'publishedImpactReports',
   ADMIN_PLANNING_CALENDARS: 'adminPlanningCalendars',
   ADMIN_PLANNING_ITEMS: 'adminPlanningItems',
+  PROGRAM_TRACKS: 'programTracks',
 };
 
 const WEB_MESSAGE_SYNC_KEY = 'volcre:messages:updatedAt';
@@ -1963,7 +1964,7 @@ function normalizeProjectSkillsNeeded(
 
 function normalizeProjectRecord(project: Project): Project {
   const normalizedTasks =
-    project.internalTasks && project.internalTasks.length > 0
+    Array.isArray(project.internalTasks) && project.internalTasks.length > 0
       ? project.internalTasks.map(task => normalizeProjectInternalTask(task, project.id))
       : [];
   const normalizedCategory =
@@ -1976,6 +1977,9 @@ function normalizeProjectRecord(project: Project): Project {
       ? 'Disaster'
       : (project.category as AdvocacyFocus | undefined)) ||
     'Disaster';
+  const normalizedProgramId =
+    String(project.program_id || project.programModule || project.category || '')
+      .trim() || undefined;
   const rawStatusMode = String(project.statusMode || '').trim().toLowerCase();
   const hasExplicitStatusMode = rawStatusMode === 'manual' || rawStatusMode === 'system';
   const normalizedStatusMode: Project['statusMode'] =
@@ -1995,6 +1999,7 @@ function normalizeProjectRecord(project: Project): Project {
     imageHidden: Boolean(project.imageHidden),
     category: normalizedCategory,
     programModule: normalizedProgramModule,
+    program_id: normalizedProgramId,
     statusMode: normalizedManualStatus ? 'Manual' : normalizedStatusMode,
     manualStatus: normalizedManualStatus || undefined,
     parentProjectId: project.parentProjectId?.trim() || undefined,
@@ -2860,6 +2865,23 @@ export async function deleteAdminPlanningItem(itemId: string): Promise<void> {
 
 // Project Storage
 // Inserts or updates a project or event record.
+export async function saveProgram(program: ProgramTrack): Promise<void> {
+  const tracks = await getStorageItem<ProgramTrack[]>(STORAGE_KEYS.PROGRAM_TRACKS) || [];
+  const existingIndex = tracks.findIndex(t => t.id === program.id);
+  if (existingIndex >= 0) {
+    tracks[existingIndex] = { ...tracks[existingIndex], ...program };
+  } else {
+    tracks.push(program);
+  }
+  await saveRemoteStorageItem(STORAGE_KEYS.PROGRAM_TRACKS, tracks);
+}
+
+export async function deleteProgram(programId: string): Promise<void> {
+  const tracks = await getStorageItem<ProgramTrack[]>(STORAGE_KEYS.PROGRAM_TRACKS) || [];
+  const filtered = tracks.filter(t => t.id !== programId);
+  await saveRemoteStorageItem(STORAGE_KEYS.PROGRAM_TRACKS, filtered);
+}
+
 export async function saveProject(project: Project): Promise<void> {
   const projects = await getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS) || [];
   const existingIndex = projects.findIndex(p => p.id === project.id);
@@ -2867,7 +2889,7 @@ export async function saveProject(project: Project): Promise<void> {
     ...project,
     isEvent: false,
     parentProjectId: undefined,
-    skillsNeeded: normalizeProjectSkillsNeeded(project, project.internalTasks || []),
+    skillsNeeded: normalizeProjectSkillsNeeded(project, Array.isArray(project.internalTasks) ? project.internalTasks : []),
   });
   if (existingIndex >= 0) {
     projects[existingIndex] = normalizedProject;
@@ -2883,7 +2905,7 @@ export async function saveEvent(event: Project): Promise<void> {
   const existingIndex = events.findIndex(entry => entry.id === event.id);
   const normalizedEvent = normalizeEventRecord({
     ...event,
-    skillsNeeded: normalizeProjectSkillsNeeded(event, event.internalTasks || []),
+    skillsNeeded: normalizeProjectSkillsNeeded(event, Array.isArray(event.internalTasks) ? event.internalTasks : []),
   });
   if (existingIndex >= 0) {
     events[existingIndex] = normalizedEvent;
