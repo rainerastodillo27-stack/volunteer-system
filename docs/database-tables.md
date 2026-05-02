@@ -84,7 +84,7 @@ These are the primary tables used by the running system.
 - Used for: attendance validation, contribution reporting, and completion evidence.
 - Key links: references `volunteer_id` and `project_id`.
 
-### 10) volunteer_project_joins
+### 10) volunteer_event_joins
 - Purpose: Stores explicit join records between volunteers and projects.
 - Used for: participation roster management and completion tracking.
 - Key links: references project and volunteer identity fields.
@@ -181,7 +181,7 @@ Current use:
 - statusUpdates -> status_updates
 - volunteerMatches -> volunteer_matches
 - volunteerTimeLogs -> volunteer_time_logs
-- volunteerProjectJoins -> volunteer_project_joins
+- volunteerProjectJoins -> volunteer_event_joins
 - partnerProjectApplications -> partner_project_applications
 - partnerReports -> reports
 - publishedImpactReports -> reports

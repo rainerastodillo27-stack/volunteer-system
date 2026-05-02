@@ -49,10 +49,11 @@ async function prefetchForUser(user: User | null): Promise<void> {
   }
   
   const platform = getPlatformOS();
-  // On web, be extremely conservative with prefetches to ensure fast boot.
+  // On mobile, prefetch only essential data to avoid slowing down app launch.
+  // Full prefetch happens on-demand when screens load.
   const keys = platform === 'web' 
     ? ['statusUpdates'] // Only fetch status on web initially
-    : PREFETCH_KEYS_BY_ROLE[user.role];
+    : ['projects']; // Only fetch projects on mobile for faster startup
     
   if (!keys) {
     return;

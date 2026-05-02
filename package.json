@@ -38,6 +38,9 @@
     "db:init": "node ./scripts/run-python.js -m backend.init_supabase",
     "db:migrate": "node ./scripts/run-python.js -m backend.migrate_database",
     "db:migrate:direct": "node ./scripts/run-python.js -m backend.migrate_database_direct",
+    "db:monitor": "node ./scripts/run-python.js -m backend.db_monitor",
+    "db:monitor:auto": "node ./scripts/run-python.js -m backend.db_monitor --auto",
+    "db:monitor:report": "node ./scripts/run-python.js -m backend.db_monitor",
     "deploy:bundle": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/create-deployment-bundle.ps1"
   },
   "dependencies": {

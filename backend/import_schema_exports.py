@@ -30,6 +30,14 @@ def _read_csv_rows(path: Path) -> list[dict[str, str]]:
         return [dict(row) for row in reader]
 
 
+def _read_first_existing_csv_rows(downloads_dir: Path, file_names: tuple[str, ...]) -> list[dict[str, str]]:
+    for file_name in file_names:
+        rows = _read_csv_rows(downloads_dir / file_name)
+        if rows:
+            return rows
+    return []
+
+
 def _clean_string(value: Any) -> str | None:
     if value is None:
         return None
@@ -296,7 +304,10 @@ def _load_import_items(downloads_dir: Path) -> dict[str, list[dict[str, Any]]]:
         ],
         "volunteerProjectJoins": [
             _volunteer_project_join_item(row)
-            for row in _read_csv_rows(downloads_dir / "volunteer_project_joins_rows.csv")
+            for row in _read_first_existing_csv_rows(
+                downloads_dir,
+                ("volunteer_event_joins_rows.csv", "volunteer_project_joins_rows.csv"),
+            )
         ],
         "partnerProjectApplications": [
             _partner_project_application_item(row)

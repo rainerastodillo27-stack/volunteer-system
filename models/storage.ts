@@ -68,7 +68,7 @@ const sharedStorageCacheTimestamps = new Map<string, number>();
 let mockDataInitializationPromise: Promise<void> | null = null;
 // Shared reads should fail fast enough to keep the UI responsive when the
 // backend is slow or unavailable.
-const REMOTE_STORAGE_TIMEOUT_MS = 30000;
+const REMOTE_STORAGE_TIMEOUT_MS = 8000;
 const API_HEALTH_TIMEOUT_MS = 8000;
 const API_READY_RETRY_MS = 1000;
 const API_READY_MAX_ATTEMPTS = 2;
@@ -1588,54 +1588,72 @@ export async function getDashboardTimelineSnapshot(): Promise<DashboardTimelineS
   }
 }
 
+// In-flight requests for snapshots to avoid redundant network overhead.
+const inFlightSnapshotRequests = new Map<string, Promise<ProjectsScreenSnapshot>>();
+
+// Shared promise for any ongoing snapshot request, regardless of params.
+let globalSnapshotPromise: Promise<ProjectsScreenSnapshot> | null = null;
+let lastSnapshotRequestTime = 0;
+const GLOBAL_SNAPSHOT_COOLDOWN_MS = 5000;
+
 // Loads the combined project, volunteer, and application data for the projects screen.
+// Note: We ignore specific 'fields' to force consolidation into a single global promise.
 export async function getProjectsScreenSnapshot(
   user?: Pick<User, 'id' | 'role'> | null,
   fields?: string[]
 ): Promise<ProjectsScreenSnapshot> {
   const params = new URLSearchParams();
-  if (user?.id) {
-    params.set('user_id', user.id);
-  }
-  if (user?.role) {
-    params.set('role', user.role);
-  }
-  if (fields && fields.length > 0) {
-    params.set('fields', fields.join(','));
+  if (user?.id) params.set('user_id', user.id);
+  if (user?.role) params.set('role', user.role);
+  
+  // We intentionally ignore the 'fields' parameter for the global promise/fetch
+  // so that all components share the same snapshot data.
+
+  // 1. Global deduplication: share the same promise if another snapshot is currently in-flight
+  if (globalSnapshotPromise) {
+    console.log(`[Data] Deduplicating ProjectsSnapshot request (shared promise)`);
+    return globalSnapshotPromise;
   }
 
+  // 2. Global cooldown: if we just requested a snapshot recently, serve from cache
   const cacheKey = `snapshot:${params.toString()}`;
-  const cached = projectsSnapshotCache.get(cacheKey);
-  if (cached && Date.now() - cached.timestamp < PROJECTS_SNAPSHOT_CACHE_TTL_MS) {
-    console.log(`[Data] ProjectsSnapshot cache hit (${cacheKey.slice(0, 40)}...)`);
-    return cached.data as ProjectsScreenSnapshot;
+  if (Date.now() - lastSnapshotRequestTime < GLOBAL_SNAPSHOT_COOLDOWN_MS) {
+    const cached = projectsSnapshotCache.get(cacheKey) || Array.from(projectsSnapshotCache.values())[0];
+    if (cached) {
+      console.log(`[Data] Throttling ProjectsSnapshot request (cooldown active)`);
+      return cached.data as ProjectsScreenSnapshot;
+    }
   }
 
-  const query = params.toString();
-  const timerLabel = `[Data] ProjectsSnapshot (${user?.role || 'unknown'})`;
-  console.time(timerLabel);
-  const snapshotStart = Date.now();
+  globalSnapshotPromise = (async () => {
+    try {
+      lastSnapshotRequestTime = Date.now();
+      const query = params.toString();
+      const payload = await requestApiJson<Partial<ProjectsScreenSnapshot>>(
+        `/projects/snapshot${query ? `?${query}` : ''}`
+      );
 
-  const payload = await requestApiJson<Partial<ProjectsScreenSnapshot>>(
-    `/projects/snapshot${query ? `?${query}` : ''}`
-  );
+      const result = {
+        projects: (payload.projects || []).map(project =>
+          project?.isEvent ? normalizeEventRecord(project) : normalizeProjectRecord(project)
+        ),
+        programTracks: Array.isArray(payload.programTracks) ? payload.programTracks : [],
+        volunteerProfile: payload.volunteerProfile || null,
+        volunteerMatches: Array.isArray(payload.volunteerMatches) ? payload.volunteerMatches : undefined,
+        timeLogs: payload.timeLogs || [],
+        partnerApplications: payload.partnerApplications || [],
+        volunteerJoinRecords: payload.volunteerJoinRecords || [],
+      };
 
-  const result = {
-    projects: (payload.projects || []).map(project =>
-      project?.isEvent ? normalizeEventRecord(project) : normalizeProjectRecord(project)
-    ),
-    programTracks: Array.isArray(payload.programTracks) ? payload.programTracks : [],
-    volunteerProfile: payload.volunteerProfile || null,
-    volunteerMatches: Array.isArray(payload.volunteerMatches) ? payload.volunteerMatches : undefined,
-    timeLogs: payload.timeLogs || [],
-    partnerApplications: payload.partnerApplications || [],
-    volunteerJoinRecords: payload.volunteerJoinRecords || [],
-  };
+      // Cache the result for this specific field-set request
+      projectsSnapshotCache.set(cacheKey, { data: result, timestamp: Date.now() });
+      return result;
+    } finally {
+      globalSnapshotPromise = null;
+    }
+  })();
 
-  projectsSnapshotCache.set(cacheKey, { data: result, timestamp: Date.now() });
-  console.timeEnd(timerLabel);
-  console.log(`[Data] ProjectsSnapshot fetched ${result.projects?.length || 0} projects in ${Date.now() - snapshotStart}ms`);
-  return result;
+  return globalSnapshotPromise;
 }
 
 // Writes one storage value to the backend and local cache.
@@ -2364,35 +2382,18 @@ export async function loginWithCredentials(
   identifier: string,
   password: string
 ): Promise<User | null> {
-  try {
-    const payload = await requestApiJson<{ user?: User | null }>('/auth/login', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        identifier: identifier.trim(),
-        password: password.trim(),
-      }),
-    });
-    return payload.user || null;
-  } catch (error: any) {
-    if (error?.message === 'Invalid email/phone or password.') {
-      return loginWithStoredCredentials(identifier, password);
-    }
-
-    const fallbackMessages = [
-      'Database unavailable while checking your account. Please try again.',
-      'Failed to fetch',
-      'Network request failed',
-      'Database Unavailable',
-    ];
-    if (fallbackMessages.some(message => String(error?.message || '').includes(message))) {
-      return loginWithStoredCredentials(identifier, password);
-    }
-
-    throw error;
-  }
+  console.log(`[Auth] Attempting login for: ${identifier}`);
+  const payload = await requestApiJson<{ user?: User | null }>('/auth/login', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      identifier: identifier.trim(),
+      password: password.trim(),
+    }),
+  }, 15000); // 15 seconds timeout
+  return payload.user || null;
 }
 
 // Returns all user accounts from shared storage.

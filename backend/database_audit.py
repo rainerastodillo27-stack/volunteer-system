@@ -1,5 +1,6 @@
 try:
     from .db import get_postgres_connection
+    from .relational_mirror import TABLE_SPECS
     from .storage_table_contract import (
         CANONICAL_STORAGE_TABLES,
         LEGACY_AUXILIARY_TABLES,
@@ -8,6 +9,7 @@ try:
     )
 except ImportError:
     from db import get_postgres_connection
+    from relational_mirror import TABLE_SPECS
     from storage_table_contract import (
         CANONICAL_STORAGE_TABLES,
         LEGACY_AUXILIARY_TABLES,
@@ -29,6 +31,14 @@ EXPECTED_SUPPORT_TABLES: set[str] = {
 }
 
 EXPECTED_TABLES = set(CANONICAL_TABLES) | EXPECTED_SUPPORT_TABLES
+
+
+def _expected_columns_by_table() -> dict[str, set[str]]:
+    expected_columns: dict[str, set[str]] = {}
+    for spec in TABLE_SPECS.values():
+        table_name = spec["table"]
+        expected_columns.setdefault(table_name, set()).update(column_name for column_name, _ in spec["columns"])
+    return expected_columns
 
 
 def print_section(title: str) -> None:
@@ -65,9 +75,51 @@ def main() -> None:
                 print("none")
 
             print_section("Canonical Row Counts")
+            existing_table_names = set(existing_tables)
             for table_name in CANONICAL_TABLES:
+                if table_name not in existing_table_names:
+                    print(f"{table_name}: missing table")
+                    continue
                 cursor.execute(f"select count(*) from {table_name}")
                 print(f"{table_name}: {cursor.fetchone()[0]}")
+
+            cursor.execute(
+                """
+                select table_name, column_name
+                from information_schema.columns
+                where table_schema = 'public'
+                order by table_name, ordinal_position
+                """
+            )
+            actual_columns_by_table: dict[str, list[str]] = {}
+            for table_name, column_name in cursor.fetchall():
+                actual_columns_by_table.setdefault(table_name, []).append(column_name)
+
+            expected_columns_by_table = _expected_columns_by_table()
+            print_section("Canonical Columns")
+            for table_name in CANONICAL_TABLES:
+                columns = actual_columns_by_table.get(table_name, [])
+                print(f"{table_name}: {', '.join(columns) if columns else 'missing table'}")
+
+            print_section("Column Mismatches")
+            found_mismatch = False
+            for table_name in sorted(expected_columns_by_table):
+                if table_name not in CANONICAL_TABLES:
+                    continue
+                expected_columns = expected_columns_by_table[table_name]
+                actual_columns = set(actual_columns_by_table.get(table_name, []))
+                missing_columns = sorted(expected_columns - actual_columns)
+                extra_columns = sorted(actual_columns - expected_columns)
+                if not missing_columns and not extra_columns:
+                    continue
+                found_mismatch = True
+                print(f"{table_name}:")
+                if missing_columns:
+                    print(f"  missing: {', '.join(missing_columns)}")
+                if extra_columns:
+                    print(f"  extra: {', '.join(extra_columns)}")
+            if not found_mismatch:
+                print("none")
 
             checks = {
                 "duplicate_user_emails": """
@@ -92,46 +144,46 @@ def main() -> None:
                     order by count(*) desc, value
                 """,
                 "invalid_user_phones": """
-                    select id, phone
+                    select users_id, phone
                     from users
                     where phone is not null
                       and phone !~ '^09[0-9]{9}$'
-                    order by id
+                    order by users_id
                 """,
                 "invalid_partner_contact_phones": """
-                    select id, contact_phone
+                    select partners_id, contact_phone
                     from partners
                     where contact_phone is not null
                       and contact_phone !~ '^(09[0-9]{9}|\\+63[0-9]{9,11})$'
-                    order by id
+                    order by partners_id
                 """,
                 "invalid_volunteer_phones": """
-                    select id, phone
+                    select volunteers_id, phone
                     from volunteers
                     where phone is not null
                       and phone !~ '^09[0-9]{9}$'
-                    order by id
+                    order by volunteers_id
                 """,
                 "projects_without_partner": """
                     select count(*)
                     from projects p
-                    left join partners pr on pr.id = p.partner_id
-                    where coalesce(p.partner_id, '') <> '' and pr.id is null
+                    left join partners pr on pr.partners_id = p.partner_id
+                    where coalesce(p.partner_id, '') <> '' and pr.partners_id is null
                 """,
                 "matches_with_missing_project_or_event": """
                     select count(*)
                     from volunteer_matches m
-                    left join projects p on p.id = m.project_id
-                    left join events e on e.id = m.project_id
+                    left join projects p on p.projects_id = m.project_id
+                    left join events e on e.events_id = m.project_id
                     where coalesce(m.project_id, '') <> ''
-                      and p.id is null
-                      and e.id is null
+                      and p.projects_id is null
+                      and e.events_id is null
                 """,
                 "matches_with_missing_volunteer": """
                     select count(*)
                     from volunteer_matches m
-                    left join volunteers v on v.id = m.volunteer_id
-                    where coalesce(m.volunteer_id, '') <> '' and v.id is null
+                    left join volunteers v on v.volunteers_id = m.volunteer_id
+                    where coalesce(m.volunteer_id, '') <> '' and v.volunteers_id is null
                 """,
             }
 

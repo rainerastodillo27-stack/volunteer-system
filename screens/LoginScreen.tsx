@@ -32,7 +32,7 @@ import {
   TASK_SKILL_OPTIONS,
   mergeSkillOptions,
 } from '../utils/skills';
-import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
+import { getRequestErrorMessage, getRequestErrorTitle, isAbortLikeError } from '../utils/requestErrors';
 import {
   composePhilippineAddress,
   getBarangaysByCity,
@@ -42,7 +42,9 @@ import {
   PHRegions,
 } from '../utils/philippineAddressData';
 
-const BACKEND_HEALTH_TIMEOUT_MS = 1200;
+const BACKEND_HEALTH_TIMEOUT_MS = 12000;
+const BACKEND_HEALTH_RETRY_MS = 3000;
+const BACKEND_HEALTH_MAX_SLOW_RETRIES = 2;
 
 function LazyDateTimePicker(props: Record<string, unknown>) {
   const DateTimePickerComponent = require('@react-native-community/datetimepicker').default;
@@ -196,11 +198,53 @@ function getIncorrectLoginMessage(
   attemptedPassword: string
 ): string {
   if (matchedUser) {
-    return 'Wrong password.';
+    return 'Wrong password for this account.';
   }
 
   const passwordExists = allUsers.some(user => user.password === attemptedPassword);
-  return passwordExists ? 'Wrong user.' : 'Wrong user and password.';
+  return passwordExists
+    ? 'Wrong email, username, or phone.'
+    : 'Wrong email, username, or phone and password.';
+}
+
+function normalizeLoginPhone(value?: string): string {
+  return (value || '').replace(/\D/g, '');
+}
+
+function findUserByLoginIdentifier(users: User[], identifier: string): User | null {
+  const normalizedIdentifier = identifier.trim().toLowerCase();
+  const usernameAlias = normalizedIdentifier.includes('@')
+    ? ''
+    : normalizedIdentifier.split('@', 1)[0];
+  const normalizedPhone = normalizeLoginPhone(identifier);
+
+  return (
+    users.find(user => {
+      const email = (user.email || '').trim().toLowerCase();
+      const phone = normalizeLoginPhone(user.phone);
+
+      return (
+        email === normalizedIdentifier ||
+        (Boolean(usernameAlias) && email.split('@', 1)[0] === usernameAlias) ||
+        (Boolean(normalizedPhone) && phone === normalizedPhone)
+      );
+    }) || null
+  );
+}
+
+function isCredentialFailureError(error: unknown): boolean {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+      ? error
+      : '';
+  const normalizedMessage = message.toLowerCase();
+
+  return (
+    normalizedMessage.includes('account not found') ||
+    normalizedMessage.includes('incorrect password')
+  );
 }
 
 function getMobileRoleLabel(role: MobileEntryRole): string {
@@ -334,6 +378,23 @@ export default function LoginScreen() {
 
   useEffect(() => {
     let cancelled = false;
+    let slowRetryCount = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const clearRetryTimer = () => {
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+    };
+
+    const scheduleBackendCheck = (delayMs: number) => {
+      clearRetryTimer();
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        void checkBackend();
+      }, delayMs);
+    };
 
     // Checks whether the backend is reachable before allowing authentication flows.
     const checkBackend = async () => {
@@ -343,26 +404,51 @@ export default function LoginScreen() {
       try {
         setBackendStatus(current => (current === 'online' ? current : 'checking'));
         setBackendMessage('Checking backend and Supabase connection...');
-        const response = await fetch(`${getApiBaseUrl()}/health`, {
+        const response = await fetch(`${getApiBaseUrl()}/db-health`, {
           signal: controller.signal,
         });
         const payload = await response.json().catch(() => null) as
-          | { status?: string; mode?: string; detail?: string }
+          | { status?: string; mode?: string; detail?: string; available?: boolean; error?: string }
           | null;
 
-        if (!response.ok || payload?.status !== 'ok' || payload?.mode !== 'postgres') {
+        if (
+          !response.ok ||
+          payload?.status !== 'ok' ||
+          payload?.mode !== 'postgres' ||
+          payload?.available === false
+        ) {
           throw new Error(
             payload?.detail ||
+            payload?.error ||
             `Database backend is unavailable at ${getApiBaseUrl()}.`
           );
         }
 
         if (!cancelled && mountedRef.current) {
+          slowRetryCount = 0;
           setBackendStatus('online');
           setBackendMessage(`Backend connected to Postgres: ${getApiBaseUrl()}`);
         }
       } catch (error) {
         if (!cancelled && mountedRef.current) {
+          if (isAbortLikeError(error)) {
+            slowRetryCount += 1;
+
+            if (slowRetryCount <= BACKEND_HEALTH_MAX_SLOW_RETRIES) {
+              setBackendStatus('checking');
+              setBackendMessage('Backend response is taking longer than expected. Retrying connection check...');
+              scheduleBackendCheck(BACKEND_HEALTH_RETRY_MS);
+              return;
+            }
+
+            setBackendStatus('offline');
+            setBackendMessage(
+              `Database backend did not respond at ${getApiBaseUrl()}. Check the backend process and Supabase connection, then run npm run all:bg or npm run all.`
+            );
+            scheduleBackendCheck(BACKEND_HEALTH_RETRY_MS * 2);
+            return;
+          }
+
           const defaultMessage = `Database backend unavailable at ${getApiBaseUrl()}. Check the backend process and Supabase connection, then run npm run all:bg or npm run all.`;
           const fallbackMessage = getRequestErrorMessage(error, defaultMessage, {
             backendUrl: getApiBaseUrl(),
@@ -370,6 +456,7 @@ export default function LoginScreen() {
 
           setBackendStatus('offline');
           setBackendMessage(fallbackMessage);
+          scheduleBackendCheck(BACKEND_HEALTH_RETRY_MS * 2);
         }
       } finally {
         clearTimeout(timeout);
@@ -382,6 +469,7 @@ export default function LoginScreen() {
     return () => {
       cancelled = true;
       clearTimeout(schedule);
+      clearRetryTimer();
     };
   }, []);
 
@@ -433,6 +521,34 @@ export default function LoginScreen() {
 
       Alert.alert(title, message);
     };
+    const getCredentialFailureMessage = async () => {
+      let allUsers = savedAccounts;
+      let matchedUser = findUserByLoginIdentifier(allUsers, trimmedIdentifier);
+
+      if (allUsers.length > 0) {
+        return getIncorrectLoginMessage(matchedUser, allUsers, trimmedPassword);
+      }
+
+      if (!matchedUser) {
+        try {
+          matchedUser = await getUserByEmailOrPhone(trimmedIdentifier);
+        } catch {
+          // Keep the locally loaded account list as the fallback signal.
+        }
+      }
+
+      try {
+        const fetchedUsers = await getAllUsers();
+        if (fetchedUsers.length > 0) {
+          allUsers = fetchedUsers;
+          matchedUser = matchedUser || findUserByLoginIdentifier(fetchedUsers, trimmedIdentifier);
+        }
+      } catch {
+        // If the backend is slow, still classify with accounts already loaded on the screen.
+      }
+
+      return getIncorrectLoginMessage(matchedUser, allUsers, trimmedPassword);
+    };
 
     setLoginError(null);
 
@@ -449,6 +565,17 @@ export default function LoginScreen() {
       return;
     }
 
+    if (savedAccounts.length > 0) {
+      const locallyMatchedUser = findUserByLoginIdentifier(savedAccounts, trimmedIdentifier);
+      const localPasswordMatches =
+        locallyMatchedUser && (locallyMatchedUser.password || '').trim() === trimmedPassword;
+
+      if (!localPasswordMatches) {
+        showLoginError('Authentication Failed', await getCredentialFailureMessage());
+        return;
+      }
+    }
+
     try {
       setLoading(true);
       if (backendStatus !== 'online') {
@@ -458,22 +585,12 @@ export default function LoginScreen() {
       const user = await loginWithCredentials(trimmedIdentifier, trimmedPassword);
 
       if (!user) {
-        const [matchedUser, allUsers] = await Promise.all([
-          getUserByEmailOrPhone(trimmedIdentifier),
-          getAllUsers(),
-        ]);
-
-        showLoginError(
-          'Authentication Failed',
-          getIncorrectLoginMessage(matchedUser, allUsers, trimmedPassword)
-        );
-        setLoading(false);
+        showLoginError('Authentication Failed', await getCredentialFailureMessage());
         return;
       }
 
       if (!isWeb && activeMobileRole && user.role !== activeMobileRole) {
         showLoginError('Role Mismatch', getMobileRoleMismatchMessage(activeMobileRole, user.role));
-        setLoading(false);
         return;
       }
 
@@ -482,7 +599,6 @@ export default function LoginScreen() {
           'Access Restricted',
           'Volunteer and partner accounts can only log in on mobile.'
         );
-        setLoading(false);
         return;
       }
 
@@ -493,29 +609,28 @@ export default function LoginScreen() {
       setLoginError(null);
       setIdentifier('');
       setPassword('');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Login error:', error);
+      if (isCredentialFailureError(error)) {
+        showLoginError('Authentication Failed', await getCredentialFailureMessage());
+        return;
+      }
+
       const message = getRequestErrorMessage(
         error,
         'An error occurred during login. Please try again.',
         { backendUrl: getApiBaseUrl() }
       );
-      const title =
-        getRequestErrorTitle(error, '') === 'Database Unavailable'
-          ? 'Database Unavailable'
-          : message.includes('rejected')
-          ? 'Application Rejected'
-          : message.includes('pending admin approval') ||
-            message.includes('organization application') ||
-            message.includes('partner account') ||
-            message.includes('volunteer account')
-          ? 'Application Pending'
-          : 'Login Error';
-      showLoginError(title, message);
-    } finally {
-      if (mountedRef.current) {
-        setLoading(false);
+      if (
+        typeof message === 'string' &&
+        message.toLowerCase().includes('database unavailable while checking your account')
+      ) {
+        setBackendStatus('offline');
+        setBackendMessage(`Database backend unavailable at ${getApiBaseUrl()}. Check the backend process and Supabase connection, then run npm run all:bg or npm run all.`);
       }
+      showLoginError('Login Failed', message);
+    } finally {
+      setLoading(false);
     }
   };
 

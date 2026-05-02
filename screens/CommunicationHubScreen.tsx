@@ -446,7 +446,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   const isCompactLayout = width < 640;
   const { projectId: requestedProjectId } = route?.params || {};
 
-  const [view, setView] = useState<'conversations' | 'detail'>('conversations');
+  const [view, setView] = useState<'conversations' | 'detail' | 'list'>('conversations');
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [projectChats, setProjectChats] = useState<ProjectChatItem[]>([]);
   const [proposalChats, setProposalChats] = useState<ProposalChatItem[]>([]);
@@ -469,7 +469,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   const selectedUserRef = useRef<User | null>(null);
   const selectedProjectChatRef = useRef<ProjectChatItem | null>(null);
-  const viewRef = useRef<'conversations' | 'detail'>('conversations');
+  const viewRef = useRef<'conversations' | 'detail' | 'list'>('conversations');
   const allUsersRef = useRef<User[]>([]);
   const lastLoadAlertMessageRef = useRef<string | null>(null);
   const lastFullListRefreshAtRef = useRef(0);

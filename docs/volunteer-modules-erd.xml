@@ -33,7 +33,7 @@
         <mxCell id="103" value="&lt;b&gt;volunteer_time_logs&lt;/b&gt;&lt;hr/&gt;PK id&lt;br&gt;FK volunteer_id&lt;br&gt;FK project_id&lt;br&gt;time_in&lt;br&gt;time_out&lt;br&gt;note&lt;br&gt;completion_photo&lt;br&gt;completion_report" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=6;fillColor=#ffffff;strokeColor=#1f2937;" vertex="1" parent="1">
           <mxGeometry x="320" y="350" width="260" height="200" as="geometry" />
         </mxCell>
-        <mxCell id="104" value="&lt;b&gt;volunteer_project_joins&lt;/b&gt;&lt;hr/&gt;PK id&lt;br&gt;FK project_id&lt;br&gt;FK volunteer_id&lt;br&gt;FK volunteer_user_id&lt;br&gt;joined_at&lt;br&gt;source&lt;br&gt;participation_status&lt;br&gt;completed_at&lt;br&gt;completed_by" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=6;fillColor=#ffffff;strokeColor=#1f2937;" vertex="1" parent="1">
+        <mxCell id="104" value="&lt;b&gt;volunteer_event_joins&lt;/b&gt;&lt;hr/&gt;PK id&lt;br&gt;FK project_id&lt;br&gt;FK volunteer_id&lt;br&gt;FK volunteer_user_id&lt;br&gt;volunteer_name&lt;br&gt;volunteer_email&lt;br&gt;joined_at&lt;br&gt;source&lt;br&gt;participation_status&lt;br&gt;completed_at&lt;br&gt;completed_by" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=6;fillColor=#ffffff;strokeColor=#1f2937;" vertex="1" parent="1">
           <mxGeometry x="600" y="220" width="220" height="220" as="geometry" />
         </mxCell>
 

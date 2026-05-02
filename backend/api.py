@@ -385,8 +385,8 @@ def ensure_message_storage() -> None:
                 """
                 create table if not exists messages (
                   messages_id text primary key,
-                  sender_id text not null references users(id) on delete cascade,
-                  recipient_id text not null references users(id) on delete cascade,
+                  sender_id text not null references users(users_id) on delete cascade,
+                  recipient_id text not null references users(users_id) on delete cascade,
                   project_id text,
                   content text not null,
                   timestamp timestamptz not null,
@@ -407,7 +407,7 @@ def ensure_project_group_message_storage() -> None:
                 create table if not exists project_group_messages (
                   project_group_messages_id text primary key,
                   project_id text not null,
-                  sender_id text not null references users(id) on delete cascade,
+                  sender_id text not null references users(users_id) on delete cascade,
                   content text not null,
                   timestamp timestamptz not null,
                   kind text not null default 'message',
@@ -850,7 +850,7 @@ def _postgres_get_volunteer_recognition_status(
                     coalesce(past_projects, '{}'::text[])
                 ) as project_id
                 from volunteers
-                where id = %s
+                where volunteers_id = %s
             )
             select count(distinct project_id)
             from (
@@ -1115,14 +1115,15 @@ def _build_projects_snapshot(
 
     # CORE LOAD: Only fetch the collections requested by the screen.
     if include_projects or include_join_records:
-        raw_projects = get_postgres_hot_storage_collection(connection, "projects")
-        raw_events = get_postgres_hot_storage_collection(connection, "events")
+        raw_projects = _get_cached_collection(connection, "projects")
+        raw_events = _get_cached_collection(connection, "events")
     if include_status_updates:
-        raw_status_updates = get_postgres_hot_storage_collection(connection, "statusUpdates")
+        raw_status_updates = _get_cached_collection(connection, "statusUpdates")
     if include_program_tracks:
-        raw_program_tracks = get_postgres_hot_storage_collection(connection, "programTracks")
+        raw_program_tracks = _get_cached_collection(connection, "programTracks")
 
     _trace(f"[TRACE] _build_projects_snapshot: read core collections after {_time.perf_counter() - t0:.3f}s")
+    t1 = _time.perf_counter()
 
     # Create a set of event project IDs for O(1) lookup when needed.
     event_project_ids = (
@@ -1135,6 +1136,8 @@ def _build_projects_snapshot(
     if include_projects:
         programs = [project for project in raw_projects if not bool(project.get("isEvent"))]
         projects = [*programs, *raw_events]
+
+    _trace(f"[TRACE] _build_projects_snapshot: processed projects after {_time.perf_counter() - t1:.3f}s")
 
     # Build snapshot with core data
     snapshot: dict[str, Any] = {
@@ -1271,8 +1274,20 @@ def health():
             },
         )
 
-    # Keep the health check fast so login/startup probes don't hang.
-    # Detailed live DB diagnostics remain available at /db-health.
+    # Use cached probe status so health reflects real DB availability
+    # without forcing an expensive live diagnostic on every call.
+    available, error = get_postgres_status(force_refresh=False)
+    if not available:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "error",
+                "configured_mode": configured_mode,
+                "mode": "unavailable",
+                "detail": error or "Supabase Postgres is currently unavailable.",
+                "timestamp": timestamp,
+            },
+        )
 
     return {
         "status": "ok",
@@ -1336,13 +1351,13 @@ def _get_user_by_identifier(identifier: str, connection: Any | None = None) -> d
         with active_connection.cursor() as cursor:
             cursor.execute(
                 """
-                select id
+                select users_id
                 from users
                 where lower(coalesce(email, '')) = %s
                    or split_part(lower(coalesce(email, '')), '@', 1) = %s
                    or regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g') = %s
                    or regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g') = %s
-                order by created_at asc nulls last, id asc
+                order by created_at asc nulls last, users_id asc
                 """,
                 (normalized_identifier, username_alias, comparable_phone, raw_digits),
             )
@@ -1555,7 +1570,7 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
     if user is None:
         try:
             print("[DEBUG] Demo account not found, trying database...")
-            with get_connection() as connection:
+            with get_connection(is_priority=True) as connection:
                 user = _get_user_by_identifier(payload.identifier, connection)
         except Exception as db_error:
             print(f"[DEBUG] Database lookup failed: {db_error}")
@@ -1566,8 +1581,11 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
     
     print(f"[DEBUG] User found: {user.get('id') if user else 'None'}")
     
-    if user is None or user.get("password") != payload.password:
-        raise HTTPException(status_code=401, detail="Invalid email/phone or password.")
+    if user is None:
+        raise HTTPException(status_code=401, detail="Account not found. Please check your email or phone number.")
+
+    if user.get("password") != payload.password:
+        raise HTTPException(status_code=401, detail="Incorrect password.")
 
     print(f"[DEBUG] Password correct for: {user.get('id')}")
     
@@ -1594,21 +1612,67 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
 
 
 @app.post("/auth/users/{user_id}/approve")
-# API endpoint for admin to approve a pending user account.
+# API endpoint for admin to approve a pending user account and linked records.
 def approve_user(user_id: str, payload: UserApprovalPayload, admin_id: str) -> dict[str, Any]:
     with get_connection() as connection:
         user = _get_user_by_id(user_id, connection)
         if user is None:
             raise HTTPException(status_code=404, detail="User not found.")
 
+        approved_at = datetime.now(timezone.utc).isoformat()
+
         if payload.status == "approved":
             user["approvalStatus"] = "approved"
             user["approvedBy"] = admin_id
-            user["approvedAt"] = datetime.now(timezone.utc).isoformat()
+            user["approvedAt"] = approved_at
             # Remove rejection reason if it was previously rejected
             user.pop("rejectionReason", None)
             _save_user_to_storage(user, connection)
-            return {"user": user, "message": "User account approved successfully."}
+
+            if user.get("role") == "volunteer":
+                # Find linked volunteer and update it
+                volunteers = _postgres_get_hot_items_by_field(connection, "volunteers", "userId", user_id)
+                for volunteer in volunteers:
+                    volunteer["registrationStatus"] = "Approved"
+                    volunteer["reviewedBy"] = admin_id
+                    volunteer["reviewedAt"] = approved_at
+                    volunteer["credentialsUnlockedAt"] = approved_at
+                    _postgres_upsert_hot_item(connection, "volunteers", volunteer)
+                
+                # Send system notification to the volunteer
+                from uuid import uuid4
+                notification = {
+                    "id": f"msg-{uuid4()}",
+                    "senderId": admin_id,
+                    "recipientId": user_id,
+                    "projectId": None,
+                    "content": "Your account registration has been approved! You can now log in and start volunteering.",
+                    "timestamp": approved_at,
+                    "read": False,
+                    "attachments": []
+                }
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        insert into messages (
+                          messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                        )
+                        values (%s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            notification["id"],
+                            notification["senderId"],
+                            notification["recipientId"],
+                            notification["projectId"],
+                            notification["content"],
+                            notification["timestamp"],
+                            notification["read"],
+                            json.dumps(notification["attachments"]),
+                        ),
+                    )
+                _invalidate_collection_cache(["messages"])
+
+            return {"user": user, "message": "User account and linked records approved successfully."}
         elif payload.status == "rejected":
             user["approvalStatus"] = "rejected"
             user["rejectionReason"] = payload.rejectionReason or "Account rejected by administrator."

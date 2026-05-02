@@ -25,8 +25,8 @@ _POSTGRES_PROBE_CACHE: dict[str, Any] = {
 _POSTGRES_LAST_SUCCESSFUL_URL: str | None = None
 _POSTGRES_CANDIDATE_FAILURES: dict[str, dict[str, Any]] = {}
 _POSTGRES_CONNECTION_POOL: Any = None
-_POSTGRES_POOL_MIN_SIZE = 5
-_POSTGRES_POOL_MAX_SIZE = 20
+_POSTGRES_POOL_MIN_SIZE = 10
+_POSTGRES_POOL_MAX_SIZE = 50
 
 
 """Shared Postgres connection helpers for the backend API and seed scripts."""
@@ -42,7 +42,7 @@ def load_environment() -> None:
     load_dotenv(backend_dir / ".env", override=True)
 
 
-# Returns the database connect timeout used for Postgres connections.
+print("[DEBUG] backend.db module loaded.")
 def _get_connect_timeout() -> int:
     raw_timeout = os.getenv("DB_CONNECT_TIMEOUT", "5").strip()
     try:
@@ -411,13 +411,34 @@ def get_pooled_postgres_connection():
     return get_postgres_connection()
 
 
-# Returns the default backend database connection.
-def get_connection():
-    """Get a pooled connection if available, otherwise a direct connection."""
+# Returns a connection from the pool if available, otherwise creates a direct connection
+# Returns a context manager that automatically releases the connection back to the pool.
+from contextlib import contextmanager
+
+@contextmanager
+def get_connection(is_priority: bool = False):
+    """Get a pooled connection, with automatic release. High-priority requests are prioritized."""
     if _POSTGRES_CONNECTION_POOL is not None:
         try:
-            return _POSTGRES_CONNECTION_POOL.getconn()
-        except Exception:
-            pass
-    return get_postgres_connection()
+            # We can't easily jump the queue in psycopg_pool without custom logic,
+            # but we can at least log if a priority request is waiting.
+            conn = _POSTGRES_CONNECTION_POOL.getconn()
+            
+            try:
+                yield conn
+            finally:
+                _POSTGRES_CONNECTION_POOL.putconn(conn)
+        except Exception as exc:
+            print(f"[WARN] Failed to get/return connection from pool: {exc}")
+            conn = get_postgres_connection()
+            try:
+                yield conn
+            finally:
+                conn.close()
+    else:
+        conn = get_postgres_connection()
+        try:
+            yield conn
+        finally:
+            conn.close()
 

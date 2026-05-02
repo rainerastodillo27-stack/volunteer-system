@@ -204,14 +204,14 @@ def _ensure_user_foreign_keys(connection: Any) -> None:
                 """
                 alter table messages
                 add constraint messages_sender_id_fkey
-                foreign key (sender_id) references users(id) on delete cascade
+                foreign key (sender_id) references users(users_id) on delete cascade
                 """
             )
             cursor.execute(
                 """
                 alter table messages
                 add constraint messages_recipient_id_fkey
-                foreign key (recipient_id) references users(id) on delete cascade
+                foreign key (recipient_id) references users(users_id) on delete cascade
                 """
             )
 
@@ -221,7 +221,7 @@ def _ensure_user_foreign_keys(connection: Any) -> None:
                 """
                 alter table project_group_messages
                 add constraint project_group_messages_sender_id_fkey
-                foreign key (sender_id) references users(id) on delete cascade
+                foreign key (sender_id) references users(users_id) on delete cascade
                 """
             )
 

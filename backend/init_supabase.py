@@ -16,8 +16,8 @@ BASE_DDL = [
     """
     create table if not exists messages (
       messages_id text primary key,
-      sender_id text not null references users(id) on delete cascade,
-      recipient_id text not null references users(id) on delete cascade,
+      sender_id text not null references users(users_id) on delete cascade,
+      recipient_id text not null references users(users_id) on delete cascade,
       project_id text,
       content text not null,
       timestamp timestamptz not null,
@@ -29,7 +29,7 @@ BASE_DDL = [
     create table if not exists project_group_messages (
       project_group_messages_id text primary key,
       project_id text not null,
-      sender_id text not null references users(id) on delete cascade,
+      sender_id text not null references users(users_id) on delete cascade,
       content text not null,
       timestamp timestamptz not null,
       kind text not null default 'message',

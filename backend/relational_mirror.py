@@ -134,13 +134,64 @@ RELATIONAL_TABLE_DDL = [
       updated_at text
     )
     """,
+    """
+    do $$
+    begin
+      if exists (
+        select 1
+        from information_schema.columns
+        where table_schema = 'public' and table_name = 'projects' and column_name = 'project_id'
+      ) and not exists (
+        select 1
+        from information_schema.columns
+        where table_schema = 'public' and table_name = 'projects' and column_name = 'id'
+      ) then
+        alter table projects rename column project_id to id;
+      end if;
+    end $$;
+    """,
+    """
+    do $$
+    begin
+      if exists (
+        select 1
+        from information_schema.columns
+        where table_schema = 'public' and table_name = 'projects' and column_name = 'id'
+      ) then
+        alter table projects alter column id drop identity if exists;
+        alter table projects alter column id type text using id::text;
+      end if;
+      if exists (
+        select 1
+        from information_schema.columns
+        where table_schema = 'public' and table_name = 'projects' and column_name = 'created_at'
+      ) then
+        alter table projects alter column created_at type text using created_at::text;
+      end if;
+    end $$;
+    """,
+    "alter table projects add column if not exists title text not null default ''",
+    "alter table projects add column if not exists description text",
+    "alter table projects add column if not exists partner_id text",
+    "alter table projects add column if not exists program_module text",
+    "alter table projects add column if not exists is_event boolean not null default false",
     "alter table projects add column if not exists parent_project_id text",
     "alter table projects add column if not exists image_url text",
     "alter table projects add column if not exists image_hidden boolean not null default false",
     "alter table projects add column if not exists status_mode text",
     "alter table projects add column if not exists manual_status text",
+    "alter table projects add column if not exists status text",
+    "alter table projects add column if not exists category text",
+    "alter table projects add column if not exists start_date text",
+    "alter table projects add column if not exists end_date text",
+    "alter table projects add column if not exists location text not null default '{}'",
+    "alter table projects add column if not exists volunteers_needed integer not null default 0",
+    "alter table projects add column if not exists volunteers text[] not null default '{}'::text[]",
+    "alter table projects add column if not exists joined_user_ids text[] not null default '{}'::text[]",
     "alter table projects add column if not exists internal_tasks text not null default '[]'",
     "alter table projects add column if not exists skills_needed text[] not null default '{}'::text[]",
+    "alter table projects add column if not exists updated_at text",
+    "alter table projects alter column updated_at type text using updated_at::text",
     "create index if not exists projects_partner_id_idx on projects (partner_id)",
     "create index if not exists projects_parent_project_id_idx on projects (parent_project_id)",
     "create index if not exists projects_status_idx on projects (status)",
@@ -170,12 +221,61 @@ RELATIONAL_TABLE_DDL = [
       updated_at text
     )
     """,
+    """
+    do $$
+    begin
+      if exists (
+        select 1
+        from information_schema.columns
+        where table_schema = 'public' and table_name = 'programs' and column_name = 'program_id'
+      ) and not exists (
+        select 1
+        from information_schema.columns
+        where table_schema = 'public' and table_name = 'programs' and column_name = 'id'
+      ) then
+        alter table programs rename column program_id to id;
+      end if;
+    end $$;
+    """,
+    """
+    do $$
+    begin
+      if exists (
+        select 1
+        from information_schema.columns
+        where table_schema = 'public' and table_name = 'programs' and column_name = 'id'
+      ) then
+        alter table programs alter column id drop identity if exists;
+        alter table programs alter column id type text using id::text;
+      end if;
+      if exists (
+        select 1
+        from information_schema.columns
+        where table_schema = 'public' and table_name = 'programs' and column_name = 'created_at'
+      ) then
+        alter table programs alter column created_at type text using created_at::text;
+      end if;
+    end $$;
+    """,
+    "alter table programs add column if not exists title text not null default ''",
+    "alter table programs add column if not exists description text",
+    "alter table programs add column if not exists partner_id text",
     "alter table programs add column if not exists image_url text",
     "alter table programs add column if not exists image_hidden boolean not null default false",
+    "alter table programs add column if not exists program_module text",
     "alter table programs add column if not exists status_mode text",
     "alter table programs add column if not exists manual_status text",
+    "alter table programs add column if not exists status text",
+    "alter table programs add column if not exists category text",
+    "alter table programs add column if not exists start_date text",
+    "alter table programs add column if not exists end_date text",
+    "alter table programs add column if not exists location text not null default '{}'",
+    "alter table programs add column if not exists volunteers_needed integer not null default 0",
+    "alter table programs add column if not exists volunteers text[] not null default '{}'::text[]",
     "alter table programs add column if not exists joined_user_ids text[] not null default '{}'::text[]",
     "alter table programs add column if not exists linked_event_count integer not null default 0",
+    "alter table programs add column if not exists updated_at text",
+    "alter table programs alter column updated_at type text using updated_at::text",
     "create index if not exists programs_partner_id_idx on programs (partner_id)",
     "create index if not exists programs_program_module_idx on programs (program_module)",
     "create index if not exists programs_category_idx on programs (category)",
@@ -880,6 +980,20 @@ FIELD_NAME_MAPS: dict[str, dict[str, str]] = {
 }
 
 
+def _table_primary_key_column(table_name: str) -> str:
+    return f"{table_name}_id"
+
+
+def _primary_key_column(key: str) -> str:
+    spec = TABLE_SPECS[key]
+    return _table_primary_key_column(spec["table"])
+
+
+for _spec in TABLE_SPECS.values():
+    if _spec["columns"] and _spec["columns"][0][0] == "id":
+        _spec["columns"][0] = (_table_primary_key_column(_spec["table"]), _spec["columns"][0][1])
+
+
 def _json_dump(value: Any, default: Any) -> str:
     if value is None:
         value = default
@@ -1266,7 +1380,13 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
 
 
 def _field_column_name(key: str, field_name: str) -> str:
+    if field_name == "id":
+        return _primary_key_column(key)
     return FIELD_NAME_MAPS.get(key, {}).get(field_name, field_name)
+
+
+def _row_id(key: str, row: dict[str, Any]) -> Any:
+    return row[_primary_key_column(key)]
 
 
 def _row_filter_clause(key: str) -> str | None:
@@ -1278,9 +1398,11 @@ def _row_filter_clause(key: str) -> str | None:
 
 
 def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
+    row_id = _row_id(key, row)
+
     if key == "users":
         return {
-            "id": row["id"],
+            "id": row_id,
             "email": row["email"],
             "password": row["password"],
             "role": row["role"],
@@ -1293,7 +1415,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
 
     if key == "partners":
         return {
-            "id": row["id"],
+            "id": row_id,
             "ownerUserId": row["owner_user_id"],
             "name": row["name"],
             "description": row["description"],
@@ -1317,7 +1439,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
 
     if key == "volunteers":
         return {
-            "id": row["id"],
+            "id": row_id,
             "userId": row["user_id"],
             "name": row["name"],
             "email": row["email"],
@@ -1354,7 +1476,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
 
     if key == "projects":
         return {
-            "id": row["id"],
+            "id": row_id,
             "title": row["title"],
             "description": row["description"],
             "partnerId": row["partner_id"],
@@ -1381,7 +1503,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
 
     if key == "programs":
         return {
-            "id": row["id"],
+            "id": row_id,
             "title": row["title"],
             "description": row["description"],
             "partnerId": row["partner_id"],
@@ -1405,7 +1527,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
 
     if key == "programTracks":
         return {
-            "id": row["id"],
+            "id": row_id,
             "title": row["title"],
             "description": row["description"],
             "icon": row["icon"],
@@ -1419,7 +1541,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
 
     if key == "events":
         return {
-            "id": row["id"],
+            "id": row_id,
             "title": row["title"],
             "description": row["description"],
             "partnerId": row["partner_id"],
@@ -1446,7 +1568,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
 
     if key == "statusUpdates":
         return {
-            "id": row["id"],
+            "id": row_id,
             "projectId": row["project_id"],
             "status": row["status"],
             "source": row["source"],
@@ -1457,7 +1579,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
 
     if key == "volunteerMatches":
         return {
-            "id": row["id"],
+            "id": row_id,
             "volunteerId": row["volunteer_id"],
             "projectId": row["project_id"],
             "status": row["status"],
@@ -1470,7 +1592,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
 
     if key == "volunteerTimeLogs":
         return {
-            "id": row["id"],
+            "id": row_id,
             "volunteerId": row["volunteer_id"],
             "projectId": row["project_id"],
             "timeIn": row["time_in"],
@@ -1482,7 +1604,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
 
     if key == "volunteerProjectJoins":
         return {
-            "id": row["id"],
+            "id": row_id,
             "projectId": row["project_id"],
             "volunteerId": row["volunteer_id"],
             "volunteerUserId": row["volunteer_user_id"],
@@ -1497,7 +1619,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
 
     if key == "partnerProjectApplications":
         return {
-            "id": row["id"],
+            "id": row_id,
             "projectId": row["project_id"],
             "partnerUserId": row["partner_user_id"],
             "partnerName": row["partner_name"],
@@ -1511,7 +1633,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
 
     if key == "partnerReports":
         return {
-            "id": row["id"],
+            "id": row_id,
             "projectId": row["project_id"],
             "partnerId": row["partner_id"],
             "partnerUserId": row["partner_user_id"],
@@ -1534,7 +1656,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
 
     if key == "publishedImpactReports":
         return {
-            "id": row["id"],
+            "id": row_id,
             "projectId": row["project_id"],
             "generatedBy": row["generated_by"],
             "generatedAt": row["generated_at"],
@@ -1548,7 +1670,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
 
     if key == "adminPlanningCalendars":
         return {
-            "id": row["id"],
+            "id": row_id,
             "name": row["name"],
             "color": row["color"],
             "description": row["description"],
@@ -1559,7 +1681,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
 
     if key == "adminPlanningItems":
         return {
-            "id": row["id"],
+            "id": row_id,
             "title": row["title"],
             "description": row["description"],
             "calendarId": row["calendar_id"],
@@ -1582,7 +1704,7 @@ def refresh_program_rows_from_tracks(connection: Any) -> None:
         cursor.execute(
             """
             insert into programs (
-              id,
+              programs_id,
               title,
               description,
               partner_id,
@@ -1604,17 +1726,17 @@ def refresh_program_rows_from_tracks(connection: Any) -> None:
               updated_at
             )
             select
-              t.id,
+              t.program_tracks_id,
               t.title,
               t.description,
               '' as partner_id,
               nullif(t.image_url, '') as image_url,
               false as image_hidden,
-              t.id as program_module,
+              t.program_tracks_id as program_module,
               'System' as status_mode,
               null::text as manual_status,
               'Planning' as status,
-              t.id as category,
+              t.program_tracks_id as category,
               null::text as start_date,
               null::text as end_date,
               '{}'::text as location,
@@ -1626,8 +1748,8 @@ def refresh_program_rows_from_tracks(connection: Any) -> None:
               coalesce(t.updated_at, now()::text)
             from program_tracks t
             where coalesce(t.is_active, true) = true
-              and t.id in ('Nutrition', 'Education', 'Livelihood')
-            order by coalesce(t.sort_order, 0), t.id
+              and t.program_tracks_id in ('Nutrition', 'Education', 'Livelihood')
+            order by coalesce(t.sort_order, 0), t.program_tracks_id
             """
         )
 
@@ -1637,7 +1759,7 @@ def ensure_default_program_tracks(connection: Any) -> None:
         cursor.execute(
             """
             insert into program_tracks (
-              id,
+              program_tracks_id,
               title,
               description,
               icon,
@@ -1652,7 +1774,7 @@ def ensure_default_program_tracks(connection: Any) -> None:
               ('Nutrition', 'Nutrition', 'Food security and health programs for children and families.', 'restaurant', '#dc2626', '', 10, true, now()::text, now()::text),
               ('Education', 'Education', 'Learning, literacy, and skill development for students.', 'school', '#2563eb', '', 20, true, now()::text, now()::text),
               ('Livelihood', 'Livelihood', 'Economic empowerment and vocational training programs.', 'work', '#7c3aed', '', 30, true, now()::text, now()::text)
-            on conflict (id) do update set
+            on conflict (program_tracks_id) do update set
               title = excluded.title,
               description = excluded.description,
               icon = excluded.icon,
@@ -1666,7 +1788,7 @@ def ensure_default_program_tracks(connection: Any) -> None:
         cursor.execute(
             """
             delete from program_tracks
-            where id not in ('Nutrition', 'Education', 'Livelihood')
+            where program_tracks_id not in ('Nutrition', 'Education', 'Livelihood')
             """
         )
 
@@ -1680,7 +1802,7 @@ def migrate_admin_planning_items_into_calendars(connection: Any) -> None:
                                 calendar_id,
                                 jsonb_agg(
                                     jsonb_build_object(
-                                        'id', id,
+                                        'id', admin_planning_items_id,
                                         'title', title,
                                         'description', description,
                                         'calendarId', calendar_id,
@@ -1693,7 +1815,7 @@ def migrate_admin_planning_items_into_calendars(connection: Any) -> None:
                                         'createdAt', created_at,
                                         'updatedAt', updated_at
                                     )
-                                    order by created_at, updated_at, id
+                                    order by created_at, updated_at, admin_planning_items_id
                                 ) as planning_items,
                                 min(created_at) as created_at,
                                 max(updated_at) as updated_at
@@ -1702,7 +1824,7 @@ def migrate_admin_planning_items_into_calendars(connection: Any) -> None:
                         ),
                         calendar_rows as (
                             select
-                                c.id,
+                                c.admin_planning_calendars_id,
                                 coalesce(c.planning_items, '[]')::jsonb as planning_items,
                                 c.name,
                                 c.color,
@@ -1716,13 +1838,13 @@ def migrate_admin_planning_items_into_calendars(connection: Any) -> None:
                             coalesce(c.planning_items, '[]')::jsonb || coalesce(li.planning_items, '[]'::jsonb)
                         )::text
                         from legacy_items li
-                        where c.id = li.calendar_id
+                        where c.admin_planning_calendars_id = li.calendar_id
                         """
                 )
                 cursor.execute(
                         """
                         insert into admin_planning_calendars (
-                            id,
+                            admin_planning_calendars_id,
                             name,
                             color,
                             description,
@@ -1743,7 +1865,7 @@ def migrate_admin_planning_items_into_calendars(connection: Any) -> None:
                                 calendar_id,
                                 jsonb_agg(
                                     jsonb_build_object(
-                                        'id', id,
+                                        'id', admin_planning_items_id,
                                         'title', title,
                                         'description', description,
                                         'calendarId', calendar_id,
@@ -1756,19 +1878,45 @@ def migrate_admin_planning_items_into_calendars(connection: Any) -> None:
                                         'createdAt', created_at,
                                         'updatedAt', updated_at
                                     )
-                                    order by created_at, updated_at, id
+                                    order by created_at, updated_at, admin_planning_items_id
                                 ) as planning_items,
                                 min(created_at) as created_at,
                                 max(updated_at) as updated_at
                             from admin_planning_items
                             group by calendar_id
                         ) li
-                        left join admin_planning_calendars c on c.id = li.calendar_id
-                        where c.id is null
-                        on conflict (id) do update set
+                        left join admin_planning_calendars c on c.admin_planning_calendars_id = li.calendar_id
+                        where c.admin_planning_calendars_id is null
+                        on conflict (admin_planning_calendars_id) do update set
                             planning_items = excluded.planning_items,
                             updated_at = excluded.updated_at
                         """
+                )
+
+
+def ensure_named_primary_key_columns(connection: Any) -> None:
+    table_names = sorted({spec["table"] for spec in TABLE_SPECS.values()})
+    with connection.cursor() as cursor:
+        for table_name in table_names:
+            primary_key_column = _table_primary_key_column(table_name)
+            cursor.execute(
+                """
+                select column_name
+                from information_schema.columns
+                where table_schema = 'public'
+                  and table_name = %s
+                  and column_name in ('id', %s)
+                """,
+                (table_name, primary_key_column),
+            )
+            columns = {row[0] for row in cursor.fetchall()}
+            if "id" in columns and primary_key_column not in columns:
+                cursor.execute(f"alter table {table_name} alter column id drop identity if exists")
+                cursor.execute(f"alter table {table_name} alter column id type text using id::text")
+                cursor.execute(f"alter table {table_name} rename column id to {primary_key_column}")
+            elif primary_key_column in columns:
+                cursor.execute(
+                    f"alter table {table_name} alter column {primary_key_column} type text using {primary_key_column}::text"
                 )
 
 
@@ -1786,6 +1934,7 @@ def ensure_relational_mirror_tables(connection: Any) -> None:
             _trace(f"[TRACE] ensure_relational_mirror_tables: executing DDL #{idx} (len={len(statement):d})")
             cursor.execute(statement)
             _trace(f"[TRACE] ensure_relational_mirror_tables: finished DDL #{idx} in {_time.perf_counter() - _t0:.3f}s")
+    ensure_named_primary_key_columns(connection)
     migrate_admin_planning_items_into_calendars(connection)
     ensure_default_program_tracks(connection)
     refresh_program_rows_from_tracks(connection)
@@ -1843,7 +1992,7 @@ def get_relational_collection(connection: Any, key: str) -> list[dict[str, Any]]
         query = f"select {', '.join(column_names)} from {spec['table']}"
         if filter_clause:
             query += f" where {filter_clause}"
-        query += " order by id asc"
+        query += f" order by {_primary_key_column(key)} asc"
         try:
             _trace(f"[TRACE] get_relational_collection: executing query on {spec['table']}")
             _trace(f"[TRACE] get_relational_collection: query length: {len(query)}")
@@ -1878,7 +2027,7 @@ def get_relational_item_by_id(connection: Any, key: str, item_id: str) -> dict[s
     column_names = [column_name for column_name, _ in spec["columns"]]
     filter_clause = _row_filter_clause(key)
     with connection.cursor(row_factory=dict_row) as cursor:
-        query = f"select {', '.join(column_names)} from {spec['table']} where id = %s"
+        query = f"select {', '.join(column_names)} from {spec['table']} where {_primary_key_column(key)} = %s"
         if filter_clause:
             query += f" and {filter_clause}"
         try:
@@ -1928,7 +2077,7 @@ def get_relational_items_by_field(
 
         if filter_clause:
             query += f" and {filter_clause}"
-        query += " order by id asc"
+        query += f" order by {_primary_key_column(key)} asc"
         try:
             cursor.execute(query, params)
         except (UndefinedColumn, UndefinedTable):
@@ -1956,14 +2105,17 @@ def upsert_relational_item(connection: Any, key: str, item: dict[str, Any]) -> d
     row = _normalize_row(key, item)
     column_names = [column_name for column_name, _ in spec["columns"]]
     placeholders = ["%s" for _ in spec["columns"]]
-    update_assignments = [f"{column_name} = excluded.{column_name}" for column_name in column_names if column_name != "id"]
+    primary_key_column = _primary_key_column(key)
+    update_assignments = [
+        f"{column_name} = excluded.{column_name}" for column_name in column_names if column_name != primary_key_column
+    ]
 
     with connection.cursor() as cursor:
         cursor.execute(
             f"""
             insert into {spec['table']} ({', '.join(column_names)})
             values ({', '.join(placeholders)})
-            on conflict (id) do update set
+            on conflict ({primary_key_column}) do update set
               {', '.join(update_assignments)}
             """,
             row,

@@ -48,7 +48,7 @@ def verify_dswd_setup() -> None:
             print("\n2. PARTNERS WITH ASSIGNED ACCREDITATION NUMBERS:")
             print("-" * 70)
             cursor.execute("""
-                SELECT id, name, dswd_accreditation_no, created_at 
+                SELECT partners_id, name, dswd_accreditation_no, created_at 
                 FROM partners 
                 ORDER BY created_at
             """)

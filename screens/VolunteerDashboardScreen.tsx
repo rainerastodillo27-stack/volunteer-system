@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import {
@@ -19,7 +19,7 @@ import {
   subscribeToStorageChanges,
 } from '../models/storage';
 import type { AdminPlanningCalendar, AdminPlanningItem, Project, Volunteer, VolunteerTimeLog } from '../models/types';
-import { navigateToAvailableRoute } from '../utils/navigation';
+import { navigateToAvailableRoute, debounce } from '../utils/navigation';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
@@ -115,8 +115,16 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
   const [planningCalendars, setPlanningCalendars] = useState<AdminPlanningCalendar[]>([]);
   const [planningItems, setPlanningItems] = useState<AdminPlanningItem[]>([]);
 
+  const isMounted = useRef(true);
+
+  useEffect(() => {
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
+
   const loadDashboardData = React.useCallback(async () => {
-    if (!user?.id) {
+    if (!user?.id || !isMounted.current) {
       return;
     }
 
@@ -144,10 +152,15 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
     }
   }, [user]);
 
+  const isLoaded = useRef(false);
+
   useFocusEffect(
     React.useCallback(() => {
-      void loadDashboardData();
-
+      if (!isLoaded.current) {
+        void loadDashboardData();
+        isLoaded.current = true;
+      }
+      
       return subscribeToStorageChanges(
         [
           'projects',
@@ -157,9 +170,9 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
           'volunteerTimeLogs',
           'adminPlanningCalendars',
         ],
-        () => {
+        debounce(() => {
           void loadDashboardData();
-        }
+        }, 1000)
       );
     }, [loadDashboardData])
   );
