@@ -514,41 +514,13 @@ export default function LoginScreen() {
     const trimmedPassword = rawPassword.trim();
     const activeMobileRole = roleOverride ?? selectedMobileRole;
     const showLoginError = (title: string, message: string) => {
-      if (isWeb) {
-        setLoginError({ title, message });
-        return;
-      }
+      setLoginError({ title, message });
 
-      Alert.alert(title, message);
+      if (!isWeb) {
+        Alert.alert(title, message);
+      }
     };
-    const getCredentialFailureMessage = async () => {
-      let allUsers = savedAccounts;
-      let matchedUser = findUserByLoginIdentifier(allUsers, trimmedIdentifier);
-
-      if (allUsers.length > 0) {
-        return getIncorrectLoginMessage(matchedUser, allUsers, trimmedPassword);
-      }
-
-      if (!matchedUser) {
-        try {
-          matchedUser = await getUserByEmailOrPhone(trimmedIdentifier);
-        } catch {
-          // Keep the locally loaded account list as the fallback signal.
-        }
-      }
-
-      try {
-        const fetchedUsers = await getAllUsers();
-        if (fetchedUsers.length > 0) {
-          allUsers = fetchedUsers;
-          matchedUser = matchedUser || findUserByLoginIdentifier(fetchedUsers, trimmedIdentifier);
-        }
-      } catch {
-        // If the backend is slow, still classify with accounts already loaded on the screen.
-      }
-
-      return getIncorrectLoginMessage(matchedUser, allUsers, trimmedPassword);
-    };
+    const getWrongCredentialsMessage = () => 'Wrong email, username, phone, or password.';
 
     setLoginError(null);
 
@@ -571,7 +543,7 @@ export default function LoginScreen() {
         locallyMatchedUser && (locallyMatchedUser.password || '').trim() === trimmedPassword;
 
       if (!localPasswordMatches) {
-        showLoginError('Authentication Failed', await getCredentialFailureMessage());
+        showLoginError('Authentication Failed', getWrongCredentialsMessage());
         return;
       }
     }
@@ -601,7 +573,7 @@ export default function LoginScreen() {
         );
         return;
       }
-
+          showLoginError('Authentication Failed', getWrongCredentialsMessage());
       // Update auth context - this triggers state change and navigation
       await login(user);
       setBackendStatus('online');
@@ -612,7 +584,7 @@ export default function LoginScreen() {
     } catch (error: any) {
       console.error('Login error:', error);
       if (isCredentialFailureError(error)) {
-        showLoginError('Authentication Failed', await getCredentialFailureMessage());
+        showLoginError('Authentication Failed', getWrongCredentialsMessage(error));
         return;
       }
 
@@ -1135,7 +1107,7 @@ export default function LoginScreen() {
               editable={!loading}
             />
 
-            {isWeb && loginError ? (
+            {loginError ? (
               <InlineLoadError title={loginError.title} message={loginError.message} />
             ) : null}
 
