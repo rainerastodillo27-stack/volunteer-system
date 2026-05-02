@@ -2859,6 +2859,36 @@ export async function deleteAdminPlanningItem(itemId: string): Promise<void> {
   await setStorageItem(STORAGE_KEYS.ADMIN_PLANNING_CALENDARS, nextCalendars);
 }
 
+// Program Tracks Storage
+// Inserts or updates a program track.
+export async function saveProgramTrack(programTrack: ProgramTrack): Promise<void> {
+  const programTracks = (await getStorageItem<ProgramTrack[]>('programTracks')) || [];
+  const existingIndex = programTracks.findIndex(p => p.id === programTrack.id);
+  const now = new Date().toISOString();
+  const normalizedTrack: ProgramTrack = {
+    ...programTrack,
+    createdAt: programTrack.createdAt || now,
+    updatedAt: now,
+  };
+  if (existingIndex >= 0) {
+    programTracks[existingIndex] = normalizedTrack;
+  } else {
+    programTracks.push(normalizedTrack);
+  }
+  await setStorageItem('programTracks', programTracks);
+}
+
+// Deletes a program track by id.
+export async function deleteProgramTrack(programTrackId: string): Promise<void> {
+  const programTracks = (await getStorageItem<ProgramTrack[]>('programTracks')) || [];
+  const filtered = programTracks.filter(p => p.id !== programTrackId);
+  await setStorageItem('programTracks', filtered);
+}
+
+export async function getAllProgramTracks(): Promise<ProgramTrack[]> {
+  return (await getStorageItem<ProgramTrack[]>('programTracks')) || [];
+}
+
 // Project Storage
 // Inserts or updates a project or event record.
 export async function saveProject(project: Project): Promise<void> {

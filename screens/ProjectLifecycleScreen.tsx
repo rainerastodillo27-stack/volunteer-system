@@ -31,6 +31,7 @@ import {
   ProjectInternalTask,
   StatusUpdate,
   VolunteerTimeLog,
+  ProgramTrack,
 } from '../models/types';
 import {
   buildProgramProposalProjectId,
@@ -42,6 +43,7 @@ import {
   getAllVolunteerTimeLogs,
   getAllPartners,
   getAllProjects,
+  getAllProgramTracks,
   getAllVolunteers,
   getPartnerReportsByProject,
   getPartnerProjectApplications,
@@ -91,7 +93,7 @@ const statuses = ['Planning', 'In Progress', 'On Hold', 'Completed', 'Cancelled'
 const lifecycleStatusModes = ['System', 'Manual'] as const;
 type LifecycleStatusMode = (typeof lifecycleStatusModes)[number];
 const projectModules: AdvocacyFocus[] = ['Nutrition', 'Education', 'Livelihood', 'Disaster'];
-const featuredProgramModules = ['Livelihood', 'Education', 'Nutrition'] as const;
+const featuredProgramModules = ['Livelihood', 'Education', 'Nutrition', 'Disaster'] as const;
 
 type ProgramSuiteModule = (typeof featuredProgramModules)[number];
 
@@ -129,6 +131,14 @@ const programSuiteConfig: Record<
     accent: '#ea580c',
     surface: '#fff7ed',
     border: '#fed7aa',
+  },
+  Disaster: {
+    title: 'Disaster Response',
+    description: 'Emergency response, relief efforts, and disaster rehabilitation programs.',
+    icon: 'emergency',
+    accent: '#dc2626',
+    surface: '#fef2f2',
+    border: '#fecaca',
   },
 };
 
@@ -512,6 +522,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
   const [allVolunteerMatches, setAllVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
   const [volunteerTimeLogs, setVolunteerTimeLogs] = useState<VolunteerTimeLog[]>([]);
+  const [programTracks, setProgramTracks] = useState<ProgramTrack[]>([]);
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [showTaskModal, setShowTaskModal] = useState(false);
@@ -542,13 +553,15 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [projectLocationBarangays, setProjectLocationBarangays] = useState<PHBarangay[]>([]);
   const [taskDraft, setTaskDraft] = useState<ProjectTaskDraft>(createEmptyProjectTaskDraft());
   const [customTaskSkill, setCustomTaskSkill] = useState('');
-  const [expandedProgramModules, setExpandedProgramModules] = useState<Set<ProgramSuiteModule>>(
+  const [expandedProgramModules, setExpandedProgramModules] = useState<Set<any>>(
     () => new Set()
   );
-  const programSectionAnimations = React.useRef<Record<ProgramSuiteModule, Animated.Value>>({
+  const programSectionAnimations = React.useRef<Record<string, Animated.Value>>({
     Livelihood: new Animated.Value(0),
     Education: new Animated.Value(0),
     Nutrition: new Animated.Value(0),
+    Disaster: new Animated.Value(0),
+    Custom: new Animated.Value(0),
   });
   const projectDraftParentProject = useMemo(
     () =>
@@ -634,6 +647,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         void loadAllVolunteerMatches();
         void loadVolunteerTimeLogs();
         void loadAllPartnerApplications();
+        void loadProgramTracks();
       };
 
       const refresh = async () => {
@@ -648,7 +662,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       const unsubscribe = subscribeToStorageChanges(
         // Keep subscriptions focused on keys that affect the visible UI first.
-        ['projects', 'events', 'partners', 'statusUpdates', 'partnerReports', 'volunteerProjectJoins', 'volunteerMatches'],
+        ['projects', 'events', 'partners', 'statusUpdates', 'partnerReports', 'volunteerProjectJoins', 'volunteerMatches', 'programTracks'],
         () => {
           // For storage updates, update light data immediately and defer heavy refreshes
           void refreshLight();
@@ -710,6 +724,17 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         title: getRequestErrorTitle(error),
         message: getRequestErrorMessage(error, 'Failed to load volunteers.'),
       });
+    }
+  };
+
+  // Loads custom program tracks for dynamic program sections.
+  const loadProgramTracks = async () => {
+    try {
+      const tracks = await getAllProgramTracks();
+      setProgramTracks(tracks);
+    } catch (error) {
+      // Non-fatal - custom programs are optional
+      console.error('Failed to load program tracks:', error);
     }
   };
 
@@ -1302,14 +1327,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       handleReturnToProjectList();
       closeProjectModal();
       Alert.alert(
-        'Saved',
+        'Success! ✓',
         editingProjectId
           ? savedProject.isEvent
-            ? 'Event updated.'
-            : 'Program updated.'
+            ? 'Event updated successfully. Returning to program list...'
+            : 'Program updated successfully. Returning to program list...'
           : savedProject.isEvent
-            ? 'Event created.'
-            : 'Program created.'
+            ? 'Event created successfully! Returning to program list...'
+            : 'Program created successfully! Returning to program list...'
       );
       await Promise.all([
         loadAllPartnerApplications(),
@@ -2007,7 +2032,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     );
   };
 
-  const toggleProgramSection = (module: ProgramSuiteModule) => {
+  const toggleProgramSection = (module: any) => {
     setExpandedProgramModules(current => {
       const next = new Set(current);
       if (next.has(module)) {
@@ -2519,6 +2544,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               const day = String(date.getDate()).padStart(2, '0');
               const dateString = `${year}-${month}-${day}`;
               handleProjectDraftChange(datePickerMode, dateString);
+              setShowDatePicker(false);
             }}
             onClose={() => setShowDatePicker(false)}
           />
@@ -2828,8 +2854,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   );
 
   const programSections = useMemo(
-    () =>
-      featuredProgramModules.map(module => {
+    () => {
+      const sections = featuredProgramModules.map(module => {
         const details = programSuiteConfig[module];
         const proposalProjectId = buildProgramProposalProjectId(module);
         const pendingProposalApplication =
@@ -2851,20 +2877,49 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           eventCount: sectionProjects.filter(project => project.isEvent).length,
           pendingProposalCount: pendingProposalApplication ? 1 : 0,
         };
-      }),
-    [allPartnerApplications, projects]
+      });
+
+      // Add dynamic sections for custom program tracks
+      programTracks.forEach(track => {
+        const trackProjects = projects
+          .filter(project => project.programModule === track.id || project.category === track.id)
+          .sort((left, right) => new Date(left.startDate).getTime() - new Date(right.startDate).getTime());
+
+        sections.push({
+          module: track.id as any,
+          title: track.title,
+          description: track.description || 'Custom program track.',
+          icon: (track.icon || 'category') as keyof typeof MaterialIcons.glyphMap,
+          accent: track.color || '#6b7280',
+          surface: track.color ? `${track.color}20` : '#f9fafb',
+          border: track.color ? `${track.color}40` : '#e5e7eb',
+          projects: trackProjects,
+          totalPrograms: trackProjects.filter(project => !project.isEvent).length,
+          inProgressCount: trackProjects.filter(project => getProjectDisplayStatus(project) === 'In Progress').length,
+          planningCount: trackProjects.filter(project => getProjectDisplayStatus(project) === 'Planning').length,
+          eventCount: trackProjects.filter(project => project.isEvent).length,
+          pendingProposalCount: 0,
+        });
+      });
+
+      return sections;
+    },
+    [allPartnerApplications, projects, programTracks]
   );
 
   useEffect(() => {
-    featuredProgramModules.forEach(module => {
-      Animated.timing(programSectionAnimations.current[module], {
-        toValue: expandedProgramModules.has(module) ? 1 : 0,
-        duration: 260,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: false,
-      }).start();
+    programSections.forEach(section => {
+      const module = section.module as any;
+      if (programSectionAnimations.current[module]) {
+        Animated.timing(programSectionAnimations.current[module], {
+          toValue: expandedProgramModules.has(module) ? 1 : 0,
+          duration: 260,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: false,
+        }).start();
+      }
     });
-  }, [expandedProgramModules]);
+  }, [expandedProgramModules, programSections]);
 
   const activeSelectedProject = getCurrentSelectedProject();
 

@@ -18,7 +18,7 @@ import {
   getProjectsScreenSnapshot,
   subscribeToStorageChanges,
 } from '../models/storage';
-import type { AdminPlanningCalendar, AdminPlanningItem, Project, Volunteer, VolunteerTimeLog } from '../models/types';
+import type { AdminPlanningCalendar, AdminPlanningItem, Project, ProgramTrack, Volunteer, VolunteerTimeLog } from '../models/types';
 import { navigateToAvailableRoute, debounce } from '../utils/navigation';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
@@ -114,8 +114,12 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
   const [unreadMessages, setUnreadMessages] = useState(0);
   const [planningCalendars, setPlanningCalendars] = useState<AdminPlanningCalendar[]>([]);
   const [planningItems, setPlanningItems] = useState<AdminPlanningItem[]>([]);
+  const [programTracks, setProgramTracks] = useState<ProgramTrack[]>([]);
 
   const isMounted = useRef(true);
+  const lastLoadAtRef = useRef(0);
+  const activeLoadPromiseRef = useRef<Promise<void> | null>(null);
+  const DASHBOARD_LOAD_COOLDOWN_MS = 8000;
 
   useEffect(() => {
     return () => {
@@ -123,33 +127,49 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
     };
   }, []);
 
-  const loadDashboardData = React.useCallback(async () => {
+  const loadDashboardData = React.useCallback(async (force = false) => {
     if (!user?.id || !isMounted.current) {
       return;
     }
 
-    try {
-      const [projectSnapshot, timelineSnapshot, messages] = await Promise.all([
-        getProjectsScreenSnapshot(user, ['projects', 'volunteerProfile', 'timeLogs']),
-        getDashboardTimelineSnapshot(),
-        getMessagesForUser(user.id),
-      ]);
-
-      setProjects(projectSnapshot.projects);
-      setVolunteerProfile(projectSnapshot.volunteerProfile);
-      setTimeLogs(projectSnapshot.timeLogs);
-      setPlanningCalendars(timelineSnapshot.planningCalendars);
-      setPlanningItems(timelineSnapshot.planningItems);
-      setUnreadMessages(messages.filter(message => !message.read && message.recipientId === user.id).length);
-      setLoadError(null);
-    } catch (error) {
-      setLoadError({
-        title: getRequestErrorTitle(error),
-        message: getRequestErrorMessage(error, 'Failed to load the volunteer dashboard.'),
-      });
-    } finally {
-      setLoading(false);
+    if (!force && activeLoadPromiseRef.current) {
+      return activeLoadPromiseRef.current;
     }
+
+    if (!force && Date.now() - lastLoadAtRef.current < DASHBOARD_LOAD_COOLDOWN_MS) {
+      return;
+    }
+
+    const loadPromise = (async () => {
+      try {
+        const [projectSnapshot, timelineSnapshot, messages] = await Promise.all([
+          getProjectsScreenSnapshot(user, ['projects', 'volunteerProfile', 'timeLogs', 'programTracks']),
+          getDashboardTimelineSnapshot(),
+          getMessagesForUser(user.id),
+        ]);
+
+        setProjects(projectSnapshot.projects);
+        setVolunteerProfile(projectSnapshot.volunteerProfile);
+        setTimeLogs(projectSnapshot.timeLogs);
+        setProgramTracks(projectSnapshot.programTracks || []);
+        setPlanningCalendars(timelineSnapshot.planningCalendars);
+        setPlanningItems(timelineSnapshot.planningItems);
+        setUnreadMessages(messages.filter(message => !message.read && message.recipientId === user.id).length);
+        setLoadError(null);
+        lastLoadAtRef.current = Date.now();
+      } catch (error) {
+        setLoadError({
+          title: getRequestErrorTitle(error),
+          message: getRequestErrorMessage(error, 'Failed to load the volunteer dashboard.'),
+        });
+      } finally {
+        setLoading(false);
+        activeLoadPromiseRef.current = null;
+      }
+    })();
+
+    activeLoadPromiseRef.current = loadPromise;
+    return loadPromise;
   }, [user]);
 
   const isLoaded = useRef(false);
@@ -157,7 +177,7 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
   useFocusEffect(
     React.useCallback(() => {
       if (!isLoaded.current) {
-        void loadDashboardData();
+        void loadDashboardData(true);
         isLoaded.current = true;
       }
       
@@ -169,6 +189,7 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
           'volunteerMatches',
           'volunteerTimeLogs',
           'adminPlanningCalendars',
+          'programTracks',
         ],
         debounce(() => {
           void loadDashboardData();
@@ -246,22 +267,37 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
     [projects, user?.id, volunteerProfile]
   );
   const programOverviewCards = useMemo(
-    () =>
-      CORE_PROGRAM_MODULES.map(module => {
+    () => {
+      const trackMap = new Map<string, typeof programTracks[0]>();
+      
+      // Add core programs
+      CORE_PROGRAM_MODULES.forEach(module => {
+        trackMap.set(module, undefined);
+      });
+      
+      // Add custom program tracks
+      programTracks.forEach(track => {
+        if (track.isActive !== false) {
+          trackMap.set(track.id, track);
+        }
+      });
+      
+      return Array.from(trackMap.entries()).map(([programId, track]) => {
         const moduleProjectCount = projects.filter(
           project =>
             !project.isEvent &&
             isVolunteerOpportunityOpen(project) &&
-            (project.programModule || project.category) === module
+            (project.programModule || project.category) === programId
         ).length;
 
         return {
-          label: module,
+          label: track?.title || programId,
           value: String(moduleProjectCount),
           meta: `${moduleProjectCount} project${moduleProjectCount === 1 ? '' : 's'} available`,
         };
-      }),
-    [projects]
+      });
+    },
+    [projects, programTracks]
   );
 
   const upcomingEvent = useMemo(() => getUpcomingProject(assignedEvents), [assignedEvents]);
@@ -413,7 +449,7 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
             <Text style={styles.errorTitle}>{loadError.title}</Text>
             <Text style={styles.errorText}>{loadError.message}</Text>
           </View>
-          <TouchableOpacity onPress={() => void loadDashboardData()}>
+          <TouchableOpacity onPress={() => void loadDashboardData(true)}>
             <Text style={styles.errorAction}>Retry</Text>
           </TouchableOpacity>
         </View>

@@ -116,7 +116,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     };
 
-    void restoreSession();
+    const startupTimeout = setTimeout(() => {
+      setLoading(false);
+    }, 800);
+
+    void restoreSession().finally(() => {
+      clearTimeout(startupTimeout);
+    });
   }, []);
 
   // Saves the active user in memory and persistent storage after login.

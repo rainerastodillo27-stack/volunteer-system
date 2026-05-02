@@ -384,7 +384,7 @@ def ensure_message_storage() -> None:
             cursor.execute(
                 """
                 create table if not exists messages (
-                  messages_id text primary key,
+                  id text primary key,
                   sender_id text not null references users(users_id) on delete cascade,
                   recipient_id text not null references users(users_id) on delete cascade,
                   project_id text,
@@ -405,7 +405,7 @@ def ensure_project_group_message_storage() -> None:
             cursor.execute(
                 """
                 create table if not exists project_group_messages (
-                  project_group_messages_id text primary key,
+                  id text primary key,
                   project_id text not null,
                   sender_id text not null references users(users_id) on delete cascade,
                   content text not null,
@@ -456,7 +456,7 @@ def serialize_message_row(row: Any) -> dict[str, Any]:
         attachments = []
 
     return {
-        "id": row["messages_id"],
+        "id": row.get("messages_id") or row.get("id"),
         "senderId": row["sender_id"],
         "recipientId": row["recipient_id"],
         "projectId": row["project_id"],
@@ -485,7 +485,7 @@ def serialize_project_group_message_row(row: Any) -> dict[str, Any]:
         scope_proposal = json.loads(scope_proposal)
 
     return {
-        "id": row["project_group_messages_id"],
+        "id": row.get("project_group_messages_id") or row.get("id"),
         "projectId": row["project_id"],
         "senderId": row["sender_id"],
         "content": row["content"],
@@ -524,9 +524,9 @@ def _get_special_storage_collection(connection: Any, key: str) -> list[dict[str,
         if key == "messages":
             cursor.execute(
                 """
-                select messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                select id as messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                 from messages
-                order by timestamp asc, messages_id asc
+                order by timestamp asc, id asc
                 """
             )
             return [serialize_message_row(row) for row in cursor.fetchall()]
@@ -535,7 +535,7 @@ def _get_special_storage_collection(connection: Any, key: str) -> list[dict[str,
             cursor.execute(
                 """
                 select
-                  project_group_messages_id,
+                  id as project_group_messages_id,
                   project_id,
                   sender_id,
                   content,
@@ -548,7 +548,7 @@ def _get_special_storage_collection(connection: Any, key: str) -> list[dict[str,
                   response_to_title,
                   attachments
                 from project_group_messages
-                order by timestamp asc, project_group_messages_id asc
+                order by timestamp asc, id asc
                 """
             )
             return [serialize_project_group_message_row(row) for row in cursor.fetchall()]
@@ -568,7 +568,7 @@ def _replace_special_storage_collection(connection: Any, key: str, value: Any) -
                 cursor.execute(
                     """
                     insert into messages (
-                      messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                      id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                     )
                     values (%s, %s, %s, %s, %s, %s, %s, %s)
                     """,
@@ -591,7 +591,7 @@ def _replace_special_storage_collection(connection: Any, key: str, value: Any) -
                 cursor.execute(
                     """
                     insert into project_group_messages (
-                      project_group_messages_id,
+                      id,
                       project_id,
                       sender_id,
                       content,
@@ -1655,7 +1655,7 @@ def approve_user(user_id: str, payload: UserApprovalPayload, admin_id: str) -> d
                     cursor.execute(
                         """
                         insert into messages (
-                          messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                          id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                         )
                         values (%s, %s, %s, %s, %s, %s, %s, %s)
                         """,
@@ -2392,10 +2392,10 @@ def get_messages(user_id: str) -> dict[str, list[dict[str, Any]]]:
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 """
-                select messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                select id as messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                 from messages
                 where sender_id = %s or recipient_id = %s
-                order by timestamp desc
+                order by timestamp desc, id desc
                 """,
                 (user_id, user_id),
             )
@@ -2413,11 +2413,11 @@ def get_conversation(user1: str, user2: str) -> dict[str, list[dict[str, Any]]]:
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 """
-                select messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                select id as messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                 from messages
                 where (sender_id = %s and recipient_id = %s)
                    or (sender_id = %s and recipient_id = %s)
-                order by timestamp asc
+                order by timestamp asc, id asc
                 """,
                 (user1, user2, user2, user1),
             )
@@ -2437,7 +2437,7 @@ def get_project_group_messages(project_id: str, user_id: str) -> dict[str, list[
             cursor.execute(
                 """
                 select
-                  project_group_messages_id,
+                  id as project_group_messages_id,
                   project_id,
                   sender_id,
                   content,
@@ -2450,7 +2450,7 @@ def get_project_group_messages(project_id: str, user_id: str) -> dict[str, list[
                   attachments
                 from project_group_messages
                 where project_id = %s
-                order by timestamp asc
+                order by timestamp asc, id asc
                 """,
                 (project_id,),
             )
@@ -2474,10 +2474,10 @@ async def create_message(payload: MessagePayload) -> dict[str, Any]:
             cursor.execute(
                 """
                 insert into messages (
-                  messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                  id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                 )
                 values (%s, %s, %s, %s, %s, %s, %s, %s)
-                returning messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                returning id as messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                 """,
                 (
                     payload.id,
@@ -2551,7 +2551,7 @@ async def create_project_group_message(
             cursor.execute(
                 """
                 insert into project_group_messages (
-                  project_group_messages_id,
+                  id,
                   project_id,
                   sender_id,
                   content,
@@ -2566,7 +2566,7 @@ async def create_project_group_message(
                 )
                 values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 returning
-                  project_group_messages_id,
+                  id as project_group_messages_id,
                   project_id,
                   sender_id,
                   content,
@@ -2615,8 +2615,8 @@ async def mark_message_read(message_id: str) -> dict[str, Any]:
                 """
                 update messages
                 set read = true
-                where messages_id = %s
-                returning messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                where id = %s
+                returning id as messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                 """,
                 (message_id,),
             )
@@ -2663,6 +2663,30 @@ def get_storage_item(key: str) -> dict[str, Any]:
         return {"key": key, "value": None}
     with get_connection() as connection:
         return {"key": key, "value": _get_cached_collection(connection, key)}
+
+
+@app.delete("/program-tracks/{track_id}")
+# API endpoint that deletes one program track.
+async def delete_program_track(track_id: str) -> dict[str, str]:
+    _require_postgres()
+    
+    with get_connection() as connection:
+        program_tracks = get_postgres_hot_storage_collection(connection, "programTracks")
+        filtered_tracks = [
+            track for track in program_tracks
+            if str(track.get("id") or "") != track_id
+        ]
+        
+        if len(filtered_tracks) == len(program_tracks):
+            raise HTTPException(status_code=404, detail="Program track not found.")
+        
+        replace_postgres_hot_storage_collection(connection, "programTracks", filtered_tracks)
+        connection.commit()
+    
+    _invalidate_collection_cache(["programTracks"])
+    _projects_snapshot_cache.clear()
+    await connection_manager.broadcast_storage_event(["programTracks"])
+    return {"status": "ok", "deletedTrackId": track_id}
 
 
 @app.post("/storage/batch")

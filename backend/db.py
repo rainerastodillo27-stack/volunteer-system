@@ -25,8 +25,8 @@ _POSTGRES_PROBE_CACHE: dict[str, Any] = {
 _POSTGRES_LAST_SUCCESSFUL_URL: str | None = None
 _POSTGRES_CANDIDATE_FAILURES: dict[str, dict[str, Any]] = {}
 _POSTGRES_CONNECTION_POOL: Any = None
-_POSTGRES_POOL_MIN_SIZE = 10
-_POSTGRES_POOL_MAX_SIZE = 50
+_POSTGRES_POOL_MIN_SIZE = 1
+_POSTGRES_POOL_MAX_SIZE = 5
 
 
 """Shared Postgres connection helpers for the backend API and seed scripts."""
@@ -166,9 +166,6 @@ def _get_database_url_candidates() -> list[str]:
             candidates.append(normalized_value)
 
     if primary_url:
-        session_pooler_url = _to_session_pooler_database_url(primary_url)
-        if session_pooler_url:
-            add_candidate(session_pooler_url)
         add_candidate(primary_url)
 
     if fallback_url:
@@ -377,9 +374,9 @@ def init_postgres_pool() -> None:
         if not candidates:
             return
 
-        # Prefer the session pooler candidate if available for the long-lived connection pool
+        # Use the primary transaction-pooler URL for the long-lived backend pool.
         database_url = candidates[0]
-        
+
         # Create connection pool with optimized settings
         _POSTGRES_CONNECTION_POOL = ConnectionPool(
             database_url,

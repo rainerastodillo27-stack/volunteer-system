@@ -17,6 +17,7 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 export default function StackNavigator() {
   const { user, loading } = useAuth();
   const startupLoggedRef = useRef(false);
+  const showBlockingStartupLoader = loading && Platform.OS === 'web';
 
   useEffect(() => {
     if (loading || startupLoggedRef.current) {
@@ -37,7 +38,7 @@ export default function StackNavigator() {
     }
   }, [loading]);
 
-  if (loading) {
+  if (showBlockingStartupLoader) {
     return (
       <View style={styles.loadingScreen}>
         <View style={styles.loadingCard}>
