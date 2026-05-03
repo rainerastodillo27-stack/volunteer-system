@@ -69,7 +69,8 @@ const sharedStorageCacheTimestamps = new Map<string, number>();
 let mockDataInitializationPromise: Promise<void> | null = null;
 // Shared reads should fail fast enough to keep the UI responsive when the
 // backend is slow or unavailable.
-const REMOTE_STORAGE_TIMEOUT_MS = 8000;
+const REMOTE_STORAGE_TIMEOUT_MS = 90000; // Increased from 60s to 90s for slow projects table
+const REMOTE_STORAGE_BATCH_TIMEOUT_MS = 120000;
 const API_HEALTH_TIMEOUT_MS = 8000;
 const API_READY_RETRY_MS = 1000;
 const API_READY_MAX_ATTEMPTS = 2;
@@ -894,7 +895,7 @@ async function fetchRemoteStorageItems(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ keys }),
-  });
+  }, REMOTE_STORAGE_BATCH_TIMEOUT_MS);
   const payload = (await response.json()) as { items?: Record<string, unknown | null> };
   return payload.items || {};
 }
@@ -1185,11 +1186,9 @@ export async function getStorageItemFast<T>(key: string): Promise<T | null> {
     const cachedAt = sharedStorageCacheTimestamps.get(key);
     const isFresh = cachedAt !== undefined && Date.now() - cachedAt <= SHARED_STORAGE_CACHE_TTL_MS;
 
+  if (!isFresh || cached === null) {
     triggerBackgroundStorageRefresh([key]);
-
-    if (cached !== null && isFresh) {
-      return cached;
-    }
+  }
 
     if (cached !== null && !isFresh) {
       try {
@@ -1284,7 +1283,9 @@ export async function getStorageItemsFast(keys: string[]): Promise<Record<string
     const cachedAt = sharedStorageCacheTimestamps.get(key);
     const isFresh = cachedAt !== undefined && Date.now() - cachedAt <= SHARED_STORAGE_CACHE_TTL_MS;
     
-    keysToRefresh.push(key);
+    if (!isFresh || cached === null) {
+      keysToRefresh.push(key);
+    }
 
     if (cached !== null && isFresh) {
       results[key] = cached;
@@ -1296,7 +1297,9 @@ export async function getStorageItemsFast(keys: string[]): Promise<Record<string
     }
   }
 
-  triggerBackgroundStorageRefresh(keysToRefresh);
+  if (keysToRefresh.length > 0) {
+    triggerBackgroundStorageRefresh(keysToRefresh);
+  }
 
   if (missingKeys.length === 0) {
     return results;
@@ -1386,6 +1389,40 @@ export async function getStorageItem<T>(key: string): Promise<T | null> {
 }
 
 // Reads multiple storage values in a single backend request when possible.
+// Split batch requests into smaller chunks to avoid timeout issues
+const STORAGE_BATCH_CHUNK_SIZE = 3;
+
+async function fetchRemoteStorageItemsInChunks(keys: string[]): Promise<Record<string, unknown | null>> {
+  if (keys.length <= STORAGE_BATCH_CHUNK_SIZE) {
+    return fetchRemoteStorageItems(keys);
+  }
+
+  const results: Record<string, unknown | null> = {};
+  const chunks: string[][] = [];
+  
+  for (let i = 0; i < keys.length; i += STORAGE_BATCH_CHUNK_SIZE) {
+    chunks.push(keys.slice(i, i + STORAGE_BATCH_CHUNK_SIZE));
+  }
+
+  // Fetch chunks sequentially to avoid overwhelming the backend
+  for (const chunk of chunks) {
+    try {
+      const chunkResults = await fetchRemoteStorageItems(chunk);
+      Object.assign(results, chunkResults);
+    } catch (error) {
+      // If a chunk fails, still try to include cached values for those keys
+      if (!isAbortLikeError(error)) {
+        throw error;
+      }
+      for (const key of chunk) {
+        results[key] = null;
+      }
+    }
+  }
+
+  return results;
+}
+
 export async function getStorageItems(
   keys: string[]
 ): Promise<Record<string, unknown | null>> {
@@ -1422,7 +1459,7 @@ export async function getStorageItems(
       return results;
     }
 
-    const remoteResults = await fetchRemoteStorageItems(missingSharedKeys);
+    const remoteResults = await fetchRemoteStorageItemsInChunks(missingSharedKeys);
     for (const key of missingSharedKeys) {
       const value = remoteResults[key] ?? null;
       setSharedStorageCacheValue(key, value);
@@ -1596,6 +1633,11 @@ const inFlightSnapshotRequests = new Map<string, Promise<ProjectsScreenSnapshot>
 let globalSnapshotPromise: Promise<ProjectsScreenSnapshot> | null = null;
 let lastSnapshotRequestTime = 0;
 const GLOBAL_SNAPSHOT_COOLDOWN_MS = 5000;
+
+function invalidateProjectsSnapshotCache(): void {
+  projectsSnapshotCache.clear();
+}
+
 
 // Loads the combined project, volunteer, and application data for the projects screen.
 // Note: We ignore specific 'fields' to force consolidation into a single global promise.
@@ -1958,13 +2000,24 @@ function normalizeProjectInternalTask(
   };
 }
 
+function _coerceToStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) return value as string[];
+  if (typeof value === 'string' && value.trim()) {
+    // Try comma-separated first, fall back to space-separated
+    return value.includes(',')
+      ? value.split(',').map(s => s.trim()).filter(Boolean)
+      : value.split(/\s+/).filter(Boolean);
+  }
+  return [];
+}
+
 function normalizeProjectSkillsNeeded(
   project: Project,
   normalizedTasks: ProjectInternalTask[]
 ): string[] {
   const rawSkills = [
-    ...(project.skillsNeeded || []),
-    ...normalizedTasks.flatMap(task => task.skillsNeeded || []),
+    ..._coerceToStringArray(project.skillsNeeded),
+    ...normalizedTasks.flatMap(task => _coerceToStringArray(task.skillsNeeded)),
   ]
     .map(skill => skill.trim())
     .filter(Boolean);
@@ -2021,8 +2074,8 @@ function normalizeProjectRecord(project: Project): Project {
     statusMode: normalizedManualStatus ? 'Manual' : normalizedStatusMode,
     manualStatus: normalizedManualStatus || undefined,
     parentProjectId: project.parentProjectId?.trim() || undefined,
-    joinedUserIds: project.isEvent ? (project.joinedUserIds || []) : [],
-    volunteers: project.isEvent ? (project.volunteers || []) : [],
+    joinedUserIds: project.isEvent ? _coerceToStringArray(project.joinedUserIds) : [],
+    volunteers: project.isEvent ? _coerceToStringArray(project.volunteers) : [],
     skillsNeeded: normalizeProjectSkillsNeeded(project, normalizedTasks),
     statusUpdates: project.statusUpdates || [],
     internalTasks: normalizedTasks,
@@ -2867,27 +2920,54 @@ export async function deleteAdminPlanningItem(itemId: string): Promise<void> {
 // Program Tracks Storage
 // Inserts or updates a program track.
 export async function saveProgramTrack(programTrack: ProgramTrack): Promise<void> {
-  const programTracks = (await getStorageItem<ProgramTrack[]>('programTracks')) || [];
-  const existingIndex = programTracks.findIndex(p => p.id === programTrack.id);
+  const [programTracks, programs] = await Promise.all([
+    getStorageItem<ProgramTrack[]>(STORAGE_KEYS.PROGRAM_TRACKS),
+    getStorageItem<ProgramTrack[]>(STORAGE_KEYS.PROGRAMS),
+  ]);
+
+  const nextProgramTracks = (programTracks || []).slice();
+  const nextPrograms = (programs || []).slice();
   const now = new Date().toISOString();
   const normalizedTrack: ProgramTrack = {
     ...programTrack,
     createdAt: programTrack.createdAt || now,
     updatedAt: now,
   };
-  if (existingIndex >= 0) {
-    programTracks[existingIndex] = normalizedTrack;
-  } else {
-    programTracks.push(normalizedTrack);
-  }
-  await setStorageItem('programTracks', programTracks);
+  const syncCollection = (collection: ProgramTrack[]) => {
+    const existingIndex = collection.findIndex(item => item.id === normalizedTrack.id);
+    if (existingIndex >= 0) {
+      collection[existingIndex] = normalizedTrack;
+      return;
+    }
+    collection.push(normalizedTrack);
+  };
+
+  syncCollection(nextProgramTracks);
+  syncCollection(nextPrograms);
+
+  await Promise.all([
+    setStorageItem(STORAGE_KEYS.PROGRAM_TRACKS, nextProgramTracks),
+    setStorageItem(STORAGE_KEYS.PROGRAMS, nextPrograms),
+  ]);
 }
 
 // Deletes a program track by id.
 export async function deleteProgramTrack(programTrackId: string): Promise<void> {
-  const programTracks = (await getStorageItem<ProgramTrack[]>('programTracks')) || [];
-  const filtered = programTracks.filter(p => p.id !== programTrackId);
-  await setStorageItem('programTracks', filtered);
+  const [programTracks, programs] = await Promise.all([
+    getStorageItem<ProgramTrack[]>(STORAGE_KEYS.PROGRAM_TRACKS),
+    getStorageItem<ProgramTrack[]>(STORAGE_KEYS.PROGRAMS),
+  ]);
+
+  await Promise.all([
+    setStorageItem(
+      STORAGE_KEYS.PROGRAM_TRACKS,
+      (programTracks || []).filter(programTrack => programTrack.id !== programTrackId)
+    ),
+    setStorageItem(
+      STORAGE_KEYS.PROGRAMS,
+      (programs || []).filter(program => program.id !== programTrackId)
+    ),
+  ]);
 }
 
 export async function getAllProgramTracks(): Promise<ProgramTrack[]> {
@@ -2897,20 +2977,49 @@ export async function getAllProgramTracks(): Promise<ProgramTrack[]> {
 // Project Storage
 // Inserts or updates a project or event record.
 export async function saveProgram(program: ProgramTrack): Promise<void> {
-  const tracks = await getStorageItem<ProgramTrack[]>(STORAGE_KEYS.PROGRAM_TRACKS) || [];
-  const existingIndex = tracks.findIndex(t => t.id === program.id);
-  if (existingIndex >= 0) {
-    tracks[existingIndex] = { ...tracks[existingIndex], ...program };
-  } else {
-    tracks.push(program);
-  }
-  await saveRemoteStorageItem(STORAGE_KEYS.PROGRAM_TRACKS, tracks);
+  const [programTracks, programs] = await Promise.all([
+    getStorageItem<ProgramTrack[]>(STORAGE_KEYS.PROGRAM_TRACKS),
+    getStorageItem<ProgramTrack[]>(STORAGE_KEYS.PROGRAMS),
+  ]);
+
+  const nextProgram = { ...program };
+  const nextProgramTracks = (programTracks || []).slice();
+  const nextPrograms = (programs || []).slice();
+
+  const upsert = (collection: ProgramTrack[]) => {
+    const existingIndex = collection.findIndex(item => item.id === nextProgram.id);
+    if (existingIndex >= 0) {
+      collection[existingIndex] = { ...collection[existingIndex], ...nextProgram };
+      return;
+    }
+    collection.push(nextProgram);
+  };
+
+  upsert(nextProgramTracks);
+  upsert(nextPrograms);
+
+  await Promise.all([
+    setStorageItem(STORAGE_KEYS.PROGRAM_TRACKS, nextProgramTracks),
+    setStorageItem(STORAGE_KEYS.PROGRAMS, nextPrograms),
+  ]);
 }
 
 export async function deleteProgram(programId: string): Promise<void> {
-  const tracks = await getStorageItem<ProgramTrack[]>(STORAGE_KEYS.PROGRAM_TRACKS) || [];
-  const filtered = tracks.filter(t => t.id !== programId);
-  await saveRemoteStorageItem(STORAGE_KEYS.PROGRAM_TRACKS, filtered);
+  const [programTracks, programs] = await Promise.all([
+    getStorageItem<ProgramTrack[]>(STORAGE_KEYS.PROGRAM_TRACKS),
+    getStorageItem<ProgramTrack[]>(STORAGE_KEYS.PROGRAMS),
+  ]);
+
+  await Promise.all([
+    setStorageItem(
+      STORAGE_KEYS.PROGRAM_TRACKS,
+      (programTracks || []).filter(track => track.id !== programId)
+    ),
+    setStorageItem(
+      STORAGE_KEYS.PROGRAMS,
+      (programs || []).filter(program => program.id !== programId)
+    ),
+  ]);
 }
 
 export async function saveProject(project: Project): Promise<void> {
@@ -2928,22 +3037,26 @@ export async function saveProject(project: Project): Promise<void> {
     projects.push(normalizedProject);
   }
   await setStorageItem(STORAGE_KEYS.PROJECTS, projects);
+  invalidateProjectsSnapshotCache();
 }
 
 // Inserts or updates an event record in the dedicated events collection.
 export async function saveEvent(event: Project): Promise<void> {
-  const events = await getStorageItem<Project[]>(STORAGE_KEYS.EVENTS) || [];
-  const existingIndex = events.findIndex(entry => entry.id === event.id);
+  const rawEvents = await getStorageItem<Project[]>(STORAGE_KEYS.EVENTS) || [];
+  const existingIndex = rawEvents.findIndex(entry => entry.id === event.id);
   const normalizedEvent = normalizeEventRecord({
     ...event,
     skillsNeeded: normalizeProjectSkillsNeeded(event, Array.isArray(event.internalTasks) ? event.internalTasks : []),
   });
   if (existingIndex >= 0) {
-    events[existingIndex] = normalizedEvent;
+    rawEvents[existingIndex] = normalizedEvent;
   } else {
-    events.push(normalizedEvent);
+    rawEvents.push(normalizedEvent);
   }
+  // Normalize all events (fixes legacy string-vs-array issues in older records)
+  const events = rawEvents.map(e => e.id === normalizedEvent.id ? normalizedEvent : normalizeEventRecord(e));
   await setStorageItem(STORAGE_KEYS.EVENTS, events);
+  invalidateProjectsSnapshotCache();
 }
 
 // Deletes a project and cleans up dependent records that reference it.

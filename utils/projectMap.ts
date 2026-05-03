@@ -7,7 +7,6 @@ const PROGRAM_IMAGE_BY_CATEGORY: Partial<Record<Project['category'], ImageSource
   Nutrition: require('../assets/programs/nutrition.jpg'),
   Education: require('../assets/programs/education.jpg'),
   Livelihood: require('../assets/programs/livelihood.jpg'),
-  Disaster: require('../assets/programs/mingo-relief.jpg'),
 };
 
 const PROGRAM_PHOTO_BY_TITLE: Record<string, ImageSourcePropType> = {
@@ -29,11 +28,6 @@ const PROGRAM_PHOTO_MATCHERS: Array<{
   {
     matches: (_project, normalizedTitle) => normalizedTitle.includes('farm to fork'),
     source: require('../assets/programs/farm-to-fork.jpg'),
-  },
-  {
-    matches: (_project, normalizedTitle) =>
-      normalizedTitle.includes('emergency') || normalizedTitle.includes('relief'),
-    source: require('../assets/programs/mingo-relief.jpg'),
   },
   {
     matches: (_project, normalizedTitle) =>

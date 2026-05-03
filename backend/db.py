@@ -370,30 +370,48 @@ def init_postgres_pool() -> None:
     if ConnectionPool is None or not psycopg:
         return  # Connection pooling not available
 
+    candidates = _get_database_url_candidates()
+    if not candidates:
+        return
+
+    connect_timeout = _get_connect_timeout()
+    candidate_timeout = _get_candidate_connect_timeout()
+
+    # Find the first reachable candidate URL before committing the pool to it.
+    database_url = None
+    for url in candidates:
+        try:
+            with psycopg.connect(url, connect_timeout=candidate_timeout) as probe:
+                probe.execute("select 1")
+            database_url = url
+            break
+        except Exception as exc:
+            print(f"[WARN] Pool candidate unreachable ({urlsplit(url).hostname}): {exc}")
+
+    if database_url is None:
+        print("[WARN] All DB candidates unreachable; connection pool not initialized")
+        return
+
     try:
-        candidates = _get_database_url_candidates()
-        if not candidates:
-            return
-
-        # Use the primary transaction-pooler URL for the long-lived backend pool.
-        database_url = candidates[0]
-
         # Create connection pool with optimized settings
         _POSTGRES_CONNECTION_POOL = ConnectionPool(
             database_url,
             min_size=_POSTGRES_POOL_MIN_SIZE,
             max_size=_POSTGRES_POOL_MAX_SIZE,
-            timeout=_get_connect_timeout() * 2,  # Timeout waiting for available connection
+            timeout=connect_timeout * 2,  # Timeout waiting for available connection
+            reconnect_timeout=30,  # Allow up to 30s to re-establish lost connections
+            check=ConnectionPool.check_connection,  # Validate connections before returning them
             kwargs={
                 "application_name": "volcre-backend-pool",
                 "prepare_threshold": None,  # Disable prepared statements for pooler compatibility
-                "connect_timeout": _get_connect_timeout(),
+                "connect_timeout": connect_timeout,
             }
         )
         print(f"[OK] Postgres connection pool initialized (min={_POSTGRES_POOL_MIN_SIZE}, max={_POSTGRES_POOL_MAX_SIZE}) using {urlsplit(database_url).hostname}")
     except Exception as exc:
         print(f"[WARN] Failed to initialize Postgres connection pool: {exc}")
         _POSTGRES_CONNECTION_POOL = None
+
 
 
 # Returns a connection from the pool if available, otherwise creates a direct connection
@@ -424,13 +442,19 @@ def get_pooled_postgres_connection():
 def get_connection():
     """Get a pooled connection if available, otherwise a direct connection."""
     if _POSTGRES_CONNECTION_POOL is not None:
+        checkout_done = False
         try:
             with _POSTGRES_CONNECTION_POOL.connection() as conn:
+                checkout_done = True
                 yield conn
-            return
+                return
         except Exception:
-            pass
-            
+            if checkout_done:
+                # Exception was thrown after yield (from caller body or pool cleanup) — re-raise
+                # so contextmanager doesn't see a second yield attempt.
+                raise
+            # Pool checkout failed before yield — fall through to a direct connection.
+
     conn = get_postgres_connection()
     try:
         with conn:

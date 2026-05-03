@@ -1,0 +1,9 @@
+env: load .env
+env: export SUPABASE_DB_URL SUPABASE_DB_URL_FALLBACK DB_STRICT_POSTGRES DB_CONNECT_TIMEOUT DB_CANDIDATE_CONNECT_TIMEOUT DB_CONNECT_MAX_ATTEMPTS DB_CONNECT_RETRY_BASE_MS DB_PROBE_CACHE_TTL_SECONDS DB_FAILOVER_COOLDOWN_SECONDS EXPO_PUBLIC_API_BASE_URL EXPO_PUBLIC_WEB_API_BASE_URL VOLCRE_WEB_API_BASE_URL GOOGLE_MAPS_API_KEY EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY ENABLE_DEMO_SEED VOLCRE_ALLOW_DEMO_SEED
+Starting project at C:\Users\ACER\OneDrive\Desktop\volunteer-system
+Metro is running in CI mode, reloads are disabled. Remove CI=true to enable watch mode.
+Starting Metro Bundler
+Waiting on http://localhost:19006
+Logs for your project will appear below.
+Web Bundled 1334ms node_modules\expo\AppEntry.js (977 modules)
+ LOG  [web] Logs will appear in the browser console

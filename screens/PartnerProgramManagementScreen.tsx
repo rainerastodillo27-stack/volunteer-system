@@ -30,7 +30,6 @@ const { width, height } = Dimensions.get('window');
 const DEFAULT_PROGRAM_IMAGE = require('../assets/programs/education.jpg');
 const DEFAULT_PROGRAM_ICON: keyof typeof MaterialIcons.glyphMap = 'category';
 const DEFAULT_PROGRAM_COLOR = '#166534';
-const CORE_PROGRAM_IDS = new Set(['Nutrition', 'Education', 'Livelihood']);
 
 type ProgramTrackCard = {
   id: string;
@@ -130,7 +129,7 @@ export default function PartnerProgramManagementScreen() {
     );
     const programIds = new Set<string>();
     tracksById.forEach((track, trackId) => {
-      if (track.isActive === false || !CORE_PROGRAM_IDS.has(trackId)) {
+      if (track.isActive === false) {
         return;
       }
       programIds.add(trackId);
@@ -139,7 +138,7 @@ export default function PartnerProgramManagementScreen() {
     if (programIds.size === 0) {
       projects.forEach(project => {
         const trackId = String(project.programModule || project.category || '').trim();
-        if (CORE_PROGRAM_IDS.has(trackId)) {
+        if (trackId) {
           programIds.add(trackId);
         }
       });
@@ -325,7 +324,7 @@ export default function PartnerProgramManagementScreen() {
     return (
       <ScrollView contentContainerStyle={styles.programsGrid} showsVerticalScrollIndicator={false}>
         <Text style={styles.tabIntroTitle}>Explore Program Tracks</Text>
-        <Text style={styles.tabIntroSubtitle}>Select a core program to view available templates and active projects you can propose or join.</Text>
+        <Text style={styles.tabIntroSubtitle}>Select a program track to view available templates and active projects you can propose or join.</Text>
         {availablePrograms.length > 0 ? (
           availablePrograms.map(renderProgramCard)
         ) : (

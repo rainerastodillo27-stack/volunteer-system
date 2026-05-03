@@ -4,6 +4,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from typing import Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -32,11 +33,7 @@ from .db import (
     init_postgres_pool,
 )
 from .field_rules import normalize_comparable_phone
-from .relational_mirror import (
-    get_relational_item_by_id,
-    get_relational_items_by_field,
-    upsert_relational_item,
-)
+from .image_compression import compress_base64_image, get_image_size_kb
 
 
 load_dotenv()
@@ -1218,6 +1215,39 @@ def _build_projects_snapshot(
 def startup() -> None:
     # Initialize connection pool for better performance
     init_postgres_pool()
+
+    # Auto-cleanup: Compress oversized base64 images to prevent slow API responses
+    # TEMPORARILY DISABLED - was causing backend to hang on startup
+    # def _cleanup_oversized_images() -> None:
+    #     try:
+    #         with get_connection() as connection:
+    #             MAX_IMAGE_URL_LEN = 200_000  # ~150KB as base64
+    #             for key in ("projects", "events"):
+    #                 items = get_postgres_hot_storage_collection(connection, key)
+    #                 changed = False
+    #                 for item in items:
+    #                     url = item.get("imageUrl")
+    #                     if isinstance(url, str) and len(url) > MAX_IMAGE_URL_LEN:
+    #                         original_size = get_image_size_kb(url)
+    #                         compressed = compress_base64_image(url)
+    #                         if compressed:
+    #                             compressed_size = get_image_size_kb(compressed)
+    #                             print(f"[CLEANUP] {key}/{item.get('id')}: Compressed image {original_size:.1f}KB → {compressed_size:.1f}KB")
+    #                             item["imageUrl"] = compressed
+    #                             changed = True
+    #                         else:
+    #                             print(f"[CLEANUP] {key}/{item.get('id')}: Could not compress, removing oversized image ({original_size:.1f}KB)")
+    #                             item["imageUrl"] = None
+    #                             changed = True
+    #                 if changed:
+    #                     replace_postgres_hot_storage_collection(connection, key, items)
+    #                     connection.commit()
+    #                     print(f"[CLEANUP] ✓ Updated {key} collection")
+    #     except Exception as error:
+    #         print(f"[WARN] Image cleanup failed: {error}")
+
+    # Run cleanup before warming cache
+    # threading.Thread(target=_cleanup_oversized_images, daemon=True).start()
 
     # Warm the most frequently used snapshot cache in the background so first client load is faster.
     def _warm_projects_snapshot_cache() -> None:
@@ -2690,25 +2720,32 @@ async def delete_program_track(track_id: str) -> dict[str, str]:
     
     with get_connection() as connection:
         program_tracks = get_postgres_hot_storage_collection(connection, "programTracks")
+        programs = get_postgres_hot_storage_collection(connection, "programs")
         filtered_tracks = [
             track for track in program_tracks
             if str(track.get("id") or "") != track_id
         ]
+        filtered_programs = [
+            program for program in programs
+            if str(program.get("id") or "") != track_id
+        ]
         
-        if len(filtered_tracks) == len(program_tracks):
+        if len(filtered_tracks) == len(program_tracks) and len(filtered_programs) == len(programs):
             raise HTTPException(status_code=404, detail="Program track not found.")
         
         replace_postgres_hot_storage_collection(connection, "programTracks", filtered_tracks)
+        replace_postgres_hot_storage_collection(connection, "programs", filtered_programs)
         connection.commit()
     
-    _invalidate_collection_cache(["programTracks"])
+    _invalidate_collection_cache(["programTracks", "programs"])
     _projects_snapshot_cache.clear()
-    await connection_manager.broadcast_storage_event(["programTracks"])
+    await connection_manager.broadcast_storage_event(["programTracks", "programs"])
     return {"status": "ok", "deletedTrackId": track_id}
 
 
 @app.post("/storage/batch")
 # API endpoint that reads multiple storage keys in a single request.
+# OPTIMIZED: Fetch keys in parallel using separate connections to avoid sequential DB queries.
 def get_storage_items_batch(payload: StorageBatchPayload) -> dict[str, dict[str, Any]]:
     keys = [key for key in payload.keys if key]
     items: dict[str, Any] = {key: None for key in keys}
@@ -2716,9 +2753,29 @@ def get_storage_items_batch(payload: StorageBatchPayload) -> dict[str, dict[str,
     if not keys:
         return {"items": items}
 
-    with get_connection() as connection:
-        for key in keys:
-            items[key] = _get_cached_collection(connection, key)
+    # Fetch keys in parallel using thread pool
+    def _fetch_collection(key: str) -> tuple[str, Any]:
+        try:
+            with get_connection() as connection:
+                value = _get_cached_collection(connection, key)
+            return key, value
+        except Exception as e:
+            _trace(f"[WARN] Failed to fetch key '{key}': {e}")
+            return key, None
+
+    # Use ThreadPoolExecutor to parallelize database queries
+    # Limit to number of keys to avoid excessive connections
+    max_workers = min(len(keys), 5)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_fetch_collection, key): key for key in keys}
+        for future in as_completed(futures):
+            try:
+                key, value = future.result()
+                items[key] = value
+            except Exception as e:
+                key = futures[future]
+                _trace(f"[WARN] Exception fetching key '{key}': {e}")
+                items[key] = None
 
     return {"items": items}
 

@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -108,6 +109,50 @@ RELATIONAL_TABLE_DDL = [
     "alter table volunteers add column if not exists home_address_barangay text",
     "alter table volunteers add column if not exists video_briefing_url text",
     f"""
+    create table if not exists skills (
+      skills_id text primary key,
+      name text not null,
+      created_at text,
+      updated_at text
+    )
+    """,
+    "alter table skills add column if not exists skills_id text",
+    "alter table skills add column if not exists name text not null default ''",
+    "alter table skills add column if not exists created_at text",
+    "alter table skills add column if not exists updated_at text",
+    "create index if not exists skills_name_idx on skills (lower(coalesce(name, '')))",
+    f"""
+    create table if not exists tasks (
+      tasks_id text primary key,
+      title text not null,
+      description text,
+      category text,
+      priority text,
+      status text,
+      assigned_volunteer_id text,
+      assigned_volunteer_name text,
+      is_field_officer boolean not null default false,
+      skills_needed text[] not null default {TEXT_ARRAY},
+      created_at text,
+      updated_at text
+    )
+    """,
+    "alter table tasks add column if not exists tasks_id text",
+    "alter table tasks add column if not exists title text not null default ''",
+    "alter table tasks add column if not exists description text",
+    "alter table tasks add column if not exists category text",
+    "alter table tasks add column if not exists priority text",
+    "alter table tasks add column if not exists status text",
+    "alter table tasks add column if not exists assigned_volunteer_id text",
+    "alter table tasks add column if not exists assigned_volunteer_name text",
+    "alter table tasks add column if not exists is_field_officer boolean not null default false",
+    "alter table tasks add column if not exists skills_needed text[] not null default '{}'::text[]",
+    "alter table tasks add column if not exists created_at text",
+    "alter table tasks add column if not exists updated_at text",
+    "create index if not exists tasks_title_idx on tasks (lower(coalesce(title, '')))",
+    "create index if not exists tasks_status_idx on tasks (status)",
+    "create index if not exists tasks_assigned_volunteer_id_idx on tasks (assigned_volunteer_id)",
+    f"""
     create table if not exists projects (
       id text primary key,
       title text not null,
@@ -157,6 +202,7 @@ RELATIONAL_TABLE_DDL = [
         select 1
         from information_schema.columns
         where table_schema = 'public' and table_name = 'projects' and column_name = 'id'
+          and data_type != 'text'
       ) then
         alter table projects alter column id drop identity if exists;
         alter table projects alter column id type text using id::text;
@@ -165,6 +211,7 @@ RELATIONAL_TABLE_DDL = [
         select 1
         from information_schema.columns
         where table_schema = 'public' and table_name = 'projects' and column_name = 'created_at'
+          and data_type != 'text'
       ) then
         alter table projects alter column created_at type text using created_at::text;
       end if;
@@ -190,6 +237,8 @@ RELATIONAL_TABLE_DDL = [
     "create index if not exists projects_status_idx on projects (status)",
     "create index if not exists projects_category_idx on projects (category)",
     "create index if not exists projects_created_at_idx on projects (created_at)",
+    "create index if not exists projects_is_event_idx on projects (is_event)",
+    "analyze projects",
     f"""
     create table if not exists programs (
       id text primary key,
@@ -290,6 +339,8 @@ RELATIONAL_TABLE_DDL = [
     "create index if not exists events_status_idx on events (status)",
     "create index if not exists events_category_idx on events (category)",
     "create index if not exists events_created_at_idx on events (created_at)",
+    "create index if not exists events_is_event_idx on events (is_event)",
+    "analyze events",
     f"""
     create table if not exists status_updates (
       id text primary key,
@@ -423,7 +474,10 @@ RELATIONAL_TABLE_DDL = [
     "create index if not exists reports_project_id_idx on reports (project_id)",
     "create index if not exists reports_partner_user_id_idx on reports (partner_user_id)",
     "create index if not exists reports_generated_at_idx on reports (generated_at)",
+    "create index if not exists reports_generated_at_is_null_idx on reports (id) where generated_at is null",
+    "create index if not exists reports_generated_at_is_not_null_idx on reports (id) where generated_at is not null",
     "create index if not exists reports_status_idx on reports (status)",
+    "analyze reports",
     "alter table reports add column if not exists submitter_user_id text",
     "alter table reports add column if not exists submitter_name text",
     "alter table reports add column if not exists submitter_role text",
@@ -549,6 +603,32 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("reviewed_at", False),
             ("credentials_unlocked_at", False),
             ("created_at", False),
+        ],
+    },
+    "skills": {
+        "table": "skills",
+        "columns": [
+            ("skills_id", False),
+            ("name", False),
+            ("created_at", False),
+            ("updated_at", False),
+        ],
+    },
+    "tasks": {
+        "table": "tasks",
+        "columns": [
+            ("tasks_id", False),
+            ("title", False),
+            ("description", False),
+            ("category", False),
+            ("priority", False),
+            ("status", False),
+            ("assigned_volunteer_id", False),
+            ("assigned_volunteer_name", False),
+            ("is_field_officer", False),
+            ("skills_needed", False),
+            ("created_at", False),
+            ("updated_at", False),
         ],
     },
     "projects": {
@@ -1049,6 +1129,60 @@ def _normalize_skills_needed(item: dict[str, Any]) -> list[str]:
     return normalized
 
 
+def _now_text() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _sync_skill_rows_from_project_event_items(connection: Any, items: list[dict[str, Any]]) -> None:
+    skills: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        skills.update(_normalize_skills_needed(item))
+
+    for skill in skills:
+        if not skill:
+            continue
+        upsert_relational_item(
+            connection,
+            "skills",
+            {
+                "id": skill,
+                "name": skill,
+                "createdAt": _now_text(),
+                "updatedAt": _now_text(),
+            },
+        )
+
+
+def _sync_task_rows_from_project_event_items(connection: Any, items: list[dict[str, Any]]) -> None:
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        internal_tasks = item.get("internalTasks") or []
+        if isinstance(internal_tasks, list):
+            for task in internal_tasks:
+                if isinstance(task, dict) and task.get("id"):
+                    upsert_relational_item(
+                        connection,
+                        "tasks",
+                        {
+                            "id": task.get("id"),
+                            "title": task.get("title") or "",
+                            "description": task.get("description"),
+                            "category": task.get("category"),
+                            "priority": task.get("priority"),
+                            "status": task.get("status"),
+                            "assignedVolunteerId": task.get("assignedVolunteerId"),
+                            "assignedVolunteerName": task.get("assignedVolunteerName"),
+                            "isFieldOfficer": task.get("isFieldOfficer", False),
+                            "skillsNeeded": task.get("skillsNeeded", []),
+                            "createdAt": task.get("createdAt") or _now_text(),
+                            "updatedAt": task.get("updatedAt") or _now_text(),
+                        },
+                    )
+
+
 def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
     if key == "users":
         return (
@@ -1122,6 +1256,30 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("reviewedAt"),
             item.get("credentialsUnlockedAt"),
             item.get("createdAt"),
+        )
+
+    if key == "skills":
+        return (
+            item.get("id"),
+            item.get("name") or "",
+            item.get("createdAt") or _now_text(),
+            item.get("updatedAt") or _now_text(),
+        )
+
+    if key == "tasks":
+        return (
+            item.get("id"),
+            item.get("title") or "",
+            item.get("description"),
+            item.get("category"),
+            item.get("priority"),
+            item.get("status"),
+            item.get("assignedVolunteerId"),
+            item.get("assignedVolunteerName"),
+            bool(item.get("isFieldOfficer", False)),
+            _normalize_string_list(item.get("skillsNeeded")),
+            item.get("createdAt") or _now_text(),
+            item.get("updatedAt") or _now_text(),
         )
 
     if key == "projects":
@@ -1417,63 +1575,87 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "userId": row["user_id"],
             "name": row["name"],
             "email": row["email"],
-            "phone": row["phone"],
-            "skills": row["skills"] or [],
-            "skillsDescription": row["skills_description"],
-            "availability": _json_load(row["availability"], {}),
-            "pastProjects": row["past_projects"] or [],
-            "totalHoursContributed": row["total_hours_contributed"],
-            "rating": row["rating"],
-            "engagementStatus": row["engagement_status"],
-            "background": row["background"],
-            "gender": row["gender"],
-            "dateOfBirth": row["date_of_birth"],
-            "civilStatus": row["civil_status"],
-            "homeAddress": row["home_address"],
-            "homeAddressRegion": row["home_address_region"],
-            "homeAddressCityMunicipality": row["home_address_city_municipality"],
-            "homeAddressBarangay": row["home_address_barangay"],
-            "occupation": row["occupation"],
-            "workplaceOrSchool": row["workplace_or_school"],
-            "collegeCourse": row["college_course"],
-            "certificationsOrTrainings": row["certifications_or_trainings"],
-            "hobbiesAndInterests": row["hobbies_and_interests"],
-            "specialSkills": row["special_skills"],
-            "videoBriefingUrl": row["video_briefing_url"],
-            "affiliations": _json_load(row["affiliations"], []),
-            "registrationStatus": row["registration_status"],
-            "reviewedBy": row["reviewed_by"],
-            "reviewedAt": row["reviewed_at"],
-            "credentialsUnlockedAt": row["credentials_unlocked_at"],
+            "phone": row.get("phone"),
+            "skills": row.get("skills") or [],
+            "skillsDescription": row.get("skills_description"),
+            "availability": _json_load(row.get("availability"), {}),
+            "pastProjects": row.get("past_projects") or [],
+            "totalHoursContributed": row.get("total_hours_contributed"),
+            "rating": row.get("rating"),
+            "engagementStatus": row.get("engagement_status"),
+            "background": row.get("background"),
+            "gender": row.get("gender"),
+            "dateOfBirth": row.get("date_of_birth"),
+            "civilStatus": row.get("civil_status"),
+            "homeAddress": row.get("home_address"),
+            "homeAddressRegion": row.get("home_address_region"),
+            "homeAddressCityMunicipality": row.get("home_address_city_municipality"),
+            "homeAddressBarangay": row.get("home_address_barangay"),
+            "occupation": row.get("occupation"),
+            "workplaceOrSchool": row.get("workplace_or_school"),
+            "collegeCourse": row.get("college_course"),
+            "certificationsOrTrainings": row.get("certifications_or_trainings"),
+            "hobbiesAndInterests": row.get("hobbies_and_interests"),
+            "specialSkills": row.get("special_skills"),
+            "videoBriefingUrl": row.get("video_briefing_url"),
+            "affiliations": _json_load(row.get("affiliations"), []),
+            "registrationStatus": row.get("registration_status"),
+            "reviewedBy": row.get("reviewed_by"),
+            "reviewedAt": row.get("reviewed_at"),
+            "credentialsUnlockedAt": row.get("credentials_unlocked_at"),
             "createdAt": row["created_at"],
+        }
+
+    if key == "skills":
+        return {
+            "id": row_id,
+            "name": row["name"],
+            "createdAt": row["created_at"],
+            "updatedAt": row["updated_at"],
+        }
+
+    if key == "tasks":
+        return {
+            "id": row_id,
+            "title": row["title"],
+            "description": row["description"],
+            "category": row["category"],
+            "priority": row["priority"],
+            "status": row["status"],
+            "assignedVolunteerId": row["assigned_volunteer_id"],
+            "assignedVolunteerName": row["assigned_volunteer_name"],
+            "isFieldOfficer": bool(row["is_field_officer"]),
+            "skillsNeeded": row["skills_needed"] or [],
+            "createdAt": row["created_at"],
+            "updatedAt": row["updated_at"],
         }
 
     if key == "projects":
         return {
             "id": row_id,
-            "title": row["title"],
-            "description": row["description"],
-            "partnerId": row["partner_id"],
-            "imageUrl": row["image_url"],
-            "imageHidden": bool(row["image_hidden"]),
-            "programModule": row["program_module"],
-            "isEvent": bool(row["is_event"]),
-            "parentProjectId": row["parent_project_id"],
-            "statusMode": row["status_mode"],
-            "manualStatus": row["manual_status"],
-            "program_id": row["program_id"],
-            "status": row["status"],
-            "category": row["category"],
-            "startDate": row["start_date"],
-            "endDate": row["end_date"],
-            "location": _json_load(row["location"], {}),
-            "volunteersNeeded": row["volunteers_needed"],
-            "volunteers": row["volunteers"] or [],
-            "joinedUserIds": row["joined_user_ids"] or [],
-            "skillsNeeded": row["skills_needed"] or [],
-            "internalTasks": _json_load(row["internal_tasks"], []),
-            "createdAt": row["created_at"],
-            "updatedAt": row["updated_at"],
+            "title": row.get("title") or "",
+            "description": row.get("description"),
+            "partnerId": row.get("partner_id"),
+            "imageUrl": row.get("image_url"),
+            "imageHidden": bool(row.get("image_hidden", False)),
+            "programModule": row.get("program_module"),
+            "isEvent": bool(row.get("is_event", False)),
+            "parentProjectId": row.get("parent_project_id"),
+            "statusMode": row.get("status_mode"),
+            "manualStatus": row.get("manual_status"),
+            "program_id": row.get("program_id"),
+            "status": row.get("status"),
+            "category": row.get("category"),
+            "startDate": row.get("start_date"),
+            "endDate": row.get("end_date"),
+            "location": _json_load(row.get("location"), {}),
+            "volunteersNeeded": row.get("volunteers_needed"),
+            "volunteers": row.get("volunteers") or [],
+            "joinedUserIds": row.get("joined_user_ids") or [],
+            "skillsNeeded": row.get("skills_needed") or [],
+            "internalTasks": _json_load(row.get("internal_tasks"), []),
+            "createdAt": row.get("created_at"),
+            "updatedAt": row.get("updated_at"),
         }
 
     if key == "programs":
@@ -1484,8 +1666,8 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "icon": row["icon"],
             "color": row["color"],
             "partnerId": row["partner_id"],
-            "imageUrl": row["image_url"],
-            "imageHidden": bool(row["image_hidden"]),
+            "imageUrl": row.get("image_url"),
+            "imageHidden": bool(row.get("image_hidden", False)),
             "programModule": row["program_module"],
             "statusMode": row["status_mode"],
             "manualStatus": row["manual_status"],
@@ -1494,10 +1676,10 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "category": row["category"],
             "startDate": row["start_date"],
             "endDate": row["end_date"],
-            "location": _json_load(row["location"], {}),
+            "location": _json_load(row.get("location"), {}),
             "volunteersNeeded": row["volunteers_needed"],
-            "volunteers": row["volunteers"] or [],
-            "joinedUserIds": row["joined_user_ids"] or [],
+            "volunteers": row.get("volunteers") or [],
+            "joinedUserIds": row.get("joined_user_ids") or [],
             "linkedEventCount": row["linked_event_count"],
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
@@ -1510,9 +1692,9 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "description": row["description"],
             "icon": row["icon"],
             "color": row["color"],
-            "imageUrl": row["image_url"],
+            "imageUrl": row.get("image_url"),
             "sortOrder": row["sort_order"],
-            "isActive": bool(row["is_active"]),
+            "isActive": bool(row.get("is_active", True)),
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
         }
@@ -1521,25 +1703,25 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
         return {
             "id": row_id,
             "title": row["title"],
-            "description": row["description"],
+            "description": row.get("description"),
             "partnerId": row["partner_id"],
-            "imageUrl": row["image_url"],
-            "imageHidden": bool(row["image_hidden"]),
+            "imageUrl": row.get("image_url"),
+            "imageHidden": bool(row.get("image_hidden", False)),
             "programModule": row["program_module"],
             "isEvent": True,
-            "parentProjectId": row["parent_project_id"],
-            "statusMode": row["status_mode"],
-            "manualStatus": row["manual_status"],
-            "status": row["status"],
-            "category": row["category"],
-            "startDate": row["start_date"],
-            "endDate": row["end_date"],
-            "location": _json_load(row["location"], {}),
+            "parentProjectId": row.get("parent_project_id"),
+            "statusMode": row.get("status_mode"),
+            "manualStatus": row.get("manual_status"),
+            "status": row.get("status"),
+            "category": row.get("category"),
+            "startDate": row.get("start_date"),
+            "endDate": row.get("end_date"),
+            "location": _json_load(row.get("location"), {}),
             "volunteersNeeded": row["volunteers_needed"],
-            "volunteers": row["volunteers"] or [],
-            "joinedUserIds": row["joined_user_ids"] or [],
-            "skillsNeeded": row["skills_needed"] or [],
-            "internalTasks": _json_load(row["internal_tasks"], []),
+            "volunteers": row.get("volunteers") or [],
+            "joinedUserIds": row.get("joined_user_ids") or [],
+            "skillsNeeded": row.get("skills_needed") or [],
+            "internalTasks": _json_load(row.get("internal_tasks"), []),
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
         }
@@ -1686,7 +1868,7 @@ def ensure_default_program_tracks(connection: Any) -> None:
         cursor.execute(
             """
             insert into program_tracks (
-              program_tracks_id,
+              id,
               title,
               description,
               icon,
@@ -1701,7 +1883,7 @@ def ensure_default_program_tracks(connection: Any) -> None:
               ('Nutrition', 'Nutrition', 'Food security and health programs for children and families.', 'restaurant', '#dc2626', '', 10, true, now()::text, now()::text),
               ('Education', 'Education', 'Learning, literacy, and skill development for students.', 'school', '#2563eb', '', 20, true, now()::text, now()::text),
               ('Livelihood', 'Livelihood', 'Economic empowerment and vocational training programs.', 'work', '#7c3aed', '', 30, true, now()::text, now()::text)
-            on conflict (program_tracks_id) do update set
+                        on conflict (id) do update set
               title = excluded.title,
               description = excluded.description,
               icon = excluded.icon,
@@ -1715,7 +1897,7 @@ def ensure_default_program_tracks(connection: Any) -> None:
         cursor.execute(
             """
             delete from program_tracks
-            where program_tracks_id not in ('Nutrition', 'Education', 'Livelihood')
+            where id not in ('Nutrition', 'Education', 'Livelihood')
             """
         )
 
@@ -1828,7 +2010,7 @@ def ensure_named_primary_key_columns(connection: Any) -> None:
             primary_key_column = _table_primary_key_column(table_name)
             cursor.execute(
                 """
-                select column_name
+                select column_name, data_type
                 from information_schema.columns
                 where table_schema = 'public'
                   and table_name = %s
@@ -1836,15 +2018,18 @@ def ensure_named_primary_key_columns(connection: Any) -> None:
                 """,
                 (table_name, primary_key_column),
             )
-            columns = {row[0] for row in cursor.fetchall()}
+            rows = cursor.fetchall()
+            columns = {row[0]: row[1] for row in rows}
             if "id" in columns and primary_key_column not in columns:
                 cursor.execute(f"alter table {table_name} alter column id drop identity if exists")
-                cursor.execute(f"alter table {table_name} alter column id type text using id::text")
+                if columns.get("id") != "text":
+                    cursor.execute(f"alter table {table_name} alter column id type text using id::text")
                 cursor.execute(f"alter table {table_name} rename column id to {primary_key_column}")
             elif primary_key_column in columns:
-                cursor.execute(
-                    f"alter table {table_name} alter column {primary_key_column} type text using {primary_key_column}::text"
-                )
+                if columns.get(primary_key_column) != "text":
+                    cursor.execute(
+                        f"alter table {table_name} alter column {primary_key_column} type text using {primary_key_column}::text"
+                    )
 
 
 def ensure_relational_mirror_tables(connection: Any) -> None:
@@ -1864,6 +2049,7 @@ def ensure_relational_mirror_tables(connection: Any) -> None:
     ensure_named_primary_key_columns(connection)
     migrate_admin_planning_items_into_calendars(connection)
     ensure_default_program_tracks(connection)
+    _backfill_skills_from_existing_relational_data(connection)
     refresh_program_rows_from_tracks(connection)
 
 
@@ -1910,10 +2096,11 @@ def get_relational_collection(connection: Any, key: str) -> list[dict[str, Any]]
 
     column_names = [column_name for column_name, _ in spec["columns"]]
     filter_clause = _row_filter_clause(key)
+    
     with connection.cursor(row_factory=dict_row) as cursor:
-        # Set a per-query timeout to prevent indefinite hangs during large table scans
+        # Set a shorter per-query timeout since we're doing targeted queries
         try:
-            cursor.execute("SET statement_timeout = '180s'")
+            cursor.execute("SET statement_timeout = '30s'")
         except Exception:
             pass  # If timeout setting fails, continue with default
         query = f"select {', '.join(column_names)} from {spec['table']}"
@@ -1922,20 +2109,22 @@ def get_relational_collection(connection: Any, key: str) -> list[dict[str, Any]]
         query += f" order by {_primary_key_column(key)} asc"
         try:
             _trace(f"[TRACE] get_relational_collection: executing query on {spec['table']}")
-            _trace(f"[TRACE] get_relational_collection: query length: {len(query)}")
+            _trace(f"[TRACE] get_relational_collection: columns selected: {len(column_names)}")
             cursor.execute(query)
         except (UndefinedColumn, UndefinedTable) as exc:
-            # Some environments may have an older DB schema (or missing tables)
-            # even though the code expects the latest relational mirror columns.
-            # Avoid running potentially long DDL sync here (can time out and block
-            # the request). Instead, log the issue and return an empty payload so
-            # callers can continue to operate with degraded data.
-            connection.rollback()
+            # Schema mismatch - return empty list
+            try:
+                connection.rollback()
+            except Exception:
+                pass
             _trace(f"[WARN] get_relational_collection: schema mismatch for {spec['table']}: {exc}; returning empty list")
             return []
         except Exception as exc:
-            # Handle query timeouts and other errors gracefully
-            connection.rollback()
+            # Query timeout or other errors - return empty list so app can continue
+            try:
+                connection.rollback()
+            except Exception:
+                pass
             _trace(f"[WARN] get_relational_collection: query error for {spec['table']}: {type(exc).__name__}: {exc}; returning empty list")
             return []
         rows = cursor.fetchall()
@@ -1960,7 +2149,10 @@ def get_relational_item_by_id(connection: Any, key: str, item_id: str) -> dict[s
         try:
             cursor.execute(query, (item_id,))
         except (UndefinedColumn, UndefinedTable):
-            connection.rollback()
+            try:
+                connection.rollback()
+            except Exception:
+                pass
             ensure_relational_mirror_tables(connection)
             connection.commit()
             cursor.execute(query, (item_id,))
@@ -2008,7 +2200,10 @@ def get_relational_items_by_field(
         try:
             cursor.execute(query, params)
         except (UndefinedColumn, UndefinedTable):
-            connection.rollback()
+            try:
+                connection.rollback()
+            except Exception:
+                pass
             ensure_relational_mirror_tables(connection)
             connection.commit()
             cursor.execute(query, params)
@@ -2018,6 +2213,10 @@ def get_relational_items_by_field(
 
 def replace_relational_collection(connection: Any, key: str, items: list[Any]) -> None:
     sync_relational_mirror_collection(connection, key, items)
+    if key in {"projects", "events"}:
+        filtered_items = [item for item in items if isinstance(item, dict)]
+        _sync_skill_rows_from_project_event_items(connection, filtered_items)
+        _sync_task_rows_from_project_event_items(connection, filtered_items)
 
 
 def upsert_relational_item(connection: Any, key: str, item: dict[str, Any]) -> dict[str, Any]:
@@ -2049,5 +2248,8 @@ def upsert_relational_item(connection: Any, key: str, item: dict[str, Any]) -> d
         )
     if key in {"programTracks", "projects", "events"}:
         refresh_program_rows_from_tracks(connection)
+    if key in {"projects", "events"}:
+        _sync_skill_rows_from_project_event_items(connection, [item])
+        _sync_task_rows_from_project_event_items(connection, [item])
 
     return item

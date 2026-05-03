@@ -102,7 +102,7 @@ function getDisplayProjectStatus(project: Project): 'Planned' | 'Active' | 'Comp
 }
 
 const REPORT_TYPE_OPTIONS: PartnerReportType[] = ['General', 'Medical', 'Logistics'];
-const FEATURED_PROGRAM_MODULES: AdvocacyFocus[] = ['Nutrition', 'Education', 'Livelihood'];
+const FEATURED_PROGRAM_MODULES: AdvocacyFocus[] = ['Nutrition', 'Education', 'Livelihood', 'Disaster'];
 
 function getProjectStatusColor(status: ReturnType<typeof getDisplayProjectStatus>) {
   switch (status) {
@@ -646,7 +646,11 @@ export default function PartnerDashboardScreen({ navigation }: any) {
             > 
               <View style={styles.programCardHeader}>
                 <View style={[styles.programIcon, { backgroundColor: getProgramModuleColor(module) }]}> 
-                  <MaterialIcons name={module === 'Nutrition' ? 'restaurant' : module === 'Education' ? 'school' : 'work'} size={20} color="#fff" />
+                  <MaterialIcons
+                    name={module === 'Nutrition' ? 'restaurant' : module === 'Education' ? 'school' : module === 'Livelihood' ? 'work' : 'warning'}
+                    size={20}
+                    color="#fff"
+                  />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.cardTitle}>{module}</Text>

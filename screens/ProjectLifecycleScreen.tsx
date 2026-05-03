@@ -27,7 +27,6 @@ import {
   Partner,
   PartnerProjectApplication,
   PartnerReport,
-  ProgramTrack,
   Project,
   ProjectInternalTask,
   StatusUpdate,
@@ -140,6 +139,7 @@ type ProjectDraft = {
   latitude: string;
   longitude: string;
   volunteersNeeded: string;
+  skillsNeeded: string[];
   isEvent: boolean;
 };
 
@@ -331,6 +331,7 @@ const createEmptyProjectDraft = (
   latitude: '',
   longitude: '',
   volunteersNeeded: '1',
+  skillsNeeded: [],
   isEvent,
 });
 
@@ -368,10 +369,6 @@ function getProjectDraftModule(project: Project): AdvocacyFocus {
   return (project.category as string) === 'Other'
     ? 'Disaster'
     : (project.category as AdvocacyFocus);
-}
-
-function normalizeProjectTitle(title: string): string {
-  return title.trim().toLowerCase();
 }
 
 function getProgramSuiteChevron(isExpanded: boolean): keyof typeof MaterialIcons.glyphMap {
@@ -501,7 +498,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [programTracks, setProgramTracks] = useState<ProgramTrack[]>([]);
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [showProjectModal, setShowProjectModal] = useState(false);
+  const [projectEditorMode, setProjectEditorMode] = useState<'project' | 'event' | null>(null);
+  const [isProjectSaveSuccess, setIsProjectSaveSuccess] = useState(false);
   const [showTaskModal, setShowTaskModal] = useState(false);
+  const [projectSaveError, setProjectSaveError] = useState<string | null>(null);
   const [showAssignmentDropdown, setShowAssignmentDropdown] = useState(false);
   const [showSkillsDropdown, setShowSkillsDropdown] = useState(false);
   const [showProgramProposalModal, setShowProgramProposalModal] = useState(false);
@@ -524,7 +524,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [statusUpdateMode, setStatusUpdateMode] = useState<LifecycleStatusMode>('System');
   const [newStatus, setNewStatus] = useState<Project['status']>('Planning');
   const [updateDescription, setUpdateDescription] = useState('');
-  const [programTracks, setProgramTracks] = useState<ProgramTrack[]>([]);
   const [projectDraft, setProjectDraft] = useState<ProjectDraft>(() => {
     const initialModule = (route.params?.programModule as AdvocacyFocus) || 'Education';
     return createEmptyProjectDraft('', initialModule);
@@ -536,6 +535,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [projectLocationBarangays, setProjectLocationBarangays] = useState<PHBarangay[]>([]);
   const [taskDraft, setTaskDraft] = useState<ProjectTaskDraft>(createEmptyProjectTaskDraft());
   const [customTaskSkill, setCustomTaskSkill] = useState('');
+  const [customProjectSkill, setCustomProjectSkill] = useState('');
   const [expandedProgramModules, setExpandedProgramModules] = useState<Set<any>>(
     () => new Set()
   );
@@ -846,10 +846,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       // Delay closing to show success checkmark
       setTimeout(async () => {
-        await loadProjects();
+        await loadProgramTracks();
         setIsAddProgramSuccess(false);
         setNewProgramName('');
         setShowAddProgramModal(false);
+        Alert.alert('✅ Program Added', `"${newProgram.title}" has been added to the dashboard.`);
       }, 1800);
     } catch (error) {
       Alert.alert('Error', getRequestErrorMessage(error, 'Failed to create program.'));
@@ -914,8 +915,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       // Show success then close modal
       setIsAddProgramSuccess(true);
       setTimeout(async () => {
-        // Sync from server to confirm data is persisted
-        await loadProjects();
+        // Sync the local program list so the new card stays visible immediately.
+        await loadProgramTracks();
         setIsAddProgramSuccess(false);
         setShowProgramCrudModal(false);
         // System notification after modal closes
@@ -939,9 +940,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     const doDelete = async () => {
       setActionLoadingKey(`deleteProgram-${trackId}`);
       try {
+        setProgramTracks(current => current.filter(track => track.id !== trackId));
         await deleteProgram(trackId);
-        await loadProjects();
+        await loadProgramTracks();
+        Alert.alert('✅ Program Deleted', `"${trackTitle}" has been removed from the dashboard.`);
       } catch (error) {
+        await loadProgramTracks();
         Alert.alert('Error', getRequestErrorMessage(error, 'Failed to delete program.'));
       } finally {
         setActionLoadingKey(null);
@@ -1012,13 +1016,16 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const openCreateProjectModal = () => {
     setEditingProjectId(null);
     setProjectDraft(createEmptyProjectDraft());
+    setProjectEditorMode('project');
     resetProjectLocationSelection();
+    setProjectSaveError(null);
     setShowProjectModal(true);
   };
 
   // Opens the project editor pre-wired to a specific program track.
   const openCreateProjectInProgramModal = (trackId: string, trackTitle: string) => {
     setEditingProjectId(null);
+    setProjectEditorMode('project');
     // Map trackId to an AdvocacyFocus if possible, else use the trackId itself
     const knownModules: AdvocacyFocus[] = ['Education', 'Livelihood', 'Nutrition', 'Disaster'];
     const module: AdvocacyFocus = knownModules.includes(trackId as AdvocacyFocus)
@@ -1030,12 +1037,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     draft.programModule = trackId as AdvocacyFocus;
     setProjectDraft(draft);
     resetProjectLocationSelection();
+    setProjectSaveError(null);
     setShowProjectModal(true);
   };
 
   // Opens the project modal in create-event mode with the selected program prefilled.
   const openCreateEventModal = (parentProject: Project) => {
     setEditingProjectId(null);
+    setProjectEditorMode('event');
     const nextDraft = createEmptyProjectDraft(
       parentProject.partnerId,
       getProjectDraftModule(parentProject) as AdvocacyFocus,
@@ -1046,8 +1055,16 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     );
     nextDraft.imageUrl = parentProject.imageUrl || '';
     nextDraft.imageHidden = Boolean(parentProject.imageHidden);
+    nextDraft.address = parentProject.location.address || '';
+    nextDraft.latitude = String(parentProject.location.latitude || '');
+    nextDraft.longitude = String(parentProject.location.longitude || '');
+    nextDraft.skillsNeeded = Array.isArray(parentProject.skillsNeeded)
+      ? parentProject.skillsNeeded
+      : [];
     setProjectDraft(nextDraft);
     resetProjectLocationSelection();
+    applyProjectLocationSelectionFromAddress(parentProject.location.address || '');
+    setProjectSaveError(null);
     setShowProjectModal(true);
   };
 
@@ -1055,11 +1072,15 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const closeProjectModal = () => {
     setShowProjectModal(false);
     setEditingProjectId(null);
+    setProjectEditorMode(null);
+    setIsProjectSaveSuccess(false);
+    setProjectSaveError(null);
   };
 
   // Opens the project modal in edit mode using the selected project values.
   const openEditProjectModal = (project: Project) => {
     setEditingProjectId(project.id);
+    setProjectEditorMode(project.isEvent ? 'event' : 'project');
     setProjectDraft({
       id: project.id,
       title: project.title,
@@ -1076,9 +1097,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       latitude: String(project.location.latitude),
       longitude: String(project.location.longitude),
       volunteersNeeded: String(project.volunteersNeeded),
+      skillsNeeded: Array.isArray(project.skillsNeeded) ? project.skillsNeeded : [],
       isEvent: !!project.isEvent,
     });
     applyProjectLocationSelectionFromAddress(project.location.address);
+    setProjectSaveError(null);
     setShowProjectModal(true);
   };
 
@@ -1100,9 +1123,87 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     await deleteProject(project.id);
   };
 
+  const handleDeleteEventRecord = (event: Project) => {
+    if (!isAdmin || !event.isEvent) {
+      return;
+    }
+
+    const doDelete = async () => {
+      setActionLoadingKey(`deleteEvent-${event.id}`);
+      try {
+        await deleteProjectLikeRecord(event);
+        setProjects(currentProjects => currentProjects.filter(project => project.id !== event.id));
+        setSelectedProject(currentProject =>
+          currentProject?.id === event.id ? null : currentProject
+        );
+        await loadProjects();
+        Alert.alert('Deleted', `Event "${event.title}" has been deleted.`);
+      } catch (error) {
+        Alert.alert(
+          getRequestErrorTitle(error),
+          getRequestErrorMessage(error, 'Failed to delete event.')
+        );
+      } finally {
+        setActionLoadingKey(null);
+      }
+    };
+
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof window.confirm === 'function') {
+      if (window.confirm(`Delete event "${event.title}"? This cannot be undone.`)) {
+        void doDelete();
+      }
+      return;
+    }
+
+    Alert.alert(
+      'Delete Event',
+      `Delete "${event.title}"? This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: () => void doDelete() },
+      ]
+    );
+  };
+
   // Updates a single project draft field without replacing the entire object.
   const handleProjectDraftChange = <K extends keyof ProjectDraft>(key: K, value: ProjectDraft[K]) => {
     setProjectDraft(current => ({ ...current, [key]: value }));
+  };
+
+  const toggleProjectSkill = (skill: string) => {
+    setProjectDraft(current => {
+      const nextSkills = current.skillsNeeded.includes(skill)
+        ? current.skillsNeeded.filter(existingSkill => existingSkill !== skill)
+        : [...current.skillsNeeded, skill];
+      return { ...current, skillsNeeded: nextSkills };
+    });
+  };
+
+  const handleAddCustomProjectSkill = () => {
+    const nextSkill = customProjectSkill.trim();
+    if (!nextSkill) {
+      return;
+    }
+
+    setProjectDraft(current => {
+      const normalizedSkill = nextSkill;
+      if (current.skillsNeeded.includes(normalizedSkill)) {
+        return current;
+      }
+
+      return {
+        ...current,
+        skillsNeeded: [...current.skillsNeeded, normalizedSkill],
+      };
+    });
+    setCustomProjectSkill('');
+  };
+
+  const removeProjectSkill = (skill: string) => {
+    setProjectDraft(current => ({
+      ...current,
+      skillsNeeded: current.skillsNeeded.filter(existingSkill => existingSkill !== skill),
+    }));
   };
 
   const handleProjectRegionChange = (regionCode: string) => {
@@ -1300,7 +1401,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   // Creates or updates a project record from the modal form.
   const handleSaveProjectRecord = async () => {
     if (!isAdmin) {
-      Alert.alert('Access Restricted', 'Only admin accounts can manage programs.');
+      Alert.alert('Access Restricted', 'Only admin accounts can manage projects.');
       return;
     }
 
@@ -1312,16 +1413,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     const existingProject = editingProjectId
       ? projects.find(project => project.id === editingProjectId) || null
       : null;
-    const existingEventByTitle =
-      projectDraft.isEvent && !editingProjectId
-        ? projects.find(
-          project =>
-            project.isEvent &&
-            project.parentProjectId === projectDraft.parentProjectId &&
-            normalizeProjectTitle(project.title) === normalizeProjectTitle(projectDraft.title)
-        ) || null
-        : null;
-
     if (
       !projectDraft.title.trim() ||
       !projectDraft.description.trim() ||
@@ -1329,17 +1420,17 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       !projectDraft.endDate.trim() ||
       !projectDraft.address.trim()
     ) {
-      Alert.alert('Validation Error', 'Fill in all required project fields, including a detailed location/address.');
+      setProjectSaveError('Fill in all required fields: title, description, start date, end date, and location.');
       return;
     }
 
     if (projectDraft.isEvent && !projectDraft.parentProjectId?.trim()) {
-      Alert.alert('Validation Error', 'Select a parent project before saving this event.');
+      setProjectSaveError('Select a parent project before saving this event.');
       return;
     }
 
     if (projectDraft.startDate > projectDraft.endDate) {
-      Alert.alert('Validation Error', 'End date must be on or after the start date.');
+      setProjectSaveError('End date must be on or after the start date.');
       return;
     }
 
@@ -1348,7 +1439,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         projects.find(project => !project.isEvent && project.id === projectDraft.parentProjectId) || null;
 
       if (!parentProject) {
-        Alert.alert('Validation Error', 'Choose a valid parent project for this event.');
+        setProjectSaveError('Choose a valid parent project for this event.');
         return;
       }
 
@@ -1360,18 +1451,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         projectDraft.startDate < parentStartDate || projectDraft.endDate > parentEndDate;
 
       if (matchesParentSchedule) {
-        Alert.alert(
-          'Validation Error',
-          'Event dates must be different from the parent project schedule. Choose a smaller window for the event.'
-        );
+        setProjectSaveError('Event dates must be different from the parent project schedule. Choose a smaller window for the event.');
         return;
       }
 
       if (isOutsideParentSchedule) {
-        Alert.alert(
-          'Validation Error',
-          `Event dates must stay within the parent project schedule (${parentStartDate} to ${parentEndDate}).`
-        );
+        setProjectSaveError(`Event dates must stay within the parent project schedule (${parentStartDate} to ${parentEndDate}).`);
         return;
       }
     }
@@ -1400,19 +1485,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           latitude: existingProject.location.latitude,
           longitude: existingProject.location.longitude,
         }
-        : null) ||
-      (existingEventByTitle
-        ? {
-          latitude: existingEventByTitle.location.latitude,
-          longitude: existingEventByTitle.location.longitude,
-        }
         : null);
 
     if (!resolvedCoordinates) {
-      Alert.alert(
-        'Place Not Recognized',
-        'Enter a recognizable barangay, city, municipality, or venue so the map can place this program.'
-      );
+      setProjectSaveError('Enter a recognizable barangay, city, municipality, or venue so the map can place this program.');
       return;
     }
 
@@ -1426,9 +1502,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     const draftBaseProject: Project = {
       id:
-        existingProject?.id ||
-        existingEventByTitle?.id ||
-        `${projectDraft.isEvent ? 'event' : 'project'}-${Date.now()}`,
+        existingProject?.id || `${projectDraft.isEvent ? 'event' : 'project'}-${Date.now()}`,
       title: projectDraft.title.trim(),
       description: projectDraft.description.trim(),
       partnerId: projectDraft.partnerId.trim(),
@@ -1451,7 +1525,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       volunteersNeeded,
       volunteers: existingProject?.volunteers || [],
       joinedUserIds: existingProject?.joinedUserIds || [],
-      skillsNeeded: existingProject?.skillsNeeded || [],
+      skillsNeeded: projectDraft.skillsNeeded || [],
       createdAt: existingProject?.createdAt || now,
       updatedAt: now,
       statusUpdates: existingProject?.statusUpdates || [],
@@ -1471,25 +1545,61 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     try {
       await saveProjectLikeRecord(savedProject);
       await loadProjects();
-      handleReturnToProjectList();
-      closeProjectModal();
-      Alert.alert(
-        'Success! ✓',
-        editingProjectId
-          ? savedProject.isEvent
-            ? 'Event updated successfully. Returning to program list...'
-            : 'Program updated successfully. Returning to program list...'
-          : savedProject.isEvent
-            ? 'Event created successfully! Returning to program list...'
-            : 'Program created successfully! Returning to program list...'
-      );
-      await Promise.all([
-        loadAllPartnerApplications(),
-      ]);
+      setActionLoadingKey(null);
+      setIsProjectSaveSuccess(true);
+      const successTitle = editingProjectId ? '✅ Project Updated' : '✅ Project Created';
+      const successMessage = editingProjectId
+        ? savedProject.isEvent
+          ? 'Event updated successfully and saved to the database.'
+          : 'Project updated successfully and saved to the database.'
+        : savedProject.isEvent
+          ? 'Event created successfully and saved to the database.'
+          : 'Project created successfully and saved to the database.';
+
+      Alert.alert(successTitle, successMessage);
+
+      // For new events, keep the modal open and reset the form for adding another event
+      if (savedProject.isEvent && !editingProjectId) {
+        setTimeout(() => {
+          setIsProjectSaveSuccess(false);
+          setProjectSaveError(null);
+          // Reset the form to create another event with the same parent project
+          const parentProject = projects.find(p => p.id === savedProject.parentProjectId && !p.isEvent);
+          if (parentProject) {
+            const nextDraft = createEmptyProjectDraft(
+              parentProject.partnerId,
+              getProjectDraftModule(parentProject) as AdvocacyFocus,
+              true,
+              'Quarterly Assessment',
+              'Quarterly Assessment event for program coordination, announcements, and assigning tasks to the event team.',
+              parentProject.id
+            );
+            nextDraft.imageUrl = parentProject.imageUrl || '';
+            nextDraft.imageHidden = Boolean(parentProject.imageHidden);
+            nextDraft.address = parentProject.location.address || '';
+            nextDraft.latitude = String(parentProject.location.latitude || '');
+            nextDraft.longitude = String(parentProject.location.longitude || '');
+            nextDraft.skillsNeeded = Array.isArray(parentProject.skillsNeeded)
+              ? parentProject.skillsNeeded
+              : [];
+            setProjectDraft(nextDraft);
+            resetProjectLocationSelection();
+            applyProjectLocationSelectionFromAddress(parentProject.location.address || '');
+          }
+        }, 1200);
+      } else {
+        // For projects and event edits, close the modal as before
+        setTimeout(() => {
+          setIsProjectSaveSuccess(false);
+          handleReturnToProjectList();
+          closeProjectModal();
+          void loadAllPartnerApplications();
+        }, 1200);
+      }
     } catch (error) {
       Alert.alert(
         getRequestErrorTitle(error),
-        getRequestErrorMessage(error, 'Failed to save program.')
+        getRequestErrorMessage(error, 'Failed to save project.')
       );
     }
   };
@@ -1500,8 +1610,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       return;
     }
 
+    const selectedRecordType = selectedProject.isEvent ? 'Event' : 'Program';
+
     Alert.alert(
-      'Delete Program',
+      `Delete ${selectedRecordType}`,
       `Delete ${selectedProject.title}? This will remove its related join records, applications, and logs.`,
       [
         { text: 'Cancel', style: 'cancel' },
@@ -1521,7 +1633,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             } catch (error) {
               Alert.alert(
                 getRequestErrorTitle(error),
-                getRequestErrorMessage(error, 'Failed to delete program.')
+                getRequestErrorMessage(error, `Failed to delete ${selectedRecordType.toLowerCase()}.`)
               );
             }
           },
@@ -1972,9 +2084,15 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     try {
       await saveProjectLikeRecord(updatedProject);
+      await loadProjects();
       setSelectedProject(updatedProject);
       closeTaskModal();
-      Alert.alert('Saved', editingTaskId ? 'Internal task updated.' : 'Internal task added.');
+      Alert.alert(
+        'Saved',
+        editingTaskId
+          ? 'Internal task updated and saved to the database.'
+          : 'Internal task added and saved to the database.'
+      );
     } catch (error) {
       Alert.alert(
         getRequestErrorTitle(error),
@@ -2048,7 +2166,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               style={styles.cardImage}
               resizeMode="cover"
             />
-          ) : null}
+          ) : (
+            <View style={styles.cardImage} />
+          )}
 
           <View style={styles.cardBody}>
             <View style={styles.cardHeader}>
@@ -2081,9 +2201,21 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             </View>
 
             {pendingRequestCount > 0 && (
-              <View style={styles.requestNotificationBadge}>
-                <MaterialIcons name="notifications-active" size={14} color="#92400e" />
-                <Text style={styles.requestNotificationBadgeText}>
+              <View style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                alignSelf: 'flex-start',
+                gap: 6,
+                marginBottom: 10,
+                paddingVertical: 6,
+                paddingHorizontal: 10,
+                borderRadius: 999,
+                backgroundColor: '#fffbeb',
+                borderWidth: 1,
+                borderColor: '#fcd34d',
+              }}>
+                <MaterialIcons name="notifications-active" size={14} color="#b45309" />
+                <Text style={{ color: '#92400e', fontSize: 12, fontWeight: '700' }}>
                   {pendingRequestCount} pending request{pendingRequestCount === 1 ? '' : 's'}
                 </Text>
               </View>
@@ -2097,29 +2229,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                   </View>
                   <View style={styles.infoRowCopy}>
                     <Text style={styles.infoRowTitle}>{projectDateLabel}</Text>
-                    <Text style={styles.infoRowSubtitle}>Project schedule</Text>
+                    <Text style={styles.infoRowSubtitle}>{project.location.address}</Text>
                   </View>
                 </View>
-                <MaterialIcons name="chevron-right" size={22} color="#cbd5e1" />
               </View>
-              <View style={styles.infoDivider} />
-              <View style={styles.infoRow}>
-                <View style={styles.infoRowLeading}>
-                  <View style={styles.infoIconWrap}>
-                    <MaterialIcons name="location-on" size={18} color="#ef4444" />
-                  </View>
-                  <View style={styles.infoRowCopy}>
-                    <Text style={styles.infoRowTitle}>{project.location.address}</Text>
-                    <Text style={styles.infoRowSubtitle}>Program location</Text>
-                  </View>
-                </View>
-                <MaterialIcons name="chevron-right" size={22} color="#cbd5e1" />
-              </View>
-            </View>
-
-            <View style={styles.aboutSection}>
-              <Text style={styles.aboutLabel}>About Project</Text>
-              <Text style={styles.description} numberOfLines={4}>
+              <Text style={styles.description}>
                 {project.description}
               </Text>
             </View>
@@ -2130,10 +2244,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           <View style={styles.projectEventPanel}>
             <View style={styles.projectEventPanelHeader}>
               <View style={styles.projectEventPanelCopy}>
-                <Text style={styles.projectEventPanelTitle}>Events Inside This Project</Text>
-                <Text style={styles.projectEventPanelMeta}>
-                  Create and open events like Quarterly Assessment from here.
-                </Text>
+                <Text style={styles.projectEventPanelTitle}>Events</Text>
               </View>
               <TouchableOpacity
                 style={styles.projectEventPanelButton}
@@ -2154,23 +2265,44 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               </View>
             ) : (
               linkedEvents.map(event => (
-                <TouchableOpacity
-                  key={event.id}
-                  style={styles.projectEventListItem}
-                  onPress={() => handleSelectProject(event)}
-                  activeOpacity={0.88}
-                >
-                  <View style={styles.projectEventListItemCopy}>
-                    <Text style={styles.projectEventListItemTitle}>{event.title}</Text>
-                    <Text style={styles.projectEventListItemMeta}>
-                      {format(new Date(event.startDate), 'PPP')} | {event.location.address}
-                    </Text>
-                    <Text style={styles.projectEventListItemSummary} numberOfLines={2}>
-                      {event.description}
-                    </Text>
-                  </View>
-                  <MaterialIcons name="chevron-right" size={22} color="#94a3b8" />
-                </TouchableOpacity>
+                <View key={event.id} style={{ position: 'relative' }}>
+                  <TouchableOpacity
+                    style={styles.projectEventListItem}
+                    onPress={() => handleSelectProject(event)}
+                    activeOpacity={0.88}
+                  >
+                    <View style={styles.projectEventListItemCopy}>
+                      <Text style={styles.projectEventListItemTitle}>{event.title}</Text>
+                      <Text style={styles.projectEventListItemMeta}>
+                        {format(new Date(event.startDate), 'PPP')} | {event.location.address}
+                      </Text>
+                      <Text style={styles.projectEventListItemSummary} numberOfLines={2}>
+                        {event.description}
+                      </Text>
+                    </View>
+                    <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center', pointerEvents: 'box-none' }}>
+                      {isAdmin && (
+                        <>
+                          <TouchableOpacity
+                            style={{ backgroundColor: 'rgba(255,255,255,0.93)', borderRadius: 6, padding: 5, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4, elevation: 2 }}
+                            onPress={() => handleSelectProject(event)}
+                            activeOpacity={0.8}
+                          >
+                            <MaterialIcons name="edit" size={16} color="#6366f1" />
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={{ backgroundColor: 'rgba(255,255,255,0.93)', borderRadius: 6, padding: 5, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4, elevation: 2 }}
+                            onPress={() => handleDeleteEventRecord(event)}
+                            activeOpacity={0.8}
+                          >
+                            <MaterialIcons name="delete" size={16} color="#ef4444" />
+                          </TouchableOpacity>
+                        </>
+                      )}
+                      <MaterialIcons name="chevron-right" size={22} color="#94a3b8" />
+                    </View>
+                  </TouchableOpacity>
+                </View>
               ))
             )}
           </View>
@@ -2226,7 +2358,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               <View style={{ flex: 1 }}>
                 <Text style={styles.programSuiteProjectsTitle}>{section.title} Projects</Text>
                 <Text style={styles.programSuiteProjectsMeta}>
-                  Open a project to see its event list, event dashboard, and event task board.
+                  Open a project to see the events that belong to it, plus its event dashboard and task board.
                 </Text>
               </View>
               {isAdmin && (
@@ -2507,29 +2639,61 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       onRequestClose={closeProjectModal}
     >
       <View style={styles.modalContainer}>
-        <View style={styles.modalHeader}>
-          <TouchableOpacity onPress={closeProjectModal}>
-            <MaterialIcons name="close" size={24} color="#333" />
-          </TouchableOpacity>
-          <Text style={styles.modalTitle}>
-            {editingProjectId
-              ? projectDraft.isEvent
-                ? 'Edit Event'
-                : 'Edit Program'
-              : projectDraft.isEvent
-                ? 'Create Event'
-                : 'Create Program'}
-          </Text>
-          <TouchableOpacity onPress={handleSaveProjectRecord}>
-            <Text style={styles.projectModalSave}>Save</Text>
-          </TouchableOpacity>
-        </View>
+        {isProjectSaveSuccess ? (
+          <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+            <View style={{ backgroundColor: '#fff', width: '100%', maxWidth: 520, borderRadius: 18, padding: 32, alignItems: 'center' }}>
+              <MaterialIcons name="check-circle" size={84} color="#10b981" />
+              <Text style={{ fontSize: 22, fontWeight: '800', color: '#1e293b', marginTop: 18, textAlign: 'center' }}>
+                {editingProjectId
+                  ? projectDraft.isEvent
+                    ? 'Event Saved!'
+                    : 'Project Saved!'
+                  : projectDraft.isEvent
+                    ? 'Event Created!'
+                    : 'Project Created!'}
+              </Text>
+              <Text style={{ fontSize: 14, color: '#64748b', marginTop: 10, textAlign: 'center', lineHeight: 20 }}>
+                {editingProjectId
+                  ? projectDraft.isEvent
+                    ? 'Your event updates were saved to the database successfully.'
+                    : 'Your project changes were saved to the database successfully.'
+                  : projectDraft.isEvent
+                    ? 'Your event was created and saved to the database successfully.'
+                    : 'Your project was created and saved to the database successfully.'}
+              </Text>
+            </View>
+          </View>
+        ) : (
+          <>
+            <View style={styles.modalHeader}>
+              <TouchableOpacity onPress={closeProjectModal}>
+                <MaterialIcons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+              <Text style={styles.modalTitle}>
+                {editingProjectId
+                  ? projectDraft.isEvent
+                    ? 'Edit Event'
+                    : 'Edit Project'
+                  : projectDraft.isEvent
+                    ? 'Create Event'
+                    : 'Create Project'}
+              </Text>
+              <TouchableOpacity onPress={handleSaveProjectRecord}>
+                <Text style={styles.projectModalSave}>Save</Text>
+              </TouchableOpacity>
+            </View>
 
-        <ScrollView style={styles.modalContent}>
-          <View style={[styles.formRow, styles.formRowReverse]}>
-            <TextInput
+            <ScrollView style={styles.modalContent}>
+              {projectSaveError ? (
+                <View style={{ backgroundColor: '#fef2f2', borderWidth: 1, borderColor: '#fca5a5', borderRadius: 8, padding: 12, marginBottom: 14 }}>
+                  <Text style={{ color: '#b91c1c', fontSize: 13, fontWeight: '600' }}>{projectSaveError}</Text>
+                </View>
+              ) : null}
+
+              <View style={[styles.formRow, styles.formRowReverse]}>
+                <TextInput
               style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
-              placeholder="Program title"
+              placeholder="Project title"
               placeholderTextColor="#999"
               value={projectDraft.title}
               onChangeText={value => handleProjectDraftChange('title', value)}
@@ -2540,7 +2704,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           <View style={[styles.formRow, styles.formRowTop, styles.formRowReverse]}>
             <TextInput
               style={[styles.textArea, styles.inputWithLabel]}
-              placeholder="Program description"
+              placeholder="Project description"
               placeholderTextColor="#999"
               multiline
               numberOfLines={4}
@@ -2602,52 +2766,27 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
           <View style={[styles.formRow, styles.formRowReverse]}>
             <View style={[styles.statusOptions, styles.statusOptionsCard]}>
-              <TouchableOpacity
-                style={[
-                  styles.statusOption,
-                  !projectDraft.isEvent && styles.statusOptionSelected,
-                ]}
-                onPress={() => handleProjectDraftChange('isEvent', false)}
-              >
-                <Text
-                  style={[
-                    styles.statusOptionText,
-                    !projectDraft.isEvent && styles.statusOptionTextSelected,
-                  ]}
+              {projectEditorMode === 'event' || projectDraft.isEvent ? (
+                <TouchableOpacity
+                  style={[styles.statusOption, styles.statusOptionSelected]}
+                  disabled
                 >
-                  Program
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.statusOption,
-                  projectDraft.isEvent && styles.statusOptionSelected,
-                ]}
-                onPress={() => handleProjectDraftChange('isEvent', true)}
-              >
-                <Text
-                  style={[
-                    styles.statusOptionText,
-                    projectDraft.isEvent && styles.statusOptionTextSelected,
-                  ]}
+                  <Text style={[styles.statusOptionText, styles.statusOptionTextSelected]}>
+                    Event
+                  </Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={[styles.statusOption, styles.statusOptionSelected]}
+                  onPress={() => handleProjectDraftChange('isEvent', false)}
                 >
-                  Event
-                </Text>
-              </TouchableOpacity>
+                  <Text style={[styles.statusOptionText, styles.statusOptionTextSelected]}>
+                    Project
+                  </Text>
+                </TouchableOpacity>
+              )}
             </View>
             <Text style={styles.labelRight}>Type</Text>
-          </View>
-
-          <View style={[styles.formRow, styles.formRowTop, styles.formRowReverse]}>
-            <View style={[styles.statusOptions, styles.statusOptionsCard]}>
-              <View style={styles.helperPanel}>
-                <Text style={styles.helperPanelTitle}>Partner assignment removed</Text>
-                <Text style={styles.helperPanelText}>
-                  Partners cannot be assigned directly to programs. A partnered org only appears after an admin approves a partner-initiated project proposal.
-                </Text>
-              </View>
-            </View>
-            <Text style={[styles.labelRight, styles.labelTop]}>Partnered Org</Text>
           </View>
 
           <View style={[styles.formRow, styles.formRowTop, styles.formRowReverse]}>
@@ -2690,7 +2829,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                 <View style={styles.projectImageEmptyState}>
                   <MaterialIcons name="image" size={22} color="#94a3b8" />
                   <Text style={styles.projectImageEmptyStateText}>
-                    No custom picture uploaded yet. The app will use the default program image.
+                      No custom picture uploaded yet. The app will use the default project image.
                   </Text>
                 </View>
               )}
@@ -2827,6 +2966,71 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             <Text style={styles.labelRight}>Volunteer Slots</Text>
           </View>
 
+          <View style={[styles.formRow, styles.formRowTop, styles.formRowReverse]}>
+            <View style={[styles.statusOptionsCard, styles.skillSelectionCard]}>
+              <Text style={styles.helperPanelTitle}>Skills Needed</Text>
+              <Text style={styles.helperPanelText}>
+                Select skills needed for this project or event. You can also add a custom skill.
+              </Text>
+
+              <View style={styles.skillOptionGrid}>
+                {TASK_SKILL_OPTIONS.map(skill => {
+                  const selected = projectDraft.skillsNeeded.includes(skill);
+                  return (
+                    <TouchableOpacity
+                      key={skill}
+                      style={[
+                        styles.skillOptionRow,
+                        selected && styles.dropdownOptionSelected,
+                      ]}
+                      onPress={() => toggleProjectSkill(skill)}
+                    >
+                      <Text
+                        style={[
+                          styles.skillOptionText,
+                          selected && styles.skillOptionTextSelected,
+                        ]}
+                      >
+                        {skill}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              <View style={styles.customSkillRow}>
+                <TextInput
+                  style={styles.customSkillInput}
+                  placeholder="Add new skill"
+                  placeholderTextColor="#999"
+                  value={customProjectSkill}
+                  onChangeText={setCustomProjectSkill}
+                />
+                <TouchableOpacity
+                  style={styles.customSkillAddButton}
+                  onPress={handleAddCustomProjectSkill}
+                >
+                  <Text style={styles.customSkillAddButtonText}>Add</Text>
+                </TouchableOpacity>
+              </View>
+
+              {projectDraft.skillsNeeded.length > 0 ? (
+                <View style={styles.selectedSkillChips}>
+                  {projectDraft.skillsNeeded.map(skill => (
+                    <TouchableOpacity
+                      key={skill}
+                      style={styles.selectedSkillChip}
+                      onPress={() => removeProjectSkill(skill)}
+                    >
+                      <Text style={styles.selectedSkillChipText}>{skill}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              ) : null}
+            </View>
+            <Text style={[styles.labelRight, styles.labelTop]}>Skills</Text>
+          </View>
+
           <TouchableOpacity
             style={styles.submitButton}
             onPress={handleSaveProjectRecord}
@@ -2835,13 +3039,15 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               {editingProjectId
                 ? projectDraft.isEvent
                   ? 'Update Event'
-                  : 'Update Program'
+                  : 'Update Project'
                 : projectDraft.isEvent
                   ? 'Create Event'
-                  : 'Create Program'}
+                  : 'Create Project'}
             </Text>
           </TouchableOpacity>
         </ScrollView>
+          </>
+        )}
       </View>
 
       {/* Date Picker Modal */}
@@ -3211,6 +3417,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       }),
     [activeProgramTracks, allPartnerApplications, projects]
   );
+
+  const programMutationInProgress =
+    actionLoadingKey === 'saveProgramCrud' ||
+    actionLoadingKey === 'addProgram' ||
+    String(actionLoadingKey || '').startsWith('deleteProgram-');
 
   useEffect(() => {
     programSections.forEach(section => {
@@ -4554,7 +4765,15 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       {!loadError ? (
         <>
           <View style={{ marginBottom: 24 }}>
-            <Text style={{ fontSize: 20, fontWeight: '700', color: '#1e293b', marginBottom: 16 }}>Programs</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+              <Text style={{ fontSize: 20, fontWeight: '700', color: '#1e293b' }}>Programs</Text>
+              {programMutationInProgress && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <ActivityIndicator size="small" color="#6366f1" />
+                  <Text style={{ fontSize: 12, color: '#6366f1', fontWeight: '600' }}>Updating programs...</Text>
+                </View>
+              )}
+            </View>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 16, paddingRight: 20 }}>
               {programSections.map(section => {
                 const track = activeProgramTracks.find(t => t.id === section.module);
@@ -5300,7 +5519,7 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: '#ffffff',
-    borderRadius: 4,
+    borderRadius: 12,
     marginBottom: 0,
     borderWidth: 1,
     borderColor: '#dbe2ea',
@@ -5312,29 +5531,35 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   cardDesktop: {
-    flexBasis: '31.7%',
-    maxWidth: '31.7%',
+    width: '100%',
+    maxWidth: 960,
+    flexShrink: 0,
+    height: 620,
   },
   cardMobile: {
-    flexBasis: '100%',
-    maxWidth: '100%',
+    width: '48%',
+    maxWidth: '48%',
+    flexShrink: 0,
+    height: 300,
   },
   cardImage: {
     width: '100%',
-    height: 160,
+    height: 80,
     backgroundColor: '#dbe4ea',
   },
   cardBody: {
-    paddingHorizontal: 14,
-    paddingTop: 12,
-    paddingBottom: 14,
+    flex: 1,
+    justifyContent: 'space-between',
+    paddingHorizontal: 8,
+    paddingTop: 6,
+    paddingBottom: 6,
   },
   cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    gap: 10,
-    marginBottom: 12,
+    gap: 6,
+    marginBottom: 4,
   },
   cardHeaderCopy: {
     flex: 1,
@@ -5344,15 +5569,15 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   cardTitle: {
-    fontSize: 20,
-    lineHeight: 24,
+    fontSize: 16,
+    lineHeight: 20,
     fontWeight: '800',
     color: '#1f2544',
   },
   cardSubtitle: {
-    fontSize: 12,
+    fontSize: 11,
     color: '#64748b',
-    marginTop: 4,
+    marginTop: 2,
     fontWeight: '600',
   },
   description: {
@@ -5583,8 +5808,9 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 16,
-    alignItems: 'stretch',
+    gap: 10,
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
   },
   emptyState: {
     alignItems: 'center',
