@@ -525,6 +525,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
   const [allVolunteerMatches, setAllVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
   const [volunteerTimeLogs, setVolunteerTimeLogs] = useState<VolunteerTimeLog[]>([]);
+  const [selectedAttendanceVolunteerId, setSelectedAttendanceVolunteerId] = useState<string | null>(null);
   const [programTracks, setProgramTracks] = useState<ProgramTrack[]>([]);
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [showProjectModal, setShowProjectModal] = useState(false);
@@ -586,6 +587,19 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         : null,
     [projectDraft.isEvent, projectDraft.parentProjectId, projects]
   );
+
+  useEffect(() => {
+    setSelectedAttendanceVolunteerId(null);
+  }, [selectedProject?.id]);
+
+  const openVolunteerAttendanceDetails = (volunteerId: string) => {
+    setSelectedAttendanceVolunteerId(volunteerId);
+  };
+
+  const closeVolunteerAttendanceDetails = () => {
+    setSelectedAttendanceVolunteerId(null);
+  };
+
   const resetProjectLocationSelection = () => {
     setProjectRegionCode('');
     setProjectCityCode('');
@@ -3606,6 +3620,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         };
       })
       .sort((left, right) => left.volunteerName.localeCompare(right.volunteerName));
+    const selectedAttendanceCard = selectedAttendanceVolunteerId
+      ? projectVolunteerAttendanceCards.find(card => card.volunteerId === selectedAttendanceVolunteerId) || null
+      : null;
     const projectTimeInCount = projectTimeLogEntries.length;
     const projectTimeOutCount = projectTimeLogEntries.filter(log => Boolean(log.timeOut)).length;
     const selectedPartnerName =
@@ -4194,36 +4211,21 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                 {projectVolunteerAttendanceCards.length === 0 ? (
                   <Text style={styles.emptyText}>No time in or time out records yet</Text>
                 ) : (
-                  <View style={styles.updatesList}>
+                  <View style={styles.attendanceCardGrid}>
                     {projectVolunteerAttendanceCards.map(card => (
-                      <View key={card.volunteerId} style={styles.applicationCard}>
-                        <View style={styles.applicationHeader}>
-                          <View style={{ flex: 1 }}>
-                            <Text style={styles.applicationName}>{card.volunteerName}</Text>
-                            <Text style={styles.applicationMeta}>{card.volunteerEmail}</Text>
-                            <Text style={styles.applicationMeta}>{card.latestActivityLabel}</Text>
-                            <View style={styles.attendanceMetricsRow}>
-                              <View style={styles.attendanceMetricChip}>
-                                <Text style={styles.attendanceMetricValue}>{card.timeInCount}</Text>
-                                <Text style={styles.attendanceMetricLabel}>time ins</Text>
-                              </View>
-                              <View style={styles.attendanceMetricChip}>
-                                <Text style={styles.attendanceMetricValue}>{card.timeOutCount}</Text>
-                                <Text style={styles.attendanceMetricLabel}>time outs</Text>
-                              </View>
-                              <View style={styles.attendanceMetricChip}>
-                                <Text style={styles.attendanceMetricValue}>{card.attendanceDays}</Text>
-                                <Text style={styles.attendanceMetricLabel}>days</Text>
-                              </View>
-                            </View>
-                            {card.logs.slice(0, 3).map(log => (
-                              <Text key={log.id} style={styles.applicationMeta}>
-                                {log.timeOut
-                                  ? `${format(new Date(log.timeIn), 'PPp')} -> ${format(new Date(log.timeOut), 'PPp')}`
-                                  : `Timed in ${format(new Date(log.timeIn), 'PPp')} (active)`}
-                              </Text>
-                            ))}
-                          </View>
+                      <TouchableOpacity
+                        key={card.volunteerId}
+                        activeOpacity={0.88}
+                        onPress={() => openVolunteerAttendanceDetails(card.volunteerId)}
+                        style={[
+                          styles.attendanceCardCompact,
+                          isDesktop ? styles.attendanceCardCompactDesktop : styles.attendanceCardCompactMobile,
+                        ]}
+                      >
+                        <View style={styles.attendanceCardCompactTopRow}>
+                          <Text style={styles.applicationName} numberOfLines={1}>
+                            {card.volunteerName}
+                          </Text>
                           <View
                             style={[
                               styles.applicationStatusBadge,
@@ -4239,7 +4241,31 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                             </Text>
                           </View>
                         </View>
-                      </View>
+                        <Text style={styles.applicationMeta} numberOfLines={1}>
+                          {card.volunteerEmail}
+                        </Text>
+                        <Text style={styles.applicationMeta} numberOfLines={2}>
+                          {card.latestActivityLabel}
+                        </Text>
+                        <View style={styles.attendanceMetricsRow}>
+                          <View style={styles.attendanceMetricChip}>
+                            <Text style={styles.attendanceMetricValue}>{card.timeInCount}</Text>
+                            <Text style={styles.attendanceMetricLabel}>time ins</Text>
+                          </View>
+                          <View style={styles.attendanceMetricChip}>
+                            <Text style={styles.attendanceMetricValue}>{card.timeOutCount}</Text>
+                            <Text style={styles.attendanceMetricLabel}>time outs</Text>
+                          </View>
+                          <View style={styles.attendanceMetricChip}>
+                            <Text style={styles.attendanceMetricValue}>{card.attendanceDays}</Text>
+                            <Text style={styles.attendanceMetricLabel}>days</Text>
+                          </View>
+                        </View>
+                        <View style={styles.attendanceCardCompactFooter}>
+                          <Text style={styles.attendanceCardCompactHint}>Tap to view full record</Text>
+                          <MaterialIcons name="chevron-right" size={18} color="#1d4ed8" />
+                        </View>
+                      </TouchableOpacity>
                     ))}
                   </View>
                 )}
@@ -4917,6 +4943,72 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                 <Text style={styles.submitButtonText}>Add Update</Text>
               </TouchableOpacity>
             </ScrollView>
+          </View>
+        </Modal>
+        <Modal
+          visible={Boolean(selectedAttendanceCard)}
+          transparent
+          animationType="fade"
+          onRequestClose={closeVolunteerAttendanceDetails}
+        >
+          <View style={styles.proposalModalBackdrop}>
+            <View style={styles.attendanceModalCard}>
+              <View style={styles.proposalModalHeader}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.proposalModalTitle}>
+                    {selectedAttendanceCard?.volunteerName || 'Volunteer Record'}
+                  </Text>
+                  <Text style={styles.proposalModalSubtitle}>
+                    {selectedAttendanceCard?.volunteerEmail || 'No email on file'}
+                  </Text>
+                  <Text style={styles.attendanceModalLiveNote}>
+                    New time in and time out records for this volunteer appear here automatically.
+                  </Text>
+                </View>
+                <TouchableOpacity onPress={closeVolunteerAttendanceDetails} style={styles.proposalModalClose}>
+                  <MaterialIcons name="close" size={18} color="#0f172a" />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView
+                style={styles.attendanceModalScroll}
+                contentContainerStyle={styles.attendanceModalScrollContent}
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={styles.attendanceModalStatsRow}>
+                  <View style={styles.attendanceModalStatCard}>
+                    <Text style={styles.attendanceModalStatValue}>{selectedAttendanceCard?.timeInCount || 0}</Text>
+                    <Text style={styles.attendanceModalStatLabel}>Time Ins</Text>
+                  </View>
+                  <View style={styles.attendanceModalStatCard}>
+                    <Text style={styles.attendanceModalStatValue}>{selectedAttendanceCard?.timeOutCount || 0}</Text>
+                    <Text style={styles.attendanceModalStatLabel}>Time Outs</Text>
+                  </View>
+                  <View style={styles.attendanceModalStatCard}>
+                    <Text style={styles.attendanceModalStatValue}>{selectedAttendanceCard?.attendanceDays || 0}</Text>
+                    <Text style={styles.attendanceModalStatLabel}>Days</Text>
+                  </View>
+                </View>
+
+                <Text style={styles.attendanceModalSectionTitle}>Attendance Records</Text>
+                {selectedAttendanceCard?.logs.map(log => (
+                  <View key={log.id} style={styles.attendanceRecordRow}>
+                    <View style={styles.attendanceRecordTimeline}>
+                      <Text style={styles.attendanceRecordLabel}>Time in</Text>
+                      <Text style={styles.attendanceRecordValue}>
+                        {format(new Date(log.timeIn), 'PPpp')}
+                      </Text>
+                    </View>
+                    <View style={styles.attendanceRecordTimeline}>
+                      <Text style={styles.attendanceRecordLabel}>Time out</Text>
+                      <Text style={styles.attendanceRecordValue}>
+                        {log.timeOut ? format(new Date(log.timeOut), 'PPpp') : 'Still active'}
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+              </ScrollView>
+            </View>
           </View>
         </Modal>
         {renderProgramProposalModal()}
@@ -6561,6 +6653,39 @@ const styles = StyleSheet.create({
   updatesList: {
     marginTop: 14,
   },
+  attendanceCardGrid: {
+    marginTop: 14,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  attendanceCardCompact: {
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    padding: 14,
+    minHeight: 180,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 2,
+  },
+  attendanceCardCompactDesktop: {
+    width: 260,
+    flexGrow: 0,
+    flexShrink: 0,
+  },
+  attendanceCardCompactMobile: {
+    width: '100%',
+  },
+  attendanceCardCompactTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
   updateItem: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -6645,6 +6770,18 @@ const styles = StyleSheet.create({
     color: '#475569',
     textTransform: 'uppercase',
     letterSpacing: 0.4,
+  },
+  attendanceCardCompactFooter: {
+    marginTop: 'auto',
+    paddingTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  attendanceCardCompactHint: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#1d4ed8',
   },
   reportImagePreview: {
     width: '100%',
@@ -7443,6 +7580,93 @@ const styles = StyleSheet.create({
   },
   proposalModalScrollContent: {
     paddingBottom: 4,
+  },
+  attendanceModalCard: {
+    width: '100%',
+    maxWidth: 640,
+    backgroundColor: '#ffffff',
+    borderRadius: 20,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.16,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 12,
+    gap: 14,
+  },
+  attendanceModalLiveNote: {
+    marginTop: 8,
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#475569',
+  },
+  attendanceModalScroll: {
+    maxHeight: Platform.select({ web: 520, default: 480 }),
+  },
+  attendanceModalScrollContent: {
+    paddingBottom: 4,
+  },
+  attendanceModalStatsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginBottom: 12,
+  },
+  attendanceModalStatCard: {
+    flex: 1,
+    minWidth: 140,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    backgroundColor: '#eff6ff',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  attendanceModalStatValue: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#1d4ed8',
+  },
+  attendanceModalStatLabel: {
+    marginTop: 4,
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#475569',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  attendanceModalSectionTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0f172a',
+    marginBottom: 10,
+  },
+  attendanceRecordRow: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#f8fafc',
+    padding: 14,
+    marginBottom: 10,
+    gap: 10,
+  },
+  attendanceRecordTimeline: {
+    gap: 4,
+  },
+  attendanceRecordLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  attendanceRecordValue: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#0f172a',
+    lineHeight: 20,
   },
   proposalModalEmpty: {
     alignItems: 'center',

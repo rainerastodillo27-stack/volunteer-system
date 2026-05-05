@@ -1755,15 +1755,35 @@ function invalidateProjectsSnapshotCache(): void {
 }
 
 
-// Loads the combined project, volunteer, and application data for the projects screen.
-// Note: We ignore specific 'fields' to force consolidation into a single global promise.
+// Loads the combined project, volunteer, and application data for project-facing screens.
+// Optional field filters are forwarded to the backend so each screen can request only
+// the collections it needs while still caching per-user/per-field snapshots.
 export async function getProjectsScreenSnapshot(
   user?: Pick<User, 'id' | 'role'> | null,
   fields?: string[]
 ): Promise<ProjectsScreenSnapshot> {
+  const normalizedFields = fields?.length
+    ? Array.from(
+        new Set(
+          fields
+            .map(field => String(field || '').trim())
+            .filter(Boolean)
+        )
+      )
+    : [];
+  const requestedFieldSet = new Set(normalizedFields);
+  const shouldLoadProjects = normalizedFields.length === 0 || requestedFieldSet.has('projects');
+  const shouldLoadProgramTracks =
+    normalizedFields.length === 0 ||
+    requestedFieldSet.has('programTracks') ||
+    requestedFieldSet.has('programCatalog');
+
   const params = new URLSearchParams();
   if (user?.id) params.set('user_id', user.id);
   if (user?.role) params.set('role', user.role);
+  if (normalizedFields.length > 0) {
+    params.set('fields', normalizedFields.join(','));
+  }
   
   const cacheKey = `snapshot:${params.toString()}`;
   const lastRequestTime = lastSnapshotRequestTimes.get(cacheKey) || 0;
@@ -1781,6 +1801,33 @@ export async function getProjectsScreenSnapshot(
   if (existingRequest) {
     return existingRequest;
   }
+
+  const buildSnapshotFallback = async (
+    seed?: Partial<ProjectsScreenSnapshot>
+  ): Promise<ProjectsScreenSnapshot> => {
+    const [fallbackProjects, fallbackProgramTracks] = await Promise.all([
+      shouldLoadProjects ? getAllProjects().catch(() => []) : Promise.resolve([] as Project[]),
+      shouldLoadProgramTracks
+        ? getAllProgramTracks().catch(() => [])
+        : Promise.resolve([] as ProgramTrack[]),
+    ]);
+
+    return {
+      projects:
+        shouldLoadProjects && fallbackProjects.length > 0
+          ? fallbackProjects
+          : (seed?.projects as Project[] | undefined) || [],
+      programTracks:
+        shouldLoadProgramTracks && fallbackProgramTracks.length > 0
+          ? fallbackProgramTracks
+          : seed?.programTracks || [],
+      volunteerProfile: seed?.volunteerProfile || null,
+      volunteerMatches: Array.isArray(seed?.volunteerMatches) ? seed?.volunteerMatches : undefined,
+      timeLogs: seed?.timeLogs || [],
+      partnerApplications: seed?.partnerApplications || [],
+      volunteerJoinRecords: seed?.volunteerJoinRecords || [],
+    };
+  };
 
   const snapshotRequest = (async () => {
     try {
@@ -1808,13 +1855,19 @@ export async function getProjectsScreenSnapshot(
           volunteerJoinRecords: payload.volunteerJoinRecords || [],
         };
 
+        const recoveredResult =
+          (shouldLoadProjects && result.projects.length === 0) ||
+          (shouldLoadProgramTracks && result.programTracks.length === 0)
+            ? await buildSnapshotFallback(result)
+            : result;
+
         // Cache the result for this specific field-set request
-        projectsSnapshotCache.set(cacheKey, { data: result, timestamp: Date.now() });
-        return result;
+        projectsSnapshotCache.set(cacheKey, { data: recoveredResult, timestamp: Date.now() });
+        return recoveredResult;
       } catch (normalizeError) {
         console.error(`[Data] Error normalizing ProjectsSnapshot:`, normalizeError);
         // Return what we can even if normalization fails
-        return {
+        const partialResult = {
           projects: payload.projects || [],
           programTracks: payload.programTracks || [],
           volunteerProfile: payload.volunteerProfile || null,
@@ -1823,21 +1876,15 @@ export async function getProjectsScreenSnapshot(
           partnerApplications: payload.partnerApplications || [],
           volunteerJoinRecords: payload.volunteerJoinRecords || [],
         };
+        const fallbackResult = await buildSnapshotFallback(partialResult);
+        projectsSnapshotCache.set(cacheKey, { data: fallbackResult, timestamp: Date.now() });
+        return fallbackResult;
       }
     } catch (error) {
       console.error(`[Data] Error fetching ProjectsSnapshot:`, error);
-      // Return empty but valid response on error
-      const emptyResult: ProjectsScreenSnapshot = {
-        projects: [],
-        programTracks: [],
-        volunteerProfile: null,
-        volunteerMatches: undefined,
-        timeLogs: [],
-        partnerApplications: [],
-        volunteerJoinRecords: [],
-      };
-      projectsSnapshotCache.set(cacheKey, { data: emptyResult, timestamp: Date.now() });
-      return emptyResult;
+      const fallbackResult = await buildSnapshotFallback();
+      projectsSnapshotCache.set(cacheKey, { data: fallbackResult, timestamp: Date.now() });
+      return fallbackResult;
     } finally {
       inFlightSnapshotRequests.delete(cacheKey);
     }

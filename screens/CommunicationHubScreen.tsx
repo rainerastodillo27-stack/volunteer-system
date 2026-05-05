@@ -136,6 +136,23 @@ type ProposalFormState = {
   expectedDeliverables: string;
 };
 
+function getSidebarSectionMeta(section: SidebarSection): {
+  label: string;
+  icon: keyof typeof MaterialIcons.glyphMap;
+} {
+  switch (section) {
+    case 'projects':
+      return { label: 'Event GC', icon: 'groups' };
+    case 'proposals':
+      return { label: 'Proposals', icon: 'calendar-today' };
+    case 'contacts':
+      return { label: 'Contacts', icon: 'contacts' };
+    case 'messages':
+    default:
+      return { label: 'Messages', icon: 'mail-outline' };
+  }
+}
+
 
 export default function CommunicationHubScreen({ navigation, route }: any) {
   const { user } = useAuth();
@@ -152,7 +169,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   } = route?.params || {};
 
   const [view, setView] = useState<'sidebar' | 'detail'>(isWide ? 'detail' : 'sidebar');
-  const [activeSection, setActiveSection] = useState<SidebarSection>('messages');
+  const [activeSection, setActiveSection] = useState<SidebarSection>('projects');
   const [loading, setLoading] = useState(true);
 
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
@@ -202,8 +219,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   const [locBarangay, setLocBarangay] = useState('');
 
   const availableSections: SidebarSection[] = isVolunteer
-    ? ['messages', 'projects']
-    : ['messages', 'projects', 'proposals', 'contacts'];
+    ? ['projects', 'contacts']
+    : ['projects', 'proposals', 'contacts'];
 
   const loadData = useCallback(async () => {
     if (!user) return;
@@ -683,19 +700,31 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         />
       </View>
 
-      <View style={styles.sectionTabs}>
-        {availableSections.map(s => (
-          <TouchableOpacity
-            key={s}
-            onPress={() => setActiveSection(s)}
-            style={[styles.sectionTab, activeSection === s && styles.sectionTabActive]}
-          >
-            <Text style={[styles.sectionTabText, activeSection === s && styles.sectionTabTextActive]}>
-              {s === 'projects' ? 'Event GC' : s.charAt(0).toUpperCase() + s.slice(1)}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
+      {!isTablet && (
+        <View style={styles.sectionTabs}>
+          {availableSections.map(section => {
+            const sectionMeta = getSidebarSectionMeta(section);
+            return (
+              <TouchableOpacity
+                key={section}
+                onPress={() => setActiveSection(section)}
+                style={[styles.sectionTab, activeSection === section && styles.sectionTabActive]}
+              >
+                <View style={[styles.sectionTabIconWrap, activeSection === section && styles.sectionTabIconWrapActive]}>
+                  <MaterialIcons
+                    name={sectionMeta.icon}
+                    size={18}
+                    color={activeSection === section ? '#ffffff' : '#166534'}
+                  />
+                </View>
+                <Text style={[styles.sectionTabText, activeSection === section && styles.sectionTabTextActive]}>
+                  {sectionMeta.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      )}
 
       <ScrollView style={styles.sidebarList}>
         {activeSection === 'messages' && (
@@ -1626,15 +1655,25 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   const renderNavRail = () => (
     <View style={styles.navRail}>
-      <TouchableOpacity style={[styles.railItem, styles.railItemActive]}>
-        <Ionicons name="chatbubble" size={24} color="#fff" />
-      </TouchableOpacity>
-      <TouchableOpacity style={styles.railItem}>
-        <Ionicons name="people-outline" size={24} color="rgba(255,255,255,0.6)" />
-      </TouchableOpacity>
-      <TouchableOpacity style={styles.railItem}>
-        <Ionicons name="calendar-outline" size={24} color="rgba(255,255,255,0.6)" />
-      </TouchableOpacity>
+      {availableSections.map(section => {
+        const sectionMeta = getSidebarSectionMeta(section);
+        const isActive = activeSection === section;
+
+        return (
+          <TouchableOpacity
+            key={section}
+            style={[styles.railItem, isActive && styles.railItemActive]}
+            onPress={() => setActiveSection(section)}
+            activeOpacity={0.85}
+          >
+            <MaterialIcons
+              name={sectionMeta.icon}
+              size={24}
+              color={isActive ? '#ffffff' : 'rgba(255,255,255,0.72)'}
+            />
+          </TouchableOpacity>
+        );
+      })}
       <View style={{ flex: 1 }} />
       <TouchableOpacity style={styles.railItem}>
         <Ionicons name="settings-outline" size={24} color="rgba(255,255,255,0.6)" />
@@ -1669,17 +1708,17 @@ const styles = StyleSheet.create({
     backgroundColor: '#166534',
     alignItems: 'center',
     paddingVertical: 24,
-    gap: 24
+    gap: 16
   },
   railItem: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
+    width: 52,
+    height: 52,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.1)'
+    backgroundColor: 'rgba(255,255,255,0.12)'
   },
-  railItemActive: { backgroundColor: 'rgba(255,255,255,0.2)' },
+  railItemActive: { backgroundColor: 'rgba(255,255,255,0.22)' },
   railAvatar: {
     width: 40,
     height: 40,
@@ -1729,15 +1768,35 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     paddingHorizontal: 24,
     gap: 12,
-    marginBottom: 16
+    marginBottom: 16,
+    flexWrap: 'wrap',
   },
   sectionTab: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    backgroundColor: '#f1f5f9'
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 16,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
   },
-  sectionTabActive: { backgroundColor: '#166534' },
+  sectionTabActive: {
+    backgroundColor: '#166534',
+    borderColor: '#166534',
+  },
+  sectionTabIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
+    backgroundColor: '#dcfce7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sectionTabIconWrapActive: {
+    backgroundColor: 'rgba(255,255,255,0.18)',
+  },
   sectionTabText: { fontSize: 13, fontWeight: '700', color: '#64748b' },
   sectionTabTextActive: { color: '#fff' },
 

@@ -92,7 +92,7 @@ $backendStarted = $false
 $backendWarning = $null
 
 try {
-  Start-ServiceProcess -Name 'backend' -Command 'npm run backend' -LogPath $backendLog -WaitForBackendHealth
+  Start-ServiceProcess -Name 'backend' -Command 'npm run backend:stable' -LogPath $backendLog -WaitForBackendHealth
   $backendStarted = $true
 } catch {
   $backendWarning = $_.Exception.Message
