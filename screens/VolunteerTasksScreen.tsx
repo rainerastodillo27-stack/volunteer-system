@@ -21,6 +21,9 @@ import {
   getVolunteerTimeLogs,
   subscribeToStorageChanges,
   saveEvent,
+  startVolunteerTimeLog,
+  notifyVolunteerAboutTaskUnassignment,
+  notifyVolunteerAboutTaskUpdate,
 } from '../models/storage';
 import {
   Project,
@@ -30,6 +33,7 @@ import {
   VolunteerTimeLog,
 } from '../models/types';
 import { getProjectDisplayStatus } from '../utils/projectStatus';
+import { navigateToAvailableRoute } from '../utils/navigation';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 type AssignedTask = ProjectInternalTask & {
@@ -40,6 +44,18 @@ type AssignedTask = ProjectInternalTask & {
   statusTrackingNote: string;
 };
 type FieldOfficerFilter = 'All' | 'Active' | 'Upcoming' | 'Completed';
+type TaskScreenTab = 'My Tasks' | 'Manage Assignments';
+
+type TaskEventAttendanceState = {
+  activeLog: VolunteerTimeLog | null;
+  latestLog: VolunteerTimeLog | null;
+  canTimeIn: boolean;
+  canTimeOut: boolean;
+  eventHasNotStarted: boolean;
+  eventHasEnded: boolean;
+  hasLoggedToday: boolean;
+  helperText: string;
+};
 
 function formatEventDateLabel(startDate?: string, endDate?: string): string {
   const start = startDate ? new Date(startDate) : null;
@@ -66,6 +82,47 @@ function formatEventDateLabel(startDate?: string, endDate?: string): string {
   });
 
   return startLabel === endLabel ? startLabel : `${startLabel} - ${endLabel}`;
+}
+
+function getLocalDateKey(value?: string, now: Date = new Date()): string {
+  const date = value ? new Date(value) : now;
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+function hasEventStartedForToday(startValue?: string, now: Date = new Date()): boolean {
+  if (!startValue) {
+    return true;
+  }
+
+  const startDate = new Date(startValue);
+  if (Number.isNaN(startDate.getTime())) {
+    return true;
+  }
+
+  const startDay = new Date(startDate);
+  startDay.setHours(0, 0, 0, 0);
+  return now >= startDay;
+}
+
+function hasEventEndedForToday(endValue?: string, now: Date = new Date()): boolean {
+  if (!endValue) {
+    return false;
+  }
+
+  const endDate = new Date(endValue);
+  if (Number.isNaN(endDate.getTime())) {
+    return false;
+  }
+
+  const endOfDay = new Date(endDate);
+  endOfDay.setHours(23, 59, 59, 999);
+  return now > endOfDay;
 }
 
 function getFieldOfficerEventBucket(project: Project): Exclude<FieldOfficerFilter, 'All'> {
@@ -120,6 +177,15 @@ function getTrackedTaskStatus(
         new Date(left.timeOut || left.timeIn).getTime()
     )[0];
   if (latestCompletedLog?.timeOut) {
+    const projectEnded = hasEventEndedForToday(project.endDate || project.startDate);
+    if (!projectEnded && !['Completed', 'Cancelled'].includes(getProjectDisplayStatus(project))) {
+      return {
+        status: 'Assigned',
+        updatedAt: latestCompletedLog.timeOut,
+        statusTrackingNote: 'Attendance was saved for today. You can time in again on the next event day.',
+      };
+    }
+
     return {
       status: 'Completed',
       updatedAt: latestCompletedLog.timeOut,
@@ -139,6 +205,54 @@ function getTrackedTaskStatus(
     status: 'Assigned',
     updatedAt: task.updatedAt,
     statusTrackingNote: 'Assigned automatically when an admin or field officer gives you this task.',
+  };
+}
+
+function getTaskEventAttendanceState(
+  project: Project,
+  isAssigned: boolean,
+  timeLogs: VolunteerTimeLog[]
+): TaskEventAttendanceState {
+  const sortedLogs = [...timeLogs].sort(
+    (left, right) =>
+      new Date(right.timeOut || right.timeIn).getTime() -
+      new Date(left.timeOut || left.timeIn).getTime()
+  );
+  const activeLog = sortedLogs.find(log => !log.timeOut) || null;
+  const latestLog = sortedLogs[0] || null;
+  const todayKey = getLocalDateKey();
+  const hasLoggedToday = sortedLogs.some(log => getLocalDateKey(log.timeIn) === todayKey);
+  const eventHasNotStarted = !hasEventStartedForToday(project.startDate);
+  const lifecycleStatus = getProjectDisplayStatus(project);
+  const eventHasEnded =
+    hasEventEndedForToday(project.endDate || project.startDate) ||
+    lifecycleStatus === 'Completed' ||
+    lifecycleStatus === 'Cancelled';
+  const canTimeIn = isAssigned && !activeLog && !hasLoggedToday && !eventHasNotStarted && !eventHasEnded;
+  const canTimeOut = Boolean(activeLog);
+
+  let helperText = 'Attendance is ready for today.';
+  if (!isAssigned) {
+    helperText = 'You need an assigned task before attendance opens for this event.';
+  } else if (activeLog) {
+    helperText = 'You are timed in for today. Submit your My Event Report to finish time out.';
+  } else if (eventHasNotStarted) {
+    helperText = 'Time in unlocks on the event start date.';
+  } else if (eventHasEnded) {
+    helperText = 'Attendance is closed because the event timeline already ended.';
+  } else if (hasLoggedToday) {
+    helperText = 'Today is already recorded. Attendance will refresh on the next event day.';
+  }
+
+  return {
+    activeLog,
+    latestLog,
+    canTimeIn,
+    canTimeOut,
+    eventHasNotStarted,
+    eventHasEnded,
+    hasLoggedToday,
+    helperText,
   };
 }
 
@@ -185,7 +299,7 @@ function collectAssignedTasks(
 }
 
 // Displays volunteer's assigned tasks from projects.
-export default function VolunteerTasksScreen() {
+export default function VolunteerTasksScreen({ navigation }: any) {
   const { user } = useAuth();
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [tasks, setTasks] = useState<AssignedTask[]>([]);
@@ -202,6 +316,7 @@ export default function VolunteerTasksScreen() {
   const [filterStatus, setFilterStatus] = useState<'All' | 'Assigned' | 'In Progress' | 'Completed'>('All');
   const [fieldOfficerFilter, setFieldOfficerFilter] = useState<FieldOfficerFilter>('All');
   const [showAllFieldOfficerEvents, setShowAllFieldOfficerEvents] = useState(false);
+  const [activeTab, setActiveTab] = useState<TaskScreenTab>('My Tasks');
 
   const tasksLoadInFlightRef = useRef<Promise<void> | null>(null);
   const tasksReloadQueuedRef = useRef(false);
@@ -348,6 +463,66 @@ export default function VolunteerTasksScreen() {
     );
   }, [loadVolunteerTasksCoalesced]);
 
+  const formatTimestamp = (value?: string) => {
+    if (!value) {
+      return '--';
+    }
+
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return '--';
+    }
+
+    return parsed.toLocaleString();
+  };
+
+  const handleTimeInForProject = async (projectId: string) => {
+    if (!volunteerProfile) {
+      return;
+    }
+
+    const project = allProjects.find(entry => entry.id === projectId) || null;
+    if (!project) {
+      Alert.alert('Event not found', 'Please reload your assigned tasks and try again.');
+      return;
+    }
+
+    const projectLogs = volunteerTimeLogs.filter(log => log.projectId === projectId);
+    const isAssigned = tasks.some(task => task.projectId === projectId);
+    const attendanceState = getTaskEventAttendanceState(project, isAssigned, projectLogs);
+
+    if (!attendanceState.canTimeIn) {
+      Alert.alert('Attendance Unavailable', attendanceState.helperText);
+      return;
+    }
+
+    try {
+      await startVolunteerTimeLog(volunteerProfile.id, projectId);
+      await loadVolunteerTasksCoalesced();
+      Alert.alert('Time In recorded', 'Your attendance for today is now active.');
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error, 'Unable to time in'),
+        getRequestErrorMessage(error, 'Please try again.')
+      );
+    }
+  };
+
+  const handleOpenTimeOutReport = (projectId: string) => {
+    const activeLog = volunteerTimeLogs.find(log => log.projectId === projectId && !log.timeOut);
+    if (!activeLog) {
+      Alert.alert('No active attendance', 'Time in first before opening the time out report.');
+      return;
+    }
+
+    navigateToAvailableRoute(navigation, 'Reports', {
+      projectId,
+      autoOpenUpload: true,
+      completionReport: activeLog.completionReport,
+      completionPhoto: activeLog.completionPhoto,
+    });
+  };
+
   const selectedEventProject = useMemo(
     () => allProjects.find(project => project.id === selectedTask?.projectId && project.isEvent) || null,
     [allProjects, selectedTask?.projectId]
@@ -431,7 +606,7 @@ export default function VolunteerTasksScreen() {
       );
 
       if (!isFieldOfficerForEvent) {
-        Alert.alert('Access Restricted', 'Only the assigned field officer can manage event task assignments.');
+        Alert.alert('Access Restricted', 'Only the assigned field officer for this event can manage volunteer task assignments.');
         return;
       }
 
@@ -441,6 +616,16 @@ export default function VolunteerTasksScreen() {
       const assignedVolunteer = volunteerId
         ? assignableVolunteers.find(volunteer => volunteer.id === volunteerId) || null
         : null;
+      const currentTask = (eventProject.internalTasks || []).find(task => task.id === taskId) || null;
+      const previouslyAssignedVolunteer =
+        currentTask?.assignedVolunteerId && currentTask.assignedVolunteerId !== volunteerId
+          ? assignableVolunteers.find(volunteer => volunteer.id === currentTask.assignedVolunteerId) || null
+          : null;
+      const shouldNotifyAssignedVolunteer = Boolean(
+        assignedVolunteer &&
+        currentTask &&
+        currentTask.assignedVolunteerId !== assignedVolunteer.id
+      );
 
       const updatedTasks = (eventProject.internalTasks || []).map(task => {
         if (task.id !== taskId) {
@@ -472,6 +657,33 @@ export default function VolunteerTasksScreen() {
         internalTasks: updatedTasks,
         updatedAt: new Date().toISOString(),
       });
+      const notificationTasks: Promise<void>[] = [];
+      if (currentTask && previouslyAssignedVolunteer) {
+        notificationTasks.push(notifyVolunteerAboutTaskUnassignment({
+          event: eventProject,
+          task: currentTask,
+          volunteer: previouslyAssignedVolunteer,
+          actorUserId: user?.id,
+        }));
+      }
+      if (currentTask && assignedVolunteer && shouldNotifyAssignedVolunteer) {
+        notificationTasks.push(notifyVolunteerAboutTaskUpdate({
+          event: eventProject,
+          task: {
+            ...currentTask,
+            status:
+              volunteerId && currentTask.status === 'Unassigned'
+                ? 'Assigned'
+                : currentTask.status,
+          },
+          volunteer: assignedVolunteer,
+          actorUserId: user?.id,
+          action: 'assigned',
+        }));
+      }
+      if (notificationTasks.length > 0) {
+        await Promise.all(notificationTasks);
+      }
       const updatedProject: Project = {
         ...eventProject,
         internalTasks: updatedTasks,
@@ -493,14 +705,13 @@ export default function VolunteerTasksScreen() {
           return current;
         }
 
-        return (
-          nextTasks.find(task => task.id === current.id && task.projectId === current.projectId) || current
-        );
+        return nextTasks.find(task => task.id === current.id && task.projectId === current.projectId) || null;
       });
       void loadVolunteerTasks();
+      const actionLabel = volunteerId ? 'assigned' : 'unassigned';
       setShowFieldOfficerBoard(false);
       setShowDetails(false);
-      Alert.alert('Saved', 'Event task assignment updated.');
+      Alert.alert('Saved', `Event task ${actionLabel}.`);
     } catch (error) {
       console.error('Error assigning event task:', error);
       Alert.alert('Error', 'Failed to update the event task assignment.');
@@ -601,6 +812,12 @@ export default function VolunteerTasksScreen() {
     setShowAllFieldOfficerEvents(false);
   }, [fieldOfficerFilter, fieldOfficerEvents.length]);
 
+  useEffect(() => {
+    if (!hasFieldOfficerAccess && activeTab === 'Manage Assignments') {
+      setActiveTab('My Tasks');
+    }
+  }, [activeTab, hasFieldOfficerAccess]);
+
   if (loading) {
     return (
       <View style={styles.centerContainer}>
@@ -622,6 +839,33 @@ export default function VolunteerTasksScreen() {
           </Text>
         </View>
 
+        {hasFieldOfficerAccess ? (
+          <View style={styles.topTabBar}>
+            {(['My Tasks', 'Manage Assignments'] as const).map(tab => (
+              <TouchableOpacity
+                key={tab}
+                style={[styles.topTabButton, activeTab === tab && styles.topTabButtonActive]}
+                onPress={() => setActiveTab(tab)}
+                activeOpacity={0.85}
+              >
+                <MaterialIcons
+                  name={tab === 'My Tasks' ? 'assignment' : 'supervisor-account'}
+                  size={18}
+                  color={activeTab === tab ? '#ffffff' : '#166534'}
+                />
+                <Text style={[styles.topTabButtonText, activeTab === tab && styles.topTabButtonTextActive]}>
+                  {tab}
+                </Text>
+                <View style={[styles.topTabBadge, activeTab === tab && styles.topTabBadgeActive]}>
+                  <Text style={[styles.topTabBadgeText, activeTab === tab && styles.topTabBadgeTextActive]}>
+                    {tab === 'My Tasks' ? tasks.length : fieldOfficerEvents.length}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </View>
+        ) : null}
+
       {loadError && (
         <View style={styles.inlineErrorWrap}>
           <InlineLoadError
@@ -632,7 +876,7 @@ export default function VolunteerTasksScreen() {
         </View>
       )}
 
-      {hasFieldOfficerAccess ? (
+      {hasFieldOfficerAccess && activeTab === 'Manage Assignments' ? (
         <View style={styles.fieldOfficerSection}>
           <View style={styles.fieldOfficerSectionHeader}>
             <View style={styles.fieldOfficerSectionTitleWrap}>
@@ -772,6 +1016,8 @@ export default function VolunteerTasksScreen() {
         </View>
       ) : null}
 
+      {activeTab === 'My Tasks' ? (
+      <>
       <View style={styles.taskSummaryRow}>
         <View style={styles.taskSummaryCard}>
           <Text style={styles.taskSummaryValue}>{tasks.length}</Text>
@@ -823,77 +1069,185 @@ export default function VolunteerTasksScreen() {
           </View>
 
           <View style={styles.taskListContent}>
-            {groupedFilteredTasks.map(group => (
-              <View key={group.projectId} style={styles.taskGroupCard}>
-                <View style={styles.taskGroupHeader}>
-                  <View style={styles.taskGroupCopy}>
-                    <Text style={styles.taskGroupTitle}>{group.projectTitle}</Text>
-                    <Text style={styles.taskGroupMeta}>
-                      {group.tasks.length} assigned task{group.tasks.length === 1 ? '' : 's'}
-                    </Text>
-                  </View>
-                  <View style={styles.taskGroupBadge}>
-                    <Text style={styles.taskGroupBadgeText}>Event tasks</Text>
-                  </View>
-                </View>
+            {groupedFilteredTasks.map(group => {
+              const project = allProjects.find(entry => entry.id === group.projectId) || null;
+              const projectLogs = volunteerTimeLogs.filter(log => log.projectId === group.projectId);
+              const attendanceState = project
+                ? getTaskEventAttendanceState(project, true, projectLogs)
+                : null;
 
-                {group.tasks.map(item => (
-                  <TouchableOpacity
-                    key={item.id}
-                    style={styles.taskCard}
-                    onPress={() => {
-                      setSelectedTask(item);
-                      setShowDetails(true);
-                    }}
-                  >
-                    <View style={styles.taskCardHeader}>
-                      <Text style={styles.taskTitle} numberOfLines={2}>
-                        {item.title}
+              return (
+                <View key={group.projectId} style={styles.taskGroupCard}>
+                  <View style={styles.taskGroupHeader}>
+                    <View style={styles.taskGroupCopy}>
+                      <Text style={styles.taskGroupTitle}>{group.projectTitle}</Text>
+                      <Text style={styles.taskGroupMeta}>
+                        {group.tasks.length} assigned task{group.tasks.length === 1 ? '' : 's'}
                       </Text>
-                      <View
-                        style={[
-                          styles.priorityBadge,
-                          { backgroundColor: getPriorityColor(item.priority) },
-                        ]}
-                      >
-                        <Text style={styles.priorityText}>{item.priority}</Text>
-                      </View>
                     </View>
+                    <View style={styles.taskGroupBadge}>
+                      <Text style={styles.taskGroupBadgeText}>Event tasks</Text>
+                    </View>
+                  </View>
 
-                    <View style={styles.taskMetaRow}>
-                      <View style={styles.taskMetaChip}>
-                        <MaterialIcons name="category" size={14} color="#166534" />
-                        <Text style={styles.taskMetaChipText}>{item.category}</Text>
-                      </View>
-                      {item.isFieldOfficer ? (
-                        <View style={styles.taskMetaChip}>
-                          <MaterialIcons name="supervisor-account" size={14} color="#166534" />
-                          <Text style={styles.taskMetaChipText}>Field Officer</Text>
+                  {project ? (
+                    <View style={styles.attendanceCard}>
+                      <View style={styles.attendanceCardHeader}>
+                        <View style={styles.attendanceCardCopy}>
+                          <Text style={styles.attendanceCardTitle}>Daily Attendance</Text>
+                          <Text style={styles.attendanceCardMeta}>
+                            {formatEventDateLabel(project.startDate, project.endDate)}
+                          </Text>
                         </View>
-                      ) : null}
-                    </View>
-
-                    <View style={styles.taskCardFooter}>
-                      <View
-                        style={[
-                          styles.statusBadge,
-                          { backgroundColor: getStatusColor(item.status) },
-                        ]}
-                      >
-                        <Text style={styles.statusText}>{item.status}</Text>
+                        <View
+                          style={[
+                            styles.attendanceStatusBadge,
+                            attendanceState?.canTimeOut
+                              ? styles.attendanceStatusBadgeActive
+                              : attendanceState?.hasLoggedToday
+                              ? styles.attendanceStatusBadgeDone
+                              : styles.attendanceStatusBadgeIdle,
+                          ]}
+                        >
+                          <Text style={styles.attendanceStatusText}>
+                            {attendanceState?.canTimeOut
+                              ? 'Timed In'
+                              : attendanceState?.hasLoggedToday
+                              ? 'Done Today'
+                              : attendanceState?.eventHasEnded
+                              ? 'Closed'
+                              : 'Ready'}
+                          </Text>
+                        </View>
                       </View>
-                      <Text style={styles.taskUpdatedText}>
-                        Updated {new Date(item.updatedAt).toLocaleDateString()}
+
+                      <Text style={styles.attendanceHelperText}>
+                        {attendanceState?.helperText || 'Attendance is unavailable for this event.'}
                       </Text>
-                      <MaterialIcons name="chevron-right" size={20} color="#999" />
+
+                      <View style={styles.attendanceLogRow}>
+                        <View style={styles.attendanceLogItem}>
+                          <Text style={styles.attendanceLogLabel}>Latest activity</Text>
+                          <Text style={styles.attendanceLogValue}>
+                            {attendanceState?.latestLog
+                              ? attendanceState.latestLog.timeOut
+                                ? `Time out ${formatTimestamp(attendanceState.latestLog.timeOut)}`
+                                : `Time in ${formatTimestamp(attendanceState.latestLog.timeIn)}`
+                              : 'No attendance yet'}
+                          </Text>
+                        </View>
+                        <View style={styles.attendanceLogItem}>
+                          <Text style={styles.attendanceLogLabel}>Today</Text>
+                          <Text style={styles.attendanceLogValue}>
+                            {attendanceState?.activeLog
+                              ? `Active since ${formatTimestamp(attendanceState.activeLog.timeIn)}`
+                              : attendanceState?.hasLoggedToday
+                              ? 'Completed for today'
+                              : 'Not started'}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <View style={styles.attendanceActionRow}>
+                        <TouchableOpacity
+                          style={[
+                            styles.attendanceButton,
+                            styles.timeInButton,
+                            !attendanceState?.canTimeIn && styles.attendanceButtonDisabled,
+                          ]}
+                          onPress={() => void handleTimeInForProject(group.projectId)}
+                          disabled={!attendanceState?.canTimeIn}
+                        >
+                          <MaterialIcons name="login" size={18} color="#fff" />
+                          <Text style={styles.attendanceButtonText}>
+                            {attendanceState?.eventHasNotStarted
+                              ? 'Await Start'
+                              : attendanceState?.hasLoggedToday
+                              ? 'Done Today'
+                              : attendanceState?.eventHasEnded
+                              ? 'Closed'
+                              : 'Time In'}
+                          </Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={[
+                            styles.attendanceButton,
+                            styles.timeOutButton,
+                            !attendanceState?.canTimeOut && styles.attendanceButtonDisabled,
+                          ]}
+                          onPress={() => handleOpenTimeOutReport(group.projectId)}
+                          disabled={!attendanceState?.canTimeOut}
+                        >
+                          <MaterialIcons name="logout" size={18} color="#fff" />
+                          <Text style={styles.attendanceButtonText}>
+                            {attendanceState?.canTimeOut ? 'Time Out' : 'Report First'}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
                     </View>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            ))}
+                  ) : null}
+
+                  {group.tasks.map(item => (
+                    <TouchableOpacity
+                      key={item.id}
+                      style={styles.taskCard}
+                      onPress={() => {
+                        setSelectedTask(item);
+                        setShowDetails(true);
+                      }}
+                    >
+                      <View style={styles.taskCardHeader}>
+                        <Text style={styles.taskTitle} numberOfLines={2}>
+                          {item.title}
+                        </Text>
+                        <View
+                          style={[
+                            styles.priorityBadge,
+                            { backgroundColor: getPriorityColor(item.priority) },
+                          ]}
+                        >
+                          <Text style={styles.priorityText}>{item.priority}</Text>
+                        </View>
+                      </View>
+
+                      <View style={styles.taskMetaRow}>
+                        <View style={styles.taskMetaChip}>
+                          <MaterialIcons name="category" size={14} color="#166534" />
+                          <Text style={styles.taskMetaChipText}>{item.category}</Text>
+                        </View>
+                        {item.isFieldOfficer ? (
+                          <View style={styles.taskMetaChip}>
+                            <MaterialIcons name="supervisor-account" size={14} color="#166534" />
+                            <Text style={styles.taskMetaChipText}>Field Officer</Text>
+                          </View>
+                        ) : null}
+                      </View>
+
+                      <View style={styles.taskCardFooter}>
+                        <View
+                          style={[
+                            styles.statusBadge,
+                            { backgroundColor: getStatusColor(item.status) },
+                          ]}
+                        >
+                          <Text style={styles.statusText}>{item.status}</Text>
+                        </View>
+                        <Text style={styles.taskUpdatedText}>
+                          Updated {new Date(item.updatedAt).toLocaleDateString()}
+                        </Text>
+                        <MaterialIcons name="chevron-right" size={20} color="#999" />
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              );
+            })}
           </View>
         </>
       )}
+      </>
+      ) : null}
       </ScrollView>
 
       <Modal
@@ -1171,6 +1525,59 @@ const styles = StyleSheet.create({
   headerSubtitle: {
     fontSize: 14,
     color: '#666',
+  },
+  topTabBar: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    paddingBottom: 4,
+  },
+  topTabButton: {
+    flex: 1,
+    minHeight: 48,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    backgroundColor: '#ffffff',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  topTabButtonActive: {
+    backgroundColor: '#166534',
+    borderColor: '#166534',
+  },
+  topTabButtonText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#166534',
+  },
+  topTabButtonTextActive: {
+    color: '#ffffff',
+  },
+  topTabBadge: {
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
+    paddingHorizontal: 6,
+    backgroundColor: '#dcfce7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  topTabBadgeActive: {
+    backgroundColor: 'rgba(255,255,255,0.18)',
+  },
+  topTabBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#166534',
+  },
+  topTabBadgeTextActive: {
+    color: '#ffffff',
   },
   fieldOfficerSection: {
     paddingHorizontal: 20,
@@ -1501,6 +1908,115 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     color: '#166534',
+  },
+  attendanceCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#d9f99d',
+    backgroundColor: '#f7fee7',
+    padding: 14,
+    gap: 12,
+  },
+  attendanceCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  attendanceCardCopy: {
+    flex: 1,
+  },
+  attendanceCardTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#14532d',
+  },
+  attendanceCardMeta: {
+    marginTop: 3,
+    fontSize: 12,
+    color: '#4b5563',
+  },
+  attendanceStatusBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  attendanceStatusBadgeActive: {
+    backgroundColor: '#166534',
+  },
+  attendanceStatusBadgeDone: {
+    backgroundColor: '#15803d',
+  },
+  attendanceStatusBadgeIdle: {
+    backgroundColor: '#65a30d',
+  },
+  attendanceStatusText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+  attendanceHelperText: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#475569',
+  },
+  attendanceLogRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  attendanceLogItem: {
+    flex: 1,
+    minWidth: 150,
+    borderRadius: 12,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#d9f99d',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  attendanceLogLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  attendanceLogValue: {
+    marginTop: 4,
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#0f172a',
+  },
+  attendanceActionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  attendanceButton: {
+    minHeight: 46,
+    minWidth: 140,
+    flexGrow: 1,
+    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 14,
+  },
+  timeInButton: {
+    backgroundColor: '#166534',
+  },
+  timeOutButton: {
+    backgroundColor: '#0f766e',
+  },
+  attendanceButtonDisabled: {
+    backgroundColor: '#94a3b8',
+  },
+  attendanceButtonText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#ffffff',
   },
   taskCard: {
     backgroundColor: '#f8fafc',

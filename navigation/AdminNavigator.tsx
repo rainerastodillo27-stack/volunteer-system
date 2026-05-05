@@ -15,17 +15,13 @@ function getPlatformOS(): string {
 import { useAuth } from '../contexts/AuthContext';
 import AppLogo from '../components/AppLogo';
 import ScreenBrandHeader from '../components/ScreenBrandHeader';
-import DashboardScreen from '../screens/DashboardScreen';
-import AdminProjectsScreen from '../screens/AdminProjectsScreen';
-import MappingScreen from '../screens/MappingScreen';
-import CommunicationHubScreen from '../screens/CommunicationHubScreen';
-import UserManagementScreen from '../screens/UserManagementScreen';
-import VolunteerManagementScreen from '../screens/VolunteerManagementScreen';
-import PartnerManagementScreen from '../screens/PartnerManagementScreen';
-import AdminReportsScreen from '../screens/AdminReportsScreen';
-import ProfileScreen from '../screens/ProfileScreen';
-import SystemSettingsScreen from '../screens/SystemSettingsScreen';
-import { getAllPartnerReports, getMessagesForUser, subscribeToMessages, subscribeToStorageChanges } from '../models/storage';
+import {
+  getAllPartnerReports,
+  getMessagesForUser,
+  getPendingUserApprovals,
+  subscribeToMessages,
+  subscribeToStorageChanges,
+} from '../models/storage';
 
 export type AdminTabParamList = {
   Dashboard: undefined;
@@ -41,6 +37,24 @@ export type AdminTabParamList = {
 };
 
 const Tab = createBottomTabNavigator<AdminTabParamList>();
+
+function lazyScreen<T extends object>(loader: () => { default: React.ComponentType<T> }) {
+  return function LazyLoadedScreen(props: T) {
+    const Component = loader().default;
+    return <Component {...props} />;
+  };
+}
+
+const DashboardScreen = lazyScreen(() => require('../screens/DashboardScreen'));
+const AdminProjectsScreen = lazyScreen(() => require('../screens/AdminProjectsScreen'));
+const MappingScreen = lazyScreen(() => require('../screens/MappingScreen'));
+const CommunicationHubScreen = lazyScreen(() => require('../screens/CommunicationHubScreen'));
+const UserManagementScreen = lazyScreen(() => require('../screens/UserManagementScreen'));
+const VolunteerManagementScreen = lazyScreen(() => require('../screens/VolunteerManagementScreen'));
+const PartnerManagementScreen = lazyScreen(() => require('../screens/PartnerManagementScreen'));
+const AdminReportsScreen = lazyScreen(() => require('../screens/AdminReportsScreen'));
+const ProfileScreen = lazyScreen(() => require('../screens/ProfileScreen'));
+const SystemSettingsScreen = lazyScreen(() => require('../screens/SystemSettingsScreen'));
 
 const SIDEBAR_WIDTH = 200;
 const SIDEBAR_WIDTH_COLLAPSED = 60;
@@ -92,7 +106,19 @@ function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle }: 
         onPress={() => navigation.navigate(route.name)}
         style={[styles.sidebarItem, focused && styles.sidebarItemActive, collapsed && styles.sidebarItemCollapsed]}
       >
-        <MaterialIcons name={getIconName(route.name as keyof AdminTabParamList)} size={20} color={focused ? '#166534' : '#65a30d'} style={styles.sidebarIcon} />
+        <View style={styles.sidebarIconWrap}>
+          <MaterialIcons
+            name={getIconName(route.name as keyof AdminTabParamList)}
+            size={20}
+            color={focused ? '#166534' : '#65a30d'}
+            style={collapsed ? undefined : styles.sidebarIcon}
+          />
+          {collapsed && badgeValue > 0 && (
+            <View style={styles.sidebarIconBadge}>
+              <Text style={styles.sidebarIconBadgeText}>{badgeValue > 99 ? '99+' : badgeValue}</Text>
+            </View>
+          )}
+        </View>
         {!collapsed && (
           <View style={styles.sidebarLabelRow}>
             <Text style={[styles.sidebarLabel, focused && styles.sidebarLabelActive]} numberOfLines={1}>{label}</Text>
@@ -133,7 +159,13 @@ function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle }: 
 }
 
 function SidebarCapture({ onPropsChange, ...tabBarProps }: BottomTabBarProps & { onPropsChange: (props: BottomTabBarProps, signature: string) => void }) {
-  const signature = [String(tabBarProps.state.index), ...tabBarProps.state.routes.map(r => tabBarProps.descriptors[r.key]?.options.title || r.name)].join('|');
+  const signature = [
+    String(tabBarProps.state.index),
+    ...tabBarProps.state.routes.map(route => {
+      const options = tabBarProps.descriptors[route.key]?.options;
+      return `${options?.title || route.name}:${String(options?.tabBarBadge || '')}`;
+    }),
+  ].join('|');
   useEffect(() => { onPropsChange(tabBarProps, signature); }, [signature]);
   return null;
 }
@@ -142,6 +174,7 @@ export default function AdminNavigator() {
   const { user } = useAuth();
   const [messageUnreadCount, setMessageUnreadCount] = useState(0);
   const [reportNotificationCount, setReportNotificationCount] = useState(0);
+  const [pendingUserApprovalCount, setPendingUserApprovalCount] = useState(0);
   const [collapsed, setCollapsed] = useState(true);
   const [tabBarProps, setTabBarProps] = useState<BottomTabBarProps | null>(null);
   const [tabBarSignature, setTabBarSignature] = useState('');
@@ -164,13 +197,22 @@ export default function AdminNavigator() {
       } catch {}
     };
 
+    const loadPendingUserApprovalCount = async () => {
+      try {
+        const pendingUsers = await getPendingUserApprovals();
+        setPendingUserApprovalCount(pendingUsers.length);
+      } catch {}
+    };
+
     loadCounts();
     loadReportNotificationCount();
+    loadPendingUserApprovalCount();
 
     const unsubMessages = subscribeToMessages(user.id, loadCounts);
-    const unsubStorage = subscribeToStorageChanges(['partnerReports'], () => {
+    const unsubStorage = subscribeToStorageChanges(['partnerReports', 'users'], () => {
         loadCounts();
         loadReportNotificationCount();
+        loadPendingUserApprovalCount();
     });
     return () => { unsubMessages(); unsubStorage?.(); };
   }, [user?.id]);
@@ -194,7 +236,7 @@ export default function AdminNavigator() {
       <Tab.Screen name="Map" component={MappingScreen} options={{ title: 'Map' }} />
       <Tab.Screen name="Messages" component={CommunicationHubScreen} options={{ title: 'Messages', tabBarBadge: messageUnreadCount > 0 ? messageUnreadCount : undefined }} />
       <Tab.Screen name="Reports" component={AdminReportsScreen} options={{ title: 'Reports', tabBarBadge: reportNotificationCount > 0 ? reportNotificationCount : undefined }} />
-      <Tab.Screen name="Users" component={UserManagementScreen} options={{ title: 'User Management' }} />
+      <Tab.Screen name="Users" component={UserManagementScreen} options={{ title: 'User Management', tabBarBadge: pendingUserApprovalCount > 0 ? pendingUserApprovalCount : undefined }} />
       <Tab.Screen name="Profile" component={ProfileScreen} options={{ title: 'Admin Profile' }} />
       <Tab.Screen name="Settings" component={SystemSettingsScreen} options={{ title: 'System Settings' }} />
     </Tab.Navigator>
@@ -236,10 +278,13 @@ const styles = StyleSheet.create({
   sidebarItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 10, borderRadius: 10, marginBottom: 6 },
   sidebarItemCollapsed: { justifyContent: 'center' },
   sidebarItemActive: { backgroundColor: '#d9f99d' },
+  sidebarIconWrap: { position: 'relative' },
   sidebarIcon: { marginRight: 12 },
   sidebarLabelRow: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   sidebarLabel: { fontSize: 14, color: '#4d7c0f', flexShrink: 1, marginRight: 6 },
   sidebarLabelActive: { color: '#166534', fontWeight: '600' },
   sidebarBadge: { minWidth: 22, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 999, backgroundColor: '#dc2626', alignItems: 'center', justifyContent: 'center' },
   sidebarBadgeText: { color: '#fff', fontSize: 11, fontWeight: '700' },
+  sidebarIconBadge: { position: 'absolute', top: -10, right: -12, minWidth: 18, height: 18, paddingHorizontal: 4, borderRadius: 999, backgroundColor: '#dc2626', borderWidth: 2, borderColor: '#d9f99d', alignItems: 'center', justifyContent: 'center' },
+  sidebarIconBadgeText: { color: '#fff', fontSize: 10, fontWeight: '800', lineHeight: 12 },
 });

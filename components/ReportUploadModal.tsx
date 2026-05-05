@@ -15,9 +15,7 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import type { SubmittedReport } from '../screens/ReportsScreen';
 import type { VolunteerTimeLog } from '../models/types';
-import { isImageMediaUri, pickImageFromDevice } from '../utils/media';
-
-import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
+import { isImageMediaUri, pickDocumentFromDevice, pickImageFromDevice } from '../utils/media';
 
 type MaterialIconName = keyof typeof MaterialIcons.glyphMap;
 
@@ -29,10 +27,11 @@ interface ReportUploadModalProps {
       SubmittedReport,
       'id' | 'submittedAt' | 'submittedBy' | 'submitterName' | 'submitterRole' | 'viewedBy'
     >
-  ) => void;
+  ) => Promise<boolean | void>;
   projects?: any[];
   userRole?: SubmittedReport['submitterRole'];
   volunteerTimeLogs?: VolunteerTimeLog[];
+  fieldOfficerProjectIds?: string[];
   initialProjectId?: string;
   initialDescription?: string;
   initialMediaUri?: string;
@@ -45,6 +44,7 @@ export default function ReportUploadModal({
   projects = [],
   userRole,
   volunteerTimeLogs,
+  fieldOfficerProjectIds = [],
   initialProjectId,
   initialDescription,
   initialMediaUri,
@@ -55,6 +55,7 @@ export default function ReportUploadModal({
   const [description, setDescription] = useState('');
   const [selectedProject, setSelectedProject] = useState<string | undefined>();
   const [selectedPhotoUri, setSelectedPhotoUri] = useState('');
+  const [selectedDocumentUri, setSelectedDocumentUri] = useState('');
   const [volunteerSummary, setVolunteerSummary] = useState('');
   const [volunteerContribution, setVolunteerContribution] = useState('');
   const [volunteerExperience, setVolunteerExperience] = useState('');
@@ -84,6 +85,21 @@ export default function ReportUploadModal({
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
     return `${date.getFullYear()}-${month}-${day}`;
+  };
+
+  const getAttachmentLabel = (value: string) => {
+    if (!value) {
+      return 'Selected attachment';
+    }
+
+    if (value.startsWith('data:')) {
+      const mimeType = value.slice('data:'.length).split(';')[0];
+      return mimeType || 'Selected attachment';
+    }
+
+    const normalizedValue = value.split('?')[0].split('#')[0];
+    const segments = normalizedValue.split('/');
+    return segments[segments.length - 1] || 'Selected attachment';
   };
 
   const volunteerMetrics = useMemo(() => {
@@ -125,6 +141,12 @@ export default function ReportUploadModal({
     () => (selectedProject ? projects.find(project => project.id === selectedProject) : undefined),
     [projects, selectedProject]
   );
+  const isFieldOfficerForSelectedProject = useMemo(
+    () => Boolean(selectedProject && fieldOfficerProjectIds.includes(selectedProject)),
+    [fieldOfficerProjectIds, selectedProject]
+  );
+  const volunteerReportType = isFieldOfficerForSelectedProject ? 'field_report' : 'event_performance';
+  const volunteerReportLabel = isFieldOfficerForSelectedProject ? 'Field Report' : 'Volunteer Report';
 
   useEffect(() => {
     if (!visible) {
@@ -132,7 +154,7 @@ export default function ReportUploadModal({
     }
 
     if (isVolunteer) {
-      setReportType('event_performance');
+      setReportType(volunteerReportType);
       setSelectedProject(current => current || projects[0]?.id);
     }
 
@@ -145,7 +167,15 @@ export default function ReportUploadModal({
     if (initialMediaUri) {
       setSelectedPhotoUri(initialMediaUri);
     }
-  }, [isVolunteer, projects, visible, initialProjectId, initialDescription, initialMediaUri]);
+  }, [isVolunteer, projects, visible, initialProjectId, initialDescription, initialMediaUri, volunteerReportType]);
+
+  useEffect(() => {
+    if (!visible || !isVolunteer) {
+      return;
+    }
+
+    setReportType(volunteerReportType);
+  }, [isVolunteer, visible, volunteerReportType]);
 
   useEffect(() => {
     if (!visible || !isVolunteer || !selectedProject || title.trim()) {
@@ -157,8 +187,12 @@ export default function ReportUploadModal({
       return;
     }
 
-    setTitle(`${selectedEvent.title} Volunteer Reflection`);
-  }, [isVolunteer, projects, selectedProject, title, visible]);
+    setTitle(
+      isFieldOfficerForSelectedProject
+        ? `${selectedEvent.title} Field Officer Report`
+        : `${selectedEvent.title} Volunteer Reflection`
+    );
+  }, [isFieldOfficerForSelectedProject, isVolunteer, projects, selectedProject, title, visible]);
 
   const reportTypeOptions: {
     value: SubmittedReport['reportType'];
@@ -247,11 +281,28 @@ export default function ReportUploadModal({
     }
   }, []);
 
+  const handlePickDocument = useCallback(async () => {
+    try {
+      const pickedDocument = await pickDocumentFromDevice();
+      if (!pickedDocument) {
+        return;
+      }
+
+      setSelectedDocumentUri(pickedDocument);
+    } catch (error: any) {
+      Alert.alert(
+        'File Access Needed',
+        error?.message || 'Unable to open your files.'
+      );
+    }
+  }, []);
+
   const handleReset = useCallback(() => {
     setTitle('');
     setDescription('');
     setSelectedProject(undefined);
     setSelectedPhotoUri('');
+    setSelectedDocumentUri('');
     setVolunteerSummary('');
     setVolunteerContribution('');
     setVolunteerExperience('');
@@ -291,7 +342,7 @@ export default function ReportUploadModal({
     // Check if volunteer has timed in for this project
     if (isVolunteer && selectedProject && volunteerTimeLogs) {
       const hasTimeIn = volunteerTimeLogs.some(log =>
-        log.projectId === selectedProject && log.timeIn && !log.timeOut
+        log.projectId === selectedProject && Boolean(log.timeIn)
       );
 
       if (!hasTimeIn) {
@@ -351,6 +402,16 @@ export default function ReportUploadModal({
           .join('\n\n')
       : description.trim();
 
+    const attachments = selectedDocumentUri
+      ? [
+          {
+            url: selectedDocumentUri,
+            type: 'document' as const,
+            description: 'Volunteer report attachment',
+          },
+        ]
+      : [];
+
     const reportData: Omit<
       SubmittedReport,
       'id' | 'submittedAt' | 'submittedBy' | 'submitterName' | 'submitterRole' | 'viewedBy'
@@ -362,20 +423,19 @@ export default function ReportUploadModal({
       projectTitle: selectedProjectData?.title,
       category: selectedProjectData?.category,
       metrics: metricsData,
-      attachments: [],
+      attachments,
       mediaFile: selectedPhotoUri || undefined,
       status: 'Submitted',
     };
 
-    try {
-      Keyboard.dismiss();
-      await onSubmit(reportData);
-      handleReset();
-      Alert.alert('Report Sent', 'Your report has been successfully submitted.');
-      onClose();
-    } catch (error) {
-      Alert.alert(getRequestErrorTitle(error), getRequestErrorMessage(error, 'Failed to submit your report. Please try again.'));
+    Keyboard.dismiss();
+    const submissionSucceeded = await onSubmit(reportData);
+    if (submissionSucceeded === false) {
+      return;
     }
+
+    handleReset();
+    onClose();
 
   }, [
     description,
@@ -385,15 +445,16 @@ export default function ReportUploadModal({
     onSubmit,
     projects,
     reportType,
+    selectedDocumentUri,
     selectedPhotoUri,
     selectedProject,
     title,
     volunteerContribution,
     volunteerExperience,
     volunteerFollowUp,
-    volunteerSummary, // Added volunteerSummary to dependencies
-    volunteerTimeLogs, // Added volunteerTimeLogs to dependencies
-    onClose, // Added onClose to dependencies
+    volunteerSummary,
+    volunteerTimeLogs,
+    onClose,
   ]);
 
   const renderVolunteerFields = () => (
@@ -405,10 +466,21 @@ export default function ReportUploadModal({
         <View style={styles.volunteerIntroContent}>
           <Text style={styles.volunteerIntroTitle}>Share your event experience</Text>
           <Text style={styles.volunteerIntroText}>
-            Tell the admin what happened, what you worked on, how the event felt on the
-            ground, and add a photo if you have one.
+            {isFieldOfficerForSelectedProject
+              ? 'Submit the field officer report for this event. Capture what happened on site, team coordination, and operational outcomes.'
+              : 'Submit your volunteer report for this event. Share what happened, what you worked on, and add a photo or file if you have one.'}
           </Text>
         </View>
+      </View>
+
+      <View style={styles.reportModeCard}>
+        <Text style={styles.reportModeLabel}>Report Type</Text>
+        <Text style={styles.reportModeValue}>{volunteerReportLabel}</Text>
+        <Text style={styles.reportModeHint}>
+          {isFieldOfficerForSelectedProject
+            ? 'Field reports are reserved for the assigned field officer of this event.'
+            : 'Volunteer reports are for volunteers who are not the field officer for this event.'}
+        </Text>
       </View>
 
       <Text style={styles.label}>{entityLabel} *</Text>
@@ -571,13 +643,21 @@ export default function ReportUploadModal({
         ))}
       </View>
 
-      <Text style={styles.sectionTitle}>Photo Proof</Text>
-      <TouchableOpacity style={styles.photoButton} onPress={handlePickPhoto}>
-        <MaterialIcons name="photo-library" size={18} color="#166534" />
-        <Text style={styles.photoButtonText}>
-          {selectedPhotoUri ? 'Replace Photo' : 'Upload Event Photo'}
-        </Text>
-      </TouchableOpacity>
+      <Text style={styles.sectionTitle}>Photo or File Proof</Text>
+      <View style={styles.proofActionRow}>
+        <TouchableOpacity style={styles.photoButton} onPress={handlePickPhoto}>
+          <MaterialIcons name="photo-library" size={18} color="#166534" />
+          <Text style={styles.photoButtonText}>
+            {selectedPhotoUri ? 'Replace Photo' : 'Upload Event Photo'}
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.photoButton} onPress={handlePickDocument}>
+          <MaterialIcons name="attach-file" size={18} color="#166534" />
+          <Text style={styles.photoButtonText}>
+            {selectedDocumentUri ? 'Replace File' : 'Upload File'}
+          </Text>
+        </TouchableOpacity>
+      </View>
       <Text style={styles.photoHint}>
         Optional, but this helps admins verify the event story and keeps documentation in
         one place.
@@ -602,6 +682,23 @@ export default function ReportUploadModal({
               <Text style={styles.photoRemoveText}>Remove Photo</Text>
             </TouchableOpacity>
           </View>
+        </View>
+      ) : null}
+
+      {selectedDocumentUri ? (
+        <View style={styles.documentPreviewCard}>
+          <View style={styles.documentPreviewIcon}>
+            <MaterialIcons name="description" size={22} color="#166534" />
+          </View>
+          <View style={styles.documentPreviewMeta}>
+            <Text style={styles.documentPreviewTitle}>File ready for this report</Text>
+            <Text style={styles.documentPreviewName} numberOfLines={1}>
+              {getAttachmentLabel(selectedDocumentUri)}
+            </Text>
+          </View>
+          <TouchableOpacity onPress={() => setSelectedDocumentUri('')}>
+            <Text style={styles.photoRemoveText}>Remove</Text>
+          </TouchableOpacity>
         </View>
       ) : null}
 
@@ -1005,8 +1102,15 @@ const styles = StyleSheet.create({
     color: '#0f172a',
     backgroundColor: '#f8fafc',
   },
+  proofActionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
   photoButton: {
     minHeight: 48,
+    minWidth: 180,
+    flexGrow: 1,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: '#86efac',
@@ -1060,6 +1164,39 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#0f172a',
+  },
+  documentPreviewCard: {
+    marginTop: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#dcfce7',
+    backgroundColor: '#f8fafc',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  documentPreviewIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: '#ecfdf5',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  documentPreviewMeta: {
+    flex: 1,
+    gap: 2,
+  },
+  documentPreviewTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  documentPreviewName: {
+    fontSize: 12,
+    color: '#64748b',
   },
   photoRemoveText: {
     fontSize: 12,
@@ -1132,6 +1269,33 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontSize: 11,
     lineHeight: 16,
+    color: '#4b5563',
+  },
+  reportModeCard: {
+    borderRadius: 12,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#dbe7df',
+    padding: 14,
+    marginBottom: 12,
+  },
+  reportModeLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  reportModeValue: {
+    marginTop: 4,
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  reportModeHint: {
+    marginTop: 6,
+    fontSize: 12,
+    lineHeight: 18,
     color: '#4b5563',
   },
   autoMetricRow: {

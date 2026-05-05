@@ -37,22 +37,38 @@ type StatusColumn = {
   reports: SubmittedReport[];
 };
 
+type AccountReportGroup = {
+  key: string;
+  submitterName: string;
+  submitterRole: SubmittedReport['submitterRole'];
+  reports: SubmittedReport[];
+  latestReport: SubmittedReport;
+};
+
 function formatShortDate(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
     return 'Unknown date';
   }
+
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 function getProgressPercent(report: SubmittedReport): number {
-  const metricValues = Object.values(report.metrics).filter((value): value is number => typeof value === 'number');
+  const metricValues = Object.values(report.metrics).filter(
+    (value): value is number => typeof value === 'number'
+  );
   if (!metricValues.length) {
     return 55;
   }
 
-  const scaled = metricValues.slice(0, 4).reduce((sum, value) => sum + Math.min(value, 100), 0);
-  return Math.max(8, Math.min(100, Math.round(scaled / Math.min(metricValues.length, 4))));
+  const scaled = metricValues
+    .slice(0, 4)
+    .reduce((sum, value) => sum + Math.min(value, 100), 0);
+  return Math.max(
+    8,
+    Math.min(100, Math.round(scaled / Math.min(metricValues.length, 4)))
+  );
 }
 
 function getLinkedActivityLabel(report: SubmittedReport): string {
@@ -61,6 +77,53 @@ function getLinkedActivityLabel(report: SubmittedReport): string {
   }
 
   return report.projectKind === 'event' ? 'No linked event' : 'No linked project';
+}
+
+function formatRoleLabel(role: SubmittedReport['submitterRole']): string {
+  switch (role) {
+    case 'volunteer':
+      return 'Volunteer Account';
+    case 'partner':
+      return 'Partner Account';
+    case 'admin':
+      return 'Admin Account';
+    default:
+      return 'User Account';
+  }
+}
+
+function groupReportsByAccount(reports: SubmittedReport[]): AccountReportGroup[] {
+  const grouped = new Map<string, SubmittedReport[]>();
+
+  reports.forEach(report => {
+    const key = `${report.submitterRole}:${report.submittedBy || report.submitterName}`;
+    const accountReports = grouped.get(key) || [];
+    accountReports.push(report);
+    grouped.set(key, accountReports);
+  });
+
+  return Array.from(grouped.entries())
+    .map(([key, accountReports]) => {
+      const sortedReports = [...accountReports].sort(
+        (left, right) =>
+          new Date(right.submittedAt).getTime() -
+          new Date(left.submittedAt).getTime()
+      );
+
+      return {
+        key,
+        submitterName: sortedReports[0]?.submitterName || 'Unknown user',
+        submitterRole: sortedReports[0]?.submitterRole || 'volunteer',
+        reports: sortedReports,
+        latestReport: sortedReports[0],
+      };
+    })
+    .filter(group => Boolean(group.latestReport))
+    .sort(
+      (left, right) =>
+        new Date(right.latestReport.submittedAt).getTime() -
+        new Date(left.latestReport.submittedAt).getTime()
+    );
 }
 
 export default function AdminReportsDashboard({
@@ -77,9 +140,18 @@ export default function AdminReportsDashboard({
   const isDesktop = Platform.OS === 'web' || width >= 1100;
 
   const summary = useMemo(() => {
-    const totalHours = reports.reduce((sum, report) => sum + (report.metrics.volunteerHours || 0), 0);
-    const verifiedAttendance = reports.reduce((sum, report) => sum + (report.metrics.verifiedAttendance || 0), 0);
-    const beneficiariesServed = reports.reduce((sum, report) => sum + (report.metrics.beneficiariesServed || 0), 0);
+    const totalHours = reports.reduce(
+      (sum, report) => sum + (report.metrics.volunteerHours || 0),
+      0
+    );
+    const verifiedAttendance = reports.reduce(
+      (sum, report) => sum + (report.metrics.verifiedAttendance || 0),
+      0
+    );
+    const beneficiariesServed = reports.reduce(
+      (sum, report) => sum + (report.metrics.beneficiariesServed || 0),
+      0
+    );
 
     return {
       totalHours,
@@ -91,48 +163,64 @@ export default function AdminReportsDashboard({
   const columns = useMemo<StatusColumn[]>(() => {
     const fieldReports = [...reports]
       .filter(report => report.reportType === 'field_report')
-      .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
+      .sort(
+        (left, right) =>
+          new Date(right.submittedAt).getTime() -
+          new Date(left.submittedAt).getTime()
+      );
 
     const volunteerReports = [...reports]
-      .filter(report => report.submitterRole === 'volunteer')
-      .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
+      .filter(
+        report =>
+          report.submitterRole === 'volunteer' &&
+          report.reportType !== 'field_report'
+      )
+      .sort(
+        (left, right) =>
+          new Date(right.submittedAt).getTime() -
+          new Date(left.submittedAt).getTime()
+      );
 
     const partnerReports = [...reports]
       .filter(report => report.submitterRole === 'partner')
-      .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
+      .sort(
+        (left, right) =>
+          new Date(right.submittedAt).getTime() -
+          new Date(left.submittedAt).getTime()
+      );
 
     return [
       {
         key: 'all',
         label: 'Field Reports',
-        subtitle: 'Structured field submissions',
-        count: fieldReports.length,
+        subtitle: 'Assigned field officer submissions',
+        count: groupReportsByAccount(fieldReports).length,
         accent: '#d9f2de',
         panel: '#2f8f45',
         card: '#4aa764',
-        chips: ['Field', 'Metrics', 'Latest'],
+        chips: ['Accounts', 'Field', 'Latest'],
         reports: fieldReports,
       },
       {
         key: 'volunteer',
         label: 'Volunteer Reports',
-        subtitle: 'Event and field submissions',
-        count: volunteerReports.length,
+        subtitle: 'Regular volunteer submissions',
+        count: groupReportsByAccount(volunteerReports).length,
         accent: '#fff6d9',
         panel: '#d1a120',
         card: '#dfb33f',
-        chips: ['Volunteer', 'Event', 'Field'],
+        chips: ['Accounts', 'Volunteer', 'Event'],
         reports: volunteerReports,
       },
       {
         key: 'partner',
         label: 'Partner Reports',
         subtitle: 'Program and event submissions',
-        count: partnerReports.length,
+        count: groupReportsByAccount(partnerReports).length,
         accent: '#ffdfe4',
         panel: '#bd3c4f',
         card: '#cd5a6d',
-        chips: ['Partner', 'Impact', 'Program'],
+        chips: ['Accounts', 'Impact', 'Program'],
         reports: partnerReports,
       },
     ];
@@ -149,7 +237,9 @@ export default function AdminReportsDashboard({
   return (
     <View style={styles.container}>
       <ScrollView
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+        }
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.frame}>
@@ -159,9 +249,16 @@ export default function AdminReportsDashboard({
             </View>
             <View style={styles.mastheadText}>
               <Text style={styles.title}>Analytics Report</Text>
-              <Text style={styles.subtitle}>Monitor submitted reports and field metrics across volunteers and partners</Text>
+              <Text style={styles.subtitle}>
+                Monitor submitted reports and field metrics across volunteers and
+                partners
+              </Text>
             </View>
-            <TouchableOpacity style={styles.uploadButton} onPress={onUploadReport} activeOpacity={0.85}>
+            <TouchableOpacity
+              style={styles.uploadButton}
+              onPress={onUploadReport}
+              activeOpacity={0.85}
+            >
               <MaterialIcons name="add" size={18} color="#fff" />
               <Text style={styles.uploadButtonText}>Upload report</Text>
             </TouchableOpacity>
@@ -175,74 +272,174 @@ export default function AdminReportsDashboard({
 
           <View style={styles.kpiRow}>
             <Text style={styles.kpiText}>Volunteer Hours: {summary.totalHours}</Text>
-            <Text style={styles.kpiText}>Attendance Metrics: {summary.verifiedAttendance}</Text>
-            <Text style={styles.kpiText}>Beneficiaries: {summary.beneficiariesServed}</Text>
+            <Text style={styles.kpiText}>
+              Attendance Metrics: {summary.verifiedAttendance}
+            </Text>
+            <Text style={styles.kpiText}>
+              Beneficiaries: {summary.beneficiariesServed}
+            </Text>
             <Text style={styles.kpiText}>Projects: {projects.length}</Text>
             <Text style={styles.kpiText}>Volunteers: {volunteers.length}</Text>
           </View>
 
           <View style={[styles.board, !isDesktop && styles.boardStacked]}>
-            {columns.map(column => (
-              <View key={column.key} style={[styles.columnPanel, { backgroundColor: column.panel }]}> 
-                <View style={styles.columnHeader}>
-                  <Text style={styles.bigCount}>{column.count}</Text>
-                  <View style={styles.headerMeta}>
-                    <Text style={styles.columnLabel}>{column.label}</Text>
-                    <Text style={styles.columnSubLabel}>{column.subtitle}</Text>
-                    <TouchableOpacity style={[styles.viewAllButton, { backgroundColor: column.card }]} activeOpacity={0.85}>
-                      <Text style={styles.viewAllText}>View all</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
+            {columns.map(column => {
+              const accountGroups = groupReportsByAccount(column.reports);
 
-                <View style={styles.filterRow}>
-                  <Text style={styles.filterHeading}>Show reports by</Text>
-                  <View style={styles.chipRow}>
-                    {column.chips.map(chip => (
-                      <View key={chip} style={[styles.chip, { backgroundColor: column.card }]}>
-                        <Text style={styles.chipText}>{chip}</Text>
-                      </View>
-                    ))}
-                  </View>
-                </View>
-
-                <ScrollView style={styles.cardList} showsVerticalScrollIndicator={false}>
-                  {column.reports.length === 0 ? (
-                    <View style={[styles.emptyCard, { backgroundColor: column.card }]}> 
-                      <MaterialIcons name="inbox" size={24} color="rgba(255,255,255,0.85)" />
-                      <Text style={styles.emptyCardTitle}>No reports yet</Text>
-                      <Text style={styles.emptyCardText}>New submissions will appear here automatically.</Text>
+              return (
+                <View
+                  key={column.key}
+                  style={[styles.columnPanel, { backgroundColor: column.panel }]}
+                >
+                  <View style={styles.columnHeader}>
+                    <Text style={styles.bigCount}>{column.count}</Text>
+                    <View style={styles.headerMeta}>
+                      <Text style={styles.columnLabel}>{column.label}</Text>
+                      <Text style={styles.columnSubLabel}>{column.subtitle}</Text>
+                      <TouchableOpacity
+                        style={[
+                          styles.viewAllButton,
+                          { backgroundColor: column.card },
+                        ]}
+                        activeOpacity={0.85}
+                      >
+                        <Text style={styles.viewAllText}>View all</Text>
+                      </TouchableOpacity>
                     </View>
-                  ) : (
-                    column.reports.slice(0, 8).map(report => {
-                      const progress = getProgressPercent(report);
-                      return (
-                        <TouchableOpacity
-                          key={report.id}
-                          style={[styles.reportCard, { backgroundColor: column.card }]}
-                          onPress={() => onViewReport(report)}
-                          activeOpacity={0.85}
-                        >
-                          <View style={styles.reportTopRow}>
-                            <Text style={styles.reportTitle} numberOfLines={1}>{report.title}</Text>
-                            <Text style={styles.reportDate}>{formatShortDate(report.submittedAt)}</Text>
-                          </View>
-                          <Text style={styles.reportMeta} numberOfLines={1}>
-                            {[report.submitterName, getLinkedActivityLabel(report)].join(' • ')}
-                          </Text>
-                          <View style={styles.progressTrack}>
-                            <View style={[styles.progressFill, { width: `${progress}%`, backgroundColor: column.accent }]} />
-                          </View>
-                          <Text style={styles.progressText}>{progress}% metrics captured</Text>
-                        </TouchableOpacity>
-                      );
-                    })
-                  )}
-                </ScrollView>
-              </View>
-            ))}
-          </View>
+                  </View>
 
+                  <View style={styles.filterRow}>
+                    <Text style={styles.filterHeading}>Show reports by</Text>
+                    <View style={styles.chipRow}>
+                      {column.chips.map(chip => (
+                        <View
+                          key={chip}
+                          style={[styles.chip, { backgroundColor: column.card }]}
+                        >
+                          <Text style={styles.chipText}>{chip}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+
+                  <ScrollView
+                    style={styles.cardList}
+                    showsVerticalScrollIndicator={false}
+                  >
+                    {accountGroups.length === 0 ? (
+                      <View
+                        style={[
+                          styles.emptyCard,
+                          { backgroundColor: column.card },
+                        ]}
+                      >
+                        <MaterialIcons
+                          name="inbox"
+                          size={24}
+                          color="rgba(255,255,255,0.85)"
+                        />
+                        <Text style={styles.emptyCardTitle}>No reports yet</Text>
+                        <Text style={styles.emptyCardText}>
+                          New submissions will appear here automatically.
+                        </Text>
+                      </View>
+                    ) : (
+                      accountGroups.slice(0, 8).map(account => {
+                        const latestReport = account.latestReport;
+
+                        return (
+                          <View
+                            key={account.key}
+                            style={[
+                              styles.reportCard,
+                              { backgroundColor: column.card },
+                            ]}
+                          >
+                            <View style={styles.reportTopRow}>
+                              <Text
+                                style={styles.reportTitle}
+                                numberOfLines={1}
+                              >
+                                {account.submitterName}
+                              </Text>
+                              <Text style={styles.reportDate}>
+                                {formatShortDate(latestReport.submittedAt)}
+                              </Text>
+                            </View>
+                            <Text style={styles.reportMeta} numberOfLines={1}>
+                              {[
+                                formatRoleLabel(account.submitterRole),
+                                `${account.reports.length} ${account.reports.length === 1 ? 'report' : 'reports'}`,
+                              ].join(' • ')}
+                            </Text>
+                            <Text
+                              style={styles.reportSubtitle}
+                              numberOfLines={1}
+                            >
+                              Reports in this account
+                            </Text>
+
+                            <View style={styles.accountReportList}>
+                              {account.reports.map(report => {
+                                const progress = getProgressPercent(report);
+
+                                return (
+                                  <TouchableOpacity
+                                    key={report.id}
+                                    style={styles.accountReportItem}
+                                    onPress={() => onViewReport(report)}
+                                    activeOpacity={0.85}
+                                  >
+                                    <View style={styles.accountReportTopRow}>
+                                      <Text
+                                        style={styles.accountReportEvent}
+                                        numberOfLines={1}
+                                      >
+                                        {getLinkedActivityLabel(report)}
+                                      </Text>
+                                      <Text style={styles.accountReportDate}>
+                                        {formatShortDate(report.submittedAt)}
+                                      </Text>
+                                    </View>
+                                    <Text
+                                      style={styles.accountReportTitle}
+                                      numberOfLines={1}
+                                    >
+                                      {report.title || 'Untitled report'}
+                                    </Text>
+                                    <Text
+                                      style={styles.accountReportType}
+                                      numberOfLines={1}
+                                    >
+                                      {report.reportType.replace(/_/g, ' ')}
+                                    </Text>
+                                    <View style={styles.progressTrack}>
+                                      <View
+                                        style={[
+                                          styles.progressFill,
+                                          {
+                                            width: `${progress}%`,
+                                            backgroundColor: column.accent,
+                                          },
+                                        ]}
+                                      />
+                                    </View>
+                                    <Text style={styles.progressText}>
+                                      {progress}% metrics captured
+                                    </Text>
+                                  </TouchableOpacity>
+                                );
+                              })}
+                            </View>
+                          </View>
+                        );
+                      })
+                    )}
+                  </ScrollView>
+                </View>
+              );
+            })}
+          </View>
         </View>
       </ScrollView>
     </View>
@@ -563,6 +760,59 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontSize: 11,
   },
+  reportSubtitle: {
+    color: '#fff',
+    marginTop: 8,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  reportCountText: {
+    color: 'rgba(255,255,255,0.86)',
+    marginTop: 4,
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  accountReportList: {
+    marginTop: 10,
+    gap: 8,
+  },
+  accountReportItem: {
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
+  },
+  accountReportTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+  },
+  accountReportEvent: {
+    flex: 1,
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  accountReportDate: {
+    color: 'rgba(255,255,255,0.82)',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  accountReportTitle: {
+    marginTop: 6,
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  accountReportType: {
+    marginTop: 4,
+    color: 'rgba(255,255,255,0.84)',
+    fontSize: 11,
+    textTransform: 'capitalize',
+  },
   progressTrack: {
     marginTop: 8,
     height: 10,
@@ -599,5 +849,3 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 });
-
-

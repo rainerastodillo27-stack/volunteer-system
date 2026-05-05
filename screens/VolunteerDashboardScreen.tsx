@@ -16,9 +16,20 @@ import {
   getDashboardTimelineSnapshot,
   getMessagesForUser,
   getProjectsScreenSnapshot,
+  reconcileApprovedVolunteerEventMemberships,
+  subscribeToMessages,
   subscribeToStorageChanges,
 } from '../models/storage';
-import type { AdminPlanningCalendar, AdminPlanningItem, Project, ProgramTrack, Volunteer, VolunteerTimeLog } from '../models/types';
+import type {
+  AdminPlanningCalendar,
+  AdminPlanningItem,
+  Project,
+  ProgramTrack,
+  Volunteer,
+  VolunteerProjectJoinRecord,
+  VolunteerProjectMatch,
+  VolunteerTimeLog,
+} from '../models/types';
 import { navigateToAvailableRoute, debounce } from '../utils/navigation';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
@@ -115,6 +126,8 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
   const [planningCalendars, setPlanningCalendars] = useState<AdminPlanningCalendar[]>([]);
   const [planningItems, setPlanningItems] = useState<AdminPlanningItem[]>([]);
   const [programTracks, setProgramTracks] = useState<ProgramTrack[]>([]);
+  const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
+  const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
 
   const isMounted = useRef(true);
   const lastLoadAtRef = useRef(0);
@@ -142,14 +155,24 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
 
     const loadPromise = (async () => {
       try {
+        await reconcileApprovedVolunteerEventMemberships();
         const [projectSnapshot, timelineSnapshot, messages] = await Promise.all([
-          getProjectsScreenSnapshot(user, ['projects', 'volunteerProfile', 'timeLogs', 'programTracks']),
+          getProjectsScreenSnapshot(user, [
+            'projects',
+            'volunteerProfile',
+            'volunteerMatches',
+            'volunteerProjectJoins',
+            'timeLogs',
+            'programTracks',
+          ]),
           getDashboardTimelineSnapshot(),
           getMessagesForUser(user.id),
         ]);
 
         setProjects(projectSnapshot.projects);
         setVolunteerProfile(projectSnapshot.volunteerProfile);
+        setVolunteerMatches(projectSnapshot.volunteerMatches || []);
+        setVolunteerJoinRecords(projectSnapshot.volunteerJoinRecords || []);
         setTimeLogs(projectSnapshot.timeLogs);
         setProgramTracks(projectSnapshot.programTracks || []);
         setPlanningCalendars(timelineSnapshot.planningCalendars);
@@ -198,6 +221,27 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
     }, [loadDashboardData])
   );
 
+  useEffect(() => {
+    if (!user?.id) {
+      return;
+    }
+
+    const refreshUnreadMessages = async () => {
+      try {
+        const messages = await getMessagesForUser(user.id);
+        setUnreadMessages(messages.filter(message => !message.read && message.recipientId === user.id).length);
+      } catch (error) {
+        console.error('Failed to refresh volunteer unread messages:', error);
+      }
+    };
+
+    return subscribeToMessages(user.id, event => {
+      if (event.type === 'message.changed') {
+        void refreshUnreadMessages();
+      }
+    });
+  }, [user?.id]);
+
   const joinedEvents = useMemo(
     () =>
       projects.filter(
@@ -206,10 +250,26 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
           (
             (project.joinedUserIds || []).includes(user?.id || '') ||
             (volunteerProfile ? project.volunteers.includes(volunteerProfile.id) : false) ||
+            (volunteerProfile
+              ? volunteerMatches.some(
+                  match =>
+                    match.projectId === project.id &&
+                    match.volunteerId === volunteerProfile.id &&
+                    (match.status === 'Matched' || match.status === 'Completed')
+                )
+              : false) ||
+            (volunteerProfile
+              ? volunteerJoinRecords.some(
+                  record =>
+                    record.projectId === project.id &&
+                    record.volunteerId === volunteerProfile.id &&
+                    (record.participationStatus || 'Active') === 'Active'
+                )
+              : false) ||
             (volunteerProfile ? (project.internalTasks || []).some(task => task.assignedVolunteerId === volunteerProfile.id) : false)
           )
       ),
-    [projects, user?.id, volunteerProfile]
+    [projects, user?.id, volunteerProfile, volunteerMatches, volunteerJoinRecords]
   );
 
   const assignedEvents = useMemo(
@@ -232,10 +292,26 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
           !(
             (project.joinedUserIds || []).includes(user?.id || '') ||
             (volunteerProfile ? project.volunteers.includes(volunteerProfile.id) : false) ||
+            (volunteerProfile
+              ? volunteerMatches.some(
+                  match =>
+                    match.projectId === project.id &&
+                    match.volunteerId === volunteerProfile.id &&
+                    (match.status === 'Matched' || match.status === 'Completed' || match.status === 'Requested')
+                )
+              : false) ||
+            (volunteerProfile
+              ? volunteerJoinRecords.some(
+                  record =>
+                    record.projectId === project.id &&
+                    record.volunteerId === volunteerProfile.id &&
+                    (record.participationStatus || 'Active') === 'Active'
+                )
+              : false) ||
             (volunteerProfile ? (project.internalTasks || []).some(task => task.assignedVolunteerId === volunteerProfile.id) : false)
           )
       ),
-    [projects, user?.id, volunteerProfile]
+    [projects, user?.id, volunteerProfile, volunteerMatches, volunteerJoinRecords]
   );
 
   const joinedProjects = useMemo(
@@ -268,7 +344,7 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
   );
   const programOverviewCards = useMemo(
     () => {
-      const trackMap = new Map<string, typeof programTracks[0]>();
+      const trackMap = new Map<string, (typeof programTracks)[number] | undefined>();
       
       // Add core programs
       CORE_PROGRAM_MODULES.forEach(module => {
@@ -305,7 +381,8 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
     () => getUpcomingProject(projects.filter(project => project.isEvent)),
     [projects]
   );
-  const featuredEvent = upcomingEvent || null;
+  const featuredEvent = upcomingEvent || suggestedEvent || null;
+  const featuredEventIsAssigned = Boolean(upcomingEvent);
   const volunteerTone = getVolunteerStatusTone(volunteerProfile?.registrationStatus);
 
   const totalHours = volunteerProfile?.totalHoursContributed || 0;
@@ -434,8 +511,9 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
           <Text style={styles.avatarText}>{user?.name?.charAt(0) || 'V'}</Text>
         </View>
         <View style={styles.headerCopy}>
-          <Text style={styles.greeting}>Welcome, {user?.name}</Text>
-          <Text style={styles.role}>Volunteer Dashboard</Text>
+          <Text style={styles.role}>Volunteer Workspace</Text>
+          <Text style={styles.greeting}>Hello, {user?.name || 'Volunteer'}</Text>
+          <Text style={styles.headerHint}>Track your service, schedule, tasks, and messages in one place.</Text>
         </View>
         <TouchableOpacity onPress={handleLogout} style={styles.iconButton}>
           <MaterialIcons name="logout" size={22} color="#166534" />
@@ -456,10 +534,12 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
       ) : null}
 
       <View style={styles.heroCard}>
+        <View style={styles.heroAccentCircle} />
+        <View style={styles.heroAccentCircleSmall} />
         <View style={styles.heroTopRow}>
           <View style={styles.heroChip}>
-            <MaterialIcons name="favorite" size={14} color="#166534" />
-            <Text style={styles.heroChipText}>Volunteer overview</Text>
+            <MaterialIcons name="verified" size={14} color="#14532d" />
+            <Text style={styles.heroChipText}>Account Status</Text>
           </View>
           <View style={[styles.statusBadge, { backgroundColor: volunteerTone.badge }]}>
             <Text style={[styles.statusBadgeText, { color: volunteerTone.text }]}>
@@ -468,31 +548,78 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
           </View>
         </View>
 
-        <Text style={styles.heroTitle}>Your next service opportunity is already on the timeline.</Text>
+        <Text style={styles.heroTitle}>Your service dashboard is ready.</Text>
         <Text style={styles.heroSubtitle}>
-          Follow your assigned event dates, admin schedule updates, and active participation from one place.
+          See what needs attention first, review your next event, and jump straight into projects, tasks, or messages.
         </Text>
 
         <View style={styles.metricRow}>
           <View style={styles.metricCard}>
+            <MaterialIcons name="event-available" size={18} color="#bbf7d0" />
             <Text style={styles.metricValue}>{joinedEvents.length}</Text>
-            <Text style={styles.metricLabel}>joined events</Text>
+            <Text style={styles.metricLabel}>Joined Events</Text>
           </View>
           <View style={styles.metricCard}>
+            <MaterialIcons name="timer" size={18} color="#bbf7d0" />
             <Text style={styles.metricValue}>{totalHours.toFixed(1)}</Text>
-            <Text style={styles.metricLabel}>hours served</Text>
+            <Text style={styles.metricLabel}>Hours Served</Text>
           </View>
           <View style={styles.metricCard}>
+            <MaterialIcons name="mark-email-unread" size={18} color="#bbf7d0" />
             <Text style={styles.metricValue}>{unreadMessages}</Text>
-            <Text style={styles.metricLabel}>unread messages</Text>
+            <Text style={styles.metricLabel}>Unread Messages</Text>
           </View>
         </View>
+      </View>
+
+      <View style={styles.quickActionRow}>
+        <TouchableOpacity style={[styles.quickActionCard, styles.quickActionPrimary]} onPress={() => openProjects()}>
+          <View style={styles.quickActionIcon}>
+            <MaterialIcons name="work-outline" size={22} color="#166534" />
+          </View>
+          <View style={styles.quickActionCopy}>
+            <Text style={styles.quickActionTitle}>Find Projects</Text>
+            <Text style={styles.quickActionText}>Browse events and service opportunities.</Text>
+          </View>
+          <MaterialIcons name="chevron-right" size={22} color="#166534" />
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.quickActionCard} onPress={openTasks}>
+          <View style={styles.quickActionIcon}>
+            <MaterialIcons name="task-alt" size={22} color="#166534" />
+          </View>
+          <View style={styles.quickActionCopy}>
+            <Text style={styles.quickActionTitle}>My Tasks</Text>
+            <Text style={styles.quickActionText}>Check assignments and field responsibilities.</Text>
+          </View>
+          <MaterialIcons name="chevron-right" size={22} color="#94a3b8" />
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.quickActionCard} onPress={openMessages}>
+          <View style={styles.quickActionIcon}>
+            <MaterialIcons name="chat-bubble-outline" size={22} color="#166534" />
+          </View>
+          <View style={styles.quickActionCopy}>
+            <Text style={styles.quickActionTitle}>Messages</Text>
+            <Text style={styles.quickActionText}>Read admin and project updates.</Text>
+          </View>
+          {unreadMessages > 0 ? (
+            <View style={styles.messageCountBadge}>
+              <Text style={styles.messageCountText}>{unreadMessages > 99 ? '99+' : unreadMessages}</Text>
+            </View>
+          ) : (
+            <MaterialIcons name="chevron-right" size={22} color="#94a3b8" />
+          )}
+        </TouchableOpacity>
       </View>
 
       <View style={styles.section}>
         <View style={styles.detailCard}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Event Details</Text>
+            <View>
+              <Text style={styles.sectionEyebrow}>Next Priority</Text>
+              <Text style={styles.sectionTitle}>Event Details</Text>
+            </View>
             <TouchableOpacity onPress={() => openProjects(featuredEvent?.id)}>
               <Text style={styles.linkText}>{featuredEvent ? 'Open event' : 'View events'}</Text>
             </TouchableOpacity>
@@ -502,8 +629,14 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
             <>
               <View style={styles.detailHeroPanel}>
                 <View style={styles.detailHeroChip}>
-                  <MaterialIcons name="event-available" size={14} color="#166534" />
-                  <Text style={styles.detailHeroChipText}>Your next assigned event</Text>
+                  <MaterialIcons
+                    name={featuredEventIsAssigned ? 'event-available' : 'explore'}
+                    size={14}
+                    color="#166534"
+                  />
+                  <Text style={styles.detailHeroChipText}>
+                    {featuredEventIsAssigned ? 'Your next assigned event' : 'Suggested upcoming event'}
+                  </Text>
                 </View>
                 <Text style={styles.detailHeroTitle}>{featuredEvent.title}</Text>
                 <Text style={styles.detailHeroText}>{featuredEvent.description}</Text>
@@ -520,15 +653,25 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
               </View>
             </>
           ) : (
-            <Text style={styles.emptySectionText}>You do not have an assigned event yet. Ask the admin or field officer to assign you to a task.</Text>
+            <View style={styles.emptyStateCard}>
+              <MaterialIcons name="event-busy" size={28} color="#94a3b8" />
+              <Text style={styles.emptyStateTitle}>No event assigned yet</Text>
+              <Text style={styles.emptySectionText}>Ask the admin or field officer to assign you to a task, or browse available events.</Text>
+              <TouchableOpacity style={styles.emptyStateButton} onPress={() => openProjects()}>
+                <Text style={styles.emptyStateButtonText}>Browse events</Text>
+              </TouchableOpacity>
+            </View>
           )}
         </View>
 
         <View style={styles.profileCard}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Volunteer Details</Text>
-            <TouchableOpacity onPress={openProfile}>
-              <MaterialIcons name="edit" size={18} color="#166534" />
+            <View>
+              <Text style={styles.sectionEyebrow}>Profile</Text>
+              <Text style={styles.sectionTitle}>Volunteer Details</Text>
+            </View>
+            <TouchableOpacity onPress={openProfile} style={styles.smallEditButton}>
+              <MaterialIcons name="edit" size={17} color="#166534" />
             </TouchableOpacity>
           </View>
 
@@ -543,7 +686,7 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
           </View>
 
           <View style={styles.detailSummaryGrid}>
-            {volunteerDetailCards.map(card => (
+            {volunteerDetailCards.slice(0, 4).map(card => (
               <View key={card.label} style={styles.detailSummaryCard}>
                 <Text style={styles.detailSummaryEyebrow}>{card.label}</Text>
                 <Text style={styles.detailSummaryValue}>{card.value}</Text>
@@ -569,26 +712,6 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
         emptyText="No volunteer timeline items yet."
         onOpenProject={projectId => openProjects(projectId)}
       />
-
-      <View style={styles.quickActionRow}>
-        <TouchableOpacity style={styles.quickActionCard} onPress={() => openProjects()}>
-          <MaterialIcons name="work-outline" size={22} color="#166534" />
-          <Text style={styles.quickActionTitle}>Projects</Text>
-          <Text style={styles.quickActionText}>Browse all projects and events</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.quickActionCard} onPress={openTasks}>
-          <MaterialIcons name="task-alt" size={22} color="#166534" />
-          <Text style={styles.quickActionTitle}>Tasks</Text>
-          <Text style={styles.quickActionText}>Check your assigned responsibilities</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.quickActionCard} onPress={openMessages}>
-          <MaterialIcons name="chat-bubble-outline" size={22} color="#166534" />
-          <Text style={styles.quickActionTitle}>Messages</Text>
-          <Text style={styles.quickActionText}>Follow admin and project updates</Text>
-        </TouchableOpacity>
-      </View>
 
       {joinedEvents.length > 1 && (
         <View style={styles.detailCard}>
@@ -881,11 +1004,11 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f3f7f2',
+    backgroundColor: '#eef5ee',
   },
   content: {
     padding: 16,
-    paddingBottom: 32,
+    paddingBottom: 36,
     gap: 16,
   },
   loadingContainer: {
@@ -921,19 +1044,24 @@ const styles = StyleSheet.create({
   headerCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    borderRadius: 22,
+    gap: 14,
+    borderRadius: 26,
     backgroundColor: '#ffffff',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
     borderWidth: 1,
-    borderColor: '#dbe7df',
+    borderColor: '#d8e7dc',
+    shadowColor: '#14532d',
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 2,
   },
   avatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#166534',
+    width: 54,
+    height: 54,
+    borderRadius: 18,
+    backgroundColor: '#14532d',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -946,13 +1074,22 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   greeting: {
-    fontSize: 16,
+    marginTop: 3,
+    fontSize: 20,
     fontWeight: '800',
     color: '#0f172a',
   },
   role: {
-    marginTop: 2,
+    fontSize: 11,
+    color: '#166534',
+    fontWeight: '800',
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+  },
+  headerHint: {
+    marginTop: 5,
     fontSize: 12,
+    lineHeight: 18,
     color: '#64748b',
   },
   iconButton: {
@@ -993,9 +1130,34 @@ const styles = StyleSheet.create({
     color: '#991b1b',
   },
   heroCard: {
-    borderRadius: 28,
-    backgroundColor: '#166534',
-    padding: 20,
+    position: 'relative',
+    overflow: 'hidden',
+    borderRadius: 30,
+    backgroundColor: '#14532d',
+    padding: 22,
+    shadowColor: '#14532d',
+    shadowOpacity: 0.22,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 4,
+  },
+  heroAccentCircle: {
+    position: 'absolute',
+    width: 180,
+    height: 180,
+    borderRadius: 90,
+    backgroundColor: 'rgba(187,247,208,0.14)',
+    right: -70,
+    top: -56,
+  },
+  heroAccentCircleSmall: {
+    position: 'absolute',
+    width: 92,
+    height: 92,
+    borderRadius: 46,
+    backgroundColor: 'rgba(250,204,21,0.12)',
+    right: 32,
+    bottom: -42,
   },
   heroTopRow: {
     flexDirection: 'row',
@@ -1008,9 +1170,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
     borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    backgroundColor: '#dcfce7',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    backgroundColor: '#bbf7d0',
   },
   heroChipText: {
     fontSize: 11,
@@ -1027,9 +1189,9 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   heroTitle: {
-    marginTop: 16,
-    fontSize: 24,
-    lineHeight: 30,
+    marginTop: 22,
+    fontSize: 28,
+    lineHeight: 34,
     fontWeight: '800',
     color: '#ffffff',
   },
@@ -1042,16 +1204,19 @@ const styles = StyleSheet.create({
   metricRow: {
     flexDirection: 'row',
     gap: 10,
-    marginTop: 18,
+    marginTop: 22,
   },
   metricCard: {
     flex: 1,
-    borderRadius: 18,
-    backgroundColor: 'rgba(255,255,255,0.14)',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.13)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
+    paddingHorizontal: 12,
+    paddingVertical: 13,
   },
   metricValue: {
+    marginTop: 8,
     fontSize: 24,
     fontWeight: '800',
     color: '#ffffff',
@@ -1081,9 +1246,17 @@ const styles = StyleSheet.create({
   sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 12,
     marginBottom: 14,
+  },
+  sectionEyebrow: {
+    marginBottom: 3,
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#166534',
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
   },
   sectionTitle: {
     fontSize: 18,
@@ -1101,13 +1274,13 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   detailHeroPanel: {
-    borderRadius: 20,
-    backgroundColor: '#f6fbf7',
+    borderRadius: 24,
+    backgroundColor: '#f4fbf6',
     borderWidth: 1,
-    borderColor: '#dbe7df',
-    padding: 16,
-    marginBottom: 14,
-    gap: 10,
+    borderColor: '#cfe8d6',
+    padding: 18,
+    marginBottom: 16,
+    gap: 12,
   },
   detailHeroChip: {
     flexDirection: 'row',
@@ -1125,8 +1298,8 @@ const styles = StyleSheet.create({
     color: '#166534',
   },
   detailHeroTitle: {
-    fontSize: 22,
-    lineHeight: 28,
+    fontSize: 23,
+    lineHeight: 30,
     fontWeight: '800',
     color: '#0f172a',
   },
@@ -1144,10 +1317,10 @@ const styles = StyleSheet.create({
     minWidth: 150,
     flexGrow: 1,
     flexShrink: 1,
-    borderRadius: 18,
-    backgroundColor: '#f8fafc',
+    borderRadius: 20,
+    backgroundColor: '#fbfdfb',
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: '#e4ede7',
     paddingHorizontal: 14,
     paddingVertical: 14,
   },
@@ -1199,6 +1372,32 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     color: '#64748b',
   },
+  emptyStateCard: {
+    alignItems: 'center',
+    borderRadius: 22,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 20,
+    gap: 8,
+  },
+  emptyStateTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  emptyStateButton: {
+    marginTop: 4,
+    borderRadius: 999,
+    backgroundColor: '#166534',
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+  },
+  emptyStateButtonText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '800',
+  },
   profileIdentity: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1208,8 +1407,16 @@ const styles = StyleSheet.create({
   profileAvatarLarge: {
     width: 74,
     height: 74,
-    borderRadius: 20,
-    backgroundColor: '#dcfce7',
+    borderRadius: 24,
+    backgroundColor: '#e6f7cd',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  smallEditButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#f0fdf4',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1235,12 +1442,29 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   quickActionCard: {
-    borderRadius: 22,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 24,
     backgroundColor: '#ffffff',
     padding: 16,
     borderWidth: 1,
-    borderColor: '#dbe7df',
-    gap: 8,
+    borderColor: '#d8e7dc',
+    gap: 12,
+  },
+  quickActionPrimary: {
+    backgroundColor: '#f7fee7',
+    borderColor: '#bef264',
+  },
+  quickActionIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    backgroundColor: '#dcfce7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  quickActionCopy: {
+    flex: 1,
   },
   quickActionTitle: {
     fontSize: 16,
@@ -1248,20 +1472,35 @@ const styles = StyleSheet.create({
     color: '#0f172a',
   },
   quickActionText: {
+    marginTop: 3,
     fontSize: 12,
     lineHeight: 18,
     color: '#64748b',
+  },
+  messageCountBadge: {
+    minWidth: 28,
+    height: 28,
+    borderRadius: 14,
+    paddingHorizontal: 8,
+    backgroundColor: '#dc2626',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  messageCountText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '800',
   },
   projectsList: {
     gap: 12,
   },
   projectItem: {
-    borderRadius: 18,
+    borderRadius: 20,
     backgroundColor: '#f8fafc',
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    padding: 14,
-    gap: 10,
+    padding: 15,
+    gap: 11,
   },
   projectItemHeader: {
     flexDirection: 'row',
@@ -1275,7 +1514,7 @@ const styles = StyleSheet.create({
   },
   projectItemTitle: {
     flex: 1,
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '800',
     color: '#0f172a',
   },

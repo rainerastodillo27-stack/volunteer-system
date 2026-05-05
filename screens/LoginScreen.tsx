@@ -1,5 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, TextInput, TouchableOpacity, Text, StyleSheet, Alert, ActivityIndicator, ScrollView, Modal } from 'react-native';
+import {
+  View,
+  TextInput,
+  TouchableOpacity,
+  Text,
+  StyleSheet,
+  Alert,
+  ActivityIndicator,
+  ScrollView,
+  Modal,
+  useWindowDimensions,
+  Image,
+} from 'react-native';
 
 // Safe Platform accessor for web environments
 function getPlatformOS(): string {
@@ -10,13 +22,15 @@ function getPlatformOS(): string {
     return 'web';
   }
 }
-import { Picker } from '@react-native-picker/picker';
 import { MaterialIcons } from '@expo/vector-icons';
+import { Picker } from '@react-native-picker/picker';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import {
   createUserAccount,
   getAllProjects,
   getAllUsers,
   getApiBaseUrl,
+  getCachedStorageItem,
   getUserByEmailOrPhone,
   isValidDswdAccreditationNo,
   loginWithCredentials,
@@ -33,23 +47,18 @@ import {
   mergeSkillOptions,
 } from '../utils/skills';
 import { getRequestErrorMessage, getRequestErrorTitle, isAbortLikeError } from '../utils/requestErrors';
+import { isImageMediaUri, pickImageFromDevice } from '../utils/media';
 import {
-  composePhilippineAddress,
   getBarangaysByCity,
   getCitiesByRegion,
-  PHBarangay,
-  PHCityMunicipality,
   PHRegions,
+  type PHBarangay,
+  type PHCityMunicipality,
 } from '../utils/philippineAddressData';
 
 const BACKEND_HEALTH_TIMEOUT_MS = 12000;
 const BACKEND_HEALTH_RETRY_MS = 3000;
 const BACKEND_HEALTH_MAX_SLOW_RETRIES = 2;
-
-function LazyDateTimePicker(props: Record<string, unknown>) {
-  const DateTimePickerComponent = require('@react-native-community/datetimepicker').default;
-  return <DateTimePickerComponent {...props} />;
-}
 
 type SignupVolunteerSheetState = {
   gender: string;
@@ -63,7 +72,6 @@ type SignupVolunteerSheetState = {
   workplaceOrSchool: string;
   collegeCourse: string;
   certificationsOrTrainings: string;
-  videoBriefingUrl: string;
   hobbiesAndInterests: string;
   specialSkills: string;
   skills: string[];
@@ -169,7 +177,6 @@ function createEmptySignupVolunteerSheet(): SignupVolunteerSheetState {
     workplaceOrSchool: '',
     collegeCourse: '',
     certificationsOrTrainings: '',
-    videoBriefingUrl: '',
     hobbiesAndInterests: '',
     specialSkills: '',
     skills: [],
@@ -191,24 +198,12 @@ function createEmptySignupPartnerApplication(): SignupPartnerApplicationState {
   };
 }
 
-// Chooses the most specific credential error message for failed login attempts.
-function getIncorrectLoginMessage(
-  matchedUser: User | null,
-  allUsers: User[],
-  attemptedPassword: string
-): string {
-  if (matchedUser) {
-    return 'Wrong password for this account.';
-  }
-
-  const passwordExists = allUsers.some(user => user.password === attemptedPassword);
-  return passwordExists
-    ? 'Wrong email, username, or phone.'
-    : 'Wrong email, username, or phone and password.';
-}
-
 function normalizeLoginPhone(value?: string): string {
   return (value || '').replace(/\D/g, '');
+}
+
+function getUserNotFoundDisplay(): { title: string; message: string } {
+  return { title: 'User Not Found', message: 'User not found' };
 }
 
 function findUserByLoginIdentifier(users: User[], identifier: string): User | null {
@@ -232,19 +227,93 @@ function findUserByLoginIdentifier(users: User[], identifier: string): User | nu
   );
 }
 
-function isCredentialFailureError(error: unknown): boolean {
-  const message =
-    error instanceof Error
-      ? error.message
-      : typeof error === 'string'
-      ? error
-      : '';
+function getLoginFailureDisplay(error: unknown): { title: string; message: string } {
+  const message = getRequestErrorMessage(error, 'Unable to sign in. Please try again.', {
+    backendUrl: getApiBaseUrl(),
+  });
   const normalizedMessage = message.toLowerCase();
 
-  return (
+  if (normalizedMessage.includes('incorrect password') || normalizedMessage.includes('wrong password')) {
+    return { title: 'Incorrect Password', message: 'Incorrect password' };
+  }
+
+  if (
+    normalizedMessage.includes('user not found') ||
+    normalizedMessage.includes('email not found') ||
+    normalizedMessage.includes('username not found') ||
+    normalizedMessage.includes('phone number not found') ||
     normalizedMessage.includes('account not found') ||
-    normalizedMessage.includes('incorrect password')
-  );
+    normalizedMessage.includes('no account found')
+  ) {
+    return getUserNotFoundDisplay();
+  }
+
+  if (
+    normalizedMessage.includes('pending approval') ||
+    normalizedMessage.includes('not yet approved') ||
+    normalizedMessage.includes('under review') ||
+    normalizedMessage.includes('rejected')
+  ) {
+    return { title: 'Login Unavailable', message };
+  }
+
+  return {
+    title: getRequestErrorTitle(error, 'Login Failed'),
+    message,
+  };
+}
+
+function getCachedLoginFailureDisplay(
+  matchedUser: User | null
+): { title: string; message: string } {
+  if (matchedUser) {
+    return {
+      title: 'Incorrect Password',
+      message: 'Incorrect password',
+    };
+  }
+
+  return getUserNotFoundDisplay();
+}
+
+function getCachedApprovalBlock(user: User | null): { title: string; message: string } | null {
+  if (!user) {
+    return null;
+  }
+
+  if (user.role === 'volunteer') {
+    if (user.approvalStatus === 'pending') {
+      return {
+        title: 'Login Unavailable',
+        message: 'Your volunteer account is still pending approval.',
+      };
+    }
+
+    if (user.approvalStatus === 'rejected') {
+      return {
+        title: 'Login Unavailable',
+        message: user.rejectionReason || 'Your volunteer account was rejected. Please contact the admin team.',
+      };
+    }
+  }
+
+  if (user.role === 'partner') {
+    if (user.approvalStatus === 'pending') {
+      return {
+        title: 'Login Unavailable',
+        message: 'Your organization application is still pending admin approval.',
+      };
+    }
+
+    if (user.approvalStatus === 'rejected') {
+      return {
+        title: 'Login Unavailable',
+        message: user.rejectionReason || 'Your organization application was rejected. Please contact the admin team.',
+      };
+    }
+  }
+
+  return null;
 }
 
 function getMobileRoleLabel(role: MobileEntryRole): string {
@@ -274,6 +343,9 @@ function getMobileRoleMismatchMessage(selectedRole: MobileEntryRole, actualRole:
 // Handles account login and volunteer or partner self-registration.
 export default function LoginScreen() {
   const isWeb = getPlatformOS() === 'web';
+  const { width: screenWidth } = useWindowDimensions();
+  const isCompactLayout = screenWidth < 480;
+  const stackSelectionCards = screenWidth < 420;
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -298,6 +370,7 @@ export default function LoginScreen() {
     mergeSkillOptions(DEFAULT_VOLUNTEER_SKILL_OPTIONS, TASK_SKILL_OPTIONS)
   );
   const [customVolunteerSkill, setCustomVolunteerSkill] = useState('');
+  const [showSkillsDropdown, setShowSkillsDropdown] = useState(false);
   const [signupAcceptedCommitment, setSignupAcceptedCommitment] = useState(false);
   const [backendStatus, setBackendStatus] = useState<'checking' | 'online' | 'offline'>('checking');
   const [backendMessage, setBackendMessage] = useState('Checking backend connection...');
@@ -323,11 +396,12 @@ export default function LoginScreen() {
   }, []);
 
   useEffect(() => {
-    const composedHomeAddress = composePhilippineAddress(
-      signupVolunteerSheet.homeAddressRegion,
+    const addressParts = [
+      signupVolunteerSheet.homeAddressBarangay,
       signupVolunteerSheet.homeAddressCityMunicipality,
-      signupVolunteerSheet.homeAddressBarangay
-    );
+      signupVolunteerSheet.homeAddressRegion,
+    ].map(value => value.replace(/\s+/g, ' ').trim());
+    const composedHomeAddress = addressParts.every(Boolean) ? addressParts.join(', ') : '';
 
     setSignupVolunteerSheet(current =>
       current.homeAddress === composedHomeAddress
@@ -402,7 +476,7 @@ export default function LoginScreen() {
       const timeout = setTimeout(() => controller.abort(), BACKEND_HEALTH_TIMEOUT_MS);
 
       try {
-        setBackendStatus(current => (current === 'online' ? current : 'checking'));
+        setBackendStatus('checking');
         setBackendMessage('Checking backend and Supabase connection...');
         const response = await fetch(`${getApiBaseUrl()}/db-health`, {
           signal: controller.signal,
@@ -474,21 +548,29 @@ export default function LoginScreen() {
   }, []);
 
   useEffect(() => {
-    if (backendStatus !== 'online') {
-      setSavedAccounts([]);
-      return undefined;
-    }
+    const applyVisibleSavedAccounts = (users: User[]) => {
+      const visibleUsers = users
+        .filter(user => (isWeb ? user.role === 'admin' : user.role !== 'admin'))
+        .filter(user => user.role === 'admin' || user.approvalStatus !== 'pending')
+        .filter(user => user.role === 'admin' || user.approvalStatus !== 'rejected')
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      if (mountedRef.current) {
+        setSavedAccounts(visibleUsers);
+      }
+    };
 
     // Loads stored accounts so users can quickly reuse credentials from this device.
     const loadSavedAccounts = async () => {
       try {
-        const users = await getAllUsers();
-        const visibleUsers = users
-          .filter(user => (isWeb ? user.role === 'admin' : user.role !== 'admin'))
-          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        if (mountedRef.current) {
-          setSavedAccounts(visibleUsers);
+        const cachedUsers = (await getCachedStorageItem<User[]>('users')) || [];
+        applyVisibleSavedAccounts(cachedUsers);
+
+        if (backendStatus !== 'online') {
+          return;
         }
+
+        const users = await getAllUsers();
+        applyVisibleSavedAccounts(users);
       } catch (error) {
         if (mountedRef.current) {
           setSavedAccounts([]);
@@ -497,6 +579,10 @@ export default function LoginScreen() {
     };
 
     void loadSavedAccounts();
+    if (backendStatus !== 'online') {
+      return undefined;
+    }
+
     const unsubscribe = subscribeToStorageChanges(['users'], () => {
       void loadSavedAccounts();
     });
@@ -520,7 +606,6 @@ export default function LoginScreen() {
         Alert.alert(title, message);
       }
     };
-    const getWrongCredentialsMessage = () => 'Wrong email, username, phone, or password.';
 
     setLoginError(null);
 
@@ -533,31 +618,26 @@ export default function LoginScreen() {
     }
 
     if (!trimmedIdentifier || !trimmedPassword) {
-      Alert.alert('Validation Error', 'Please enter email, username, or phone and password.');
+      showLoginError('Validation Error', 'Please fill in all fields');
       return;
     }
 
-    if (savedAccounts.length > 0) {
-      const locallyMatchedUser = findUserByLoginIdentifier(savedAccounts, trimmedIdentifier);
-      const localPasswordMatches =
-        locallyMatchedUser && (locallyMatchedUser.password || '').trim() === trimmedPassword;
+    const locallyMatchedUser = findUserByLoginIdentifier(savedAccounts, trimmedIdentifier);
+    const localPasswordMatches =
+      locallyMatchedUser && (locallyMatchedUser.password || '').trim() === trimmedPassword;
+
+    if (backendStatus !== 'online' && savedAccounts.length > 0) {
 
       if (!localPasswordMatches) {
-        showLoginError('Authentication Failed', getWrongCredentialsMessage());
+        const failure = getCachedLoginFailureDisplay(locallyMatchedUser);
+        showLoginError(failure.title, failure.message);
         return;
       }
-    }
 
-    try {
-      setLoading(true);
-      if (backendStatus !== 'online') {
-        setBackendStatus('checking');
-        setBackendMessage('Trying to reach the database on a slow connection...');
-      }
-      const user = await loginWithCredentials(trimmedIdentifier, trimmedPassword);
-
+      const user = locallyMatchedUser;
       if (!user) {
-        showLoginError('Authentication Failed', await getCredentialFailureMessage());
+        const failure = getCachedLoginFailureDisplay(locallyMatchedUser);
+        showLoginError(failure.title, failure.message);
         return;
       }
 
@@ -573,7 +653,56 @@ export default function LoginScreen() {
         );
         return;
       }
-          showLoginError('Authentication Failed', getWrongCredentialsMessage());
+
+      const cachedApprovalBlock = getCachedApprovalBlock(user);
+      if (cachedApprovalBlock) {
+        showLoginError(cachedApprovalBlock.title, cachedApprovalBlock.message);
+        return;
+      }
+
+      setLoading(true);
+      try {
+        await login(user);
+        setLoginError(null);
+        setIdentifier('');
+        setPassword('');
+        setBackendStatus('checking');
+        setBackendMessage('Signed in with cached account data while the backend reconnects.');
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
+    try {
+      setLoading(true);
+      if (backendStatus !== 'online') {
+        setBackendStatus('checking');
+        setBackendMessage('Trying to reach the database on a slow connection...');
+      }
+      const user = await loginWithCredentials(trimmedIdentifier, trimmedPassword);
+
+      if (!user) {
+        showLoginError(
+          'Login Failed',
+          'The backend did not return an account for this sign-in attempt. Please try again.'
+        );
+        return;
+      }
+
+      if (!isWeb && activeMobileRole && user.role !== activeMobileRole) {
+        showLoginError('Role Mismatch', getMobileRoleMismatchMessage(activeMobileRole, user.role));
+        return;
+      }
+
+      if (isWeb && user.role !== 'admin') {
+        showLoginError(
+          'Access Restricted',
+          'Volunteer and partner accounts can only log in on mobile.'
+        );
+        return;
+      }
+
       // Update auth context - this triggers state change and navigation
       await login(user);
       setBackendStatus('online');
@@ -582,25 +711,29 @@ export default function LoginScreen() {
       setIdentifier('');
       setPassword('');
     } catch (error: any) {
-      console.error('Login error:', error);
-      if (isCredentialFailureError(error)) {
-        showLoginError('Authentication Failed', getWrongCredentialsMessage(error));
-        return;
+      const { title, message } = getLoginFailureDisplay(error);
+      const isExpectedLoginFailure =
+        title === 'Login Unavailable' ||
+        title === 'Incorrect Password' ||
+        title === 'User Not Found' ||
+        title === 'Validation Error' ||
+        title === 'Access Restricted' ||
+        title === 'Role Mismatch';
+      if (!isExpectedLoginFailure) {
+        console.log('Login error:', error);
       }
-
-      const message = getRequestErrorMessage(
-        error,
-        'An error occurred during login. Please try again.',
-        { backendUrl: getApiBaseUrl() }
-      );
+      const normalizedMessage = typeof message === 'string' ? message.toLowerCase() : '';
       if (
-        typeof message === 'string' &&
-        message.toLowerCase().includes('database unavailable while checking your account')
+        title === 'Database Unavailable' ||
+        normalizedMessage.includes('database') ||
+        normalizedMessage.includes('backend') ||
+        normalizedMessage.includes('npm run all:bg') ||
+        normalizedMessage.includes('npm run all')
       ) {
         setBackendStatus('offline');
-        setBackendMessage(`Database backend unavailable at ${getApiBaseUrl()}. Check the backend process and Supabase connection, then run npm run all:bg or npm run all.`);
+        setBackendMessage(message);
       }
-      showLoginError('Login Failed', message);
+      showLoginError(title, message);
     } finally {
       setLoading(false);
     }
@@ -631,6 +764,7 @@ export default function LoginScreen() {
     setSignupPartnerApplication(createEmptySignupPartnerApplication());
     setSignupVolunteerSheet(createEmptySignupVolunteerSheet());
     setCustomVolunteerSkill('');
+    setShowSkillsDropdown(false);
     setSelectedRegionCode('');
     setSelectedCityCode('');
     setFilteredCities([]);
@@ -689,6 +823,22 @@ export default function LoginScreen() {
     setSignupVolunteerSheet(current => ({ ...current, [key]: value }));
   };
 
+  const handlePickVolunteerCertificate = async () => {
+    try {
+      const selectedImage = await pickImageFromDevice();
+      if (!selectedImage) {
+        return;
+      }
+
+      updateSignupVolunteerSheet('certificationsOrTrainings', selectedImage);
+    } catch (error: any) {
+      Alert.alert(
+        'Certificate Upload Failed',
+        error?.message || 'Unable to open the photo library for certificate upload.'
+      );
+    }
+  };
+
   const handleAddCustomVolunteerSkill = () => {
     const normalizedSkill = customVolunteerSkill.trim();
     if (!normalizedSkill) {
@@ -701,6 +851,41 @@ export default function LoginScreen() {
       skills: mergeSkillOptions(current.skills, [normalizedSkill]),
     }));
     setCustomVolunteerSkill('');
+  };
+
+  const handleToggleVolunteerSkill = (skill: string) => {
+    setSignupVolunteerSheet(current => {
+      const isSelected = current.skills.includes(skill);
+      return {
+        ...current,
+        skills: isSelected
+          ? current.skills.filter(existingSkill => existingSkill !== skill)
+          : [...current.skills, skill],
+      };
+    });
+  };
+
+  const handleSelectRegion = (regionCode: string) => {
+    const selectedRegion = PHRegions.find(region => region.code === regionCode);
+    updateSignupVolunteerSheet('homeAddressRegion', selectedRegion?.name || '');
+    updateSignupVolunteerSheet('homeAddressCityMunicipality', '');
+    updateSignupVolunteerSheet('homeAddressBarangay', '');
+    setSelectedRegionCode(regionCode);
+    setSelectedCityCode('');
+    setFilteredCities(regionCode ? getCitiesByRegion(regionCode) : []);
+    setFilteredBarangays([]);
+  };
+
+  const handleSelectCity = (cityCode: string) => {
+    const selectedCity = filteredCities.find(city => city.code === cityCode);
+    updateSignupVolunteerSheet('homeAddressCityMunicipality', selectedCity?.displayName || '');
+    updateSignupVolunteerSheet('homeAddressBarangay', '');
+    setSelectedCityCode(cityCode);
+    setFilteredBarangays(cityCode ? getBarangaysByCity(cityCode) : []);
+  };
+
+  const handleSelectBarangay = (barangayName: string) => {
+    updateSignupVolunteerSheet('homeAddressBarangay', barangayName);
   };
 
   // Updates one field in the partner application form.
@@ -831,7 +1016,6 @@ export default function LoginScreen() {
                 hobbiesAndInterests: signupVolunteerSheet.hobbiesAndInterests.trim(),
                 specialSkills: signupVolunteerSheet.specialSkills.trim(),
                 skills: signupVolunteerSheet.skills,
-                videoBriefingUrl: signupVolunteerSheet.videoBriefingUrl.trim(),
                 affiliations: [
                   {
                     organization: signupVolunteerSheet.affiliationOrg1.trim(),
@@ -946,20 +1130,31 @@ export default function LoginScreen() {
   }
 
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={[styles.contentContainer, isWeb && styles.webContainer]}
-      showsVerticalScrollIndicator={false}
-      keyboardShouldPersistTaps="handled"
-    >
-      <View style={[styles.contentShell, isWeb && styles.webContentShell, !isWeb && styles.mobileContentShell]}>
-        <View style={styles.brandSection}>
-          <AppLogo width={isWeb ? 126 : 138} />
-          <Text style={styles.title}>NVC CONNECT</Text>
-          <Text style={styles.subtitle}>
-            {isWeb ? 'Admin web portal' : 'Volunteer coordination platform'}
-          </Text>
-        </View>
+    <>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={[
+          styles.contentContainer,
+          isWeb && styles.webContainer,
+          isCompactLayout && styles.compactContentContainer,
+        ]}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="always"
+      >
+        <View
+          style={[
+            styles.contentShell,
+            isWeb ? styles.webContentShell : styles.mobileContentShell,
+            isCompactLayout && styles.compactContentShell,
+          ]}
+        >
+          <View style={styles.brandSection}>
+            <AppLogo width={isWeb ? 126 : 138} />
+            <Text style={styles.title}>NVC CONNECT</Text>
+            <Text style={styles.subtitle}>
+              {isWeb ? 'Admin web portal' : 'Volunteer coordination platform'}
+            </Text>
+          </View>
 
         {isWeb ? (
           <View style={styles.webAccessNotice}>
@@ -1012,7 +1207,7 @@ export default function LoginScreen() {
               </Text>
 
               <TouchableOpacity
-                style={styles.selectionCard}
+                style={[styles.selectionCard, stackSelectionCards && styles.selectionCardStacked]}
                 onPress={() => handleSelectMobileRole('volunteer')}
                 activeOpacity={0.9}
               >
@@ -1029,7 +1224,11 @@ export default function LoginScreen() {
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.selectionCard, styles.selectionCardPartner]}
+                style={[
+                  styles.selectionCard,
+                  styles.selectionCardPartner,
+                  stackSelectionCards && styles.selectionCardStacked,
+                ]}
                 onPress={() => handleSelectMobileRole('partner')}
                 activeOpacity={0.9}
               >
@@ -1079,7 +1278,7 @@ export default function LoginScreen() {
             ) : null}
 
             <TextInput
-              style={styles.input}
+              style={[styles.input, isCompactLayout && styles.compactInput]}
               placeholder="Email, Username, or Phone"
               placeholderTextColor="#999"
               value={identifier}
@@ -1093,7 +1292,7 @@ export default function LoginScreen() {
             />
 
             <TextInput
-              style={styles.input}
+              style={[styles.input, isCompactLayout && styles.compactInput]}
               placeholder="Password"
               placeholderTextColor="#999"
               value={password}
@@ -1112,7 +1311,11 @@ export default function LoginScreen() {
             ) : null}
 
             <TouchableOpacity
-              style={[styles.button, loading ? styles.buttonDisabled : null]}
+              style={[
+                styles.button,
+                isCompactLayout && styles.compactButton,
+                loading ? styles.buttonDisabled : null,
+              ]}
               onPress={() => {
                 void handleLogin();
               }}
@@ -1170,6 +1373,7 @@ export default function LoginScreen() {
           </>
         )}
       </View>
+      </ScrollView>
 
       {showSignupModal ? (
       <Modal
@@ -1215,6 +1419,8 @@ export default function LoginScreen() {
                     key={option.role}
                     style={styles.signupRoleCard}
                     onPress={() => handleSelectSignupRole(option.role)}
+                    activeOpacity={0.7}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                   >
                     <View style={styles.signupRoleCardHeader}>
                       <MaterialIcons name={option.icon} size={22} color="#166534" />
@@ -1233,6 +1439,8 @@ export default function LoginScreen() {
                 contentContainerStyle={styles.modalFormContent}
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled"
+                nestedScrollEnabled
+                scrollEnabled={true}
               >
                 <TextInput
                   style={styles.input}
@@ -1279,8 +1487,11 @@ export default function LoginScreen() {
                         <TouchableOpacity
                           key={userType}
                           style={[styles.roleChip, signupUserType === userType && styles.roleChipActive]}
-                          onPress={() => setSignupUserType(userType)}
+                          onPress={() => {
+                            setSignupUserType(userType);
+                          }}
                           disabled={signupLoading}
+                          hitSlop={8}
                         >
                           <Text style={[styles.roleChipText, signupUserType === userType && styles.roleChipTextActive]}>
                             {userType}
@@ -1297,14 +1508,15 @@ export default function LoginScreen() {
                           <TouchableOpacity
                             key={pillar}
                             style={[styles.pillarChip, selected && styles.pillarChipActive]}
-                            onPress={() =>
+                            onPress={() => {
                               setSignupPillars(current =>
                                 current.includes(pillar)
                                   ? current.filter(item => item !== pillar)
                                   : [...current, pillar]
-                              )
-                            }
+                              );
+                            }}
                             disabled={signupLoading}
+                            hitSlop={8}
                           >
                             <Text style={[styles.pillarChipText, selected && styles.pillarChipTextActive]}>
                               {pillar}
@@ -1414,8 +1626,11 @@ export default function LoginScreen() {
                         <TouchableOpacity
                           key={gender}
                           style={[styles.genderChip, signupVolunteerSheet.gender === gender && styles.genderChipActive]}
-                          onPress={() => updateSignupVolunteerSheet('gender', gender)}
+                          onPress={() => {
+                            updateSignupVolunteerSheet('gender', gender);
+                          }}
                           disabled={signupLoading}
+                          hitSlop={8}
                         >
                           <Text style={[styles.genderChipText, signupVolunteerSheet.gender === gender && styles.genderChipTextActive]}>
                             {gender}
@@ -1427,8 +1642,11 @@ export default function LoginScreen() {
                   <Text style={styles.modalSectionSubLabel}>Date of Birth</Text>
                   <TouchableOpacity
                     style={[styles.button, styles.datePickerButton]}
-                    onPress={() => setShowDatePicker(true)}
+                    onPress={() => {
+                      setShowDatePicker(true);
+                    }}
                     disabled={signupLoading}
+                    hitSlop={8}
                   >
                     <MaterialIcons name="calendar-today" size={20} color="#fff" />
                     <Text style={styles.datePickerButtonText}>
@@ -1448,8 +1666,11 @@ export default function LoginScreen() {
                       <TouchableOpacity
                         key={status}
                         style={[styles.statusChip, signupVolunteerSheet.civilStatus === status && styles.statusChipActive]}
-                        onPress={() => updateSignupVolunteerSheet('civilStatus', status)}
+                        onPress={() => {
+                          updateSignupVolunteerSheet('civilStatus', status);
+                        }}
                         disabled={signupLoading}
+                        hitSlop={8}
                       >
                         <Text style={[styles.statusChipText, signupVolunteerSheet.civilStatus === status && styles.statusChipTextActive]}>
                           {status}
@@ -1464,22 +1685,17 @@ export default function LoginScreen() {
                   <View style={styles.pickerContainer}>
                     <Picker
                       selectedValue={selectedRegionCode}
-                      onValueChange={(itemValue: string) => {
-                        const selectedRegion = PHRegions.find(region => region.code === itemValue);
-                        updateSignupVolunteerSheet('homeAddressRegion', selectedRegion?.name || '');
-                        updateSignupVolunteerSheet('homeAddressCityMunicipality', '');
-                        updateSignupVolunteerSheet('homeAddressBarangay', '');
-                        setSelectedRegionCode(itemValue);
-                        setSelectedCityCode('');
-                        setFilteredCities(getCitiesByRegion(itemValue));
-                        setFilteredBarangays([]);
-                      }}
+                      onValueChange={(itemValue: string) => handleSelectRegion(itemValue)}
                       enabled={!signupLoading}
                       style={styles.picker}
                     >
                       <Picker.Item label="Select Region..." value="" />
                       {PHRegions.map(region => (
-                        <Picker.Item key={region.code} label={region.name} value={region.code} />
+                        <Picker.Item
+                          key={region.code}
+                          label={region.name}
+                          value={region.code}
+                        />
                       ))}
                     </Picker>
                   </View>
@@ -1488,22 +1704,17 @@ export default function LoginScreen() {
                   <View style={styles.pickerContainer}>
                     <Picker
                       selectedValue={selectedCityCode}
-                      onValueChange={(itemValue: string) => {
-                        const selectedCity = filteredCities.find(city => city.code === itemValue);
-                        updateSignupVolunteerSheet(
-                          'homeAddressCityMunicipality',
-                          selectedCity?.displayName || ''
-                        );
-                        updateSignupVolunteerSheet('homeAddressBarangay', '');
-                        setSelectedCityCode(itemValue);
-                        setFilteredBarangays(getBarangaysByCity(itemValue));
-                      }}
+                      onValueChange={(itemValue: string) => handleSelectCity(itemValue)}
                       enabled={!signupLoading && selectedRegionCode !== ''}
                       style={styles.picker}
                     >
-                      <Picker.Item label="Select City/Municipality..." value="" />
+                      <Picker.Item label="Select City / Municipality..." value="" />
                       {filteredCities.map(city => (
-                        <Picker.Item key={city.code} label={city.displayName} value={city.code} />
+                        <Picker.Item
+                          key={city.code}
+                          label={city.displayName}
+                          value={city.code}
+                        />
                       ))}
                     </Picker>
                   </View>
@@ -1512,7 +1723,7 @@ export default function LoginScreen() {
                   <View style={styles.pickerContainer}>
                     <Picker
                       selectedValue={signupVolunteerSheet.homeAddressBarangay}
-                      onValueChange={(itemValue: string) => updateSignupVolunteerSheet('homeAddressBarangay', itemValue)}
+                      onValueChange={(itemValue: string) => handleSelectBarangay(itemValue)}
                       enabled={!signupLoading && selectedCityCode !== ''}
                       style={styles.picker}
                     >
@@ -1555,14 +1766,6 @@ export default function LoginScreen() {
                   />
                   <TextInput
                     style={styles.input}
-                    placeholder="Certifications or Trainings"
-                    placeholderTextColor="#999"
-                    value={signupVolunteerSheet.certificationsOrTrainings}
-                    onChangeText={value => updateSignupVolunteerSheet('certificationsOrTrainings', value)}
-                    editable={!signupLoading}
-                  />
-                  <TextInput
-                    style={styles.input}
                     placeholder="Hobbies and Interests"
                     placeholderTextColor="#999"
                     value={signupVolunteerSheet.hobbiesAndInterests}
@@ -1579,28 +1782,64 @@ export default function LoginScreen() {
                   />
 
                   <Text style={styles.modalSectionSubLabel}>Skills (Select all that apply)</Text>
-                  <View style={styles.skillsGrid}>
-                    {availableSkills.map(skill => {
-                      const isSelected = signupVolunteerSheet.skills.includes(skill);
-                      return (
-                        <TouchableOpacity
-                          key={skill}
-                          style={[styles.skillChip, isSelected && styles.skillChipActive]}
-                          onPress={() => {
-                            const currentSkills = signupVolunteerSheet.skills;
-                            const newSkills = isSelected
-                              ? currentSkills.filter(s => s !== skill)
-                              : [...currentSkills, skill];
-                            updateSignupVolunteerSheet('skills', newSkills);
-                          }}
-                          disabled={signupLoading}
-                        >
-                          <Text style={[styles.skillChipText, isSelected && styles.skillChipTextActive]}>
-                            {skill}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
+                  <View style={styles.dropdownWrap}>
+                    <TouchableOpacity
+                      style={styles.dropdownTrigger}
+                      onPress={() => {
+                        setShowSkillsDropdown(current => !current);
+                      }}
+                      disabled={signupLoading}
+                      activeOpacity={0.85}
+                      hitSlop={8}
+                    >
+                      <Text
+                        style={[
+                          styles.dropdownTriggerText,
+                          signupVolunteerSheet.skills.length === 0 && styles.dropdownPlaceholder,
+                        ]}
+                        numberOfLines={2}
+                      >
+                        {signupVolunteerSheet.skills.length > 0
+                          ? signupVolunteerSheet.skills.join(', ')
+                          : 'Select skills'}
+                      </Text>
+                      <MaterialIcons
+                        name={showSkillsDropdown ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
+                        size={22}
+                        color="#475569"
+                      />
+                    </TouchableOpacity>
+                    {showSkillsDropdown ? (
+                      <View style={styles.dropdownMenu}>
+                        {availableSkills.map(skill => {
+                          const isSelected = signupVolunteerSheet.skills.includes(skill);
+                          return (
+                            <TouchableOpacity
+                              key={skill}
+                              style={[styles.dropdownOption, isSelected && styles.dropdownOptionSelected]}
+                              onPress={() => handleToggleVolunteerSkill(skill)}
+                              disabled={signupLoading}
+                              activeOpacity={0.8}
+                              hitSlop={4}
+                            >
+                              <MaterialIcons
+                                name={isSelected ? 'check-box' : 'check-box-outline-blank'}
+                                size={19}
+                                color={isSelected ? '#166534' : '#64748b'}
+                              />
+                              <Text
+                                style={[
+                                  styles.dropdownOptionText,
+                                  isSelected && styles.dropdownOptionTextSelected,
+                                ]}
+                              >
+                                {skill}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    ) : null}
                   </View>
 
                   <View style={styles.customSkillRow}>
@@ -1626,16 +1865,48 @@ export default function LoginScreen() {
 
                   <Text style={styles.modalSectionLabel}>Certifications & Media</Text>
                   
-                  <TouchableOpacity
-                    style={[styles.button, styles.uploadButton, signupLoading && { opacity: 0.6 }]}
-                    onPress={() => {
-                      // TODO: Integrate with expo-image-picker for certificate uploads
-                      Alert.alert('Certificate Upload', 'File picker to be implemented with expo-image-picker');
-                    }}
-                    disabled={signupLoading}
-                  >
-                    <Text style={styles.uploadButtonText}>Upload Certificates</Text>
-                  </TouchableOpacity>
+                  <View style={styles.uploadActionsRow}>
+                    <TouchableOpacity
+                      style={[styles.button, styles.uploadButton, signupLoading && { opacity: 0.6 }]}
+                      onPress={handlePickVolunteerCertificate}
+                      disabled={signupLoading}
+                    >
+                      <Text style={styles.uploadButtonText}>
+                        {signupVolunteerSheet.certificationsOrTrainings ? 'Change Certificate Photo' : 'Upload Certificate Photo'}
+                      </Text>
+                    </TouchableOpacity>
+                    {signupVolunteerSheet.certificationsOrTrainings ? (
+                      <TouchableOpacity
+                        style={[styles.button, styles.cancelUploadButton]}
+                        onPress={() => updateSignupVolunteerSheet('certificationsOrTrainings', '')}
+                        disabled={signupLoading}
+                      >
+                        <Text style={styles.cancelUploadButtonText}>Cancel Upload</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+                  <Text style={styles.certificateHelperText}>
+                    Upload a clear photo of your certificate of training.
+                  </Text>
+                  {signupVolunteerSheet.certificationsOrTrainings ? (
+                    <View style={styles.certificatePreviewCard}>
+                      {isImageMediaUri(signupVolunteerSheet.certificationsOrTrainings) ? (
+                        <Image
+                          source={{ uri: signupVolunteerSheet.certificationsOrTrainings }}
+                          style={styles.certificatePreviewImage}
+                        />
+                      ) : null}
+                      <View style={styles.certificatePreviewFooter}>
+                        <Text style={styles.certificatePreviewLabel}>Certificate photo selected</Text>
+                        <TouchableOpacity
+                          onPress={() => updateSignupVolunteerSheet('certificationsOrTrainings', '')}
+                          disabled={signupLoading}
+                        >
+                          <Text style={styles.certificateRemoveText}>Remove</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ) : null}
 
                   <Text style={styles.modalSectionSubLabel}>Video Briefing</Text>
                   <View style={styles.briefingVideoCard}>
@@ -1649,14 +1920,6 @@ export default function LoginScreen() {
                       registration. This placeholder can be replaced with the final video later.
                     </Text>
                   </View>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Video or audio briefing link (URL)"
-                    placeholderTextColor="#999"
-                    value={signupVolunteerSheet.videoBriefingUrl}
-                    onChangeText={value => updateSignupVolunteerSheet('videoBriefingUrl', value)}
-                    editable={!signupLoading}
-                  />
 
                   <Text style={styles.modalSectionSubLabel}>Affiliations (if any)</Text>
                   <View style={styles.affiliationRow}>
@@ -1783,7 +2046,7 @@ export default function LoginScreen() {
         
         {/* Date Picker Modal */}
         {showDatePicker && (
-          <LazyDateTimePicker
+          <DateTimePicker
             value={selectedDate}
             mode="date"
             display={getPlatformOS() === 'ios' ? 'spinner' : 'default'}
@@ -1813,7 +2076,7 @@ export default function LoginScreen() {
         )}
       </Modal>
       ) : null}
-    </ScrollView>
+    </>
   );
 }
 
@@ -1827,20 +2090,28 @@ const styles = StyleSheet.create({
     padding: 20,
     justifyContent: 'flex-start',
   },
+  compactContentContainer: {
+    paddingHorizontal: 14,
+    paddingVertical: 16,
+  },
   webContainer: {
     justifyContent: 'flex-start',
   },
   contentShell: {
     width: '100%',
+    maxWidth: 560,
+    alignSelf: 'center',
   },
   mobileContentShell: {
     paddingTop: 24,
     paddingBottom: 24,
   },
+  compactContentShell: {
+    paddingTop: 14,
+    paddingBottom: 18,
+  },
   webContentShell: {
     width: '100%',
-    maxWidth: 720,
-    alignSelf: 'center',
     paddingTop: 32,
     paddingBottom: 32,
   },
@@ -1906,6 +2177,9 @@ const styles = StyleSheet.create({
     borderColor: '#bbf7d0',
     borderRadius: 18,
     padding: 18,
+  },
+  selectionCardStacked: {
+    flexDirection: 'column',
   },
   selectionCardPartner: {
     backgroundColor: '#fffbeb',
@@ -1995,21 +2269,33 @@ const styles = StyleSheet.create({
   },
   input: {
     backgroundColor: '#fff',
-    borderRadius: 8,
-    padding: 15,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 15,
     marginBottom: 15,
     borderWidth: 1,
     borderColor: '#ddd',
     fontSize: 16,
+    minHeight: 54,
+  },
+  compactInput: {
+    fontSize: 15,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    marginBottom: 12,
   },
   button: {
     backgroundColor: '#4CAF50',
-    borderRadius: 8,
+    borderRadius: 12,
     paddingVertical: 15,
     alignItems: 'center',
     marginTop: 20,
     minHeight: 50,
     justifyContent: 'center',
+  },
+  compactButton: {
+    marginTop: 16,
+    minHeight: 48,
   },
   buttonDisabled: {
     backgroundColor: '#999',
@@ -2118,6 +2404,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    flexWrap: 'wrap',
     gap: 12,
     marginBottom: 6,
   },
@@ -2132,6 +2419,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#166534',
     textTransform: 'uppercase',
+    alignSelf: 'flex-start',
   },
   savedAccountCredential: {
     fontSize: 13,
@@ -2158,13 +2446,13 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'rgba(15, 23, 42, 0.45)',
     justifyContent: 'center',
-    padding: 20,
+    padding: 14,
   },
   modalCard: {
     backgroundColor: '#fff',
     borderRadius: 16,
     padding: 18,
-    maxHeight: '92%',
+    flex: 1,
   },
   modalTitle: {
     fontSize: 20,
@@ -2178,10 +2466,10 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   modalForm: {
-    maxHeight: 520,
+    maxHeight: 560,
   },
   modalFormContent: {
-    paddingBottom: 8,
+    paddingBottom: 24,
   },
   modalSectionLabel: {
     fontSize: 13,
@@ -2218,11 +2506,13 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   signupRoleCard: {
-    borderWidth: 1,
+    borderWidth: 2,
     borderColor: '#dbeafe',
     backgroundColor: '#f8fafc',
     borderRadius: 14,
     padding: 16,
+    minHeight: 120,
+    justifyContent: 'flex-start',
   },
   signupRoleCardHeader: {
     flexDirection: 'row',
@@ -2384,6 +2674,7 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
   },
   uploadButton: {
+    flex: 1,
     backgroundColor: '#dbeafe',
     borderWidth: 1,
     borderColor: '#0ea5e9',
@@ -2397,6 +2688,68 @@ const styles = StyleSheet.create({
     color: '#0369a1',
     fontWeight: '600',
     fontSize: 14,
+  },
+  uploadActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 10,
+    marginBottom: 12,
+  },
+  cancelUploadButton: {
+    flex: 1,
+    backgroundColor: '#fee2e2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginTop: 20,
+    marginBottom: 12,
+  },
+  cancelUploadButtonText: {
+    color: '#991b1b',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  certificateHelperText: {
+    marginTop: 8,
+    marginBottom: 12,
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#475569',
+  },
+  certificatePreviewCard: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 14,
+  },
+  certificatePreviewImage: {
+    width: '100%',
+    height: 180,
+    borderRadius: 10,
+    backgroundColor: '#e2e8f0',
+    marginBottom: 10,
+  },
+  certificatePreviewFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  certificatePreviewLabel: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#0f172a',
+  },
+  certificateRemoveText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#dc2626',
   },
   briefingVideoCard: {
     backgroundColor: '#f8fafc',
@@ -2535,6 +2888,65 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 8,
     marginBottom: 12,
+  },
+  dropdownWrap: {
+    marginBottom: 12,
+  },
+  dropdownTrigger: {
+    minHeight: 48,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 10,
+    backgroundColor: '#fff',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  dropdownTriggerDisabled: {
+    opacity: 0.55,
+  },
+  dropdownTriggerText: {
+    flex: 1,
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#0f172a',
+  },
+  dropdownPlaceholder: {
+    color: '#94a3b8',
+  },
+  dropdownMenu: {
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 10,
+    backgroundColor: '#fff',
+    overflow: 'hidden',
+    marginBottom: 8,
+    maxHeight: 300,
+  },
+  dropdownOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  dropdownOptionSelected: {
+    backgroundColor: '#f0fdf4',
+  },
+  dropdownOptionText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#334155',
+  },
+  dropdownOptionTextSelected: {
+    color: '#166534',
+    fontWeight: '700',
   },
   skillChip: {
     paddingVertical: 8,

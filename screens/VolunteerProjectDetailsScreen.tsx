@@ -115,7 +115,7 @@ export default function VolunteerProjectDetailsScreen({
         match,
         ...prev.filter((m) => m.projectId !== project.id),
       ]);
-      Alert.alert('Success', 'Join request sent!');
+      Alert.alert('Request Sent', 'Your event join request was sent to admin. You will be notified when it is approved.');
     } catch (error) {
       Alert.alert(
         'Error',

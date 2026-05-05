@@ -12,6 +12,7 @@ import {
   useWindowDimensions,
   Image,
   ActivityIndicator,
+  Linking,
 } from 'react-native';
 import { MaterialIcons, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import { Picker } from '@react-native-picker/picker';
@@ -31,9 +32,11 @@ import {
   getMessagesForUser,
   getProjectGroupMessages,
   getProjectsScreenSnapshot,
+  leaveVolunteerEventGroup,
   markMessageAsRead,
   saveMessage,
   saveProjectGroupMessage,
+  subscribeToMessages,
   subscribeToStorageChanges,
   submitPartnerProgramProposal,
   reviewPartnerProjectApplication,
@@ -47,6 +50,8 @@ import {
   AdvocacyFocus,
 } from '../models/types';
 import { navigateToAvailableRoute } from '../utils/navigation';
+import { isImageMediaUri, pickDocumentFromDevice, pickImageFromDevice } from '../utils/media';
+import { getRequestErrorMessage } from '../utils/requestErrors';
 
 function LazyDateTimePicker(props: any) {
   if (Platform.OS === 'web') {
@@ -100,6 +105,26 @@ type ProposalChatItem = {
 
 type ChatMessage = Message | ProjectGroupMessage;
 
+function upsertChatMessage(current: ChatMessage[], incoming: ChatMessage): ChatMessage[] {
+  const byId = new Map(current.map(message => [message.id, message]));
+  byId.set(incoming.id, incoming);
+  return Array.from(byId.values()).sort(
+    (left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime()
+  );
+}
+
+function getAttachmentName(uri: string, index: number): string {
+  if (uri.startsWith('data:')) {
+    const mimeType = uri.slice(5, uri.indexOf(';') > -1 ? uri.indexOf(';') : undefined);
+    const extension = mimeType.includes('/') ? mimeType.split('/').pop() : 'file';
+    return `Attachment ${index + 1}.${extension || 'file'}`;
+  }
+
+  const cleanUri = uri.split('?')[0];
+  const fileName = cleanUri.split('/').pop();
+  return fileName || `Attachment ${index + 1}`;
+}
+
 type ProposalFormState = {
   proposedTitle: string;
   proposedDescription: string;
@@ -117,6 +142,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   const { width } = useWindowDimensions();
   const isWide = width >= 1024;
   const isTablet = width >= 768;
+  const isVolunteer = user?.role === 'volunteer';
 
   const {
     projectId: requestedProjectId,
@@ -141,13 +167,18 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [messageText, setMessageText] = useState('');
+  const [pendingAttachments, setPendingAttachments] = useState<string[]>([]);
   const [searchText, setSearchText] = useState('');
   const [isSending, setIsSending] = useState(false);
 
   const [templateActive, setTemplateActive] = useState(true);
   const [showMessageHub, setShowMessageHub] = useState(false);
+  const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
+  const [showConversationMenu, setShowConversationMenu] = useState(false);
 
   const scrollRef = useRef<ScrollView>(null);
+  const selectedUserRef = useRef<User | null>(null);
+  const selectedProjectChatRef = useRef<ProjectChatItem | null>(null);
 
   const [proposalForm, setProposalForm] = useState<ProposalFormState>({
     proposedTitle: newProposalTitle || '',
@@ -170,6 +201,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   const [locCity, setLocCity] = useState('');
   const [locBarangay, setLocBarangay] = useState('');
 
+  const availableSections: SidebarSection[] = isVolunteer
+    ? ['messages', 'projects']
+    : ['messages', 'projects', 'proposals', 'contacts'];
+
   const loadData = useCallback(async () => {
     if (!user) return;
     try {
@@ -180,14 +215,41 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       ]);
 
       const others = users.filter(u => u.id !== user.id);
-      setAllUsers(others);
+      const allowedDirectUsers = user.role === 'volunteer'
+        ? others.filter(u => u.role === 'admin')
+        : others;
+      const allowedDirectUserIds = new Set(allowedDirectUsers.map(u => u.id));
+      const joinedEventIds = new Set(snapshot.volunteerJoinRecords.map(record => record.projectId));
+      const volunteerProfileId = snapshot.volunteerProfile?.id;
 
-      setProjectChats(snapshot.projects.map(p => ({
-        project: p,
-        participantCount: p.volunteers?.length || 0
-      })));
+      setAllUsers(allowedDirectUsers);
 
-      setProposalChats(snapshot.partnerApplications.map(app => ({
+      setProjectChats(
+        snapshot.projects
+          .filter(project => {
+            if (!project?.isEvent) {
+              return false;
+            }
+            if (user.role !== 'volunteer') {
+              return true;
+            }
+            const joinedByRecord = joinedEventIds.has(project.id);
+            const joinedByUserId = (project.joinedUserIds || []).includes(user.id);
+            const joinedByVolunteerId = Boolean(
+              volunteerProfileId && (project.volunteers || []).includes(volunteerProfileId)
+            );
+            return joinedByRecord || joinedByUserId || joinedByVolunteerId;
+          })
+          .map(project => ({
+            project,
+            participantCount: Math.max(
+              (project.joinedUserIds || []).length,
+              (project.volunteers || []).length,
+            ),
+          }))
+      );
+
+      setProposalChats((user.role === 'volunteer' ? [] : snapshot.partnerApplications).map(app => ({
         application: app,
         projectTitle: app.proposalDetails?.proposedTitle || 'Untitled Proposal',
         programModule: app.proposalDetails?.requestedProgramModule || 'Nutrition'
@@ -196,6 +258,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       const convMap = new Map<string, ConversationItem>();
       msgs.forEach(m => {
         const otherId = m.senderId === user.id ? m.recipientId : m.senderId;
+        if (!allowedDirectUserIds.has(otherId)) return;
         const otherUser = others.find(u => u.id === otherId);
         if (!otherUser) return;
         const entry = convMap.get(otherId) || { user: otherUser, unreadCount: 0 };
@@ -216,7 +279,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       console.error(e);
       setLoading(false);
     }
-  }, [user?.id]);
+  }, [user]);
 
   const loadMessages = async () => {
     if (!user) return;
@@ -238,16 +301,100 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     }
   };
 
+  useEffect(() => {
+    selectedUserRef.current = selectedUser;
+  }, [selectedUser]);
+
+  useEffect(() => {
+    selectedProjectChatRef.current = selectedProjectChat;
+    setShowConversationMenu(false);
+  }, [selectedProjectChat]);
+
   useFocusEffect(useCallback(() => {
     void loadData();
     return subscribeToStorageChanges(['users', 'projects', 'partnerProjectApplications', 'messages', 'projectGroupMessages'], loadData);
   }, [loadData]));
 
   useEffect(() => {
+    if (!user?.id) {
+      return;
+    }
+
+    return subscribeToMessages(user.id, event => {
+      if (event.type === 'message.changed') {
+        const incoming = event.message;
+        const activeUser = selectedUserRef.current;
+        const isActiveConversation = Boolean(
+          activeUser &&
+          ((incoming.senderId === user.id && incoming.recipientId === activeUser.id) ||
+            (incoming.senderId === activeUser.id && incoming.recipientId === user.id))
+        );
+
+        if (isActiveConversation) {
+          setMessages(current => upsertChatMessage(current, incoming));
+          if (!incoming.read && incoming.recipientId === user.id) {
+            void markMessageAsRead(incoming.id).then(() => {
+              void loadData();
+            });
+          }
+        } else {
+          void loadData();
+        }
+        return;
+      }
+
+      if (event.type === 'project-group-message.changed') {
+        const incoming = event.message;
+        const activeProjectChat = selectedProjectChatRef.current;
+
+        if (activeProjectChat?.project.id === incoming.projectId) {
+          setMessages(current => upsertChatMessage(current, incoming));
+        }
+      }
+    });
+  }, [loadData, user?.id]);
+
+  useEffect(() => {
     if (view === 'detail') {
       void loadMessages();
     }
   }, [selectedUser, selectedProjectChat, view]);
+
+  useEffect(() => {
+    if (!availableSections.includes(activeSection)) {
+      setActiveSection(availableSections[0]);
+    }
+  }, [activeSection, availableSections]);
+
+  useEffect(() => {
+    if (selectedUser && !allUsers.some(candidate => candidate.id === selectedUser.id)) {
+      setSelectedUser(null);
+    }
+  }, [allUsers, selectedUser]);
+
+  useEffect(() => {
+    if (
+      selectedProjectChat &&
+      !projectChats.some(candidate => candidate.project.id === selectedProjectChat.project.id)
+    ) {
+      setSelectedProjectChat(null);
+    }
+  }, [projectChats, selectedProjectChat]);
+
+  useEffect(() => {
+    if (!requestedProjectId || loading) return;
+
+    const matchedProjectChat = projectChats.find(chat => chat.project.id === requestedProjectId);
+    if (matchedProjectChat) {
+      setSelectedProjectChat(matchedProjectChat);
+      setSelectedUser(null);
+      setSelectedProposalApplication(null);
+      setProposalIntent(null);
+      setView('detail');
+    }
+
+    navigation.setParams({ projectId: undefined });
+  }, [requestedProjectId, loading, navigation, projectChats]);
 
   useEffect(() => {
     if (newProposalModule || newProposalProjectId) {
@@ -345,14 +492,75 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     }
   }, [messages]);
 
+  const handlePickAttachment = async (type: 'photo' | 'file') => {
+    try {
+      setShowAttachmentMenu(false);
+      const uri = type === 'photo'
+        ? await pickImageFromDevice()
+        : await pickDocumentFromDevice();
+
+      if (!uri) {
+        return;
+      }
+
+      setPendingAttachments(current => [...current, uri]);
+    } catch (error) {
+      Alert.alert(
+        type === 'photo' ? 'Photo Upload Failed' : 'File Upload Failed',
+        error instanceof Error ? error.message : 'Unable to attach this file. Please try again.'
+      );
+    }
+  };
+
+  const removePendingAttachment = (attachmentUri: string) => {
+    setPendingAttachments(current => current.filter(uri => uri !== attachmentUri));
+  };
+
+  const handleLeaveEventGc = () => {
+    if (!user?.id || user.role !== 'volunteer' || !selectedProjectChat) {
+      return;
+    }
+
+    const eventTitle = selectedProjectChat.project.title;
+    Alert.alert(
+      'Leave Event GC',
+      `Leave "${eventTitle}"? You will be removed from this event group chat.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Leave',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setShowConversationMenu(false);
+              await leaveVolunteerEventGroup(selectedProjectChat.project.id, user.id);
+              setSelectedProjectChat(null);
+              setMessages([]);
+              setView(isWide ? 'detail' : 'sidebar');
+              await loadData();
+              Alert.alert('Left GC', `You left "${eventTitle}".`);
+            } catch (error) {
+              Alert.alert(
+                'Unable to Leave',
+                getRequestErrorMessage(error, 'Failed to leave this event group chat. Please try again.')
+              );
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const handleSendMessage = async () => {
-    if (!user || !messageText.trim() || isSending) return;
+    const trimmedMessage = messageText.trim();
+    if (!user || (!trimmedMessage && pendingAttachments.length === 0) || isSending) return;
     setIsSending(true);
     const msg = {
       id: `msg-${Date.now()}`,
       senderId: user.id,
-      content: messageText.trim(),
+      content: trimmedMessage || 'Attachment',
       timestamp: new Date().toISOString(),
+      attachments: pendingAttachments,
     };
     try {
       if (selectedUser) {
@@ -365,6 +573,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         setMessages(curr => [...curr, fullMsg]);
       }
       setMessageText('');
+      setPendingAttachments([]);
     } catch (e) {
       Alert.alert('Error', 'Failed to send message');
     } finally {
@@ -475,14 +684,14 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       </View>
 
       <View style={styles.sectionTabs}>
-        {(['messages', 'projects', 'proposals', 'contacts'] as SidebarSection[]).map(s => (
+        {availableSections.map(s => (
           <TouchableOpacity
             key={s}
             onPress={() => setActiveSection(s)}
             style={[styles.sectionTab, activeSection === s && styles.sectionTabActive]}
           >
             <Text style={[styles.sectionTabText, activeSection === s && styles.sectionTabTextActive]}>
-              {s.charAt(0).toUpperCase() + s.slice(1)}
+              {s === 'projects' ? 'Event GC' : s.charAt(0).toUpperCase() + s.slice(1)}
             </Text>
           </TouchableOpacity>
         ))}
@@ -519,7 +728,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
         {activeSection === 'projects' && (
           <>
-            <Text style={styles.listSectionLabel}>Active Teams</Text>
+            <Text style={styles.listSectionLabel}>Event GC</Text>
             {filteredProjects.length > 0 ? (
               filteredProjects.map(p => renderSidebarItem(
                 p.project.id,
@@ -530,7 +739,9 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                 { icon: 'groups' }
               ))
             ) : (
-              <Text style={styles.emptyListText}>No project teams joined</Text>
+              <Text style={styles.emptyListText}>
+                {isVolunteer ? 'No joined event GC yet' : 'No event GC available'}
+              </Text>
             )}
           </>
         )}
@@ -812,13 +1023,15 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
             <Ionicons name="chatbubbles-outline" size={64} color="#166534" />
           </View>
           <Text style={styles.emptyTitle}>Your Workspace Hub</Text>
-          <Text style={styles.emptySubtitle}>Select a conversation or project team to start collaborating</Text>
+          <Text style={styles.emptySubtitle}>Select an admin conversation or Event GC to start collaborating</Text>
         </View>
       );
     }
 
     const title = selectedUser?.name || selectedProjectChat?.project.title;
-    const subtitle = selectedUser ? (selectedUser.role === 'admin' ? 'System Admin' : 'Direct Message') : 'Project Group Chat';
+    const subtitle = selectedUser
+      ? (selectedUser.role === 'admin' ? 'System Admin' : 'Direct Message')
+      : 'Event GC';
 
     return (
       <View style={styles.detail}>
@@ -838,9 +1051,29 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
             </View>
           </View>
           <View style={styles.headerActions}>
-            <TouchableOpacity style={styles.headerAction}><Ionicons name="call-outline" size={22} color="#64748b" /></TouchableOpacity>
-            <TouchableOpacity style={styles.headerAction}><Ionicons name="videocam-outline" size={22} color="#64748b" /></TouchableOpacity>
-            <TouchableOpacity style={styles.headerAction}><Ionicons name="ellipsis-vertical" size={22} color="#64748b" /></TouchableOpacity>
+            {selectedProjectChat && user?.role === 'volunteer' ? (
+              <View style={styles.conversationMenuWrap}>
+                <TouchableOpacity
+                  style={styles.headerAction}
+                  onPress={() => setShowConversationMenu(current => !current)}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="ellipsis-vertical" size={22} color="#64748b" />
+                </TouchableOpacity>
+                {showConversationMenu ? (
+                  <View style={styles.conversationMenu}>
+                    <TouchableOpacity
+                      style={styles.conversationMenuItem}
+                      onPress={handleLeaveEventGc}
+                      activeOpacity={0.85}
+                    >
+                      <MaterialIcons name="logout" size={18} color="#dc2626" />
+                      <Text style={styles.conversationMenuDangerText}>Leave GC</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
+              </View>
+            ) : null}
           </View>
         </View>
 
@@ -945,10 +1178,55 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                 );
               }
 
+              const messageAttachments = m.attachments || [];
+
               return (
                 <View key={m.id} style={[styles.messageRow, isOwn ? styles.messageRowOwn : styles.messageRowOther]}>
                   <View style={[styles.bubble, isOwn ? styles.bubbleOwn : styles.bubbleOther]}>
-                    <Text style={[styles.bubbleText, isOwn && styles.bubbleTextOwn]}>{m.content}</Text>
+                    {m.content ? (
+                      <Text style={[styles.bubbleText, isOwn && styles.bubbleTextOwn]}>{m.content}</Text>
+                    ) : null}
+                    {messageAttachments.length > 0 ? (
+                      <View style={styles.messageAttachmentList}>
+                        {messageAttachments.map((attachmentUri, attachmentIndex) => {
+                          const attachmentName = getAttachmentName(attachmentUri, attachmentIndex);
+                          const isImageAttachment = isImageMediaUri(attachmentUri);
+
+                          return (
+                            <TouchableOpacity
+                              key={`${m.id}-attachment-${attachmentIndex}`}
+                              style={[
+                                styles.messageAttachmentCard,
+                                isOwn && styles.messageAttachmentCardOwn,
+                              ]}
+                              onPress={() => {
+                                void Linking.openURL(attachmentUri).catch(() => {
+                                  Alert.alert('Attachment', 'Unable to open this attachment on this device.');
+                                });
+                              }}
+                              activeOpacity={0.85}
+                            >
+                              {isImageAttachment ? (
+                                <Image source={{ uri: attachmentUri }} style={styles.messageAttachmentImage} />
+                              ) : (
+                                <View style={[styles.messageAttachmentFileIcon, isOwn && styles.messageAttachmentFileIconOwn]}>
+                                  <MaterialIcons name="insert-drive-file" size={22} color={isOwn ? '#dcfce7' : '#166534'} />
+                                </View>
+                              )}
+                              <Text
+                                style={[
+                                  styles.messageAttachmentName,
+                                  isOwn && styles.messageAttachmentNameOwn,
+                                ]}
+                                numberOfLines={1}
+                              >
+                                {attachmentName}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    ) : null}
                   </View>
                   <Text style={styles.messageTime}>
                     {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -1257,8 +1535,63 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         )}
 
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          {showAttachmentMenu ? (
+            <View style={styles.attachmentMenu}>
+              <TouchableOpacity
+                style={styles.attachmentMenuButton}
+                onPress={() => void handlePickAttachment('photo')}
+                activeOpacity={0.85}
+              >
+                <View style={styles.attachmentMenuIcon}>
+                  <Ionicons name="image-outline" size={20} color="#166534" />
+                </View>
+                <View style={styles.attachmentMenuTextWrap}>
+                  <Text style={styles.attachmentMenuTitle}>Photo upload</Text>
+                  <Text style={styles.attachmentMenuSubtitle}>Attach an image from this device</Text>
+                </View>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.attachmentMenuButton}
+                onPress={() => void handlePickAttachment('file')}
+                activeOpacity={0.85}
+              >
+                <View style={styles.attachmentMenuIcon}>
+                  <MaterialIcons name="attach-file" size={20} color="#166534" />
+                </View>
+                <View style={styles.attachmentMenuTextWrap}>
+                  <Text style={styles.attachmentMenuTitle}>File upload</Text>
+                  <Text style={styles.attachmentMenuSubtitle}>Attach a document or file</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
+          {pendingAttachments.length > 0 ? (
+            <View style={styles.pendingAttachmentTray}>
+              {pendingAttachments.map((attachmentUri, attachmentIndex) => (
+                <View key={`${attachmentUri}-${attachmentIndex}`} style={styles.pendingAttachmentChip}>
+                  <MaterialIcons
+                    name={isImageMediaUri(attachmentUri) ? 'image' : 'insert-drive-file'}
+                    size={16}
+                    color="#166534"
+                  />
+                  <Text style={styles.pendingAttachmentText} numberOfLines={1}>
+                    {getAttachmentName(attachmentUri, attachmentIndex)}
+                  </Text>
+                  <TouchableOpacity onPress={() => removePendingAttachment(attachmentUri)}>
+                    <MaterialIcons name="close" size={16} color="#64748b" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          ) : null}
+
           <View style={styles.composer}>
-            <TouchableOpacity style={styles.composerAdd}>
+            <TouchableOpacity
+              style={[styles.composerAdd, showAttachmentMenu && styles.composerAddActive]}
+              onPress={() => setShowAttachmentMenu(current => !current)}
+              activeOpacity={0.85}
+            >
               <Ionicons name="add-circle" size={28} color="#166534" />
             </TouchableOpacity>
             <View style={styles.inputWrap}>
@@ -1272,9 +1605,12 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
               />
             </View>
             <TouchableOpacity
-              style={[styles.sendBtn, !messageText.trim() && styles.sendBtnDisabled]}
+              style={[
+                styles.sendBtn,
+                (!messageText.trim() && pendingAttachments.length === 0) && styles.sendBtnDisabled,
+              ]}
               onPress={handleSendMessage}
-              disabled={!messageText.trim() || isSending}
+              disabled={(!messageText.trim() && pendingAttachments.length === 0) || isSending}
             >
               {isSending ? (
                 <ActivityIndicator size="small" color="#fff" />
@@ -1460,6 +1796,34 @@ const styles = StyleSheet.create({
   detailSubtitle: { fontSize: 13, color: '#166534', fontWeight: '600', marginTop: 1 },
   headerActions: { flexDirection: 'row', gap: 4 },
   headerAction: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  conversationMenuWrap: { position: 'relative' },
+  conversationMenu: {
+    position: 'absolute',
+    right: 0,
+    top: 44,
+    minWidth: 150,
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 8,
+    borderWidth: 1,
+    borderColor: '#fee2e2',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    elevation: 8,
+    zIndex: 20,
+  },
+  conversationMenuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: '#fef2f2',
+  },
+  conversationMenuDangerText: { fontSize: 13, fontWeight: '900', color: '#dc2626' },
   backButton: { marginRight: 16 },
 
   messagesList: { flex: 1 },
@@ -1472,10 +1836,105 @@ const styles = StyleSheet.create({
   bubbleOther: { backgroundColor: '#f1f5f9', borderBottomLeftRadius: 4 },
   bubbleText: { fontSize: 15, lineHeight: 22, color: '#334155' },
   bubbleTextOwn: { color: '#fff' },
+  messageAttachmentList: { gap: 8, marginTop: 10 },
+  messageAttachmentCard: {
+    minWidth: 180,
+    maxWidth: 280,
+    borderRadius: 16,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    overflow: 'hidden',
+  },
+  messageAttachmentCardOwn: {
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderColor: 'rgba(255,255,255,0.2)',
+  },
+  messageAttachmentImage: {
+    width: 240,
+    height: 150,
+    backgroundColor: '#e2e8f0',
+  },
+  messageAttachmentFileIcon: {
+    width: 240,
+    height: 88,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#dcfce7',
+  },
+  messageAttachmentFileIconOwn: {
+    backgroundColor: 'rgba(255,255,255,0.14)',
+  },
+  messageAttachmentName: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#334155',
+  },
+  messageAttachmentNameOwn: { color: '#ffffff' },
   messageTime: { fontSize: 10, color: '#94a3b8', fontWeight: '600' },
   emptyChat: { padding: 40, alignItems: 'center' },
   emptyChatText: { color: '#94a3b8', fontSize: 12 },
 
+  attachmentMenu: {
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    paddingBottom: 4,
+    borderTopWidth: 1,
+    borderTopColor: '#f1f5f9',
+    backgroundColor: '#ffffff',
+  },
+  attachmentMenuButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 12,
+    borderRadius: 18,
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+  },
+  attachmentMenuIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 14,
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  attachmentMenuTextWrap: { flex: 1 },
+  attachmentMenuTitle: { fontSize: 13, fontWeight: '900', color: '#14532d' },
+  attachmentMenuSubtitle: { fontSize: 11, fontWeight: '600', color: '#64748b', marginTop: 2 },
+  pendingAttachmentTray: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    backgroundColor: '#ffffff',
+  },
+  pendingAttachmentChip: {
+    maxWidth: 260,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+  },
+  pendingAttachmentText: {
+    flexShrink: 1,
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#166534',
+  },
   composer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1486,6 +1945,7 @@ const styles = StyleSheet.create({
     borderTopColor: '#f1f5f9'
   },
   composerAdd: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  composerAddActive: { backgroundColor: '#dcfce7', borderRadius: 20 },
   inputWrap: { flex: 1, backgroundColor: '#f1f5f9', borderRadius: 24, paddingHorizontal: 16 },
   composerInput: { minHeight: 44, maxHeight: 120, fontSize: 15, color: '#1e293b', paddingVertical: 10 },
   sendBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#166534', alignItems: 'center', justifyContent: 'center' },

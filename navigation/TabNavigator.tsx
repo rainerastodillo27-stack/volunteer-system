@@ -1,9 +1,21 @@
 import React from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import AdminNavigator from './AdminNavigator';
-import VolunteerNavigator from './VolunteerNavigator';
-import PartnerNavigator from './PartnerNavigator';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
+
+const LazyAdminNavigator = (props: Record<string, unknown>) => {
+  const AdminNavigator = require('./AdminNavigator').default;
+  return <AdminNavigator {...props} />;
+};
+
+const LazyVolunteerNavigator = (props: Record<string, unknown>) => {
+  const VolunteerNavigator = require('./VolunteerNavigator').default;
+  return <VolunteerNavigator {...props} />;
+};
+
+const LazyPartnerNavigator = (props: Record<string, unknown>) => {
+  const PartnerNavigator = require('./PartnerNavigator').default;
+  return <PartnerNavigator {...props} />;
+};
 
 // Dispatches the appropriate tab navigator based on the authenticated user's role.
 export default function TabNavigator() {
@@ -18,19 +30,19 @@ export default function TabNavigator() {
   }
 
   if (isAdmin) {
-    return <AdminNavigator />;
+    return <LazyAdminNavigator />;
   }
 
   if (user?.role === 'volunteer') {
-    return <VolunteerNavigator />;
+    return <LazyVolunteerNavigator />;
   }
 
   if (user?.role === 'partner') {
-    return <PartnerNavigator />;
+    return <LazyPartnerNavigator />;
   }
 
   // Fallback (should be handled by Auth guards in StackNavigator)
-  return <VolunteerNavigator />;
+  return <LazyVolunteerNavigator />;
 }
 
 const styles = StyleSheet.create({

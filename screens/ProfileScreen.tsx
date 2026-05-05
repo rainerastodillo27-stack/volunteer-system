@@ -608,9 +608,18 @@ export default function ProfileScreen() {
               <Text style={styles.infoValue}>{volunteerProfile.collegeCourse || 'Not provided'}</Text>
 
               <Text style={styles.infoLabel}>Certifications or Trainings</Text>
-              <Text style={styles.infoValue}>
-                {volunteerProfile.certificationsOrTrainings || 'Not provided'}
-              </Text>
+              {volunteerProfile.certificationsOrTrainings ? (
+                isImageMediaUri(volunteerProfile.certificationsOrTrainings) ? (
+                  <Image
+                    source={{ uri: volunteerProfile.certificationsOrTrainings }}
+                    style={styles.certificateImage}
+                  />
+                ) : (
+                  <Text style={styles.infoValue}>{volunteerProfile.certificationsOrTrainings}</Text>
+                )
+              ) : (
+                <Text style={styles.infoValue}>Not provided</Text>
+              )}
 
               <Text style={styles.infoLabel}>Hobbies and Interests</Text>
               <Text style={styles.infoValue}>{volunteerProfile.hobbiesAndInterests || 'Not provided'}</Text>
@@ -1136,6 +1145,14 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 10,
+  },
+  certificateImage: {
+    width: '100%',
+    height: 180,
+    borderRadius: 12,
+    marginTop: 8,
+    marginBottom: 4,
+    backgroundColor: '#e2e8f0',
   },
   detailCardTitle: {
     fontSize: 15,

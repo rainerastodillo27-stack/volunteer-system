@@ -10,10 +10,16 @@ import {
   TextInput,
   Image,
   useWindowDimensions,
+  Alert,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import type { SubmittedReport } from '../screens/ReportsScreen';
-import { getAttachmentUris, isImageMediaUri } from '../utils/media';
+import {
+  getAttachmentLabel,
+  getAttachmentUris,
+  isImageMediaUri,
+  openAttachmentUri,
+} from '../utils/media';
 
 interface ReportDetailsModalProps {
   visible: boolean;
@@ -71,6 +77,14 @@ export default function ReportDetailsModal({
     ...(report.attachments || []),
   ]);
   const statusPresentation = getStatusPresentation(report.status);
+  const handleOpenAttachment = async (uri: string) => {
+    try {
+      await openAttachmentUri(uri);
+    } catch (error) {
+      console.error('Unable to open report attachment:', error);
+      Alert.alert('Attachment', 'Unable to open this attachment on this device.');
+    }
+  };
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={handleClose}>
@@ -162,21 +176,51 @@ export default function ReportDetailsModal({
                 <View style={[styles.attachmentsList, isWideLayout && styles.attachmentsListWide]}>
                   {attachmentPreviews.map(uri =>
                     isImageMediaUri(uri) ? (
-                      <View
+                      <TouchableOpacity
                         key={uri}
                         style={[styles.attachmentPreviewCard, isWideLayout && styles.attachmentPreviewCardWide]}
+                        onPress={() => {
+                          void handleOpenAttachment(uri);
+                        }}
+                        activeOpacity={0.9}
                       >
                         <Image
                           source={{ uri }}
                           style={styles.attachmentPreview}
                           resizeMode="contain"
                         />
-                      </View>
+                        <View style={styles.attachmentPreviewMeta}>
+                          <Text style={styles.attachmentPreviewTitle} numberOfLines={1}>
+                            {getAttachmentLabel(uri)}
+                          </Text>
+                          <View style={styles.attachmentOpenRow}>
+                            <MaterialIcons name="open-in-new" size={14} color="#166534" />
+                            <Text style={styles.attachmentOpenText}>Open photo</Text>
+                          </View>
+                        </View>
+                      </TouchableOpacity>
                     ) : (
-                      <View key={uri} style={styles.attachmentFileCard}>
-                        <MaterialIcons name="attach-file" size={16} color="#166534" />
-                        <Text style={styles.attachmentFileText}>{uri}</Text>
-                      </View>
+                      <TouchableOpacity
+                        key={uri}
+                        style={styles.attachmentFileCard}
+                        onPress={() => {
+                          void handleOpenAttachment(uri);
+                        }}
+                        activeOpacity={0.85}
+                      >
+                        <View style={styles.attachmentFileIcon}>
+                          <MaterialIcons name="attach-file" size={18} color="#166534" />
+                        </View>
+                        <View style={styles.attachmentFileMeta}>
+                          <Text style={styles.attachmentFileTitle} numberOfLines={1}>
+                            {getAttachmentLabel(uri)}
+                          </Text>
+                          <Text style={styles.attachmentFileText} numberOfLines={1}>
+                            Tap to open attachment
+                          </Text>
+                        </View>
+                        <MaterialIcons name="open-in-new" size={18} color="#166534" />
+                      </TouchableOpacity>
                     )
                   )}
                 </View>
@@ -595,17 +639,54 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: '#e2e8f0',
   },
+  attachmentPreviewMeta: {
+    paddingTop: 10,
+    gap: 4,
+  },
+  attachmentPreviewTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  attachmentOpenRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  attachmentOpenText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#166534',
+  },
   attachmentFileCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 10,
     borderRadius: 10,
     backgroundColor: '#f1f5f9',
     paddingHorizontal: 12,
     paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: '#dbe4ee',
+  },
+  attachmentFileIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#dcfce7',
+  },
+  attachmentFileMeta: {
+    flex: 1,
+    gap: 2,
+  },
+  attachmentFileTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
   },
   attachmentFileText: {
-    flex: 1,
     fontSize: 12,
     color: '#475569',
   },

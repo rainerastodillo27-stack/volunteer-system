@@ -121,6 +121,8 @@ module.exports = () => {
           : undefined,
       },
       android: {
+        package: 'com.volcre.nvcconnect',
+        versionCode: 1,
         adaptiveIcon: {
           backgroundColor: '#ffffff',
         },

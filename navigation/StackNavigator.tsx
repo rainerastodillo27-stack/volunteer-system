@@ -3,8 +3,6 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { ActivityIndicator, Platform, StyleSheet, Text, View } from "react-native";
 import { useAuth } from "../contexts/AuthContext";
 import AppLogo from "../components/AppLogo";
-import LoginScreen from "../screens/LoginScreen";
-import TabNavigator from "./TabNavigator";
 
 export type RootStackParamList = {
   Login: undefined;
@@ -12,6 +10,16 @@ export type RootStackParamList = {
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
+
+const LazyLoginScreen = (props: Record<string, unknown>) => {
+  const LoginScreen = require("../screens/LoginScreen").default;
+  return <LoginScreen {...props} />;
+};
+
+const LazyTabNavigator = (props: Record<string, unknown>) => {
+  const TabNavigator = require("./TabNavigator").default;
+  return <TabNavigator {...props} />;
+};
 
 // Switches between the login flow and the authenticated tab navigator.
 export default function StackNavigator() {
@@ -58,9 +66,9 @@ export default function StackNavigator() {
       }}
     >
       {user ? (
-        <Stack.Screen name="Main" component={TabNavigator} />
+        <Stack.Screen name="Main" component={LazyTabNavigator} />
       ) : (
-        <Stack.Screen name="Login" component={LoginScreen} />
+        <Stack.Screen name="Login" component={LazyLoginScreen} />
       )}
     </Stack.Navigator>
   );

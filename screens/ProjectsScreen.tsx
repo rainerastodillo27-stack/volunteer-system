@@ -22,6 +22,8 @@ import {
   getVolunteerProjectMatches,
   requestVolunteerProjectJoin,
   saveEvent,
+  notifyVolunteerAboutTaskUnassignment,
+  notifyVolunteerAboutTaskUpdate,
   submitVolunteerTimeOutReport,
   submitPartnerProgramProposal,
   startVolunteerTimeLog,
@@ -535,7 +537,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
       });
       Alert.alert(
         'Request Sent',
-        'Your event join request was sent to the admin. You will be notified once it is approved or rejected.'
+        'Your event join request was sent to admin. You will be notified when it is approved.'
       );
     } catch (error) {
       Alert.alert(
@@ -898,6 +900,10 @@ export default function ProjectsScreen({ navigation, route }: any) {
   );
 
   const isFieldOfficerForEvent = useCallback((event: Project) => {
+    if (user?.role === 'admin') {
+      return true;
+    }
+
     if (!volunteerProfile?.id || !event.isEvent) {
       return false;
     }
@@ -905,7 +911,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
     return (event.internalTasks || []).some(
       task => task.isFieldOfficer && task.assignedVolunteerId === volunteerProfile.id
     );
-  }, [volunteerProfile?.id]);
+  }, [user?.role, volunteerProfile?.id]);
 
   const getAssignableVolunteersForEvent = useCallback((event: Project) => {
     return event.volunteers
@@ -920,7 +926,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
     volunteerId?: string
   ) => {
     if (!isFieldOfficerForEvent(eventProject)) {
-      Alert.alert('Access Restricted', 'Only the assigned field officer can manage volunteers in this event.');
+      Alert.alert('Access Restricted', 'Only admins and the assigned field officer for this event can manage volunteer task assignments.');
       return;
     }
 
@@ -928,6 +934,16 @@ export default function ProjectsScreen({ navigation, route }: any) {
       const assignableVolunteers = getAssignableVolunteersForEvent(eventProject);
       const assignedVolunteer =
         volunteerId ? assignableVolunteers.find(volunteer => volunteer.id === volunteerId) || null : null;
+      const currentTask = (eventProject.internalTasks || []).find(task => task.id === taskId) || null;
+      const previouslyAssignedVolunteer =
+        currentTask?.assignedVolunteerId && currentTask.assignedVolunteerId !== volunteerId
+          ? assignableVolunteers.find(volunteer => volunteer.id === currentTask.assignedVolunteerId) || null
+          : null;
+      const shouldNotifyAssignedVolunteer = Boolean(
+        assignedVolunteer &&
+        currentTask &&
+        currentTask.assignedVolunteerId !== assignedVolunteer.id
+      );
 
       const updatedTasks = (eventProject.internalTasks || []).map(task => {
         if (task.id !== taskId) {
@@ -959,6 +975,34 @@ export default function ProjectsScreen({ navigation, route }: any) {
         internalTasks: updatedTasks,
         updatedAt: new Date().toISOString(),
       });
+
+      const notificationTasks: Promise<void>[] = [];
+      if (currentTask && previouslyAssignedVolunteer) {
+        notificationTasks.push(notifyVolunteerAboutTaskUnassignment({
+          event: eventProject,
+          task: currentTask,
+          volunteer: previouslyAssignedVolunteer,
+          actorUserId: user?.id,
+        }));
+      }
+      if (currentTask && assignedVolunteer && shouldNotifyAssignedVolunteer) {
+        notificationTasks.push(notifyVolunteerAboutTaskUpdate({
+          event: eventProject,
+          task: {
+            ...currentTask,
+            status:
+              volunteerId && currentTask.status === 'Unassigned'
+                ? 'Assigned'
+                : currentTask.status,
+          },
+          volunteer: assignedVolunteer,
+          actorUserId: user?.id,
+          action: 'assigned',
+        }));
+      }
+      if (notificationTasks.length > 0) {
+        await Promise.all(notificationTasks);
+      }
 
       void loadProjectsData();
       Alert.alert('Saved', 'Volunteer assignment updated for this event.');

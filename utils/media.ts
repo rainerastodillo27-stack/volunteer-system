@@ -1,4 +1,6 @@
 import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
+import { Linking } from 'react-native';
 
 // Safe Platform accessor for web environments
 function getPlatformOS(): string {
@@ -11,6 +13,7 @@ function getPlatformOS(): string {
 }
 
 const IMAGE_FILE_PATTERN = /\.(png|jpe?g|gif|webp|bmp|heic|heif)(\?.*)?$/i;
+const DATA_URI_PATTERN = /^data:([^;,]+)(;base64)?,/i;
 
 // Returns true when the provided string can be rendered as an image preview.
 export function isImageMediaUri(value?: string | null): boolean {
@@ -45,6 +48,54 @@ export function getAttachmentUris(
     .filter(Boolean);
 
   return uris.filter((value, index) => uris.indexOf(value) === index);
+}
+
+// Builds a short admin-friendly attachment label from a URI or data URI.
+export function getAttachmentLabel(value?: string | null): string {
+  const normalizedValue = (value || '').trim();
+  if (!normalizedValue) {
+    return 'Attachment';
+  }
+
+  const dataUriMatch = normalizedValue.match(DATA_URI_PATTERN);
+  if (dataUriMatch?.[1]) {
+    const mimeType = dataUriMatch[1].toLowerCase();
+    const mimeSubtype = mimeType.split('/')[1] || 'file';
+    return `${mimeSubtype.toUpperCase()} file`;
+  }
+
+  const sanitizedValue = normalizedValue.split('#')[0] || normalizedValue;
+  const pathWithoutQuery = sanitizedValue.split('?')[0] || sanitizedValue;
+  const segments = pathWithoutQuery.split('/');
+  const lastSegment = segments[segments.length - 1] || pathWithoutQuery;
+
+  try {
+    return decodeURIComponent(lastSegment) || 'Attachment';
+  } catch {
+    return lastSegment || 'Attachment';
+  }
+}
+
+// Opens local, remote, or data URI attachments in the most compatible way available.
+export async function openAttachmentUri(uri: string): Promise<void> {
+  const normalizedUri = uri.trim();
+  if (!normalizedUri) {
+    throw new Error('Attachment URI is empty.');
+  }
+
+  if (getPlatformOS() === 'web' && typeof window !== 'undefined') {
+    const newWindow = window.open(normalizedUri, '_blank', 'noopener,noreferrer');
+    if (!newWindow && typeof document !== 'undefined') {
+      const link = document.createElement('a');
+      link.href = normalizedUri;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.click();
+    }
+    return;
+  }
+
+  await Linking.openURL(normalizedUri);
 }
 
 // Returns the best available image/media URI from a primary field plus attachments.
@@ -90,33 +141,20 @@ export async function pickImageFromDevice(): Promise<string | null> {
 
 // Opens the device file picker for documents and returns a persistable file URI/data URI.
 export async function pickDocumentFromDevice(): Promise<string | null> {
-  try {
-    if (getPlatformOS() !== 'web') {
-      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!permission.granted) {
-        throw new Error('File library access is required. Please enable photo library permissions in settings.');
-      }
-    }
+  const result = await DocumentPicker.getDocumentAsync({
+    copyToCacheDirectory: true,
+    multiple: false,
+    base64: true,
+  });
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.All,
-      quality: 1,
-      base64: true,
-      allowsMultipleSelection: false,
-    });
-
-    if (result.canceled || !result.assets?.length) {
-      return null;
-    }
-
-    const asset = result.assets[0];
-    if (asset.base64) {
-      return `data:${asset.mimeType || 'application/octet-stream'};base64,${asset.base64}`;
-    }
-
-    return asset.uri;
-  } catch (error: any) {
-    // Re-throw with better error message
-    throw error;
+  if (result.canceled || !result.assets?.length) {
+    return null;
   }
+
+  const asset = result.assets[0];
+  if (asset.base64) {
+    return `data:${asset.mimeType || 'application/octet-stream'};base64,${asset.base64}`;
+  }
+
+  return asset.uri;
 }

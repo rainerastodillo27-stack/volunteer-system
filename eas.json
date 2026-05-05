@@ -1,8 +1,19 @@
 {
-  "expo": {
-    "plugins": [
-      "@react-native-camera-roll/camera-roll",
-      "expo-location"
-    ]
+  "cli": {
+    "version": ">= 16.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "preview": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "production": {
+      "android": {
+        "buildType": "apk"
+      }
+    }
   }
 }

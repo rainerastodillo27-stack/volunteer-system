@@ -26,11 +26,19 @@ RELATIONAL_TABLE_DDL = [
       phone text,
       user_type text,
       pillars_of_interest text[] not null default {TEXT_ARRAY},
+      approval_status text,
+      approved_by text,
+      approved_at text,
+      rejection_reason text,
       created_at text
     )
     """,
     "create index if not exists users_email_idx on users (lower(coalesce(email, '')))",
     "create index if not exists users_phone_idx on users (coalesce(phone, ''))",
+    "alter table users add column if not exists approval_status text",
+    "alter table users add column if not exists approved_by text",
+    "alter table users add column if not exists approved_at text",
+    "alter table users add column if not exists rejection_reason text",
     f"""
     create table if not exists partners (
       id text primary key,
@@ -539,6 +547,10 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("phone", False),
             ("user_type", False),
             ("pillars_of_interest", False),
+            ("approval_status", False),
+            ("approved_by", False),
+            ("approved_at", False),
+            ("rejection_reason", False),
             ("created_at", False),
         ],
     },
@@ -824,6 +836,7 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("status", False),
             ("reviewed_at", False),
             ("reviewed_by", False),
+            ("source_report_ids", False),
         ],
     },
     "publishedImpactReports": {
@@ -1194,6 +1207,10 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("phone"),
             item.get("userType"),
             _normalize_string_list(item.get("pillarsOfInterest")),
+            item.get("approvalStatus"),
+            item.get("approvedBy"),
+            item.get("approvedAt"),
+            item.get("rejectionReason"),
             item.get("createdAt"),
         )
 
@@ -1465,6 +1482,7 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("status"),
             item.get("reviewedAt"),
             item.get("reviewedBy"),
+            _normalize_string_list(item.get("sourceReportIds")),
         )
 
     if key == "publishedImpactReports":
@@ -1542,6 +1560,10 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "phone": row["phone"],
             "userType": row["user_type"],
             "pillarsOfInterest": row["pillars_of_interest"] or [],
+            "approvalStatus": row.get("approval_status"),
+            "approvedBy": row.get("approved_by"),
+            "approvedAt": row.get("approved_at"),
+            "rejectionReason": row.get("rejection_reason"),
             "createdAt": row["created_at"],
         }
 
@@ -1812,6 +1834,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "status": row["status"],
             "reviewedAt": row["reviewed_at"],
             "reviewedBy": row["reviewed_by"],
+            "sourceReportIds": row["source_report_ids"] or [],
         }
 
     if key == "publishedImpactReports":

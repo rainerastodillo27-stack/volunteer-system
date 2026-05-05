@@ -26,8 +26,8 @@ _POSTGRES_PROBE_CACHE: dict[str, Any] = {
 _POSTGRES_LAST_SUCCESSFUL_URL: str | None = None
 _POSTGRES_CANDIDATE_FAILURES: dict[str, dict[str, Any]] = {}
 _POSTGRES_CONNECTION_POOL: Any = None
-_POSTGRES_POOL_MIN_SIZE = 1
-_POSTGRES_POOL_MAX_SIZE = 5
+_POSTGRES_POOL_MIN_SIZE = 5
+_POSTGRES_POOL_MAX_SIZE = 20
 
 
 """Shared Postgres connection helpers for the backend API and seed scripts."""

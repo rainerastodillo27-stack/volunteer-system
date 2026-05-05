@@ -3,12 +3,6 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
 import ScreenBrandHeader from '../components/ScreenBrandHeader';
-import PartnerDashboardScreen from '../screens/PartnerDashboardScreen';
-import PartnerProgramManagementScreen from '../screens/PartnerProgramManagementScreen';
-import MappingScreen from '../screens/MappingScreen';
-import CommunicationHubScreen from '../screens/CommunicationHubScreen';
-import PartnerReportsScreen from '../screens/PartnerReportsScreen';
-import ProfileScreen from '../screens/ProfileScreen';
 import { getMessagesForUser, subscribeToMessages } from '../models/storage';
 
 export type PartnerTabParamList = {
@@ -21,6 +15,20 @@ export type PartnerTabParamList = {
 };
 
 const Tab = createBottomTabNavigator<PartnerTabParamList>();
+
+function lazyScreen<T extends object>(loader: () => { default: React.ComponentType<T> }) {
+  return function LazyLoadedScreen(props: T) {
+    const Component = loader().default;
+    return <Component {...props} />;
+  };
+}
+
+const PartnerDashboardScreen = lazyScreen(() => require('../screens/PartnerDashboardScreen'));
+const PartnerProgramManagementScreen = lazyScreen(() => require('../screens/PartnerProgramManagementScreen'));
+const MappingScreen = lazyScreen(() => require('../screens/MappingScreen'));
+const CommunicationHubScreen = lazyScreen(() => require('../screens/CommunicationHubScreen'));
+const PartnerReportsScreen = lazyScreen(() => require('../screens/PartnerReportsScreen'));
+const ProfileScreen = lazyScreen(() => require('../screens/ProfileScreen'));
 
 const getIconName = (routeName: keyof PartnerTabParamList) => {
   switch (routeName) {

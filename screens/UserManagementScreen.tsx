@@ -10,6 +10,7 @@ import {
   TextInput,
   ScrollView,
   Platform,
+  Image,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -28,6 +29,7 @@ import {
   rejectUser,
 } from '../models/storage';
 import { NVCSector, Partner, User, UserRole, UserType, Volunteer } from '../models/types';
+import { isImageMediaUri } from '../utils/media';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 const roleOptions: UserRole[] = ['admin', 'partner', 'volunteer'];
@@ -37,6 +39,7 @@ const NEW_ACCOUNT_WINDOW_MS = 1000 * 60 * 60 * 24 * 3;
 export default function UserManagementScreen() {
   const { user, isAdmin } = useAuth();
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
+  const [successNotice, setSuccessNotice] = useState<{ title: string; message: string } | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [partners, setPartners] = useState<Partner[]>([]);
   const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
@@ -53,8 +56,8 @@ export default function UserManagementScreen() {
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [expandedUserRoles, setExpandedUserRoles] = useState<Record<UserRole, boolean>>({
     admin: false,
-    partner: false,
-    volunteer: false,
+    partner: true,
+    volunteer: true,
   });
   const [reviewTarget, setReviewTarget] = useState<
     | { type: 'user'; record: User }
@@ -111,6 +114,18 @@ export default function UserManagementScreen() {
       });
     }, [isAdmin, loadUsers])
   );
+
+  React.useEffect(() => {
+    if (!successNotice) {
+      return undefined;
+    }
+
+    const timer = setTimeout(() => {
+      setSuccessNotice(null);
+    }, 4000);
+
+    return () => clearTimeout(timer);
+  }, [successNotice]);
 
   // Flags recently created accounts so they can be visually highlighted.
   const isNewAccount = (createdAt: string) => {
@@ -180,6 +195,10 @@ export default function UserManagementScreen() {
         closeEditModal();
       }
       await loadUsers();
+      setSuccessNotice({
+        title: 'Deletion Complete',
+        message: `${targetUser.name}'s account and linked application records were deleted.`,
+      });
       Alert.alert('Deleted', 'Account removed successfully.');
     } catch (error) {
       Alert.alert(
@@ -230,26 +249,48 @@ export default function UserManagementScreen() {
       return;
     }
 
+    const approveTargetUser = async () => {
+      try {
+        await approveUser(targetUser.id, user.id);
+        if (reviewTarget?.type === 'user' && reviewTarget.record.id === targetUser.id) {
+          closeReviewModal();
+        }
+        await loadUsers();
+        setSuccessNotice({
+          title: 'Approval Complete',
+          message: `${targetUser.name}'s account has been approved and login access is now unlocked.`,
+        });
+        Alert.alert('Approved', `${targetUser.name}'s account has been approved.`);
+      } catch (error) {
+        Alert.alert(
+          getRequestErrorTitle(error),
+          getRequestErrorMessage(error, 'Failed to approve user account.')
+        );
+      }
+    };
+
+    const confirmationMessage = `Approve ${targetUser.name}'s account? They will be able to log in immediately.`;
+
+    if (Platform.OS === 'web') {
+      const confirmed =
+        typeof window !== 'undefined'
+          ? window.confirm(`${confirmationMessage}\n\nChoose OK to approve or Cancel to keep pending.`)
+          : true;
+      if (confirmed) {
+        void approveTargetUser();
+      }
+      return;
+    }
+
     Alert.alert(
       'Approve Account',
-      `Approve ${targetUser.name}'s account? They will be able to log in immediately.`,
+      confirmationMessage,
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Approve',
           style: 'default',
-          onPress: async () => {
-            try {
-              await approveUser(targetUser.id, user.id);
-              Alert.alert('Approved', `${targetUser.name}'s account has been approved.`);
-              await loadUsers();
-            } catch (error) {
-              Alert.alert(
-                getRequestErrorTitle(error),
-                getRequestErrorMessage(error, 'Failed to approve user account.')
-              );
-            }
-          },
+          onPress: () => void approveTargetUser(),
         },
       ]
     );
@@ -262,7 +303,7 @@ export default function UserManagementScreen() {
 
     Alert.alert(
       'Reject Account',
-      `Reject ${targetUser.name}'s account? They will not be able to log in.`,
+      `Reject ${targetUser.name}'s account? This will permanently delete the unapproved account.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -271,7 +312,11 @@ export default function UserManagementScreen() {
           onPress: async () => {
             try {
               await rejectUser(targetUser.id, 'Account rejected by administrator.', user.id);
-              Alert.alert('Rejected', `${targetUser.name}'s account has been rejected.`);
+              setSuccessNotice({
+                title: 'Deletion Complete',
+                message: `${targetUser.name}'s unapproved account was deleted from the approval queue.`,
+              });
+              Alert.alert('Deleted', `${targetUser.name}'s unapproved account has been deleted.`);
               await loadUsers();
             } catch (error) {
               Alert.alert(
@@ -340,6 +385,43 @@ export default function UserManagementScreen() {
         (volunteer.phone || '').trim() === (targetUser.phone || '').trim()
       );
     }) || null;
+
+  const renderPendingApprovalCard = (pendingUser: User) => (
+    <View key={pendingUser.id} style={styles.requestCard}>
+      <View style={styles.requestHeader}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.requestName}>{pendingUser.name}</Text>
+          <Text style={styles.requestMeta}>{pendingUser.role}</Text>
+          <Text style={styles.requestMeta}>{pendingUser.email || 'No email on file'}</Text>
+          <Text style={styles.requestMeta}>{pendingUser.phone || 'No phone number on file'}</Text>
+          <Text style={styles.requestMeta}>
+            Submitted {format(new Date(pendingUser.createdAt), 'MMM dd, yyyy hh:mm a')}
+          </Text>
+          <Text style={styles.requestMeta}>
+            Review the full application before approving or rejecting.
+          </Text>
+        </View>
+        <View style={[styles.requestBadge, styles.requestBadgePending]}>
+          <Text style={styles.requestBadgeText}>Pending</Text>
+        </View>
+      </View>
+      <View style={styles.requestActionRow}>
+        <TouchableOpacity
+          style={[styles.requestActionButton, styles.reviewActionButton]}
+          onPress={() => openUserReview(pendingUser)}
+        >
+          <Text style={styles.requestActionButtonText}>Review Details</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.requestActionButton, styles.rejectActionButton]}
+          onPress={() => handleDeleteUser(pendingUser)}
+        >
+          <Text style={styles.requestActionButtonText}>Delete Account</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+
   const renderUserCard = (item: User) => {
     const linkedPartners = partners.filter(partner => {
       if (partner.ownerUserId) {
@@ -422,6 +504,29 @@ export default function UserManagementScreen() {
       </View>
     );
   };
+
+  const renderReviewField = (
+    label: string,
+    value: React.ReactNode,
+    options?: { wide?: boolean }
+  ) => (
+    <View style={[styles.reviewField, options?.wide && styles.reviewFieldWide]}>
+      <Text style={styles.reviewRowLabel}>{label}</Text>
+      {typeof value === 'string' || typeof value === 'number' ? (
+        <Text style={styles.reviewRowValue}>{value}</Text>
+      ) : (
+        value
+      )}
+    </View>
+  );
+
+  const renderReviewSection = (title: string, children: React.ReactNode) => (
+    <View style={styles.reviewSectionCard}>
+      <Text style={styles.reviewSectionTitle}>{title}</Text>
+      <View style={styles.reviewFieldGrid}>{children}</View>
+    </View>
+  );
+
   const userSections: Array<{
     id: string;
     role: UserRole;
@@ -433,21 +538,21 @@ export default function UserManagementScreen() {
       id: 'section-partners',
       role: 'partner',
       title: 'Partner Accounts',
-      subtitle: 'Partner user accounts are listed separately from volunteers and admins.',
+      subtitle: 'Review, edit, or delete approved partner accounts from this section.',
       users: partnerUsers,
     },
     {
       id: 'section-volunteers',
       role: 'volunteer',
       title: 'Volunteer Accounts',
-      subtitle: 'Volunteer user accounts are grouped here for easier review.',
+      subtitle: 'Review, edit, or delete approved volunteer accounts from this section.',
       users: volunteerUsers,
     },
     {
       id: 'section-admins',
       role: 'admin',
       title: 'Admin Accounts',
-      subtitle: 'Admin users are shown separately from partner and volunteer users.',
+      subtitle: 'Admin users are shown separately; expand only when you need account actions.',
       users: adminUsers,
     },
   ];
@@ -480,6 +585,18 @@ export default function UserManagementScreen() {
         </View>
       ) : null}
 
+      {successNotice ? (
+        <View style={styles.bannerWrap}>
+          <View style={styles.successBanner}>
+            <MaterialIcons name="check-circle" size={18} color="#166534" />
+            <View style={styles.successBannerTextWrap}>
+              <Text style={styles.successBannerTitle}>{successNotice.title}</Text>
+              <Text style={styles.successBannerMessage}>{successNotice.message}</Text>
+            </View>
+          </View>
+        </View>
+      ) : null}
+
       {!loadError || users.length > 0 ? (
       <View style={styles.summaryRow}>
         <View style={styles.summaryCard}>
@@ -508,48 +625,19 @@ export default function UserManagementScreen() {
         ListHeaderComponent={
           <>
             <View style={styles.requestSection}>
-              <Text style={styles.requestSectionTitle}>Users Waiting For Approval</Text>
+              <View style={styles.requestQueueHeader}>
+                <Text style={styles.requestSectionTitle}>User Approval Queue</Text>
+                <View style={styles.requestQueueBadge}>
+                  <Text style={styles.requestQueueBadgeText}>{pendingUserApprovals.length}</Text>
+                </View>
+              </View>
               <Text style={styles.requestSectionSubtitle}>
                 All volunteer and partner signups that still need admin approval before they can join the system.
               </Text>
               {pendingUserApprovals.length === 0 ? (
                 <Text style={styles.requestEmptyText}>No users are waiting for approval.</Text>
               ) : (
-                pendingUserApprovals.map(pendingUser => (
-                  <View key={pendingUser.id} style={styles.requestCard}>
-                    <View style={styles.requestHeader}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.requestName}>{pendingUser.name}</Text>
-                        <Text style={styles.requestMeta}>{pendingUser.role}</Text>
-                        <Text style={styles.requestMeta}>{pendingUser.email || 'No email on file'}</Text>
-                        <Text style={styles.requestMeta}>{pendingUser.phone || 'No phone number on file'}</Text>
-                        <Text style={styles.requestMeta}>
-                          Submitted {format(new Date(pendingUser.createdAt), 'MMM dd, yyyy hh:mm a')}
-                        </Text>
-                        <Text style={styles.requestMeta}>
-                          Review the full application before approving or rejecting.
-                        </Text>
-                      </View>
-                      <View style={[styles.requestBadge, styles.requestBadgePending]}>
-                        <Text style={styles.requestBadgeText}>Pending</Text>
-                      </View>
-                    </View>
-                    <View style={styles.requestActionRow}>
-                      <TouchableOpacity
-                        style={[styles.requestActionButton, styles.reviewActionButton]}
-                        onPress={() => openUserReview(pendingUser)}
-                      >
-                        <Text style={styles.requestActionButtonText}>Review Details</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[styles.requestActionButton, styles.rejectActionButton]}
-                        onPress={() => handleDeleteUser(pendingUser)}
-                      >
-                        <Text style={styles.requestActionButtonText}>Delete Account</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                ))
+                pendingUserApprovals.map(renderPendingApprovalCard)
               )}
             </View>
 
@@ -692,144 +780,158 @@ export default function UserManagementScreen() {
       </Modal>
 
       <Modal visible={Boolean(reviewTarget)} animationType="slide" onRequestClose={closeReviewModal}>
-        <View style={styles.modalContainer}>
-          <View style={styles.modalHeader}>
-            <TouchableOpacity onPress={closeReviewModal}>
-              <Text style={styles.modalCancel}>Close</Text>
+        <View style={styles.reviewModalContainer}>
+          <View style={styles.reviewModalHeader}>
+            <TouchableOpacity style={styles.reviewCloseButton} onPress={closeReviewModal}>
+              <MaterialIcons name="close" size={18} color="#334155" />
+              <Text style={styles.reviewCloseButtonText}>Close</Text>
             </TouchableOpacity>
-            <Text style={styles.modalTitle}>User Review</Text>
+            <View style={styles.reviewHeaderTitleWrap}>
+              <Text style={styles.reviewModalTitle}>User Review</Text>
+              <Text style={styles.reviewModalSubtitle}>Verify applicant details before approving or deleting the request.</Text>
+            </View>
             <View style={styles.modalHeaderSpacer} />
           </View>
 
-          <ScrollView style={styles.modalBody} contentContainerStyle={styles.reviewContent}>
+          <ScrollView style={styles.reviewModalBody} contentContainerStyle={styles.reviewContent}>
             {reviewTarget?.type === 'user' ? (
-              <>
-                <Text style={styles.reviewSectionTitle}>Account Details</Text>
-                <Text style={styles.reviewRowLabel}>Full Name</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.name}</Text>
-                <Text style={styles.reviewRowLabel}>Role</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.role}</Text>
-                <Text style={styles.reviewRowLabel}>Email</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.email || 'Not provided'}</Text>
-                <Text style={styles.reviewRowLabel}>Phone</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.phone || 'Not provided'}</Text>
-                <Text style={styles.reviewRowLabel}>Profile Type</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.userType || 'Not provided'}</Text>
-                <Text style={styles.reviewRowLabel}>Pillars of Interest</Text>
-                <Text style={styles.reviewRowValue}>
-                  {reviewTarget.record.pillarsOfInterest && reviewTarget.record.pillarsOfInterest.length > 0
-                    ? reviewTarget.record.pillarsOfInterest.join(', ')
-                    : 'No pillar preferences'}
-                </Text>
-                <Text style={styles.reviewRowLabel}>Approval Status</Text>
-                <Text style={styles.reviewRowValue}>{reviewTarget.record.approvalStatus || 'pending'}</Text>
-                <Text style={styles.reviewRowLabel}>Submitted</Text>
-                <Text style={styles.reviewRowValue}>
-                  {format(new Date(reviewTarget.record.createdAt), 'MMM dd, yyyy hh:mm a')}
-                </Text>
+              <View style={styles.reviewPanel}>
+                <View style={styles.reviewSummaryCard}>
+                  <View style={styles.reviewAvatar}>
+                    <Text style={styles.reviewAvatarText}>
+                      {(reviewTarget.record.name || reviewTarget.record.email || '?').charAt(0).toUpperCase()}
+                    </Text>
+                  </View>
+                  <View style={styles.reviewSummaryText}>
+                    <Text style={styles.reviewApplicantName}>{reviewTarget.record.name || 'Unnamed applicant'}</Text>
+                    <Text style={styles.reviewApplicantMeta}>
+                      {reviewTarget.record.email || 'No email'} / {reviewTarget.record.phone || 'No phone'}
+                    </Text>
+                  </View>
+                  <View style={styles.reviewStatusStack}>
+                    <View style={styles.reviewRoleBadge}>
+                      <Text style={styles.reviewRoleBadgeText}>{reviewTarget.record.role}</Text>
+                    </View>
+                    <View style={styles.reviewPendingBadge}>
+                      <Text style={styles.reviewPendingBadgeText}>{reviewTarget.record.approvalStatus || 'pending'}</Text>
+                    </View>
+                  </View>
+                </View>
 
-                {reviewTarget.record.role === 'partner' ? (
+                {renderReviewSection(
+                  'Account Details',
                   <>
-                    <Text style={styles.reviewSectionTitle}>Partner Application</Text>
-                    {(() => {
+                    {renderReviewField('Full Name', reviewTarget.record.name || 'Not provided')}
+                    {renderReviewField('Role', reviewTarget.record.role)}
+                    {renderReviewField('Email', reviewTarget.record.email || 'Not provided')}
+                    {renderReviewField('Phone', reviewTarget.record.phone || 'Not provided')}
+                    {renderReviewField('Profile Type', reviewTarget.record.userType || 'Not provided')}
+                    {renderReviewField('Approval Status', reviewTarget.record.approvalStatus || 'pending')}
+                    {renderReviewField(
+                      'Pillars of Interest',
+                      reviewTarget.record.pillarsOfInterest && reviewTarget.record.pillarsOfInterest.length > 0
+                        ? reviewTarget.record.pillarsOfInterest.join(', ')
+                        : 'No pillar preferences',
+                      { wide: true }
+                    )}
+                    {renderReviewField(
+                      'Submitted',
+                      format(new Date(reviewTarget.record.createdAt), 'MMM dd, yyyy hh:mm a'),
+                      { wide: true }
+                    )}
+                  </>
+                )}
+
+                {reviewTarget.record.role === 'partner'
+                  ? (() => {
                       const linkedPartner = getLinkedPartnerForUser(reviewTarget.record);
                       if (!linkedPartner) {
-                        return <Text style={styles.reviewRowValue}>No partner application record found.</Text>;
+                        return renderReviewSection(
+                          'Partner Application',
+                          renderReviewField('Application Record', 'No partner application record found.', { wide: true })
+                        );
                       }
 
-                      return (
+                      return renderReviewSection(
+                        'Partner Application',
                         <>
-                          <Text style={styles.reviewRowLabel}>Organization Name</Text>
-                          <Text style={styles.reviewRowValue}>{linkedPartner.name}</Text>
-                          <Text style={styles.reviewRowLabel}>Sector Type</Text>
-                          <Text style={styles.reviewRowValue}>{linkedPartner.sectorType}</Text>
-                          <Text style={styles.reviewRowLabel}>DSWD Accreditation No.</Text>
-                          <Text style={styles.reviewRowValue}>{linkedPartner.dswdAccreditationNo || 'Not provided'}</Text>
-                          <Text style={styles.reviewRowLabel}>SEC Registration No.</Text>
-                          <Text style={styles.reviewRowValue}>{linkedPartner.secRegistrationNo || 'Not provided'}</Text>
-                          <Text style={styles.reviewRowLabel}>Advocacy Focus</Text>
-                          <Text style={styles.reviewRowValue}>
-                            {linkedPartner.advocacyFocus.length > 0
-                              ? linkedPartner.advocacyFocus.join(', ')
-                              : 'Not provided'}
-                          </Text>
-                          <Text style={styles.reviewRowLabel}>Description</Text>
-                          <Text style={styles.reviewRowValue}>{linkedPartner.description || 'Not provided'}</Text>
-                          <Text style={styles.reviewRowLabel}>Contact Email</Text>
-                          <Text style={styles.reviewRowValue}>{linkedPartner.contactEmail || 'Not provided'}</Text>
-                          <Text style={styles.reviewRowLabel}>Contact Phone</Text>
-                          <Text style={styles.reviewRowValue}>{linkedPartner.contactPhone || 'Not provided'}</Text>
-                          <Text style={styles.reviewRowLabel}>Address</Text>
-                          <Text style={styles.reviewRowValue}>{linkedPartner.address || 'Not provided'}</Text>
-                          <Text style={styles.reviewRowLabel}>Verification Status</Text>
-                          <Text style={styles.reviewRowValue}>{linkedPartner.verificationStatus || 'Pending'}</Text>
+                          {renderReviewField('Organization Name', linkedPartner.name)}
+                          {renderReviewField('Sector Type', linkedPartner.sectorType)}
+                          {renderReviewField('DSWD Accreditation No.', linkedPartner.dswdAccreditationNo || 'Not provided')}
+                          {renderReviewField('SEC Registration No.', linkedPartner.secRegistrationNo || 'Not provided')}
+                          {renderReviewField(
+                            'Advocacy Focus',
+                            linkedPartner.advocacyFocus.length > 0 ? linkedPartner.advocacyFocus.join(', ') : 'Not provided'
+                          )}
+                          {renderReviewField('Verification Status', linkedPartner.verificationStatus || 'Pending')}
+                          {renderReviewField('Contact Email', linkedPartner.contactEmail || 'Not provided')}
+                          {renderReviewField('Contact Phone', linkedPartner.contactPhone || 'Not provided')}
+                          {renderReviewField('Address', linkedPartner.address || 'Not provided', { wide: true })}
+                          {renderReviewField('Description', linkedPartner.description || 'Not provided', { wide: true })}
                         </>
                       );
-                    })()}
-                  </>
-                ) : reviewTarget.record.role === 'volunteer' ? (
-                  <>
-                    <Text style={styles.reviewSectionTitle}>Volunteer Membership Form</Text>
-                    {(() => {
+                    })()
+                  : null}
+
+                {reviewTarget.record.role === 'volunteer'
+                  ? (() => {
                       const linkedVolunteer = getLinkedVolunteerForUser(reviewTarget.record);
                       if (!linkedVolunteer) {
-                        return <Text style={styles.reviewRowValue}>No volunteer profile record found.</Text>;
+                        return renderReviewSection(
+                          'Volunteer Membership Form',
+                          renderReviewField('Application Record', 'No volunteer profile record found.', { wide: true })
+                        );
                       }
 
-                      return (
+                      return renderReviewSection(
+                        'Volunteer Membership Form',
                         <>
-                          <Text style={styles.reviewRowLabel}>Gender</Text>
-                          <Text style={styles.reviewRowValue}>{linkedVolunteer.gender || 'Not provided'}</Text>
-                          <Text style={styles.reviewRowLabel}>Date of Birth</Text>
-                          <Text style={styles.reviewRowValue}>{linkedVolunteer.dateOfBirth || 'Not provided'}</Text>
-                          <Text style={styles.reviewRowLabel}>Civil Status</Text>
-                          <Text style={styles.reviewRowValue}>{linkedVolunteer.civilStatus || 'Not provided'}</Text>
-                          <Text style={styles.reviewRowLabel}>Home Address</Text>
-                          <Text style={styles.reviewRowValue}>{linkedVolunteer.homeAddress || 'Not provided'}</Text>
-                          <Text style={styles.reviewRowLabel}>Region</Text>
-                          <Text style={styles.reviewRowValue}>{linkedVolunteer.homeAddressRegion || 'Not provided'}</Text>
-                          <Text style={styles.reviewRowLabel}>City / Municipality</Text>
-                          <Text style={styles.reviewRowValue}>
-                            {linkedVolunteer.homeAddressCityMunicipality || 'Not provided'}
-                          </Text>
-                          <Text style={styles.reviewRowLabel}>Barangay</Text>
-                          <Text style={styles.reviewRowValue}>{linkedVolunteer.homeAddressBarangay || 'Not provided'}</Text>
-                          <Text style={styles.reviewRowLabel}>Occupation</Text>
-                          <Text style={styles.reviewRowValue}>{linkedVolunteer.occupation || 'Not provided'}</Text>
-                          <Text style={styles.reviewRowLabel}>Workplace / School</Text>
-                          <Text style={styles.reviewRowValue}>{linkedVolunteer.workplaceOrSchool || 'Not provided'}</Text>
-                          <Text style={styles.reviewRowLabel}>College Course</Text>
-                          <Text style={styles.reviewRowValue}>{linkedVolunteer.collegeCourse || 'Not provided'}</Text>
-                          <Text style={styles.reviewRowLabel}>Certifications / Trainings</Text>
-                          <Text style={styles.reviewRowValue}>
-                            {linkedVolunteer.certificationsOrTrainings || 'Not provided'}
-                          </Text>
-                          <Text style={styles.reviewRowLabel}>Hobbies and Interests</Text>
-                          <Text style={styles.reviewRowValue}>{linkedVolunteer.hobbiesAndInterests || 'Not provided'}</Text>
-                          <Text style={styles.reviewRowLabel}>Special Skills</Text>
-                          <Text style={styles.reviewRowValue}>{linkedVolunteer.specialSkills || 'Not provided'}</Text>
-                          <Text style={styles.reviewRowLabel}>Video Briefing URL</Text>
-                          <Text style={styles.reviewRowValue}>{linkedVolunteer.videoBriefingUrl || 'Not provided'}</Text>
-                          <Text style={styles.reviewRowLabel}>Affiliations</Text>
-                          <Text style={styles.reviewRowValue}>
-                            {linkedVolunteer.affiliations && linkedVolunteer.affiliations.length > 0
+                          {renderReviewField('Gender', linkedVolunteer.gender || 'Not provided')}
+                          {renderReviewField('Date of Birth', linkedVolunteer.dateOfBirth || 'Not provided')}
+                          {renderReviewField('Civil Status', linkedVolunteer.civilStatus || 'Not provided')}
+                          {renderReviewField('Registration Status', linkedVolunteer.registrationStatus || 'Pending')}
+                          {renderReviewField('Home Address', linkedVolunteer.homeAddress || 'Not provided', { wide: true })}
+                          {renderReviewField('Region', linkedVolunteer.homeAddressRegion || 'Not provided')}
+                          {renderReviewField('City / Municipality', linkedVolunteer.homeAddressCityMunicipality || 'Not provided')}
+                          {renderReviewField('Barangay', linkedVolunteer.homeAddressBarangay || 'Not provided')}
+                          {renderReviewField('Occupation', linkedVolunteer.occupation || 'Not provided')}
+                          {renderReviewField('Workplace / School', linkedVolunteer.workplaceOrSchool || 'Not provided')}
+                          {renderReviewField('College Course', linkedVolunteer.collegeCourse || 'Not provided')}
+                          {renderReviewField(
+                            'Certifications / Trainings',
+                            linkedVolunteer.certificationsOrTrainings ? (
+                              isImageMediaUri(linkedVolunteer.certificationsOrTrainings) ? (
+                                <Image
+                                  source={{ uri: linkedVolunteer.certificationsOrTrainings }}
+                                  style={styles.reviewCertificateImage}
+                                />
+                              ) : (
+                                <Text style={styles.reviewRowValue}>{linkedVolunteer.certificationsOrTrainings}</Text>
+                              )
+                            ) : (
+                              'Not provided'
+                            ),
+                            { wide: true }
+                          )}
+                          {renderReviewField('Hobbies and Interests', linkedVolunteer.hobbiesAndInterests || 'Not provided', { wide: true })}
+                          {renderReviewField('Special Skills', linkedVolunteer.specialSkills || 'Not provided', { wide: true })}
+                          {renderReviewField('Video Briefing URL', linkedVolunteer.videoBriefingUrl || 'Not provided', { wide: true })}
+                          {renderReviewField(
+                            'Affiliations',
+                            linkedVolunteer.affiliations && linkedVolunteer.affiliations.length > 0
                               ? linkedVolunteer.affiliations
                                   .map(affiliation =>
                                     `${affiliation.organization || 'Organization not provided'} - ${affiliation.position || 'Position not provided'}`
                                   )
                                   .join('\n')
-                              : 'No affiliations provided.'}
-                          </Text>
-                          <Text style={styles.reviewRowLabel}>Registration Status</Text>
-                          <Text style={styles.reviewRowValue}>
-                            {linkedVolunteer.registrationStatus || 'Pending'}
-                          </Text>
+                              : 'No affiliations provided.',
+                            { wide: true }
+                          )}
                         </>
                       );
-                    })()}
-                  </>
-                ) : null}
-              </>
+                    })()
+                  : null}
+              </View>
             ) : null}
           </ScrollView>
 
@@ -838,21 +940,24 @@ export default function UserManagementScreen() {
               {reviewTarget.type === 'user' ? (
                 <>
                   <TouchableOpacity
-                    style={[styles.requestActionButton, styles.rejectActionButton]}
+                    style={[styles.requestActionButton, styles.reviewDeleteButton]}
                     onPress={() => handleDeleteUser(reviewTarget.record)}
                   >
+                    <MaterialIcons name="delete-outline" size={16} color="#991b1b" />
                     <Text style={styles.requestActionButtonText}>Delete Account</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={[styles.requestActionButton, styles.approveActionButton]}
                     onPress={() => handleApproveUser(reviewTarget.record)}
                   >
+                    <MaterialIcons name="check-circle-outline" size={16} color="#166534" />
                     <Text style={styles.requestActionButtonText}>Approve</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={[styles.requestActionButton, styles.rejectActionButton]}
+                    style={[styles.requestActionButton, styles.reviewRejectButton]}
                     onPress={() => handleRejectUser(reviewTarget.record)}
                   >
+                    <MaterialIcons name="block" size={16} color="#991b1b" />
                     <Text style={styles.requestActionButtonText}>Reject</Text>
                   </TouchableOpacity>
                 </>
@@ -897,6 +1002,31 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 12,
     color: '#64748b',
+  },
+  successBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: '#dcfce7',
+    borderWidth: 1,
+    borderColor: '#86efac',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  successBannerTextWrap: {
+    flex: 1,
+  },
+  successBannerTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#166534',
+  },
+  successBannerMessage: {
+    marginTop: 2,
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#166534',
   },
   refreshButton: {
     flexDirection: 'row',
@@ -1074,6 +1204,10 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f8fafc',
   },
+  reviewModalContainer: {
+    flex: 1,
+    backgroundColor: '#eef2f7',
+  },
   modalHeader: {
     paddingHorizontal: 16,
     paddingVertical: 14,
@@ -1100,6 +1234,53 @@ const styles = StyleSheet.create({
   },
   modalBody: {
     padding: 16,
+  },
+  reviewModalHeader: {
+    minHeight: 72,
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    backgroundColor: '#ffffff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#dbe3ee',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 16,
+  },
+  reviewCloseButton: {
+    minWidth: 96,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#f8fafc',
+  },
+  reviewCloseButtonText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  reviewHeaderTitleWrap: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  reviewModalTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  reviewModalSubtitle: {
+    marginTop: 3,
+    fontSize: 12,
+    color: '#64748b',
+    textAlign: 'center',
+  },
+  reviewModalBody: {
+    flex: 1,
   },
   input: {
     backgroundColor: '#fff',
@@ -1146,6 +1327,26 @@ const styles = StyleSheet.create({
     padding: 16,
     marginHorizontal: 16,
     marginBottom: 8,
+  },
+  requestQueueHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 6,
+  },
+  requestQueueBadge: {
+    minWidth: 28,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: '#dbeafe',
+    alignItems: 'center',
+  },
+  requestQueueBadgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#1d4ed8',
   },
   userRoleSection: {
     marginTop: 8,
@@ -1274,6 +1475,16 @@ const styles = StyleSheet.create({
   rejectActionButton: {
     backgroundColor: '#fee2e2',
   },
+  reviewDeleteButton: {
+    backgroundColor: '#fee2e2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+  },
+  reviewRejectButton: {
+    backgroundColor: '#fff1f2',
+    borderWidth: 1,
+    borderColor: '#fecdd3',
+  },
   reviewActionButton: {
     backgroundColor: '#e0f2fe',
   },
@@ -1282,38 +1493,143 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   modalHeaderSpacer: {
-    width: 48,
+    width: 96,
   },
   reviewContent: {
-    paddingBottom: 24,
+    width: '100%',
+    maxWidth: 1120,
+    alignSelf: 'center',
+    paddingHorizontal: 24,
+    paddingTop: 24,
+    paddingBottom: 112,
+  },
+  reviewPanel: {
+    gap: 16,
+  },
+  reviewSummaryCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dbe3ee',
+    borderRadius: 10,
+    padding: 18,
+  },
+  reviewAvatar: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#166534',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reviewAvatarText: {
+    color: '#ffffff',
+    fontSize: 20,
+    fontWeight: '800',
+  },
+  reviewSummaryText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  reviewApplicantName: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  reviewApplicantMeta: {
+    marginTop: 4,
+    fontSize: 13,
+    color: '#64748b',
+  },
+  reviewStatusStack: {
+    alignItems: 'flex-end',
+    gap: 8,
+  },
+  reviewRoleBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: '#e0f2fe',
+  },
+  reviewRoleBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#075985',
+    textTransform: 'uppercase',
+  },
+  reviewPendingBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: '#fef3c7',
+  },
+  reviewPendingBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#92400e',
+    textTransform: 'uppercase',
+  },
+  reviewSectionCard: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dbe3ee',
+    borderRadius: 10,
+    padding: 18,
   },
   reviewSectionTitle: {
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: '800',
     color: '#0f172a',
-    marginTop: 8,
-    marginBottom: 10,
+    marginBottom: 14,
+  },
+  reviewFieldGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  reviewField: {
+    flexGrow: 1,
+    flexBasis: '48%',
+    minWidth: 260,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  reviewFieldWide: {
+    flexBasis: '100%',
   },
   reviewRowLabel: {
-    fontSize: 12,
-    fontWeight: '700',
+    fontSize: 11,
+    fontWeight: '800',
     color: '#475569',
-    marginTop: 8,
+    textTransform: 'uppercase',
   },
   reviewRowValue: {
     fontSize: 14,
     color: '#0f172a',
     lineHeight: 20,
-    marginTop: 4,
+    marginTop: 6,
+  },
+  reviewCertificateImage: {
+    width: '100%',
+    height: 260,
+    borderRadius: 8,
+    marginTop: 8,
+    backgroundColor: '#e2e8f0',
   },
   reviewActionFooter: {
     flexDirection: 'row',
-    gap: 8,
-    paddingHorizontal: 16,
+    gap: 12,
+    paddingHorizontal: 24,
     paddingBottom: 16,
-    paddingTop: 8,
+    paddingTop: 14,
     backgroundColor: '#fff',
     borderTopWidth: 1,
-    borderTopColor: '#e5e7eb',
+    borderTopColor: '#dbe3ee',
   },
 });

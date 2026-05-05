@@ -71,18 +71,18 @@ let mockDataInitializationPromise: Promise<void> | null = null;
 // backend is slow or unavailable.
 const REMOTE_STORAGE_TIMEOUT_MS = 90000; // Increased from 60s to 90s for slow projects table
 const REMOTE_STORAGE_BATCH_TIMEOUT_MS = 120000;
-const API_HEALTH_TIMEOUT_MS = 8000;
-const API_READY_RETRY_MS = 1000;
-const API_READY_MAX_ATTEMPTS = 2;
-const API_READY_CACHE_MS = 5000;
-const API_REQUEST_MAX_ATTEMPTS = 4;
-const API_REQUEST_RETRY_BASE_MS = 1000;
-const API_REQUEST_RETRY_MAX_MS = 8000;
+const API_HEALTH_TIMEOUT_MS = 4000; // Reduced from 8s for faster startup detection
+const API_READY_RETRY_MS = 500; // Reduced from 1s for faster retries
+const API_READY_MAX_ATTEMPTS = 2; // Keep low to fail fast on mobile
+const API_READY_CACHE_MS = 10000; // Increased from 5s to reduce health checks
+const API_REQUEST_MAX_ATTEMPTS = 3; // Reduced from 4 to fail faster
+const API_REQUEST_RETRY_BASE_MS = 500; // Reduced from 1s
+const API_REQUEST_RETRY_MAX_MS = 4000; // Reduced from 8s
 const SHARED_STORAGE_CACHE_TTL_MS = 300000; // Increased from 90s to 5m
 const PROJECTS_SNAPSHOT_CACHE_TTL_MS = 60000; // Increased from 20s to 1m
-const STORAGE_CHANGE_POLL_INTERVAL_MS = 3000;
-const STORAGE_CHANGE_DEBOUNCE_MS = 500; // Increased from 120ms
-const STORAGE_CHANGE_CALLBACK_COOLDOWN_MS = 1000; // Increased from 180ms
+const STORAGE_CHANGE_POLL_INTERVAL_MS = 1000;
+const STORAGE_CHANGE_DEBOUNCE_MS = 250;
+const STORAGE_CHANGE_CALLBACK_COOLDOWN_MS = 250;
 const LOCAL_ONLY_STORAGE_KEYS = new Set([STORAGE_KEYS.CURRENT_USER]);
 const NEGROS_OCCIDENTAL_BOUNDS = {
   minLatitude: 9.85,
@@ -624,6 +624,26 @@ async function notifyAdminAboutVolunteerProjectJoinRequest(
   );
 }
 
+async function notifyVolunteerAboutProjectJoinRequestCreated(
+  projectId: string,
+  volunteerUserId: string
+): Promise<void> {
+  const [project, adminUser] = await Promise.all([
+    getProject(projectId),
+    getPrimaryAdminUser(),
+  ]);
+
+  if (!project || !adminUser || !volunteerUserId) {
+    return;
+  }
+
+  await sendSystemMessage(
+    adminUser.id,
+    volunteerUserId,
+    `Your request to join "${project.title}" was submitted. You will be notified when admin approves or rejects it.`
+  );
+}
+
 async function notifyVolunteerAboutProjectMatchDecision(
   projectId: string,
   volunteerUserId: string,
@@ -639,8 +659,8 @@ async function notifyVolunteerAboutProjectMatchDecision(
   const outcome =
     decision === 'Matched'
       ? reason === 'assignment'
-        ? `assigned you to "${project.title}". You can now join the program and coordinate through Messages.`
-        : `approved your request to join "${project.title}". You can now join the program and coordinate through Messages.`
+        ? `assigned you to "${project.title}". You are now joined to this event and can coordinate through Event GC.`
+        : `approved your request to join "${project.title}". You are now joined to this event and can coordinate through Event GC.`
       : `rejected your request to join "${project.title}". You may contact NVC admin for clarification.`;
 
   await sendSystemMessage(
@@ -648,6 +668,96 @@ async function notifyVolunteerAboutProjectMatchDecision(
     volunteerUserId,
     `NVC Admin ${outcome}`
   );
+}
+
+// Notifies a volunteer when a task assignment is removed from an event.
+export async function notifyVolunteerAboutTaskUnassignment(params: {
+  event: Pick<Project, 'id' | 'title'>;
+  task: Pick<ProjectInternalTask, 'id' | 'title'>;
+  volunteer: Pick<Volunteer, 'userId' | 'name'>;
+  actorUserId?: string;
+}): Promise<void> {
+  if (!params.volunteer.userId) {
+    return;
+  }
+
+  const adminUser = await getPrimaryAdminUser();
+  const senderId = adminUser?.id || params.actorUserId;
+
+  if (!senderId || senderId === params.volunteer.userId) {
+    return;
+  }
+
+  try {
+    await sendSystemMessage(
+      senderId,
+      params.volunteer.userId,
+      `You were unassigned from "${params.task.title}" in "${params.event.title}". This task has been removed from My Tasks.`
+    );
+  } catch (error) {
+    console.error('Failed to send task unassignment notification:', error);
+  }
+}
+
+// Notifies a volunteer when one of their assigned event tasks is created or edited.
+export async function notifyVolunteerAboutTaskUpdate(params: {
+  event: Pick<Project, 'id' | 'title'>;
+  task: Pick<ProjectInternalTask, 'id' | 'title' | 'status'>;
+  volunteer: Pick<Volunteer, 'userId' | 'name'>;
+  actorUserId?: string;
+  action: 'assigned' | 'updated';
+}): Promise<void> {
+  if (!params.volunteer.userId) {
+    return;
+  }
+
+  const adminUser = await getPrimaryAdminUser();
+  const senderId = adminUser?.id || params.actorUserId;
+
+  if (!senderId || senderId === params.volunteer.userId) {
+    return;
+  }
+
+  const message =
+    params.action === 'assigned'
+      ? `You were assigned to "${params.task.title}" in "${params.event.title}". Check My Tasks for details.`
+      : `"${params.task.title}" in "${params.event.title}" was updated. Current status: ${params.task.status}.`;
+
+  try {
+    await sendSystemMessage(senderId, params.volunteer.userId, message);
+  } catch (error) {
+    console.error('Failed to send task update notification:', error);
+  }
+}
+
+// Notifies a volunteer that their event time in was recorded successfully.
+export async function notifyVolunteerAboutTimeIn(params: {
+  event: Pick<Project, 'id' | 'title'>;
+  volunteer: Pick<Volunteer, 'userId' | 'name'>;
+  timeIn: string;
+}): Promise<void> {
+  if (!params.volunteer.userId) {
+    return;
+  }
+
+  const adminUser = await getPrimaryAdminUser();
+  const senderId = adminUser?.id;
+
+  if (!senderId || senderId === params.volunteer.userId) {
+    return;
+  }
+
+  const formattedTimeIn = new Date(params.timeIn).toLocaleString();
+
+  try {
+    await sendSystemMessage(
+      senderId,
+      params.volunteer.userId,
+      `Time in recorded for "${params.event.title}" at ${formattedTimeIn}. You can submit your event report when you are ready to time out.`
+    );
+  } catch (error) {
+    console.error('Failed to send time in notification:', error);
+  }
 }
 
 // Extracts the Metro bundler host so native devices can resolve the backend URL.
@@ -670,6 +780,7 @@ function getBundlerHost(): string | null {
 function resolveConfiguredApiBaseUrl(configuredBaseUrl: string): string {
   const trimmedBaseUrl = configuredBaseUrl.trim().replace(/\/$/, '');
   const bundlerHost = getBundlerHost();
+  const platformOS = getPlatformOS();
 
   try {
     const parsedUrl = new URL(trimmedBaseUrl);
@@ -678,7 +789,7 @@ function resolveConfiguredApiBaseUrl(configuredBaseUrl: string): string {
       parsedUrl.hostname === 'localhost' ||
       parsedUrl.hostname === '10.0.2.2';
 
-    if (bundlerHost && isLoopbackHost && getPlatformOS() !== 'web') {
+    if (bundlerHost && isLoopbackHost && platformOS !== 'web') {
       parsedUrl.hostname = bundlerHost;
       return parsedUrl.toString().replace(/\/$/, '');
     }
@@ -902,9 +1013,20 @@ async function fetchRemoteStorageItems(
 
 async function getApiErrorMessage(response: Response, fallback: string): Promise<string> {
   try {
-    const payload = (await response.json()) as { detail?: string };
+    const payload = (await response.json()) as {
+      detail?: string | Array<{ msg?: string }>;
+    };
     if (typeof payload.detail === 'string' && payload.detail.trim()) {
       return payload.detail;
+    }
+    if (Array.isArray(payload.detail)) {
+      const message = payload.detail
+        .map(item => String(item?.msg || '').trim())
+        .filter(Boolean)
+        .join('\n');
+      if (message) {
+        return message;
+      }
     }
   } catch {
     // Ignore parse errors and fall back to the default message.
@@ -985,17 +1107,13 @@ async function requestApiJson<T>(
   const requestKey = `${method}:${path}:${timeoutMs}`;
   const existingRequest = inFlightJsonRequests.get(requestKey);
   if (existingRequest) {
-    console.log(`[Network] Deduplicating request: ${path.slice(0, 50)}`);
     return existingRequest as Promise<T>;
   }
 
   const nextRequest = (async () => {
     try {
-      const reqStart = Date.now();
       const response = await fetchApiResponse(path, init, timeoutMs);
-      const result = (await response.json()) as T;
-      console.log(`[Network] ${method} ${path.slice(0, 50)} completed in ${Date.now() - reqStart}ms`);
-      return result;
+      return (await response.json()) as T;
     } catch (error) {
       inFlightJsonRequests.delete(requestKey);
       throw error;
@@ -1156,6 +1274,11 @@ export function clearStorageCache(keys?: string[]): void {
   invalidateSharedStorageCache(keys);
 }
 
+// Reads only the device cache without starting a backend request.
+export async function getCachedStorageItem<T>(key: string): Promise<T | null> {
+  return getLocalStorageItem<T>(key);
+}
+
 function triggerBackgroundStorageRefresh(keys: string[]): void {
   if (keys.length === 0) {
     return;
@@ -1186,20 +1309,15 @@ export async function getStorageItemFast<T>(key: string): Promise<T | null> {
     const cachedAt = sharedStorageCacheTimestamps.get(key);
     const isFresh = cachedAt !== undefined && Date.now() - cachedAt <= SHARED_STORAGE_CACHE_TTL_MS;
 
-  if (!isFresh || cached === null) {
-    triggerBackgroundStorageRefresh([key]);
-  }
-
-    if (cached !== null && !isFresh) {
-      try {
-        return await getStorageItem<T>(key);
-      } catch {
-        return cached;
-      }
+    if (!isFresh || cached === null) {
+      triggerBackgroundStorageRefresh([key]);
     }
 
-    const value = await getStorageItem<T>(key);
-    return value;
+    if (cached !== null) {
+      return cached;
+    }
+
+    return getStorageItem<T>(key);
   } catch {
     return getStorageItem<T>(key);
   }
@@ -1629,10 +1747,8 @@ export async function getDashboardTimelineSnapshot(): Promise<DashboardTimelineS
 // In-flight requests for snapshots to avoid redundant network overhead.
 const inFlightSnapshotRequests = new Map<string, Promise<ProjectsScreenSnapshot>>();
 
-// Shared promise for any ongoing snapshot request, regardless of params.
-let globalSnapshotPromise: Promise<ProjectsScreenSnapshot> | null = null;
-let lastSnapshotRequestTime = 0;
-const GLOBAL_SNAPSHOT_COOLDOWN_MS = 5000;
+const lastSnapshotRequestTimes = new Map<string, number>();
+const GLOBAL_SNAPSHOT_COOLDOWN_MS = 1000;
 
 function invalidateProjectsSnapshotCache(): void {
   projectsSnapshotCache.clear();
@@ -1649,54 +1765,86 @@ export async function getProjectsScreenSnapshot(
   if (user?.id) params.set('user_id', user.id);
   if (user?.role) params.set('role', user.role);
   
-  // We intentionally ignore the 'fields' parameter for the global promise/fetch
-  // so that all components share the same snapshot data.
-
-  // 1. Global deduplication: share the same promise if another snapshot is currently in-flight
-  if (globalSnapshotPromise) {
-    console.log(`[Data] Deduplicating ProjectsSnapshot request (shared promise)`);
-    return globalSnapshotPromise;
-  }
-
-  // 2. Global cooldown: if we just requested a snapshot recently, serve from cache
   const cacheKey = `snapshot:${params.toString()}`;
-  if (Date.now() - lastSnapshotRequestTime < GLOBAL_SNAPSHOT_COOLDOWN_MS) {
-    const cached = projectsSnapshotCache.get(cacheKey) || Array.from(projectsSnapshotCache.values())[0];
+  const lastRequestTime = lastSnapshotRequestTimes.get(cacheKey) || 0;
+
+  // Serve only this user's cached snapshot. Reusing another account's snapshot
+  // makes volunteer dashboards show the wrong joined events.
+  if (Date.now() - lastRequestTime < GLOBAL_SNAPSHOT_COOLDOWN_MS) {
+    const cached = projectsSnapshotCache.get(cacheKey);
     if (cached) {
-      console.log(`[Data] Throttling ProjectsSnapshot request (cooldown active)`);
       return cached.data as ProjectsScreenSnapshot;
     }
   }
 
-  globalSnapshotPromise = (async () => {
+  const existingRequest = inFlightSnapshotRequests.get(cacheKey);
+  if (existingRequest) {
+    return existingRequest;
+  }
+
+  const snapshotRequest = (async () => {
     try {
-      lastSnapshotRequestTime = Date.now();
+      lastSnapshotRequestTimes.set(cacheKey, Date.now());
       const query = params.toString();
       const payload = await requestApiJson<Partial<ProjectsScreenSnapshot>>(
         `/projects/snapshot${query ? `?${query}` : ''}`
       );
 
-      const result = {
-        projects: (payload.projects || []).map(project =>
-          project?.isEvent ? normalizeEventRecord(project) : normalizeProjectRecord(project)
-        ),
-        programTracks: Array.isArray(payload.programTracks) ? payload.programTracks : [],
-        volunteerProfile: payload.volunteerProfile || null,
-        volunteerMatches: Array.isArray(payload.volunteerMatches) ? payload.volunteerMatches : undefined,
-        timeLogs: payload.timeLogs || [],
-        partnerApplications: payload.partnerApplications || [],
-        volunteerJoinRecords: payload.volunteerJoinRecords || [],
-      };
+      try {
+        const result = {
+          projects: (payload.projects || []).map(project => {
+            try {
+              return project?.isEvent ? normalizeEventRecord(project) : normalizeProjectRecord(project);
+            } catch (normalizeError) {
+              console.error(`[Data] Error normalizing project ${project?.id}:`, normalizeError);
+              return project as Project;
+            }
+          }),
+          programTracks: Array.isArray(payload.programTracks) ? payload.programTracks : [],
+          volunteerProfile: payload.volunteerProfile || null,
+          volunteerMatches: Array.isArray(payload.volunteerMatches) ? payload.volunteerMatches : undefined,
+          timeLogs: payload.timeLogs || [],
+          partnerApplications: payload.partnerApplications || [],
+          volunteerJoinRecords: payload.volunteerJoinRecords || [],
+        };
 
-      // Cache the result for this specific field-set request
-      projectsSnapshotCache.set(cacheKey, { data: result, timestamp: Date.now() });
-      return result;
+        // Cache the result for this specific field-set request
+        projectsSnapshotCache.set(cacheKey, { data: result, timestamp: Date.now() });
+        return result;
+      } catch (normalizeError) {
+        console.error(`[Data] Error normalizing ProjectsSnapshot:`, normalizeError);
+        // Return what we can even if normalization fails
+        return {
+          projects: payload.projects || [],
+          programTracks: payload.programTracks || [],
+          volunteerProfile: payload.volunteerProfile || null,
+          volunteerMatches: payload.volunteerMatches,
+          timeLogs: payload.timeLogs || [],
+          partnerApplications: payload.partnerApplications || [],
+          volunteerJoinRecords: payload.volunteerJoinRecords || [],
+        };
+      }
+    } catch (error) {
+      console.error(`[Data] Error fetching ProjectsSnapshot:`, error);
+      // Return empty but valid response on error
+      const emptyResult: ProjectsScreenSnapshot = {
+        projects: [],
+        programTracks: [],
+        volunteerProfile: null,
+        volunteerMatches: undefined,
+        timeLogs: [],
+        partnerApplications: [],
+        volunteerJoinRecords: [],
+      };
+      projectsSnapshotCache.set(cacheKey, { data: emptyResult, timestamp: Date.now() });
+      return emptyResult;
     } finally {
-      globalSnapshotPromise = null;
+      inFlightSnapshotRequests.delete(cacheKey);
     }
   })();
 
-  return globalSnapshotPromise;
+  inFlightSnapshotRequests.set(cacheKey, snapshotRequest);
+  return snapshotRequest;
 }
 
 // Writes one storage value to the backend and local cache.
@@ -2440,7 +2588,6 @@ export async function loginWithCredentials(
   identifier: string,
   password: string
 ): Promise<User | null> {
-  console.log(`[Auth] Attempting login for: ${identifier}`);
   const payload = await requestApiJson<{ user?: User | null }>('/auth/login', {
     method: 'POST',
     headers: {
@@ -2583,10 +2730,49 @@ async function getLinkedUserAccountForPartner(partner: Partner): Promise<User | 
 // User Approval Management
 // Gets all pending user accounts that need admin approval.
 export async function getPendingUserApprovals(): Promise<User[]> {
-  const users = await getAllUsers();
-  return users.filter(
-    user => user.role !== 'admin' && user.approvalStatus === 'pending'
-  );
+  const [users, volunteers, partners] = await Promise.all([
+    getAllUsers(),
+    getAllVolunteers(),
+    getAllPartners(),
+  ]);
+
+  return users.filter(user => {
+    if (user.role === 'admin') {
+      return false;
+    }
+
+    if (user.approvalStatus === 'pending') {
+      return true;
+    }
+
+    if (user.approvalStatus === 'approved' || user.approvalStatus === 'rejected') {
+      return false;
+    }
+
+    if (user.role === 'volunteer') {
+      return volunteers.some(
+        volunteer =>
+          userMatchesLinkedRecord(user, {
+            userId: volunteer.userId,
+            email: volunteer.email,
+            phone: volunteer.phone,
+          }) && (volunteer.registrationStatus || 'Pending') === 'Pending'
+      );
+    }
+
+    if (user.role === 'partner') {
+      return partners.some(
+        partner =>
+          userMatchesLinkedRecord(user, {
+            ownerUserId: partner.ownerUserId,
+            email: partner.contactEmail,
+            phone: partner.contactPhone,
+          }) && (partner.status || 'Pending') === 'Pending'
+      );
+    }
+
+    return false;
+  });
 }
 
 // Gets all approved users.
@@ -2597,108 +2783,40 @@ export async function getApprovedUsers(): Promise<User[]> {
 
 // Approves a pending user account.
 export async function approveUser(userId: string, adminId: string): Promise<User> {
-  const user = await getUser(userId);
-  if (!user) {
-    throw new Error('User not found.');
+  const payload = await requestApiJson<{ user: User }>(
+    `/auth/users/${encodeURIComponent(userId)}/approve?admin_id=${encodeURIComponent(adminId)}`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ status: 'approved' }),
+    }
+  );
+
+  invalidateSharedStorageCache([
+    STORAGE_KEYS.USERS,
+    STORAGE_KEYS.VOLUNTEERS,
+    STORAGE_KEYS.PARTNERS,
+    STORAGE_KEYS.MESSAGES,
+  ]);
+
+  if (!payload.user) {
+    throw new Error('Approval completed but the updated user was not returned.');
   }
 
-  const approvedAt = new Date().toISOString();
-  const updatedUser: User = {
-    ...user,
-    approvalStatus: 'approved',
-    approvedBy: adminId,
-    approvedAt,
-    rejectionReason: undefined,
-  };
-
-  await saveUser(updatedUser);
-
-  if (updatedUser.role === 'volunteer') {
-    const linkedVolunteers = await getLinkedVolunteersForUserAccount(updatedUser);
-    await Promise.all(
-      linkedVolunteers.map(volunteer =>
-        saveVolunteer({
-          ...volunteer,
-          registrationStatus: 'Approved',
-          reviewedBy: adminId,
-          reviewedAt: approvedAt,
-          credentialsUnlockedAt: approvedAt,
-        })
-      )
-    );
-  }
-
-  if (updatedUser.role === 'partner') {
-    const linkedPartners = await getLinkedPartnerRecordsForUserAccount(updatedUser);
-    await Promise.all(
-      linkedPartners.map(partner =>
-        savePartner({
-          ...partner,
-          status: 'Approved',
-          validatedBy: adminId,
-          validatedAt: approvedAt,
-          credentialsUnlockedAt: approvedAt,
-        })
-      )
-    );
-  }
-
-  return updatedUser;
+  return payload.user;
 }
 
-// Rejects a pending user account with an optional reason.
+// Deletes a pending user account instead of keeping a rejected login around.
 export async function rejectUser(
   userId: string,
   rejectionReason: string = 'Account rejected by administrator.',
   adminId?: string
-): Promise<User> {
-  const user = await getUser(userId);
-  if (!user) {
-    throw new Error('User not found.');
-  }
-
-  const reviewedAt = new Date().toISOString();
-  const updatedUser: User = {
-    ...user,
-    approvalStatus: 'rejected',
-    approvedBy: undefined,
-    approvedAt: undefined,
-    rejectionReason,
-  };
-
-  await saveUser(updatedUser);
-
-  if (updatedUser.role === 'volunteer') {
-    const linkedVolunteers = await getLinkedVolunteersForUserAccount(updatedUser);
-    await Promise.all(
-      linkedVolunteers.map(volunteer =>
-        saveVolunteer({
-          ...volunteer,
-          registrationStatus: 'Rejected',
-          reviewedBy: adminId,
-          reviewedAt,
-          credentialsUnlockedAt: undefined,
-        })
-      )
-    );
-  }
-
-  if (updatedUser.role === 'partner') {
-    const linkedPartners = await getLinkedPartnerRecordsForUserAccount(updatedUser);
-    await Promise.all(
-      linkedPartners.map(partner =>
-        savePartner({
-          ...partner,
-          status: 'Rejected',
-          validatedBy: adminId,
-          validatedAt: reviewedAt,
-          credentialsUnlockedAt: undefined,
-        })
-      )
-    );
-  }
-
-  return updatedUser;
+): Promise<void> {
+  void rejectionReason;
+  void adminId;
+  await deleteUser(userId);
 }
 
 // Partner Storage
@@ -3414,6 +3532,23 @@ export async function startVolunteerTimeLog(
     throw new Error('Time in did not complete.');
   }
 
+  try {
+    const [volunteer, project] = await Promise.all([
+      getVolunteer(volunteerId),
+      getProject(projectId),
+    ]);
+
+    if (volunteer && project) {
+      await notifyVolunteerAboutTimeIn({
+        event: project,
+        volunteer,
+        timeIn: payload.log.timeIn,
+      });
+    }
+  } catch (error) {
+    console.error('Failed to send volunteer time in notification:', error);
+  }
+
   return payload.log;
 }
 
@@ -3739,6 +3874,11 @@ export async function saveVolunteerProjectMatch(match: VolunteerProjectMatch): P
   ]);
   if (match.status === 'Matched') {
     await attachVolunteerToProject(match.projectId, match.volunteerId);
+    await ensureVolunteerProjectJoinRecord(
+      match.projectId,
+      match.volunteerId,
+      match.requestedAt ? 'VolunteerJoin' : 'AdminMatch'
+    );
   }
   await syncVolunteerEngagementStatus(match.volunteerId);
 }
@@ -3966,6 +4106,169 @@ export async function getVolunteerProjectJoinRecords(
       participationStatus: record.participationStatus || 'Active',
     }))
     .sort((a, b) => new Date(b.joinedAt).getTime() - new Date(a.joinedAt).getTime());
+}
+
+// Repairs legacy/partial approvals so every matched volunteer is present in event membership.
+export async function reconcileApprovedVolunteerEventMemberships(): Promise<void> {
+  const [events, volunteers, matches, joinRecords] = await Promise.all([
+    getStorageItem<Project[]>(STORAGE_KEYS.EVENTS),
+    getStorageItem<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS),
+    getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES),
+    getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS),
+  ]);
+
+  const eventRecords = events || [];
+  const volunteerById = new Map((volunteers || []).map(volunteer => [volunteer.id, volunteer]));
+  const nextJoinRecords = [...(joinRecords || [])];
+  let eventsChanged = false;
+  let joinRecordsChanged = false;
+
+  const matchedByProjectId = new Map<string, VolunteerProjectMatch[]>();
+  (matches || []).forEach(match => {
+    if (match.status !== 'Matched') {
+      return;
+    }
+    const projectMatches = matchedByProjectId.get(match.projectId) || [];
+    projectMatches.push(match);
+    matchedByProjectId.set(match.projectId, projectMatches);
+  });
+
+  const nextEvents = eventRecords.map(event => {
+    if (!event.isEvent) {
+      return event;
+    }
+
+    const projectMatches = matchedByProjectId.get(event.id) || [];
+    if (projectMatches.length === 0) {
+      return event;
+    }
+
+    const volunteerIds = new Set(event.volunteers || []);
+    const joinedUserIds = new Set(event.joinedUserIds || []);
+    let eventChanged = false;
+
+    projectMatches.forEach(match => {
+      const volunteer = volunteerById.get(match.volunteerId);
+      if (!volunteer) {
+        return;
+      }
+
+      if (!volunteerIds.has(volunteer.id)) {
+        volunteerIds.add(volunteer.id);
+        eventChanged = true;
+      }
+
+      if (volunteer.userId && !joinedUserIds.has(volunteer.userId)) {
+        joinedUserIds.add(volunteer.userId);
+        eventChanged = true;
+      }
+
+      const hasJoinRecord = nextJoinRecords.some(
+        record => record.projectId === event.id && record.volunteerId === volunteer.id
+      );
+      if (!hasJoinRecord) {
+        nextJoinRecords.push({
+          id: buildVolunteerProjectJoinRecordId(event.id, volunteer.id),
+          projectId: event.id,
+          volunteerId: volunteer.id,
+          volunteerUserId: volunteer.userId,
+          volunteerName: volunteer.name,
+          volunteerEmail: volunteer.email,
+          joinedAt: match.reviewedAt || match.matchedAt || new Date().toISOString(),
+          source: 'VolunteerJoin',
+          participationStatus: 'Active',
+        });
+        joinRecordsChanged = true;
+      }
+    });
+
+    if (!eventChanged) {
+      return event;
+    }
+
+    eventsChanged = true;
+    return {
+      ...event,
+      volunteers: Array.from(volunteerIds),
+      joinedUserIds: Array.from(joinedUserIds),
+      updatedAt: new Date().toISOString(),
+    };
+  });
+
+  const writes: Promise<void>[] = [];
+  if (eventsChanged) {
+    writes.push(setStorageItem(STORAGE_KEYS.EVENTS, nextEvents));
+  }
+  if (joinRecordsChanged) {
+    writes.push(setStorageItem(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS, nextJoinRecords));
+  }
+
+  if (writes.length > 0) {
+    await Promise.all(writes);
+    invalidateProjectsSnapshotCache();
+    invalidateSharedStorageCache([
+      STORAGE_KEYS.EVENTS,
+      STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
+      STORAGE_KEYS.VOLUNTEER_MATCHES,
+    ]);
+  }
+}
+
+// Removes a volunteer from an event group chat by clearing their event membership records.
+export async function leaveVolunteerEventGroup(
+  projectId: string,
+  userId: string
+): Promise<void> {
+  const [project, volunteer, joinRecords, matches] = await Promise.all([
+    getProject(projectId),
+    getVolunteerByUserId(userId),
+    getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS),
+    getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES),
+  ]);
+
+  if (!project?.isEvent) {
+    throw new Error('Event group chat not found.');
+  }
+
+  if (!volunteer) {
+    throw new Error('Volunteer profile not found.');
+  }
+
+  const nextTasks = (project.internalTasks || []).map(task => {
+    if (task.assignedVolunteerId !== volunteer.id || task.isFieldOfficer) {
+      return task;
+    }
+
+    return {
+      ...task,
+      assignedVolunteerId: undefined,
+      assignedVolunteerName: undefined,
+      status: 'Unassigned' as const,
+      updatedAt: new Date().toISOString(),
+    };
+  });
+
+  await Promise.all([
+    saveEvent({
+      ...project,
+      volunteers: (project.volunteers || []).filter(volunteerId => volunteerId !== volunteer.id),
+      joinedUserIds: (project.joinedUserIds || []).filter(joinedUserId => joinedUserId !== userId),
+      internalTasks: nextTasks,
+      updatedAt: new Date().toISOString(),
+    }),
+    setStorageItem(
+      STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
+      (joinRecords || []).filter(
+        record => !(record.projectId === projectId && record.volunteerId === volunteer.id)
+      )
+    ),
+    setStorageItem(
+      STORAGE_KEYS.VOLUNTEER_MATCHES,
+      (matches || []).filter(
+        match => !(match.projectId === projectId && match.volunteerId === volunteer.id)
+      )
+    ),
+  ]);
 }
 
 // Returns project ids that a volunteer has already completed.
@@ -4313,10 +4616,12 @@ function calculateImpactCountFromMetrics(metrics?: Record<string, number>): numb
     return 0;
   }
 
-  return Object.values(metrics).reduce(
+  const total = Object.values(metrics).reduce(
     (sum, value) => sum + (Number.isFinite(value) ? value : 0),
     0
   );
+
+  return Math.max(0, Math.round(total));
 }
 
 const REPORT_MEDIA_FILE_MAX_LENGTH = 500;
@@ -4461,6 +4766,7 @@ export async function submitImpactHubReport(input: {
     mediaFile: normalizedMediaPayload.mediaFile,
     createdAt: new Date().toISOString(),
     status: 'Submitted',
+    sourceReportIds: [],
   };
 
   try {

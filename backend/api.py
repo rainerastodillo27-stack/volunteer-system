@@ -4,6 +4,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from dotenv import load_dotenv
@@ -34,6 +35,11 @@ from .db import (
 )
 from .field_rules import normalize_comparable_phone
 from .image_compression import compress_base64_image, get_image_size_kb
+from .relational_mirror import (
+    get_relational_item_by_id,
+    get_relational_items_by_field,
+    upsert_relational_item,
+)
 
 
 load_dotenv()
@@ -223,15 +229,71 @@ class ReportSubmitPayload(BaseModel):
     title: str | None = None
     reportType: str
     description: str
-    impactCount: int | None = None
+    impactCount: float | int | None = None
     metrics: dict[str, Any] | None = None
     attachments: list[ReportAttachmentPayload] | None = None
     mediaFile: str | None = None
+    sourceReportIds: list[str] | None = None
     createdAt: str | None = None
     status: str | None = None
 
 
 REPORT_MEDIA_FILE_MAX_LENGTH = 500
+APP_TIMEZONE = ZoneInfo("Asia/Manila")
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    raw_value = str(value or "").strip()
+    if not raw_value:
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _get_local_date_key(value: Any, tz: ZoneInfo = APP_TIMEZONE) -> str:
+    parsed = _parse_iso_datetime(value)
+    if parsed is None:
+        return ""
+
+    localized = parsed.astimezone(tz)
+    return localized.strftime("%Y-%m-%d")
+
+
+def _event_attendance_window_has_started(project: dict[str, Any], now: datetime | None = None) -> bool:
+    if not bool(project.get("isEvent")):
+        return True
+
+    start_date = _parse_iso_datetime(project.get("startDate"))
+    if start_date is None:
+        return True
+
+    current_time = (now or datetime.now(timezone.utc)).astimezone(APP_TIMEZONE)
+    start_of_day = start_date.astimezone(APP_TIMEZONE).replace(hour=0, minute=0, second=0, microsecond=0)
+    return current_time >= start_of_day
+
+
+def _event_attendance_window_has_ended(project: dict[str, Any], now: datetime | None = None) -> bool:
+    status = str(project.get("status") or "").strip()
+    if status in {"Completed", "Cancelled"}:
+        return True
+
+    if not bool(project.get("isEvent")):
+        return False
+
+    end_date = _parse_iso_datetime(project.get("endDate") or project.get("startDate"))
+    if end_date is None:
+        return False
+
+    current_time = (now or datetime.now(timezone.utc)).astimezone(APP_TIMEZONE)
+    end_of_day = end_date.astimezone(APP_TIMEZONE).replace(hour=23, minute=59, second=59, microsecond=999999)
+    return current_time > end_of_day
 
 
 def _normalize_partner_proposal_date(value: Any, fallback: str) -> str:
@@ -667,6 +729,47 @@ def _get_project_chat_participant_user_ids(connection: Any, project_id: str) -> 
     return participant_user_ids
 
 
+# Returns whether a direct-message pair is allowed based on the users' roles.
+def _is_direct_message_pair_allowed(sender_role: str, recipient_role: str) -> bool:
+    normalized_sender_role = str(sender_role or "").strip()
+    normalized_recipient_role = str(recipient_role or "").strip()
+    role_pair = {normalized_sender_role, normalized_recipient_role}
+
+    if "admin" in role_pair:
+        return True
+
+    if "volunteer" in role_pair:
+        return False
+
+    return True
+
+
+# Raises an error if the requesting users cannot use direct messaging.
+def _assert_direct_message_access(
+    connection: Any,
+    sender_id: str,
+    recipient_id: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    sender_user = _get_user_by_id(sender_id, connection)
+    if sender_user is None:
+        raise HTTPException(status_code=404, detail="Sender not found.")
+
+    recipient_user = _get_user_by_id(recipient_id, connection)
+    if recipient_user is None:
+        raise HTTPException(status_code=404, detail="Recipient not found.")
+
+    if not _is_direct_message_pair_allowed(
+        str(sender_user.get("role") or ""),
+        str(recipient_user.get("role") or ""),
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Volunteer direct messages are limited to admin contacts.",
+        )
+
+    return sender_user, recipient_user
+
+
 # Raises an error if the requesting user cannot access the project group chat.
 def _assert_project_group_chat_access(
     connection: Any, project_id: str, user_id: str
@@ -674,6 +777,12 @@ def _assert_project_group_chat_access(
     project, _ = _postgres_get_project_like_item_by_id(connection, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found.")
+
+    if not bool(project.get("isEvent")):
+        raise HTTPException(
+            status_code=403,
+            detail="Group chat is only available for event workspaces.",
+        )
 
     user = _postgres_get_hot_item_by_id(connection, "users", user_id)
     role = str(user.get("role") or "") if user else ""
@@ -820,6 +929,23 @@ def _volunteer_is_assigned_to_event_task(
     tasks = project.get("internalTasks") or []
     return any(
         str(task.get("assignedVolunteerId") or "").strip() == volunteer_id
+        for task in tasks
+    )
+
+
+def _volunteer_is_field_officer_for_event(
+    connection: Any,
+    volunteer_id: str,
+    project_id: str,
+) -> bool:
+    project, _ = _postgres_get_project_like_item_by_id(connection, project_id)
+    if not project or not bool(project.get("isEvent")):
+        return False
+
+    tasks = project.get("internalTasks") or []
+    return any(
+        str(task.get("assignedVolunteerId") or "").strip() == volunteer_id
+        and bool(task.get("isFieldOfficer"))
         for task in tasks
     )
 
@@ -1092,8 +1218,10 @@ def _build_projects_snapshot(
     role: str | None,
     requested_fields: set[str] | None = None,
 ) -> dict[str, Any]:
+    import sys
     import time as _time
     t0 = _time.perf_counter()
+    print(f"[DEBUG] _build_projects_snapshot START: user_id={user_id} role={role} fields={requested_fields}", flush=True)
     _trace(f"[TRACE] _build_projects_snapshot: starting optimized hot storage reads at {_time.perf_counter():.3f}")
 
     includes = requested_fields if requested_fields is not None else _DEFAULT_SNAPSHOT_FIELDS
@@ -1106,6 +1234,8 @@ def _build_projects_snapshot(
     include_partner_applications = "partnerApplications" in includes
     include_join_records = "volunteerJoinRecords" in includes
 
+    print(f"[DEBUG] include_projects={include_projects} include_status_updates={include_status_updates}", flush=True)
+
     raw_projects: list[dict[str, Any]] = []
     raw_events: list[dict[str, Any]] = []
     raw_status_updates: list[dict[str, Any]] = []
@@ -1114,13 +1244,51 @@ def _build_projects_snapshot(
 
     # CORE LOAD: Only fetch the collections requested by the screen.
     if include_projects or include_join_records:
-        raw_projects = _get_cached_collection(connection, "projects")
-        raw_events = _get_cached_collection(connection, "events")
+        print(f"[DEBUG] Fetching projects from database...", flush=True)
+        try:
+            raw_projects = _get_cached_collection(connection, "projects")
+            print(f"[DEBUG] Got {len(raw_projects) if raw_projects else 0} projects", flush=True)
+        except Exception as e:
+            print(f"[ERROR] Failed to fetch projects: {type(e).__name__}: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            raw_projects = []
+        
+        try:
+            raw_events = _get_cached_collection(connection, "events")
+            print(f"[DEBUG] Got {len(raw_events) if raw_events else 0} events", flush=True)
+        except Exception as e:
+            print(f"[ERROR] Failed to fetch events: {type(e).__name__}: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            raw_events = []
     if include_status_updates:
-        raw_status_updates = _get_cached_collection(connection, "statusUpdates")
+        try:
+            raw_status_updates = _get_cached_collection(connection, "statusUpdates")
+            print(f"[DEBUG] Got {len(raw_status_updates) if raw_status_updates else 0} statusUpdates", flush=True)
+        except Exception as e:
+            print(f"[ERROR] Failed to fetch statusUpdates: {type(e).__name__}: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            raw_status_updates = []
     if include_program_tracks:
-        raw_program_tracks = get_postgres_hot_storage_collection(connection, "programTracks")
-        raw_programs_table = get_postgres_hot_storage_collection(connection, "programs")
+        try:
+            raw_program_tracks = get_postgres_hot_storage_collection(connection, "programTracks")
+            print(f"[DEBUG] Got {len(raw_program_tracks) if raw_program_tracks else 0} programTracks", flush=True)
+        except Exception as e:
+            print(f"[ERROR] Failed to fetch programTracks: {type(e).__name__}: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            raw_program_tracks = []
+            
+        try:
+            raw_programs_table = get_postgres_hot_storage_collection(connection, "programs")
+            print(f"[DEBUG] Got {len(raw_programs_table) if raw_programs_table else 0} programs", flush=True)
+        except Exception as e:
+            print(f"[ERROR] Failed to fetch programs: {type(e).__name__}: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            raw_programs_table = []
         
         # Merge programs table into program tracks to support the new program creation workflow
         # while maintaining compatibility with legacy tracks.
@@ -1278,8 +1446,19 @@ def startup() -> None:
     # Run warmup in a background thread to avoid blocking server startup
     threading.Thread(target=_warm_projects_snapshot_cache, daemon=True).start()
 
+    # Always auto-seed demo data if database is empty (prevents "all zeros" after restart)
+    # This uses direct SQL instead of the Python seed function which has connection pool issues
+    def auto_seed_demo_data():
+        try:
+            from auto_seed import auto_seed_if_empty
+            auto_seed_if_empty()
+        except Exception as error:
+            print(f"[WARN] Auto-seed skipped: {type(error).__name__}: {error}")
+    
+    threading.Thread(target=auto_seed_demo_data, daemon=True).start()
+
     if not is_demo_seed_enabled():
-        print("[OK] Backend started in canonical-only mode; demo seed is disabled")
+        print("[OK] Backend started; demo seed disabled but auto-seeding empty database")
         return
 
     if not is_demo_seed_unlocked():
@@ -1381,6 +1560,10 @@ def _get_email_username_alias(identifier: str) -> str:
     return normalized_identifier
 
 
+def _get_identifier_error_message(identifier: str) -> str:
+    return "User not found"
+
+
 # Finds a user by email, email username alias, or normalized phone identifier.
 def _get_user_by_identifier(identifier: str, connection: Any | None = None) -> dict[str, Any] | None:
     normalized_identifier = identifier.strip().lower()
@@ -1397,11 +1580,18 @@ def _get_user_by_identifier(identifier: str, connection: Any | None = None) -> d
                 from users
                 where lower(coalesce(email, '')) = %s
                    or split_part(lower(coalesce(email, '')), '@', 1) = %s
-                   or regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g') = %s
-                   or regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g') = %s
+                   or (%s <> '' and regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g') = %s)
+                   or (%s <> '' and regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g') = %s)
                 order by created_at asc nulls last, users_id asc
                 """,
-                (normalized_identifier, username_alias, comparable_phone, raw_digits),
+                (
+                    normalized_identifier,
+                    username_alias,
+                    comparable_phone,
+                    comparable_phone,
+                    raw_digits,
+                    raw_digits,
+                ),
             )
             row = cursor.fetchone()
         if row is None:
@@ -1596,7 +1786,7 @@ def _get_demo_account(identifier: str) -> dict[str, Any] | None:
         if username_alias and account_email.split("@", 1)[0] == username_alias:
             return account
         # Check phone match
-        if _normalize_phone(account.get("phone", "")) == normalized_phone:
+        if normalized_phone and _normalize_phone(account.get("phone", "")) == normalized_phone:
             return account
     return None
 
@@ -1612,7 +1802,7 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
     if user is None:
         try:
             print("[DEBUG] Demo account not found, trying database...")
-            with get_connection(is_priority=True) as connection:
+            with get_connection() as connection:
                 user = _get_user_by_identifier(payload.identifier, connection)
         except Exception as db_error:
             print(f"[DEBUG] Database lookup failed: {db_error}")
@@ -1624,10 +1814,13 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
     print(f"[DEBUG] User found: {user.get('id') if user else 'None'}")
     
     if user is None:
-        raise HTTPException(status_code=401, detail="Account not found. Please check your email or phone number.")
+        raise HTTPException(
+            status_code=401,
+            detail=_get_identifier_error_message(payload.identifier),
+        )
 
     if user.get("password") != payload.password:
-        raise HTTPException(status_code=401, detail="Incorrect password.")
+        raise HTTPException(status_code=401, detail="Incorrect password")
 
     print(f"[DEBUG] Password correct for: {user.get('id')}")
     
@@ -1650,16 +1843,21 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
         except Exception as e:
             print(f"[DEBUG] Error during approval check: {e}")
 
-    return {"user": user}
+    return {"user": user, "message": "Login successful"}
 
 
 @app.post("/auth/users/{user_id}/approve")
 # API endpoint for admin to approve a pending user account and linked records.
-def approve_user(user_id: str, payload: UserApprovalPayload, admin_id: str) -> dict[str, Any]:
+async def approve_user(user_id: str, payload: UserApprovalPayload, admin_id: str) -> dict[str, Any]:
     with get_connection() as connection:
-        user = _get_user_by_id(user_id, connection)
-        if user is None:
+        users = get_postgres_hot_storage_collection(connection, "users")
+        user_index = next(
+            (index for index, candidate in enumerate(users) if str(candidate.get("id") or "") == user_id),
+            -1,
+        )
+        if user_index < 0:
             raise HTTPException(status_code=404, detail="User not found.")
+        user = dict(users[user_index])
 
         approved_at = datetime.now(timezone.utc).isoformat()
 
@@ -1669,57 +1867,108 @@ def approve_user(user_id: str, payload: UserApprovalPayload, admin_id: str) -> d
             user["approvedAt"] = approved_at
             # Remove rejection reason if it was previously rejected
             user.pop("rejectionReason", None)
-            _save_user_to_storage(user, connection)
+            users[user_index] = user
+            replace_postgres_hot_storage_collection(connection, "users", users)
+            changed_keys = ["users"]
 
             if user.get("role") == "volunteer":
                 # Find linked volunteer and update it
-                volunteers = _postgres_get_hot_items_by_field(connection, "volunteers", "userId", user_id)
+                volunteers = get_postgres_hot_storage_collection(connection, "volunteers")
+                normalized_user_email = str(user.get("email") or "").strip().lower()
+                normalized_user_phone = _normalize_comparable_phone(user.get("phone"))
                 for volunteer in volunteers:
-                    volunteer["registrationStatus"] = "Approved"
-                    volunteer["reviewedBy"] = admin_id
-                    volunteer["reviewedAt"] = approved_at
-                    volunteer["credentialsUnlockedAt"] = approved_at
-                    _postgres_upsert_hot_item(connection, "volunteers", volunteer)
-                
-                # Send system notification to the volunteer
-                from uuid import uuid4
-                notification = {
-                    "id": f"msg-{uuid4()}",
-                    "senderId": admin_id,
-                    "recipientId": user_id,
-                    "projectId": None,
-                    "content": "Your account registration has been approved! You can now log in and start volunteering.",
-                    "timestamp": approved_at,
-                    "read": False,
-                    "attachments": []
-                }
-                with connection.cursor() as cursor:
-                    cursor.execute(
-                        """
-                        insert into messages (
-                          id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                    if (
+                        str(volunteer.get("userId") or "") == user_id
+                        or (
+                            normalized_user_email
+                            and str(volunteer.get("email") or "").strip().lower() == normalized_user_email
                         )
-                        values (%s, %s, %s, %s, %s, %s, %s, %s)
-                        """,
-                        (
-                            notification["id"],
-                            notification["senderId"],
-                            notification["recipientId"],
-                            notification["projectId"],
-                            notification["content"],
-                            notification["timestamp"],
-                            notification["read"],
-                            json.dumps(notification["attachments"]),
-                        ),
+                        or (
+                            normalized_user_phone
+                            and _normalize_comparable_phone(volunteer.get("phone")) == normalized_user_phone
+                        )
+                    ):
+                        volunteer["registrationStatus"] = "Approved"
+                        volunteer["reviewedBy"] = admin_id
+                        volunteer["reviewedAt"] = approved_at
+                        volunteer["credentialsUnlockedAt"] = approved_at
+                replace_postgres_hot_storage_collection(connection, "volunteers", volunteers)
+                changed_keys.append("volunteers")
+
+            if user.get("role") == "partner":
+                partners = get_postgres_hot_storage_collection(connection, "partners")
+                normalized_user_email = str(user.get("email") or "").strip().lower()
+                normalized_user_phone = _normalize_comparable_phone(user.get("phone"))
+                for partner in partners:
+                    if (
+                        str(partner.get("ownerUserId") or "") == user_id
+                        or (
+                            normalized_user_email
+                            and str(partner.get("contactEmail") or "").strip().lower() == normalized_user_email
+                        )
+                        or (
+                            normalized_user_phone
+                            and _normalize_comparable_phone(partner.get("contactPhone")) == normalized_user_phone
+                        )
+                    ):
+                        partner["status"] = "Approved"
+                        partner["validatedBy"] = admin_id
+                        partner["validatedAt"] = approved_at
+                        partner["credentialsUnlockedAt"] = approved_at
+                replace_postgres_hot_storage_collection(connection, "partners", partners)
+                changed_keys.append("partners")
+
+            from uuid import uuid4
+            notification = {
+                "id": f"msg-{uuid4()}",
+                "senderId": admin_id,
+                "recipientId": user_id,
+                "projectId": None,
+                "content": (
+                    "Your partner organization account has been approved. You can now log in and access the partner portal."
+                    if user.get("role") == "partner"
+                    else "Your volunteer account has been approved. You can now log in and start volunteering."
+                ),
+                "timestamp": approved_at,
+                "read": False,
+                "attachments": []
+            }
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    insert into messages (
+                      id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                     )
-                _invalidate_collection_cache(["messages"])
+                    values (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        notification["id"],
+                        notification["senderId"],
+                        notification["recipientId"],
+                        notification["projectId"],
+                        notification["content"],
+                        notification["timestamp"],
+                        notification["read"],
+                        json.dumps(notification["attachments"]),
+                    ),
+                )
+            connection.commit()
+            changed_keys.append("messages")
+            _invalidate_collection_cache(changed_keys)
+            _projects_snapshot_cache.clear()
+            await connection_manager.broadcast_storage_event(changed_keys)
 
             return {"user": user, "message": "User account and linked records approved successfully."}
         elif payload.status == "rejected":
-            user["approvalStatus"] = "rejected"
-            user["rejectionReason"] = payload.rejectionReason or "Account rejected by administrator."
-            _save_user_to_storage(user, connection)
-            return {"user": user, "message": "User account rejected."}
+            changed_keys = _delete_user_account_records(connection, user_id)
+            connection.commit()
+            _invalidate_collection_cache(changed_keys)
+            _projects_snapshot_cache.clear()
+            await connection_manager.broadcast_storage_event(changed_keys)
+            return {
+                "deletedUserId": user_id,
+                "message": payload.rejectionReason or "User account rejected and deleted.",
+            }
         else:
             raise HTTPException(status_code=400, detail="Invalid approval status. Use 'approved' or 'rejected'.")
 
@@ -1729,199 +1978,161 @@ def approve_user(user_id: str, payload: UserApprovalPayload, admin_id: str) -> d
 def get_pending_users() -> dict[str, Any]:
     with get_connection() as connection:
         all_users = _get_all_users_from_storage(connection)
-        pending_users = [
-            u for u in all_users 
-            if u.get("approvalStatus") == "pending" and u.get("role") != "admin"
-        ]
+        volunteers = get_postgres_hot_storage_collection(connection, "volunteers")
+        partners = get_postgres_hot_storage_collection(connection, "partners")
+
+        def user_matches_linked_record(
+            user: dict[str, Any],
+            *,
+            linked_user_id: Any = None,
+            linked_email: Any = None,
+            linked_phone: Any = None,
+        ) -> bool:
+            user_id = str(user.get("id") or "").strip()
+            user_email = str(user.get("email") or "").strip().lower()
+            user_phone = _normalize_comparable_phone(user.get("phone"))
+
+            candidate_user_id = str(linked_user_id or "").strip()
+            candidate_email = str(linked_email or "").strip().lower()
+            candidate_phone = _normalize_comparable_phone(linked_phone)
+
+            if candidate_user_id and user_id and candidate_user_id == user_id:
+                return True
+
+            if candidate_email and user_email and candidate_email == user_email:
+                return True
+
+            if candidate_phone and user_phone and candidate_phone == user_phone:
+                return True
+
+            return False
+
+        pending_users: list[dict[str, Any]] = []
+        for user in all_users:
+            if str(user.get("role") or "") == "admin":
+                continue
+
+            approval_status = str(user.get("approvalStatus") or "").strip().lower()
+            if approval_status == "pending":
+                pending_users.append(user)
+                continue
+
+            if approval_status in {"approved", "rejected"}:
+                continue
+
+            role = str(user.get("role") or "").strip().lower()
+            if role == "volunteer":
+                has_pending_volunteer = any(
+                    user_matches_linked_record(
+                        user,
+                        linked_user_id=volunteer.get("userId"),
+                        linked_email=volunteer.get("email"),
+                        linked_phone=volunteer.get("phone"),
+                    )
+                    and str(volunteer.get("registrationStatus") or "Pending").strip().lower() == "pending"
+                    for volunteer in volunteers
+                )
+                if has_pending_volunteer:
+                    pending_users.append({**user, "approvalStatus": "pending"})
+                continue
+
+            if role == "partner":
+                has_pending_partner = any(
+                    user_matches_linked_record(
+                        user,
+                        linked_user_id=partner.get("ownerUserId"),
+                        linked_email=partner.get("contactEmail"),
+                        linked_phone=partner.get("contactPhone"),
+                    )
+                    and str(partner.get("status") or "Pending").strip().lower() == "pending"
+                    for partner in partners
+                )
+                if has_pending_partner:
+                    pending_users.append({**user, "approvalStatus": "pending"})
+
         return {
             "pendingUsers": pending_users,
             "count": len(pending_users)
         }
 
 
+def _delete_user_account_records(connection: Any, user_id: str) -> list[str]:
+    users = get_postgres_hot_storage_collection(connection, "users")
+    user = next((candidate for candidate in users if str(candidate.get("id") or "") == user_id), None)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    normalized_deleted_email = str(user.get("email") or "").strip().lower()
+    normalized_deleted_phone = _normalize_comparable_phone(user.get("phone"))
+
+    volunteers = get_postgres_hot_storage_collection(connection, "volunteers")
+    removed_volunteer_ids = {
+        str(volunteer.get("id") or "")
+        for volunteer in volunteers
+        if (
+            str(volunteer.get("id") or "") == user_id
+            or str(volunteer.get("userId") or "") == user_id
+            or (
+                normalized_deleted_email
+                and str(volunteer.get("email") or "").strip().lower() == normalized_deleted_email
+            )
+            or (
+                normalized_deleted_phone
+                and _normalize_comparable_phone(volunteer.get("phone")) == normalized_deleted_phone
+            )
+        )
+    }
+
+    partners = get_postgres_hot_storage_collection(connection, "partners")
+    removed_partner_ids = {
+        str(partner.get("id") or "")
+        for partner in partners
+        if (
+            str(partner.get("ownerUserId") or "") == user_id
+            or (
+                normalized_deleted_email
+                and str(partner.get("contactEmail") or "").strip().lower() == normalized_deleted_email
+            )
+            or (
+                normalized_deleted_phone
+                and _normalize_comparable_phone(partner.get("contactPhone")) == normalized_deleted_phone
+            )
+        )
+    }
+
+    filtered_users = [
+        candidate for candidate in users if str(candidate.get("id") or "") != user_id
+    ]
+    filtered_volunteers = [
+        volunteer
+        for volunteer in volunteers
+        if str(volunteer.get("id") or "") not in removed_volunteer_ids
+    ]
+    filtered_partners = [
+        partner
+        for partner in partners
+        if str(partner.get("id") or "") not in removed_partner_ids
+    ]
+
+    # Account management deletes must be reliable for both pending and approved accounts.
+    # Keep this scoped to the account row and linked profile rows shown on this screen.
+    replace_postgres_hot_storage_collection(connection, "users", filtered_users)
+    replace_postgres_hot_storage_collection(connection, "volunteers", filtered_volunteers)
+    replace_postgres_hot_storage_collection(connection, "partners", filtered_partners)
+    return ["users", "volunteers", "partners"]
+
+
 @app.delete("/auth/users/{user_id}")
-# API endpoint that deletes one user and all related shared-storage records in one transaction.
+# API endpoint that deletes one user and linked profile records in one transaction.
 async def delete_user_account(user_id: str) -> dict[str, Any]:
     _require_postgres()
 
-    changed_keys = [
-        "users",
-        "volunteers",
-        "partners",
-        "messages",
-        "projectGroupMessages",
-        "partnerProjectApplications",
-        "partnerReports",
-        "volunteerProjectJoins",
-        "volunteerMatches",
-        "volunteerTimeLogs",
-        "projects",
-        "events",
-    ]
-
     with get_connection() as connection:
-        users = get_postgres_hot_storage_collection(connection, "users")
-        user = next((candidate for candidate in users if str(candidate.get("id") or "") == user_id), None)
-        if user is None:
-            raise HTTPException(status_code=404, detail="User not found.")
-
-        normalized_deleted_email = str(user.get("email") or "").strip().lower()
-        normalized_deleted_phone = _normalize_comparable_phone(user.get("phone"))
-
-        volunteers = get_postgres_hot_storage_collection(connection, "volunteers")
-        removed_volunteer_ids = {
-            str(volunteer.get("id") or "")
-            for volunteer in volunteers
-            if (
-                str(volunteer.get("id") or "") == user_id
-                or str(volunteer.get("userId") or "") == user_id
-                or (
-                    normalized_deleted_email
-                    and str(volunteer.get("email") or "").strip().lower() == normalized_deleted_email
-                )
-                or (
-                    normalized_deleted_phone
-                    and _normalize_comparable_phone(volunteer.get("phone")) == normalized_deleted_phone
-                )
-            )
-        }
-
-        partners = get_postgres_hot_storage_collection(connection, "partners")
-        removed_partner_ids = {
-            str(partner.get("id") or "")
-            for partner in partners
-            if (
-                str(partner.get("ownerUserId") or "") == user_id
-                or (
-                    normalized_deleted_email
-                    and str(partner.get("contactEmail") or "").strip().lower() == normalized_deleted_email
-                )
-                or (
-                    normalized_deleted_phone
-                    and _normalize_comparable_phone(partner.get("contactPhone")) == normalized_deleted_phone
-                )
-            )
-        }
-
-        filtered_users = [
-            candidate for candidate in users if str(candidate.get("id") or "") != user_id
-        ]
-        filtered_volunteers = [
-            volunteer
-            for volunteer in volunteers
-            if str(volunteer.get("id") or "") not in removed_volunteer_ids
-        ]
-        filtered_partners = [
-            partner
-            for partner in partners
-            if str(partner.get("id") or "") not in removed_partner_ids
-        ]
-
-        messages = _get_special_storage_collection(connection, "messages")
-        filtered_messages = [
-            message
-            for message in messages
-            if str(message.get("senderId") or "") != user_id
-            and str(message.get("recipientId") or "") != user_id
-        ]
-
-        project_group_messages = _get_special_storage_collection(connection, "projectGroupMessages")
-        filtered_project_group_messages = [
-            message
-            for message in project_group_messages
-            if str(message.get("senderId") or "") != user_id
-        ]
-
-        partner_applications = get_postgres_hot_storage_collection(connection, "partnerProjectApplications")
-        filtered_partner_applications = [
-            application
-            for application in partner_applications
-            if str(application.get("partnerUserId") or "") != user_id
-        ]
-
-        partner_reports = get_postgres_hot_storage_collection(connection, "partnerReports")
-        filtered_partner_reports = [
-            report
-            for report in partner_reports
-            if str(report.get("submitterUserId") or "") != user_id
-            and str(report.get("partnerUserId") or "") != user_id
-            and str(report.get("partnerId") or "") not in removed_partner_ids
-        ]
-
-        volunteer_join_records = get_postgres_hot_storage_collection(connection, "volunteerProjectJoins")
-        filtered_volunteer_join_records = [
-            record
-            for record in volunteer_join_records
-            if str(record.get("volunteerUserId") or "") != user_id
-            and str(record.get("volunteerId") or "") not in removed_volunteer_ids
-        ]
-
-        volunteer_matches = get_postgres_hot_storage_collection(connection, "volunteerMatches")
-        filtered_volunteer_matches = [
-            match
-            for match in volunteer_matches
-            if str(match.get("volunteerId") or "") not in removed_volunteer_ids
-        ]
-
-        volunteer_time_logs = get_postgres_hot_storage_collection(connection, "volunteerTimeLogs")
-        filtered_volunteer_time_logs = [
-            log
-            for log in volunteer_time_logs
-            if str(log.get("volunteerId") or "") not in removed_volunteer_ids
-        ]
-
-        projects = get_postgres_hot_storage_collection(connection, "projects")
-        updated_projects = []
-        for project in projects:
-            updated_project = dict(project)
-            updated_project["joinedUserIds"] = [
-                joined_id
-                for joined_id in (project.get("joinedUserIds") or [])
-                if str(joined_id or "") != user_id
-            ]
-            updated_project["volunteers"] = [
-                volunteer_id
-                for volunteer_id in (project.get("volunteers") or [])
-                if str(volunteer_id or "") not in removed_volunteer_ids
-            ]
-            updated_projects.append(updated_project)
-
-        events = get_postgres_hot_storage_collection(connection, "events")
-        updated_events = []
-        for event in events:
-            updated_event = dict(event)
-            updated_event["joinedUserIds"] = [
-                joined_id
-                for joined_id in (event.get("joinedUserIds") or [])
-                if str(joined_id or "") != user_id
-            ]
-            updated_event["volunteers"] = [
-                volunteer_id
-                for volunteer_id in (event.get("volunteers") or [])
-                if str(volunteer_id or "") not in removed_volunteer_ids
-            ]
-            updated_events.append(updated_event)
-
-        replace_postgres_hot_storage_collection(connection, "users", filtered_users)
-        replace_postgres_hot_storage_collection(connection, "volunteers", filtered_volunteers)
-        replace_postgres_hot_storage_collection(connection, "partners", filtered_partners)
-        replace_postgres_hot_storage_collection(
-            connection, "partnerProjectApplications", filtered_partner_applications
-        )
-        replace_postgres_hot_storage_collection(connection, "partnerReports", filtered_partner_reports)
-        replace_postgres_hot_storage_collection(
-            connection, "volunteerProjectJoins", filtered_volunteer_join_records
-        )
-        replace_postgres_hot_storage_collection(connection, "volunteerMatches", filtered_volunteer_matches)
-        replace_postgres_hot_storage_collection(connection, "volunteerTimeLogs", filtered_volunteer_time_logs)
-        replace_postgres_hot_storage_collection(connection, "projects", updated_projects)
-        replace_postgres_hot_storage_collection(connection, "events", updated_events)
-        _replace_special_storage_collection(connection, "messages", filtered_messages)
-        _replace_special_storage_collection(
-            connection, "projectGroupMessages", filtered_project_group_messages
-        )
+        changed_keys = _delete_user_account_records(connection, user_id)
         connection.commit()
 
+    _invalidate_collection_cache(changed_keys)
+    _projects_snapshot_cache.clear()
     await connection_manager.broadcast_storage_event(changed_keys)
     return {"status": "ok", "deletedUserId": user_id}
 
@@ -1968,69 +2179,37 @@ def get_projects_snapshot(
     role: str | None = None,
     fields: str | None = None,
 ) -> dict[str, Any]:
-    _require_postgres()
-    import time as _time
-    _start = _time.perf_counter()
-    normalized_fields = _normalize_snapshot_fields(fields)
-    includes = normalized_fields if normalized_fields is not None else _DEFAULT_SNAPSHOT_FIELDS
-    normalized_fields_token = (
-        ",".join(sorted(normalized_fields)) if normalized_fields is not None else "*"
-    )
-    _trace(
-        f"[TRACE] /projects/snapshot start user_id={user_id} role={role} fields={normalized_fields_token}"
-    )
+    """Return the project snapshot used by web and native project screens."""
+    try:
+        _require_postgres()
 
-    # Create cache key from parameters
-    cache_key = f"snapshot:{user_id}:{role}:{normalized_fields_token}"
-
-    # Check cache first (outside lock for fast path)
-    cached_result = _projects_snapshot_cache.get(cache_key)
-    if cached_result is not None:
-        return cached_result
-
-    with _projects_snapshot_lock:
-        # Check again inside lock
-        cached_result = _projects_snapshot_cache.get(cache_key)
-        if cached_result is not None:
-            return cached_result
-
-        # Not in cache, fetch from database
         with get_connection() as connection:
-            _trace(f"[TRACE] /projects/snapshot got connection after {_time.perf_counter() - _start:.3f}s")
-            # Reuse shared project/status snapshot for user-scoped requests to avoid
-            # re-fetching the heaviest collections on first screen load.
-            should_reuse_shared_core = bool(user_id and role and "projects" in includes)
-            if not should_reuse_shared_core:
-                result = _build_projects_snapshot(connection, user_id, role, normalized_fields)
-            else:
-                base_fields: set[str] = {"projects"}
-                if "statusUpdates" in includes:
-                    base_fields.add("statusUpdates")
-                if "programTracks" in includes:
-                    base_fields.add("programTracks")
-                base_fields_token = ",".join(sorted(base_fields))
-                base_cache_key = f"snapshot:None:None:{base_fields_token}"
-                base_snapshot = _projects_snapshot_cache.get(base_cache_key)
-                if base_snapshot is None:
-                    base_snapshot = _build_projects_snapshot(connection, None, None, base_fields)
-                    _projects_snapshot_cache.set(base_cache_key, base_snapshot)
-    
-                user_fields = set(includes)
-                user_fields.discard("projects")
-                user_fields.discard("statusUpdates")
-                user_fields.discard("programTracks")
-                user_snapshot = _build_projects_snapshot(connection, user_id, role, user_fields)
-                user_snapshot["projects"] = base_snapshot.get("projects", [])
-                user_snapshot["programTracks"] = base_snapshot.get("programTracks", [])
-                if "statusUpdates" in includes:
-                    user_snapshot["statusUpdates"] = base_snapshot.get("statusUpdates", [])
-                result = user_snapshot
-            _trace(f"[TRACE] /projects/snapshot built snapshot after {_time.perf_counter() - _start:.3f}s")
-    
-        # Store in cache
-        _projects_snapshot_cache.set(cache_key, result)
-        _trace(f"[TRACE] /projects/snapshot returning after {_time.perf_counter() - _start:.3f}s")
-        return result
+            requested_fields = _normalize_snapshot_fields(fields)
+            snapshot = _build_projects_snapshot(connection, user_id, role, requested_fields)
+            snapshot["events"] = [
+                project
+                for project in snapshot.get("projects", [])
+                if bool(project.get("isEvent"))
+            ]
+            return snapshot
+    except Exception as error:
+        import sys
+        import traceback
+        print(f"[ERROR] Snapshot failed: {type(error).__name__}: {error}", flush=True)
+        traceback.print_exc()
+        print(f"[ERROR] Snapshot failed: {type(error).__name__}: {error}", file=sys.stderr, flush=True)
+        # Return valid empty response
+        return {
+            "projects": [],
+            "events": [],
+            "statusUpdates": [],
+            "programTracks": [],
+            "volunteerProfile": None,
+            "volunteerMatches": [],
+            "timeLogs": [],
+            "partnerApplications": [],
+            "volunteerJoinRecords": [],
+        }
 
 
 @app.get("/volunteers/by-user/{user_id}")
@@ -2073,6 +2252,8 @@ async def start_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogStartP
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found.")
 
+        now = datetime.now(timezone.utc)
+
         if bool(project.get("isEvent")) and not _volunteer_is_assigned_to_event_task(
             connection,
             volunteer_id,
@@ -2081,6 +2262,18 @@ async def start_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogStartP
             raise HTTPException(
                 status_code=403,
                 detail="You must be assigned to an event task before timing in.",
+            )
+
+        if bool(project.get("isEvent")) and not _event_attendance_window_has_started(project, now):
+            raise HTTPException(
+                status_code=400,
+                detail="This event has not started yet.",
+            )
+
+        if bool(project.get("isEvent")) and _event_attendance_window_has_ended(project, now):
+            raise HTTPException(
+                status_code=400,
+                detail="This event attendance window has already ended.",
             )
 
         existing_logs = _postgres_get_volunteer_time_logs(connection, volunteer_id)
@@ -2095,11 +2288,26 @@ async def start_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogStartP
         if active_log is not None:
             raise HTTPException(status_code=409, detail="You already have an active time log for this project.")
 
+        today_log = next(
+            (
+                log
+                for log in existing_logs
+                if log.get("projectId") == payload.projectId
+                and _get_local_date_key(log.get("timeIn")) == _get_local_date_key(now.isoformat())
+            ),
+            None,
+        )
+        if today_log is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Attendance has already been recorded for this event today.",
+            )
+
         new_log = {
             "id": f"timelog-{int(datetime.now(timezone.utc).timestamp() * 1000)}",
             "volunteerId": volunteer_id,
             "projectId": payload.projectId,
-            "timeIn": datetime.now(timezone.utc).isoformat(),
+            "timeIn": now.isoformat(),
             "note": payload.note,
         }
         _postgres_upsert_hot_item(connection, "volunteerTimeLogs", new_log)
@@ -2123,7 +2331,10 @@ async def end_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogEndPaylo
             None,
         )
         if active_log is None:
-            return {"log": None, "volunteerProfile": _postgres_get_hot_item_by_id(connection, "volunteers", volunteer_id)}
+            raise HTTPException(
+                status_code=400,
+                detail="You must time in before you can time out.",
+            )
 
         completion_report = str(payload.completionReport or "").strip()
         completion_photo = str(payload.completionPhoto or "").strip()
@@ -2437,6 +2648,8 @@ def get_messages(user_id: str) -> dict[str, list[dict[str, Any]]]:
     from psycopg.rows import dict_row
 
     with get_connection() as connection:
+        current_user = _get_user_by_id(user_id, connection)
+        current_role = str(current_user.get("role") or "") if current_user else ""
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 """
@@ -2448,6 +2661,16 @@ def get_messages(user_id: str) -> dict[str, list[dict[str, Any]]]:
                 (user_id, user_id),
             )
             rows = cursor.fetchall()
+
+        if current_role:
+            visible_rows = []
+            for row in rows:
+                other_user_id = row["recipient_id"] if row["sender_id"] == user_id else row["sender_id"]
+                other_user = _get_user_by_id(other_user_id, connection)
+                other_role = str(other_user.get("role") or "") if other_user else ""
+                if _is_direct_message_pair_allowed(current_role, other_role):
+                    visible_rows.append(row)
+            rows = visible_rows
     return {"messages": [serialize_message_row(row) for row in rows]}
 
 
@@ -2458,6 +2681,7 @@ def get_conversation(user1: str, user2: str) -> dict[str, list[dict[str, Any]]]:
     from psycopg.rows import dict_row
 
     with get_connection() as connection:
+        _assert_direct_message_access(connection, user1, user2)
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 """
@@ -2514,10 +2738,7 @@ async def create_message(payload: MessagePayload) -> dict[str, Any]:
     from psycopg.rows import dict_row
 
     with get_connection() as connection:
-        if _get_user_by_id(payload.senderId, connection) is None:
-            raise HTTPException(status_code=404, detail="Sender not found.")
-        if _get_user_by_id(payload.recipientId, connection) is None:
-            raise HTTPException(status_code=404, detail="Recipient not found.")
+        _assert_direct_message_access(connection, payload.senderId, payload.recipientId)
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 """
@@ -2709,8 +2930,15 @@ def get_storage_item(key: str) -> dict[str, Any]:
     _require_postgres()
     if not is_hot_storage_key(key) and key not in SPECIAL_STORAGE_KEYS:
         return {"key": key, "value": None}
-    with get_connection() as connection:
-        return {"key": key, "value": _get_cached_collection(connection, key)}
+    try:
+        with get_connection() as connection:
+            return {"key": key, "value": _get_cached_collection(connection, key)}
+    except Exception as error:
+        print(f"[ERROR] Failed to get storage key '{key}': {type(error).__name__}: {error}")
+        # Return empty list/object instead of 500 error to keep UI responsive
+        if key in COLLECTION_KEYS:
+            return {"key": key, "value": []}
+        return {"key": key, "value": {}}
 
 
 @app.delete("/program-tracks/{track_id}")
@@ -2747,37 +2975,42 @@ async def delete_program_track(track_id: str) -> dict[str, str]:
 # API endpoint that reads multiple storage keys in a single request.
 # OPTIMIZED: Fetch keys in parallel using separate connections to avoid sequential DB queries.
 def get_storage_items_batch(payload: StorageBatchPayload) -> dict[str, dict[str, Any]]:
-    keys = [key for key in payload.keys if key]
-    items: dict[str, Any] = {key: None for key in keys}
+    try:
+        keys = [key for key in payload.keys if key]
+        items: dict[str, Any] = {key: None for key in keys}
 
-    if not keys:
-        return {"items": items}
+        if not keys:
+            return {"items": items}
 
-    # Fetch keys in parallel using thread pool
-    def _fetch_collection(key: str) -> tuple[str, Any]:
-        try:
-            with get_connection() as connection:
-                value = _get_cached_collection(connection, key)
-            return key, value
-        except Exception as e:
-            _trace(f"[WARN] Failed to fetch key '{key}': {e}")
-            return key, None
-
-    # Use ThreadPoolExecutor to parallelize database queries
-    # Limit to number of keys to avoid excessive connections
-    max_workers = min(len(keys), 5)
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(_fetch_collection, key): key for key in keys}
-        for future in as_completed(futures):
+        # Fetch keys in parallel using thread pool
+        def _fetch_collection(key: str) -> tuple[str, Any]:
             try:
-                key, value = future.result()
-                items[key] = value
+                with get_connection() as connection:
+                    value = _get_cached_collection(connection, key)
+                return key, value
             except Exception as e:
-                key = futures[future]
-                _trace(f"[WARN] Exception fetching key '{key}': {e}")
-                items[key] = None
+                print(f"[WARN] Failed to fetch key '{key}': {type(e).__name__}: {e}")
+                return key, [] if key in COLLECTION_KEYS else {}
 
-    return {"items": items}
+        # Use ThreadPoolExecutor to parallelize database queries
+        # Limit to number of keys to avoid excessive connections
+        max_workers = min(len(keys), 5)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_fetch_collection, key): key for key in keys}
+            for future in as_completed(futures):
+                try:
+                    key, value = future.result()
+                    items[key] = value
+                except Exception as e:
+                    key = futures[future]
+                    print(f"[WARN] Exception fetching key '{key}': {type(e).__name__}: {e}")
+                    items[key] = [] if key in COLLECTION_KEYS else {}
+
+        return {"items": items}
+    except Exception as error:
+        print(f"[ERROR] Batch storage request failed: {type(error).__name__}: {error}")
+        # Return empty items instead of 500 error
+        return {"items": {k: ([] if k in COLLECTION_KEYS else {}) for k in (payload.keys or [])}}
 
 
 @app.put("/storage/{key}")
@@ -2863,6 +3096,11 @@ async def submit_report(payload: ReportSubmitPayload) -> dict[str, Any]:
         "metrics": metrics,
         "attachments": attachments,
         "mediaFile": media_file,
+        "sourceReportIds": [
+            str(report_id).strip()
+            for report_id in (payload.sourceReportIds or [])
+            if str(report_id).strip()
+        ],
         "createdAt": str(payload.createdAt or now).strip() or now,
         "status": str(payload.status or "Submitted").strip() or "Submitted",
         "reviewedAt": None,
@@ -2873,6 +3111,10 @@ async def submit_report(payload: ReportSubmitPayload) -> dict[str, Any]:
         broadcast_keys = ["partnerReports"]
         with get_connection() as connection:
             if submitter_role == "volunteer":
+                project, _ = _postgres_get_project_like_item_by_id(connection, project_id)
+                if project is None:
+                    raise HTTPException(status_code=404, detail="Project not found.")
+
                 volunteer = _postgres_get_volunteer_by_user_id(connection, submitter_user_id)
                 if volunteer is None:
                     raise HTTPException(
@@ -2887,6 +3129,18 @@ async def submit_report(payload: ReportSubmitPayload) -> dict[str, Any]:
                     )
 
                 volunteer_id = str(volunteer.get("id") or "")
+                report_type = str(payload.reportType or "").strip()
+                is_field_officer = _volunteer_is_field_officer_for_event(connection, volunteer_id, project_id)
+                if report_type == "field_report" and not is_field_officer:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Field reports are only for the assigned field officer of this event.",
+                    )
+                if report_type != "field_report" and is_field_officer:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="The assigned field officer must submit a field report for this event.",
+                    )
                 existing_logs = _postgres_get_volunteer_time_logs(connection, volunteer_id)
                 active_log = next(
                     (
@@ -2911,13 +3165,14 @@ async def submit_report(payload: ReportSubmitPayload) -> dict[str, Any]:
                     _postgres_add_logged_hours_to_volunteer(connection, volunteer_id, updated_log)
                     broadcast_keys.extend(["volunteerTimeLogs", "volunteers"])
 
-                _postgres_complete_volunteer_participation(
-                    connection,
-                    project_id,
-                    volunteer_id,
-                    submitter_user_id,
-                )
-                broadcast_keys.extend(["volunteerProjectJoins", "volunteerMatches", "volunteers"])
+                if _event_attendance_window_has_ended(project):
+                    _postgres_complete_volunteer_participation(
+                        connection,
+                        project_id,
+                        volunteer_id,
+                        submitter_user_id,
+                    )
+                    broadcast_keys.extend(["volunteerProjectJoins", "volunteerMatches", "volunteers"])
 
             saved_report = _postgres_upsert_hot_item(connection, "partnerReports", report)
             connection.commit()

@@ -54,7 +54,10 @@ import {
   reviewPartnerReport,
   reviewPartnerProjectApplication,
   reviewVolunteerProjectMatch,
+  reconcileApprovedVolunteerEventMemberships,
   deleteProgram,
+  notifyVolunteerAboutTaskUnassignment,
+  notifyVolunteerAboutTaskUpdate,
   saveEvent,
   saveProgram,
   saveProject,
@@ -182,6 +185,33 @@ type ProjectTimeLogEntry = VolunteerTimeLog & {
   volunteerName: string;
   volunteerEmail: string;
 };
+
+type ProjectVolunteerAttendanceCard = {
+  volunteerId: string;
+  volunteerName: string;
+  volunteerEmail: string;
+  logs: ProjectTimeLogEntry[];
+  timeInCount: number;
+  timeOutCount: number;
+  attendanceDays: number;
+  latestActivityLabel: string;
+  activeLog: ProjectTimeLogEntry | null;
+};
+
+function getLocalDateKey(value?: string): string {
+  if (!value) {
+    return '';
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return '';
+  }
+
+  const month = String(parsed.getMonth() + 1).padStart(2, '0');
+  const day = String(parsed.getDate()).padStart(2, '0');
+  return `${parsed.getFullYear()}-${month}-${day}`;
+}
 
 function getStartOfWeekMonday(sourceDate: Date): Date {
   const date = new Date(sourceDate);
@@ -501,6 +531,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [projectEditorMode, setProjectEditorMode] = useState<'project' | 'event' | null>(null);
   const [isProjectSaveSuccess, setIsProjectSaveSuccess] = useState(false);
   const [showTaskModal, setShowTaskModal] = useState(false);
+  const [isTaskSaveSuccess, setIsTaskSaveSuccess] = useState(false);
+  const [taskSaveSuccessMessage, setTaskSaveSuccessMessage] = useState('');
+  const [taskSaveNotice, setTaskSaveNotice] = useState<string | null>(null);
   const [projectSaveError, setProjectSaveError] = useState<string | null>(null);
   const [showAssignmentDropdown, setShowAssignmentDropdown] = useState(false);
   const [showSkillsDropdown, setShowSkillsDropdown] = useState(false);
@@ -645,10 +678,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       const unsubscribe = subscribeToStorageChanges(
         // Keep subscriptions focused on keys that affect the visible UI first.
-        ['projects', 'events', 'partners', 'statusUpdates', 'partnerReports', 'volunteerProjectJoins', 'volunteerMatches', 'programTracks'],
-        () => {
+        ['projects', 'events', 'partners', 'statusUpdates', 'partnerReports', 'volunteerProjectJoins', 'volunteerMatches', 'volunteerTimeLogs', 'programTracks'],
+        event => {
           // For storage updates, update light data immediately and defer heavy refreshes
           void refreshLight();
+          if (event.keys.includes('volunteerTimeLogs')) {
+            void loadVolunteerTimeLogs();
+          }
           setTimeout(() => {
             void refreshDeferred();
           }, 200);
@@ -784,6 +820,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   // Loads volunteers who have already joined the selected project.
   const loadVolunteerJoinsForProject = async (projectId: string) => {
     try {
+      await reconcileApprovedVolunteerEventMemberships();
       const records = await getVolunteerProjectJoinRecords(projectId);
       setVolunteerJoinRecords(records);
     } catch (error) {
@@ -1277,6 +1314,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     setTaskDraft(createEmptyProjectTaskDraft());
     setCustomTaskSkill('');
     setShowAssignmentDropdown(false);
+    setIsTaskSaveSuccess(false);
+    setTaskSaveSuccessMessage('');
     setShowTaskModal(true);
   };
 
@@ -1295,15 +1334,23 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     });
     setCustomTaskSkill('');
     setShowAssignmentDropdown(false);
+    setIsTaskSaveSuccess(false);
+    setTaskSaveSuccessMessage('');
     setShowTaskModal(true);
   };
 
   const closeTaskModal = () => {
     setShowTaskModal(false);
+    setIsTaskSaveSuccess(false);
+    setTaskSaveSuccessMessage('');
     setEditingTaskId(null);
     setTaskDraft(createEmptyProjectTaskDraft());
     setCustomTaskSkill('');
     setShowAssignmentDropdown(false);
+  };
+
+  const showTaskSaveNotice = (message: string) => {
+    setTaskSaveNotice(message);
   };
 
   const toggleTaskSkill = (skillName: string) => {
@@ -1405,6 +1452,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       return;
     }
 
+    const failProjectSaveValidation = (message: string) => {
+      setActionLoadingKey(null);
+      setProjectSaveError(message);
+      Alert.alert('Update Blocked', message);
+    };
+
     const parsedLatitude = Number(projectDraft.latitude);
     const parsedLongitude = Number(projectDraft.longitude);
     const volunteersNeeded = Number(projectDraft.volunteersNeeded);
@@ -1420,17 +1473,17 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       !projectDraft.endDate.trim() ||
       !projectDraft.address.trim()
     ) {
-      setProjectSaveError('Fill in all required fields: title, description, start date, end date, and location.');
+      failProjectSaveValidation('Fill in all required fields: title, description, start date, end date, and location.');
       return;
     }
 
     if (projectDraft.isEvent && !projectDraft.parentProjectId?.trim()) {
-      setProjectSaveError('Select a parent project before saving this event.');
+      failProjectSaveValidation('Select a parent project before saving this event.');
       return;
     }
 
     if (projectDraft.startDate > projectDraft.endDate) {
-      setProjectSaveError('End date must be on or after the start date.');
+      failProjectSaveValidation('End date must be on or after the start date.');
       return;
     }
 
@@ -1439,24 +1492,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         projects.find(project => !project.isEvent && project.id === projectDraft.parentProjectId) || null;
 
       if (!parentProject) {
-        setProjectSaveError('Choose a valid parent project for this event.');
-        return;
-      }
-
-      const parentStartDate = parentProject.startDate.slice(0, 10);
-      const parentEndDate = parentProject.endDate.slice(0, 10);
-      const matchesParentSchedule =
-        projectDraft.startDate === parentStartDate && projectDraft.endDate === parentEndDate;
-      const isOutsideParentSchedule =
-        projectDraft.startDate < parentStartDate || projectDraft.endDate > parentEndDate;
-
-      if (matchesParentSchedule) {
-        setProjectSaveError('Event dates must be different from the parent project schedule. Choose a smaller window for the event.');
-        return;
-      }
-
-      if (isOutsideParentSchedule) {
-        setProjectSaveError(`Event dates must stay within the parent project schedule (${parentStartDate} to ${parentEndDate}).`);
+        failProjectSaveValidation('Choose a valid parent project for this event.');
         return;
       }
     }
@@ -1488,7 +1524,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         : null);
 
     if (!resolvedCoordinates) {
-      setProjectSaveError('Enter a recognizable barangay, city, municipality, or venue so the map can place this program.');
+      failProjectSaveValidation('Enter a recognizable barangay, city, municipality, or venue so the map can place this program.');
       return;
     }
 
@@ -1546,20 +1582,37 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       await saveProjectLikeRecord(savedProject);
       await loadProjects();
       setActionLoadingKey(null);
-      setIsProjectSaveSuccess(true);
-      const successTitle = editingProjectId ? '✅ Project Updated' : '✅ Project Created';
-      const successMessage = editingProjectId
+      const isEditingExistingRecord = Boolean(editingProjectId);
+      const successTitle = isEditingExistingRecord
         ? savedProject.isEvent
-          ? 'Event updated successfully and saved to the database.'
-          : 'Project updated successfully and saved to the database.'
+          ? 'Event Edit Completed'
+          : 'Project Edit Completed'
         : savedProject.isEvent
-          ? 'Event created successfully and saved to the database.'
-          : 'Project created successfully and saved to the database.';
+          ? 'Event Created'
+          : 'Project Created';
+      const successMessage = isEditingExistingRecord
+        ? savedProject.isEvent
+          ? 'Event details were updated and saved successfully.'
+          : 'Project details were updated and saved successfully.'
+        : savedProject.isEvent
+          ? 'Event was created and saved successfully.'
+          : 'Project was created and saved successfully.';
 
-      Alert.alert(successTitle, successMessage);
+      if (isEditingExistingRecord) {
+        closeProjectModal();
+        showTaskSaveNotice(
+          savedProject.isEvent
+            ? 'Event edit completed. The event details were updated and saved successfully.'
+            : 'Project edit completed. The project details were updated and saved successfully.'
+        );
+        Alert.alert(successTitle, successMessage);
+      } else {
+        setIsProjectSaveSuccess(true);
+        Alert.alert(successTitle, successMessage);
+      }
 
       // For new events, keep the modal open and reset the form for adding another event
-      if (savedProject.isEvent && !editingProjectId) {
+      if (savedProject.isEvent && !isEditingExistingRecord) {
         setTimeout(() => {
           setIsProjectSaveSuccess(false);
           setProjectSaveError(null);
@@ -1586,15 +1639,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             resetProjectLocationSelection();
             applyProjectLocationSelectionFromAddress(parentProject.location.address || '');
           }
-        }, 1200);
-      } else {
-        // For projects and event edits, close the modal as before
-        setTimeout(() => {
-          setIsProjectSaveSuccess(false);
-          handleReturnToProjectList();
-          closeProjectModal();
-          void loadAllPartnerApplications();
-        }, 1200);
+        }, 1800);
+      } else if (!isEditingExistingRecord) {
+        void loadAllPartnerApplications();
       }
     } catch (error) {
       Alert.alert(
@@ -1938,13 +1985,18 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   // Builds the volunteer list displayed for a specific project.
   const getProjectVolunteerEntries = (project: Project) => {
     const volunteerById = new Map(volunteers.map(volunteer => [volunteer.id, volunteer]));
+    const projectJoinRecords = volunteerJoinRecords.filter(record => record.projectId === project.id);
     const joinRecordByVolunteerId = new Map(
-      volunteerJoinRecords.map(record => [record.volunteerId, record])
+      projectJoinRecords.map(record => [record.volunteerId, record])
     );
+    const matchedVolunteerIds = volunteerMatches
+      .filter(match => match.projectId === project.id && match.status === 'Matched')
+      .map(match => match.volunteerId);
     const volunteerIds = Array.from(
       new Set([
         ...project.volunteers,
-        ...volunteerJoinRecords.map(record => record.volunteerId),
+        ...projectJoinRecords.map(record => record.volunteerId),
+        ...matchedVolunteerIds,
       ])
     );
 
@@ -1986,11 +2038,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   };
 
   // Builds the volunteer-request list for the selected project.
-  const getProjectVolunteerRequestEntries = () => {
+  const getProjectVolunteerRequestEntries = (projectId: string) => {
     const volunteerById = new Map(volunteers.map(volunteer => [volunteer.id, volunteer]));
 
     return volunteerMatches
-      .filter(match => match.status === 'Requested' || match.status === 'Rejected')
+      .filter(match => match.projectId === projectId && match.status === 'Requested')
       .map<ProjectVolunteerRequestEntry | null>(match => {
         const volunteer = volunteerById.get(match.volunteerId);
         if (!volunteer) {
@@ -2054,6 +2106,34 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       return;
     }
 
+    const previousTask = editingTaskId
+      ? (Array.isArray(currentSelectedProject.internalTasks) ? currentSelectedProject.internalTasks : []).find(task => task.id === editingTaskId) || null
+      : null;
+    const previouslyAssignedVolunteer =
+      previousTask?.assignedVolunteerId && previousTask.assignedVolunteerId !== taskDraft.assignedVolunteerId
+        ? assignableVolunteers.find(volunteer => volunteer.id === previousTask.assignedVolunteerId) || null
+        : null;
+    const notificationAssignedVolunteer = assignedVolunteer
+      ? volunteers.find(volunteer => volunteer.id === assignedVolunteer.id) || null
+      : null;
+    const notificationPreviousVolunteer = previouslyAssignedVolunteer
+      ? volunteers.find(volunteer => volunteer.id === previouslyAssignedVolunteer.id) || null
+      : null;
+    const shouldNotifyAssignedVolunteer = Boolean(
+      assignedVolunteer &&
+      (
+        !previousTask ||
+        previousTask.assignedVolunteerId !== assignedVolunteer.id ||
+        previousTask.title !== taskDraft.title.trim() ||
+        previousTask.description !== taskDraft.description.trim() ||
+        previousTask.category !== taskDraft.category.trim() ||
+        previousTask.priority !== taskDraft.priority ||
+        previousTask.status !== taskStatus ||
+        previousTask.isFieldOfficer !== taskDraft.isFieldOfficer ||
+        (previousTask.skillsNeeded || []).join('|') !== normalizedSkills.join('|')
+      )
+    );
+
     const nextTask: ProjectInternalTask = {
       id: editingTaskId || `${currentSelectedProject.id}-task-${Date.now()}`,
       title: taskDraft.title.trim(),
@@ -2084,14 +2164,34 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     try {
       await saveProjectLikeRecord(updatedProject);
+      const notificationTasks: Promise<void>[] = [];
+      if (previousTask && notificationPreviousVolunteer) {
+        notificationTasks.push(notifyVolunteerAboutTaskUnassignment({
+          event: currentSelectedProject,
+          task: previousTask,
+          volunteer: notificationPreviousVolunteer,
+          actorUserId: user?.id,
+        }));
+      }
+      if (notificationAssignedVolunteer && shouldNotifyAssignedVolunteer) {
+        notificationTasks.push(notifyVolunteerAboutTaskUpdate({
+          event: updatedProject,
+          task: nextTask,
+          volunteer: notificationAssignedVolunteer,
+          actorUserId: user?.id,
+          action: previousTask?.assignedVolunteerId === notificationAssignedVolunteer.id ? 'updated' : 'assigned',
+        }));
+      }
+      if (notificationTasks.length > 0) {
+        await Promise.all(notificationTasks);
+      }
       await loadProjects();
       setSelectedProject(updatedProject);
-      closeTaskModal();
-      Alert.alert(
-        'Saved',
+      setIsTaskSaveSuccess(true);
+      setTaskSaveSuccessMessage(
         editingTaskId
-          ? 'Internal task updated and saved to the database.'
-          : 'Internal task added and saved to the database.'
+          ? 'Event task update complete. Assignment changes were saved and volunteer notifications were sent when needed.'
+          : 'Event task added. Assignment changes were saved and volunteer notifications were sent when needed.'
       );
     } catch (error) {
       Alert.alert(
@@ -2646,21 +2746,34 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               <Text style={{ fontSize: 22, fontWeight: '800', color: '#1e293b', marginTop: 18, textAlign: 'center' }}>
                 {editingProjectId
                   ? projectDraft.isEvent
-                    ? 'Event Saved!'
-                    : 'Project Saved!'
+                    ? 'Event Edit Completed'
+                    : 'Project Edit Completed'
                   : projectDraft.isEvent
-                    ? 'Event Created!'
-                    : 'Project Created!'}
+                    ? 'Event Created'
+                    : 'Project Created'}
               </Text>
               <Text style={{ fontSize: 14, color: '#64748b', marginTop: 10, textAlign: 'center', lineHeight: 20 }}>
                 {editingProjectId
                   ? projectDraft.isEvent
-                    ? 'Your event updates were saved to the database successfully.'
-                    : 'Your project changes were saved to the database successfully.'
+                    ? 'The event details edit was done and completed successfully.'
+                    : 'The project details edit was done and completed successfully.'
                   : projectDraft.isEvent
-                    ? 'Your event was created and saved to the database successfully.'
-                    : 'Your project was created and saved to the database successfully.'}
+                    ? 'The event was created and saved successfully.'
+                    : 'The project was created and saved successfully.'}
               </Text>
+              {editingProjectId ? (
+                <TouchableOpacity
+                  style={{ marginTop: 24, backgroundColor: '#166534', borderRadius: 12, paddingVertical: 12, paddingHorizontal: 34 }}
+                  onPress={() => {
+                    setIsProjectSaveSuccess(false);
+                    handleReturnToProjectList();
+                    closeProjectModal();
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <Text style={{ color: '#ffffff', fontSize: 14, fontWeight: '900' }}>OK</Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
           </View>
         ) : (
@@ -2886,11 +2999,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           {projectDraft.isEvent && projectDraftParentProject ? (
             <View style={[styles.formRow, styles.formRowTop, styles.formRowReverse]}>
               <View style={[styles.statusOptionsCard, styles.helperPanel]}>
-                <Text style={styles.helperPanelTitle}>Event schedule must differ from the parent project</Text>
+                <Text style={styles.helperPanelTitle}>Event timeline can be updated independently</Text>
                 <Text style={styles.helperPanelText}>
                   Parent project window: {projectDraftParentProject.startDate.slice(0, 10)} to{' '}
-                  {projectDraftParentProject.endDate.slice(0, 10)}. Set an event-specific start and end date inside
-                  that range.
+                  {projectDraftParentProject.endDate.slice(0, 10)}. You can adjust this event schedule here and the
+                  attendance timeline will follow the updated dates in realtime.
                 </Text>
               </View>
               <Text style={[styles.labelRight, styles.labelTop]}>Date Rule</Text>
@@ -3439,12 +3552,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   if (activeSelectedProject) {
     const volunteerEntries = getProjectVolunteerEntries(activeSelectedProject);
     const assignableVolunteerOptions = getAssignableVolunteerOptions(activeSelectedProject);
-    const volunteerRequestEntries = getProjectVolunteerRequestEntries();
+    const volunteerRequestEntries = getProjectVolunteerRequestEntries(activeSelectedProject.id);
     const pendingVolunteerRequestEntries = volunteerRequestEntries.filter(
       requestEntry => requestEntry.status === 'Requested',
-    );
-    const rejectedVolunteerRequestEntries = volunteerRequestEntries.filter(
-      requestEntry => requestEntry.status === 'Rejected',
     );
     const projectTimeLogEntries: ProjectTimeLogEntry[] = volunteerTimeLogs
       .filter(log => log.projectId === activeSelectedProject.id)
@@ -3455,7 +3565,47 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           volunteerName: volunteer?.name || 'Volunteer',
           volunteerEmail: volunteer?.email || 'No email on file',
         };
-      });
+      })
+      .sort(
+        (left, right) =>
+          new Date(right.timeOut || right.timeIn).getTime() -
+          new Date(left.timeOut || left.timeIn).getTime()
+      );
+    const projectVolunteerAttendanceCards: ProjectVolunteerAttendanceCard[] = Array.from(
+      projectTimeLogEntries.reduce((map, log) => {
+        const current = map.get(log.volunteerId) || [];
+        current.push(log);
+        map.set(log.volunteerId, current);
+        return map;
+      }, new Map<string, ProjectTimeLogEntry[]>())
+    )
+      .map(([volunteerId, logs]) => {
+        const sortedLogs = [...logs].sort(
+          (left, right) =>
+            new Date(right.timeOut || right.timeIn).getTime() -
+            new Date(left.timeOut || left.timeIn).getTime()
+        );
+        const latestLog = sortedLogs[0] || null;
+
+        return {
+          volunteerId,
+          volunteerName: sortedLogs[0]?.volunteerName || 'Volunteer',
+          volunteerEmail: sortedLogs[0]?.volunteerEmail || 'No email on file',
+          logs: sortedLogs,
+          timeInCount: sortedLogs.length,
+          timeOutCount: sortedLogs.filter(log => Boolean(log.timeOut)).length,
+          attendanceDays: new Set(
+            sortedLogs.map(log => getLocalDateKey(log.timeIn)).filter(Boolean)
+          ).size,
+          latestActivityLabel: latestLog
+            ? latestLog.timeOut
+              ? `Time out ${format(new Date(latestLog.timeOut), 'PPpp')}`
+              : `Time in ${format(new Date(latestLog.timeIn), 'PPpp')}`
+            : 'No time logs yet',
+          activeLog: sortedLogs.find(log => !log.timeOut) || null,
+        };
+      })
+      .sort((left, right) => left.volunteerName.localeCompare(right.volunteerName));
     const projectTimeInCount = projectTimeLogEntries.length;
     const projectTimeOutCount = projectTimeLogEntries.filter(log => Boolean(log.timeOut)).length;
     const selectedPartnerName =
@@ -3480,20 +3630,64 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       activeSelectedProject.startDate,
       activeSelectedProject.endDate
     );
-    const volunteerSlotsFilled = activeSelectedProject.volunteers.length;
+    const volunteerSlotsFilled = volunteerEntries.length;
     const volunteerSlotsNeeded = activeSelectedProject.volunteersNeeded;
     const remainingVolunteerSlots = Math.max(volunteerSlotsNeeded - volunteerSlotsFilled, 0);
+    const activeVolunteerCount = volunteerEntries.filter(
+      volunteerEntry => volunteerEntry.participationStatus === 'Active'
+    ).length;
+    const completedVolunteerCount = Math.max(volunteerSlotsFilled - activeVolunteerCount, 0);
     const pendingVolunteerRequestCount = pendingVolunteerRequestEntries.length;
     const latestTimeActivityLabel = projectTimeLogEntries[0]
       ? projectTimeLogEntries[0].timeOut
         ? `Time out ${format(new Date(projectTimeLogEntries[0].timeOut), 'PPpp')}`
         : `Time in ${format(new Date(projectTimeLogEntries[0].timeIn), 'PPpp')}`
       : 'No time logs yet';
+    const detailsDescription = activeSelectedProject.description?.trim()
+      || (activeSelectedProject.isEvent
+        ? 'This event is ready for staffing, scheduling, and day-of coordination.'
+        : 'This program record keeps planning, staffing, and delivery details in one place.');
+    const detailWorkspaceCaption = activeSelectedProject.isEvent
+      ? 'Track staffing, schedule, and delivery activity from a single event workspace.'
+      : 'Review program setup, delivery details, and volunteer coverage in one place.';
+    const heroHighlights = [
+      {
+        icon: 'calendar-month' as const,
+        label: 'Schedule',
+        value: formattedScheduleRange,
+      },
+      {
+        icon: 'groups' as const,
+        label: activeSelectedProject.isEvent ? 'Confirmed Team' : 'Volunteer Coverage',
+        value: `${volunteerSlotsFilled}/${volunteerSlotsNeeded}`,
+      },
+      {
+        icon: 'location-on' as const,
+        label: 'Location',
+        value: activeSelectedProject.location.address || 'Location not set',
+      },
+      ...(hasPartneredOrg
+        ? [{
+          icon: 'business' as const,
+          label: 'Partner',
+          value: selectedPartnerName,
+        }]
+        : []),
+      ...(activeSelectedProject.isEvent
+        ? [{
+          icon: 'pending-actions' as const,
+          label: 'Pending Requests',
+          value: `${pendingVolunteerRequestCount}`,
+        }]
+        : []),
+    ];
     const overviewCards = [
       {
-        label: activeSelectedProject.isEvent ? 'Campaign' : 'Program Module',
-        value: detailModuleLabel,
-        meta: activeSelectedProject.isEvent ? 'Linked advocacy focus' : 'Primary focus area',
+        label: activeSelectedProject.isEvent ? 'Parent Program' : 'Program Module',
+        value: activeSelectedProject.isEvent
+          ? parentProject?.title || detailModuleLabel
+          : detailModuleLabel,
+        meta: activeSelectedProject.isEvent ? 'Program this event rolls up to' : 'Primary focus area',
       },
       ...(hasPartneredOrg
         ? [
@@ -3510,12 +3704,22 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         meta: activeSelectedProject.isEvent ? 'Event window' : 'Project timeline',
       },
       {
-        label: 'Volunteer Slots',
+        label: 'Team Coverage',
         value: `${volunteerSlotsFilled}/${volunteerSlotsNeeded}`,
         meta:
-          remainingVolunteerSlots > 0
-            ? `${remainingVolunteerSlots} slot${remainingVolunteerSlots === 1 ? '' : 's'} still open`
-            : 'All volunteer slots are filled',
+          pendingVolunteerRequestCount > 0
+            ? `${pendingVolunteerRequestCount} request${pendingVolunteerRequestCount === 1 ? '' : 's'} awaiting review`
+            : remainingVolunteerSlots > 0
+              ? `${remainingVolunteerSlots} slot${remainingVolunteerSlots === 1 ? '' : 's'} still open`
+              : 'All volunteer slots are filled',
+      },
+      {
+        label: activeSelectedProject.isEvent ? 'Participation' : 'Confirmed Volunteers',
+        value: activeSelectedProject.isEvent ? `${activeVolunteerCount} active` : `${volunteerSlotsFilled}`,
+        meta:
+          completedVolunteerCount > 0
+            ? `${completedVolunteerCount} completed volunteer${completedVolunteerCount === 1 ? '' : 's'} kept in history`
+            : 'No completed volunteer records yet',
       },
       {
         label: 'Location',
@@ -3622,12 +3826,35 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     return (
       <ScrollView style={styles.container} contentContainerStyle={styles.detailsScreenContent}>
-        <View style={styles.header}>
-          <TouchableOpacity onPress={handleReturnToProjectList}>
-            <MaterialIcons name="arrow-back" size={24} color="#333" />
+        {taskSaveNotice ? (
+          <View style={styles.taskSaveNotice}>
+            <MaterialIcons name="check-circle" size={20} color="#166534" />
+            <Text style={styles.taskSaveNoticeText}>{taskSaveNotice}</Text>
+            <TouchableOpacity style={styles.taskSaveNoticeButton} onPress={() => setTaskSaveNotice(null)}>
+              <Text style={styles.taskSaveNoticeButtonText}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+        <View style={styles.detailsHeaderBar}>
+          <TouchableOpacity style={styles.detailsBackButton} onPress={handleReturnToProjectList}>
+            <MaterialIcons name="arrow-back" size={18} color="#0f172a" />
+            <Text style={styles.detailsBackButtonText}>Back</Text>
           </TouchableOpacity>
-          <Text style={styles.title}>{activeSelectedProject.isEvent ? 'Event Details' : 'Project Details'}</Text>
-          <View style={styles.headerSpacer} />
+          <View style={styles.detailsHeaderCopy}>
+            <Text style={styles.detailsHeaderEyebrow}>{detailWorkspaceLabel}</Text>
+            <Text style={styles.detailsHeaderTitle}>
+              {activeSelectedProject.isEvent ? 'Event Details' : 'Project Details'}
+            </Text>
+            <Text style={styles.detailsHeaderMeta}>{detailWorkspaceCaption}</Text>
+          </View>
+          <View
+            style={[
+              styles.detailsHeaderStatusPill,
+              { backgroundColor: getProjectStatusColor(activeSelectedProject) },
+            ]}
+          >
+            <Text style={styles.detailsHeaderStatusText}>{getProjectDisplayStatus(activeSelectedProject)}</Text>
+          </View>
         </View>
 
         <View style={styles.detailsCard}>
@@ -3636,7 +3863,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               <View style={styles.detailsHeroCopy}>
                 <Text style={styles.detailsEyebrow}>{detailWorkspaceLabel}</Text>
                 <Text style={styles.detailsTitle}>{activeSelectedProject.title}</Text>
-                <Text style={styles.detailsSubtitle}>{activeSelectedProject.description}</Text>
+                <Text style={styles.detailsSubtitle}>{detailsDescription}</Text>
               </View>
               <View
                 style={[
@@ -3648,8 +3875,29 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               </View>
             </View>
 
-            <View style={styles.detailsMediaPanel}>
-              <View style={styles.detailsMediaPreviewWrap}>
+            <View style={styles.detailsHeroHighlights}>
+              {heroHighlights.map(highlight => (
+                <View key={highlight.label} style={styles.detailsHeroHighlight}>
+                  <View style={styles.detailsHeroHighlightIcon}>
+                    <MaterialIcons name={highlight.icon} size={18} color="#166534" />
+                  </View>
+                  <View style={styles.detailsHeroHighlightCopy}>
+                    <Text style={styles.detailsHeroHighlightLabel}>{highlight.label}</Text>
+                    <Text style={styles.detailsHeroHighlightValue} numberOfLines={2}>
+                      {highlight.value}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+
+            <View style={[styles.detailsMediaPanel, isDesktop && styles.detailsMediaPanelDesktop]}>
+              <View
+                style={[
+                  styles.detailsMediaPreviewWrap,
+                  isDesktop && styles.detailsMediaPreviewWrapDesktop,
+                ]}
+              >
                 {activeProjectImageSource ? (
                   <Image
                     source={activeProjectImageSource}
@@ -3664,7 +3912,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                 )}
               </View>
 
-              <View style={styles.detailsMediaCopy}>
+              <View style={[styles.detailsMediaCopy, isDesktop && styles.detailsMediaCopyDesktop]}>
                 <Text style={styles.detailsMediaTitle}>{detailEntityLabel} Picture</Text>
                 <Text style={styles.detailsMediaMeta}>
                   This image appears in cards, previews, and supporting screens so volunteers and admins can recognize this record quickly.
@@ -3736,9 +3984,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
           {activeSelectedProject.isEvent ? (
             <View style={[styles.detailsSection, styles.detailsSectionCard]}>
-              <Text style={styles.sectionTitle}>Event Operations</Text>
+              <Text style={styles.sectionTitle}>Operations Snapshot</Text>
               <Text style={styles.sectionHint}>
-                Review the parent program, staffing, and assignments from one event workspace.
+                Review staffing, parent-program context, and readiness signals before event day.
               </Text>
               <View style={styles.detailFieldGrid}>
                 {eventOperationsDetails.map(field => (
@@ -3802,8 +4050,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           )}
 
           <View style={[styles.detailsSection, styles.detailsSectionCard]}>
-            <Text style={styles.sectionTitle}>Overview</Text>
-            <Text style={styles.sectionHint}>The core context your team needs before taking action.</Text>
+            <Text style={styles.sectionTitle}>Core Setup</Text>
+            <Text style={styles.sectionHint}>The foundational record details your team refers to most often.</Text>
             <View style={styles.detailFieldGrid}>
               {setupDetails.map(field => (
                 <View key={field.label} style={styles.detailField}>
@@ -3816,8 +4064,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           </View>
 
           <View style={[styles.detailsSection, styles.detailsSectionCard]}>
-            <Text style={styles.sectionTitle}>Schedule and Capacity</Text>
-            <Text style={styles.sectionHint}>Dates, location, and staffing are grouped here for easier review.</Text>
+            <Text style={styles.sectionTitle}>Logistics and Capacity</Text>
+            <Text style={styles.sectionHint}>Dates, venue details, and volunteer coverage are grouped here for quicker review.</Text>
             <View style={styles.detailFieldGrid}>
               {logisticsDetails.map(field => (
                 <View key={field.label} style={styles.detailField}>
@@ -3922,7 +4170,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               <View style={[styles.detailsSection, styles.detailsSectionCard]}>
                 <Text style={styles.sectionTitle}>Event Time Tracking</Text>
                 <Text style={styles.sectionHint}>
-                  Attendance activity is summarized first, then listed per volunteer below.
+                  Attendance activity is summarized first, then grouped into one card per volunteer account below.
                 </Text>
                 <View style={styles.detailsQuickGrid}>
                   <View style={styles.detailsQuickCard}>
@@ -3942,36 +4190,52 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                   </View>
                 </View>
 
-                <Text style={styles.sectionSubheading}>Volunteer Time Logs</Text>
-                {projectTimeLogEntries.length === 0 ? (
+                <Text style={styles.sectionSubheading}>Volunteer Account Cards</Text>
+                {projectVolunteerAttendanceCards.length === 0 ? (
                   <Text style={styles.emptyText}>No time in or time out records yet</Text>
                 ) : (
                   <View style={styles.updatesList}>
-                    {projectTimeLogEntries.map(log => (
-                      <View key={log.id} style={styles.applicationCard}>
+                    {projectVolunteerAttendanceCards.map(card => (
+                      <View key={card.volunteerId} style={styles.applicationCard}>
                         <View style={styles.applicationHeader}>
                           <View style={{ flex: 1 }}>
-                            <Text style={styles.applicationName}>{log.volunteerName}</Text>
-                            <Text style={styles.applicationMeta}>{log.volunteerEmail}</Text>
-                            <Text style={styles.applicationMeta}>
-                              Time In {format(new Date(log.timeIn), 'PPpp')}
-                            </Text>
-                            <Text style={styles.applicationMeta}>
-                              {log.timeOut
-                                ? `Time Out ${format(new Date(log.timeOut), 'PPpp')}`
-                                : 'Time Out still pending'}
-                            </Text>
+                            <Text style={styles.applicationName}>{card.volunteerName}</Text>
+                            <Text style={styles.applicationMeta}>{card.volunteerEmail}</Text>
+                            <Text style={styles.applicationMeta}>{card.latestActivityLabel}</Text>
+                            <View style={styles.attendanceMetricsRow}>
+                              <View style={styles.attendanceMetricChip}>
+                                <Text style={styles.attendanceMetricValue}>{card.timeInCount}</Text>
+                                <Text style={styles.attendanceMetricLabel}>time ins</Text>
+                              </View>
+                              <View style={styles.attendanceMetricChip}>
+                                <Text style={styles.attendanceMetricValue}>{card.timeOutCount}</Text>
+                                <Text style={styles.attendanceMetricLabel}>time outs</Text>
+                              </View>
+                              <View style={styles.attendanceMetricChip}>
+                                <Text style={styles.attendanceMetricValue}>{card.attendanceDays}</Text>
+                                <Text style={styles.attendanceMetricLabel}>days</Text>
+                              </View>
+                            </View>
+                            {card.logs.slice(0, 3).map(log => (
+                              <Text key={log.id} style={styles.applicationMeta}>
+                                {log.timeOut
+                                  ? `${format(new Date(log.timeIn), 'PPp')} -> ${format(new Date(log.timeOut), 'PPp')}`
+                                  : `Timed in ${format(new Date(log.timeIn), 'PPp')} (active)`}
+                              </Text>
+                            ))}
                           </View>
                           <View
                             style={[
                               styles.applicationStatusBadge,
-                              log.timeOut
+                              card.activeLog
+                                ? styles.applicationStatusPending
+                                : card.timeOutCount > 0
                                 ? styles.applicationStatusApproved
                                 : styles.applicationStatusPending,
                             ]}
                           >
                             <Text style={styles.applicationStatusText}>
-                              {log.timeOut ? 'Timed Out' : 'Timed In'}
+                              {card.activeLog ? 'Timed In' : card.timeOutCount > 0 ? 'Recorded' : 'No Sign Out'}
                             </Text>
                           </View>
                         </View>
@@ -3986,7 +4250,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                   Pending Event Join Requests ({pendingVolunteerRequestEntries.length})
                 </Text>
                 <Text style={styles.sectionHint}>
-                  Review incoming volunteer requests here before they appear in the active event team.
+                  Review incoming join requests here before volunteers are added to the confirmed event team.
                 </Text>
 
                 {pendingVolunteerRequestEntries.length === 0 ? (
@@ -4045,65 +4309,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
               <View style={[styles.detailsSection, styles.detailsSectionCard]}>
                 <Text style={styles.sectionTitle}>
-                  Rejected Event Join Requests ({rejectedVolunteerRequestEntries.length})
-                </Text>
-                <Text style={styles.sectionHint}>
-                  Keep a readable record of declined requests and who reviewed them.
-                </Text>
-
-                {rejectedVolunteerRequestEntries.length === 0 ? (
-                  <Text style={styles.emptyText}>No rejected event join requests</Text>
-                ) : (
-                  <View style={styles.updatesList}>
-                    {rejectedVolunteerRequestEntries.map(requestEntry => (
-                      <View key={requestEntry.id} style={styles.applicationCard}>
-                        <View style={styles.applicationHeader}>
-                          <View style={{ flex: 1 }}>
-                            <Text style={styles.applicationName}>{requestEntry.volunteerName}</Text>
-                            <Text style={styles.applicationMeta}>{requestEntry.volunteerEmail}</Text>
-                            <Text style={styles.applicationMeta}>
-                              Requested {format(new Date(requestEntry.requestedAt), 'PPpp')}
-                            </Text>
-                            {requestEntry.reviewedAt ? (
-                              <Text style={styles.applicationMeta}>
-                                Rejected {format(new Date(requestEntry.reviewedAt), 'PPpp')}
-                              </Text>
-                            ) : null}
-                            {requestEntry.reviewedBy ? (
-                              <Text style={styles.applicationMeta}>
-                                Reviewed by {requestEntry.reviewedBy}
-                              </Text>
-                            ) : null}
-                          </View>
-                          <View
-                            style={[
-                              styles.applicationStatusBadge,
-                              styles.applicationStatusRejected,
-                            ]}
-                          >
-                            <Text style={styles.applicationStatusText}>Rejected</Text>
-                          </View>
-                        </View>
-
-                        <TouchableOpacity
-                          style={styles.viewVolunteerProfileButton}
-                          onPress={() => openVolunteerProfile(requestEntry.volunteerId)}
-                        >
-                          <MaterialIcons name="person-search" size={16} color="#2563eb" />
-                          <Text style={styles.viewVolunteerProfileText}>Open Volunteer Profile</Text>
-                        </TouchableOpacity>
-                      </View>
-                    ))}
-                  </View>
-                )}
-              </View>
-
-              <View style={[styles.detailsSection, styles.detailsSectionCard]}>
-                <Text style={styles.sectionTitle}>
                   Event Participants ({volunteerEntries.length})
                 </Text>
                 <Text style={styles.sectionHint}>
-                  Active and completed participants are listed together with their join history.
+                  Confirmed volunteers are listed here with their participation history and current status.
                 </Text>
 
                 {volunteerEntries.length === 0 ? (
@@ -4289,19 +4498,38 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           onRequestClose={closeTaskModal}
         >
           <View style={styles.modalContainer}>
-            <View style={styles.modalHeader}>
-              <TouchableOpacity onPress={closeTaskModal}>
-                <MaterialIcons name="close" size={24} color="#333" />
-              </TouchableOpacity>
-              <Text style={styles.modalTitle}>
-                {editingTaskId ? 'Edit Internal Task' : 'Add Internal Task'}
-              </Text>
-              <TouchableOpacity onPress={handleSaveInternalTask}>
-                <Text style={styles.projectModalSave}>Save</Text>
-              </TouchableOpacity>
-            </View>
+            {isTaskSaveSuccess ? (
+              <View style={styles.taskSuccessContainer}>
+                <View style={styles.taskSuccessCard}>
+                  <MaterialIcons name="check-circle" size={86} color="#16a34a" />
+                  <Text style={styles.taskSuccessTitle}>
+                    {editingTaskId ? 'Task Update Complete' : 'Task Added'}
+                  </Text>
+                  <Text style={styles.taskSuccessMessage}>{taskSaveSuccessMessage}</Text>
+                  <TouchableOpacity
+                    style={styles.taskSuccessButton}
+                    onPress={closeTaskModal}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.taskSuccessButtonText}>OK</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : (
+              <>
+                <View style={styles.modalHeader}>
+                  <TouchableOpacity onPress={closeTaskModal}>
+                    <MaterialIcons name="close" size={24} color="#333" />
+                  </TouchableOpacity>
+                  <Text style={styles.modalTitle}>
+                    {editingTaskId ? 'Edit Internal Task' : 'Add Internal Task'}
+                  </Text>
+                  <TouchableOpacity onPress={handleSaveInternalTask}>
+                    <Text style={styles.projectModalSave}>Save</Text>
+                  </TouchableOpacity>
+                </View>
 
-            <ScrollView style={styles.modalContent}>
+                <ScrollView style={styles.modalContent}>
               <View style={[styles.formRow, styles.formRowReverse]}>
                 <TextInput
                   style={[styles.textArea, styles.inputWithLabel, styles.singleLineInput]}
@@ -4574,6 +4802,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                 </Text>
               </TouchableOpacity>
             </ScrollView>
+              </>
+            )}
           </View>
         </Modal>
 
@@ -4704,6 +4934,15 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       }}
       scrollEventThrottle={16}
     >
+      {taskSaveNotice ? (
+        <View style={styles.taskSaveNotice}>
+          <MaterialIcons name="check-circle" size={20} color="#166534" />
+          <Text style={styles.taskSaveNoticeText}>{taskSaveNotice}</Text>
+          <TouchableOpacity style={styles.taskSaveNoticeButton} onPress={() => setTaskSaveNotice(null)}>
+            <Text style={styles.taskSaveNoticeButtonText}>OK</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
       <View style={styles.lifecycleHero}>
         <View style={styles.lifecycleHeroCopy}>
           <Text style={styles.lifecycleEyebrow}>Lifecycle workspace</Text>
@@ -5099,7 +5338,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#eef4f1',
     padding: 16,
   },
   detailsScreenContent: {
@@ -5114,7 +5353,74 @@ const styles = StyleSheet.create({
   headerSpacer: {
     width: 24,
     height: 24,
-  }, lifecycleHero: {
+  },
+  detailsHeaderBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    marginBottom: 18,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: '#dbe7df',
+    backgroundColor: '#f8fcfa',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.05,
+    shadowRadius: 16,
+    elevation: 2,
+  },
+  detailsBackButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#d6e4db',
+    backgroundColor: '#ffffff',
+  },
+  detailsBackButtonText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  detailsHeaderCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  detailsHeaderEyebrow: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#166534',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  detailsHeaderTitle: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  detailsHeaderMeta: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#475569',
+  },
+  detailsHeaderStatusPill: {
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    alignSelf: 'flex-start',
+  },
+  detailsHeaderStatusText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  lifecycleHero: {
     marginBottom: 14,
     backgroundColor: '#ffffff',
     borderWidth: 1,
@@ -5275,6 +5581,36 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     letterSpacing: 0.3,
+  },
+  taskSaveNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#dcfce7',
+    borderWidth: 1,
+    borderColor: '#86efac',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 14,
+  },
+  taskSaveNoticeText: {
+    flex: 1,
+    color: '#14532d',
+    fontSize: 13,
+    fontWeight: '800',
+    lineHeight: 18,
+  },
+  taskSaveNoticeButton: {
+    backgroundColor: '#166534',
+    borderRadius: 999,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  taskSaveNoticeButtonText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '900',
   },
   programSuiteAddEventButton: {
     flexDirection: 'row',
@@ -5823,48 +6159,100 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   detailsCard: {
-    backgroundColor: '#fff',
-    borderRadius: 24,
-    padding: 22,
+    backgroundColor: '#fcfdfc',
+    borderRadius: 28,
+    padding: 24,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: '#dbe7df',
     shadowColor: '#0f172a',
-    shadowOffset: { width: 0, height: 8 },
+    shadowOffset: { width: 0, height: 12 },
     shadowOpacity: 0.08,
-    shadowRadius: 22,
+    shadowRadius: 26,
     elevation: 4,
   },
   detailsHero: {
-    backgroundColor: '#f7fff9',
+    backgroundColor: '#f4fbf6',
     borderWidth: 1,
-    borderColor: '#d1fae5',
-    borderRadius: 22,
-    padding: 20,
-    marginBottom: 24,
+    borderColor: '#cfe9d8',
+    borderRadius: 26,
+    padding: 22,
+    marginBottom: 26,
   },
   detailsHeroHeader: {
-    gap: 12,
-    marginBottom: 20,
+    gap: 14,
+    marginBottom: 18,
   },
   detailsHeroCopy: {
-    gap: 8,
+    gap: 10,
+  },
+  detailsHeroHighlights: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginBottom: 18,
+  },
+  detailsHeroHighlight: {
+    minWidth: 190,
+    flexGrow: 1,
+    flexShrink: 1,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#d7e8dd',
+    backgroundColor: '#ffffff',
+  },
+  detailsHeroHighlightIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ecfdf5',
+  },
+  detailsHeroHighlightCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  detailsHeroHighlightLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  detailsHeroHighlightValue: {
+    fontSize: 14,
+    fontWeight: '700',
+    lineHeight: 20,
+    color: '#0f172a',
   },
   detailsMediaPanel: {
     marginBottom: 20,
     gap: 16,
   },
+  detailsMediaPanelDesktop: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+  },
   detailsMediaPreviewWrap: {
     width: '100%',
   },
+  detailsMediaPreviewWrapDesktop: {
+    flex: 1.1,
+  },
   detailsMediaPreview: {
     width: '100%',
-    height: 220,
-    borderRadius: 18,
+    height: 260,
+    borderRadius: 20,
     backgroundColor: '#dbeafe',
   },
   detailsMediaEmptyState: {
-    height: 180,
-    borderRadius: 18,
+    height: 220,
+    borderRadius: 20,
     borderWidth: 1,
     borderColor: '#bfdbfe',
     backgroundColor: '#eff6ff',
@@ -5879,6 +6267,10 @@ const styles = StyleSheet.create({
   },
   detailsMediaCopy: {
     gap: 8,
+  },
+  detailsMediaCopyDesktop: {
+    flex: 0.9,
+    justifyContent: 'center',
   },
   detailsMediaTitle: {
     fontSize: 17,
@@ -5937,26 +6329,26 @@ const styles = StyleSheet.create({
   },
   detailsEyebrow: {
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '800',
     color: '#166534',
     textTransform: 'uppercase',
-    letterSpacing: 0.8,
+    letterSpacing: 0.9,
   },
   detailsTitle: {
-    fontSize: 28,
+    fontSize: 30,
     fontWeight: '800',
     color: '#0f172a',
-    lineHeight: 34,
+    lineHeight: 36,
   },
   detailsSubtitle: {
     fontSize: 15,
     color: '#475569',
-    lineHeight: 24,
+    lineHeight: 25,
   },
   detailsHeroStatus: {
     paddingHorizontal: 14,
     paddingVertical: 10,
-    borderRadius: 6,
+    borderRadius: 999,
     alignSelf: 'flex-start',
   },
   detailsQuickGrid: {
@@ -5969,11 +6361,11 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     flexShrink: 1,
     backgroundColor: '#ffffff',
-    borderRadius: 18,
+    borderRadius: 20,
     borderWidth: 1,
-    borderColor: '#dbeafe',
-    paddingHorizontal: 14,
-    paddingVertical: 14,
+    borderColor: '#d7e8dd',
+    paddingHorizontal: 16,
+    paddingVertical: 16,
     shadowColor: '#0f172a',
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.04,
@@ -6057,11 +6449,11 @@ const styles = StyleSheet.create({
     marginVertical: 12,
   },
   detailsSectionCard: {
-    backgroundColor: '#f8fafc',
+    backgroundColor: '#f8fbf9',
     borderWidth: 1,
-    borderColor: '#dbeafe',
-    borderRadius: 22,
-    padding: 18,
+    borderColor: '#d7e8dd',
+    borderRadius: 24,
+    padding: 20,
     shadowColor: '#0f172a',
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.04,
@@ -6074,15 +6466,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: 19,
     fontWeight: '800',
     color: '#0f172a',
     marginBottom: 8,
   },
   sectionHint: {
     fontSize: 13,
-    color: '#64748b',
-    lineHeight: 19,
+    color: '#5b6b7f',
+    lineHeight: 20,
     marginBottom: 16,
   },
   sectionSubheading: {
@@ -6101,11 +6493,11 @@ const styles = StyleSheet.create({
   },
   detailField: {
     backgroundColor: '#fff',
-    borderRadius: 18,
+    borderRadius: 20,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
-    paddingHorizontal: 14,
-    paddingVertical: 14,
+    borderColor: '#dde7e1',
+    paddingHorizontal: 15,
+    paddingVertical: 15,
     minWidth: 220,
     flexGrow: 1,
     flexShrink: 1,
@@ -6224,6 +6616,35 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#64748b',
     marginTop: 4,
+  },
+  attendanceMetricsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 10,
+    marginBottom: 6,
+  },
+  attendanceMetricChip: {
+    minWidth: 82,
+    borderRadius: 12,
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  attendanceMetricValue: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#1d4ed8',
+  },
+  attendanceMetricLabel: {
+    marginTop: 2,
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#475569',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
   },
   reportImagePreview: {
     width: '100%',
@@ -6897,6 +7318,54 @@ const styles = StyleSheet.create({
   modalContainer: {
     flex: 1,
     backgroundColor: '#f5f5f5',
+  },
+  taskSuccessContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  taskSuccessCard: {
+    width: '100%',
+    maxWidth: 540,
+    backgroundColor: '#ffffff',
+    borderRadius: 22,
+    padding: 34,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.08,
+    shadowRadius: 24,
+    elevation: 6,
+  },
+  taskSuccessTitle: {
+    marginTop: 18,
+    fontSize: 24,
+    fontWeight: '900',
+    color: '#102118',
+    textAlign: 'center',
+  },
+  taskSuccessMessage: {
+    marginTop: 10,
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '700',
+    color: '#475569',
+    textAlign: 'center',
+  },
+  taskSuccessButton: {
+    marginTop: 26,
+    backgroundColor: '#166534',
+    borderRadius: 14,
+    paddingVertical: 13,
+    paddingHorizontal: 42,
+  },
+  taskSuccessButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '900',
   },
   modalHeader: {
     flexDirection: 'row',

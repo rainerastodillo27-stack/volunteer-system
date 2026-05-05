@@ -365,6 +365,7 @@ export interface PartnerReport {
   status: 'Submitted' | 'Reviewed' | 'Rejected';
   reviewedAt?: string;
   reviewedBy?: string;
+  sourceReportIds?: string[];
   viewedBy?: string[];
   reviewNotes?: string;
 }

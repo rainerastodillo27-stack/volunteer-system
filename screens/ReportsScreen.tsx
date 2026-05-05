@@ -99,6 +99,7 @@ export default function ReportsScreen({ navigation, route }: any) {
   } | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
+  const [volunteerProfileId, setVolunteerProfileId] = useState<string | null>(null);
   const [volunteerTimedInProjectIds, setVolunteerTimedInProjectIds] = useState<string[]>([]);
   const [volunteerTimeLogs, setVolunteerTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const reportsLoadInFlightRef = useRef<Promise<void> | null>(null);
@@ -107,8 +108,9 @@ export default function ReportsScreen({ navigation, route }: any) {
 
   const loadProjects = useCallback(async () => {
     if (user?.role === 'volunteer' && user.id) {
-      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'timeLogs']);
+      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'timeLogs', 'volunteerProfile']);
       setProjects(snapshot.projects);
+      setVolunteerProfileId(snapshot.volunteerProfile?.id || null);
       setVolunteerTimeLogs(snapshot.timeLogs);
       setVolunteerTimedInProjectIds(
         Array.from(
@@ -123,12 +125,29 @@ export default function ReportsScreen({ navigation, route }: any) {
       return snapshot.projects;
     }
 
+    setVolunteerProfileId(null);
     setVolunteerTimedInProjectIds([]);
     setVolunteerTimeLogs([]);
     const allProjects = await getAllProjects();
     setProjects(allProjects);
     return allProjects;
   }, [user]);
+
+  const fieldOfficerProjectIds = useMemo(() => {
+    if (!volunteerProfileId) {
+      return [];
+    }
+
+    return projects
+      .filter(
+        project =>
+          project.isEvent &&
+          (project.internalTasks || []).some(
+            task => task.isFieldOfficer && task.assignedVolunteerId === volunteerProfileId
+          )
+      )
+      .map(project => project.id);
+  }, [projects, volunteerProfileId]);
 
   const loadVolunteers = useCallback(async () => {
     const allVolunteers = await getAllVolunteers();
@@ -239,9 +258,9 @@ export default function ReportsScreen({ navigation, route }: any) {
         SubmittedReport,
         'id' | 'submittedAt' | 'submittedBy' | 'submitterName' | 'submitterRole' | 'viewedBy'
       >
-    ) => {
+    ): Promise<boolean> => {
       if (!user?.id) {
-        return;
+        return false;
       }
 
       const targetProjectId =
@@ -253,14 +272,31 @@ export default function ReportsScreen({ navigation, route }: any) {
             ? 'Select an event you already timed in to before submitting a report.'
             : 'Select a project before submitting a report.'
         );
-        return;
+        return false;
       }
 
       try {
         const reportType = reportData.reportType as ImpactHubReportType;
+        if (
+          user.role === 'volunteer' &&
+          reportType === 'field_report' &&
+          !fieldOfficerProjectIds.includes(targetProjectId)
+        ) {
+          Alert.alert(
+            'Field Officer Only',
+            'Field reports are only for the assigned field officer of that event.'
+          );
+          return false;
+        }
         const numericMetrics = Object.fromEntries(
           Object.entries(reportData.metrics).filter(([, value]) => typeof value === 'number')
         ) as Record<string, number>;
+        const hadActiveVolunteerLog =
+          user.role === 'volunteer'
+            ? volunteerTimeLogs.some(
+                log => log.projectId === targetProjectId && Boolean(log.timeIn) && !log.timeOut
+              )
+            : false;
         const completionPhotoUri =
           (reportData.mediaFile || '').trim() ||
           reportData.attachments?.find(attachment => Boolean(attachment?.url?.trim()))?.url?.trim() ||
@@ -302,9 +338,12 @@ export default function ReportsScreen({ navigation, route }: any) {
         Alert.alert(
           'Success',
           user.role === 'volunteer'
-            ? 'Your report was submitted. Time out is complete and this event is now marked as task completed.'
+            ? hadActiveVolunteerLog
+              ? 'Your report was submitted and your time out is complete for today.'
+              : 'Your report was submitted to the event reports.'
             : 'Your report was submitted to the impact hub.'
         );
+        return true;
       } catch (error: any) {
         console.error('Error submitting report:', error);
         const detail =
@@ -312,9 +351,10 @@ export default function ReportsScreen({ navigation, route }: any) {
             ? error.message.trim()
             : 'Failed to submit report.';
         Alert.alert('Error', detail);
+        return false;
       }
     },
-    [loadReportsCoalesced, projects, user?.id, user?.name, user?.role]
+    [fieldOfficerProjectIds, loadReportsCoalesced, projects, user?.id, user?.name, user?.role, volunteerTimeLogs]
   );
 
   const handleViewReport = useCallback((report: SubmittedReport) => {
@@ -407,6 +447,7 @@ export default function ReportsScreen({ navigation, route }: any) {
         projects={user?.role === 'volunteer' ? volunteerEventProjects : projects}
         userRole={user?.role}
         volunteerTimeLogs={user?.role === 'volunteer' ? volunteerTimeLogs : undefined}
+        fieldOfficerProjectIds={user?.role === 'volunteer' ? fieldOfficerProjectIds : undefined}
         initialProjectId={uploadModalInitialValues?.projectId}
         initialDescription={uploadModalInitialValues?.completionReport}
         initialMediaUri={uploadModalInitialValues?.completionPhoto}

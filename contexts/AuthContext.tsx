@@ -51,23 +51,20 @@ async function prefetchForUser(user: User | null): Promise<void> {
   const platform = getPlatformOS();
   // On mobile, prefetch only essential data to avoid slowing down app launch.
   // Full prefetch happens on-demand when screens load.
+  // IMPORTANT: Keep prefetch minimal to prevent >2000ms launch warning
   const keys = platform === 'web' 
     ? ['statusUpdates'] // Only fetch status on web initially
-    : ['projects']; // Only fetch projects on mobile for faster startup
+    : []; // Skip prefetch on mobile entirely for fastest startup - fetch on-demand
     
-  if (!keys) {
+  if (!keys || keys.length === 0) {
     return;
   }
   // Fire-and-forget prefetch: do not wait for completion to avoid blocking auth gate.
   // Cache will be populated in the background for faster first screen load.
-  const prefetchStart = Date.now();
-  console.time(`[App] Prefetch (${user.role})`);
   void getStorageItemsFast(Array.from(keys)).then(() => {
-    console.timeEnd(`[App] Prefetch (${user.role})`);
-    console.log(`[App] Prefetch completed in ${Date.now() - prefetchStart}ms`);
+    return undefined;
   }).catch(error => {
     console.debug(`[App] Background prefetch failed (non-blocking):`, error);
-    console.timeEnd(`[App] Prefetch (${user.role})`);
   });
 }
 
