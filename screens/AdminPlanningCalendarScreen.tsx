@@ -466,34 +466,46 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
     }
 
     setSaving(true);
+    const timestamp = new Date().toISOString();
+    const previousPlanningItems = planningItems;
+    const savedItem: AdminPlanningItem = {
+      id: itemDraft.id || `planner-item-${Date.now()}`,
+      title: itemDraft.title,
+      description: itemDraft.description,
+      calendarId: itemDraft.calendarId,
+      linkedProjectId: itemDraft.linkedProjectId || undefined,
+      startDate: itemDraft.startDate,
+      endDate: itemDraft.endDate,
+      location: itemDraft.location,
+      participantsLabel: itemDraft.participantsLabel,
+      createdBy: user?.id || 'admin',
+      createdAt: itemDraft.id
+        ? planningItems.find(item => item.id === itemDraft.id)?.createdAt || timestamp
+        : timestamp,
+      updatedAt: timestamp,
+    };
+
+    setPlanningItems(currentItems => {
+      const existingIndex = currentItems.findIndex(item => item.id === savedItem.id);
+      if (existingIndex >= 0) {
+        const nextItems = [...currentItems];
+        nextItems[existingIndex] = savedItem;
+        return nextItems;
+      }
+      return [...currentItems, savedItem];
+    });
+    setShowItemModal(false);
+    setSaving(false);
+
     try {
-      const timestamp = new Date().toISOString();
-      await saveAdminPlanningItem({
-        id: itemDraft.id || `planner-item-${Date.now()}`,
-        title: itemDraft.title,
-        description: itemDraft.description,
-        calendarId: itemDraft.calendarId,
-        linkedProjectId: itemDraft.linkedProjectId || undefined,
-        startDate: itemDraft.startDate,
-        endDate: itemDraft.endDate,
-        location: itemDraft.location,
-        participantsLabel: itemDraft.participantsLabel,
-        createdBy: user?.id || 'admin',
-        createdAt: itemDraft.id
-          ? planningItems.find(item => item.id === itemDraft.id)?.createdAt || timestamp
-          : timestamp,
-        updatedAt: timestamp,
-      });
-      setShowItemModal(false);
-      await loadPlannerData();
-      Alert.alert('Saved', itemDraft.id ? 'Plan item updated.' : 'Plan item added.');
+      await saveAdminPlanningItem(savedItem);
+      void loadPlannerData();
     } catch (error) {
+      setPlanningItems(previousPlanningItems);
       Alert.alert(
         getRequestErrorTitle(error),
         getRequestErrorMessage(error, 'Unable to save this plan item.')
       );
-    } finally {
-      setSaving(false);
     }
   };
 
@@ -503,28 +515,22 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
       return;
     }
 
-    Alert.alert('Delete plan item', 'Remove this entry from the calendar?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          setSaving(true);
-          try {
-            await deleteAdminPlanningItem(itemDraft.id!);
-            setShowItemModal(false);
-            await loadPlannerData();
-          } catch (error) {
-            Alert.alert(
-              getRequestErrorTitle(error),
-              getRequestErrorMessage(error, 'Unable to delete this plan item.')
-            );
-          } finally {
-            setSaving(false);
-          }
-        },
-      },
-    ]);
+    const previousPlanningItems = planningItems;
+    setSaving(true);
+    setPlanningItems(currentItems => currentItems.filter(item => item.id !== itemDraft.id));
+    setShowItemModal(false);
+    setSaving(false);
+
+    try {
+      await deleteAdminPlanningItem(itemDraft.id);
+      void loadPlannerData();
+    } catch (error) {
+      setPlanningItems(previousPlanningItems);
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Unable to delete this plan item.')
+      );
+    }
   };
 
   const handleSavePlanningCalendar = async () => {
@@ -534,61 +540,81 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
     }
 
     setSaving(true);
-    try {
-      const timestamp = new Date().toISOString();
-      const existingCalendar = planningCalendars.find(calendar => calendar.id === calendarDraft.id);
-      const savedCalendar: AdminPlanningCalendar = {
-        id: calendarDraft.id || `planner-calendar-${Date.now()}`,
-        name: calendarDraft.name,
-        description: calendarDraft.description,
-        color: calendarDraft.color,
-        createdAt: existingCalendar?.createdAt || timestamp,
-        updatedAt: timestamp,
-      };
+    const timestamp = new Date().toISOString();
+    const previousPlanningCalendars = planningCalendars;
+    const previousSelectedCalendarIds = selectedCalendarIds;
+    const existingCalendar = planningCalendars.find(calendar => calendar.id === calendarDraft.id);
+    const savedCalendar: AdminPlanningCalendar = {
+      id: calendarDraft.id || `planner-calendar-${Date.now()}`,
+      name: calendarDraft.name,
+      description: calendarDraft.description,
+      color: calendarDraft.color,
+      createdAt: existingCalendar?.createdAt || timestamp,
+      updatedAt: timestamp,
+    };
 
+    setPlanningCalendars(currentCalendars => {
+      const existingIndex = currentCalendars.findIndex(calendar => calendar.id === savedCalendar.id);
+      if (existingIndex >= 0) {
+        const nextCalendars = [...currentCalendars];
+        nextCalendars[existingIndex] = savedCalendar;
+        return nextCalendars;
+      }
+      return [...currentCalendars, savedCalendar];
+    });
+    setShowCalendarModal(false);
+    setSelectedCalendarIds(currentSelection => {
+      if (currentSelection.includes(savedCalendar.id)) {
+        return currentSelection;
+      }
+      return [...currentSelection, savedCalendar.id];
+    });
+    setSaving(false);
+
+    try {
       await saveAdminPlanningCalendar(savedCalendar);
-      setShowCalendarModal(false);
-      setSelectedCalendarIds(currentSelection => {
-        if (currentSelection.includes(savedCalendar.id)) {
-          return currentSelection;
-        }
-        return [...currentSelection, savedCalendar.id];
-      });
-      await loadPlannerData();
-      Alert.alert('Saved', calendarDraft.id ? 'Calendar updated.' : 'Calendar created.');
+      void loadPlannerData();
     } catch (error) {
+      setPlanningCalendars(previousPlanningCalendars);
+      setSelectedCalendarIds(previousSelectedCalendarIds);
       Alert.alert(
         getRequestErrorTitle(error),
         getRequestErrorMessage(error, 'Unable to save this calendar.')
       );
-    } finally {
-      setSaving(false);
     }
   };
 
   const handleDeletePlanningCalendar = (calendarId: string) => {
-    Alert.alert('Delete calendar', 'Remove this custom calendar lane?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          setSaving(true);
-          try {
-            await deleteAdminPlanningCalendar(calendarId);
-            setShowCalendarModal(false);
-            await loadPlannerData();
-          } catch (error) {
-            Alert.alert(
-              getRequestErrorTitle(error),
-              getRequestErrorMessage(error, 'Unable to delete this calendar.')
-            );
-          } finally {
-            setSaving(false);
-          }
-        },
-      },
-    ]);
+    const previousPlanningCalendars = planningCalendars;
+    const previousSelectedCalendarIds = selectedCalendarIds;
+    const remainingCalendarIds = planningCalendars
+      .filter(calendar => calendar.id !== calendarId)
+      .map(calendar => calendar.id);
+
+    setSaving(true);
+    setPlanningCalendars(currentCalendars =>
+      currentCalendars.filter(calendar => calendar.id !== calendarId)
+    );
+    setSelectedCalendarIds(currentSelection => {
+      const nextSelection = currentSelection.filter(id => id !== calendarId);
+      return nextSelection.length > 0 ? nextSelection : remainingCalendarIds;
+    });
+    setShowCalendarModal(false);
+    setSaving(false);
+
+    void (async () => {
+      try {
+        await deleteAdminPlanningCalendar(calendarId);
+        void loadPlannerData();
+      } catch (error) {
+        setPlanningCalendars(previousPlanningCalendars);
+        setSelectedCalendarIds(previousSelectedCalendarIds);
+        Alert.alert(
+          getRequestErrorTitle(error),
+          getRequestErrorMessage(error, 'Unable to delete this calendar.')
+        );
+      }
+    })();
   };
 
   const toggleCalendarSelection = (calendarId: string) => {

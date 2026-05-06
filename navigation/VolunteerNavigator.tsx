@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Alert } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../contexts/AuthContext';
 import ScreenBrandHeader from '../components/ScreenBrandHeader';
 import {
@@ -136,6 +137,7 @@ function collectVolunteerJoinedEventMap(
 
 export default function VolunteerNavigator() {
   const { user } = useAuth();
+  const insets = useSafeAreaInsets();
   const [messageUnreadCount, setMessageUnreadCount] = useState(0);
   const taskAssignmentSnapshotRef = useRef<Map<string, TrackedVolunteerTask> | null>(null);
   const joinedEventSnapshotRef = useRef<Map<string, TrackedJoinedEvent> | null>(null);
@@ -260,7 +262,15 @@ export default function VolunteerNavigator() {
         tabBarIcon: ({ color, size }) => <MaterialIcons name={getIconName(route.name as keyof VolunteerTabParamList)} size={size} color={color} />,
         tabBarActiveTintColor: '#4CAF50',
         tabBarInactiveTintColor: '#999',
-        tabBarStyle: { backgroundColor: '#fff', borderTopColor: '#eee', paddingBottom: 4 },
+        tabBarShowLabel: false,
+        tabBarItemStyle: { paddingTop: 6, paddingBottom: 10 },
+        tabBarStyle: {
+          backgroundColor: '#fff',
+          borderTopColor: '#eee',
+          height: 58 + Math.max(insets.bottom, 16),
+          paddingTop: 6,
+          paddingBottom: Math.max(insets.bottom, 16),
+        },
       })}
     >
       <Tab.Screen name="Dashboard" component={VolunteerDashboardScreen} options={{ title: 'Volunteer Dashboard' }} />

@@ -4,6 +4,7 @@ import {
   Text,
   StyleSheet,
   Platform,
+  Alert,
   TouchableOpacity,
   ScrollView,
   FlatList,
@@ -11,8 +12,12 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import type { SubmittedReport } from '../screens/ReportsScreen';
+import type {
+  PartnerProjectReportSummary,
+  SubmittedReport,
+} from '../screens/ReportsScreen';
 import type { Project } from '../models/types';
+import { buildTextPdf, downloadPdfFile } from '../utils/pdfDownload';
 
 type MaterialIconName = keyof typeof MaterialIcons.glyphMap;
 
@@ -24,6 +29,7 @@ interface VolunteerReportsDashboardProps {
   loading: boolean;
   onRefresh: () => void;
   refreshing: boolean;
+  projectSummaries?: PartnerProjectReportSummary[];
 }
 
 export function VolunteerReportsDashboard({
@@ -177,7 +183,7 @@ export function VolunteerReportsDashboard({
 
 export function PartnerReportsDashboard({
   reports,
-  projects,
+  projectSummaries = [],
   onUploadReport,
   onViewReport,
   loading,
@@ -185,21 +191,55 @@ export function PartnerReportsDashboard({
   refreshing,
 }: VolunteerReportsDashboardProps) {
   const stats = useMemo(() => {
-    const submitted = reports.filter(r => r.status === 'Submitted').length;
-    const beneficiaries = reports.reduce((sum, r) => sum + (r.metrics.beneficiariesServed || 0), 0);
-    const linkedProjects = new Set(reports.map(report => report.projectId).filter(Boolean)).size;
+    const submitted = projectSummaries.reduce(
+      (sum, summary) => sum + getVolunteerReportsForSummary(summary).length,
+      0
+    );
+    const beneficiaries = projectSummaries.reduce(
+      (sum, summary) => sum + (summary.metrics.beneficiariesServed || 0),
+      0
+    );
+    const linkedProjects = projectSummaries.length;
 
     return { submitted, beneficiaries, linkedProjects };
-  }, [reports]);
+  }, [projectSummaries]);
 
-  const reportsByType = useMemo(() => {
-    const grouped: Record<string, SubmittedReport[]> = {};
-    reports.forEach(r => {
-      if (!grouped[r.reportType]) grouped[r.reportType] = [];
-      grouped[r.reportType].push(r);
-    });
-    return grouped;
-  }, [reports]);
+  const projectSections = useMemo(
+    () =>
+      projectSummaries.map(summary => ({
+        key: summary.project.id,
+        title: summary.project.title,
+        subtitle: `${summary.linkedEvents.length} linked event${summary.linkedEvents.length === 1 ? '' : 's'} • ${summary.volunteerAccounts.length} volunteer account${summary.volunteerAccounts.length === 1 ? '' : 's'}`,
+        reports: getVolunteerReportsForSummary(summary),
+        summary,
+      })),
+    [projectSummaries]
+  );
+
+  const handleDownloadProjectSummary = (summary: PartnerProjectReportSummary) => {
+    const title = `${summary.project.title} Project Summary`;
+    void downloadPdfFile(
+      `${summary.project.title}-summary-${new Date().toISOString().slice(0, 10)}.pdf`,
+      buildTextPdf(title, buildProjectSummaryContent(summary))
+    );
+  };
+
+  const handleDownloadAllSummaries = () => {
+    if (!projectSummaries.length) {
+      Alert.alert('Reports', 'There are no approved partner projects to summarize yet.');
+      return;
+    }
+
+    void downloadPdfFile(
+      `partner-project-summaries-${new Date().toISOString().slice(0, 10)}.pdf`,
+      buildTextPdf(
+        'Partner Project Summaries',
+        projectSummaries
+          .map(summary => buildProjectSummaryContent(summary))
+          .join('\n\n==================================================\n\n')
+      )
+    );
+  };
 
   const renderReportItem = ({ item }: { item: SubmittedReport }) => (
     <TouchableOpacity
@@ -214,6 +254,7 @@ export function PartnerReportsDashboard({
           {item.projectTitle && (
             <Text style={styles.reportItemType}>{item.projectTitle}</Text>
           )}
+          <Text style={styles.reportItemType}>Volunteer account: {item.submitterName}</Text>
           <Text style={styles.reportItemDate}>
             {new Date(item.submittedAt).toLocaleDateString()}
           </Text>
@@ -251,16 +292,22 @@ export function PartnerReportsDashboard({
             <Text style={styles.title}>Program Reports</Text>
             <Text style={styles.subtitle}>Monitor program impact and progress</Text>
           </View>
-          <TouchableOpacity style={styles.uploadButton} onPress={onUploadReport}>
-            <MaterialIcons name="add" size={20} color="#fff" />
-          </TouchableOpacity>
+          <View style={styles.headerActions}>
+            <TouchableOpacity style={styles.secondaryHeaderButton} onPress={handleDownloadAllSummaries}>
+              <MaterialIcons name="download" size={18} color="#166534" />
+              <Text style={styles.secondaryHeaderButtonText}>All PDFs</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.uploadButton} onPress={onUploadReport}>
+              <MaterialIcons name="add" size={20} color="#fff" />
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Impact Metrics */}
         <View style={styles.impactContainer}>
           <View style={[styles.impactCard, styles.impactCardBlue]}>
             <Text style={styles.impactLabel}>Reports Submitted</Text>
-            <Text style={styles.impactValue}>{reports.length}</Text>
+            <Text style={styles.impactValue}>{stats.submitted}</Text>
           </View>
           <View style={[styles.impactCard, styles.impactCardGreen]}>
             <Text style={styles.impactLabel}>Projects Linked</Text>
@@ -272,25 +319,83 @@ export function PartnerReportsDashboard({
           </View>
         </View>
 
-        {/* Reports by Type */}
-        {Object.entries(reportsByType).map(([typeKey, typeReports]) => (
-          <View key={typeKey} style={styles.section}>
+        {projectSections.map(section => (
+          <View key={section.key} style={styles.section}>
             <View style={styles.sectionHeader}>
-              <MaterialIcons name={getReportIcon(typeKey as any)} size={18} color="#166534" />
-              <Text style={styles.sectionTitle}>{formatReportType(typeKey as any)}</Text>
-              <Text style={styles.sectionBadge}>{typeReports.length}</Text>
+              <View style={styles.sectionTitleRow}>
+                <MaterialIcons name="folder" size={18} color="#166534" />
+                <Text style={styles.sectionTitle}>{section.title}</Text>
+                <Text style={styles.sectionBadge}>{section.reports.length}</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.inlineActionButton}
+                onPress={() => handleDownloadProjectSummary(section.summary)}
+              >
+                <MaterialIcons name="download" size={16} color="#166534" />
+                <Text style={styles.inlineActionButtonText}>PDF</Text>
+              </TouchableOpacity>
             </View>
-            <FlatList
-              data={typeReports}
-              renderItem={renderReportItem}
-              keyExtractor={item => item.id}
-              scrollEnabled={false}
-              ItemSeparatorComponent={() => <View style={styles.separator} />}
-            />
+            <Text style={styles.reportItemType}>{section.subtitle}</Text>
+            {section.reports.length > 0 ? (
+              <FlatList
+                data={section.reports}
+                renderItem={renderReportItem}
+                keyExtractor={item => item.id}
+                scrollEnabled={false}
+                ItemSeparatorComponent={() => <View style={styles.separator} />}
+              />
+            ) : (
+              <View style={styles.emptyState}>
+                <MaterialIcons name="description" size={40} color="#cbd5e1" />
+                <Text style={styles.emptyTitle}>No volunteer reports yet</Text>
+                <Text style={styles.emptyText}>
+                  Volunteer reports from the linked approved project events will appear here.
+                </Text>
+              </View>
+            )}
+
+            {section.summary.volunteerAccounts.length > 0 ? (
+              <View style={styles.section}>
+                <View style={styles.sectionHeader}>
+                  <MaterialIcons name="groups" size={18} color="#166534" />
+                  <Text style={styles.sectionTitle}>Volunteer Accounts</Text>
+                  <Text style={styles.sectionBadge}>{section.summary.volunteerAccounts.length}</Text>
+                </View>
+                {section.summary.volunteerAccounts.map(account => (
+                  <TouchableOpacity
+                    key={account.key}
+                    style={styles.reportItem}
+                    onPress={() => {
+                      if (account.reports[0]) {
+                        onViewReport(account.reports[0]);
+                      }
+                    }}
+                    activeOpacity={account.reports[0] ? 0.7 : 1}
+                  >
+                    <View style={styles.reportItemLeft}>
+                      <MaterialIcons name="person" size={20} color="#166534" />
+                      <View style={styles.reportItemContent}>
+                        <Text style={styles.reportItemTitle}>{account.submitterName}</Text>
+                        <Text style={styles.reportItemType}>
+                          {`${account.verifiedAttendance} verified • ${account.beneficiariesServed} beneficiaries • ${Number.isInteger(account.volunteerHours) ? account.volunteerHours : account.volunteerHours.toFixed(1)} hours`}
+                        </Text>
+                        <Text style={styles.reportItemDate}>
+                          {account.reports.length} volunteer report{account.reports.length === 1 ? '' : 's'}
+                          {account.reports.length > 0 ? ' • Tap to open latest report' : ''}
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={styles.reportStatusBadge}>
+                      <Text style={styles.badgeText}>{account.reports.length}</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : null}
           </View>
         ))}
 
-        {reports.length === 0 && (
+        {projectSections.length === 0 && (
           <View style={styles.emptyState}>
             <MaterialIcons name="trending-up" size={48} color="#cbd5e1" />
             <Text style={styles.emptyTitle}>No Reports Submitted</Text>
@@ -309,6 +414,91 @@ export function PartnerReportsDashboard({
 }
 
 export default VolunteerReportsDashboard;
+
+function getVolunteerReportsForSummary(summary: PartnerProjectReportSummary): SubmittedReport[] {
+  return summary.volunteerAccounts
+    .flatMap(account => account.reports)
+    .sort(
+      (left, right) =>
+        new Date(right.submittedAt).getTime() - new Date(left.submittedAt).getTime()
+    );
+}
+
+function formatMetricValue(value?: number): string {
+  if (!value) {
+    return '0';
+  }
+
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+function buildProjectSummaryContent(summary: PartnerProjectReportSummary): string {
+  const volunteerReports = getVolunteerReportsForSummary(summary);
+  const linkedEvents = summary.linkedEvents.length
+    ? summary.linkedEvents
+        .map(
+          event =>
+            `- ${event.title}${event.startDate ? ` (${new Date(event.startDate).toLocaleDateString()})` : ''}`
+        )
+        .join('\n')
+    : 'No linked events yet.';
+  const volunteerAccounts = summary.volunteerAccounts.length
+    ? summary.volunteerAccounts
+        .map(account =>
+          [
+            `- ${account.submitterName}`,
+            `  Volunteer Reports: ${account.reports.length}`,
+            `  Verified Attendance: ${account.verifiedAttendance}`,
+            `  Volunteer Hours: ${formatMetricValue(account.volunteerHours)}`,
+            `  Beneficiaries Served: ${account.beneficiariesServed}`,
+            account.reports.length
+              ? `  Reports: ${account.reports.map(report => report.title).join(', ')}`
+              : null,
+          ]
+            .filter(Boolean)
+            .join('\n')
+        )
+        .join('\n\n')
+    : 'No volunteer accounts yet.';
+  const reportDetails = volunteerReports.length
+    ? volunteerReports
+        .map(report =>
+          [
+            `- ${report.title}`,
+            `  Volunteer Account: ${report.submitterName}`,
+            report.projectTitle ? `  Event: ${report.projectTitle}` : null,
+            `  Status: ${report.status}`,
+            `  Submitted: ${new Date(report.submittedAt).toLocaleString()}`,
+            `  Description: ${report.description || 'No description provided.'}`,
+          ]
+            .filter(Boolean)
+            .join('\n')
+        )
+        .join('\n\n')
+    : 'No volunteer reports yet.';
+
+  return [
+    `Project Summary: ${summary.project.title}`,
+    `Project Description: ${summary.project.description || 'No project description provided.'}`,
+    '',
+    'Project Metrics',
+    `Volunteer Reports Submitted: ${volunteerReports.length}`,
+    `Verified Attendance: ${formatMetricValue(summary.metrics.verifiedAttendance)}`,
+    `Volunteer Hours: ${formatMetricValue(summary.metrics.volunteerHours)}`,
+    `Active Volunteers: ${formatMetricValue(summary.metrics.activeVolunteers)}`,
+    `Beneficiaries Served: ${formatMetricValue(summary.metrics.beneficiariesServed)}`,
+    `Linked Events Count: ${summary.linkedEvents.length}`,
+    '',
+    'Linked Events',
+    linkedEvents,
+    '',
+    'Volunteer Accounts',
+    volunteerAccounts,
+    '',
+    'Volunteer Report Details',
+    reportDetails,
+  ].join('\n');
+}
 
 function formatReportType(type: string): string {
   const types: Record<string, string> = {
@@ -360,6 +550,11 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#e2e8f0',
   },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   title: {
     fontSize: 24,
     fontWeight: '800',
@@ -377,6 +572,22 @@ const styles = StyleSheet.create({
     backgroundColor: '#166534',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  secondaryHeaderButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minHeight: 44,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+  },
+  secondaryHeaderButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#166534',
   },
   statsContainer: {
     flexDirection: 'row',
@@ -450,8 +661,15 @@ const styles = StyleSheet.create({
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     gap: 8,
     marginBottom: 12,
+  },
+  sectionTitleRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   sectionTitle: {
     fontSize: 14,
@@ -469,6 +687,22 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#0f172a',
     textAlign: 'center',
+  },
+  inlineActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#dbe4ee',
+  },
+  inlineActionButtonText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#166534',
   },
   reportItem: {
     flexDirection: 'row',

@@ -83,10 +83,18 @@ type SignupVolunteerSheetState = {
 
 type SignupPartnerApplicationState = {
   organizationName: string;
+  stakeholderName: string;
   sectorType: PartnerSectorType;
   dswdAccreditationNo: string;
-  secRegistrationNo: string;
+  region: string;
+  province: string;
+  cityMunicipality: string;
   advocacyFocus: AdvocacyFocus[];
+};
+
+type PartnerProvinceOption = {
+  code: string;
+  name: string;
 };
 
 type MobileEntryRole = Exclude<UserRole, 'admin'>;
@@ -191,9 +199,12 @@ function createEmptySignupVolunteerSheet(): SignupVolunteerSheetState {
 function createEmptySignupPartnerApplication(): SignupPartnerApplicationState {
   return {
     organizationName: '',
+    stakeholderName: '',
     sectorType: 'NGO',
     dswdAccreditationNo: '',
-    secRegistrationNo: '',
+    region: '',
+    province: '',
+    cityMunicipality: '',
     advocacyFocus: [],
   };
 }
@@ -382,6 +393,11 @@ export default function LoginScreen() {
   const [selectedCityCode, setSelectedCityCode] = useState('');
   const [filteredCities, setFilteredCities] = useState<PHCityMunicipality[]>([]);
   const [filteredBarangays, setFilteredBarangays] = useState<PHBarangay[]>([]);
+  const [selectedPartnerRegionCode, setSelectedPartnerRegionCode] = useState('');
+  const [partnerProvinceOptions, setPartnerProvinceOptions] = useState<PartnerProvinceOption[]>([]);
+  const [selectedPartnerProvinceCode, setSelectedPartnerProvinceCode] = useState('');
+  const [partnerFilteredCities, setPartnerFilteredCities] = useState<PHCityMunicipality[]>([]);
+  const [selectedPartnerCityCode, setSelectedPartnerCityCode] = useState('');
   const { login } = useAuth();
   const mountedRef = useRef(true);
   const visibleDemoAccounts = getVisibleDemoAccounts(isWeb, selectedMobileRole);
@@ -769,6 +785,11 @@ export default function LoginScreen() {
     setSelectedCityCode('');
     setFilteredCities([]);
     setFilteredBarangays([]);
+    setSelectedPartnerRegionCode('');
+    setPartnerProvinceOptions([]);
+    setSelectedPartnerProvinceCode('');
+    setPartnerFilteredCities([]);
+    setSelectedPartnerCityCode('');
     setSignupAcceptedCommitment(false);
     setSignupStep('role');
   };
@@ -888,6 +909,75 @@ export default function LoginScreen() {
     updateSignupVolunteerSheet('homeAddressBarangay', barangayName);
   };
 
+  const getPartnerProvinceOptions = (regionCode: string): PartnerProvinceOption[] => {
+    if (!regionCode) {
+      return [];
+    }
+
+    const uniqueProvinces = new Map<string, PartnerProvinceOption>();
+    getCitiesByRegion(regionCode).forEach(city => {
+      if (!uniqueProvinces.has(city.provinceCode)) {
+        uniqueProvinces.set(city.provinceCode, {
+          code: city.provinceCode,
+          name: city.provinceName,
+        });
+      }
+    });
+
+    return Array.from(uniqueProvinces.values()).sort((a, b) => a.name.localeCompare(b.name));
+  };
+
+  const handleSelectPartnerRegion = (regionCode: string) => {
+    const selectedRegion = PHRegions.find(region => region.code === regionCode);
+    const provinces = getPartnerProvinceOptions(regionCode);
+
+    setSignupPartnerApplication(current => ({
+      ...current,
+      region: selectedRegion?.name || '',
+      province: '',
+      cityMunicipality: '',
+    }));
+    setSelectedPartnerRegionCode(regionCode);
+    setPartnerProvinceOptions(provinces);
+    setSelectedPartnerProvinceCode('');
+    setPartnerFilteredCities([]);
+    setSelectedPartnerCityCode('');
+  };
+
+  const handleSelectPartnerProvince = (provinceCode: string) => {
+    const selectedProvince = partnerProvinceOptions.find(option => option.code === provinceCode);
+    const uniqueCities = new Map<string, PHCityMunicipality>();
+
+    getCitiesByRegion(selectedPartnerRegionCode)
+      .filter(city => city.provinceCode === provinceCode)
+      .forEach(city => {
+        if (!uniqueCities.has(city.code)) {
+          uniqueCities.set(city.code, city);
+        }
+      });
+
+    setSignupPartnerApplication(current => ({
+      ...current,
+      province: selectedProvince?.name || '',
+      cityMunicipality: '',
+    }));
+    setSelectedPartnerProvinceCode(provinceCode);
+    setPartnerFilteredCities(
+      Array.from(uniqueCities.values()).sort((a, b) => a.displayName.localeCompare(b.displayName))
+    );
+    setSelectedPartnerCityCode('');
+  };
+
+  const handleSelectPartnerCity = (cityCode: string) => {
+    const selectedCity = partnerFilteredCities.find(city => city.code === cityCode);
+
+    setSignupPartnerApplication(current => ({
+      ...current,
+      cityMunicipality: selectedCity?.displayName || '',
+    }));
+    setSelectedPartnerCityCode(cityCode);
+  };
+
   // Updates one field in the partner application form.
   const updateSignupPartnerApplication = <K extends keyof SignupPartnerApplicationState>(
     key: K,
@@ -924,19 +1014,44 @@ export default function LoginScreen() {
         return;
       }
 
-      // Validate DSWD accreditation number against database
-      const dswdValidation = await validateDswdAccreditationNo(signupPartnerApplication.dswdAccreditationNo);
-      if (!dswdValidation.valid) {
-        let errorMessage = 'Enter a valid DSWD accreditation number.';
-        if (dswdValidation.reason === 'Accreditation number not found in database') {
-          errorMessage = 'This DSWD accreditation number is not recognized. Please use one of the unassigned accreditation numbers provided by the system.';
-        } else if (dswdValidation.reason === 'Accreditation number already assigned') {
-          errorMessage = 'This DSWD accreditation number is already assigned to another partner. Please use an unassigned number.';
-        } else if (dswdValidation.reason === 'Invalid format') {
-          errorMessage = 'Invalid DSWD accreditation number format. Please check the format and try again.';
-        }
-        Alert.alert('Validation Error', errorMessage);
+      if (!signupPartnerApplication.stakeholderName.trim()) {
+        Alert.alert('Validation Error', 'Stakeholder name is required.');
         return;
+      }
+
+      if (
+        !signupPartnerApplication.region.trim() ||
+        !signupPartnerApplication.province.trim() ||
+        !signupPartnerApplication.cityMunicipality.trim()
+      ) {
+        Alert.alert('Validation Error', 'Select the partner region, province, and city or municipality.');
+        return;
+      }
+
+      if (signupPartnerApplication.sectorType === 'NGO') {
+        // Only NGO registrations require a DSWD accreditation number.
+        const dswdValidation = await validateDswdAccreditationNo(
+          signupPartnerApplication.dswdAccreditationNo
+        );
+        if (!dswdValidation.valid) {
+          let errorTitle = 'Validation Error';
+          let errorMessage = 'Enter a valid DSWD accreditation number.';
+          if (dswdValidation.reason === 'Accreditation number not found in database') {
+            errorTitle = 'DSWD Accreditation Number Not Found';
+            errorMessage = 'The DSWD accreditation number does not exist in the system.';
+          } else if (dswdValidation.reason === 'Accreditation number already assigned') {
+            errorMessage =
+              'This DSWD accreditation number is already assigned to another partner. Please use an unassigned number.';
+          } else if (dswdValidation.reason === 'Invalid format') {
+            errorMessage =
+              'Invalid DSWD accreditation number format. Please check the format and try again.';
+          } else if (dswdValidation.reason === 'Network error') {
+            errorMessage =
+              'Unable to verify the DSWD accreditation number right now. Please try again.';
+          }
+          Alert.alert(errorTitle, errorMessage);
+          return;
+        }
       }
 
       if (signupPartnerApplication.advocacyFocus.length === 0) {
@@ -992,9 +1107,12 @@ export default function LoginScreen() {
           signupRole === 'partner'
             ? {
                 organizationName: signupPartnerApplication.organizationName.trim(),
+                stakeholderName: signupPartnerApplication.stakeholderName.trim(),
                 sectorType: signupPartnerApplication.sectorType,
                 dswdAccreditationNo: signupPartnerApplication.dswdAccreditationNo.trim(),
-                secRegistrationNo: signupPartnerApplication.secRegistrationNo.trim(),
+                region: signupPartnerApplication.region.trim(),
+                province: signupPartnerApplication.province.trim(),
+                cityMunicipality: signupPartnerApplication.cityMunicipality.trim(),
                 advocacyFocus: signupPartnerApplication.advocacyFocus,
               }
             : undefined,
@@ -1538,6 +1656,72 @@ export default function LoginScreen() {
                       editable={!signupLoading}
                     />
 
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Stakeholder Name"
+                      placeholderTextColor="#999"
+                      value={signupPartnerApplication.stakeholderName}
+                      onChangeText={value => updateSignupPartnerApplication('stakeholderName', value)}
+                      editable={!signupLoading}
+                    />
+
+                    <Text style={styles.modalSectionSubLabel}>Region</Text>
+                    <View style={styles.pickerContainer}>
+                      <Picker
+                        selectedValue={selectedPartnerRegionCode}
+                        onValueChange={(itemValue: string) => handleSelectPartnerRegion(itemValue)}
+                        enabled={!signupLoading}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Select Region..." value="" />
+                        {PHRegions.map(region => (
+                          <Picker.Item
+                            key={region.code}
+                            label={region.name}
+                            value={region.code}
+                          />
+                        ))}
+                      </Picker>
+                    </View>
+
+                    <Text style={styles.modalSectionSubLabel}>Province</Text>
+                    <View style={styles.pickerContainer}>
+                      <Picker
+                        selectedValue={selectedPartnerProvinceCode}
+                        onValueChange={(itemValue: string) => handleSelectPartnerProvince(itemValue)}
+                        enabled={!signupLoading && selectedPartnerRegionCode !== ''}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Select Province..." value="" />
+                        {partnerProvinceOptions.map(province => (
+                          <Picker.Item
+                            key={province.code}
+                            label={province.name}
+                            value={province.code}
+                          />
+                        ))}
+                      </Picker>
+                    </View>
+
+                    <Text style={styles.modalSectionSubLabel}>City / Municipality</Text>
+                    <View style={styles.pickerContainer}>
+                      <Picker
+                        selectedValue={selectedPartnerCityCode}
+                        onValueChange={(itemValue: string) => handleSelectPartnerCity(itemValue)}
+                        enabled={!signupLoading && selectedPartnerProvinceCode !== ''}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Select City / Municipality..." value="" />
+                        {partnerFilteredCities.map(city => (
+                          <Picker.Item
+                            key={city.code}
+                            label={city.displayName}
+                            value={city.code}
+                          />
+                        ))}
+                      </Picker>
+                    </View>
+
                     <Text style={styles.modalSectionSubLabel}>Sector Type</Text>
                     <View style={styles.pillarGrid}>
                       {(['NGO', 'Hospital', 'Institution', 'Private'] as const).map(sector => {
@@ -1546,7 +1730,13 @@ export default function LoginScreen() {
                           <TouchableOpacity
                             key={sector}
                             style={[styles.pillarChip, selected && styles.pillarChipActive]}
-                            onPress={() => updateSignupPartnerApplication('sectorType', sector)}
+                            onPress={() =>
+                              setSignupPartnerApplication(current => ({
+                                ...current,
+                                sectorType: sector,
+                                dswdAccreditationNo: sector === 'NGO' ? current.dswdAccreditationNo : '',
+                              }))
+                            }
                             disabled={signupLoading}
                           >
                             <Text style={[styles.pillarChipText, selected && styles.pillarChipTextActive]}>
@@ -1557,29 +1747,27 @@ export default function LoginScreen() {
                       })}
                     </View>
 
-                    <Text style={styles.fieldLabel}>DSWD Accreditation Number</Text>
-                    <Text style={styles.fieldHelpText}>
-                      Enter one of the unassigned DSWD accreditation numbers. Contact admin if you need an assigned number.
-                    </Text>
-                    <TextInput
-                      style={styles.input}
-                      placeholder="DSWD Accreditation No. (must be unassigned)"
-                      placeholderTextColor="#999"
-                      value={signupPartnerApplication.dswdAccreditationNo}
-                      onChangeText={value => updateSignupPartnerApplication('dswdAccreditationNo', value)}
-                      autoCapitalize="characters"
-                      editable={!signupLoading}
-                    />
-
-                    <TextInput
-                      style={styles.input}
-                      placeholder="SEC Registration No. e.g. CN201234567"
-                      placeholderTextColor="#999"
-                      value={signupPartnerApplication.secRegistrationNo}
-                      onChangeText={value => updateSignupPartnerApplication('secRegistrationNo', value)}
-                      autoCapitalize="characters"
-                      editable={!signupLoading}
-                    />
+                    {signupPartnerApplication.sectorType === 'NGO' ? (
+                      <>
+                        <Text style={styles.fieldLabel}>DSWD Accreditation Number</Text>
+                        <Text style={styles.fieldHelpText}>
+                          Enter one of the unassigned DSWD accreditation numbers. Contact admin if you need an assigned number.
+                        </Text>
+                        <TextInput
+                          style={styles.input}
+                          placeholder="DSWD Accreditation No. (must be unassigned)"
+                          placeholderTextColor="#999"
+                          value={signupPartnerApplication.dswdAccreditationNo}
+                          onChangeText={value => updateSignupPartnerApplication('dswdAccreditationNo', value)}
+                          autoCapitalize="characters"
+                          editable={!signupLoading}
+                        />
+                      </>
+                    ) : (
+                      <Text style={styles.fieldHelpText}>
+                        DSWD accreditation number is only required when the sector type is NGO.
+                      </Text>
+                    )}
 
                     <Text style={styles.modalSectionSubLabel}>Advocacy Focus</Text>
                     <View style={styles.pillarGrid}>
@@ -1610,7 +1798,7 @@ export default function LoginScreen() {
                     <View style={styles.partnerLockNotice}>
                       <MaterialIcons name="verified-user" size={18} color="#92400e" />
                       <Text style={styles.partnerLockNoticeText}>
-                        Admin will review your DSWD accreditation number, verify the application, and unlock partner login after approval.
+                        Admin will review your application and unlock partner login after approval. DSWD accreditation is only checked for NGO registrations.
                       </Text>
                     </View>
                   </>
@@ -2120,7 +2308,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   title: {
-    fontSize: 28,
+    fontSize: 24,
     fontWeight: 'bold',
     marginTop: 18,
     marginBottom: 8,
@@ -2128,7 +2316,7 @@ const styles = StyleSheet.create({
     color: '#333',
   },
   subtitle: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#666',
     textAlign: 'center',
     marginBottom: 30,
@@ -2157,13 +2345,13 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   selectionTitle: {
-    fontSize: 24,
+    fontSize: 20,
     fontWeight: '700',
     color: '#0f172a',
     textAlign: 'center',
   },
   selectionSubtitle: {
-    fontSize: 14,
+    fontSize: 13,
     lineHeight: 22,
     color: '#475569',
     textAlign: 'center',
@@ -2275,11 +2463,11 @@ const styles = StyleSheet.create({
     marginBottom: 15,
     borderWidth: 1,
     borderColor: '#ddd',
-    fontSize: 16,
+    fontSize: 15,
     minHeight: 54,
   },
   compactInput: {
-    fontSize: 15,
+    fontSize: 14,
     paddingHorizontal: 14,
     paddingVertical: 13,
     marginBottom: 12,
@@ -2303,7 +2491,7 @@ const styles = StyleSheet.create({
   },
   buttonText: {
     color: '#fff',
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: 'bold',
   },
   demoSection: {
@@ -2380,7 +2568,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   mobileRoleBannerTitle: {
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: '700',
     color: '#0f172a',
   },
@@ -2455,7 +2643,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   modalTitle: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '700',
     color: '#111827',
   },
@@ -2478,7 +2666,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   fieldLabel: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '700',
     color: '#0f172a',
     marginBottom: 6,

@@ -308,6 +308,48 @@ export default function VolunteerProjectsScreen({ navigation }: { navigation: an
     }
   };
 
+  const handleStepPress = (step: 'Program' | 'Project' | 'Event') => {
+    if (step === 'Program') {
+      setSelectedProgramId(null);
+      setSelectedProjectId(null);
+      return;
+    }
+
+    if (step === 'Project') {
+      if (selectedProgramId) {
+        setSelectedProjectId(null);
+        return;
+      }
+
+      const firstProgram = programs[0];
+      if (firstProgram) {
+        setSelectedProgramId(firstProgram.id);
+        setSelectedProjectId(null);
+      }
+      return;
+    }
+
+    if (selectedProjectId) {
+      return;
+    }
+
+    const resolvedProgramId = selectedProgramId || programs[0]?.id || null;
+    if (!resolvedProgramId) {
+      return;
+    }
+
+    const firstProjectForProgram = records
+      .filter(project => !project.isEvent && getProjectProgramId(project) === resolvedProgramId)
+      .sort(sortByDate)[0];
+
+    setSelectedProgramId(resolvedProgramId);
+    setSelectedProjectId(firstProjectForProgram?.id || null);
+  };
+
+  const openProjectDetails = (projectId: string) => {
+    navigation.navigate('ProjectDetails', { projectId });
+  };
+
   const renderEventCard = (event: Project) => {
     const match = matchByProjectId.get(event.id);
     const joinedByUser = (event.joinedUserIds || []).includes(user?.id || '');
@@ -317,7 +359,12 @@ export default function VolunteerProjectsScreen({ navigation }: { navigation: an
     const statusLabel = getEventStatusLabel(match, joinedByUser);
 
     return (
-      <View key={event.id} style={styles.eventCard}>
+      <TouchableOpacity
+        key={event.id}
+        style={styles.eventCard}
+        onPress={() => openProjectDetails(event.id)}
+        activeOpacity={0.88}
+      >
         <View style={styles.eventImageWrap}>
           <Image source={getProjectImageSource(event)} style={styles.cardImage} />
           <View style={[styles.floatingBadge, { backgroundColor: visual.color }]}>
@@ -369,7 +416,7 @@ export default function VolunteerProjectsScreen({ navigation }: { navigation: an
             </Text>
           </TouchableOpacity>
         </View>
-      </View>
+      </TouchableOpacity>
     );
   };
 
@@ -435,10 +482,15 @@ export default function VolunteerProjectsScreen({ navigation }: { navigation: an
           { label: 'Project', active: Boolean(selectedProgramId && !selectedProjectId) },
           { label: 'Event', active: Boolean(selectedProjectId) },
         ].map((step, index) => (
-          <View key={step.label} style={[styles.stepItem, step.active && styles.stepItemActive]}>
+          <TouchableOpacity
+            key={step.label}
+            style={[styles.stepItem, step.active && styles.stepItemActive]}
+            onPress={() => handleStepPress(step.label as 'Program' | 'Project' | 'Event')}
+            activeOpacity={0.88}
+          >
             <Text style={[styles.stepNumber, step.active && styles.stepNumberActive]}>{index + 1}</Text>
             <Text style={[styles.stepLabel, step.active && styles.stepLabelActive]}>{step.label}</Text>
-          </View>
+          </TouchableOpacity>
         ))}
       </View>
 
@@ -585,13 +637,13 @@ export default function VolunteerProjectsScreen({ navigation }: { navigation: an
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#eef7ef' },
-  listContent: { padding: 16, paddingBottom: 36 },
-  centerContent: { alignItems: 'center', justifyContent: 'center', padding: 24 },
-  loadingText: { marginTop: 10, fontSize: 14, color: '#64748b', fontWeight: '700', textAlign: 'center' },
+  listContent: { padding: 14, paddingBottom: 30 },
+  centerContent: { alignItems: 'center', justifyContent: 'center', padding: 20 },
+  loadingText: { marginTop: 10, fontSize: 13, color: '#64748b', fontWeight: '700', textAlign: 'center' },
   heroCard: {
     backgroundColor: '#0f5132',
-    borderRadius: 28,
-    padding: 20,
+    borderRadius: 24,
+    padding: 16,
     marginBottom: 16,
     overflow: 'hidden',
   },
@@ -605,33 +657,33 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     marginBottom: 7,
   },
-  heroTitle: { fontSize: 23, lineHeight: 29, fontWeight: '900', color: '#ffffff' },
-  heroSubtitle: { fontSize: 13, lineHeight: 20, color: '#dcfce7', marginTop: 10, fontWeight: '600' },
+  heroTitle: { fontSize: 19, lineHeight: 24, fontWeight: '900', color: '#ffffff' },
+  heroSubtitle: { fontSize: 12, lineHeight: 18, color: '#dcfce7', marginTop: 8, fontWeight: '600' },
   heroIcon: {
-    width: 58,
-    height: 58,
-    borderRadius: 22,
+    width: 50,
+    height: 50,
+    borderRadius: 18,
     backgroundColor: 'rgba(255,255,255,0.16)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  statsGrid: { flexDirection: 'row', gap: 10, marginTop: 18 },
+  statsGrid: { flexDirection: 'row', gap: 8, marginTop: 14 },
   statCard: {
     flex: 1,
     backgroundColor: 'rgba(255,255,255,0.12)',
-    borderRadius: 18,
-    paddingVertical: 12,
-    paddingHorizontal: 10,
+    borderRadius: 15,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
   },
-  statValue: { fontSize: 21, fontWeight: '900', color: '#ffffff' },
-  statLabel: { fontSize: 11, fontWeight: '800', color: '#bbf7d0', marginTop: 2 },
+  statValue: { fontSize: 16, fontWeight: '900', color: '#ffffff' },
+  statLabel: { fontSize: 10, fontWeight: '800', color: '#bbf7d0', marginTop: 2 },
   stepper: {
     flexDirection: 'row',
     gap: 8,
     backgroundColor: '#ffffff',
-    borderRadius: 18,
-    padding: 8,
-    marginBottom: 14,
+    borderRadius: 16,
+    padding: 7,
+    marginBottom: 12,
     borderWidth: 1,
     borderColor: '#dbe7df',
   },
@@ -641,49 +693,49 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    borderRadius: 13,
-    paddingVertical: 9,
+    borderRadius: 11,
+    paddingVertical: 8,
   },
   stepItemActive: { backgroundColor: '#dcfce7' },
   stepNumber: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
     textAlign: 'center',
-    lineHeight: 20,
-    fontSize: 11,
+    lineHeight: 18,
+    fontSize: 10,
     fontWeight: '900',
     color: '#64748b',
     backgroundColor: '#f1f5f9',
   },
   stepNumberActive: { color: '#ffffff', backgroundColor: '#166534' },
-  stepLabel: { fontSize: 11, fontWeight: '900', color: '#64748b' },
+  stepLabel: { fontSize: 10, fontWeight: '900', color: '#64748b' },
   stepLabelActive: { color: '#166534' },
   featuredEventCard: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 14,
+    gap: 12,
     backgroundColor: '#ffffff',
-    borderRadius: 22,
-    padding: 16,
-    marginBottom: 16,
+    borderRadius: 18,
+    padding: 13,
+    marginBottom: 14,
     borderWidth: 1,
     borderColor: '#bbf7d0',
   },
-  featuredEyebrow: { fontSize: 11, fontWeight: '900', color: '#166534', textTransform: 'uppercase', letterSpacing: 0.8 },
-  featuredTitle: { fontSize: 17, fontWeight: '900', color: '#102118', marginTop: 4 },
-  featuredMeta: { fontSize: 12, fontWeight: '800', color: '#64748b', marginTop: 5 },
-  sectionHeader: { marginTop: 4, marginBottom: 12 },
-  screenTitle: { fontSize: 27, fontWeight: '900', color: '#102118', marginBottom: 6 },
-  screenSubtitle: { fontSize: 14, color: '#64748b', lineHeight: 21 },
+  featuredEyebrow: { fontSize: 10, fontWeight: '900', color: '#166534', textTransform: 'uppercase', letterSpacing: 0.6 },
+  featuredTitle: { fontSize: 15, fontWeight: '900', color: '#102118', marginTop: 4 },
+  featuredMeta: { fontSize: 11, fontWeight: '800', color: '#64748b', marginTop: 4 },
+  sectionHeader: { marginTop: 4, marginBottom: 10 },
+  screenTitle: { fontSize: 19, fontWeight: '900', color: '#102118', marginBottom: 4 },
+  screenSubtitle: { fontSize: 12, color: '#64748b', lineHeight: 18 },
   backButton: {
     alignSelf: 'flex-start',
     backgroundColor: '#dcfce7',
     borderRadius: 999,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    marginBottom: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    marginBottom: 12,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
@@ -692,11 +744,11 @@ const styles = StyleSheet.create({
   selectionCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 14,
+    gap: 12,
     backgroundColor: '#fff',
-    borderRadius: 24,
-    marginBottom: 14,
-    padding: 16,
+    borderRadius: 20,
+    marginBottom: 12,
+    padding: 13,
     borderWidth: 1,
     borderColor: '#dbe7df',
     shadowColor: '#0f172a',
@@ -705,13 +757,13 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
     elevation: 3,
   },
-  programIcon: { width: 58, height: 58, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  programIcon: { width: 48, height: 48, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   selectionBody: { flex: 1 },
-  selectionTitle: { fontSize: 21, fontWeight: '900', color: '#102118', marginBottom: 8 },
+  selectionTitle: { fontSize: 16, fontWeight: '900', color: '#102118', marginBottom: 6 },
   card: {
     backgroundColor: '#fff',
-    borderRadius: 24,
-    marginBottom: 16,
+    borderRadius: 20,
+    marginBottom: 14,
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: '#dbe7df',
@@ -723,8 +775,8 @@ const styles = StyleSheet.create({
   },
   eventCard: {
     backgroundColor: '#fff',
-    borderRadius: 26,
-    marginBottom: 16,
+    borderRadius: 22,
+    marginBottom: 14,
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: '#dbe7df',
@@ -735,57 +787,57 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   eventImageWrap: { position: 'relative' },
-  cardImage: { width: '100%', height: 158, backgroundColor: '#e5e7eb' },
+  cardImage: { width: '100%', height: 142, backgroundColor: '#e5e7eb' },
   floatingBadge: {
     position: 'absolute',
-    left: 14,
-    bottom: 14,
+    left: 12,
+    bottom: 12,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
     borderRadius: 999,
   },
-  floatingBadgeText: { color: '#ffffff', fontSize: 11, fontWeight: '900' },
-  cardContent: { padding: 16 },
-  cardLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
-  miniIcon: { width: 30, height: 30, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  floatingBadgeText: { color: '#ffffff', fontSize: 10, fontWeight: '900' },
+  cardContent: { padding: 13 },
+  cardLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+  miniIcon: { width: 26, height: 26, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   cardLabel: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '900',
     letterSpacing: 0.8,
     textTransform: 'uppercase',
   },
-  cardTitle: { fontSize: 19, fontWeight: '900', color: '#102118', marginBottom: 4 },
-  infoRow: { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 8 },
-  cardDate: { fontSize: 14, color: '#64748b', fontWeight: '700', flex: 1 },
-  cardDescription: { fontSize: 14, color: '#475569', lineHeight: 20 },
-  metaText: { fontSize: 13, color: '#64748b', fontWeight: '800', flex: 1 },
-  metricPillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
+  cardTitle: { fontSize: 14, fontWeight: '900', color: '#102118', marginBottom: 4 },
+  infoRow: { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 6 },
+  cardDate: { fontSize: 12, color: '#64748b', fontWeight: '700', flex: 1 },
+  cardDescription: { fontSize: 12, color: '#475569', lineHeight: 18 },
+  metaText: { fontSize: 11, color: '#64748b', fontWeight: '800', flex: 1 },
+  metricPillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 10 },
   metricPill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
     backgroundColor: '#f8fafc',
     borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
   },
-  metricPillText: { fontSize: 11, color: '#64748b', fontWeight: '900' },
+  metricPillText: { fontSize: 10, color: '#64748b', fontWeight: '900' },
   projectFooter: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 12,
-    marginTop: 14,
+    gap: 10,
+    marginTop: 12,
   },
-  openButtonLite: { backgroundColor: '#dcfce7', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999 },
-  openButtonLiteText: { color: '#166534', fontSize: 12, fontWeight: '900' },
+  openButtonLite: { backgroundColor: '#dcfce7', paddingHorizontal: 11, paddingVertical: 7, borderRadius: 999 },
+  openButtonLiteText: { color: '#166534', fontSize: 10, fontWeight: '900' },
   button: {
-    padding: 14,
-    borderRadius: 16,
-    marginTop: 16,
+    padding: 12,
+    borderRadius: 14,
+    marginTop: 14,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',

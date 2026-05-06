@@ -36,6 +36,7 @@ import {
   PartnerProjectApplication,
   PartnerProjectProposalDetails,
   PublishedImpactReport,
+  AppSettings,
   VolunteerProjectJoinRecord,
 } from './types';
 import { NVCSector, UserRole } from './types';
@@ -61,6 +62,7 @@ const STORAGE_KEYS = {
   ADMIN_PLANNING_CALENDARS: 'adminPlanningCalendars',
   ADMIN_PLANNING_ITEMS: 'adminPlanningItems',
   PROGRAM_TRACKS: 'programTracks',
+  APP_SETTINGS: 'appSettings',
 };
 
 const WEB_MESSAGE_SYNC_KEY = 'volcre:messages:updatedAt';
@@ -83,7 +85,7 @@ const PROJECTS_SNAPSHOT_CACHE_TTL_MS = 60000; // Increased from 20s to 1m
 const STORAGE_CHANGE_POLL_INTERVAL_MS = 1000;
 const STORAGE_CHANGE_DEBOUNCE_MS = 250;
 const STORAGE_CHANGE_CALLBACK_COOLDOWN_MS = 250;
-const LOCAL_ONLY_STORAGE_KEYS = new Set([STORAGE_KEYS.CURRENT_USER]);
+const LOCAL_ONLY_STORAGE_KEYS = new Set([STORAGE_KEYS.CURRENT_USER, STORAGE_KEYS.APP_SETTINGS]);
 const NEGROS_OCCIDENTAL_BOUNDS = {
   minLatitude: 9.85,
   maxLatitude: 11.05,
@@ -208,6 +210,7 @@ function flushSharedStorageChangedKeys() {
 }
 
 function queueSharedStorageChangedKeys(changedKeys: string[]) {
+  invalidateProjectsSnapshotCache();
   changedKeys.forEach(key => sharedStoragePendingChangedKeys.add(key));
   if (!sharedStoragePendingChangeTimer) {
     sharedStoragePendingChangeTimer = setTimeout(() => {
@@ -518,7 +521,10 @@ export function getProgramModuleFromProposalProjectId(projectId: string): string
     return null;
   }
 
-  const extractedModule = projectId.slice('program:'.length).trim();
+  const extractedModule = projectId
+    .slice('program:'.length)
+    .split('::', 1)[0]
+    .trim();
   return extractedModule || null;
 }
 
@@ -591,7 +597,7 @@ async function notifyPartnerAboutProjectJoinReview(
   const outcome =
     application.status === 'Approved'
       ? `approved your project proposal for ${targetLabel}. You can now coordinate with NVC through Messages.`
-      : `rejected your project proposal for ${targetLabel}. You may contact NVC admin for clarification.`;
+      : `rejected your project proposal for ${targetLabel}. Please create and send a new proposal again if you want to continue this request.`;
 
   await sendSystemMessage(
     reviewedBy,
@@ -1623,9 +1629,11 @@ export async function getDashboardSnapshot(): Promise<{
     STORAGE_KEYS.PARTNERS,
     STORAGE_KEYS.VOLUNTEERS,
     STORAGE_KEYS.STATUS_UPDATES,
+    STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
   ]);
 
   const partners = ((coreItems[STORAGE_KEYS.PARTNERS] as Partner[] | null) || [])
+    .map(normalizePartnerRecord)
     .filter(p => !p.contactEmail?.toLowerCase().includes('eduindia.org'));
 
   const projects = (coreItems[STORAGE_KEYS.PROJECTS] as Project[] | null) || [];
@@ -1644,7 +1652,8 @@ export async function getDashboardSnapshot(): Promise<{
     volunteerMatches: [],
     volunteerTimeLogs: [],
     volunteerProjectJoins: [],
-    partnerProjectApplications: [],
+    partnerProjectApplications:
+      (coreItems[STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS] as PartnerProjectApplication[] | null) || [],
     partnerReports: [],
     publishedImpactReports: [],
     adminPlanningCalendars: [],
@@ -1752,6 +1761,7 @@ const GLOBAL_SNAPSHOT_COOLDOWN_MS = 1000;
 
 function invalidateProjectsSnapshotCache(): void {
   projectsSnapshotCache.clear();
+  lastSnapshotRequestTimes.clear();
 }
 
 
@@ -1881,7 +1891,8 @@ export async function getProjectsScreenSnapshot(
         return fallbackResult;
       }
     } catch (error) {
-      console.error(`[Data] Error fetching ProjectsSnapshot:`, error);
+      // Snapshot screens already have a safe fallback path below. Avoid surfacing
+      // recoverable backend fetch failures as mobile LogBox errors.
       const fallbackResult = await buildSnapshotFallback();
       projectsSnapshotCache.set(cacheKey, { data: fallbackResult, timestamp: Date.now() });
       return fallbackResult;
@@ -1944,6 +1955,10 @@ export function isValidDswdAccreditationNo(value: string): boolean {
   return /^[A-Z0-9][A-Z0-9\-\/]{5,}$/.test(normalizedValue);
 }
 
+function requiresDswdAccreditationNo(sectorType: PartnerSectorType): boolean {
+  return sectorType === 'NGO';
+}
+
 export async function validateDswdAccreditationNo(value: string): Promise<{valid: boolean, reason?: string}> {
   const normalizedValue = value.trim().toUpperCase();
   
@@ -1996,6 +2011,17 @@ function normalizePartnerContactPhone(value?: string): string | undefined {
   return undefined;
 }
 
+function composePartnerAddress(
+  region?: string,
+  province?: string,
+  cityMunicipality?: string
+): string {
+  return [cityMunicipality, province, region]
+    .map(value => value?.trim() || '')
+    .filter(Boolean)
+    .join(', ');
+}
+
 // Maps one advocacy focus into the existing project/partner category taxonomy.
 function getCategoryFromAdvocacyFocus(focuses: AdvocacyFocus[]): Partner['category'] {
   if (focuses.includes('Disaster')) {
@@ -2024,6 +2050,7 @@ function normalizePartnerRecord(partner: Partner): Partner {
 
   return {
     ...partner,
+    stakeholderName: partner.stakeholderName?.trim() || '',
     description: partner.description?.trim() || '',
     category: derivedCategory,
     sectorType: partner.sectorType || 'NGO',
@@ -2032,10 +2059,16 @@ function normalizePartnerRecord(partner: Partner): Partner {
     advocacyFocus,
     contactEmail: partner.contactEmail?.trim().toLowerCase() || '',
     contactPhone: normalizePartnerContactPhone(partner.contactPhone) || '',
-    address: partner.address?.trim() || '',
+    region: partner.region?.trim() || '',
+    province: partner.province?.trim() || '',
+    cityMunicipality: partner.cityMunicipality?.trim() || '',
+    address:
+      partner.address?.trim() ||
+      composePartnerAddress(partner.region, partner.province, partner.cityMunicipality),
     verificationStatus:
-      partner.verificationStatus ||
-      (partner.status === 'Approved' ? 'Verified' : 'Pending'),
+      partner.status === 'Approved'
+        ? 'Verified'
+        : partner.verificationStatus || 'Pending',
   };
 }
 
@@ -2333,9 +2366,13 @@ export async function createUserAccount(input: {
   pillarsOfInterest: NVCSector[];
   partnerRegistration?: {
     organizationName: string;
+    stakeholderName: string;
     sectorType: PartnerSectorType;
     dswdAccreditationNo: string;
     secRegistrationNo?: string;
+    region: string;
+    province: string;
+    cityMunicipality: string;
     advocacyFocus: AdvocacyFocus[];
   };
   volunteerMembershipSheet?: {
@@ -2385,7 +2422,12 @@ export async function createUserAccount(input: {
     input.role === 'partner' &&
     (!input.partnerRegistration ||
       !input.partnerRegistration.organizationName.trim() ||
-      !isValidDswdAccreditationNo(input.partnerRegistration.dswdAccreditationNo) ||
+      !input.partnerRegistration.stakeholderName.trim() ||
+      !input.partnerRegistration.region.trim() ||
+      !input.partnerRegistration.province.trim() ||
+      !input.partnerRegistration.cityMunicipality.trim() ||
+      (requiresDswdAccreditationNo(input.partnerRegistration.sectorType) &&
+        !isValidDswdAccreditationNo(input.partnerRegistration.dswdAccreditationNo)) ||
       input.partnerRegistration.advocacyFocus.length === 0)
   ) {
     throw new Error('Complete the organization application details before submitting.');
@@ -2463,18 +2505,33 @@ export async function createUserAccount(input: {
   }
 
   if (input.role === 'partner' && input.partnerRegistration) {
+    const normalizedDswdAccreditationNo = requiresDswdAccreditationNo(
+      input.partnerRegistration.sectorType
+    )
+      ? input.partnerRegistration.dswdAccreditationNo.trim().toUpperCase()
+      : '';
+
     await savePartner({
       id: `partner-${createdUser.id}`,
       ownerUserId: createdUser.id,
       name: input.partnerRegistration.organizationName.trim(),
+      stakeholderName: input.partnerRegistration.stakeholderName.trim(),
       description: `${input.partnerRegistration.advocacyFocus.join(', ')} partnership application`,
       category: getCategoryFromAdvocacyFocus(input.partnerRegistration.advocacyFocus),
       sectorType: input.partnerRegistration.sectorType,
-      dswdAccreditationNo: input.partnerRegistration.dswdAccreditationNo.trim().toUpperCase(),
+      dswdAccreditationNo: normalizedDswdAccreditationNo,
       secRegistrationNo: input.partnerRegistration.secRegistrationNo?.trim().toUpperCase() || '',
       advocacyFocus: input.partnerRegistration.advocacyFocus,
       contactEmail: createdUser.email,
       contactPhone: createdUser.phone,
+      region: input.partnerRegistration.region.trim(),
+      province: input.partnerRegistration.province.trim(),
+      cityMunicipality: input.partnerRegistration.cityMunicipality.trim(),
+      address: composePartnerAddress(
+        input.partnerRegistration.region,
+        input.partnerRegistration.province,
+        input.partnerRegistration.cityMunicipality
+      ),
       status: 'Pending',
       verificationStatus: 'Pending',
       createdAt,
@@ -2677,6 +2734,33 @@ export async function setCurrentUser(user: User | null): Promise<void> {
 // Restores the currently signed-in user from local-only storage.
 export async function getCurrentUser(): Promise<User | null> {
   return (await getLocalStorageItem<User>(STORAGE_KEYS.CURRENT_USER)) || null;
+}
+
+export const DEFAULT_APP_SETTINGS: AppSettings = {
+  notificationsEnabled: true,
+  autoRefreshEnabled: true,
+  compactDashboard: false,
+  approvalConfirmations: true,
+  showProgramContext: true,
+  startupScreen: 'Dashboard',
+};
+
+export async function getAppSettings(): Promise<AppSettings> {
+  const stored = await getLocalStorageItem<Partial<AppSettings>>(STORAGE_KEYS.APP_SETTINGS);
+  return {
+    ...DEFAULT_APP_SETTINGS,
+    ...(stored || {}),
+  };
+}
+
+export async function saveAppSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
+  const current = await getAppSettings();
+  const next: AppSettings = {
+    ...current,
+    ...patch,
+  };
+  await setLocalStorageItem(STORAGE_KEYS.APP_SETTINGS, next);
+  return next;
 }
 
 function userMatchesLinkedRecord(
@@ -3736,6 +3820,21 @@ export async function saveProjectGroupMessage(message: ProjectGroupMessage): Pro
   }
 }
 
+export async function deleteProjectGroupChat(projectId: string): Promise<void> {
+  try {
+    await fetchApiResponse(
+      `/projects/${encodeURIComponent(projectId)}/group-messages`,
+      { method: 'DELETE' }
+    );
+    notifyWebMessageUpdate();
+  } catch (error) {
+    if (!isExpectedRemoteStorageError(error)) {
+      console.error('Error deleting project group chat:', error);
+    }
+    throw error;
+  }
+}
+
 // Returns all direct messages relevant to a specific user.
 export async function getMessagesForUser(userId: string): Promise<Message[]> {
   const payload = await requestApiJson<{ messages?: Message[] }>(
@@ -4475,13 +4574,34 @@ export async function submitPartnerProgramProposal(
     throw new Error('Partner program proposal did not complete.');
   }
 
+  let resolvedApplication = payload.application;
+
+  if (resolvedApplication.status === 'Rejected') {
+    resolvedApplication = {
+      ...resolvedApplication,
+      projectId: proposalProjectId,
+      partnerUserId: partnerUser.id,
+      partnerName: partnerUser.name,
+      partnerEmail: partnerUser.email || '',
+      proposalDetails: options?.proposalDetails,
+      status: 'Pending',
+      requestedAt: new Date().toISOString(),
+      reviewedAt: undefined,
+      reviewedBy: undefined,
+    };
+    await savePartnerProjectApplication(resolvedApplication);
+  }
+
+  invalidateSharedStorageCache([STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS]);
+  queueSharedStorageChangedKeys([STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS]);
+
   try {
     await notifyAdminAboutPartnerProjectJoin(proposalProjectId, partnerUser);
   } catch (error) {
     console.error('Error notifying admin about partner join request:', error);
   }
 
-  return payload.application;
+  return resolvedApplication;
 }
 
 // Backwards-compatible alias used by older screens.
@@ -4497,7 +4617,7 @@ export async function reviewPartnerProjectApplication(
   applicationId: string,
   status: 'Approved' | 'Rejected',
   reviewedBy: string
-): Promise<void> {
+): Promise<PartnerProjectApplication> {
   const payload = await requestApiJson<{ application?: PartnerProjectApplication | null }>(
     `/partner-project-applications/${encodeURIComponent(applicationId)}/review`,
     {
@@ -4516,11 +4636,20 @@ export async function reviewPartnerProjectApplication(
     throw new Error('Application review did not complete.');
   }
 
+  const changedKeys = [STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS];
+  if (payload.application.status === 'Approved' && !String(payload.application.projectId || '').startsWith('program:')) {
+    changedKeys.push(STORAGE_KEYS.PROJECTS);
+  }
+  invalidateSharedStorageCache(changedKeys);
+  queueSharedStorageChangedKeys(changedKeys);
+
   try {
     await notifyPartnerAboutProjectJoinReview(payload.application, reviewedBy);
   } catch (error) {
     console.error('Error notifying partner about application review:', error);
   }
+
+  return payload.application;
 }
 
 // Marks a partner registration as externally verified by admin.
@@ -4780,6 +4909,9 @@ export async function submitImpactHubReport(input: {
   partnerId?: string;
   partnerUserId?: string;
   partnerName?: string;
+  collaborationFeedback?: string;
+  volunteerPraise?: string;
+  gratitudeNote?: string;
 }): Promise<PartnerReport> {
   await validateVolunteerReportEligibility({
     projectId: input.projectId,
@@ -4814,6 +4946,9 @@ export async function submitImpactHubReport(input: {
     createdAt: new Date().toISOString(),
     status: 'Submitted',
     sourceReportIds: [],
+    collaborationFeedback: input.collaborationFeedback?.trim() || undefined,
+    volunteerPraise: input.volunteerPraise?.trim() || undefined,
+    gratitudeNote: input.gratitudeNote?.trim() || undefined,
   };
 
   try {
@@ -4825,6 +4960,7 @@ export async function submitImpactHubReport(input: {
       body: JSON.stringify(report),
     });
     if (payload.report) {
+      await savePartnerReport(payload.report);
       return payload.report;
     }
   } catch (error: any) {

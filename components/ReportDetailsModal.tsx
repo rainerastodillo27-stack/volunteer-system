@@ -20,6 +20,7 @@ import {
   isImageMediaUri,
   openAttachmentUri,
 } from '../utils/media';
+import { buildTextPdf, downloadPdfFile } from '../utils/pdfDownload';
 
 interface ReportDetailsModalProps {
   visible: boolean;
@@ -85,6 +86,12 @@ export default function ReportDetailsModal({
       Alert.alert('Attachment', 'Unable to open this attachment on this device.');
     }
   };
+  const handleDownloadReport = () => {
+    void downloadPdfFile(
+      `${report.title}-${new Date(report.submittedAt).toISOString().slice(0, 10)}.pdf`,
+      buildTextPdf(report.title, buildReportDownloadContent(report))
+    );
+  };
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={handleClose}>
@@ -96,9 +103,15 @@ export default function ReportDetailsModal({
               <Text style={styles.title}>{report.title}</Text>
               <Text style={styles.submitter}>Submitted by {report.submitterName}</Text>
             </View>
-            <TouchableOpacity style={styles.headerCloseButton} onPress={handleClose} hitSlop={8}>
-              <MaterialIcons name="close" size={24} color="#0f172a" />
-            </TouchableOpacity>
+            <View style={styles.headerActions}>
+              <TouchableOpacity style={styles.downloadButton} onPress={handleDownloadReport}>
+                <MaterialIcons name="download" size={18} color="#166534" />
+                <Text style={styles.downloadButtonText}>PDF</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.headerCloseButton} onPress={handleClose} hitSlop={8}>
+                <MaterialIcons name="close" size={24} color="#0f172a" />
+              </TouchableOpacity>
+            </View>
           </View>
 
           <ScrollView
@@ -164,6 +177,30 @@ export default function ReportDetailsModal({
               <Text style={styles.sectionTitle}>Description</Text>
               <Text style={styles.descriptionText}>{report.description}</Text>
             </View>
+
+            {(report.collaborationFeedback || report.volunteerPraise || report.gratitudeNote) && (
+              <View style={styles.sectionCard}>
+                <Text style={styles.sectionTitle}>Partner Feedback</Text>
+                {report.collaborationFeedback ? (
+                  <View style={styles.feedbackBlock}>
+                    <Text style={styles.feedbackLabel}>How Was the Collaboration?</Text>
+                    <Text style={styles.descriptionText}>{report.collaborationFeedback}</Text>
+                  </View>
+                ) : null}
+                {report.volunteerPraise ? (
+                  <View style={styles.feedbackBlock}>
+                    <Text style={styles.feedbackLabel}>Praise for the Volunteers</Text>
+                    <Text style={styles.descriptionText}>{report.volunteerPraise}</Text>
+                  </View>
+                ) : null}
+                {report.gratitudeNote ? (
+                  <View style={styles.feedbackBlock}>
+                    <Text style={styles.feedbackLabel}>Thank You Note</Text>
+                    <Text style={styles.descriptionText}>{report.gratitudeNote}</Text>
+                  </View>
+                ) : null}
+              </View>
+            )}
 
             {attachmentPreviews.length > 0 && (
               <View style={styles.sectionCard}>
@@ -375,6 +412,48 @@ export default function ReportDetailsModal({
   );
 }
 
+function buildReportDownloadContent(report: SubmittedReport): string {
+  const metricLines = Object.entries(report.metrics)
+    .filter(([, value]) => value !== undefined && value !== null)
+    .map(([key, value]) => `${formatMetricKey(key)}: ${value}`);
+  const feedbackLines = [
+    report.collaborationFeedback
+      ? `How Was the Collaboration?: ${report.collaborationFeedback}`
+      : null,
+    report.volunteerPraise ? `Praise for the Volunteers: ${report.volunteerPraise}` : null,
+    report.gratitudeNote ? `Thank You Note: ${report.gratitudeNote}` : null,
+  ].filter(Boolean) as string[];
+
+  return [
+    `Title: ${report.title}`,
+    `Submitted By: ${report.submitterName}`,
+    `Role: ${report.submitterRole}`,
+    `Status: ${report.status}`,
+    `Submitted At: ${new Date(report.submittedAt).toLocaleString()}`,
+    `Report Type: ${formatReportType(report.reportType)}`,
+    report.projectTitle
+      ? `${report.projectKind === 'event' ? 'Event' : 'Project'}: ${report.projectTitle}`
+      : null,
+    report.category ? `Category: ${report.category}` : null,
+    '',
+    'Description',
+    report.description || 'No description provided.',
+    feedbackLines.length ? '' : null,
+    feedbackLines.length ? 'Partner Feedback' : null,
+    feedbackLines.length ? feedbackLines.join('\n') : null,
+    '',
+    'Metrics',
+    metricLines.length ? metricLines.join('\n') : 'No metrics captured.',
+    report.approvedBy ? '' : null,
+    report.approvedBy ? 'Approval History' : null,
+    report.approvedBy ? `Reviewed By: ${report.approvedBy}` : null,
+    report.approvedAt ? `Reviewed At: ${new Date(report.approvedAt).toLocaleString()}` : null,
+    report.approvalNotes ? `Approval Notes: ${report.approvalNotes}` : null,
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
 function formatReportType(type: string): string {
   const types: Record<string, string> = {
     General: 'General Report',
@@ -472,6 +551,27 @@ const styles = StyleSheet.create({
   },
   headerContent: {
     flex: 1,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  downloadButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minHeight: 38,
+    paddingHorizontal: 12,
+    borderRadius: 19,
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+  },
+  downloadButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#166534',
   },
   headerCloseButton: {
     width: 38,
@@ -604,6 +704,17 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 22,
     color: '#475569',
+  },
+  feedbackBlock: {
+    marginTop: 10,
+  },
+  feedbackLabel: {
+    marginBottom: 4,
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
   },
   metricsDisplay: {
     flexDirection: 'row',

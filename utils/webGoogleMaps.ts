@@ -46,6 +46,7 @@ type GoogleMapInstance = {
   fitBounds: (bounds: GoogleLatLngBounds, padding?: number) => void;
   setCenter: (center: GoogleLatLngLiteral) => void;
   setZoom: (zoom: number) => void;
+  getZoom: () => number | undefined;
   setOptions: (options: Partial<GoogleMapOptions>) => void;
 };
 

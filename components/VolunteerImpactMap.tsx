@@ -20,6 +20,7 @@ import {
   getMappedProjects,
   getProjectMarkerColor,
 } from '../utils/projectMap';
+import { getProjectDisplayStatus } from '../utils/projectStatus';
 
 type AccountOption = {
   id: string;
@@ -97,7 +98,9 @@ const MapMarker = React.memo<MapMarkerProps>(
     onVolunteerPress,
   }) => {
     const partnerHit = useMemo(() => 
-      (partnerAccounts || []).find(account => (account.projectIds || []).includes(project.id)),
+      (partnerAccounts || []).find(
+        account => account.id !== 'partner-unassigned' && (account.projectIds || []).includes(project.id)
+      ),
       [partnerAccounts, project.id]
     );
 
@@ -124,6 +127,9 @@ const MapMarker = React.memo<MapMarkerProps>(
         <View style={styles.calloutCard}>
           <Text style={styles.calloutTitle} numberOfLines={2}>
             {project.title}
+          </Text>
+          <Text style={styles.calloutTypeLabel}>
+            {project.isEvent ? 'Event' : 'Project'}
           </Text>
 
           {partnerHit && (
@@ -208,7 +214,7 @@ const MAP_STYLE_PRESETS: MapStylePreset[] = [
   {
     key: 'admin-overview',
     label: 'Admin overview',
-    description: 'Shows all mapped projects across the system.',
+    description: 'Shows all mapped projects and events across the system.',
     mapType: 'standard',
     accentColor: '#1d4ed8',
     chipBg: '#eff6ff',
@@ -219,7 +225,7 @@ const MAP_STYLE_PRESETS: MapStylePreset[] = [
   {
     key: 'volunteer-view',
     label: 'Volunteer view',
-    description: 'Choose a volunteer and inspect their mapped completed work.',
+    description: 'Choose a volunteer and inspect their mapped events.',
     mapType: 'standard',
     accentColor: '#1d4ed8',
     chipBg: '#eff6ff',
@@ -231,7 +237,7 @@ const MAP_STYLE_PRESETS: MapStylePreset[] = [
     key: 'partner-view',
     label: 'Partner view',
     description: 'Choose a partner and inspect their mapped project footprint.',
-    mapType: 'hybrid',
+    mapType: 'standard',
     accentColor: '#0f766e',
     chipBg: '#ecfeff',
     chipBorder: '#a5f3fc',
@@ -253,7 +259,8 @@ type VolunteerImpactMapProps = {
 
 function buildAvailableAccountOptions(
   accounts: MapAccountOption[],
-  mappedProjects: Project[]
+  mappedProjects: Project[],
+  includeEmptyAccounts = false
 ): AvailableMapAccountOption[] {
   const projectById = new Map(mappedProjects.map(project => [project.id, project]));
 
@@ -270,7 +277,7 @@ function buildAvailableAccountOptions(
         projectCount: accountProjects.length,
       };
     })
-    .filter(account => account.projectCount > 0)
+    .filter(account => includeEmptyAccounts || account.projectCount > 0)
     .sort((left, right) => left.label.localeCompare(right.label));
 }
 
@@ -280,7 +287,7 @@ function getMapEmptyStateMessage(
   selectedAccountOption: AvailableMapAccountOption | null
 ) {
   if (selectedMapStyleKey === 'admin-overview') {
-    return 'No mapped projects are available yet.';
+    return 'No mapped projects or events are available yet.';
   }
 
   const targetLabel = selectedMapStyleKey === 'volunteer-view' ? 'volunteer' : 'partner';
@@ -335,14 +342,18 @@ export default function VolunteerImpactMap({
   onPartnerPress,
 }: VolunteerImpactMapProps) {
   const mappedProjects = useMemo(() => getMappedProjects(projects), [projects]);
+  const mappedEvents = useMemo(
+    () => mappedProjects.filter(project => project.isEvent),
+    [mappedProjects]
+  );
   const hasVolunteerScope = Array.isArray(volunteerAccounts);
   const hasPartnerScope = Array.isArray(partnerAccounts);
   const volunteerOptions = useMemo(
-    () => buildAvailableAccountOptions(volunteerAccounts || [], mappedProjects),
-    [volunteerAccounts, mappedProjects]
+    () => buildAvailableAccountOptions(volunteerAccounts || [], mappedEvents),
+    [volunteerAccounts, mappedEvents]
   );
   const partnerOptions = useMemo(
-    () => buildAvailableAccountOptions(partnerAccounts || [], mappedProjects),
+    () => buildAvailableAccountOptions(partnerAccounts || [], mappedProjects, true),
     [partnerAccounts, mappedProjects]
   );
   const [selectedProject, setSelectedProject] = useState<Project | null>(mappedProjects[0] || null);
@@ -395,7 +406,7 @@ export default function VolunteerImpactMap({
   );
   const displayProjects = useMemo(() => {
     if (selectedMapStyleKey === 'admin-overview') {
-      return mappedProjects.filter(project => project.isEvent);
+      return mappedProjects;
     }
 
     if (selectedMapStyleKey === 'volunteer-view') {
@@ -403,7 +414,7 @@ export default function VolunteerImpactMap({
         const selectedVolunteer = volunteerOptions.find(option => option.id === selectedVolunteerId);
         return selectedVolunteer?.mappedProjects || [];
       }
-      return mappedProjects;
+      return mappedEvents;
     }
 
     if (selectedMapStyleKey === 'partner-view') {
@@ -415,7 +426,7 @@ export default function VolunteerImpactMap({
     }
 
     return mappedProjects;
-  }, [selectedMapStyleKey, hasVolunteerScope, hasPartnerScope, selectedVolunteerId, selectedPartnerId, volunteerOptions, partnerOptions, mappedProjects]);
+  }, [selectedMapStyleKey, hasVolunteerScope, hasPartnerScope, selectedVolunteerId, selectedPartnerId, volunteerOptions, partnerOptions, mappedProjects, mappedEvents]);
   const hasAnyMapData =
     mappedProjects.length > 0 || volunteerOptions.length > 0 || partnerOptions.length > 0;
 
@@ -560,7 +571,7 @@ export default function VolunteerImpactMap({
         <View style={styles.detailCard}>
           <Text style={styles.detailTitle}>{selectedProject.title}</Text>
           <Text style={styles.detailMeta}>
-            {`${selectedProject.isEvent ? 'Event' : 'Program'} | ${selectedProject.category}`}
+            {`${selectedProject.isEvent ? 'Event' : 'Project'} | ${selectedProject.category} | ${getProjectDisplayStatus(selectedProject)}`}
           </Text>
           <Text style={styles.detailAddress}>{selectedProject.location.address}</Text>
         </View>
@@ -740,6 +751,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
     color: '#0f172a',
+    marginBottom: 4,
+  },
+  calloutTypeLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#475569',
     marginBottom: 8,
   },
   calloutSectionLabel: {

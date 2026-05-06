@@ -9,7 +9,6 @@ import {
   Modal,
   TextInput,
   ScrollView,
-  Platform,
   Image,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -23,6 +22,9 @@ import {
   getAllUsers,
   getAllVolunteers,
   saveUser,
+  savePartner,
+  saveVolunteer,
+  setCurrentUser,
   subscribeToStorageChanges,
   getPendingUserApprovals,
   approveUser,
@@ -163,8 +165,12 @@ export default function UserManagementScreen() {
       return;
     }
 
+    const previousUsers = users;
+    const previousPartners = partners;
+    const previousVolunteers = volunteers;
+
     try {
-      await saveUser({
+      const updatedUser: User = {
         ...selectedUser,
         name: nameDraft.trim(),
         email: emailDraft.trim().toLowerCase(),
@@ -173,11 +179,92 @@ export default function UserManagementScreen() {
         role: roleDraft,
         userType: userTypeDraft,
         pillarsOfInterest: pillarsDraft,
+      };
+      const linkedPartners = partners.filter(partner => {
+        if (partner.ownerUserId) {
+          return partner.ownerUserId === selectedUser.id;
+        }
+
+        return (
+          (partner.contactEmail || '').trim().toLowerCase() === (selectedUser.email || '').trim().toLowerCase() ||
+          (partner.contactPhone || '').trim() === (selectedUser.phone || '').trim()
+        );
       });
+
+      const linkedVolunteers = volunteers.filter(volunteer => {
+        if (volunteer.userId) {
+          return volunteer.userId === selectedUser.id;
+        }
+
+        return (
+          (volunteer.email || '').trim().toLowerCase() === (selectedUser.email || '').trim().toLowerCase() ||
+          (volunteer.phone || '').trim() === (selectedUser.phone || '').trim()
+        );
+      });
+      const nextPartners = partners.map(partner =>
+        linkedPartners.some(linkedPartner => linkedPartner.id === partner.id)
+          ? {
+            ...partner,
+            ownerUserId: updatedUser.id,
+            contactEmail: updatedUser.email,
+            contactPhone: updatedUser.phone,
+          }
+          : partner
+      );
+      const nextVolunteers = volunteers.map(volunteer =>
+        linkedVolunteers.some(linkedVolunteer => linkedVolunteer.id === volunteer.id)
+          ? {
+            ...volunteer,
+            userId: updatedUser.id,
+            name: updatedUser.name,
+            email: updatedUser.email || '',
+            phone: updatedUser.phone || '',
+          }
+          : volunteer
+      );
+      setUsers(currentUsers =>
+        currentUsers.map(currentUser => (currentUser.id === updatedUser.id ? updatedUser : currentUser))
+      );
+      setPartners(nextPartners);
+      setVolunteers(nextVolunteers);
+      if (reviewTarget?.type === 'user' && reviewTarget.record.id === updatedUser.id) {
+        setReviewTarget({ type: 'user', record: updatedUser });
+      }
       closeEditModal();
-      await loadUsers();
-      Alert.alert('Saved', 'User updated.');
+      setSuccessNotice({
+        title: 'Changes Saved',
+        message: `${updatedUser.name}'s account details were updated successfully.`,
+      });
+
+      await saveUser(updatedUser);
+
+      await Promise.all([
+        ...linkedPartners.map(partner =>
+          savePartner({
+            ...partner,
+            ownerUserId: updatedUser.id,
+            contactEmail: updatedUser.email,
+            contactPhone: updatedUser.phone,
+          })
+        ),
+        ...linkedVolunteers.map(volunteer =>
+          saveVolunteer({
+            ...volunteer,
+            userId: updatedUser.id,
+            name: updatedUser.name,
+            email: updatedUser.email || '',
+            phone: updatedUser.phone || '',
+          })
+        ),
+      ]);
+      if (user?.id === updatedUser.id) {
+        await setCurrentUser(updatedUser);
+      }
+      void loadUsers();
     } catch (error) {
+      setUsers(previousUsers);
+      setPartners(previousPartners);
+      setVolunteers(previousVolunteers);
       Alert.alert(
         getRequestErrorTitle(error),
         getRequestErrorMessage(error, 'Failed to update user.')
@@ -186,21 +273,29 @@ export default function UserManagementScreen() {
   };
 
   const performDeleteUser = async (targetUser: User) => {
+    const previousUsers = users;
+    const previousPendingApprovals = pendingUserApprovals;
+    setUsers(currentUsers => currentUsers.filter(currentUser => currentUser.id !== targetUser.id));
+    setPendingUserApprovals(currentUsers =>
+      currentUsers.filter(currentUser => currentUser.id !== targetUser.id)
+    );
+    if (reviewTarget?.type === 'user' && reviewTarget.record.id === targetUser.id) {
+      closeReviewModal();
+    }
+    if (selectedUser?.id === targetUser.id) {
+      closeEditModal();
+    }
+    setSuccessNotice({
+      title: 'Deletion Complete',
+      message: `${targetUser.name}'s account and linked application records were deleted.`,
+    });
+
     try {
       await deleteUser(targetUser.id);
-      if (reviewTarget?.type === 'user' && reviewTarget.record.id === targetUser.id) {
-        closeReviewModal();
-      }
-      if (selectedUser?.id === targetUser.id) {
-        closeEditModal();
-      }
-      await loadUsers();
-      setSuccessNotice({
-        title: 'Deletion Complete',
-        message: `${targetUser.name}'s account and linked application records were deleted.`,
-      });
-      Alert.alert('Deleted', 'Account removed successfully.');
+      void loadUsers();
     } catch (error) {
+      setUsers(previousUsers);
+      setPendingUserApprovals(previousPendingApprovals);
       Alert.alert(
         getRequestErrorTitle(error),
         getRequestErrorMessage(error, 'Failed to delete user account.')
@@ -215,33 +310,7 @@ export default function UserManagementScreen() {
       return;
     }
 
-    const confirmationMessage = `Do you want to delete ${targetUser.name}'s account?`;
-
-    if (Platform.OS === 'web') {
-      const confirmed =
-        typeof window !== 'undefined'
-          ? window.confirm(`${confirmationMessage}\n\nChoose OK for Yes or Cancel to keep the account.`)
-          : true;
-      if (confirmed) {
-        void performDeleteUser(targetUser);
-      }
-      return;
-    }
-
-    Alert.alert(
-      'Delete Account',
-      confirmationMessage,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Yes',
-          style: 'destructive',
-          onPress: async () => {
-            await performDeleteUser(targetUser);
-          },
-        },
-      ]
-    );
+    void performDeleteUser(targetUser);
   };
 
   const handleApproveUser = async (targetUser: User) => {
@@ -249,51 +318,48 @@ export default function UserManagementScreen() {
       return;
     }
 
-    const approveTargetUser = async () => {
-      try {
-        await approveUser(targetUser.id, user.id);
-        if (reviewTarget?.type === 'user' && reviewTarget.record.id === targetUser.id) {
-          closeReviewModal();
-        }
-        await loadUsers();
-        setSuccessNotice({
-          title: 'Approval Complete',
-          message: `${targetUser.name}'s account has been approved and login access is now unlocked.`,
-        });
-        Alert.alert('Approved', `${targetUser.name}'s account has been approved.`);
-      } catch (error) {
-        Alert.alert(
-          getRequestErrorTitle(error),
-          getRequestErrorMessage(error, 'Failed to approve user account.')
-        );
-      }
+    const previousUsers = users;
+    const previousPendingApprovals = pendingUserApprovals;
+    const now = new Date().toISOString();
+    const optimisticApprovedUser: User = {
+      ...targetUser,
+      approvalStatus: 'approved',
+      approvedBy: user.id,
+      approvedAt: now,
+      rejectionReason: undefined,
     };
-
-    const confirmationMessage = `Approve ${targetUser.name}'s account? They will be able to log in immediately.`;
-
-    if (Platform.OS === 'web') {
-      const confirmed =
-        typeof window !== 'undefined'
-          ? window.confirm(`${confirmationMessage}\n\nChoose OK to approve or Cancel to keep pending.`)
-          : true;
-      if (confirmed) {
-        void approveTargetUser();
-      }
-      return;
-    }
-
-    Alert.alert(
-      'Approve Account',
-      confirmationMessage,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Approve',
-          style: 'default',
-          onPress: () => void approveTargetUser(),
-        },
-      ]
+    setUsers(currentUsers =>
+      currentUsers.map(currentUser =>
+        currentUser.id === targetUser.id ? optimisticApprovedUser : currentUser
+      )
     );
+    setPendingUserApprovals(currentUsers =>
+      currentUsers.filter(currentUser => currentUser.id !== targetUser.id)
+    );
+    if (reviewTarget?.type === 'user' && reviewTarget.record.id === targetUser.id) {
+      closeReviewModal();
+    }
+    setSuccessNotice({
+      title: 'Approval Complete',
+      message: `${targetUser.name}'s account has been approved and login access is now unlocked.`,
+    });
+
+    try {
+      const approvedUser = await approveUser(targetUser.id, user.id);
+      setUsers(currentUsers =>
+        currentUsers.map(currentUser =>
+          currentUser.id === targetUser.id ? approvedUser : currentUser
+        )
+      );
+      void loadUsers();
+    } catch (error) {
+      setUsers(previousUsers);
+      setPendingUserApprovals(previousPendingApprovals);
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to approve user account.')
+      );
+    }
   };
 
   const handleRejectUser = async (targetUser: User) => {
@@ -301,33 +367,33 @@ export default function UserManagementScreen() {
       return;
     }
 
-    Alert.alert(
-      'Reject Account',
-      `Reject ${targetUser.name}'s account? This will permanently delete the unapproved account.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Reject',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await rejectUser(targetUser.id, 'Account rejected by administrator.', user.id);
-              setSuccessNotice({
-                title: 'Deletion Complete',
-                message: `${targetUser.name}'s unapproved account was deleted from the approval queue.`,
-              });
-              Alert.alert('Deleted', `${targetUser.name}'s unapproved account has been deleted.`);
-              await loadUsers();
-            } catch (error) {
-              Alert.alert(
-                getRequestErrorTitle(error),
-                getRequestErrorMessage(error, 'Failed to reject user account.')
-              );
-            }
-          },
-        },
-      ]
+    const previousUsers = users;
+    const previousPendingApprovals = pendingUserApprovals;
+    setUsers(currentUsers =>
+      currentUsers.filter(currentUser => currentUser.id !== targetUser.id)
     );
+    setPendingUserApprovals(currentUsers =>
+      currentUsers.filter(currentUser => currentUser.id !== targetUser.id)
+    );
+    if (reviewTarget?.type === 'user' && reviewTarget.record.id === targetUser.id) {
+      closeReviewModal();
+    }
+    setSuccessNotice({
+      title: 'Deletion Complete',
+      message: `${targetUser.name}'s unapproved account was deleted from the approval queue.`,
+    });
+
+    try {
+      await rejectUser(targetUser.id, 'Account rejected by administrator.', user.id);
+      void loadUsers();
+    } catch (error) {
+      setUsers(previousUsers);
+      setPendingUserApprovals(previousPendingApprovals);
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to reject user account.')
+      );
+    }
   };
 
   const openUserReview = (targetUser: User) => {
@@ -363,6 +429,8 @@ export default function UserManagementScreen() {
   const totalAdmins = adminUsers.length;
   const totalPartners = partnerUsers.length;
   const totalVolunteers = volunteerUsers.length;
+  const pendingPartnerApprovals = pendingUserApprovals.filter(item => item.role === 'partner').length;
+  const pendingVolunteerApprovals = pendingUserApprovals.filter(item => item.role === 'volunteer').length;
   const getLinkedPartnerForUser = (targetUser: User) =>
     partners.find(partner => {
       if (partner.ownerUserId) {
@@ -386,41 +454,33 @@ export default function UserManagementScreen() {
       );
     }) || null;
 
-  const renderPendingApprovalCard = (pendingUser: User) => (
-    <View key={pendingUser.id} style={styles.requestCard}>
-      <View style={styles.requestHeader}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.requestName}>{pendingUser.name}</Text>
-          <Text style={styles.requestMeta}>{pendingUser.role}</Text>
-          <Text style={styles.requestMeta}>{pendingUser.email || 'No email on file'}</Text>
-          <Text style={styles.requestMeta}>{pendingUser.phone || 'No phone number on file'}</Text>
-          <Text style={styles.requestMeta}>
-            Submitted {format(new Date(pendingUser.createdAt), 'MMM dd, yyyy hh:mm a')}
-          </Text>
-          <Text style={styles.requestMeta}>
-            Review the full application before approving or rejecting.
-          </Text>
+  const renderPendingApprovalCard = (pendingUser: User) => {
+    return (
+      <TouchableOpacity
+        key={pendingUser.id}
+        style={styles.requestTile}
+        activeOpacity={0.88}
+        onPress={() => openUserReview(pendingUser)}
+      >
+        <View style={styles.requestTileHeader}>
+          <View style={styles.requestTileAvatar}>
+            <Text style={styles.requestTileAvatarText}>
+              {(pendingUser.name || pendingUser.email || '?').charAt(0).toUpperCase()}
+            </Text>
+          </View>
+          <View style={[styles.requestBadge, styles.requestRolePill]}>
+            <Text style={[styles.requestBadgeText, styles.requestRolePillText]}>
+              {pendingUser.role}
+            </Text>
+          </View>
         </View>
-        <View style={[styles.requestBadge, styles.requestBadgePending]}>
-          <Text style={styles.requestBadgeText}>Pending</Text>
-        </View>
-      </View>
-      <View style={styles.requestActionRow}>
-        <TouchableOpacity
-          style={[styles.requestActionButton, styles.reviewActionButton]}
-          onPress={() => openUserReview(pendingUser)}
-        >
-          <Text style={styles.requestActionButtonText}>Review Details</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.requestActionButton, styles.rejectActionButton]}
-          onPress={() => handleDeleteUser(pendingUser)}
-        >
-          <Text style={styles.requestActionButtonText}>Delete Account</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
+        <Text style={styles.requestTileName} numberOfLines={1}>
+          {pendingUser.name || pendingUser.email || 'Unnamed applicant'}
+        </Text>
+        <Text style={styles.requestTileHint}>Tap to view full application</Text>
+      </TouchableOpacity>
+    );
+  };
 
   const renderUserCard = (item: User) => {
     const linkedPartners = partners.filter(partner => {
@@ -559,9 +619,19 @@ export default function UserManagementScreen() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>User Management</Text>
-
-      <View style={styles.toolbar}>
+      <View style={styles.pageHeader}>
+        <View style={styles.pageHeaderTop}>
+          <View style={styles.pageHeaderTextWrap}>
+            <Text style={styles.title}>User Management</Text>
+            <Text style={styles.pageSubtitle}>
+              Review approvals and manage user accounts from one place.
+            </Text>
+          </View>
+          <TouchableOpacity style={styles.refreshButton} onPress={() => void loadUsers()}>
+            <MaterialIcons name="refresh" size={16} color="#166534" />
+            <Text style={styles.refreshButtonText}>Refresh</Text>
+          </TouchableOpacity>
+        </View>
         <Text style={styles.syncText}>
           {lastSyncedAt
             ? `Last synced ${format(new Date(lastSyncedAt), 'MMM dd, yyyy hh:mm a')}`
@@ -569,10 +639,6 @@ export default function UserManagementScreen() {
             ? 'Unable to sync users right now.'
             : 'Syncing users...'}
         </Text>
-        <TouchableOpacity style={styles.refreshButton} onPress={() => void loadUsers()}>
-          <MaterialIcons name="refresh" size={16} color="#166534" />
-          <Text style={styles.refreshButtonText}>Refresh</Text>
-        </TouchableOpacity>
       </View>
 
       {loadError ? (
@@ -626,18 +692,36 @@ export default function UserManagementScreen() {
           <>
             <View style={styles.requestSection}>
               <View style={styles.requestQueueHeader}>
-                <Text style={styles.requestSectionTitle}>User Approval Queue</Text>
+                <View style={styles.requestQueueTitleWrap}>
+                  <Text style={styles.requestSectionTitle}>User Approval Queue</Text>
+                  <Text style={styles.requestSectionSubtitle}>
+                    Click a name to open the full application and review the details.
+                  </Text>
+                </View>
                 <View style={styles.requestQueueBadge}>
-                  <Text style={styles.requestQueueBadgeText}>{pendingUserApprovals.length}</Text>
+                  <Text style={styles.requestQueueBadgeText}>{pendingUserApprovals.length} pending</Text>
                 </View>
               </View>
-              <Text style={styles.requestSectionSubtitle}>
-                All volunteer and partner signups that still need admin approval before they can join the system.
-              </Text>
+              <View style={styles.requestQueueSummaryRow}>
+                <View style={styles.requestSummaryCard}>
+                  <Text style={styles.requestSummaryValue}>{pendingUserApprovals.length}</Text>
+                  <Text style={styles.requestSummaryLabel}>Total requests</Text>
+                </View>
+                <View style={styles.requestSummaryCard}>
+                  <Text style={styles.requestSummaryValue}>{pendingPartnerApprovals}</Text>
+                  <Text style={styles.requestSummaryLabel}>Partner applications</Text>
+                </View>
+                <View style={styles.requestSummaryCard}>
+                  <Text style={styles.requestSummaryValue}>{pendingVolunteerApprovals}</Text>
+                  <Text style={styles.requestSummaryLabel}>Volunteer applications</Text>
+                </View>
+              </View>
               {pendingUserApprovals.length === 0 ? (
                 <Text style={styles.requestEmptyText}>No users are waiting for approval.</Text>
               ) : (
-                pendingUserApprovals.map(renderPendingApprovalCard)
+                <View style={styles.requestTileGrid}>
+                  {pendingUserApprovals.map(renderPendingApprovalCard)}
+                </View>
               )}
             </View>
 
@@ -788,7 +872,9 @@ export default function UserManagementScreen() {
             </TouchableOpacity>
             <View style={styles.reviewHeaderTitleWrap}>
               <Text style={styles.reviewModalTitle}>User Review</Text>
-              <Text style={styles.reviewModalSubtitle}>Verify applicant details before approving or deleting the request.</Text>
+              <Text style={styles.reviewModalSubtitle}>
+                Review the application details and choose whether to approve or reject the request.
+              </Text>
             </View>
             <View style={styles.modalHeaderSpacer} />
           </View>
@@ -806,6 +892,9 @@ export default function UserManagementScreen() {
                     <Text style={styles.reviewApplicantName}>{reviewTarget.record.name || 'Unnamed applicant'}</Text>
                     <Text style={styles.reviewApplicantMeta}>
                       {reviewTarget.record.email || 'No email'} / {reviewTarget.record.phone || 'No phone'}
+                    </Text>
+                    <Text style={styles.reviewApplicantSupport}>
+                      Submitted {format(new Date(reviewTarget.record.createdAt), 'MMM dd, yyyy hh:mm a')}
                     </Text>
                   </View>
                   <View style={styles.reviewStatusStack}>
@@ -856,9 +945,9 @@ export default function UserManagementScreen() {
                         'Partner Application',
                         <>
                           {renderReviewField('Organization Name', linkedPartner.name)}
+                          {renderReviewField('Stakeholder Name', linkedPartner.stakeholderName || 'Not provided')}
                           {renderReviewField('Sector Type', linkedPartner.sectorType)}
                           {renderReviewField('DSWD Accreditation No.', linkedPartner.dswdAccreditationNo || 'Not provided')}
-                          {renderReviewField('SEC Registration No.', linkedPartner.secRegistrationNo || 'Not provided')}
                           {renderReviewField(
                             'Advocacy Focus',
                             linkedPartner.advocacyFocus.length > 0 ? linkedPartner.advocacyFocus.join(', ') : 'Not provided'
@@ -866,6 +955,9 @@ export default function UserManagementScreen() {
                           {renderReviewField('Verification Status', linkedPartner.verificationStatus || 'Pending')}
                           {renderReviewField('Contact Email', linkedPartner.contactEmail || 'Not provided')}
                           {renderReviewField('Contact Phone', linkedPartner.contactPhone || 'Not provided')}
+                          {renderReviewField('Region', linkedPartner.region || 'Not provided')}
+                          {renderReviewField('Province', linkedPartner.province || 'Not provided')}
+                          {renderReviewField('City / Municipality', linkedPartner.cityMunicipality || 'Not provided')}
                           {renderReviewField('Address', linkedPartner.address || 'Not provided', { wide: true })}
                           {renderReviewField('Description', linkedPartner.description || 'Not provided', { wide: true })}
                         </>
@@ -938,29 +1030,30 @@ export default function UserManagementScreen() {
           {reviewTarget ? (
             <View style={styles.reviewActionFooter}>
               {reviewTarget.type === 'user' ? (
-                <>
-                  <TouchableOpacity
-                    style={[styles.requestActionButton, styles.reviewDeleteButton]}
-                    onPress={() => handleDeleteUser(reviewTarget.record)}
-                  >
-                    <MaterialIcons name="delete-outline" size={16} color="#991b1b" />
-                    <Text style={styles.requestActionButtonText}>Delete Account</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.requestActionButton, styles.approveActionButton]}
-                    onPress={() => handleApproveUser(reviewTarget.record)}
-                  >
-                    <MaterialIcons name="check-circle-outline" size={16} color="#166534" />
-                    <Text style={styles.requestActionButtonText}>Approve</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.requestActionButton, styles.reviewRejectButton]}
-                    onPress={() => handleRejectUser(reviewTarget.record)}
-                  >
-                    <MaterialIcons name="block" size={16} color="#991b1b" />
-                    <Text style={styles.requestActionButtonText}>Reject</Text>
-                  </TouchableOpacity>
-                </>
+                <View style={styles.reviewActionBar}>
+                  <View style={styles.reviewActionCopy}>
+                    <Text style={styles.reviewActionTitle}>Decision</Text>
+                    <Text style={styles.reviewActionDescription}>
+                      Approve to unlock account access. Reject will remove the pending application from the system.
+                    </Text>
+                  </View>
+                  <View style={styles.reviewActionButtons}>
+                    <TouchableOpacity
+                      style={[styles.requestActionButton, styles.approveActionButton]}
+                      onPress={() => handleApproveUser(reviewTarget.record)}
+                    >
+                      <MaterialIcons name="check-circle-outline" size={16} color="#166534" />
+                      <Text style={[styles.requestActionButtonText, styles.approveActionButtonText]}>Approve</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.requestActionButton, styles.reviewRejectButton]}
+                      onPress={() => handleRejectUser(reviewTarget.record)}
+                    >
+                      <MaterialIcons name="block" size={16} color="#991b1b" />
+                      <Text style={[styles.requestActionButtonText, styles.rejectActionButtonText]}>Reject</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
               ) : null}
             </View>
           ) : null}
@@ -973,35 +1066,44 @@ export default function UserManagementScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#f3f4f6',
   },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#333',
+  pageHeader: {
+    backgroundColor: '#ffffff',
     paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-  },
-  toolbar: {
-    backgroundColor: '#fff',
-    paddingHorizontal: 16,
+    paddingTop: 14,
     paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+  },
+  pageHeaderTop: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: 12,
   },
+  pageHeaderTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#111827',
+  },
+  pageSubtitle: {
+    marginTop: 4,
+    fontSize: 13,
+    color: '#6b7280',
+  },
   bannerWrap: {
     paddingHorizontal: 16,
-    paddingTop: 12,
+    paddingTop: 10,
   },
   syncText: {
-    flex: 1,
     fontSize: 12,
     color: '#64748b',
+    marginTop: 8,
   },
   successBanner: {
     flexDirection: 'row',
@@ -1033,9 +1135,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
     backgroundColor: '#dcfce7',
-    borderRadius: 999,
+    borderRadius: 12,
     paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingVertical: 10,
   },
   refreshButtonText: {
     fontSize: 12,
@@ -1045,35 +1147,42 @@ const styles = StyleSheet.create({
   summaryRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 12,
-    padding: 16,
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 6,
   },
   summaryCard: {
-    width: '47%',
+    flexGrow: 1,
+    flexBasis: '23%',
+    minWidth: 140,
     backgroundColor: '#fff',
     borderRadius: 12,
-    padding: 16,
-    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
   },
   summaryValue: {
-    fontSize: 24,
-    fontWeight: '700',
+    fontSize: 22,
+    fontWeight: '800',
     color: '#166534',
   },
   summaryLabel: {
-    marginTop: 4,
+    marginTop: 2,
     fontSize: 12,
     color: '#64748b',
   },
   listContent: {
-    paddingHorizontal: 16,
     paddingBottom: 20,
   },
   userCard: {
     backgroundColor: '#fff',
     borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
   },
   userHeader: {
     flexDirection: 'row',
@@ -1236,9 +1345,9 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   reviewModalHeader: {
-    minHeight: 72,
+    minHeight: 76,
     paddingHorizontal: 24,
-    paddingVertical: 14,
+    paddingVertical: 16,
     backgroundColor: '#ffffff',
     borderBottomWidth: 1,
     borderBottomColor: '#dbe3ee',
@@ -1253,8 +1362,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     paddingHorizontal: 12,
-    paddingVertical: 9,
-    borderRadius: 8,
+    paddingVertical: 10,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: '#cbd5e1',
     backgroundColor: '#f8fafc',
@@ -1269,13 +1378,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   reviewModalTitle: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: '800',
     color: '#0f172a',
   },
   reviewModalSubtitle: {
-    marginTop: 3,
-    fontSize: 12,
+    marginTop: 4,
+    fontSize: 13,
+    lineHeight: 18,
     color: '#64748b',
     textAlign: 'center',
   },
@@ -1321,45 +1431,76 @@ const styles = StyleSheet.create({
     color: '#fff',
   },
   requestSection: {
-    marginTop: 16,
+    marginTop: 10,
     backgroundColor: '#fff',
     borderRadius: 12,
-    padding: 16,
+    padding: 14,
     marginHorizontal: 16,
-    marginBottom: 8,
+    marginBottom: 6,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
   },
   requestQueueHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: 12,
-    marginBottom: 6,
+    marginBottom: 14,
+  },
+  requestQueueTitleWrap: {
+    flex: 1,
   },
   requestQueueBadge: {
-    minWidth: 28,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 999,
-    backgroundColor: '#dbeafe',
+    minWidth: 92,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 14,
+    backgroundColor: '#dcfce7',
     alignItems: 'center',
   },
   requestQueueBadgeText: {
     fontSize: 12,
-    fontWeight: '700',
-    color: '#1d4ed8',
+    fontWeight: '800',
+    color: '#166534',
+  },
+  requestQueueSummaryRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginBottom: 14,
+  },
+  requestSummaryCard: {
+    flexGrow: 1,
+    minWidth: 120,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  requestSummaryValue: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  requestSummaryLabel: {
+    marginTop: 2,
+    fontSize: 11,
+    color: '#64748b',
   },
   userRoleSection: {
-    marginTop: 8,
+    marginTop: 6,
     marginBottom: 4,
     paddingHorizontal: 16,
   },
   userTypeBox: {
     backgroundColor: '#ffffff',
-    borderRadius: 14,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
   },
   userTypeBoxHeader: {
     flexDirection: 'row',
@@ -1378,7 +1519,7 @@ const styles = StyleSheet.create({
   userTypeCountBadge: {
     minWidth: 30,
     paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingVertical: 5,
     borderRadius: 999,
     backgroundColor: '#dcfce7',
     alignItems: 'center',
@@ -1392,39 +1533,80 @@ const styles = StyleSheet.create({
     paddingTop: 10,
   },
   requestSectionTitle: {
-    fontSize: 18,
-    fontWeight: '700',
+    fontSize: 16,
+    fontWeight: '800',
     color: '#0f172a',
-    marginBottom: 4,
+    marginBottom: 2,
   },
   requestSectionSubtitle: {
-    fontSize: 14,
+    fontSize: 12,
     color: '#64748b',
-    marginBottom: 16,
+    lineHeight: 18,
+    marginBottom: 10,
   },
   requestEmptyText: {
     fontSize: 14,
     color: '#64748b',
     fontStyle: 'italic',
   },
-  requestCard: {
-    backgroundColor: '#f8fafc',
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  requestHeader: {
+  requestTileGrid: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: 12,
+    flexWrap: 'wrap',
+    gap: 10,
   },
-  requestName: {
-    fontSize: 16,
-    fontWeight: '700',
+  requestTile: {
+    flexGrow: 1,
+    flexBasis: '23%',
+    minWidth: 180,
+    maxWidth: 260,
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#dbe3ee',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.03,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 1,
+  },
+  requestTileHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 10,
+  },
+  requestTileAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#166534',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  requestTileAvatarText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+  requestTileName: {
+    fontSize: 14,
+    fontWeight: '800',
     color: '#0f172a',
     marginBottom: 4,
+  },
+  requestTileHint: {
+    fontSize: 11,
+    lineHeight: 16,
+    color: '#64748b',
+  },
+  requestRolePill: {
+    backgroundColor: '#e0f2fe',
+  },
+  requestRolePillText: {
+    color: '#075985',
   },
   requestMeta: {
     fontSize: 12,
@@ -1432,11 +1614,9 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   requestBadge: {
-    marginLeft: 'auto',
-    backgroundColor: '#fef3c7',
     borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
   },
   requestBadgePending: {
     backgroundColor: '#fef3c7',
@@ -1445,8 +1625,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#fee2e2',
   },
   requestBadgeText: {
-    fontSize: 10,
-    fontWeight: '700',
+    fontSize: 11,
+    fontWeight: '800',
     color: '#92400e',
     textTransform: 'uppercase',
   },
@@ -1455,16 +1635,19 @@ const styles = StyleSheet.create({
   },
   requestActionRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 8,
   },
   requestActionButton: {
-    flex: 1,
+    flexGrow: 1,
+    minWidth: 120,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
     paddingVertical: 10,
-    borderRadius: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
   },
   verifyActionButton: {
     backgroundColor: '#dbeafe',
@@ -1492,19 +1675,28 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
   },
+  reviewActionButtonText: {
+    color: '#075985',
+  },
+  approveActionButtonText: {
+    color: '#166534',
+  },
+  rejectActionButtonText: {
+    color: '#b91c1c',
+  },
   modalHeaderSpacer: {
     width: 96,
   },
   reviewContent: {
     width: '100%',
-    maxWidth: 1120,
+    maxWidth: 980,
     alignSelf: 'center',
-    paddingHorizontal: 24,
-    paddingTop: 24,
-    paddingBottom: 112,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 120,
   },
   reviewPanel: {
-    gap: 16,
+    gap: 18,
   },
   reviewSummaryCard: {
     flexDirection: 'row',
@@ -1513,13 +1705,18 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: '#dbe3ee',
-    borderRadius: 10,
-    padding: 18,
+    borderRadius: 18,
+    padding: 20,
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.05,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
   },
   reviewAvatar: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     backgroundColor: '#166534',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1542,6 +1739,11 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontSize: 13,
     color: '#64748b',
+  },
+  reviewApplicantSupport: {
+    marginTop: 8,
+    fontSize: 12,
+    color: '#475569',
   },
   reviewStatusStack: {
     alignItems: 'flex-end',
@@ -1575,8 +1777,13 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: '#dbe3ee',
-    borderRadius: 10,
+    borderRadius: 18,
     padding: 18,
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.04,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 1,
   },
   reviewSectionTitle: {
     fontSize: 16,
@@ -1592,13 +1799,13 @@ const styles = StyleSheet.create({
   reviewField: {
     flexGrow: 1,
     flexBasis: '48%',
-    minWidth: 260,
+    minWidth: 220,
     backgroundColor: '#f8fafc',
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
   },
   reviewFieldWide: {
     flexBasis: '100%',
@@ -1623,13 +1830,40 @@ const styles = StyleSheet.create({
     backgroundColor: '#e2e8f0',
   },
   reviewActionFooter: {
-    flexDirection: 'row',
-    gap: 12,
-    paddingHorizontal: 24,
-    paddingBottom: 16,
+    paddingHorizontal: 20,
+    paddingBottom: 18,
     paddingTop: 14,
-    backgroundColor: '#fff',
+    backgroundColor: '#ffffff',
     borderTopWidth: 1,
     borderTopColor: '#dbe3ee',
+  },
+  reviewActionBar: {
+    width: '100%',
+    maxWidth: 980,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 16,
+  },
+  reviewActionCopy: {
+    flex: 1,
+  },
+  reviewActionTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  reviewActionDescription: {
+    marginTop: 4,
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#64748b',
+  },
+  reviewActionButtons: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
   },
 });

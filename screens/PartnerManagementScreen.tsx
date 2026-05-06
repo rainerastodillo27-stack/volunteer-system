@@ -9,7 +9,6 @@ import {
   Modal,
   TextInput,
   FlatList,
-  Platform,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
@@ -32,6 +31,7 @@ const advocacyOptions: AdvocacyFocus[] = ['Nutrition', 'Education', 'Livelihood'
 export default function PartnerManagementScreen({ navigation, route }: any) {
   const { user, isAdmin } = useAuth();
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [partners, setPartners] = useState<Partner[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [view, setView] = useState<'list' | 'detail'>('list');
@@ -45,6 +45,18 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
   const [contactEmailDraft, setContactEmailDraft] = useState('');
   const [contactPhoneDraft, setContactPhoneDraft] = useState('');
   const [addressDraft, setAddressDraft] = useState('');
+
+  useEffect(() => {
+    if (!actionNotice) {
+      return undefined;
+    }
+
+    const timer = setTimeout(() => {
+      setActionNotice(null);
+    }, 1500);
+
+    return () => clearTimeout(timer);
+  }, [actionNotice]);
 
   useEffect(() => {
     if (!isAdmin) {
@@ -149,7 +161,6 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
   // Closes the partner editor.
   const closeEditModal = () => {
     setShowEditModal(false);
-    setSelectedPartner(null);
   };
 
   // Saves changes made to the selected partner.
@@ -160,8 +171,11 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
       return;
     }
 
+    const previousPartners = partners;
+    const previousSelectedPartner = selectedPartner;
+
     try {
-      await savePartner({
+      const updatedPartner: Partner = {
         ...selectedPartner,
         name: nameDraft.trim(),
         description: descriptionDraft.trim() || undefined,
@@ -171,11 +185,18 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
         contactEmail: contactEmailDraft.trim() || undefined,
         contactPhone: contactPhoneDraft.trim() || undefined,
         address: addressDraft.trim() || undefined,
-      });
+      };
+      setPartners(currentPartners =>
+        currentPartners.map(partner => (partner.id === updatedPartner.id ? updatedPartner : partner))
+      );
+      setSelectedPartner(updatedPartner);
       closeEditModal();
-      await loadPartners();
-      Alert.alert('Saved', 'Partner updated.');
+      setActionNotice('Partner updated.');
+      await savePartner(updatedPartner);
+      void loadPartners();
     } catch (error) {
+      setPartners(previousPartners);
+      setSelectedPartner(previousSelectedPartner);
       Alert.alert(
         getRequestErrorTitle(error),
         getRequestErrorMessage(error, 'Failed to update partner.')
@@ -224,6 +245,13 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
             <MaterialIcons name="edit" size={24} color="#4CAF50" />
           </TouchableOpacity>
         </View>
+
+        {actionNotice ? (
+          <View style={styles.noticeBanner}>
+            <MaterialIcons name="check-circle" size={18} color="#166534" />
+            <Text style={styles.noticeBannerText}>{actionNotice}</Text>
+          </View>
+        ) : null}
 
         <View style={styles.card}>
           <View style={styles.partnerHeader}>
@@ -421,6 +449,12 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
       <View style={styles.titleRow}>
         <Text style={styles.title}>Partner Management</Text>
       </View>
+      {actionNotice ? (
+        <View style={styles.noticeBanner}>
+          <MaterialIcons name="check-circle" size={18} color="#166534" />
+          <Text style={styles.noticeBannerText}>{actionNotice}</Text>
+        </View>
+      ) : null}
       <View style={styles.listContent}>
         {loadError ? (
           <InlineLoadError
@@ -466,9 +500,28 @@ const styles = StyleSheet.create({
     backgroundColor: '#f5f5f5',
   },
   title: {
-    fontSize: 24,
+    fontSize: 20,
     fontWeight: 'bold',
     color: '#333',
+  },
+  noticeBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#86efac',
+    backgroundColor: '#dcfce7',
+  },
+  noticeBannerText: {
+    flex: 1,
+    color: '#14532d',
+    fontSize: 12,
+    fontWeight: '700',
   },
   titleRow: {
     paddingHorizontal: 16,
@@ -501,13 +554,13 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   partnerCardName: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '700',
     color: '#0f172a',
     marginBottom: 4,
   },
   partnerCardSector: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#64748b',
     marginBottom: 2,
   },
@@ -523,7 +576,7 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     marginTop: 12,
-    fontSize: 14,
+    fontSize: 13,
     color: '#64748b',
   },
   header: {
@@ -555,18 +608,18 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   partnerName: {
-    fontSize: 24,
+    fontSize: 20,
     fontWeight: '700',
     color: '#0f172a',
     marginBottom: 4,
   },
   partnerSector: {
-    fontSize: 16,
+    fontSize: 14,
     color: '#64748b',
     marginBottom: 2,
   },
   partnerMeta: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#64748b',
     lineHeight: 20,
   },
@@ -579,7 +632,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   statValue: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '700',
     color: '#0f172a',
     marginTop: 4,
@@ -602,13 +655,13 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '700',
     color: '#0f172a',
     marginBottom: 12,
   },
   descriptionText: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#374151',
     lineHeight: 20,
   },
@@ -620,13 +673,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   infoLabel: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '600',
     color: '#374151',
     width: 80,
   },
   infoValue: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#6b7280',
     flex: 1,
   },
@@ -657,12 +710,12 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   projectName: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '600',
     color: '#0f172a',
   },
   projectCategory: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#64748b',
   },
   projectMeta: {
@@ -690,17 +743,17 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   modalTitle: {
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: '700',
     color: '#0f172a',
   },
   modalCancel: {
     color: '#64748b',
-    fontSize: 15,
+    fontSize: 14,
   },
   modalSave: {
     color: '#15803d',
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '700',
   },
   modalContent: {
@@ -712,7 +765,7 @@ const styles = StyleSheet.create({
     borderColor: '#cbd5e1',
     borderRadius: 12,
     padding: 14,
-    fontSize: 15,
+    fontSize: 14,
     color: '#0f172a',
     marginBottom: 12,
   },
@@ -721,7 +774,7 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
   },
   fieldLabel: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
     color: '#334155',
     marginBottom: 8,

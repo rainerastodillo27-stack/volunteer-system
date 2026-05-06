@@ -726,6 +726,21 @@ def _get_project_chat_participant_user_ids(connection: Any, project_id: str) -> 
         if isinstance(volunteer_user_id, str) and volunteer_user_id:
             participant_user_ids.add(volunteer_user_id)
 
+    approved_project_ids = {project_id}
+    parent_project_id = project.get("parentProjectId")
+    if isinstance(parent_project_id, str) and parent_project_id:
+        approved_project_ids.add(parent_project_id)
+
+    applications = get_postgres_hot_storage_collection(connection, "partnerProjectApplications")
+    for application in applications:
+        if str(application.get("status") or "") != "Approved":
+            continue
+        if str(application.get("projectId") or "") not in approved_project_ids:
+            continue
+        partner_user_id = str(application.get("partnerUserId") or "")
+        if partner_user_id:
+            participant_user_ids.add(partner_user_id)
+
     return participant_user_ids
 
 
@@ -782,6 +797,12 @@ def _assert_project_group_chat_access(
         raise HTTPException(
             status_code=403,
             detail="Group chat is only available for event workspaces.",
+        )
+
+    if bool(project.get("groupChatDisabled")):
+        raise HTTPException(
+            status_code=404,
+            detail="This group chat has been removed from the system.",
         )
 
     user = _postgres_get_hot_item_by_id(connection, "users", user_id)
@@ -1012,6 +1033,44 @@ def _postgres_get_partner_project_applications_by_user(
 def _postgres_get_volunteer_time_logs(connection: Any, volunteer_id: str) -> list[dict[str, Any]]:
     logs = _postgres_get_hot_items_by_field(connection, "volunteerTimeLogs", "volunteerId", volunteer_id)
     return _sort_iso_desc(logs, "timeIn")
+
+
+def _postgres_reset_stale_daily_time_logs(
+    connection: Any,
+    volunteer_id: str,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    reference_now = now or datetime.now(timezone.utc)
+    today_key = _get_local_date_key(reference_now.isoformat())
+    logs = _postgres_get_volunteer_time_logs(connection, volunteer_id)
+    changed = False
+    normalized_logs: list[dict[str, Any]] = []
+
+    for log in logs:
+        if log.get("timeOut"):
+            normalized_logs.append(log)
+            continue
+
+        if _get_local_date_key(log.get("timeIn")) == today_key:
+            normalized_logs.append(log)
+            continue
+
+        updated_log = {
+            **log,
+            "timeOut": log.get("timeIn"),
+            "note": (
+                f"{str(log.get('note') or '').strip()} "
+                "[Auto-reset after day rollover]"
+            ).strip(),
+        }
+        _postgres_upsert_hot_item(connection, "volunteerTimeLogs", updated_log)
+        normalized_logs.append(updated_log)
+        changed = True
+
+    if changed:
+        connection.commit()
+
+    return _sort_iso_desc(normalized_logs, "timeIn")
 
 
 # Ensures a volunteer-project join record exists after approval or assignment.
@@ -1350,7 +1409,7 @@ def _build_projects_snapshot(
                     "matchedAt",
                 )
             if include_time_logs:
-                snapshot["timeLogs"] = _postgres_get_volunteer_time_logs(connection, volunteer["id"])
+                snapshot["timeLogs"] = _postgres_reset_stale_daily_time_logs(connection, volunteer["id"])
             if include_join_records:
                 volunteer_join_records = _postgres_get_hot_items_by_field(
                     connection,
@@ -2235,7 +2294,7 @@ def get_volunteer_recognition_status(volunteer_id: str) -> dict[str, Any]:
 def get_volunteer_logs(volunteer_id: str) -> dict[str, Any]:
     _require_postgres()
     with get_connection() as connection:
-        logs = _postgres_get_volunteer_time_logs(connection, volunteer_id)
+        logs = _postgres_reset_stale_daily_time_logs(connection, volunteer_id)
     return {"logs": logs}
 
 
@@ -2276,7 +2335,7 @@ async def start_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogStartP
                 detail="This event attendance window has already ended.",
             )
 
-        existing_logs = _postgres_get_volunteer_time_logs(connection, volunteer_id)
+        existing_logs = _postgres_reset_stale_daily_time_logs(connection, volunteer_id, now)
         active_log = next(
             (
                 log
@@ -2321,7 +2380,7 @@ async def start_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogStartP
 async def end_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogEndPayload) -> dict[str, Any]:
     _require_postgres()
     with get_connection() as connection:
-        existing_logs = _postgres_get_volunteer_time_logs(connection, volunteer_id)
+        existing_logs = _postgres_reset_stale_daily_time_logs(connection, volunteer_id)
         active_log = next(
             (
                 log
@@ -2371,7 +2430,11 @@ def get_partner_applications_by_user(partner_user_id: str) -> dict[str, Any]:
 async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload) -> dict[str, Any]:
     _require_postgres()
     requested_program_module = str(payload.programModule or "").strip()
-    proposal_project_id = f"program:{requested_program_module}" if requested_program_module else payload.projectId
+    proposal_project_id = (
+        f"program:{requested_program_module}::{int(datetime.now(timezone.utc).timestamp() * 1000)}"
+        if requested_program_module
+        else payload.projectId
+    )
 
     with get_connection() as connection:
         target_project: dict[str, Any] | None = None
@@ -2387,19 +2450,43 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
                 raise HTTPException(status_code=404, detail="Project not found.")
             target_project = project
 
-        existing_application = next(
-            (
-                application
-                for application in _postgres_get_partner_project_applications_by_user(
-                    connection,
-                    payload.partnerUserId,
-                )
-                if application.get("projectId") == proposal_project_id
-            ),
-            None,
-        )
-        if existing_application is not None:
-            return {"application": existing_application}
+        if not requested_program_module:
+            existing_application = next(
+                (
+                    application
+                    for application in _postgres_get_partner_project_applications_by_user(
+                        connection,
+                        payload.partnerUserId,
+                    )
+                    if application.get("projectId") == proposal_project_id
+                ),
+                None,
+            )
+            if existing_application is not None:
+                existing_status = str(existing_application.get("status") or "").strip()
+                if existing_status == "Rejected":
+                    refreshed_application = {
+                        **existing_application,
+                        "projectId": proposal_project_id,
+                        "partnerUserId": payload.partnerUserId,
+                        "partnerName": payload.partnerName,
+                        "partnerEmail": payload.partnerEmail,
+                        "proposalDetails": _normalize_partner_proposal_details(
+                            payload.proposalDetails,
+                            requested_program_module,
+                            target_project,
+                        ),
+                        "status": "Pending",
+                        "requestedAt": datetime.now(timezone.utc).isoformat(),
+                        "reviewedAt": None,
+                        "reviewedBy": None,
+                    }
+                    _postgres_upsert_hot_item(connection, "partnerProjectApplications", refreshed_application)
+                    connection.commit()
+                    await connection_manager.broadcast_storage_event(["partnerProjectApplications"])
+                    return {"application": refreshed_application}
+
+                return {"application": existing_application}
 
         application = {
             "id": f"partner-application-{int(datetime.now(timezone.utc).timestamp() * 1000)}",
@@ -2446,9 +2533,10 @@ async def review_partner_project_application(
 
         if should_create_program_project:
             proposal_details = application.get("proposalDetails") or {}
+            fallback_program_module = next_project_id.split(":", 1)[1] if ":" in next_project_id else ""
             requested_program_module = str(
                 proposal_details.get("requestedProgramModule")
-                or next_project_id.split(":", 1)[1]
+                or fallback_program_module.split("::", 1)[0]
             ).strip()
             if not requested_program_module:
                 raise HTTPException(status_code=400, detail="Program module is required to approve this proposal.")
@@ -2487,6 +2575,22 @@ async def review_partner_project_application(
                 "description": str(proposal_details.get("proposedDescription") or "").strip()
                 or f"Partner-initiated {requested_program_module} program approved by admin.",
                 "partnerId": partner_id,
+                "imageUrl": next(
+                    (
+                        str(attachment.get("url") or "").strip()
+                        for attachment in (proposal_details.get("attachments") or [])
+                        if isinstance(attachment, dict)
+                        and str(attachment.get("type") or "").strip() == "image"
+                        and str(attachment.get("url") or "").strip()
+                    ),
+                    None,
+                ),
+                "imageHidden": not any(
+                    isinstance(attachment, dict)
+                    and str(attachment.get("type") or "").strip() == "image"
+                    and str(attachment.get("url") or "").strip()
+                    for attachment in (proposal_details.get("attachments") or [])
+                ),
                 "programModule": requested_program_module,
                 "statusMode": "System",
                 "manualStatus": None,
@@ -2503,6 +2607,9 @@ async def review_partner_project_application(
                 },
                 "volunteersNeeded": max(int(proposal_details.get("proposedVolunteersNeeded") or 0), 0),
                 "skillsNeeded": proposal_details.get("skillsNeeded") or [],
+                "communityNeed": str(proposal_details.get("communityNeed") or "").strip(),
+                "expectedDeliverables": str(proposal_details.get("expectedDeliverables") or "").strip(),
+                "attachments": proposal_details.get("attachments") or [],
                 "volunteers": [],
                 "joinedUserIds": [],
                 "createdAt": now_iso,
@@ -2872,6 +2979,29 @@ async def create_project_group_message(
     return message
 
 
+@app.delete("/projects/{project_id}/group-messages")
+# API endpoint that removes all messages for one project group chat.
+async def delete_project_group_messages(project_id: str) -> dict[str, Any]:
+    ensure_project_group_message_storage()
+
+    with get_connection() as connection:
+        project, _ = _postgres_get_project_like_item_by_id(connection, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found.")
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "delete from project_group_messages where project_id = %s",
+                (project_id,),
+            )
+            deleted_count = cursor.rowcount or 0
+        connection.commit()
+
+    _invalidate_collection_cache(["projectGroupMessages"])
+    await connection_manager.broadcast_storage_event(["projectGroupMessages", "projects", "events"])
+    return {"deletedCount": deleted_count}
+
+
 @app.patch("/messages/{message_id}/read")
 # API endpoint that marks one direct message as read.
 async def mark_message_read(message_id: str) -> dict[str, Any]:
@@ -3141,7 +3271,7 @@ async def submit_report(payload: ReportSubmitPayload) -> dict[str, Any]:
                         status_code=403,
                         detail="The assigned field officer must submit a field report for this event.",
                     )
-                existing_logs = _postgres_get_volunteer_time_logs(connection, volunteer_id)
+                existing_logs = _postgres_reset_stale_daily_time_logs(connection, volunteer_id)
                 active_log = next(
                     (
                         log

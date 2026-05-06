@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -27,15 +28,20 @@ import {
   PHRegions,
 } from '../utils/philippineAddressData';
 import {
+  deleteProjectGroupChat,
+  getAllPartnerProjectApplications,
   getAllUsers,
   getConversation,
   getMessagesForUser,
+  getProject,
   getProjectGroupMessages,
   getProjectsScreenSnapshot,
   leaveVolunteerEventGroup,
   markMessageAsRead,
   saveMessage,
+  saveEvent,
   saveProjectGroupMessage,
+  saveProject,
   subscribeToMessages,
   subscribeToStorageChanges,
   submitPartnerProgramProposal,
@@ -44,6 +50,7 @@ import {
 import {
   Message,
   PartnerProjectApplication,
+  PartnerProjectProposalDetails,
   Project,
   ProjectGroupMessage,
   User,
@@ -92,9 +99,17 @@ type ConversationItem = {
   unreadCount: number;
 };
 
+type ProjectChatMember = {
+  id: string;
+  name: string;
+  role: 'Admin' | 'Partner' | 'Volunteer';
+  detail?: string;
+};
+
 type ProjectChatItem = {
   project: Project;
   participantCount: number;
+  members: ProjectChatMember[];
 };
 
 type ProposalChatItem = {
@@ -123,6 +138,24 @@ function getAttachmentName(uri: string, index: number): string {
   const cleanUri = uri.split('?')[0];
   const fileName = cleanUri.split('/').pop();
   return fileName || `Attachment ${index + 1}`;
+}
+
+function formatProposalDate(value?: string): string {
+  const normalizedValue = String(value || '').trim();
+  if (!normalizedValue) {
+    return 'Not provided';
+  }
+
+  const parsedDate = new Date(normalizedValue);
+  if (Number.isNaN(parsedDate.getTime())) {
+    return normalizedValue;
+  }
+
+  return parsedDate.toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
 }
 
 type ProposalFormState = {
@@ -160,6 +193,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   const isWide = width >= 1024;
   const isTablet = width >= 768;
   const isVolunteer = user?.role === 'volunteer';
+  const isPartner = user?.role === 'partner';
 
   const {
     projectId: requestedProjectId,
@@ -169,7 +203,9 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   } = route?.params || {};
 
   const [view, setView] = useState<'sidebar' | 'detail'>(isWide ? 'detail' : 'sidebar');
-  const [activeSection, setActiveSection] = useState<SidebarSection>('projects');
+  const [activeSection, setActiveSection] = useState<SidebarSection>(
+    user?.role === 'admin' ? 'proposals' : 'messages'
+  );
   const [loading, setLoading] = useState(true);
 
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
@@ -187,11 +223,18 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   const [pendingAttachments, setPendingAttachments] = useState<string[]>([]);
   const [searchText, setSearchText] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [reviewNotice, setReviewNotice] = useState<{
+    title: string;
+    message: string;
+    tone: 'success' | 'warning';
+  } | null>(null);
 
   const [templateActive, setTemplateActive] = useState(true);
   const [showMessageHub, setShowMessageHub] = useState(false);
   const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
   const [showConversationMenu, setShowConversationMenu] = useState(false);
+  const [showMembersModal, setShowMembersModal] = useState(false);
+  const [conversationMenuAction, setConversationMenuAction] = useState<string | null>(null);
 
   const scrollRef = useRef<ScrollView>(null);
   const selectedUserRef = useRef<User | null>(null);
@@ -220,36 +263,73 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   const availableSections: SidebarSection[] = isVolunteer
     ? ['projects', 'contacts']
+    : isPartner
+    ? ['messages', 'projects']
     : ['projects', 'proposals', 'contacts'];
 
   const loadData = useCallback(async () => {
     if (!user) return;
     try {
-      const [users, snapshot, msgs] = await Promise.all([
+      const [usersResult, snapshotResult, messagesResult, partnerApplicationsResult] = await Promise.allSettled([
         getAllUsers(),
         getProjectsScreenSnapshot(user),
         getMessagesForUser(user.id),
+        user.role === 'volunteer'
+          ? Promise.resolve([] as PartnerProjectApplication[])
+          : getAllPartnerProjectApplications(),
       ]);
 
+      const users = usersResult.status === 'fulfilled' ? usersResult.value : [];
+      const snapshot =
+        snapshotResult.status === 'fulfilled'
+          ? snapshotResult.value
+          : {
+              projects: [],
+              partnerApplications: [],
+              volunteerJoinRecords: [],
+              volunteerProfile: null,
+            };
+      const msgs = messagesResult.status === 'fulfilled' ? messagesResult.value : [];
+      const directPartnerApplications =
+        partnerApplicationsResult.status === 'fulfilled' ? partnerApplicationsResult.value : [];
+
       const others = users.filter(u => u.id !== user.id);
-      const allowedDirectUsers = user.role === 'volunteer'
+      const allowedDirectUsers = user.role === 'volunteer' || user.role === 'partner'
         ? others.filter(u => u.role === 'admin')
         : others;
       const allowedDirectUserIds = new Set(allowedDirectUsers.map(u => u.id));
       const joinedEventIds = new Set(snapshot.volunteerJoinRecords.map(record => record.projectId));
       const volunteerProfileId = snapshot.volunteerProfile?.id;
+      const adminUsers = users.filter(candidate => candidate.role === 'admin');
 
       setAllUsers(allowedDirectUsers);
+
+      const approvedPartnerProjectIds = new Set(
+        [...snapshot.partnerApplications, ...directPartnerApplications]
+          .filter(
+            application =>
+              application.status === 'Approved' && application.partnerUserId === user.id
+          )
+          .map(application => application.projectId)
+          .filter(Boolean)
+      );
 
       setProjectChats(
         snapshot.projects
           .filter(project => {
-            if (!project?.isEvent) {
+            if (!project?.isEvent || project.groupChatDisabled) {
               return false;
             }
-            if (user.role !== 'volunteer') {
+            if (user.role === 'admin') {
               return true;
             }
+            if (user.role === 'partner') {
+              return (
+                approvedPartnerProjectIds.has(project.id) ||
+                Boolean(project.parentProjectId && approvedPartnerProjectIds.has(project.parentProjectId))
+              );
+            }
+
             const joinedByRecord = joinedEventIds.has(project.id);
             const joinedByUserId = (project.joinedUserIds || []).includes(user.id);
             const joinedByVolunteerId = Boolean(
@@ -257,20 +337,98 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
             );
             return joinedByRecord || joinedByUserId || joinedByVolunteerId;
           })
-          .map(project => ({
-            project,
-            participantCount: Math.max(
-              (project.joinedUserIds || []).length,
-              (project.volunteers || []).length,
-            ),
-          }))
+          .map(project => {
+            const memberMap = new Map<string, ProjectChatMember>();
+            adminUsers.forEach(admin => {
+              memberMap.set(`admin:${admin.id}`, {
+                id: admin.id,
+                name: admin.name || 'Admin',
+                role: 'Admin',
+                detail: admin.email,
+              });
+            });
+
+            (project.joinedUserIds || []).forEach(joinedUserId => {
+              const joinedUser = users.find(candidate => candidate.id === joinedUserId);
+              if (!joinedUser || joinedUser.role !== 'volunteer') {
+                return;
+              }
+
+              memberMap.set(`volunteer:${joinedUser.id}`, {
+                id: joinedUser.id,
+                name: joinedUser.name || 'Volunteer',
+                role: 'Volunteer',
+                detail: joinedUser.email,
+              });
+            });
+
+            [...snapshot.partnerApplications, ...directPartnerApplications]
+              .filter(application => {
+                if (application.status !== 'Approved') {
+                  return false;
+                }
+
+                return (
+                  application.projectId === project.id ||
+                  Boolean(project.parentProjectId && application.projectId === project.parentProjectId)
+                );
+              })
+              .forEach(application => {
+                const partnerUser = users.find(candidate => candidate.id === application.partnerUserId);
+                memberMap.set(`partner:${application.partnerUserId}`, {
+                  id: application.partnerUserId,
+                  name: application.partnerName || partnerUser?.name || 'Partner Account',
+                  role: 'Partner',
+                  detail: application.partnerEmail || partnerUser?.email,
+                });
+              });
+
+            const members = Array.from(memberMap.values()).sort((left, right) => {
+              const rank = { Admin: 0, Partner: 1, Volunteer: 2 };
+              const roleRank = rank[left.role] - rank[right.role];
+              return roleRank !== 0 ? roleRank : left.name.localeCompare(right.name);
+            });
+            const partnerParticipantCount =
+              user.role === 'partner' &&
+              (approvedPartnerProjectIds.has(project.id) ||
+                Boolean(project.parentProjectId && approvedPartnerProjectIds.has(project.parentProjectId)))
+                ? 1
+                : 0;
+
+            return {
+              project,
+              participantCount:
+                Math.max(
+                  members.length,
+                  Math.max(
+                    (project.joinedUserIds || []).length,
+                    (project.volunteers || []).length
+                  ) + partnerParticipantCount
+                ),
+              members,
+            };
+          })
       );
 
-      setProposalChats((user.role === 'volunteer' ? [] : snapshot.partnerApplications).map(app => ({
-        application: app,
-        projectTitle: app.proposalDetails?.proposedTitle || 'Untitled Proposal',
-        programModule: app.proposalDetails?.requestedProgramModule || 'Nutrition'
-      })));
+      setProposalChats(
+        (user.role === 'admin' ? directPartnerApplications : [])
+          .sort((left, right) => {
+            const leftRank = left.status === 'Pending' ? 0 : 1;
+            const rightRank = right.status === 'Pending' ? 0 : 1;
+            if (leftRank !== rightRank) {
+              return leftRank - rightRank;
+            }
+            return new Date(right.requestedAt).getTime() - new Date(left.requestedAt).getTime();
+          })
+          .map(app => ({
+            application: app,
+            projectTitle:
+              app.proposalDetails?.proposedTitle ||
+              app.proposalDetails?.targetProjectTitle ||
+              'Untitled Proposal',
+            programModule: app.proposalDetails?.requestedProgramModule || 'Nutrition'
+          }))
+      );
 
       const convMap = new Map<string, ConversationItem>();
       msgs.forEach(m => {
@@ -314,6 +472,11 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         setMessages(chat);
       }
     } catch (e) {
+      if (selectedProjectChat && user.role === 'partner') {
+        setMessages([]);
+        return;
+      }
+
       console.error(e);
     }
   };
@@ -325,12 +488,25 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   useEffect(() => {
     selectedProjectChatRef.current = selectedProjectChat;
     setShowConversationMenu(false);
+    setShowMembersModal(false);
   }, [selectedProjectChat]);
 
   useFocusEffect(useCallback(() => {
     void loadData();
     return subscribeToStorageChanges(['users', 'projects', 'partnerProjectApplications', 'messages', 'projectGroupMessages'], loadData);
   }, [loadData]));
+
+  useEffect(() => {
+    if (user?.role !== 'admin' || activeSection !== 'proposals') {
+      return undefined;
+    }
+
+    const pollTimer = setInterval(() => {
+      void loadData();
+    }, 1000);
+
+    return () => clearInterval(pollTimer);
+  }, [activeSection, loadData, user?.role]);
 
   useEffect(() => {
     if (!user?.id) {
@@ -383,6 +559,28 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     }
   }, [activeSection, availableSections]);
 
+  const pendingProposalChats = proposalChats.filter(item => item.application.status === 'Pending');
+
+  useEffect(() => {
+    if (
+      user?.role === 'admin' &&
+      pendingProposalChats.length > 0 &&
+      !selectedProposalApplication &&
+      !selectedProjectChat &&
+      !selectedUser &&
+      !proposalIntent
+    ) {
+      const nextProposal =
+        pendingProposalChats[0]?.application ||
+        null;
+      if (nextProposal) {
+        setActiveSection('proposals');
+        setSelectedProposalApplication(nextProposal);
+        setView('detail');
+      }
+    }
+  }, [pendingProposalChats, proposalIntent, selectedProjectChat, selectedProposalApplication, selectedUser, user?.role]);
+
   useEffect(() => {
     if (selectedUser && !allUsers.some(candidate => candidate.id === selectedUser.id)) {
       setSelectedUser(null);
@@ -414,6 +612,13 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   }, [requestedProjectId, loading, navigation, projectChats]);
 
   useEffect(() => {
+    if (user?.role === 'partner') {
+      if (newProposalModule || newProposalProjectId || newProposalTitle) {
+        navigation.setParams({ newProposalModule: undefined, newProposalProjectId: undefined, newProposalTitle: undefined });
+      }
+      return;
+    }
+
     if (newProposalModule || newProposalProjectId) {
       setProposalIntent({
         module: newProposalModule,
@@ -435,7 +640,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       setSelectedProposalApplication(null);
       navigation.setParams({ newProposalModule: undefined, newProposalProjectId: undefined, newProposalTitle: undefined });
     }
-  }, [newProposalModule, newProposalProjectId, newProposalTitle, navigation]);
+  }, [newProposalModule, newProposalProjectId, newProposalTitle, navigation, user?.role]);
 
   const PROPOSAL_PREFIX = '___PROPOSAL_CARD___:';
 
@@ -529,6 +734,43 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     }
   };
 
+  const closeActiveConversation = () => {
+    setSelectedUser(null);
+    setSelectedProjectChat(null);
+    setSelectedProposalApplication(null);
+    setProposalIntent(null);
+    setShowConversationMenu(false);
+    setMessages([]);
+    if (!isWide) {
+      setView('sidebar');
+    }
+  };
+
+  const handleOpenProposalAttachment = async (uri: string, attachmentIndex: number) => {
+    const normalizedUri = String(uri || '').trim();
+    if (!normalizedUri) {
+      return;
+    }
+
+    try {
+      if (Platform.OS === 'web' && typeof document !== 'undefined') {
+        const link = document.createElement('a');
+        link.href = normalizedUri;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.download = getAttachmentName(normalizedUri, attachmentIndex);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        return;
+      }
+
+      await Linking.openURL(normalizedUri);
+    } catch {
+      Alert.alert('Attachment Unavailable', 'Unable to open or download this attachment right now.');
+    }
+  };
+
   const removePendingAttachment = (attachmentUri: string) => {
     setPendingAttachments(current => current.filter(uri => uri !== attachmentUri));
   };
@@ -539,33 +781,114 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     }
 
     const eventTitle = selectedProjectChat.project.title;
-    Alert.alert(
-      'Leave Event GC',
-      `Leave "${eventTitle}"? You will be removed from this event group chat.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Leave',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              setShowConversationMenu(false);
-              await leaveVolunteerEventGroup(selectedProjectChat.project.id, user.id);
-              setSelectedProjectChat(null);
-              setMessages([]);
-              setView(isWide ? 'detail' : 'sidebar');
-              await loadData();
-              Alert.alert('Left GC', `You left "${eventTitle}".`);
-            } catch (error) {
-              Alert.alert(
-                'Unable to Leave',
-                getRequestErrorMessage(error, 'Failed to leave this event group chat. Please try again.')
-              );
-            }
-          },
-        },
-      ]
+    const previousProjectChats = projectChats;
+    const previousSelectedProjectChat = selectedProjectChat;
+    const previousMessages = messages;
+    setShowConversationMenu(false);
+    setProjectChats(currentChats =>
+      currentChats.filter(chat => chat.project.id !== selectedProjectChat.project.id)
     );
+    setSelectedProjectChat(null);
+    setMessages([]);
+    setView(isWide ? 'detail' : 'sidebar');
+    setReviewNotice({
+      title: 'Left event GC',
+      message: `You left "${eventTitle}".`,
+      tone: 'warning',
+    });
+
+    void (async () => {
+      try {
+        await leaveVolunteerEventGroup(previousSelectedProjectChat.project.id, user.id);
+        void loadData();
+      } catch (error) {
+        setProjectChats(previousProjectChats);
+        setSelectedProjectChat(previousSelectedProjectChat);
+        setMessages(previousMessages);
+        setView(isWide ? 'detail' : 'sidebar');
+        Alert.alert(
+          'Unable to Leave',
+          getRequestErrorMessage(error, 'Failed to leave this event group chat. Please try again.')
+        );
+      }
+    })();
+  };
+
+  const handleOpenGcProjectDetails = () => {
+    if (!selectedProjectChat) {
+      return;
+    }
+
+    setShowConversationMenu(false);
+    navigateToAvailableRoute(navigation, 'Projects', { projectId: selectedProjectChat.project.id });
+  };
+
+  const handleOpenGcMembers = () => {
+    if (!selectedProjectChat) {
+      return;
+    }
+
+    setShowConversationMenu(false);
+    setShowMembersModal(true);
+  };
+
+  const handleDeleteEventGc = () => {
+    if (!user || user.role !== 'admin' || !selectedProjectChat) {
+      return;
+    }
+
+    const targetProject = selectedProjectChat.project;
+    const previousProjectChats = projectChats;
+    const previousSelectedProjectChat = selectedProjectChat;
+    const previousMessages = messages;
+    setConversationMenuAction('delete-gc');
+    setShowConversationMenu(false);
+    setProjectChats(currentChats =>
+      currentChats.filter(chat => chat.project.id !== targetProject.id)
+    );
+    setSelectedProjectChat(null);
+    setMessages([]);
+    setView(isWide ? 'detail' : 'sidebar');
+    setReviewNotice({
+      title: 'GC deleted',
+      message: `The group chat for "${targetProject.title}" has been removed.`,
+      tone: 'warning',
+    });
+
+    void (async () => {
+      try {
+        const latestProject = await getProject(targetProject.id);
+        if (!latestProject) {
+          throw new Error('Project not found.');
+        }
+
+        const nextProject = {
+          ...latestProject,
+          groupChatDisabled: true,
+          updatedAt: new Date().toISOString(),
+        };
+
+        if (latestProject.isEvent) {
+          await saveEvent(nextProject);
+        } else {
+          await saveProject(nextProject);
+        }
+
+        await deleteProjectGroupChat(latestProject.id);
+        void loadData();
+      } catch (error) {
+        setProjectChats(previousProjectChats);
+        setSelectedProjectChat(previousSelectedProjectChat);
+        setMessages(previousMessages);
+        setView(isWide ? 'detail' : 'sidebar');
+        Alert.alert(
+          'Unable to delete GC',
+          getRequestErrorMessage(error, 'Failed to delete this group chat. Please try again.')
+        );
+      } finally {
+        setConversationMenuAction(null);
+      }
+    })();
   };
 
   const handleSendMessage = async () => {
@@ -624,22 +947,59 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     setProposalForm(f => ({ ...f, proposedLocation: composed }));
   }, [locRegion, locCity, locBarangay]);
 
+  useEffect(() => {
+    if (!reviewNotice) {
+      return undefined;
+    }
+
+    const timer = setTimeout(() => {
+      setReviewNotice(null);
+    }, 4500);
+
+    return () => clearTimeout(timer);
+  }, [reviewNotice]);
+
   const handleReview = async (app: PartnerProjectApplication, status: 'Approved' | 'Rejected') => {
+    const previousProposalChats = proposalChats;
+    const previousSelectedProposalApplication = selectedProposalApplication;
+    setProposalChats(current =>
+      current.filter(item => item.application.id !== app.id)
+    );
+    setReviewNotice(
+      status === 'Approved'
+        ? {
+            title: 'Proposal approved',
+            message: 'The proposal was approved and converted into a project.',
+            tone: 'success',
+          }
+        : {
+            title: 'Proposal rejected',
+            message: 'The proposal was rejected and removed from the review queue.',
+            tone: 'warning',
+          }
+    );
+    setSelectedProposalApplication(null);
+    setView(isWide ? 'detail' : 'sidebar');
+
     try {
-      await reviewPartnerProjectApplication(app.id, status, user?.id || '');
-      Alert.alert('Success', `Proposal has been ${status.toLowerCase()}.`);
-      setSelectedProposalApplication(null);
-      setView(isWide ? 'detail' : 'sidebar');
+      const reviewedApplication = await reviewPartnerProjectApplication(app.id, status, user?.id || '');
       void loadData();
+      if (status === 'Approved') {
+        navigateToAvailableRoute(navigation, 'Projects', { projectId: reviewedApplication.projectId });
+      }
     } catch (e) {
+      setProposalChats(previousProposalChats);
+      setSelectedProposalApplication(previousSelectedProposalApplication);
+      setView(isWide ? 'detail' : 'sidebar');
       Alert.alert('Error', 'Failed to complete review.');
     }
   };
 
   const filteredConversations = conversations.filter(c => c.user.name.toLowerCase().includes(searchText.toLowerCase()));
   const filteredProjects = projectChats.filter(c => c.project.title.toLowerCase().includes(searchText.toLowerCase()));
-  const filteredProposals = proposalChats.filter(c => c.application.partnerName.toLowerCase().includes(searchText.toLowerCase()) || c.projectTitle.toLowerCase().includes(searchText.toLowerCase()));
+  const filteredProposals = pendingProposalChats.filter(c => c.application.partnerName.toLowerCase().includes(searchText.toLowerCase()) || c.projectTitle.toLowerCase().includes(searchText.toLowerCase()));
   const filteredUsers = allUsers.filter(u => u.name.toLowerCase().includes(searchText.toLowerCase()));
+  const pendingProposalCount = pendingProposalChats.length;
 
   const renderSidebarItem = (
     id: string,
@@ -720,6 +1080,18 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                 <Text style={[styles.sectionTabText, activeSection === section && styles.sectionTabTextActive]}>
                   {sectionMeta.label}
                 </Text>
+                {section === 'proposals' && pendingProposalCount > 0 ? (
+                  <View style={[styles.sectionTabBadge, activeSection === section && styles.sectionTabBadgeActive]}>
+                    <Text
+                      style={[
+                        styles.sectionTabBadgeText,
+                        activeSection === section && styles.sectionTabBadgeTextActive,
+                      ]}
+                    >
+                      {pendingProposalCount}
+                    </Text>
+                  </View>
+                ) : null}
               </TouchableOpacity>
             );
           })}
@@ -777,7 +1149,11 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
         {activeSection === 'proposals' && (
           <>
-            <Text style={styles.listSectionLabel}>Project Proposals</Text>
+            <Text style={styles.listSectionLabel}>
+              {pendingProposalCount > 0
+                ? `Project Proposals • ${pendingProposalCount} pending`
+                : 'Project Proposals'}
+            </Text>
             {filteredProposals.length > 0 ? (
               filteredProposals.map(p => renderSidebarItem(
                 p.application.id,
@@ -785,10 +1161,21 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                 `${p.application.partnerName} • ${p.application.status}`,
                 selectedProposalApplication?.id === p.application.id,
                 () => { setSelectedProposalApplication(p.application); setSelectedUser(null); setSelectedProjectChat(null); setProposalIntent(null); setView('detail'); },
-                { icon: 'description', color: p.application.status === 'Approved' ? '#166534' : '#f59e0b' }
+                {
+                  icon: 'description',
+                  color:
+                    p.application.status === 'Approved'
+                      ? '#166534'
+                      : p.application.status === 'Rejected'
+                      ? '#dc2626'
+                      : '#f59e0b',
+                  badge: p.application.status === 'Pending' ? 1 : undefined,
+                }
               ))
             ) : (
-              <Text style={styles.emptyListText}>No proposals found</Text>
+              <Text style={styles.emptyListText}>
+                No partner proposals yet. Submitted proposals will appear here for admin review.
+              </Text>
             )}
           </>
         )}
@@ -991,6 +1378,13 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
     if (selectedProposalApplication) {
       const app = selectedProposalApplication;
+      const proposalDetails: Partial<PartnerProjectProposalDetails> = app.proposalDetails || {};
+      const proposalAttachments = Array.isArray(proposalDetails.attachments) ? proposalDetails.attachments : [];
+      const proposalSkills = Array.isArray(proposalDetails.skillsNeeded) ? proposalDetails.skillsNeeded : [];
+      const proposalTitle =
+        String(proposalDetails.proposedTitle || '').trim() ||
+        String(proposalDetails.targetProjectTitle || '').trim() ||
+        'Untitled Proposal';
       return (
         <View style={styles.detail}>
           <View style={styles.detailHeader}>
@@ -1014,19 +1408,129 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                 </Text>
               </View>
 
-              <Text style={styles.previewTitle}>{app.proposalDetails?.proposedTitle}</Text>
-              <Text style={styles.previewSectionLabel}>PROJECT DESCRIPTION</Text>
-              <Text style={styles.previewText}>{app.proposalDetails?.proposedDescription}</Text>
+              <View style={styles.reviewWorkflowCard}>
+                <Text style={styles.reviewWorkflowTitle}>Admin Workflow</Text>
+                <Text style={styles.reviewWorkflowText}>
+                  Approve this proposal to create a new project automatically. After approval, open the project in
+                  Projects and add events there.
+                </Text>
+              </View>
+
+              <Text style={styles.previewTitle}>{proposalTitle}</Text>
+
+              <View style={styles.previewGrid}>
+                <View style={styles.previewGridItem}>
+                  <Text style={styles.previewSectionLabel}>PARTNER ORGANIZATION</Text>
+                  <Text style={styles.previewTextCompact}>{app.partnerName || 'Not provided'}</Text>
+                </View>
+                <View style={styles.previewGridItem}>
+                  <Text style={styles.previewSectionLabel}>PROGRAM MODULE</Text>
+                  <Text style={styles.previewTextCompact}>
+                    {proposalDetails.requestedProgramModule || 'Not provided'}
+                  </Text>
+                </View>
+              </View>
 
               <View style={styles.previewGrid}>
                 <View style={styles.previewGridItem}>
                   <Text style={styles.previewSectionLabel}>TIMELINE</Text>
-                  <Text style={styles.previewText}>{app.proposalDetails?.proposedStartDate} to {app.proposalDetails?.proposedEndDate}</Text>
+                  <Text style={styles.previewTextCompact}>
+                    {formatProposalDate(proposalDetails.proposedStartDate)} to {formatProposalDate(proposalDetails.proposedEndDate)}
+                  </Text>
                 </View>
                 <View style={styles.previewGridItem}>
                   <Text style={styles.previewSectionLabel}>LOCATION</Text>
-                  <Text style={styles.previewText}>{app.proposalDetails?.proposedLocation}</Text>
+                  <Text style={styles.previewTextCompact}>{proposalDetails.proposedLocation || 'Not provided'}</Text>
                 </View>
+              </View>
+
+              <View style={styles.previewGrid}>
+                <View style={styles.previewGridItem}>
+                  <Text style={styles.previewSectionLabel}>VOLUNTEER SLOTS</Text>
+                  <Text style={styles.previewTextCompact}>
+                    {proposalDetails.proposedVolunteersNeeded ?? 'Not provided'}
+                  </Text>
+                </View>
+                <View style={styles.previewGridItem}>
+                  <Text style={styles.previewSectionLabel}>SUBMITTED ON</Text>
+                  <Text style={styles.previewTextCompact}>{formatProposalDate(app.requestedAt)}</Text>
+                </View>
+              </View>
+
+              <View style={styles.previewNarrativeCard}>
+                <Text style={styles.previewSectionLabel}>PROJECT DESCRIPTION</Text>
+                <Text style={styles.previewText}>{proposalDetails.proposedDescription || 'Not provided'}</Text>
+              </View>
+
+              <View style={styles.previewNarrativeCard}>
+                <Text style={styles.previewSectionLabel}>COMMUNITY NEED</Text>
+                <Text style={styles.previewText}>{proposalDetails.communityNeed || 'Not provided'}</Text>
+              </View>
+
+              <View style={styles.previewNarrativeCard}>
+                <Text style={styles.previewSectionLabel}>EXPECTED DELIVERABLES</Text>
+                <Text style={styles.previewText}>{proposalDetails.expectedDeliverables || 'Not provided'}</Text>
+              </View>
+
+              <View style={styles.previewNarrativeCard}>
+                <Text style={styles.previewSectionLabel}>SKILLS NEEDED</Text>
+                {proposalSkills.length > 0 ? (
+                  <View style={styles.previewSkillRow}>
+                    {proposalSkills.map((skill: string) => (
+                      <View key={skill} style={styles.previewSkillChip}>
+                        <Text style={styles.previewSkillChipText}>{skill}</Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : (
+                  <Text style={styles.previewText}>No skills specified.</Text>
+                )}
+              </View>
+
+              <View style={styles.previewNarrativeCard}>
+                <Text style={styles.previewSectionLabel}>ATTACHMENTS</Text>
+                {proposalAttachments.length > 0 ? (
+                  <View style={styles.attachmentList}>
+                    {proposalAttachments.map((attachment: any, attachmentIndex: number) => {
+                      const attachmentUri = String(attachment?.url || '').trim();
+                      const isImageAttachment =
+                        String(attachment?.type || '').trim() === 'image' || isImageMediaUri(attachmentUri);
+                      if (!attachmentUri) {
+                        return null;
+                      }
+
+                      return (
+                        <View key={`${attachmentUri}-${attachmentIndex}`} style={styles.attachmentCard}>
+                          {isImageAttachment ? (
+                            <Image source={{ uri: attachmentUri }} style={styles.attachmentPreviewImage} />
+                          ) : (
+                            <View style={styles.attachmentPreviewFile}>
+                              <MaterialIcons name="description" size={28} color="#166534" />
+                            </View>
+                          )}
+                          <View style={styles.attachmentMeta}>
+                            <Text style={styles.attachmentTitle}>{getAttachmentName(attachmentUri, attachmentIndex)}</Text>
+                            <Text style={styles.attachmentSubtitle}>
+                              {isImageAttachment ? 'Photo attachment' : 'Document attachment'}
+                            </Text>
+                            <TouchableOpacity
+                              style={styles.attachmentDownloadButton}
+                              onPress={() => void handleOpenProposalAttachment(attachmentUri, attachmentIndex)}
+                              activeOpacity={0.85}
+                            >
+                              <MaterialIcons name="download" size={18} color="#166534" />
+                              <Text style={styles.attachmentDownloadButtonText}>
+                                {isImageAttachment ? 'Open or Download Photo' : 'Open or Download File'}
+                              </Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </View>
+                ) : (
+                  <Text style={styles.previewText}>No attachments uploaded.</Text>
+                )}
               </View>
 
               {user?.role === 'admin' && app.status === 'Pending' && (
@@ -1036,6 +1540,17 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                   </TouchableOpacity>
                   <TouchableOpacity style={[styles.actionBtn, styles.rejectBtn]} onPress={() => handleReview(app, 'Rejected')}>
                     <Text style={[styles.actionBtnText, { color: '#ef4444' }]}>Reject</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {user?.role === 'admin' && app.status === 'Approved' && (
+                <View style={styles.adminActionRow}>
+                  <TouchableOpacity
+                    style={[styles.actionBtn, styles.approveBtn]}
+                    onPress={() => navigateToAvailableRoute(navigation, 'Projects', { projectId: app.projectId })}
+                  >
+                    <Text style={styles.actionBtnText}>Open Project</Text>
                   </TouchableOpacity>
                 </View>
               )}
@@ -1052,7 +1567,13 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
             <Ionicons name="chatbubbles-outline" size={64} color="#166534" />
           </View>
           <Text style={styles.emptyTitle}>Your Workspace Hub</Text>
-          <Text style={styles.emptySubtitle}>Select an admin conversation or Event GC to start collaborating</Text>
+          <Text style={styles.emptySubtitle}>
+            {user?.role === 'admin'
+              ? 'Open a partner proposal, contact, or Event GC to continue your admin workflow.'
+              : user?.role === 'partner'
+              ? 'Select an admin conversation to start collaborating.'
+              : 'Select an admin conversation or Event GC to start collaborating.'}
+          </Text>
         </View>
       );
     }
@@ -1080,7 +1601,14 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
             </View>
           </View>
           <View style={styles.headerActions}>
-            {selectedProjectChat && user?.role === 'volunteer' ? (
+            <TouchableOpacity
+              style={styles.headerAction}
+              onPress={closeActiveConversation}
+              activeOpacity={0.8}
+            >
+              <MaterialIcons name="close" size={22} color="#64748b" />
+            </TouchableOpacity>
+            {selectedProjectChat ? (
               <View style={styles.conversationMenuWrap}>
                 <TouchableOpacity
                   style={styles.headerAction}
@@ -1093,12 +1621,45 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                   <View style={styles.conversationMenu}>
                     <TouchableOpacity
                       style={styles.conversationMenuItem}
+                      onPress={handleOpenGcMembers}
+                      activeOpacity={0.85}
+                    >
+                      <MaterialIcons name="groups" size={18} color="#166534" />
+                      <Text style={styles.conversationMenuText}>View Members</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.conversationMenuItem}
+                      onPress={handleOpenGcProjectDetails}
+                      activeOpacity={0.85}
+                    >
+                      <MaterialIcons name="open-in-new" size={18} color="#166534" />
+                      <Text style={styles.conversationMenuText}>Open Event Details</Text>
+                    </TouchableOpacity>
+                    {user?.role === 'admin' ? (
+                      <TouchableOpacity
+                        style={[styles.conversationMenuItem, styles.conversationMenuItemDanger]}
+                        onPress={handleDeleteEventGc}
+                        activeOpacity={0.85}
+                        disabled={conversationMenuAction === 'delete-gc'}
+                      >
+                        {conversationMenuAction === 'delete-gc' ? (
+                          <ActivityIndicator size="small" color="#dc2626" />
+                        ) : (
+                          <MaterialIcons name="delete-forever" size={18} color="#dc2626" />
+                        )}
+                        <Text style={styles.conversationMenuDangerText}>Delete GC</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                    {user?.role === 'volunteer' ? (
+                    <TouchableOpacity
+                      style={[styles.conversationMenuItem, styles.conversationMenuItemDanger]}
                       onPress={handleLeaveEventGc}
                       activeOpacity={0.85}
                     >
                       <MaterialIcons name="logout" size={18} color="#dc2626" />
                       <Text style={styles.conversationMenuDangerText}>Leave GC</Text>
                     </TouchableOpacity>
+                    ) : null}
                   </View>
                 ) : null}
               </View>
@@ -1267,7 +1828,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         </ScrollView>
 
         {/* Message Hub Template Panel — Partner ↔ Admin chats only */}
-        {((user?.role === 'partner' && selectedUser?.role === 'admin') || (user?.role === 'admin' && selectedUser?.role === 'partner')) && (
+        {(user?.role === 'admin' && selectedUser?.role === 'partner') && (
           <View style={styles.msgHubOuter}>
             {/* Toggle bar */}
             <TouchableOpacity
@@ -1527,28 +2088,6 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                   </View>
 
                   <View style={styles.msgHubBtnRow}>
-                    {user?.role === 'partner' && (
-                      <TouchableOpacity
-                        style={styles.msgHubSubmitProposalBtn}
-                        onPress={() => {
-                          if (!proposalForm.proposedTitle.trim()) {
-                            Alert.alert('Validation', 'Please enter a project title.');
-                            return;
-                          }
-                          // Build proposal intent from form and submit
-                          const intent = {
-                            module: (proposalIntent as any)?.module || 'Nutrition',
-                            projectId: (proposalIntent as any)?.projectId || 'new',
-                            title: proposalForm.proposedTitle,
-                          };
-                          setProposalIntent(intent);
-                          handleSubmitProposal();
-                        }}
-                      >
-                        <MaterialIcons name="task-alt" size={18} color="#fff" />
-                        <Text style={styles.msgHubSendBtnText}>Submit Proposal</Text>
-                      </TouchableOpacity>
-                    )}
                     <TouchableOpacity
                       style={styles.msgHubSendBtn}
                       onPress={() => handleSendProposalCard()}
@@ -1658,6 +2197,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       {availableSections.map(section => {
         const sectionMeta = getSidebarSectionMeta(section);
         const isActive = activeSection === section;
+        const badgeCount = section === 'proposals' ? pendingProposalCount : 0;
 
         return (
           <TouchableOpacity
@@ -1671,6 +2211,11 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
               size={24}
               color={isActive ? '#ffffff' : 'rgba(255,255,255,0.72)'}
             />
+            {badgeCount > 0 ? (
+              <View style={styles.railBadge}>
+                <Text style={styles.railBadgeText}>{badgeCount}</Text>
+              </View>
+            ) : null}
           </TouchableOpacity>
         );
       })}
@@ -1689,6 +2234,112 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   return (
     <View style={styles.container}>
+      {reviewNotice ? (
+        <View style={styles.reviewNoticeWrap}>
+          <View
+            style={[
+              styles.reviewNoticeCard,
+              reviewNotice.tone === 'warning' ? styles.reviewNoticeWarning : styles.reviewNoticeSuccess,
+            ]}
+          >
+            <MaterialIcons
+              name={reviewNotice.tone === 'warning' ? 'info' : 'check-circle'}
+              size={18}
+              color={reviewNotice.tone === 'warning' ? '#9a3412' : '#166534'}
+            />
+            <View style={styles.reviewNoticeTextWrap}>
+              <Text
+                style={[
+                  styles.reviewNoticeTitle,
+                  reviewNotice.tone === 'warning' ? styles.reviewNoticeTitleWarning : null,
+                ]}
+              >
+                {reviewNotice.title}
+              </Text>
+              <Text
+                style={[
+                  styles.reviewNoticeMessage,
+                  reviewNotice.tone === 'warning' ? styles.reviewNoticeMessageWarning : null,
+                ]}
+              >
+                {reviewNotice.message}
+              </Text>
+            </View>
+            <TouchableOpacity onPress={() => setReviewNotice(null)} style={styles.reviewNoticeClose}>
+              <Ionicons
+                name="close"
+                size={18}
+                color={reviewNotice.tone === 'warning' ? '#9a3412' : '#166534'}
+              />
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
+      <Modal
+        visible={showMembersModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowMembersModal(false)}
+      >
+        <View style={styles.membersModalBackdrop}>
+          <View style={styles.membersModalCard}>
+            <View style={styles.membersModalHeader}>
+              <View>
+                <Text style={styles.membersModalTitle}>GC Members</Text>
+                <Text style={styles.membersModalSubtitle}>
+                  {selectedProjectChat?.project.title || 'Event GC'}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.membersModalClose}
+                onPress={() => setShowMembersModal(false)}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="close" size={20} color="#475569" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.membersList} showsVerticalScrollIndicator>
+              {(selectedProjectChat?.members || []).length > 0 ? (
+                selectedProjectChat?.members.map(member => (
+                  <View key={`${member.role}:${member.id}`} style={styles.memberItem}>
+                    <View
+                      style={[
+                        styles.memberAvatar,
+                        member.role === 'Admin'
+                          ? styles.memberAvatarAdmin
+                          : member.role === 'Partner'
+                          ? styles.memberAvatarPartner
+                          : styles.memberAvatarVolunteer,
+                      ]}
+                    >
+                      <Text style={styles.memberAvatarText}>
+                        {member.name.charAt(0).toUpperCase()}
+                      </Text>
+                    </View>
+                    <View style={styles.memberInfo}>
+                      <Text style={styles.memberName}>{member.name}</Text>
+                      {member.detail ? (
+                        <Text style={styles.memberDetail} numberOfLines={1}>
+                          {member.detail}
+                        </Text>
+                      ) : null}
+                    </View>
+                    <View style={styles.memberRoleBadge}>
+                      <Text style={styles.memberRoleText}>{member.role}</Text>
+                    </View>
+                  </View>
+                ))
+              ) : (
+                <View style={styles.membersEmptyState}>
+                  <MaterialIcons name="groups" size={28} color="#94a3b8" />
+                  <Text style={styles.membersEmptyText}>No members found for this GC.</Text>
+                </View>
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
       <View style={styles.layout}>
         {isTablet && renderNavRail()}
         {renderSidebar()}
@@ -1702,6 +2353,51 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
   layout: { flex: 1, flexDirection: 'row' },
   hidden: { display: 'none' },
+  reviewNoticeWrap: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 4,
+  },
+  reviewNoticeCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  reviewNoticeSuccess: {
+    backgroundColor: '#dcfce7',
+    borderColor: '#86efac',
+  },
+  reviewNoticeWarning: {
+    backgroundColor: '#ffedd5',
+    borderColor: '#fdba74',
+  },
+  reviewNoticeTextWrap: {
+    flex: 1,
+  },
+  reviewNoticeTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#166534',
+  },
+  reviewNoticeTitleWarning: {
+    color: '#9a3412',
+  },
+  reviewNoticeMessage: {
+    marginTop: 2,
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#166534',
+  },
+  reviewNoticeMessageWarning: {
+    color: '#9a3412',
+  },
+  reviewNoticeClose: {
+    padding: 2,
+  },
 
   navRail: {
     width: 72,
@@ -1716,9 +2412,27 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.12)'
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    position: 'relative',
   },
   railItemActive: { backgroundColor: 'rgba(255,255,255,0.22)' },
+  railBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -2,
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#f59e0b',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 5,
+  },
+  railBadgeText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '900',
+  },
   railAvatar: {
     width: 40,
     height: 40,
@@ -1738,14 +2452,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 24,
-    paddingBottom: 16
+    padding: 18,
+    paddingBottom: 12
   },
-  sidebarHeaderTitle: { fontSize: 24, fontWeight: '900', color: '#0f172a', letterSpacing: -0.5 },
+  sidebarHeaderTitle: { fontSize: 20, fontWeight: '900', color: '#0f172a', letterSpacing: -0.5 },
   sidebarHeaderAction: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+    width: 36,
+    height: 36,
+    borderRadius: 10,
     backgroundColor: '#f0fdf4',
     alignItems: 'center',
     justifyContent: 'center'
@@ -1754,30 +2468,30 @@ const styles = StyleSheet.create({
   searchBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    marginHorizontal: 24,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    gap: 10,
+    marginHorizontal: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
     backgroundColor: '#f8fafc',
-    borderRadius: 14,
-    marginBottom: 20
+    borderRadius: 12,
+    marginBottom: 16
   },
-  searchInput: { flex: 1, fontSize: 15, color: '#1e293b' },
+  searchInput: { flex: 1, fontSize: 14, color: '#1e293b' },
 
   sectionTabs: {
     flexDirection: 'row',
-    paddingHorizontal: 24,
-    gap: 12,
-    marginBottom: 16,
+    paddingHorizontal: 18,
+    gap: 10,
+    marginBottom: 12,
     flexWrap: 'wrap',
   },
   sectionTab: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 16,
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 14,
     backgroundColor: '#f1f5f9',
     borderWidth: 1,
     borderColor: '#e2e8f0',
@@ -1787,9 +2501,9 @@ const styles = StyleSheet.create({
     borderColor: '#166534',
   },
   sectionTabIconWrap: {
-    width: 34,
-    height: 34,
-    borderRadius: 12,
+    width: 30,
+    height: 30,
+    borderRadius: 10,
     backgroundColor: '#dcfce7',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1797,8 +2511,28 @@ const styles = StyleSheet.create({
   sectionTabIconWrapActive: {
     backgroundColor: 'rgba(255,255,255,0.18)',
   },
-  sectionTabText: { fontSize: 13, fontWeight: '700', color: '#64748b' },
+  sectionTabText: { fontSize: 12, fontWeight: '700', color: '#64748b' },
   sectionTabTextActive: { color: '#fff' },
+  sectionTabBadge: {
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#dcfce7',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 5,
+  },
+  sectionTabBadgeActive: {
+    backgroundColor: 'rgba(255,255,255,0.2)',
+  },
+  sectionTabBadgeText: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: '#166534',
+  },
+  sectionTabBadgeTextActive: {
+    color: '#ffffff',
+  },
 
   sidebarList: { flex: 1 },
   listSectionLabel: {
@@ -1807,65 +2541,65 @@ const styles = StyleSheet.create({
     color: '#94a3b8',
     textTransform: 'uppercase',
     letterSpacing: 1.5,
-    paddingHorizontal: 24,
-    marginTop: 20,
-    marginBottom: 12
+    paddingHorizontal: 18,
+    marginTop: 16,
+    marginBottom: 10
   },
   sidebarItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 16,
-    padding: 16,
-    marginHorizontal: 12,
-    borderRadius: 16,
+    gap: 12,
+    padding: 12,
+    marginHorizontal: 10,
+    borderRadius: 14,
     marginBottom: 4
   },
   sidebarItemActive: { backgroundColor: '#f0fdf4' },
   sidebarAvatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
+    width: 40,
+    height: 40,
+    borderRadius: 13,
     alignItems: 'center',
     justifyContent: 'center'
   },
-  sidebarAvatarText: { color: '#fff', fontWeight: '800', fontSize: 18 },
+  sidebarAvatarText: { color: '#fff', fontWeight: '800', fontSize: 16 },
   sidebarItemInfo: { flex: 1 },
   sidebarItemHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  sidebarItemTitle: { fontSize: 16, fontWeight: '800', color: '#1e293b' },
+  sidebarItemTitle: { fontSize: 14, fontWeight: '800', color: '#1e293b' },
   sidebarItemTitleActive: { color: '#166534' },
-  sidebarItemSubtitle: { fontSize: 13, color: '#64748b', marginTop: 2 },
+  sidebarItemSubtitle: { fontSize: 12, color: '#64748b', marginTop: 2 },
   sidebarItemSubtitleActive: { color: '#166534', opacity: 0.8 },
   sidebarBadge: { backgroundColor: '#166534', borderRadius: 10, minWidth: 20, height: 20, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
   sidebarBadgeText: { color: '#fff', fontSize: 10, fontWeight: '900' },
-  emptyListText: { textAlign: 'center', color: '#94a3b8', fontSize: 14, marginTop: 20 },
+  emptyListText: { textAlign: 'center', color: '#94a3b8', fontSize: 12, marginTop: 16 },
 
   detail: { flex: 1, backgroundColor: '#fff' },
   detailHeader: {
-    height: 80,
+    height: 70,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 24,
+    paddingHorizontal: 18,
     borderBottomWidth: 1,
     borderBottomColor: '#f1f5f9'
   },
-  headerInfo: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 16 },
-  headerAvatar: { width: 44, height: 44, borderRadius: 14, backgroundColor: '#166534', alignItems: 'center', justifyContent: 'center' },
-  headerAvatarText: { color: '#fff', fontWeight: '800', fontSize: 18 },
-  detailTitle: { fontSize: 18, fontWeight: '900', color: '#0f172a' },
+  headerInfo: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  headerAvatar: { width: 38, height: 38, borderRadius: 12, backgroundColor: '#166534', alignItems: 'center', justifyContent: 'center' },
+  headerAvatarText: { color: '#fff', fontWeight: '800', fontSize: 16 },
+  detailTitle: { fontSize: 16, fontWeight: '900', color: '#0f172a' },
   detailSubtitle: { fontSize: 13, color: '#166534', fontWeight: '600', marginTop: 1 },
   headerActions: { flexDirection: 'row', gap: 4 },
-  headerAction: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  headerAction: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   conversationMenuWrap: { position: 'relative' },
   conversationMenu: {
     position: 'absolute',
     right: 0,
     top: 44,
-    minWidth: 150,
+    minWidth: 190,
     backgroundColor: '#ffffff',
     borderRadius: 16,
     padding: 8,
     borderWidth: 1,
-    borderColor: '#fee2e2',
+    borderColor: '#e2e8f0',
     shadowColor: '#0f172a',
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.12,
@@ -1880,20 +2614,154 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 10,
     borderRadius: 12,
+    backgroundColor: '#f8fafc',
+  },
+  conversationMenuItemDanger: {
     backgroundColor: '#fef2f2',
   },
-  conversationMenuDangerText: { fontSize: 13, fontWeight: '900', color: '#dc2626' },
+  conversationMenuText: { fontSize: 12, fontWeight: '800', color: '#166534' },
+  conversationMenuDangerText: { fontSize: 12, fontWeight: '900', color: '#dc2626' },
   backButton: { marginRight: 16 },
 
+  membersModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15,23,42,0.48)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 18,
+  },
+  membersModalCard: {
+    width: '100%',
+    maxWidth: 520,
+    maxHeight: '82%',
+    backgroundColor: '#ffffff',
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    overflow: 'hidden',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.18,
+    shadowRadius: 28,
+    elevation: 14,
+  },
+  membersModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+    backgroundColor: '#f8fafc',
+  },
+  membersModalTitle: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: '#0f172a',
+  },
+  membersModalSubtitle: {
+    marginTop: 2,
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#166534',
+  },
+  membersModalClose: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  membersList: {
+    padding: 12,
+  },
+  memberItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 10,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#eef2f7',
+    backgroundColor: '#ffffff',
+    marginBottom: 8,
+  },
+  memberAvatar: {
+    width: 38,
+    height: 38,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  memberAvatarAdmin: {
+    backgroundColor: '#166534',
+  },
+  memberAvatarPartner: {
+    backgroundColor: '#0369a1',
+  },
+  memberAvatarVolunteer: {
+    backgroundColor: '#b45309',
+  },
+  memberAvatarText: {
+    fontSize: 14,
+    fontWeight: '900',
+    color: '#ffffff',
+  },
+  memberInfo: {
+    flex: 1,
+    minWidth: 0,
+  },
+  memberName: {
+    fontSize: 13,
+    fontWeight: '900',
+    color: '#0f172a',
+  },
+  memberDetail: {
+    marginTop: 2,
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#64748b',
+  },
+  memberRoleBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+  },
+  memberRoleText: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: '#166534',
+  },
+  membersEmptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 36,
+    gap: 8,
+  },
+  membersEmptyText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#64748b',
+    textAlign: 'center',
+  },
+
   messagesList: { flex: 1 },
-  messagesListContent: { padding: 24, gap: 20 },
+  messagesListContent: { padding: 16, gap: 14 },
   messageRow: { maxWidth: '80%', gap: 6 },
   messageRowOwn: { alignSelf: 'flex-end', alignItems: 'flex-end' },
   messageRowOther: { alignSelf: 'flex-start' },
-  bubble: { padding: 16, borderRadius: 24 },
+  bubble: { padding: 12, borderRadius: 18 },
   bubbleOwn: { backgroundColor: '#166534', borderBottomRightRadius: 4 },
   bubbleOther: { backgroundColor: '#f1f5f9', borderBottomLeftRadius: 4 },
-  bubbleText: { fontSize: 15, lineHeight: 22, color: '#334155' },
+  bubbleText: { fontSize: 13, lineHeight: 19, color: '#334155' },
   bubbleTextOwn: { color: '#fff' },
   messageAttachmentList: { gap: 8, marginTop: 10 },
   messageAttachmentCard: {
@@ -1925,22 +2793,22 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.14)',
   },
   messageAttachmentName: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontSize: 11,
     fontWeight: '800',
     color: '#334155',
   },
   messageAttachmentNameOwn: { color: '#ffffff' },
   messageTime: { fontSize: 10, color: '#94a3b8', fontWeight: '600' },
-  emptyChat: { padding: 40, alignItems: 'center' },
+  emptyChat: { padding: 28, alignItems: 'center' },
   emptyChatText: { color: '#94a3b8', fontSize: 12 },
 
   attachmentMenu: {
     flexDirection: 'row',
-    gap: 12,
-    paddingHorizontal: 20,
-    paddingTop: 14,
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingTop: 10,
     paddingBottom: 4,
     borderTopWidth: 1,
     borderTopColor: '#f1f5f9',
@@ -1950,29 +2818,29 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    padding: 12,
-    borderRadius: 18,
+    gap: 8,
+    padding: 10,
+    borderRadius: 14,
     backgroundColor: '#f0fdf4',
     borderWidth: 1,
     borderColor: '#bbf7d0',
   },
   attachmentMenuIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 14,
+    width: 34,
+    height: 34,
+    borderRadius: 12,
     backgroundColor: '#ffffff',
     alignItems: 'center',
     justifyContent: 'center',
   },
   attachmentMenuTextWrap: { flex: 1 },
-  attachmentMenuTitle: { fontSize: 13, fontWeight: '900', color: '#14532d' },
+  attachmentMenuTitle: { fontSize: 12, fontWeight: '900', color: '#14532d' },
   attachmentMenuSubtitle: { fontSize: 11, fontWeight: '600', color: '#64748b', marginTop: 2 },
   pendingAttachmentTray: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     paddingTop: 10,
     backgroundColor: '#ffffff',
   },
@@ -1981,8 +2849,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
     borderRadius: 999,
     backgroundColor: '#f0fdf4',
     borderWidth: 1,
@@ -1990,36 +2858,36 @@ const styles = StyleSheet.create({
   },
   pendingAttachmentText: {
     flexShrink: 1,
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
     color: '#166534',
   },
   composer: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    padding: 20,
+    gap: 10,
+    padding: 16,
     paddingTop: 12,
     borderTopWidth: 1,
     borderTopColor: '#f1f5f9'
   },
   composerAdd: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   composerAddActive: { backgroundColor: '#dcfce7', borderRadius: 20 },
-  inputWrap: { flex: 1, backgroundColor: '#f1f5f9', borderRadius: 24, paddingHorizontal: 16 },
-  composerInput: { minHeight: 44, maxHeight: 120, fontSize: 15, color: '#1e293b', paddingVertical: 10 },
-  sendBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#166534', alignItems: 'center', justifyContent: 'center' },
+  inputWrap: { flex: 1, backgroundColor: '#f1f5f9', borderRadius: 18, paddingHorizontal: 14 },
+  composerInput: { minHeight: 40, maxHeight: 108, fontSize: 14, color: '#1e293b', paddingVertical: 9 },
+  sendBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#166534', alignItems: 'center', justifyContent: 'center' },
   sendBtnDisabled: { opacity: 0.5 },
 
   detailEmpty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 40 },
   emptyIconCircle: { width: 120, height: 120, borderRadius: 60, backgroundColor: '#f0fdf4', alignItems: 'center', justifyContent: 'center', marginBottom: 24 },
-  emptyTitle: { fontSize: 24, fontWeight: '900', color: '#0f172a', marginBottom: 8 },
-  emptySubtitle: { fontSize: 16, color: '#64748b', textAlign: 'center', lineHeight: 24 },
+  emptyTitle: { fontSize: 20, fontWeight: '900', color: '#0f172a', marginBottom: 8 },
+  emptySubtitle: { fontSize: 14, color: '#64748b', textAlign: 'center', lineHeight: 22 },
 
-  detailScrollContent: { padding: 24 },
+  detailScrollContent: { padding: 18 },
   proposalCard: {
     backgroundColor: '#fff',
-    borderRadius: 32,
-    padding: 32,
+    borderRadius: 24,
+    padding: 20,
     borderWidth: 1,
     borderColor: '#e2e8f0',
     shadowColor: '#000',
@@ -2028,23 +2896,126 @@ const styles = StyleSheet.create({
     shadowRadius: 20,
     elevation: 5
   },
-  proposalHeader: { flexDirection: 'row', alignItems: 'center', gap: 20, marginBottom: 32 },
-  proposalTitle: { fontSize: 24, fontWeight: '900', color: '#0f172a' },
-  proposalMeta: { fontSize: 14, color: '#64748b', marginTop: 4 },
-  formGroup: { marginBottom: 20 },
-  formLabel: { fontSize: 14, fontWeight: '800', color: '#475569', marginBottom: 8, marginLeft: 4 },
-  formInput: { backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 16, padding: 16, fontSize: 16, color: '#0f172a' },
-  formRow: { flexDirection: 'row', gap: 16 },
-  submitBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12, backgroundColor: '#166534', paddingVertical: 20, borderRadius: 20, marginTop: 12 },
-  submitBtnText: { color: '#fff', fontSize: 16, fontWeight: '900' },
+  proposalHeader: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 20 },
+  proposalTitle: { fontSize: 20, fontWeight: '900', color: '#0f172a' },
+  proposalMeta: { fontSize: 12, color: '#64748b', marginTop: 4 },
+  formGroup: { marginBottom: 16 },
+  formLabel: { fontSize: 12, fontWeight: '800', color: '#475569', marginBottom: 6, marginLeft: 4 },
+  formInput: { backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 14, padding: 13, fontSize: 14, color: '#0f172a' },
+  formRow: { flexDirection: 'row', gap: 12 },
+  submitBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, backgroundColor: '#166534', paddingVertical: 15, borderRadius: 16, marginTop: 10 },
+  submitBtnText: { color: '#fff', fontSize: 14, fontWeight: '900' },
 
   statusBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#f8fafc', padding: 12, borderRadius: 12, marginBottom: 24 },
-  statusText: { fontSize: 14, fontWeight: '700' },
-  previewTitle: { fontSize: 28, fontWeight: '900', color: '#0f172a', marginBottom: 24 },
+  statusText: { fontSize: 13, fontWeight: '700' },
+  reviewWorkflowCard: {
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 24,
+  },
+  reviewWorkflowTitle: {
+    fontSize: 13,
+    fontWeight: '900',
+    color: '#1d4ed8',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  reviewWorkflowText: {
+    marginTop: 6,
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#334155',
+  },
+  previewTitle: { fontSize: 22, fontWeight: '900', color: '#0f172a', marginBottom: 24 },
   previewSectionLabel: { fontSize: 12, fontWeight: '900', color: '#94a3b8', letterSpacing: 1.5, marginBottom: 8 },
-  previewText: { fontSize: 16, lineHeight: 26, color: '#334155', marginBottom: 24 },
-  previewGrid: { flexDirection: 'row', gap: 40, marginBottom: 32 },
+  previewText: { fontSize: 14, lineHeight: 22, color: '#334155', marginBottom: 20 },
+  previewTextCompact: { fontSize: 14, lineHeight: 21, color: '#334155', marginBottom: 14 },
+  previewGrid: { flexDirection: 'row', gap: 24, marginBottom: 24 },
   previewGridItem: { flex: 1 },
+  previewNarrativeCard: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 16,
+  },
+  previewSkillRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  previewSkillChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: '#dcfce7',
+    borderWidth: 1,
+    borderColor: '#86efac',
+  },
+  previewSkillChipText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#166534',
+  },
+  attachmentList: {
+    gap: 12,
+  },
+  attachmentCard: {
+    borderWidth: 1,
+    borderColor: '#dbe2ea',
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: '#ffffff',
+  },
+  attachmentPreviewImage: {
+    width: '100%',
+    height: 180,
+    backgroundColor: '#e2e8f0',
+  },
+  attachmentPreviewFile: {
+    width: '100%',
+    height: 98,
+    backgroundColor: '#f0fdf4',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#dbe2ea',
+  },
+  attachmentMeta: {
+    padding: 12,
+    gap: 6,
+  },
+  attachmentTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  attachmentSubtitle: {
+    fontSize: 12,
+    color: '#64748b',
+    marginBottom: 8,
+  },
+  attachmentDownloadButton: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 10,
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1,
+    borderColor: '#86efac',
+  },
+  attachmentDownloadButtonText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#166534',
+  },
   adminActionRow: { flexDirection: 'row', gap: 16, borderTopWidth: 1, borderTopColor: '#f1f5f9', paddingTop: 32 },
   actionBtn: { flex: 1, paddingVertical: 18, borderRadius: 16, alignItems: 'center' },
   actionBtnText: { color: '#fff', fontSize: 16, fontWeight: '800' },

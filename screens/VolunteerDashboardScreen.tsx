@@ -420,38 +420,6 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
       ]
     : [];
   const assignedEventIds = assignedEvents.map(project => project.id);
-  const volunteerDetailCards = [
-    {
-      label: 'Date of Birth',
-      value: formatLongDate(volunteerProfile?.dateOfBirth),
-      meta: 'Personal profile record',
-    },
-    {
-      label: 'Gender',
-      value: volunteerProfile?.gender || 'Not set',
-      meta: 'Profile information',
-    },
-    {
-      label: 'Phone',
-      value: volunteerProfile?.phone || 'Not set',
-      meta: 'Best contact number',
-    },
-    {
-      label: 'Workplace / School',
-      value: volunteerProfile?.workplaceOrSchool || 'Not set',
-      meta: 'Current affiliation',
-    },
-    {
-      label: 'Total Points',
-      value: String(Math.round(totalHours * 10)),
-      meta: 'Based on recorded service hours',
-    },
-    {
-      label: 'Completed Logs',
-      value: String(completedLogs),
-      meta: 'Finished time-in and time-out entries',
-    },
-  ];
 
   const openProjects = React.useCallback(
     (projectId?: string) => {
@@ -471,10 +439,6 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
 
   const openMessages = React.useCallback(() => {
     navigateToAvailableRoute(navigation, 'Messages');
-  }, [navigation]);
-
-  const openProfile = React.useCallback(() => {
-    navigateToAvailableRoute(navigation, 'Profile');
   }, [navigation]);
 
   const handleLogout = async () => {
@@ -555,17 +519,17 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
 
         <View style={styles.metricRow}>
           <View style={styles.metricCard}>
-            <MaterialIcons name="event-available" size={18} color="#bbf7d0" />
+            <MaterialIcons name="event-available" size={16} color="#bbf7d0" />
             <Text style={styles.metricValue}>{joinedEvents.length}</Text>
             <Text style={styles.metricLabel}>Joined Events</Text>
           </View>
           <View style={styles.metricCard}>
-            <MaterialIcons name="timer" size={18} color="#bbf7d0" />
+            <MaterialIcons name="timer" size={16} color="#bbf7d0" />
             <Text style={styles.metricValue}>{totalHours.toFixed(1)}</Text>
             <Text style={styles.metricLabel}>Hours Served</Text>
           </View>
           <View style={styles.metricCard}>
-            <MaterialIcons name="mark-email-unread" size={18} color="#bbf7d0" />
+            <MaterialIcons name="mark-email-unread" size={16} color="#bbf7d0" />
             <Text style={styles.metricValue}>{unreadMessages}</Text>
             <Text style={styles.metricLabel}>Unread Messages</Text>
           </View>
@@ -575,29 +539,29 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
       <View style={styles.quickActionRow}>
         <TouchableOpacity style={[styles.quickActionCard, styles.quickActionPrimary]} onPress={() => openProjects()}>
           <View style={styles.quickActionIcon}>
-            <MaterialIcons name="work-outline" size={22} color="#166534" />
+            <MaterialIcons name="work-outline" size={20} color="#166534" />
           </View>
           <View style={styles.quickActionCopy}>
             <Text style={styles.quickActionTitle}>Find Projects</Text>
             <Text style={styles.quickActionText}>Browse events and service opportunities.</Text>
           </View>
-          <MaterialIcons name="chevron-right" size={22} color="#166534" />
+          <MaterialIcons name="chevron-right" size={20} color="#166534" />
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.quickActionCard} onPress={openTasks}>
           <View style={styles.quickActionIcon}>
-            <MaterialIcons name="task-alt" size={22} color="#166534" />
+            <MaterialIcons name="task-alt" size={20} color="#166534" />
           </View>
           <View style={styles.quickActionCopy}>
             <Text style={styles.quickActionTitle}>My Tasks</Text>
             <Text style={styles.quickActionText}>Check assignments and field responsibilities.</Text>
           </View>
-          <MaterialIcons name="chevron-right" size={22} color="#94a3b8" />
+          <MaterialIcons name="chevron-right" size={20} color="#94a3b8" />
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.quickActionCard} onPress={openMessages}>
           <View style={styles.quickActionIcon}>
-            <MaterialIcons name="chat-bubble-outline" size={22} color="#166534" />
+            <MaterialIcons name="chat-bubble-outline" size={20} color="#166534" />
           </View>
           <View style={styles.quickActionCopy}>
             <Text style={styles.quickActionTitle}>Messages</Text>
@@ -608,7 +572,7 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
               <Text style={styles.messageCountText}>{unreadMessages > 99 ? '99+' : unreadMessages}</Text>
             </View>
           ) : (
-            <MaterialIcons name="chevron-right" size={22} color="#94a3b8" />
+            <MaterialIcons name="chevron-right" size={20} color="#94a3b8" />
           )}
         </TouchableOpacity>
       </View>
@@ -664,37 +628,6 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
           )}
         </View>
 
-        <View style={styles.profileCard}>
-          <View style={styles.sectionHeader}>
-            <View>
-              <Text style={styles.sectionEyebrow}>Profile</Text>
-              <Text style={styles.sectionTitle}>Volunteer Details</Text>
-            </View>
-            <TouchableOpacity onPress={openProfile} style={styles.smallEditButton}>
-              <MaterialIcons name="edit" size={17} color="#166534" />
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.profileIdentity}>
-            <View style={styles.profileAvatarLarge}>
-              <Text style={styles.profileAvatarText}>{user?.name?.charAt(0) || 'V'}</Text>
-            </View>
-            <View style={styles.profileIdentityCopy}>
-              <Text style={styles.profileName}>{volunteerProfile?.name || user?.name}</Text>
-              <Text style={styles.profileMeta}>{user?.email || volunteerProfile?.email || 'No email added yet'}</Text>
-            </View>
-          </View>
-
-          <View style={styles.detailSummaryGrid}>
-            {volunteerDetailCards.slice(0, 4).map(card => (
-              <View key={card.label} style={styles.detailSummaryCard}>
-                <Text style={styles.detailSummaryEyebrow}>{card.label}</Text>
-                <Text style={styles.detailSummaryValue}>{card.value}</Text>
-                <Text style={styles.detailSummaryMeta}>{card.meta}</Text>
-              </View>
-            ))}
-          </View>
-        </View>
       </View>
 
       <ProjectTimelineCalendarCard
@@ -1007,9 +940,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#eef5ee',
   },
   content: {
-    padding: 16,
-    paddingBottom: 36,
-    gap: 16,
+    padding: 14,
+    paddingBottom: 32,
+    gap: 14,
   },
   loadingContainer: {
     flex: 1,
@@ -1021,34 +954,34 @@ const styles = StyleSheet.create({
   loadingCard: {
     width: '100%',
     maxWidth: 360,
-    borderRadius: 24,
+    borderRadius: 20,
     backgroundColor: '#ffffff',
     alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingVertical: 28,
+    paddingHorizontal: 20,
+    paddingVertical: 22,
     borderWidth: 1,
     borderColor: '#dbe7df',
     gap: 10,
   },
   loadingTitle: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '800',
     color: '#0f172a',
   },
   loadingText: {
     textAlign: 'center',
-    fontSize: 13,
-    lineHeight: 20,
+    fontSize: 12,
+    lineHeight: 18,
     color: '#64748b',
   },
   headerCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 14,
-    borderRadius: 26,
+    gap: 12,
+    borderRadius: 22,
     backgroundColor: '#ffffff',
-    paddingHorizontal: 18,
-    paddingVertical: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
     borderWidth: 1,
     borderColor: '#d8e7dc',
     shadowColor: '#14532d',
@@ -1058,16 +991,16 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   avatar: {
-    width: 54,
-    height: 54,
-    borderRadius: 18,
+    width: 48,
+    height: 48,
+    borderRadius: 16,
     backgroundColor: '#14532d',
     alignItems: 'center',
     justifyContent: 'center',
   },
   avatarText: {
     color: '#ffffff',
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '800',
   },
   headerCopy: {
@@ -1075,7 +1008,7 @@ const styles = StyleSheet.create({
   },
   greeting: {
     marginTop: 3,
-    fontSize: 20,
+    fontSize: 17,
     fontWeight: '800',
     color: '#0f172a',
   },
@@ -1088,14 +1021,14 @@ const styles = StyleSheet.create({
   },
   headerHint: {
     marginTop: 5,
-    fontSize: 12,
-    lineHeight: 18,
+    fontSize: 11,
+    lineHeight: 16,
     color: '#64748b',
   },
   iconButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     backgroundColor: '#f0fdf4',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1104,11 +1037,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    borderRadius: 18,
+    borderRadius: 16,
     backgroundColor: '#fef2f2',
     borderWidth: 1,
     borderColor: '#fecaca',
-    padding: 14,
+    padding: 12,
   },
   errorCopy: {
     flex: 1,
@@ -1120,8 +1053,8 @@ const styles = StyleSheet.create({
   },
   errorText: {
     marginTop: 3,
-    fontSize: 12,
-    lineHeight: 18,
+    fontSize: 11,
+    lineHeight: 16,
     color: '#b91c1c',
   },
   errorAction: {
@@ -1132,13 +1065,13 @@ const styles = StyleSheet.create({
   heroCard: {
     position: 'relative',
     overflow: 'hidden',
-    borderRadius: 30,
+    borderRadius: 24,
     backgroundColor: '#14532d',
-    padding: 22,
+    padding: 18,
     shadowColor: '#14532d',
     shadowOpacity: 0.22,
-    shadowRadius: 24,
-    shadowOffset: { width: 0, height: 12 },
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
     elevation: 4,
   },
   heroAccentCircle: {
@@ -1170,76 +1103,77 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
     borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
     backgroundColor: '#bbf7d0',
   },
   heroChipText: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '800',
     color: '#166534',
   },
   statusBadge: {
     borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
   },
   statusBadgeText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
   },
   heroTitle: {
-    marginTop: 22,
-    fontSize: 28,
-    lineHeight: 34,
+    marginTop: 18,
+    fontSize: 20,
+    lineHeight: 28,
     fontWeight: '800',
     color: '#ffffff',
   },
   heroSubtitle: {
-    marginTop: 8,
-    fontSize: 13,
-    lineHeight: 20,
+    marginTop: 6,
+    fontSize: 12,
+    lineHeight: 18,
     color: '#dcfce7',
   },
   metricRow: {
     flexDirection: 'row',
-    gap: 10,
-    marginTop: 22,
+    gap: 8,
+    marginTop: 16,
   },
   metricCard: {
     flex: 1,
-    borderRadius: 20,
+    borderRadius: 16,
     backgroundColor: 'rgba(255,255,255,0.13)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.16)',
-    paddingHorizontal: 12,
-    paddingVertical: 13,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
   },
   metricValue: {
-    marginTop: 8,
-    fontSize: 24,
+    marginTop: 6,
+    fontSize: 17,
     fontWeight: '800',
     color: '#ffffff',
   },
   metricLabel: {
     marginTop: 3,
-    fontSize: 11,
+    fontSize: 10,
+    lineHeight: 13,
     color: '#dcfce7',
   },
   section: {
-    gap: 16,
+    gap: 14,
   },
   detailCard: {
-    borderRadius: 24,
+    borderRadius: 20,
     backgroundColor: '#ffffff',
-    padding: 18,
+    padding: 14,
     borderWidth: 1,
     borderColor: '#dbe7df',
   },
   profileCard: {
-    borderRadius: 24,
+    borderRadius: 20,
     backgroundColor: '#ffffff',
-    padding: 18,
+    padding: 14,
     borderWidth: 1,
     borderColor: '#dbe7df',
   },
@@ -1248,39 +1182,39 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     gap: 12,
-    marginBottom: 14,
+    marginBottom: 12,
   },
   sectionEyebrow: {
     marginBottom: 3,
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '800',
     color: '#166534',
     textTransform: 'uppercase',
     letterSpacing: 0.7,
   },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: 15,
     fontWeight: '800',
     color: '#0f172a',
   },
   linkText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
     color: '#166534',
   },
   sectionSubtitle: {
-    fontSize: 12,
+    fontSize: 11,
     color: '#64748b',
-    marginBottom: 12,
+    marginBottom: 10,
   },
   detailHeroPanel: {
-    borderRadius: 24,
+    borderRadius: 18,
     backgroundColor: '#f4fbf6',
     borderWidth: 1,
     borderColor: '#cfe8d6',
-    padding: 18,
-    marginBottom: 16,
-    gap: 12,
+    padding: 14,
+    marginBottom: 12,
+    gap: 10,
   },
   detailHeroChip: {
     flexDirection: 'row',
@@ -1293,56 +1227,56 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   detailHeroChipText: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '800',
     color: '#166534',
   },
   detailHeroTitle: {
-    fontSize: 23,
-    lineHeight: 30,
+    fontSize: 17,
+    lineHeight: 24,
     fontWeight: '800',
     color: '#0f172a',
   },
   detailHeroText: {
-    fontSize: 13,
-    lineHeight: 20,
+    fontSize: 12,
+    lineHeight: 18,
     color: '#475569',
   },
   detailSummaryGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 12,
+    gap: 10,
   },
   detailSummaryCard: {
-    minWidth: 150,
+    minWidth: 132,
     flexGrow: 1,
     flexShrink: 1,
-    borderRadius: 20,
+    borderRadius: 16,
     backgroundColor: '#fbfdfb',
     borderWidth: 1,
     borderColor: '#e4ede7',
-    paddingHorizontal: 14,
-    paddingVertical: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
   },
   detailSummaryEyebrow: {
-    fontSize: 11,
-    lineHeight: 16,
+    fontSize: 10,
+    lineHeight: 14,
     fontWeight: '800',
     color: '#64748b',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
   detailSummaryValue: {
-    marginTop: 8,
-    fontSize: 15,
-    lineHeight: 21,
+    marginTop: 6,
+    fontSize: 13,
+    lineHeight: 18,
     fontWeight: '800',
     color: '#0f172a',
   },
   detailSummaryMeta: {
-    marginTop: 8,
-    fontSize: 12,
-    lineHeight: 18,
+    marginTop: 6,
+    fontSize: 10,
+    lineHeight: 15,
     color: '#64748b',
   },
   detailGrid: {
@@ -1355,34 +1289,34 @@ const styles = StyleSheet.create({
   },
   detailLabel: {
     width: 112,
-    fontSize: 12,
+    fontSize: 11,
     lineHeight: 18,
     fontWeight: '700',
     color: '#64748b',
   },
   detailValue: {
     flex: 1,
-    fontSize: 13,
+    fontSize: 12,
     lineHeight: 20,
     color: '#0f172a',
     fontWeight: '600',
   },
   emptySectionText: {
-    fontSize: 13,
-    lineHeight: 20,
+    fontSize: 12,
+    lineHeight: 18,
     color: '#64748b',
   },
   emptyStateCard: {
     alignItems: 'center',
-    borderRadius: 22,
+    borderRadius: 18,
     backgroundColor: '#f8fafc',
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    padding: 20,
+    padding: 16,
     gap: 8,
   },
   emptyStateTitle: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '800',
     color: '#0f172a',
   },
@@ -1395,33 +1329,33 @@ const styles = StyleSheet.create({
   },
   emptyStateButtonText: {
     color: '#ffffff',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
   },
   profileIdentity: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    marginBottom: 18,
+    gap: 10,
+    marginBottom: 14,
   },
   profileAvatarLarge: {
-    width: 74,
-    height: 74,
-    borderRadius: 24,
+    width: 62,
+    height: 62,
+    borderRadius: 20,
     backgroundColor: '#e6f7cd',
     alignItems: 'center',
     justifyContent: 'center',
   },
   smallEditButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     backgroundColor: '#f0fdf4',
     alignItems: 'center',
     justifyContent: 'center',
   },
   profileAvatarText: {
-    fontSize: 28,
+    fontSize: 20,
     fontWeight: '800',
     color: '#166534',
   },
@@ -1429,36 +1363,36 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   profileName: {
-    fontSize: 18,
+    fontSize: 14,
     fontWeight: '800',
     color: '#0f172a',
   },
   profileMeta: {
     marginTop: 4,
-    fontSize: 12,
+    fontSize: 11,
     color: '#64748b',
   },
   quickActionRow: {
-    gap: 12,
+    gap: 10,
   },
   quickActionCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: 24,
+    borderRadius: 18,
     backgroundColor: '#ffffff',
-    padding: 16,
+    padding: 12,
     borderWidth: 1,
     borderColor: '#d8e7dc',
-    gap: 12,
+    gap: 10,
   },
   quickActionPrimary: {
     backgroundColor: '#f7fee7',
     borderColor: '#bef264',
   },
   quickActionIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 16,
+    width: 38,
+    height: 38,
+    borderRadius: 13,
     backgroundColor: '#dcfce7',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1467,20 +1401,20 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   quickActionTitle: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '800',
     color: '#0f172a',
   },
   quickActionText: {
     marginTop: 3,
-    fontSize: 12,
-    lineHeight: 18,
+    fontSize: 11,
+    lineHeight: 16,
     color: '#64748b',
   },
   messageCountBadge: {
-    minWidth: 28,
-    height: 28,
-    borderRadius: 14,
+    minWidth: 24,
+    height: 24,
+    borderRadius: 12,
     paddingHorizontal: 8,
     backgroundColor: '#dc2626',
     alignItems: 'center',
@@ -1488,19 +1422,19 @@ const styles = StyleSheet.create({
   },
   messageCountText: {
     color: '#ffffff',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
   },
   projectsList: {
-    gap: 12,
+    gap: 10,
   },
   projectItem: {
-    borderRadius: 20,
+    borderRadius: 16,
     backgroundColor: '#f8fafc',
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    padding: 15,
-    gap: 11,
+    padding: 12,
+    gap: 9,
   },
   projectItemHeader: {
     flexDirection: 'row',
@@ -1510,11 +1444,11 @@ const styles = StyleSheet.create({
   },
   projectItemBadges: {
     alignItems: 'flex-end',
-    gap: 6,
+    gap: 5,
   },
   projectItemTitle: {
     flex: 1,
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '800',
     color: '#0f172a',
   },
@@ -1525,7 +1459,7 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   projectItemBadgeText: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '700',
     color: '#166534',
   },
@@ -1536,16 +1470,16 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   projectItemStatusBadgeText: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '700',
   },
   projectItemDescription: {
-    fontSize: 12,
-    lineHeight: 18,
+    fontSize: 11,
+    lineHeight: 16,
     color: '#475569',
   },
   projectItemMeta: {
-    gap: 8,
+    gap: 6,
   },
   projectItemMetaItem: {
     flexDirection: 'row',
@@ -1553,7 +1487,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   projectItemMetaText: {
-    fontSize: 11,
+    fontSize: 10,
     color: '#64748b',
   },
 });

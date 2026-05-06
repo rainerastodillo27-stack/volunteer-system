@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+﻿import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Image,
@@ -12,6 +12,7 @@ import {
   View,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { Picker } from '@react-native-picker/picker';
 import { useFocusEffect } from '@react-navigation/native';
 import InlineLoadError from '../components/InlineLoadError';
 import ProjectTimelineCalendarCard from '../components/ProjectTimelineCalendarCard';
@@ -23,6 +24,7 @@ import {
   submitPartnerReport,
   subscribeToStorageChanges,
   buildProgramProposalProjectId,
+  getProgramModuleFromProposalProjectId,
 } from '../models/storage';
 import {
   AdminPlanningCalendar,
@@ -31,7 +33,6 @@ import {
   Partner,
   PartnerProjectApplication,
   PartnerProjectProposalDetails,
-  PartnerReport,
   PartnerReportType,
   Project,
 } from '../models/types';
@@ -39,6 +40,18 @@ import { isImageMediaUri, pickImageFromDevice, pickDocumentFromDevice } from '..
 import { navigateToAvailableRoute } from '../utils/navigation';
 import { getProjectDisplayStatus as getDerivedProjectStatus } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
+import {
+  DEFAULT_VOLUNTEER_SKILL_OPTIONS,
+  TASK_SKILL_OPTIONS,
+  mergeSkillOptions,
+} from '../utils/skills';
+import {
+  getBarangaysByCity,
+  getCitiesByRegion,
+  PHRegions,
+  type PHBarangay,
+  type PHCityMunicipality,
+} from '../utils/philippineAddressData';
 
 type ReportFormState = {
   projectId: string;
@@ -56,6 +69,7 @@ type ProposalFormState = {
   proposedEndDate: string;
   proposedLocation: string;
   proposedVolunteersNeeded: string;
+  skillsNeeded: string[];
   communityNeed: string;
   expectedDeliverables: string;
   photoAttachment: string;
@@ -81,6 +95,7 @@ function createEmptyProposalForm(module: AdvocacyFocus): ProposalFormState {
     proposedEndDate: '',
     proposedLocation: '',
     proposedVolunteersNeeded: '',
+    skillsNeeded: [],
     communityNeed: '',
     expectedDeliverables: '',
     photoAttachment: '',
@@ -147,15 +162,64 @@ function getProgramModuleDescription(module: AdvocacyFocus): string {
   }
 }
 
+function LazyDateTimePicker(props: any) {
+  if (Platform.OS === 'web') {
+    return (
+      <View style={{ marginTop: 10 }}>
+        <input
+          type="date"
+          value={props.value instanceof Date ? props.value.toISOString().split('T')[0] : ''}
+          min={props.minimumDate instanceof Date ? props.minimumDate.toISOString().split('T')[0] : undefined}
+          max={props.maximumDate instanceof Date ? props.maximumDate.toISOString().split('T')[0] : undefined}
+          onChange={event => {
+            if (props.onChange) {
+              props.onChange({ type: 'set' }, new Date(event.target.value));
+            }
+          }}
+          style={{
+            width: '100%',
+            padding: '12px',
+            borderRadius: '10px',
+            border: '1px solid #dbe2ea',
+            fontSize: '14px',
+            fontFamily: 'inherit',
+            color: '#0f172a',
+            backgroundColor: '#fff',
+            cursor: 'pointer',
+          }}
+        />
+      </View>
+    );
+  }
+
+  const DateTimePickerComponent = require('@react-native-community/datetimepicker').default;
+  return <DateTimePickerComponent {...props} />;
+}
+
+function formatDateValue(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function parseDateValue(value: string): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value.trim())) {
+    return null;
+  }
+
+  const parsedDate = new Date(`${value}T00:00:00`);
+  return Number.isNaN(parsedDate.getTime()) ? null : parsedDate;
+}
+
 // Shows the partner workspace for program proposals and report uploads.
-export default function PartnerDashboardScreen({ navigation }: any) {
+export default function PartnerDashboardScreen({ navigation, route }: any) {
   const { user, logout } = useAuth();
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [partners, setPartners] = useState<Partner[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [partnerApplications, setPartnerApplications] = useState<PartnerProjectApplication[]>([]);
-  const [partnerReports, setPartnerReports] = useState<PartnerReport[]>([]);
   const [actionProjectId, setActionProjectId] = useState<string | null>(null);
   const [reportForm, setReportForm] = useState<ReportFormState>(createEmptyReportForm());
   const [proposalForm, setProposalForm] = useState<ProposalFormState>(createEmptyProposalForm(FEATURED_PROGRAM_MODULES[0]));
@@ -163,6 +227,19 @@ export default function PartnerDashboardScreen({ navigation }: any) {
   const [activeProposalModule, setActiveProposalModule] = useState<AdvocacyFocus | null>(null);
   const [planningCalendars, setPlanningCalendars] = useState<AdminPlanningCalendar[]>([]);
   const [planningItems, setPlanningItems] = useState<AdminPlanningItem[]>([]);
+  const [availableProposalSkills, setAvailableProposalSkills] = useState<string[]>(
+    mergeSkillOptions(TASK_SKILL_OPTIONS, DEFAULT_VOLUNTEER_SKILL_OPTIONS)
+  );
+  const [selectedProposalSkillOption, setSelectedProposalSkillOption] = useState('');
+  const [customProposalSkill, setCustomProposalSkill] = useState('');
+  const [selectedRegionCode, setSelectedRegionCode] = useState('');
+  const [selectedCityCode, setSelectedCityCode] = useState('');
+  const [selectedBarangay, setSelectedBarangay] = useState('');
+  const [filteredCities, setFilteredCities] = useState<PHCityMunicipality[]>([]);
+  const [filteredBarangays, setFilteredBarangays] = useState<PHBarangay[]>([]);
+  const [showProposalDatePicker, setShowProposalDatePicker] = useState(false);
+  const [proposalDatePickerMode, setProposalDatePickerMode] = useState<'startDate' | 'endDate'>('startDate');
+  const [selectedProposalDate, setSelectedProposalDate] = useState(new Date());
 
   const isOwnedByCurrentPartner = React.useCallback(
     (partner: Partner) => {
@@ -197,15 +274,6 @@ export default function PartnerDashboardScreen({ navigation }: any) {
           .filter(application => application.partnerUserId === user.id)
           .sort((a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime())
       );
-      setPartnerReports(
-        snapshot.partnerReports
-          .filter(
-            report =>
-              report.submitterUserId === user.id ||
-              report.partnerUserId === user.id
-          )
-          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-      );
       setPlanningCalendars(timelineSnapshot.planningCalendars);
       setPlanningItems(timelineSnapshot.planningItems);
       setLoadError(null);
@@ -231,7 +299,6 @@ export default function PartnerDashboardScreen({ navigation }: any) {
           'partners',
           'projects',
           'partnerProjectApplications',
-          'partnerReports',
           'adminPlanningCalendars',
         ],
         () => {
@@ -254,11 +321,18 @@ export default function PartnerDashboardScreen({ navigation }: any) {
   const programApplicationByModule = useMemo(() => {
     const byModule = new Map<string, PartnerProjectApplication>();
     partnerApplications.forEach(application => {
-      const programModule = application.projectId.startsWith('program:')
-        ? application.projectId.slice('program:'.length).trim()
-        : application.proposalDetails?.requestedProgramModule || '';
+      const programModule =
+        getProgramModuleFromProposalProjectId(application.projectId) ||
+        application.proposalDetails?.requestedProgramModule ||
+        '';
       if (programModule) {
-        byModule.set(programModule, application);
+        const existing = byModule.get(programModule);
+        if (
+          !existing ||
+          new Date(application.requestedAt).getTime() > new Date(existing.requestedAt).getTime()
+        ) {
+          byModule.set(programModule, application);
+        }
       }
     });
     return byModule;
@@ -271,6 +345,14 @@ export default function PartnerDashboardScreen({ navigation }: any) {
         return application?.status === 'Approved';
       }),
     [applicationByProjectId, projects, user?.id]
+  );
+
+  const trackedProjects = useMemo(
+    () =>
+      [...attendingProjects].sort(
+        (left, right) => new Date(right.updatedAt || right.createdAt).getTime() - new Date(left.updatedAt || left.createdAt).getTime()
+      ),
+    [attendingProjects]
   );
 
   const activeProjects = useMemo(
@@ -308,19 +390,135 @@ export default function PartnerDashboardScreen({ navigation }: any) {
     setProposalForm(current =>
       current.requestedProgramModule === module ? current : createEmptyProposalForm(module)
     );
+    setSelectedProposalSkillOption('');
+    setCustomProposalSkill('');
+    setSelectedRegionCode('');
+    setSelectedCityCode('');
+    setSelectedBarangay('');
+    setFilteredCities([]);
+    setFilteredBarangays([]);
+    setShowProposalDatePicker(false);
+    setProposalDatePickerMode('startDate');
+    setSelectedProposalDate(new Date());
     setShowProposalModal(true);
   };
+
+  useEffect(() => {
+    const requestedModule = route?.params?.openProposalModule;
+    if (!requestedModule || !FEATURED_PROGRAM_MODULES.includes(requestedModule)) {
+      return;
+    }
+
+    openProposalForm(requestedModule as AdvocacyFocus);
+    navigation.setParams({ openProposalModule: undefined });
+  }, [navigation, route?.params?.openProposalModule]);
 
   const closeProposalForm = () => {
     setShowProposalModal(false);
     setActiveProposalModule(null);
+    setSelectedProposalSkillOption('');
+    setCustomProposalSkill('');
+    setSelectedRegionCode('');
+    setSelectedCityCode('');
+    setSelectedBarangay('');
+    setFilteredCities([]);
+    setFilteredBarangays([]);
+    setShowProposalDatePicker(false);
+    setProposalDatePickerMode('startDate');
   };
 
-  const updateProposalForm = (updates: Partial<Omit<ProposalFormState, 'requestedProgramModule'>>) => {
+  const updateProposalForm = (updates: Partial<ProposalFormState>) => {
     setProposalForm(current => ({
       ...current,
       ...updates,
     }));
+  };
+
+  useEffect(() => {
+    if (!showProposalModal) {
+      return;
+    }
+
+    const regionName = PHRegions.find(region => region.code === selectedRegionCode)?.name || '';
+    const cityName =
+      filteredCities.find(city => city.code === selectedCityCode)?.displayName ||
+      filteredCities.find(city => city.code === selectedCityCode)?.name ||
+      '';
+    const barangayName =
+      filteredBarangays.find(barangay => barangay.code === selectedBarangay)?.displayName ||
+      filteredBarangays.find(barangay => barangay.code === selectedBarangay)?.name ||
+      '';
+    const nextLocation = [barangayName, cityName, regionName].filter(Boolean).join(', ');
+
+    if (!nextLocation) {
+      return;
+    }
+
+    setProposalForm(current =>
+      current.proposedLocation === nextLocation
+        ? current
+        : {
+            ...current,
+            proposedLocation: nextLocation,
+          }
+    );
+  }, [
+    filteredBarangays,
+    filteredCities,
+    selectedBarangay,
+    selectedCityCode,
+    selectedRegionCode,
+    showProposalModal,
+  ]);
+
+  const handleSelectProposalRegion = (regionCode: string) => {
+    setSelectedRegionCode(regionCode);
+    setSelectedCityCode('');
+    setSelectedBarangay('');
+    setFilteredCities(regionCode ? getCitiesByRegion(regionCode) : []);
+    setFilteredBarangays([]);
+    updateProposalForm({ proposedLocation: '' });
+  };
+
+  const handleSelectProposalCity = (cityCode: string) => {
+    setSelectedCityCode(cityCode);
+    setSelectedBarangay('');
+    setFilteredBarangays(cityCode ? getBarangaysByCity(cityCode) : []);
+    updateProposalForm({ proposedLocation: '' });
+  };
+
+  const handleAddSelectedProposalSkill = () => {
+    const normalizedSkill = selectedProposalSkillOption.trim();
+    if (!normalizedSkill) {
+      return;
+    }
+
+    setProposalForm(current => ({
+      ...current,
+      skillsNeeded: mergeSkillOptions(current.skillsNeeded, [normalizedSkill]),
+    }));
+    setSelectedProposalSkillOption('');
+  };
+
+  const handleRemoveProposalSkill = (skill: string) => {
+    setProposalForm(current => ({
+      ...current,
+      skillsNeeded: current.skillsNeeded.filter(existingSkill => existingSkill !== skill),
+    }));
+  };
+
+  const handleAddCustomProposalSkill = () => {
+    const normalizedSkill = customProposalSkill.trim();
+    if (!normalizedSkill) {
+      return;
+    }
+
+    setAvailableProposalSkills(current => mergeSkillOptions(current, [normalizedSkill]));
+    setProposalForm(current => ({
+      ...current,
+      skillsNeeded: mergeSkillOptions(current.skillsNeeded, [normalizedSkill]),
+    }));
+    setCustomProposalSkill('');
   };
 
   const handlePickProposalPhoto = async () => {
@@ -356,28 +554,59 @@ export default function PartnerDashboardScreen({ navigation }: any) {
     updateProposalForm({ attachmentUrl: '' });
   };
 
-  const handleSubmitProgramProposal = async () => {
-    if (!user || !activeProposalModule) {
+  const openProposalDatePicker = (mode: 'startDate' | 'endDate') => {
+    const currentValue =
+      mode === 'startDate' ? proposalForm.proposedStartDate : proposalForm.proposedEndDate;
+    const parsedDate = parseDateValue(currentValue);
+
+    setProposalDatePickerMode(mode);
+    setSelectedProposalDate(parsedDate || new Date());
+    setShowProposalDatePicker(true);
+  };
+
+  const handleProposalDateChange = (_event: unknown, date?: Date) => {
+    if (Platform.OS !== 'ios') {
+      setShowProposalDatePicker(false);
+    }
+
+    if (!date) {
       return;
     }
 
-    const proposalProjectId = buildProgramProposalProjectId(activeProposalModule);
+    const formattedDate = formatDateValue(date);
+    setSelectedProposalDate(date);
+
+    if (proposalDatePickerMode === 'startDate') {
+      updateProposalForm({ proposedStartDate: formattedDate });
+      return;
+    }
+
+    updateProposalForm({ proposedEndDate: formattedDate });
+  };
+
+  const handleSubmitProgramProposal = async () => {
+    if (!user) {
+      return;
+    }
+
+    const selectedModule = proposalForm.requestedProgramModule;
+    const proposalProjectId = buildProgramProposalProjectId(selectedModule);
     const volunteersNeeded = Number(proposalForm.proposedVolunteersNeeded);
     const proposalDetails: PartnerProjectProposalDetails = {
-      requestedProgramModule: activeProposalModule,
+      requestedProgramModule: selectedModule,
       proposedTitle: proposalForm.proposedTitle.trim(),
       proposedDescription: proposalForm.proposedDescription.trim(),
       proposedStartDate: proposalForm.proposedStartDate.trim(),
       proposedEndDate: proposalForm.proposedEndDate.trim(),
       proposedLocation: proposalForm.proposedLocation.trim(),
       proposedVolunteersNeeded: Number.isNaN(volunteersNeeded) ? 0 : volunteersNeeded,
+      skillsNeeded: proposalForm.skillsNeeded,
       communityNeed: proposalForm.communityNeed.trim(),
       expectedDeliverables: proposalForm.expectedDeliverables.trim(),
       targetProjectId: undefined,
       targetProjectTitle: undefined,
       targetProjectDescription: undefined,
       targetProjectAddress: undefined,
-      skillsNeeded: [],
       attachments: [
         ...(proposalForm.photoAttachment
           ? [{ url: proposalForm.photoAttachment, type: 'image' as const }]
@@ -432,16 +661,16 @@ export default function PartnerDashboardScreen({ navigation }: any) {
     try {
       setActionProjectId(proposalProjectId);
       await submitPartnerProgramProposal(proposalProjectId, user, {
-        programModule: activeProposalModule,
+        programModule: selectedModule,
         proposalDetails,
       });
       setShowProposalModal(false);
-      Alert.alert('Proposal Sent', 'Your proposal has been sent to the admin for review.');
+      Alert.alert('Proposal Sent', 'Your project proposal has been sent to the admin for review.');
       void loadDashboardData();
     } catch (error) {
       Alert.alert(
         getRequestErrorTitle(error),
-        getRequestErrorMessage(error, 'Failed to send the program proposal.')
+        getRequestErrorMessage(error, 'Failed to send the project proposal.')
       );
     } finally {
       setActionProjectId(null);
@@ -586,6 +815,72 @@ export default function PartnerDashboardScreen({ navigation }: any) {
       />
 
       <View style={styles.section}>
+        <View style={styles.sectionHeaderRow}>
+          <View style={styles.sectionHeaderCopy}>
+            <Text style={styles.sectionTitle}>Approved Proposal Projects</Text>
+            <Text style={styles.sectionSubtitle}>
+              Track the live status of projects that were approved from your proposals.
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={styles.secondaryActionButton}
+            onPress={() => navigateToAvailableRoute(navigation, 'Projects')}
+          >
+            <Text style={styles.secondaryActionButtonText}>My Projects</Text>
+          </TouchableOpacity>
+        </View>
+        {trackedProjects.length === 0 ? (
+          <View style={styles.card}>
+            <Text style={styles.cardText}>No approved proposal projects to track yet.</Text>
+          </View>
+        ) : (
+          trackedProjects.map(project => (
+            <TouchableOpacity
+              key={project.id}
+              style={styles.card}
+              activeOpacity={0.86}
+              onPress={() =>
+                navigateToAvailableRoute(navigation, 'Projects', {
+                  projectId: project.id,
+                })
+              }
+            >
+              <View style={styles.cardHeader}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cardTitle}>{project.title}</Text>
+                  <Text style={styles.cardMeta}>
+                    {(project.programModule || project.category)} â€¢ {getDisplayProjectStatus(project)}
+                  </Text>
+                </View>
+                <View
+                  style={[
+                    styles.statusBadge,
+                    { backgroundColor: getProjectStatusColor(getDisplayProjectStatus(project)) },
+                  ]}
+                >
+                  <Text style={styles.statusBadgeText}>{getDisplayProjectStatus(project)}</Text>
+                </View>
+              </View>
+              <Text style={styles.cardText}>{project.location?.address || 'Location to be finalized'}</Text>
+              <Text style={styles.cardText}>
+                {new Date(project.startDate).toLocaleDateString()} - {new Date(project.endDate).toLocaleDateString()}
+              </Text>
+              <TouchableOpacity
+                style={styles.primaryButton}
+                onPress={() =>
+                  navigateToAvailableRoute(navigation, 'Projects', {
+                    projectId: project.id,
+                  })
+                }
+              >
+                <Text style={styles.primaryButtonText}>Track Project</Text>
+              </TouchableOpacity>
+            </TouchableOpacity>
+          ))
+        )}
+      </View>
+
+      <View style={styles.section}>
         <Text style={styles.sectionTitle}>Registration Status</Text>
         {partners.length === 0 ? (
           <View style={styles.card}>
@@ -598,7 +893,7 @@ export default function PartnerDashboardScreen({ navigation }: any) {
                 <View style={{ flex: 1 }}>
                   <Text style={styles.cardTitle}>{partner.name}</Text>
                   <Text style={styles.cardMeta}>
-                    {partner.sectorType} • DSWD {partner.dswdAccreditationNo || 'Pending'}
+                    {partner.sectorType} â€¢ DSWD {partner.dswdAccreditationNo || 'Pending'}
                   </Text>
                 </View>
                 <View
@@ -611,7 +906,7 @@ export default function PartnerDashboardScreen({ navigation }: any) {
                 </View>
               </View>
               <Text style={styles.cardText}>
-                Verification: {partner.verificationStatus || 'Pending'}{partner.credentialsUnlockedAt ? ' • Login unlocked' : ' • Login locked'}
+                Verification: {partner.verificationStatus || 'Pending'}{partner.credentialsUnlockedAt ? ' â€¢ Login unlocked' : ' â€¢ Login locked'}
               </Text>
             </View>
           ))
@@ -630,20 +925,13 @@ export default function PartnerDashboardScreen({ navigation }: any) {
           const isPending = status === 'Pending';
           const isRejected = status === 'Rejected';
           const proposalProjectId = buildProgramProposalProjectId(module);
-          const buttonLabel = isApproved
-            ? 'Proposal Approved'
-            : isPending
-            ? 'Proposal Pending'
-            : isRejected
-            ? 'Submit Again'
-            : 'Submit Project Proposal';
+          const buttonLabel = application ? 'Submit Another Proposal' : 'Submit Project Proposal';
 
           return (
-            <TouchableOpacity 
-              key={module} 
+            <View
+              key={module}
               style={[styles.card, styles.programCard, { borderColor: getProgramModuleColor(module) }]}
-              onPress={() => navigateToAvailableRoute(navigation, 'Programs', { programModule: module })}
-            > 
+            >
               <View style={styles.programCardHeader}>
                 <View style={[styles.programIcon, { backgroundColor: getProgramModuleColor(module) }]}> 
                   <MaterialIcons
@@ -661,47 +949,19 @@ export default function PartnerDashboardScreen({ navigation }: any) {
                 </View>
               </View>
               <TouchableOpacity
-                style={[styles.primaryButton, isApproved && styles.secondaryButton, isPending && styles.timeButtonDisabled]}
+                style={[styles.primaryButton, actionProjectId === proposalProjectId && styles.timeButtonDisabled]}
                 onPress={() => openProposalForm(module)}
-                disabled={actionProjectId === proposalProjectId || isApproved || isPending}
+                disabled={actionProjectId === proposalProjectId}
               >
-                <Text style={[styles.primaryButtonText, isApproved && styles.secondaryButtonText]}>
+                <Text style={styles.primaryButtonText}>
                   {actionProjectId === proposalProjectId ? 'Sending...' : buttonLabel}
                 </Text>
               </TouchableOpacity>
-            </TouchableOpacity>
+            </View>
           );
         })}
       </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Field Activity History</Text>
-        {partnerReports.length === 0 ? (
-          <View style={styles.card}>
-            <Text style={styles.cardText}>No partner reports submitted yet. Approved projects will show submitted reports here.</Text>
-          </View>
-        ) : (
-              <View style={styles.card}>
-                <Text style={styles.cardTitle}>Submitted Reports</Text>
-                {partnerReports.slice(0, 5).map(report => {
-                  const linkedProject = projects.find(project => project.id === report.projectId);
-                  return (
-                    <View key={report.id} style={styles.historyItem}>
-                      <Text style={styles.historyTitle}>
-                        {report.title || linkedProject?.title || 'Project report'}
-                      </Text>
-                      <Text style={styles.historyMeta}>
-                        {report.reportType} • {report.status} • {new Date(report.createdAt).toLocaleDateString()}
-                      </Text>
-                      {report.reviewNotes ? (
-                        <Text style={styles.historyNotes}>Admin notes: {report.reviewNotes}</Text>
-                      ) : null}
-                    </View>
-                  );
-                })}
-              </View>
-        )}
-      </View>
 
       <Modal
         visible={showProposalModal}
@@ -713,116 +973,345 @@ export default function PartnerDashboardScreen({ navigation }: any) {
           <View style={styles.modalCard}>
             <ScrollView contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
               <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>Submit Program Proposal</Text>
+                <Text style={styles.modalTitle}>Submit Project Proposal</Text>
                 <TouchableOpacity onPress={closeProposalForm} style={styles.modalCloseButton}>
                   <MaterialIcons name="close" size={20} color="#475569" />
                 </TouchableOpacity>
               </View>
-              <Text style={styles.fieldLabel}>Proposal Title</Text>
-              <TextInput
-                style={styles.input}
-                value={proposalForm.proposedTitle}
-                onChangeText={value => updateProposalForm({ proposedTitle: value })}
-                placeholder="Short proposal title"
-                placeholderTextColor="#94a3b8"
-              />
-              <Text style={styles.fieldLabel}>Proposal Description</Text>
-              <TextInput
-                style={[styles.input, styles.inputMultiline]}
-                value={proposalForm.proposedDescription}
-                onChangeText={value => updateProposalForm({ proposedDescription: value })}
-                placeholder="What will this project deliver?"
-                placeholderTextColor="#94a3b8"
-                multiline
-              />
-              <Text style={styles.fieldLabel}>Start / End Date</Text>
-              <View style={styles.dateRow}>
+              <View style={styles.proposalFieldRow}>
                 <TextInput
-                  style={[styles.input, styles.dateInput]}
-                  value={proposalForm.proposedStartDate}
-                  onChangeText={value => updateProposalForm({ proposedStartDate: value })}
-                  placeholder="YYYY-MM-DD"
+                  style={[styles.input, styles.proposalInputField]}
+                  value={proposalForm.proposedTitle}
+                  onChangeText={value => updateProposalForm({ proposedTitle: value })}
+                  placeholder="Project title"
                   placeholderTextColor="#94a3b8"
                 />
-                <TextInput
-                  style={[styles.input, styles.dateInput]}
-                  value={proposalForm.proposedEndDate}
-                  onChangeText={value => updateProposalForm({ proposedEndDate: value })}
-                  placeholder="YYYY-MM-DD"
-                  placeholderTextColor="#94a3b8"
-                />
+                <View style={styles.proposalFieldTagSpacer} />
               </View>
-              <Text style={styles.fieldLabel}>Location</Text>
-              <TextInput
-                style={styles.input}
-                value={proposalForm.proposedLocation}
-                onChangeText={value => updateProposalForm({ proposedLocation: value })}
-                placeholder="Address or barangay"
-                placeholderTextColor="#94a3b8"
-              />
-              <Text style={styles.fieldLabel}>Volunteers Needed</Text>
-              <TextInput
-                style={styles.input}
-                value={proposalForm.proposedVolunteersNeeded}
-                onChangeText={value => updateProposalForm({ proposedVolunteersNeeded: value.replace(/[^0-9]/g, '') })}
-                placeholder="Number of volunteers"
-                placeholderTextColor="#94a3b8"
-                keyboardType="numeric"
-              />
-              <Text style={styles.fieldLabel}>Community Need</Text>
-              <TextInput
-                style={[styles.input, styles.inputMultiline]}
-                value={proposalForm.communityNeed}
-                onChangeText={value => updateProposalForm({ communityNeed: value })}
-                placeholder="Describe the community need"
-                placeholderTextColor="#94a3b8"
-                multiline
-              />
-              <Text style={styles.fieldLabel}>Expected Deliverables</Text>
-              <TextInput
-                style={[styles.input, styles.inputMultiline]}
-                value={proposalForm.expectedDeliverables}
-                onChangeText={value => updateProposalForm({ expectedDeliverables: value })}
-                placeholder="What will the project deliver?"
-                placeholderTextColor="#94a3b8"
-                multiline
-              />
-              <Text style={styles.fieldLabel}>Document Attachment</Text>
-              {proposalForm.attachmentUrl ? (
-                <View style={styles.photoPreviewCard}>
-                  <View style={styles.documentPreview}>
-                    <MaterialIcons name="description" size={24} color="#166534" />
+              <View style={[styles.proposalFieldRow, styles.proposalFieldRowTop]}>
+                <TextInput
+                  style={[styles.input, styles.inputMultiline, styles.proposalInputField]}
+                  value={proposalForm.proposedDescription}
+                  onChangeText={value => updateProposalForm({ proposedDescription: value })}
+                  placeholder="Project description"
+                  placeholderTextColor="#94a3b8"
+                  multiline
+                />
+                <View style={styles.proposalFieldTagSpacer} />
+              </View>
+              <View style={[styles.proposalFieldRow, styles.proposalFieldRowTop]}>
+                <View style={styles.proposalCardField}>
+                  <View style={styles.selectorGrid}>
+                    {FEATURED_PROGRAM_MODULES.map(module => {
+                      const selected = proposalForm.requestedProgramModule === module;
+                      return (
+                        <TouchableOpacity
+                          key={module}
+                          style={[
+                            styles.selectorChip,
+                            selected && styles.selectorChipActive,
+                            selected && { backgroundColor: getProgramModuleColor(module) },
+                          ]}
+                          onPress={() => {
+                            setActiveProposalModule(module);
+                            updateProposalForm({ requestedProgramModule: module });
+                          }}
+                        >
+                          <Text style={[styles.selectorChipText, selected && styles.selectorChipTextActive]}>
+                            {module}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
                   </View>
-                  <View style={styles.photoPreviewMeta}>
-                    <Text style={styles.photoPreviewLabel}>Document attached</Text>
-                    <TouchableOpacity onPress={handleRemoveProposalDocument}>
-                      <Text style={styles.photoRemoveText}>Remove</Text>
+                </View>
+                <View style={styles.proposalFieldTagSpacer} />
+              </View>
+              <View style={[styles.proposalFieldRow, styles.proposalFieldRowTop]}>
+                <View style={[styles.proposalCardField, styles.proposalImageEditorCard]}>
+                  <View style={styles.proposalImageEditorHeader}>
+                    <Text style={styles.proposalImageEditorTitle}>Project Picture</Text>
+                    <Text style={styles.fieldHelpText}>
+                      Upload the picture that should carry over into the approved project details.
+                    </Text>
+                  </View>
+                  <View style={styles.proposalImageEditorActions}>
+                    <TouchableOpacity style={styles.photoPickerButton} onPress={handlePickProposalPhoto}>
+                      <MaterialIcons name="photo-library" size={18} color="#166534" />
+                      <Text style={styles.photoPickerButtonText}>
+                        {proposalForm.photoAttachment ? 'Replace Picture' : 'Upload Picture'}
+                      </Text>
+                    </TouchableOpacity>
+                    {proposalForm.photoAttachment ? (
+                      <TouchableOpacity style={styles.photoRemoveButton} onPress={handleRemoveProposalPhoto}>
+                        <MaterialIcons name="delete-outline" size={18} color="#b91c1c" />
+                        <Text style={styles.photoRemoveButtonText}>Remove</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+                  {proposalForm.photoAttachment ? (
+                    <View style={styles.photoPreviewCard}>
+                      <Image source={{ uri: proposalForm.photoAttachment }} style={styles.photoPreview} />
+                      <View style={styles.photoPreviewMeta}>
+                        <Text style={styles.photoPreviewLabel}>Custom project image ready</Text>
+                      </View>
+                    </View>
+                  ) : (
+                    <View style={styles.photoEmptyState}>
+                      <MaterialIcons name="image" size={22} color="#94a3b8" />
+                      <Text style={styles.photoEmptyStateText}>
+                        No custom picture uploaded yet. The project will use the default image until you add one.
+                      </Text>
+                    </View>
+                  )}
+                </View>
+                <View style={styles.proposalFieldTagSpacer} />
+              </View>
+              <View style={styles.proposalFieldRow}>
+                <TouchableOpacity
+                  style={[styles.input, styles.dateFieldButton, styles.proposalInputField]}
+                  onPress={() => openProposalDatePicker('startDate')}
+                  activeOpacity={0.85}
+                >
+                  <Text
+                    style={[
+                      styles.dateFieldButtonText,
+                      !proposalForm.proposedStartDate && styles.dateFieldButtonPlaceholder,
+                    ]}
+                  >
+                    {proposalForm.proposedStartDate || 'Select start date'}
+                  </Text>
+                  <MaterialIcons name="calendar-today" size={18} color="#64748b" />
+                </TouchableOpacity>
+                <View style={styles.proposalFieldTagSpacer} />
+              </View>
+              {showProposalDatePicker && proposalDatePickerMode === 'startDate' ? (
+                <>
+                  <LazyDateTimePicker
+                    value={selectedProposalDate}
+                    mode="date"
+                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                    onChange={handleProposalDateChange}
+                    maximumDate={parseDateValue(proposalForm.proposedEndDate) || undefined}
+                  />
+                  {Platform.OS === 'ios' ? (
+                    <View style={styles.iosDatePickerActions}>
+                      <TouchableOpacity onPress={() => setShowProposalDatePicker(false)}>
+                        <Text style={styles.iosDatePickerButton}>Done</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ) : null}
+                </>
+              ) : null}
+              <View style={styles.proposalFieldRow}>
+                <TouchableOpacity
+                  style={[styles.input, styles.dateFieldButton, styles.proposalInputField]}
+                  onPress={() => openProposalDatePicker('endDate')}
+                  activeOpacity={0.85}
+                >
+                  <Text
+                    style={[
+                      styles.dateFieldButtonText,
+                      !proposalForm.proposedEndDate && styles.dateFieldButtonPlaceholder,
+                    ]}
+                  >
+                    {proposalForm.proposedEndDate || 'Select end date'}
+                  </Text>
+                  <MaterialIcons name="calendar-today" size={18} color="#64748b" />
+                </TouchableOpacity>
+                <View style={styles.proposalFieldTagSpacer} />
+              </View>
+              {showProposalDatePicker && proposalDatePickerMode === 'endDate' ? (
+                <>
+                  <LazyDateTimePicker
+                    value={selectedProposalDate}
+                    mode="date"
+                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                    onChange={handleProposalDateChange}
+                    minimumDate={parseDateValue(proposalForm.proposedStartDate) || undefined}
+                  />
+                  {Platform.OS === 'ios' ? (
+                    <View style={styles.iosDatePickerActions}>
+                      <TouchableOpacity onPress={() => setShowProposalDatePicker(false)}>
+                        <Text style={styles.iosDatePickerButton}>Done</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ) : null}
+                </>
+              ) : null}
+              <View style={[styles.proposalFieldRow, styles.proposalFieldRowTop]}>
+                <View style={[styles.proposalCardField, styles.addressContainer]}>
+                  <View style={styles.pickerWrap}>
+                    <Text style={styles.pickerLabel}>Region</Text>
+                    <View style={styles.pickerBorder}>
+                      <Picker
+                        selectedValue={selectedRegionCode}
+                        onValueChange={handleSelectProposalRegion}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Select Region..." value="" color="#94a3b8" />
+                        {PHRegions.map(region => (
+                          <Picker.Item key={region.code} label={region.name} value={region.code} />
+                        ))}
+                      </Picker>
+                    </View>
+                  </View>
+                  <View style={styles.pickerWrap}>
+                    <Text style={styles.pickerLabel}>City / Municipality</Text>
+                    <View style={styles.pickerBorder}>
+                      <Picker
+                        selectedValue={selectedCityCode}
+                        onValueChange={handleSelectProposalCity}
+                        enabled={selectedRegionCode !== ''}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Select City/Municipality..." value="" color="#94a3b8" />
+                        {filteredCities.map(city => (
+                          <Picker.Item
+                            key={city.code}
+                            label={city.displayName || city.name}
+                            value={city.code}
+                          />
+                        ))}
+                      </Picker>
+                    </View>
+                  </View>
+                  <View style={styles.pickerWrap}>
+                    <Text style={styles.pickerLabel}>Barangay</Text>
+                    <View style={styles.pickerBorder}>
+                      <Picker
+                        selectedValue={selectedBarangay}
+                        onValueChange={value => setSelectedBarangay(String(value || ''))}
+                        enabled={selectedCityCode !== ''}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Select Barangay..." value="" color="#94a3b8" />
+                        {filteredBarangays.map(barangay => (
+                          <Picker.Item
+                            key={barangay.code}
+                            label={barangay.displayName || barangay.name}
+                            value={barangay.code}
+                          />
+                        ))}
+                      </Picker>
+                    </View>
+                  </View>
+                  <Text style={styles.locationPreviewText}>
+                    {proposalForm.proposedLocation || 'Choose region, city/municipality, and barangay to set the place.'}
+                  </Text>
+                </View>
+                <View style={styles.proposalFieldTagSpacer} />
+              </View>
+              <View style={styles.proposalFieldRow}>
+                <TextInput
+                  style={[styles.input, styles.proposalInputField]}
+                  value={proposalForm.proposedVolunteersNeeded}
+                  onChangeText={value => updateProposalForm({ proposedVolunteersNeeded: value.replace(/[^0-9]/g, '') })}
+                  placeholder="Volunteer slots"
+                  placeholderTextColor="#94a3b8"
+                  keyboardType="numeric"
+                />
+                <View style={styles.proposalFieldTagSpacer} />
+              </View>
+              <View style={[styles.proposalFieldRow, styles.proposalFieldRowTop]}>
+                <View style={[styles.proposalCardField, styles.skillSelectionCard]}>
+                  <Text style={styles.proposalCardTitle}>Skills Needed</Text>
+                  <Text style={styles.fieldHelpText}>
+                    Select skills needed for this project. You can also add a custom skill.
+                  </Text>
+                  <View style={styles.skillSelectorRow}>
+                    <View style={[styles.pickerBorder, styles.skillPickerWrap]}>
+                      <Picker
+                        selectedValue={selectedProposalSkillOption}
+                        onValueChange={value => setSelectedProposalSkillOption(String(value || ''))}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Select skill" value="" color="#94a3b8" />
+                        {availableProposalSkills.map(skill => (
+                          <Picker.Item key={skill} label={skill} value={skill} />
+                        ))}
+                      </Picker>
+                    </View>
+                    <TouchableOpacity style={styles.addSkillButton} onPress={handleAddSelectedProposalSkill}>
+                      <Text style={styles.addSkillButtonText}>Add</Text>
+                    </TouchableOpacity>
+                  </View>
+                  {proposalForm.skillsNeeded.length > 0 ? (
+                    <View style={styles.selectedSkillList}>
+                      {proposalForm.skillsNeeded.map(skill => (
+                        <View key={skill} style={styles.selectedSkillItem}>
+                          <Text style={styles.selectedSkillText}>{skill}</Text>
+                          <TouchableOpacity onPress={() => handleRemoveProposalSkill(skill)}>
+                            <MaterialIcons name="close" size={16} color="#166534" />
+                          </TouchableOpacity>
+                        </View>
+                      ))}
+                    </View>
+                  ) : null}
+                  <View style={styles.skillInputRow}>
+                    <TextInput
+                      style={[styles.input, styles.skillInput]}
+                      value={customProposalSkill}
+                      onChangeText={setCustomProposalSkill}
+                      placeholder="Add new skill"
+                      placeholderTextColor="#94a3b8"
+                    />
+                    <TouchableOpacity style={styles.addSkillButton} onPress={handleAddCustomProposalSkill}>
+                      <Text style={styles.addSkillButtonText}>Add</Text>
                     </TouchableOpacity>
                   </View>
                 </View>
-              ) : (
-                <TouchableOpacity style={styles.photoPickerButton} onPress={handlePickProposalDocument}>
-                  <MaterialIcons name="attach-file" size={18} color="#166534" />
-                  <Text style={styles.photoPickerButtonText}>Add document attachment</Text>
-                </TouchableOpacity>
-              )}
-              <Text style={[styles.fieldLabel, { marginTop: 12 }]}>Photo Attachment</Text>
-              {proposalForm.photoAttachment ? (
-                <View style={styles.photoPreviewCard}>
-                  <Image source={{ uri: proposalForm.photoAttachment }} style={styles.photoPreview} />
-                  <View style={styles.photoPreviewMeta}>
-                    <Text style={styles.photoPreviewLabel}>Selected photo attachment</Text>
-                    <TouchableOpacity onPress={handleRemoveProposalPhoto}>
-                      <Text style={styles.photoRemoveText}>Remove</Text>
+                <View style={styles.proposalFieldTagSpacer} />
+              </View>
+              <View style={[styles.proposalFieldRow, styles.proposalFieldRowTop]}>
+                <TextInput
+                  style={[styles.input, styles.inputMultiline, styles.proposalInputField]}
+                  value={proposalForm.communityNeed}
+                  onChangeText={value => updateProposalForm({ communityNeed: value })}
+                  placeholder="Describe the community need"
+                  placeholderTextColor="#94a3b8"
+                  multiline
+                />
+                <View style={styles.proposalFieldTagSpacer} />
+              </View>
+              <View style={[styles.proposalFieldRow, styles.proposalFieldRowTop]}>
+                <TextInput
+                  style={[styles.input, styles.inputMultiline, styles.proposalInputField]}
+                  value={proposalForm.expectedDeliverables}
+                  onChangeText={value => updateProposalForm({ expectedDeliverables: value })}
+                  placeholder="What will the project deliver?"
+                  placeholderTextColor="#94a3b8"
+                  multiline
+                />
+                <View style={styles.proposalFieldTagSpacer} />
+              </View>
+              <View style={[styles.proposalFieldRow, styles.proposalFieldRowTop]}>
+                <View style={styles.proposalCardField}>
+                  <Text style={styles.proposalCardTitle}>Document Attachment</Text>
+                  <Text style={styles.fieldHelpText}>
+                    Upload the same project file that should stay with the approved project details.
+                  </Text>
+                  {proposalForm.attachmentUrl ? (
+                    <View style={styles.proposalDocumentCard}>
+                      <View style={styles.proposalDocumentMeta}>
+                        <MaterialIcons name="description" size={20} color="#166534" />
+                        <Text style={styles.proposalDocumentName} numberOfLines={1}>
+                          {proposalForm.attachmentUrl.split('/').pop() || 'Attached document'}
+                        </Text>
+                      </View>
+                      <TouchableOpacity onPress={handleRemoveProposalDocument}>
+                        <Text style={styles.photoRemoveText}>Remove</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ) : (
+                    <TouchableOpacity style={styles.photoPickerButton} onPress={handlePickProposalDocument}>
+                      <MaterialIcons name="attach-file" size={18} color="#166534" />
+                      <Text style={styles.photoPickerButtonText}>Upload Document</Text>
                     </TouchableOpacity>
-                  </View>
+                  )}
                 </View>
-              ) : (
-                <TouchableOpacity style={styles.photoPickerButton} onPress={handlePickProposalPhoto}>
-                  <MaterialIcons name="photo" size={18} color="#166534" />
-                  <Text style={styles.photoPickerButtonText}>Add project photo</Text>
-                </TouchableOpacity>
-              )}
+                <View style={styles.proposalFieldTagSpacer} />
+              </View>
               <View style={styles.modalActionRow}>
                 <TouchableOpacity style={[styles.primaryButton, styles.modalCancelButton]} onPress={closeProposalForm}>
                   <Text style={[styles.primaryButtonText, styles.modalCancelText]}>Cancel</Text>
@@ -868,7 +1357,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   loadingTitle: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '800',
     color: '#0f172a',
   },
@@ -896,11 +1385,11 @@ const styles = StyleSheet.create({
   },
   avatarText: {
     color: '#fff',
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '700',
   },
   greeting: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '700',
     color: '#0f172a',
   },
@@ -913,13 +1402,22 @@ const styles = StyleSheet.create({
     marginTop: 16,
     gap: 12,
   },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  sectionHeaderCopy: {
+    flex: 1,
+  },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '700',
     color: '#0f172a',
   },
   sectionSubtitle: {
-    fontSize: 13,
+    fontSize: 12,
     color: '#475569',
     lineHeight: 18,
     marginBottom: 8,
@@ -961,18 +1459,18 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
   },
   cardTitle: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '700',
     color: '#0f172a',
   },
   cardMeta: {
     marginTop: 4,
-    fontSize: 12,
+    fontSize: 11,
     color: '#64748b',
     lineHeight: 18,
   },
   cardText: {
-    fontSize: 13,
+    fontSize: 12,
     color: '#334155',
     lineHeight: 19,
   },
@@ -996,6 +1494,17 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '700',
   },
+  secondaryActionButton: {
+    backgroundColor: '#dcfce7',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  secondaryActionButtonText: {
+    color: '#166534',
+    fontSize: 11,
+    fontWeight: '800',
+  },
   secondaryButton: {
     backgroundColor: '#dcfce7',
   },
@@ -1016,13 +1525,13 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   inlineReportTitle: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '700',
     color: '#0f172a',
   },
   inlineReportMeta: {
     marginTop: 4,
-    fontSize: 12,
+    fontSize: 11,
     color: '#64748b',
     lineHeight: 18,
   },
@@ -1034,16 +1543,73 @@ const styles = StyleSheet.create({
   },
   inlineReportToggleText: {
     color: '#166534',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
   },
   inlineReportForm: {
     gap: 10,
   },
   fieldLabel: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
     color: '#475569',
+  },
+  fieldHelpText: {
+    fontSize: 11,
+    lineHeight: 18,
+    color: '#64748b',
+  },
+  proposalFieldRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 0,
+  },
+  proposalFieldRowTop: {
+    alignItems: 'flex-start',
+  },
+  proposalInputField: {
+    flex: 1,
+  },
+  proposalFieldTag: {
+    width: 110,
+    textAlign: 'right',
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  proposalFieldTagSpacer: {
+    width: 0,
+  },
+  proposalFieldTagTop: {
+    paddingTop: 6,
+  },
+  proposalCardField: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#dbe2ea',
+    borderRadius: 12,
+    backgroundColor: '#fff',
+    padding: 14,
+    gap: 10,
+  },
+  proposalCardTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  proposalReadonlyChip: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#dcfce7',
+    borderWidth: 1,
+    borderColor: '#86efac',
+  },
+  proposalReadonlyChipText: {
+    color: '#166534',
+    fontSize: 11,
+    fontWeight: '800',
   },
   selectorGrid: {
     flexDirection: 'row',
@@ -1062,7 +1628,7 @@ const styles = StyleSheet.create({
   },
   selectorChipText: {
     color: '#475569',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
   },
   selectorChipTextActive: {
@@ -1080,6 +1646,129 @@ const styles = StyleSheet.create({
     minHeight: 88,
     textAlignVertical: 'top',
   },
+  dateFieldButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#fff',
+  },
+  dateFieldButtonText: {
+    color: '#0f172a',
+    fontSize: 13,
+  },
+  dateFieldButtonPlaceholder: {
+    color: '#94a3b8',
+  },
+  iosDatePickerActions: {
+    alignItems: 'flex-end',
+    marginTop: 6,
+    marginBottom: 4,
+  },
+  iosDatePickerButton: {
+    color: '#166534',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  addressContainer: {
+    gap: 10,
+  },
+  pickerWrap: {
+    flex: 1,
+  },
+  pickerLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748b',
+    marginBottom: 4,
+    marginLeft: 4,
+  },
+  pickerBorder: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#dbe2ea',
+    borderRadius: 10,
+    overflow: 'hidden',
+  },
+  picker: {
+    height: 52,
+    width: '100%',
+  },
+  locationPreviewText: {
+    fontSize: 11,
+    lineHeight: 18,
+    color: '#64748b',
+  },
+  skillSelectorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 10,
+  },
+  skillPickerWrap: {
+    flex: 1,
+  },
+  skillSelectionCard: {
+    gap: 10,
+  },
+  selectedSkillList: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 10,
+  },
+  selectedSkillItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#dcfce7',
+    borderWidth: 1,
+    borderColor: '#86efac',
+  },
+  selectedSkillText: {
+    color: '#166534',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  skillInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 4,
+  },
+  skillInput: {
+    flex: 1,
+  },
+  addSkillButton: {
+    backgroundColor: '#166534',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  addSkillButtonText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  proposalImageEditorCard: {
+    gap: 12,
+  },
+  proposalImageEditorHeader: {
+    gap: 4,
+  },
+  proposalImageEditorTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  proposalImageEditorActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
   photoPickerButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1093,6 +1782,21 @@ const styles = StyleSheet.create({
   },
   photoPickerButtonText: {
     color: '#166534',
+    fontWeight: '700',
+  },
+  photoRemoveButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    backgroundColor: '#fef2f2',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  photoRemoveButtonText: {
+    color: '#b91c1c',
     fontWeight: '700',
   },
   photoPreviewCard: {
@@ -1134,6 +1838,48 @@ const styles = StyleSheet.create({
     color: '#dc2626',
     fontWeight: '700',
   },
+  photoEmptyState: {
+    borderWidth: 1,
+    borderColor: '#dbe2ea',
+    borderRadius: 12,
+    backgroundColor: '#f8fafc',
+    paddingHorizontal: 16,
+    paddingVertical: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  photoEmptyStateText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#64748b',
+  },
+  proposalDocumentCard: {
+    marginTop: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    borderWidth: 1,
+    borderColor: '#dbe2ea',
+    borderRadius: 12,
+    backgroundColor: '#fff',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  proposalDocumentMeta: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  proposalDocumentName: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
   modalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(15, 23, 42, 0.55)',
@@ -1156,7 +1902,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   modalTitle: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '800',
     color: '#0f172a',
   },
@@ -1181,28 +1927,5 @@ const styles = StyleSheet.create({
   },
   dateInput: {
     flex: 1,
-  },
-  historyItem: {
-    paddingTop: 10,
-    paddingBottom: 4,
-    borderTopWidth: 1,
-    borderTopColor: '#e2e8f0',
-  },
-  historyTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#0f172a',
-  },
-  historyMeta: {
-    marginTop: 4,
-    fontSize: 12,
-    color: '#64748b',
-    lineHeight: 18,
-  },
-  historyNotes: {
-    marginTop: 6,
-    fontSize: 12,
-    color: '#475569',
-    lineHeight: 18,
   },
 });

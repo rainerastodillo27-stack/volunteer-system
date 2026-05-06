@@ -343,7 +343,7 @@ export default function MappingScreen({ navigation }: any) {
             container.style.lineHeight = '16px';
 
             const header = document.createElement('div');
-            header.innerHTML = `<div style="font-weight:700;color:#0f172a;margin-bottom:6px;">${escapeHtml(project.title)}</div>`;
+            header.innerHTML = `<div style="font-weight:700;color:#0f172a;margin-bottom:4px;">${escapeHtml(project.title)}</div><div style="font-weight:700;color:#475569;margin-bottom:6px;">${project.isEvent ? 'Event' : 'Project'}</div>`;
             container.appendChild(header);
 
             if (partner) {
@@ -539,7 +539,11 @@ export default function MappingScreen({ navigation }: any) {
       ]);
       const approvedPartnerProjectIds = new Set(
         snapshot.partnerApplications
-          .filter(application => application.status === 'Approved')
+          .filter(
+            application =>
+              application.status === 'Approved' &&
+              String(application.projectId || '').startsWith('project-proposal-')
+          )
           .map(application => application.projectId)
       );
       const joinedVolunteerProjectIds = new Set(
@@ -558,7 +562,7 @@ export default function MappingScreen({ navigation }: any) {
                 (snapshot.volunteerProfile && (project.volunteers || []).includes(snapshot.volunteerProfile.id)) ||
                 (snapshot.volunteerProfile && (project.internalTasks || []).some(task => task.assignedVolunteerId === snapshot.volunteerProfile?.id))
             )
-          : snapshot.projects.filter(project => project.isEvent);
+          : snapshot.projects;
 
       setProjects(visibleProjects);
       setVolunteers([]);
@@ -731,6 +735,12 @@ export default function MappingScreen({ navigation }: any) {
                 <Text style={styles.description}>{selectedProject.description}</Text>
 
                 <View style={styles.infoGrid}>
+                  <View style={styles.infoItem}>
+                    <Text style={styles.infoLabel}>Type</Text>
+                    <Text style={styles.infoValue}>
+                      {selectedProject.isEvent ? 'Event' : 'Project'}
+                    </Text>
+                  </View>
                   <View style={styles.infoItem}>
                     <Text style={styles.infoLabel}>Category</Text>
                     <Text style={styles.infoValue}>

@@ -9,6 +9,7 @@ import {
   getMappedProjects,
   getProjectMarkerColor,
 } from '../utils/projectMap';
+import { getProjectDisplayStatus } from '../utils/projectStatus';
 import { createGoogleMapsMarkerIcon, loadGoogleMaps } from '../utils/webGoogleMaps';
 
 const MapHost = 'div' as any;
@@ -44,7 +45,7 @@ const MAP_STYLE_PRESETS: MapStylePreset[] = [
   {
     key: 'admin-overview',
     label: 'Admin overview',
-    description: 'Shows all mapped projects across the system.',
+    description: 'Shows all mapped projects and events across the system.',
     mapTypeId: 'roadmap',
     accentColor: '#1d4ed8',
     chipBg: '#eff6ff',
@@ -57,7 +58,7 @@ const MAP_STYLE_PRESETS: MapStylePreset[] = [
   {
     key: 'volunteer-view',
     label: 'Volunteer view',
-    description: 'Choose a volunteer and inspect their mapped completed work.',
+    description: 'Choose a volunteer and inspect their mapped events.',
     mapTypeId: 'roadmap',
     accentColor: '#1d4ed8',
     chipBg: '#eff6ff',
@@ -71,7 +72,7 @@ const MAP_STYLE_PRESETS: MapStylePreset[] = [
     key: 'partner-view',
     label: 'Partner view',
     description: 'Choose a partner and inspect their mapped project footprint.',
-    mapTypeId: 'hybrid',
+    mapTypeId: 'roadmap',
     accentColor: '#0f766e',
     chipBg: '#ecfeff',
     chipBorder: '#a5f3fc',
@@ -118,7 +119,8 @@ function getGoogleMapsErrorMessage(apiKey: string) {
 
 function buildAvailableAccountOptions(
   accounts: MapAccountOption[],
-  mappedProjects: Project[]
+  mappedProjects: Project[],
+  includeEmptyAccounts = false
 ): AvailableMapAccountOption[] {
   const projectById = new Map(mappedProjects.map(project => [project.id, project]));
 
@@ -135,7 +137,7 @@ function buildAvailableAccountOptions(
         projectCount: accountProjects.length,
       };
     })
-    .filter(account => account.projectCount > 0)
+    .filter(account => includeEmptyAccounts || account.projectCount > 0)
     .sort((left, right) => left.label.localeCompare(right.label));
 }
 
@@ -145,7 +147,7 @@ function getMapEmptyStateMessage(
   selectedAccountOption: AvailableMapAccountOption | null
 ) {
   if (selectedMapStyleKey === 'admin-overview') {
-    return 'No mapped projects are available yet.';
+    return 'No mapped projects or events are available yet.';
   }
 
   const targetLabel = selectedMapStyleKey === 'volunteer-view' ? 'volunteer' : 'partner';
@@ -192,14 +194,18 @@ export default function VolunteerImpactMap({
   onPartnerPress,
 }: VolunteerImpactMapProps) {
   const mappedProjects = useMemo(() => getMappedProjects(projects), [projects]);
+  const mappedEvents = useMemo(
+    () => mappedProjects.filter(project => project.isEvent),
+    [mappedProjects]
+  );
   const hasVolunteerScope = Array.isArray(volunteerAccounts);
   const hasPartnerScope = Array.isArray(partnerAccounts);
   const volunteerOptions = useMemo(
-    () => buildAvailableAccountOptions(volunteerAccounts || [], mappedProjects),
-    [volunteerAccounts, mappedProjects]
+    () => buildAvailableAccountOptions(volunteerAccounts || [], mappedEvents),
+    [volunteerAccounts, mappedEvents]
   );
   const partnerOptions = useMemo(
-    () => buildAvailableAccountOptions(partnerAccounts || [], mappedProjects),
+    () => buildAvailableAccountOptions(partnerAccounts || [], mappedProjects, true),
     [partnerAccounts, mappedProjects]
   );
   const [selectedProject, setSelectedProject] = useState<Project | null>(mappedProjects[0] || null);
@@ -261,11 +267,11 @@ export default function VolunteerImpactMap({
 
   const displayProjects =
     selectedMapStyleKey === 'admin-overview'
-      ? mappedProjects.filter(project => project.isEvent)
+      ? mappedProjects
       : selectedMapStyleKey === 'volunteer-view'
       ? hasVolunteerScope
         ? selectedAccountOption?.mappedProjects || []
-        : mappedProjects
+        : mappedEvents
       : hasPartnerScope
       ? selectedAccountOption?.mappedProjects || []
       : mappedProjects;
@@ -357,6 +363,7 @@ export default function VolunteerImpactMap({
               .sort((a, b) => a.label.localeCompare(b.label));
             const partnerHits = (partnerAccounts || [])
               .filter(account => (account.projectIds || []).includes(project.id))
+              .filter(account => account.id !== 'partner-unassigned')
               .sort((a, b) => a.label.localeCompare(b.label));
 
             const container = document.createElement('div');
@@ -369,9 +376,16 @@ export default function VolunteerImpactMap({
             const titleDiv = document.createElement('div');
             titleDiv.style.fontWeight = '700';
             titleDiv.style.color = '#0f172a';
-            titleDiv.style.marginBottom = '6px';
+            titleDiv.style.marginBottom = '4px';
             titleDiv.textContent = project.title;
             container.appendChild(titleDiv);
+
+            const typeDiv = document.createElement('div');
+            typeDiv.style.fontWeight = '700';
+            typeDiv.style.color = '#475569';
+            typeDiv.style.marginBottom = '6px';
+            typeDiv.textContent = project.isEvent ? 'Event' : 'Project';
+            container.appendChild(typeDiv);
 
             if (partnerHits.length > 0) {
               const partner = partnerHits[0];
@@ -495,7 +509,20 @@ export default function VolunteerImpactMap({
           });
         });
 
+        if (displayProjects.length === 1) {
+          map.setCenter({
+            lat: displayProjects[0].location.latitude,
+            lng: displayProjects[0].location.longitude,
+          });
+          map.setZoom(6);
+          return;
+        }
+
         map.fitBounds(bounds, 56);
+        const currentZoom = map.getZoom();
+        if (typeof currentZoom === 'number' && currentZoom > 7) {
+          map.setZoom(7);
+        }
       } catch {
         if (!cancelled) {
           clearMarkers();
@@ -523,10 +550,6 @@ export default function VolunteerImpactMap({
     selectedMapStyleKey,
     currentAccountOptions,
     selectedAccountOption
-  );
-  const mapHostKey = useMemo(
-    () => `${selectedMapStyleKey}:${displayProjects.map(project => project.id).join('|')}`,
-    [displayProjects, selectedMapStyleKey]
   );
   const showAccountPicker = selectedMapStyleKey !== 'admin-overview' && currentAccountOptions.length > 0;
   const selectedAccountLabel = getAccountPickerLabel(selectedMapStyleKey, selectedAccountOption);
@@ -610,7 +633,7 @@ export default function VolunteerImpactMap({
           },
         ]}
       >
-        <MapHost key={mapHostKey} ref={mapElementRef} style={styles.mapHost} />
+        <MapHost ref={mapElementRef} style={styles.mapHost} />
         {mapError ? (
           <View style={[styles.errorOverlay, { backgroundColor: selectedMapStyle.errorBg }]}>
             <View style={[styles.errorCard, { borderColor: selectedMapStyle.errorBorder }]}>
@@ -633,7 +656,7 @@ export default function VolunteerImpactMap({
         <View style={styles.detailCard}>
           <Text style={styles.detailTitle}>{selectedProject.title}</Text>
           <Text style={styles.detailMeta}>
-            {`${selectedProject.isEvent ? 'Event' : 'Program'} | ${selectedProject.category}`}
+            {`${selectedProject.isEvent ? 'Event' : 'Project'} | ${selectedProject.category} | ${getProjectDisplayStatus(selectedProject)}`}
           </Text>
           <Text style={styles.detailAddress}>{selectedProject.location.address}</Text>
         </View>

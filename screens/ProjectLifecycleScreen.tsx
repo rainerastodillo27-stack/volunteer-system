@@ -9,6 +9,7 @@ import {
   Pressable,
   TouchableOpacity,
   Alert,
+  Linking,
   Modal,
   TextInput,
   Image,
@@ -38,11 +39,11 @@ import {
   completeVolunteerProjectParticipation,
   deleteEvent,
   deleteProject,
+  getProgramModuleFromProposalProjectId,
   getAllPartnerProjectApplications,
   getAllVolunteerProjectMatches,
   getAllVolunteerTimeLogs,
   getAllPartners,
-  getAllProjects,
   getAllProgramTracks,
   getAllVolunteers,
   getPartnerReportsByProject,
@@ -74,7 +75,7 @@ import {
   PHILIPPINES_REGION,
 } from '../utils/projectMap';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
-import { getPrimaryReportMediaUri, isImageMediaUri, pickImageFromDevice } from '../utils/media';
+import { getPrimaryReportMediaUri, isImageMediaUri, pickDocumentFromDevice, pickImageFromDevice } from '../utils/media';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 import {
   composePhilippineAddress,
@@ -143,6 +144,9 @@ type ProjectDraft = {
   longitude: string;
   volunteersNeeded: string;
   skillsNeeded: string[];
+  communityNeed: string;
+  expectedDeliverables: string;
+  attachmentUrl: string;
   isEvent: boolean;
 };
 
@@ -211,6 +215,12 @@ function getLocalDateKey(value?: string): string {
   const month = String(parsed.getMonth() + 1).padStart(2, '0');
   const day = String(parsed.getDate()).padStart(2, '0');
   return `${parsed.getFullYear()}-${month}-${day}`;
+}
+
+function getProjectAttachmentName(uri: string, index: number): string {
+  const cleanUri = String(uri || '').trim().split('?')[0];
+  const fileName = cleanUri.split('/').pop();
+  return fileName || `Attachment ${index + 1}`;
 }
 
 function getStartOfWeekMonday(sourceDate: Date): Date {
@@ -362,6 +372,9 @@ const createEmptyProjectDraft = (
   longitude: '',
   volunteersNeeded: '1',
   skillsNeeded: [],
+  communityNeed: '',
+  expectedDeliverables: '',
+  attachmentUrl: '',
   isEvent,
 });
 
@@ -535,6 +548,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [isTaskSaveSuccess, setIsTaskSaveSuccess] = useState(false);
   const [taskSaveSuccessMessage, setTaskSaveSuccessMessage] = useState('');
   const [taskSaveNotice, setTaskSaveNotice] = useState<string | null>(null);
+  const taskSaveNoticeTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const [projectSaveError, setProjectSaveError] = useState<string | null>(null);
   const [showAssignmentDropdown, setShowAssignmentDropdown] = useState(false);
   const [showSkillsDropdown, setShowSkillsDropdown] = useState(false);
@@ -543,7 +557,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [newProgramName, setNewProgramName] = useState('');
   const [isAddProgramSuccess, setIsAddProgramSuccess] = useState(false);
   const [editingProgramId, setEditingProgramId] = useState<string | null>(null);
-  const [programDraft, setProgramDraft] = useState({ title: '', description: '', icon: 'folder', color: '#6366f1', imageUrl: '' });
+  const [programDraft, setProgramDraft] = useState({ title: '', description: '', context: '', icon: 'folder', color: '#6366f1', imageUrl: '' });
   const [showProgramCrudModal, setShowProgramCrudModal] = useState(false);
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
@@ -692,7 +706,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       const unsubscribe = subscribeToStorageChanges(
         // Keep subscriptions focused on keys that affect the visible UI first.
-        ['projects', 'events', 'partners', 'statusUpdates', 'partnerReports', 'volunteerProjectJoins', 'volunteerMatches', 'volunteerTimeLogs', 'programTracks'],
+        ['projects', 'events', 'partners', 'statusUpdates', 'partnerProjectApplications', 'partnerReports', 'volunteerProjectJoins', 'volunteerMatches', 'volunteerTimeLogs', 'programTracks'],
         event => {
           // For storage updates, update light data immediately and defer heavy refreshes
           void refreshLight();
@@ -912,7 +926,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   const openCreateProgramModal = () => {
     setEditingProgramId(null);
-    setProgramDraft({ title: '', description: '', icon: 'folder', color: '#6366f1', imageUrl: '' });
+    setProgramDraft({ title: '', description: '', context: '', icon: 'folder', color: '#6366f1', imageUrl: '' });
     setShowProgramCrudModal(true);
   };
 
@@ -921,6 +935,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     setProgramDraft({
       title: track.title,
       description: track.description || '',
+      context: track.context || '',
       icon: track.icon || 'folder',
       color: track.color || '#6366f1',
       imageUrl: track.imageUrl || '',
@@ -941,6 +956,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         id,
         title: programDraft.title.trim(),
         description: programDraft.description.trim() || `Folder for ${programDraft.title.trim()} projects.`,
+        context: programDraft.context.trim() || undefined,
         icon: programDraft.icon || 'folder',
         color: programDraft.color || '#6366f1',
         imageUrl: programDraft.imageUrl.trim() || undefined,
@@ -1063,16 +1079,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     navigation.setParams({ projectId: undefined });
   }, [navigation, projects, route?.params?.projectId]);
 
-  // Opens the project modal in create mode with a blank draft.
-  const openCreateProjectModal = () => {
-    setEditingProjectId(null);
-    setProjectDraft(createEmptyProjectDraft());
-    setProjectEditorMode('project');
-    resetProjectLocationSelection();
-    setProjectSaveError(null);
-    setShowProjectModal(true);
-  };
-
   // Opens the project editor pre-wired to a specific program track.
   const openCreateProjectInProgramModal = (trackId: string, trackTitle: string) => {
     setEditingProjectId(null);
@@ -1112,6 +1118,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     nextDraft.skillsNeeded = Array.isArray(parentProject.skillsNeeded)
       ? parentProject.skillsNeeded
       : [];
+    nextDraft.communityNeed = parentProject.communityNeed || '';
+    nextDraft.expectedDeliverables = parentProject.expectedDeliverables || '';
+    nextDraft.attachmentUrl =
+      (parentProject.attachments || []).find(attachment => attachment.type === 'document')?.url || '';
     setProjectDraft(nextDraft);
     resetProjectLocationSelection();
     applyProjectLocationSelectionFromAddress(parentProject.location.address || '');
@@ -1149,6 +1159,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       longitude: String(project.location.longitude),
       volunteersNeeded: String(project.volunteersNeeded),
       skillsNeeded: Array.isArray(project.skillsNeeded) ? project.skillsNeeded : [],
+      communityNeed: project.communityNeed || '',
+      expectedDeliverables: project.expectedDeliverables || '',
+      attachmentUrl:
+        (project.attachments || []).find(attachment => attachment.type === 'document')?.url || '',
       isEvent: !!project.isEvent,
     });
     applyProjectLocationSelectionFromAddress(project.location.address);
@@ -1180,40 +1194,29 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     }
 
     const doDelete = async () => {
+      const previousSelectedProject = selectedProject;
+      const previousProjects = projects;
       setActionLoadingKey(`deleteEvent-${event.id}`);
+      setProjects(currentProjects => currentProjects.filter(project => project.id !== event.id));
+      setSelectedProject(currentProject =>
+        currentProject?.id === event.id ? null : currentProject
+      );
+      setActionLoadingKey(null);
+      showTaskSaveNotice(`Event "${event.title}" was deleted successfully.`, 1200);
+
       try {
         await deleteProjectLikeRecord(event);
-        setProjects(currentProjects => currentProjects.filter(project => project.id !== event.id));
-        setSelectedProject(currentProject =>
-          currentProject?.id === event.id ? null : currentProject
-        );
-        await loadProjects();
-        Alert.alert('Deleted', `Event "${event.title}" has been deleted.`);
+        void loadProjects();
       } catch (error) {
+        setProjects(previousProjects);
+        setSelectedProject(previousSelectedProject);
         Alert.alert(
           getRequestErrorTitle(error),
           getRequestErrorMessage(error, 'Failed to delete event.')
         );
-      } finally {
-        setActionLoadingKey(null);
       }
     };
-
-    if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof window.confirm === 'function') {
-      if (window.confirm(`Delete event "${event.title}"? This cannot be undone.`)) {
-        void doDelete();
-      }
-      return;
-    }
-
-    Alert.alert(
-      'Delete Event',
-      `Delete "${event.title}"? This cannot be undone.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: () => void doDelete() },
-      ]
-    );
+    void doDelete();
   };
 
   // Updates a single project draft field without replacing the entire object.
@@ -1323,6 +1326,48 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     handleProjectDraftChange('imageUrl', '');
   };
 
+  const handlePickProjectDocument = async () => {
+    try {
+      const pickedDocument = await pickDocumentFromDevice();
+      if (!pickedDocument) {
+        return;
+      }
+
+      handleProjectDraftChange('attachmentUrl', pickedDocument);
+    } catch (error: any) {
+      Alert.alert('Document Access Needed', error?.message || 'Unable to open your file library.');
+    }
+  };
+
+  const handleRemoveProjectDocument = () => {
+    handleProjectDraftChange('attachmentUrl', '');
+  };
+
+  const handleOpenProjectAttachment = async (uri: string, index: number) => {
+    const normalizedUri = String(uri || '').trim();
+    if (!normalizedUri) {
+      return;
+    }
+
+    try {
+      if (Platform.OS === 'web' && typeof document !== 'undefined') {
+        const link = document.createElement('a');
+        link.href = normalizedUri;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.download = getProjectAttachmentName(normalizedUri, index);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        return;
+      }
+
+      await Linking.openURL(normalizedUri);
+    } catch {
+      Alert.alert('Attachment Unavailable', 'Unable to open this project attachment right now.');
+    }
+  };
+
   const openCreateTaskModal = () => {
     setEditingTaskId(null);
     setTaskDraft(createEmptyProjectTaskDraft());
@@ -1363,9 +1408,42 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     setShowAssignmentDropdown(false);
   };
 
-  const showTaskSaveNotice = (message: string) => {
+  useEffect(() => {
+    return () => {
+      if (taskSaveNoticeTimerRef.current) {
+        clearTimeout(taskSaveNoticeTimerRef.current);
+      }
+    };
+  }, []);
+
+  const showTaskSaveNotice = (message: string, durationMs?: number) => {
+    if (taskSaveNoticeTimerRef.current) {
+      clearTimeout(taskSaveNoticeTimerRef.current);
+      taskSaveNoticeTimerRef.current = null;
+    }
+
     setTaskSaveNotice(message);
+
+    if (typeof durationMs === 'number' && durationMs > 0) {
+      taskSaveNoticeTimerRef.current = setTimeout(() => {
+        setTaskSaveNotice(null);
+        taskSaveNoticeTimerRef.current = null;
+      }, durationMs);
+    }
   };
+
+  const renderTaskSaveToast = () =>
+    taskSaveNotice ? (
+      <View pointerEvents="box-none" style={styles.taskSaveToastOverlay}>
+        <View style={styles.taskSaveNotice}>
+          <MaterialIcons name="check-circle" size={20} color="#166534" />
+          <Text style={styles.taskSaveNoticeText}>{taskSaveNotice}</Text>
+          <TouchableOpacity style={styles.taskSaveNoticeButton} onPress={() => setTaskSaveNotice(null)}>
+            <Text style={styles.taskSaveNoticeButtonText}>OK</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    ) : null;
 
   const toggleTaskSkill = (skillName: string) => {
     const normalizedSkill = skillName.trim();
@@ -1576,6 +1654,16 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       volunteers: existingProject?.volunteers || [],
       joinedUserIds: existingProject?.joinedUserIds || [],
       skillsNeeded: projectDraft.skillsNeeded || [],
+      communityNeed: projectDraft.communityNeed.trim(),
+      expectedDeliverables: projectDraft.expectedDeliverables.trim(),
+      attachments: [
+        ...(projectDraft.imageUrl.trim()
+          ? [{ url: projectDraft.imageUrl.trim(), type: 'image' as const }]
+          : []),
+        ...(projectDraft.attachmentUrl.trim()
+          ? [{ url: projectDraft.attachmentUrl.trim(), type: 'document' as const }]
+          : []),
+      ],
       createdAt: existingProject?.createdAt || now,
       updatedAt: now,
       statusUpdates: existingProject?.statusUpdates || [],
@@ -1592,11 +1680,38 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       status: resolvedLifecycleStatus,
     };
 
+    const isEditingExistingRecord = Boolean(editingProjectId);
+    const isNewEventCreate = savedProject.isEvent && !isEditingExistingRecord;
+
+    if (isNewEventCreate) {
+      setProjects(currentProjects => {
+        const existingIndex = currentProjects.findIndex(project => project.id === savedProject.id);
+        if (existingIndex >= 0) {
+          const nextProjects = [...currentProjects];
+          nextProjects[existingIndex] = savedProject;
+          return nextProjects;
+        }
+
+        return [...currentProjects, savedProject];
+      });
+      setActionLoadingKey(null);
+      closeProjectModal();
+      showTaskSaveNotice('Event created. The new event is now visible.', 1200);
+
+      void saveProjectLikeRecord(savedProject).catch(error => {
+        setProjects(currentProjects => currentProjects.filter(project => project.id !== savedProject.id));
+        Alert.alert(
+          getRequestErrorTitle(error),
+          getRequestErrorMessage(error, 'Failed to save project.')
+        );
+      });
+      return;
+    }
+
     try {
       await saveProjectLikeRecord(savedProject);
       await loadProjects();
       setActionLoadingKey(null);
-      const isEditingExistingRecord = Boolean(editingProjectId);
       const successTitle = isEditingExistingRecord
         ? savedProject.isEvent
           ? 'Event Edit Completed'
@@ -1620,41 +1735,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             : 'Project edit completed. The project details were updated and saved successfully.'
         );
         Alert.alert(successTitle, successMessage);
+      } else if (savedProject.isEvent) {
+        closeProjectModal();
+        showTaskSaveNotice('Event created. The new event was saved and is now visible in the live project flow.');
       } else {
         setIsProjectSaveSuccess(true);
         Alert.alert(successTitle, successMessage);
-      }
-
-      // For new events, keep the modal open and reset the form for adding another event
-      if (savedProject.isEvent && !isEditingExistingRecord) {
-        setTimeout(() => {
-          setIsProjectSaveSuccess(false);
-          setProjectSaveError(null);
-          // Reset the form to create another event with the same parent project
-          const parentProject = projects.find(p => p.id === savedProject.parentProjectId && !p.isEvent);
-          if (parentProject) {
-            const nextDraft = createEmptyProjectDraft(
-              parentProject.partnerId,
-              getProjectDraftModule(parentProject) as AdvocacyFocus,
-              true,
-              'Quarterly Assessment',
-              'Quarterly Assessment event for program coordination, announcements, and assigning tasks to the event team.',
-              parentProject.id
-            );
-            nextDraft.imageUrl = parentProject.imageUrl || '';
-            nextDraft.imageHidden = Boolean(parentProject.imageHidden);
-            nextDraft.address = parentProject.location.address || '';
-            nextDraft.latitude = String(parentProject.location.latitude || '');
-            nextDraft.longitude = String(parentProject.location.longitude || '');
-            nextDraft.skillsNeeded = Array.isArray(parentProject.skillsNeeded)
-              ? parentProject.skillsNeeded
-              : [];
-            setProjectDraft(nextDraft);
-            resetProjectLocationSelection();
-            applyProjectLocationSelectionFromAddress(parentProject.location.address || '');
-          }
-        }, 1800);
-      } else if (!isEditingExistingRecord) {
         void loadAllPartnerApplications();
       }
     } catch (error) {
@@ -1778,20 +1864,31 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   ) => {
     if (!isAdmin || !user?.id) return;
 
+    const previousApplications = allPartnerApplications;
+    const now = new Date().toISOString();
+    setAllPartnerApplications(currentApplications =>
+      currentApplications.map(application =>
+        application.id === applicationId
+          ? {
+            ...application,
+            status: nextStatus,
+            reviewedAt: now,
+            reviewedBy: user.id,
+          }
+          : application
+      )
+    );
+    showTaskSaveNotice(
+      `Project proposal ${nextStatus === 'Approved' ? 'approved' : 'rejected'}.`,
+      1200
+    );
+
     try {
       await reviewPartnerProjectApplication(applicationId, nextStatus, user.id);
-      await Promise.all([
-        loadAllPartnerApplications(),
-        loadProjects(),
-      ]);
-      if (selectedProject) {
-        const refreshedProject = await getAllProjects();
-        const nextSelectedProject =
-          refreshedProject.find(project => project.id === selectedProject.id) || null;
-        setSelectedProject(nextSelectedProject);
-      }
-      Alert.alert('Success', `Project proposal ${nextStatus.toLowerCase()}. The partner has been notified.`);
+      void loadAllPartnerApplications();
+      void loadProjects();
     } catch (error) {
+      setAllPartnerApplications(previousApplications);
       Alert.alert(
         getRequestErrorTitle(error),
         getRequestErrorMessage(error, 'Failed to review partner application.')
@@ -1804,11 +1901,27 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       return;
     }
 
+    const previousReports = partnerReports;
+    const now = new Date().toISOString();
+    setPartnerReports(currentReports =>
+      currentReports.map(report =>
+        report.id === reportId
+          ? {
+            ...report,
+            status: 'Reviewed',
+            reviewedAt: now,
+            reviewedBy: user.id,
+          }
+          : report
+      )
+    );
+    showTaskSaveNotice('Partner report marked as reviewed.', 1200);
+
     try {
       await reviewPartnerReport(reportId, user.id);
-      await loadPartnerReportsForProject(selectedProject.id);
-      Alert.alert('Reviewed', 'Partner report marked as reviewed.');
+      void loadPartnerReportsForProject(selectedProject.id);
     } catch (error) {
+      setPartnerReports(previousReports);
       Alert.alert(
         getRequestErrorTitle(error),
         getRequestErrorMessage(error, 'Failed to review the partner report.')
@@ -1901,15 +2014,48 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       return;
     }
 
+    const previousJoinRecords = volunteerJoinRecords;
+    const previousVolunteerMatches = volunteerMatches;
+    const previousAllVolunteerMatches = allVolunteerMatches;
+    const now = new Date().toISOString();
+    setVolunteerJoinRecords(currentRecords =>
+      currentRecords.map(record =>
+        record.projectId === selectedProject.id && record.volunteerId === volunteerId
+          ? {
+            ...record,
+            participationStatus: 'Completed',
+            completedAt: now,
+            completedBy: user.id,
+          }
+          : record
+      )
+    );
+    setVolunteerMatches(currentMatches =>
+      currentMatches.map(match =>
+        match.projectId === selectedProject.id && match.volunteerId === volunteerId
+          ? { ...match, status: 'Completed' }
+          : match
+      )
+    );
+    setAllVolunteerMatches(currentMatches =>
+      currentMatches.map(match =>
+        match.projectId === selectedProject.id && match.volunteerId === volunteerId
+          ? { ...match, status: 'Completed' }
+          : match
+      )
+    );
+    showTaskSaveNotice('Volunteer marked as completed for this program.', 1200);
+
     try {
       await completeVolunteerProjectParticipation(selectedProject.id, volunteerId, user.id);
-      await Promise.all([
-        loadVolunteerJoinsForProject(selectedProject.id),
-        loadVolunteers(),
-        loadVolunteerMatchesForProject(selectedProject.id),
-      ]);
-      Alert.alert('Success', 'Volunteer marked as completed for this program.');
+      void loadVolunteerJoinsForProject(selectedProject.id);
+      void loadVolunteers();
+      void loadVolunteerMatchesForProject(selectedProject.id);
+      void loadAllVolunteerMatches();
     } catch (error) {
+      setVolunteerJoinRecords(previousJoinRecords);
+      setVolunteerMatches(previousVolunteerMatches);
+      setAllVolunteerMatches(previousAllVolunteerMatches);
       Alert.alert(
         getRequestErrorTitle(error),
         getRequestErrorMessage(error, 'Failed to complete volunteer participation.')
@@ -1918,29 +2064,83 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   };
 
   const handleReviewVolunteerRequest = async (
-    matchId: string,
+    requestEntry: ProjectVolunteerRequestEntry,
     nextStatus: 'Matched' | 'Rejected'
   ) => {
     if (!isAdmin || !user?.id || !selectedProject) {
       return;
     }
 
+    const previousVolunteerMatches = volunteerMatches;
+    const previousAllVolunteerMatches = allVolunteerMatches;
+    const previousJoinRecords = volunteerJoinRecords;
+    const now = new Date().toISOString();
+    const optimisticMatchUpdater = (match: VolunteerProjectMatch) =>
+      match.id === requestEntry.id
+        ? {
+          ...match,
+          status: nextStatus,
+          reviewedAt: now,
+          reviewedBy: user.id,
+        }
+        : match;
+    setVolunteerMatches(currentMatches => currentMatches.map(optimisticMatchUpdater));
+    setAllVolunteerMatches(currentMatches => currentMatches.map(optimisticMatchUpdater));
+
+    if (nextStatus === 'Matched') {
+      const optimisticJoinRecord: VolunteerProjectJoinRecord = {
+        id: `volunteer-join-${selectedProject.id}-${requestEntry.volunteerId}`,
+        projectId: selectedProject.id,
+        volunteerId: requestEntry.volunteerId,
+        volunteerUserId: requestEntry.volunteerUserId,
+        volunteerName: requestEntry.volunteerName,
+        volunteerEmail: requestEntry.volunteerEmail,
+        joinedAt: now,
+        source: 'AdminMatch',
+        participationStatus: 'Active',
+      };
+
+      setVolunteerJoinRecords(currentRecords => {
+        const existingIndex = currentRecords.findIndex(
+          record =>
+            record.projectId === selectedProject.id &&
+            record.volunteerId === requestEntry.volunteerId
+        );
+        if (existingIndex >= 0) {
+          const nextRecords = [...currentRecords];
+          nextRecords[existingIndex] = {
+            ...nextRecords[existingIndex],
+            volunteerUserId: optimisticJoinRecord.volunteerUserId,
+            volunteerName: optimisticJoinRecord.volunteerName,
+            volunteerEmail: optimisticJoinRecord.volunteerEmail,
+            source: optimisticJoinRecord.source,
+            participationStatus: nextRecords[existingIndex].participationStatus || 'Active',
+          };
+          return nextRecords;
+        }
+
+        return [...currentRecords, optimisticJoinRecord];
+      });
+    }
+
+    showTaskSaveNotice(
+      nextStatus === 'Matched'
+        ? 'Volunteer approved and notified.'
+        : 'Volunteer request rejected and volunteer notified.',
+      1200
+    );
+
     try {
-      await reviewVolunteerProjectMatch(matchId, nextStatus, user.id);
-      await Promise.all([
-        loadAllVolunteerMatches(),
-        loadVolunteerMatchesForProject(selectedProject.id),
-        loadVolunteerJoinsForProject(selectedProject.id),
-        loadVolunteers(),
-        loadProjects(),
-      ]);
-      Alert.alert(
-        'Success',
-        nextStatus === 'Matched'
-          ? 'Volunteer approved and notified.'
-          : 'Volunteer request rejected and volunteer notified.'
-      );
+      await reviewVolunteerProjectMatch(requestEntry.id, nextStatus, user.id);
+      void loadAllVolunteerMatches();
+      void loadVolunteerMatchesForProject(selectedProject.id);
+      void loadVolunteerJoinsForProject(selectedProject.id);
+      void loadVolunteers();
+      void loadProjects();
     } catch (error) {
+      setVolunteerMatches(previousVolunteerMatches);
+      setAllVolunteerMatches(previousAllVolunteerMatches);
+      setVolunteerJoinRecords(previousJoinRecords);
       Alert.alert(
         getRequestErrorTitle(error),
         getRequestErrorMessage(error, 'Failed to review volunteer request.')
@@ -1952,33 +2152,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     requestEntry: ProjectVolunteerRequestEntry,
     nextStatus: 'Matched' | 'Rejected'
   ) => {
-    const actionLabel = nextStatus === 'Matched' ? 'Approve' : 'Reject';
-    const message =
-      nextStatus === 'Matched'
-        ? `Allow ${requestEntry.volunteerName} to join this program? The volunteer will be notified.`
-        : `Reject ${requestEntry.volunteerName}'s join request? The volunteer will be notified.`;
-
-    if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof window.confirm === 'function') {
-      if (window.confirm(message)) {
-        void handleReviewVolunteerRequest(requestEntry.id, nextStatus);
-      }
-      return;
-    }
-
-    Alert.alert(
-      `${actionLabel} Volunteer Request`,
-      message,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: actionLabel,
-          style: nextStatus === 'Rejected' ? 'destructive' : 'default',
-          onPress: () => {
-            void handleReviewVolunteerRequest(requestEntry.id, nextStatus);
-          },
-        },
-      ]
-    );
+    void handleReviewVolunteerRequest(requestEntry, nextStatus);
   };
 
   // Counts pending volunteer requests per project for list badges.
@@ -2471,6 +2645,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             <View style={[styles.programSuiteProjectsHeader, { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }]}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.programSuiteProjectsTitle}>{section.title} Projects</Text>
+                {section.context ? (
+                  <Text style={[styles.programSuiteProjectsMeta, { marginBottom: 4 }]}>
+                    {section.context}
+                  </Text>
+                ) : null}
                 <Text style={styles.programSuiteProjectsMeta}>
                   Open a project to see the events that belong to it, plus its event dashboard and task board.
                 </Text>
@@ -2532,7 +2711,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               <View>
                 <View style={styles.list}>
                   {sectionProjects.map(project => (
-                    <View key={project.id} style={{ position: 'relative' }}>
+                    <View
+                      key={project.id}
+                      style={[
+                        styles.projectCardWrap,
+                        isDesktop ? styles.projectCardWrapDesktop : styles.projectCardWrapMobile,
+                      ]}
+                    >
                       {renderProjectCard(project)}
                       {isAdmin && (
                         <View style={{ position: 'absolute', top: 10, right: 10, flexDirection: 'row', gap: 6 }}>
@@ -2651,7 +2836,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               <Text style={{ fontSize: 13, fontWeight: '600', color: '#374151', marginBottom: 6 }}>Program Name *</Text>
               <TextInput
                 style={{ borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, padding: 12, fontSize: 15, color: '#1e293b', marginBottom: 16 }}
-                placeholder="e.g. Community Health 2026"
+                placeholder="e.g. Community Health Outreach"
                 value={programDraft.title}
                 onChangeText={v => setProgramDraft(d => ({ ...d, title: v }))}
                 autoFocus={!editingProgramId}
@@ -2661,10 +2846,18 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               <Text style={{ fontSize: 13, fontWeight: '600', color: '#374151', marginBottom: 6 }}>Description</Text>
               <TextInput
                 style={{ borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, padding: 12, fontSize: 14, color: '#1e293b', marginBottom: 16, minHeight: 72, textAlignVertical: 'top' }}
-                placeholder="Brief description of this program..."
+                placeholder="e.g. Health missions, wellness drives, and barangay-based care projects."
                 value={programDraft.description}
                 onChangeText={v => setProgramDraft(d => ({ ...d, description: v }))}
                 multiline
+              />
+
+              <Text style={{ fontSize: 13, fontWeight: '600', color: '#374151', marginBottom: 6 }}>Program Context</Text>
+              <TextInput
+                style={{ borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, padding: 12, fontSize: 14, color: '#1e293b', marginBottom: 16 }}
+                placeholder="e.g. Low-income families in coastal barangays"
+                value={programDraft.context}
+                onChangeText={v => setProgramDraft(d => ({ ...d, context: v }))}
               />
 
               {/* Color */}
@@ -3158,6 +3351,62 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             <Text style={[styles.labelRight, styles.labelTop]}>Skills</Text>
           </View>
 
+          {!projectDraft.isEvent ? (
+            <>
+              <View style={[styles.formRow, styles.formRowTop, styles.formRowReverse]}>
+                <TextInput
+                  style={[styles.textArea, styles.inputWithLabel]}
+                  placeholder="Describe the community need"
+                  placeholderTextColor="#999"
+                  multiline
+                  value={projectDraft.communityNeed}
+                  onChangeText={value => handleProjectDraftChange('communityNeed', value)}
+                />
+                <Text style={[styles.labelRight, styles.labelTop]}>Community Need</Text>
+              </View>
+
+              <View style={[styles.formRow, styles.formRowTop, styles.formRowReverse]}>
+                <TextInput
+                  style={[styles.textArea, styles.inputWithLabel]}
+                  placeholder="Describe the expected deliverables"
+                  placeholderTextColor="#999"
+                  multiline
+                  value={projectDraft.expectedDeliverables}
+                  onChangeText={value => handleProjectDraftChange('expectedDeliverables', value)}
+                />
+                <Text style={[styles.labelRight, styles.labelTop]}>Expected Deliverables</Text>
+              </View>
+
+              <View style={[styles.formRow, styles.formRowTop, styles.formRowReverse]}>
+                <View style={[styles.statusOptionsCard, styles.inputWithLabel]}>
+                  <Text style={styles.helperPanelTitle}>Document Attachment</Text>
+                  <Text style={styles.helperPanelText}>
+                    Keep the project document aligned with the approved proposal file.
+                  </Text>
+                  {projectDraft.attachmentUrl ? (
+                    <View style={styles.projectDocumentCard}>
+                      <View style={styles.projectDocumentMeta}>
+                        <MaterialIcons name="description" size={20} color="#166534" />
+                        <Text style={styles.projectDocumentName} numberOfLines={1}>
+                          {projectDraft.attachmentUrl.split('/').pop() || 'Attached document'}
+                        </Text>
+                      </View>
+                      <TouchableOpacity onPress={handleRemoveProjectDocument}>
+                        <Text style={styles.projectDocumentRemoveText}>Remove</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ) : (
+                    <TouchableOpacity style={styles.projectDocumentButton} onPress={handlePickProjectDocument}>
+                      <MaterialIcons name="attach-file" size={18} color="#166534" />
+                      <Text style={styles.projectDocumentButtonText}>Upload Document</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+                <Text style={[styles.labelRight, styles.labelTop]}>Document</Text>
+              </View>
+            </>
+          ) : null}
+
           <TouchableOpacity
             style={styles.submitButton}
             onPress={handleSaveProjectRecord}
@@ -3205,12 +3454,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   const renderProgramProposalModal = () => {
     const module = selectedProgramProposalModule;
-    const proposalProjectId = module ? buildProgramProposalProjectId(module) : '';
     const pendingProposal =
       module && showProgramProposalModal
         ? allPartnerApplications.find(
-          application =>
-            application.projectId === proposalProjectId && application.status === 'Pending'
+            application =>
+              application.status === 'Pending' &&
+              getProgramModuleFromProposalProjectId(application.projectId) === module
         ) || null
         : null;
 
@@ -3515,11 +3764,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     () =>
       activeProgramTracks.map(track => {
         const module = String(track.id).trim();
-        const proposalProjectId = buildProgramProposalProjectId(module);
         const pendingProposalApplication =
           allPartnerApplications.find(
             application =>
-              application.projectId === proposalProjectId && application.status === 'Pending'
+              application.status === 'Pending' &&
+              getProgramModuleFromProposalProjectId(application.projectId) === module
           ) || null;
         const sectionProjects = projects
           .filter(project => getProgramSuiteModuleForProject(project, activeProgramTrackIds) === module)
@@ -3529,6 +3778,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           module,
           title: track.title || module,
           description: track.description || '',
+          context: track.context || '',
           icon: normalizeProgramTrackIcon(track.icon),
           accent: normalizeProgramTrackColor(track.color),
           surface: '#f5f3ff',
@@ -3667,6 +3917,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     const detailWorkspaceCaption = activeSelectedProject.isEvent
       ? 'Track staffing, schedule, and delivery activity from a single event workspace.'
       : 'Review program setup, delivery details, and volunteer coverage in one place.';
+    const projectAttachments = Array.isArray(activeSelectedProject.attachments)
+      ? activeSelectedProject.attachments.filter(
+        attachment => Boolean(String(attachment?.url || '').trim())
+      )
+      : [];
     const heroHighlights = [
       {
         icon: 'calendar-month' as const,
@@ -3842,16 +4097,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       : [];
 
     return (
-      <ScrollView style={styles.container} contentContainerStyle={styles.detailsScreenContent}>
-        {taskSaveNotice ? (
-          <View style={styles.taskSaveNotice}>
-            <MaterialIcons name="check-circle" size={20} color="#166534" />
-            <Text style={styles.taskSaveNoticeText}>{taskSaveNotice}</Text>
-            <TouchableOpacity style={styles.taskSaveNoticeButton} onPress={() => setTaskSaveNotice(null)}>
-              <Text style={styles.taskSaveNoticeButtonText}>OK</Text>
-            </TouchableOpacity>
-          </View>
-        ) : null}
+      <View style={styles.screenShell}>
+        {renderTaskSaveToast()}
+        <ScrollView style={styles.container} contentContainerStyle={styles.detailsScreenContent}>
         <View style={styles.detailsHeaderBar}>
           <TouchableOpacity style={styles.detailsBackButton} onPress={handleReturnToProjectList}>
             <MaterialIcons name="arrow-back" size={18} color="#0f172a" />
@@ -4093,6 +4341,67 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               ))}
             </View>
           </View>
+
+          {!activeSelectedProject.isEvent ? (
+            <View style={[styles.detailsSection, styles.detailsSectionCard]}>
+              <Text style={styles.sectionTitle}>Proposal Alignment</Text>
+              <Text style={styles.sectionHint}>These fields stay aligned with the approved proposal details.</Text>
+
+              <View style={styles.projectNarrativeCard}>
+                <Text style={styles.detailFieldLabel}>Community Need</Text>
+                <Text style={styles.projectNarrativeText}>
+                  {activeSelectedProject.communityNeed?.trim() || 'No community need recorded.'}
+                </Text>
+              </View>
+
+              <View style={styles.projectNarrativeCard}>
+                <Text style={styles.detailFieldLabel}>Expected Deliverables</Text>
+                <Text style={styles.projectNarrativeText}>
+                  {activeSelectedProject.expectedDeliverables?.trim() || 'No expected deliverables recorded.'}
+                </Text>
+              </View>
+
+              <View style={styles.projectNarrativeCard}>
+                <Text style={styles.detailFieldLabel}>Attachments</Text>
+                {projectAttachments.length > 0 ? (
+                  <View style={styles.projectAttachmentList}>
+                    {projectAttachments.map((attachment, index) => {
+                      const isImageAttachment =
+                        attachment.type === 'image' || isImageMediaUri(attachment.url);
+                      return (
+                        <View key={`${attachment.url}-${index}`} style={styles.projectAttachmentCard}>
+                          {isImageAttachment ? (
+                            <Image source={{ uri: attachment.url }} style={styles.projectAttachmentPreviewImage} />
+                          ) : (
+                            <View style={styles.projectAttachmentPreviewFile}>
+                              <MaterialIcons name="description" size={26} color="#166534" />
+                            </View>
+                          )}
+                          <View style={styles.projectAttachmentInfo}>
+                            <Text style={styles.projectAttachmentTitle}>
+                              {getProjectAttachmentName(attachment.url, index)}
+                            </Text>
+                            <Text style={styles.projectAttachmentMeta}>
+                              {isImageAttachment ? 'Project photo' : 'Project document'}
+                            </Text>
+                            <TouchableOpacity
+                              style={styles.projectAttachmentAction}
+                              onPress={() => void handleOpenProjectAttachment(attachment.url, index)}
+                            >
+                              <MaterialIcons name="download" size={16} color="#166534" />
+                              <Text style={styles.projectAttachmentActionText}>Open or Download</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </View>
+                ) : (
+                  <Text style={styles.projectNarrativeText}>No project attachments uploaded.</Text>
+                )}
+              </View>
+            </View>
+          ) : null}
 
           <View
             style={[
@@ -5014,27 +5323,21 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         {renderProgramProposalModal()}
         {renderProjectEditorModal()}
       </ScrollView>
+      </View>
     );
   }
 
   return (
-    <ScrollView
-      ref={listScrollViewRef}
-      style={styles.container}
-      onScroll={event => {
-        listScrollOffsetRef.current = event.nativeEvent.contentOffset.y;
-      }}
-      scrollEventThrottle={16}
-    >
-      {taskSaveNotice ? (
-        <View style={styles.taskSaveNotice}>
-          <MaterialIcons name="check-circle" size={20} color="#166534" />
-          <Text style={styles.taskSaveNoticeText}>{taskSaveNotice}</Text>
-          <TouchableOpacity style={styles.taskSaveNoticeButton} onPress={() => setTaskSaveNotice(null)}>
-            <Text style={styles.taskSaveNoticeButtonText}>OK</Text>
-          </TouchableOpacity>
-        </View>
-      ) : null}
+    <View style={styles.screenShell}>
+      {renderTaskSaveToast()}
+      <ScrollView
+        ref={listScrollViewRef}
+        style={styles.container}
+        onScroll={event => {
+          listScrollOffsetRef.current = event.nativeEvent.contentOffset.y;
+        }}
+        scrollEventThrottle={16}
+      >
       <View style={styles.lifecycleHero}>
         <View style={styles.lifecycleHeroCopy}>
           <Text style={styles.lifecycleEyebrow}>Lifecycle workspace</Text>
@@ -5043,12 +5346,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             Open the active programs below and manage each scheduler, project list, volunteers, and approvals in one place.
           </Text>
         </View>
-        {isAdmin && (
-          <TouchableOpacity style={styles.createProjectButton} onPress={openCreateProjectModal}>
-            <MaterialIcons name="add" size={18} color="#fff" />
-            <Text style={styles.createProjectButtonText}>New Initiative</Text>
-          </TouchableOpacity>
-        )}
       </View>
 
       <View style={styles.lifecycleStatsRow}>
@@ -5424,6 +5721,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       {renderProgramCrudModal()}
       {renderProjectEditorModal()}
     </ScrollView>
+    </View>
   );
 }
 
@@ -5578,20 +5876,6 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     color: '#64748b',
   },
-  createProjectButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#166534',
-    borderRadius: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  createProjectButtonText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '700',
-  },
   programSuiteStack: {
     gap: 20,
     marginBottom: 20,
@@ -5674,6 +5958,18 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0.3,
   },
+  screenShell: {
+    flex: 1,
+    position: 'relative',
+  },
+  taskSaveToastOverlay: {
+    position: 'absolute',
+    top: 14,
+    left: 14,
+    right: 14,
+    zIndex: 50,
+    elevation: 12,
+  },
   taskSaveNotice: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -5685,6 +5981,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 12,
     marginBottom: 14,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
   },
   taskSaveNoticeText: {
     flex: 1,
@@ -6236,9 +6536,19 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 10,
+    gap: 18,
     alignItems: 'flex-start',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start',
+  },
+  projectCardWrap: {
+    position: 'relative',
+    flexShrink: 0,
+  },
+  projectCardWrapDesktop: {
+    width: '48.8%',
+  },
+  projectCardWrapMobile: {
+    width: '48%',
   },
   emptyState: {
     alignItems: 'center',
@@ -6613,6 +6923,76 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
     color: '#64748b',
+  },
+  projectNarrativeCard: {
+    marginTop: 14,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#dbe2ea',
+    backgroundColor: '#f8fafc',
+    padding: 16,
+  },
+  projectNarrativeText: {
+    marginTop: 8,
+    fontSize: 14,
+    lineHeight: 22,
+    color: '#334155',
+  },
+  projectAttachmentList: {
+    gap: 14,
+    marginTop: 10,
+  },
+  projectAttachmentCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#dbe2ea',
+    backgroundColor: '#ffffff',
+    overflow: 'hidden',
+  },
+  projectAttachmentPreviewImage: {
+    width: '100%',
+    height: 220,
+    backgroundColor: '#e2e8f0',
+  },
+  projectAttachmentPreviewFile: {
+    width: '100%',
+    height: 110,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f0fdf4',
+    borderBottomWidth: 1,
+    borderBottomColor: '#dbe2ea',
+  },
+  projectAttachmentInfo: {
+    padding: 14,
+    gap: 6,
+  },
+  projectAttachmentTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  projectAttachmentMeta: {
+    fontSize: 12,
+    color: '#64748b',
+  },
+  projectAttachmentAction: {
+    marginTop: 6,
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 12,
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1,
+    borderColor: '#86efac',
+  },
+  projectAttachmentActionText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#166534',
   },
   timelineDetails: {
     flexDirection: 'row',
@@ -7926,6 +8306,54 @@ const styles = StyleSheet.create({
     color: '#0F766E',
     fontSize: 12,
     fontWeight: '700',
+  },
+  projectDocumentButton: {
+    marginTop: 6,
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#86efac',
+    backgroundColor: '#f0fdf4',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  projectDocumentButtonText: {
+    color: '#166534',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  projectDocumentCard: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    borderWidth: 1,
+    borderColor: '#dbe2ea',
+    borderRadius: 12,
+    backgroundColor: '#ffffff',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  projectDocumentMeta: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  projectDocumentName: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  projectDocumentRemoveText: {
+    color: '#dc2626',
+    fontSize: 12,
+    fontWeight: '800',
   },
   projectImageRemoveButton: {
     flexDirection: 'row',

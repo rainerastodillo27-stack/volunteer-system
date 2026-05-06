@@ -33,6 +33,7 @@ import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestEr
 export default function VolunteerManagementScreen({ navigation, route }: any) {
   const { user, isAdmin } = useAuth();
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const hasInitialVolunteerId = Boolean(route?.params?.volunteerId);
@@ -45,6 +46,18 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   const [daysPerWeek, setDaysPerWeek] = useState('3');
   const [hoursPerWeek, setHoursPerWeek] = useState('12');
   const [availableDays, setAvailableDays] = useState<string[]>(['Monday', 'Wednesday', 'Saturday']);
+
+  useEffect(() => {
+    if (!actionNotice) {
+      return undefined;
+    }
+
+    const timer = setTimeout(() => {
+      setActionNotice(null);
+    }, 1500);
+
+    return () => clearTimeout(timer);
+  }, [actionNotice]);
 
   useEffect(() => {
     if (!isAdmin) {
@@ -200,13 +213,30 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
 
     if (!selectedVolunteer) return;
 
-    try {
-      await assignVolunteerToProject(projectId, selectedVolunteer.id, user?.id || '');
-      Alert.alert('Success', 'Volunteer assigned to event and notified.');
+    const previousVolunteerMatches = volunteerMatches;
+    const now = new Date().toISOString();
+    const optimisticMatch: VolunteerProjectMatch = {
+      id: `match-${Date.now()}`,
+      volunteerId: selectedVolunteer.id,
+      projectId,
+      status: 'Matched',
+      requestedAt: undefined,
+      matchedAt: now,
+      reviewedAt: now,
+      reviewedBy: user?.id || '',
+      hoursContributed: 0,
+    };
+    setVolunteerMatches(currentMatches => [...currentMatches, optimisticMatch]);
+    setActionNotice('Volunteer assigned to event and notified.');
 
-      const matches = await getVolunteerProjectMatches(selectedVolunteer.id);
-      setVolunteerMatches(matches);
+    try {
+      const savedMatch = await assignVolunteerToProject(projectId, selectedVolunteer.id, user?.id || '');
+      setVolunteerMatches(currentMatches =>
+        currentMatches.map(match => (match.id === optimisticMatch.id ? savedMatch : match))
+      );
+      void loadSelectedVolunteerDetails(selectedVolunteer.id);
     } catch (error) {
+      setVolunteerMatches(previousVolunteerMatches);
       Alert.alert(
         getRequestErrorTitle(error),
         getRequestErrorMessage(error, 'Failed to match volunteer.')
@@ -223,6 +253,9 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
 
     if (!selectedVolunteer) return;
 
+    const previousVolunteers = volunteers;
+    const previousSelectedVolunteer = selectedVolunteer;
+
     try {
       const updated = {
         ...selectedVolunteer,
@@ -233,12 +266,18 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
         },
       };
 
-      await saveVolunteer(updated);
-      Alert.alert('Success', 'Availability updated');
-      closeAvailabilityModal();
+      setVolunteers(currentVolunteers =>
+        currentVolunteers.map(volunteer => (volunteer.id === updated.id ? updated : volunteer))
+      );
       setSelectedVolunteer(updated);
-      loadVolunteers();
+      closeAvailabilityModal();
+      setActionNotice('Availability updated.');
+
+      await saveVolunteer(updated);
+      void loadVolunteers();
     } catch (error) {
+      setVolunteers(previousVolunteers);
+      setSelectedVolunteer(previousSelectedVolunteer);
       Alert.alert(
         getRequestErrorTitle(error),
         getRequestErrorMessage(error, 'Failed to update availability.')
@@ -401,6 +440,13 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
           <Text style={styles.title}>Volunteer Profile</Text>
           <View style={{ width: 24 }} />
         </View>
+
+        {actionNotice ? (
+          <View style={styles.noticeBanner}>
+            <MaterialIcons name="check-circle" size={18} color="#166534" />
+            <Text style={styles.noticeBannerText}>{actionNotice}</Text>
+          </View>
+        ) : null}
 
         <View style={styles.card}>
           <View style={styles.avatarSection}>
@@ -788,6 +834,12 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
           <Text style={styles.reportButtonText}>Download Hours Report</Text>
         </TouchableOpacity>
       </View>
+      {actionNotice ? (
+        <View style={styles.noticeBanner}>
+          <MaterialIcons name="check-circle" size={18} color="#166534" />
+          <Text style={styles.noticeBannerText}>{actionNotice}</Text>
+        </View>
+      ) : null}
       <View style={styles.listContent}>
         {loadError ? (
           <InlineLoadError
@@ -878,6 +930,25 @@ const styles = StyleSheet.create({
   reportButtonText: {
     color: '#fff',
     fontSize: 12,
+    fontWeight: '700',
+  },
+  noticeBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#86efac',
+    backgroundColor: '#dcfce7',
+  },
+  noticeBannerText: {
+    flex: 1,
+    color: '#14532d',
+    fontSize: 13,
     fontWeight: '700',
   },
   registrationSummaryCard: {

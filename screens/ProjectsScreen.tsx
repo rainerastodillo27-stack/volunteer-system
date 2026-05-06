@@ -17,6 +17,7 @@ import InlineLoadError from '../components/InlineLoadError';
 import { useAuth } from '../contexts/AuthContext';
 import {
   buildProgramProposalProjectId,
+  getProgramModuleFromProposalProjectId,
   getAllVolunteers,
   getProjectsScreenSnapshot,
   getVolunteerProjectMatches,
@@ -113,6 +114,20 @@ function hasEventStartedForToday(startValue?: string, now: Date = new Date()): b
   const startDay = new Date(startDate);
   startDay.setHours(0, 0, 0, 0);
   return now >= startDay;
+}
+
+function getLocalDateKey(value?: string, now: Date = new Date()): string {
+  const date = value ? new Date(value) : now;
+  if (Number.isNaN(date.getTime())) {
+    const fallback = new Date(now);
+    const month = String(fallback.getMonth() + 1).padStart(2, '0');
+    const day = String(fallback.getDate()).padStart(2, '0');
+    return `${fallback.getFullYear()}-${month}-${day}`;
+  }
+
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
 }
 
 function createPartnerProposalDraft(project: Project): PartnerProposalDraft {
@@ -248,8 +263,13 @@ function getProjectImageSources(project: Project): ImageSourcePropType[] {
   }
 
   const imageSources: ImageSourcePropType[] = [];
-  if (isImageMediaUri(project.imageUrl)) {
+  const hasUploadedProjectImage = isImageMediaUri(project.imageUrl);
+  if (hasUploadedProjectImage) {
     imageSources.push({ uri: project.imageUrl });
+  }
+  const isProposalCreatedProject = String(project.id || '').startsWith('project-proposal-');
+  if (isProposalCreatedProject && !hasUploadedProjectImage) {
+    return imageSources;
   }
 
   if (project.programModule && project.programModule in PROGRAM_IMAGE_BY_CATEGORY) {
@@ -692,11 +712,15 @@ export default function ProjectsScreen({ navigation, route }: any) {
       partnerApplications.forEach(application => {
         byProjectId.set(application.projectId, application);
 
-        const requestedProgramModule = application.projectId.startsWith('program:')
-          ? application.projectId.slice('program:'.length).trim()
-          : '';
+        const requestedProgramModule = getProgramModuleFromProposalProjectId(application.projectId);
         if (requestedProgramModule) {
-          byProgramModule.set(requestedProgramModule, application);
+          const existing = byProgramModule.get(requestedProgramModule);
+          if (
+            !existing ||
+            new Date(application.requestedAt).getTime() > new Date(existing.requestedAt).getTime()
+          ) {
+            byProgramModule.set(requestedProgramModule, application);
+          }
         }
       });
 
@@ -709,7 +733,14 @@ export default function ProjectsScreen({ navigation, route }: any) {
   );
 
   const activeLogByProjectId = useMemo(
-    () => new Map(timeLogs.filter(log => !log.timeOut).map(log => [log.projectId, log])),
+    () => {
+      const todayKey = getLocalDateKey();
+      return new Map(
+        timeLogs
+          .filter(log => !log.timeOut && getLocalDateKey(log.timeIn) === todayKey)
+          .map(log => [log.projectId, log])
+      );
+    },
     [timeLogs]
   );
 
@@ -1626,7 +1657,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                                 ) : null}
                               </View>
 
-                                {eventJoined ? (
+                                {eventJoined && !event.groupChatDisabled ? (
                                 <TouchableOpacity
                                   style={styles.groupChatButton}
                                   onPress={() => handleOpenGroupChat(event.id)}
@@ -1889,7 +1920,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                         </View>
                       )}
 
-                      {joined ? (
+                      {joined && !item.groupChatDisabled ? (
                         <>
                           <TouchableOpacity
                             style={styles.groupChatButton}
@@ -1965,30 +1996,18 @@ export default function ProjectsScreen({ navigation, route }: any) {
                   <TouchableOpacity
                     style={[
                       styles.joinButton,
-                      partnerApplication && styles.joinButtonJoined,
                       loadingProjectId === item.id && styles.joinButtonLoading,
                     ]}
-                    disabled={!!partnerApplication || loadingProjectId === item.id}
+                    disabled={loadingProjectId === item.id}
                     onPress={() => handleJoinProject(item.id)}
                   >
                     <MaterialIcons
-                      name={partnerApplication ? 'hourglass-empty' : 'campaign'}
+                      name={partnerApplication ? 'add-business' : 'campaign'}
                       size={18}
-                      color={partnerApplication ? '#155724' : '#fff'}
+                      color="#fff"
                     />
-                    <Text
-                      style={[
-                        styles.joinButtonText,
-                        partnerApplication && styles.joinButtonTextJoined,
-                      ]}
-                    >
-                      {partnerApplication?.status === 'Pending'
-                        ? 'Proposal Pending'
-                        : partnerApplication?.status === 'Rejected'
-                        ? 'Proposal Rejected'
-                        : partnerApplication?.status === 'Approved'
-                        ? 'Proposal Approved'
-                        : 'Submit Proposal'}
+                    <Text style={styles.joinButtonText}>
+                      {partnerApplication ? 'Submit Another Proposal' : 'Submit Proposal'}
                     </Text>
                   </TouchableOpacity>
                   {partnerApplication && (
@@ -2713,7 +2732,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                     </TouchableOpacity>
                   ) : null}
 
-                  {selectedEventActionState.joined ? (
+                  {selectedEventActionState.joined && !selectedEvent.groupChatDisabled ? (
                     <TouchableOpacity
                       style={styles.groupChatButton}
                       onPress={() => handleOpenGroupChat(selectedEvent.id)}

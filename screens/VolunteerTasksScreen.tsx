@@ -16,6 +16,7 @@ import { useAuth } from '../contexts/AuthContext';
 import {
   getAllVolunteers,
   getAllProjects,
+  getAllVolunteerTimeLogs,
   getVolunteerByUserId,
   getVolunteerProjectJoinRecords,
   getVolunteerTimeLogs,
@@ -138,6 +139,34 @@ function getFieldOfficerEventBucket(project: Project): Exclude<FieldOfficerFilte
   }
 }
 
+function getCompletedLogMinutes(log: VolunteerTimeLog): number {
+  if (!log.timeOut) {
+    return 0;
+  }
+
+  const start = new Date(log.timeIn).getTime();
+  const end = new Date(log.timeOut).getTime();
+  if (Number.isNaN(start) || Number.isNaN(end) || end <= start) {
+    return 0;
+  }
+
+  return Math.round((end - start) / (1000 * 60));
+}
+
+function formatVolunteerTime(totalMinutes: number): string {
+  if (totalMinutes <= 0) {
+    return '0h';
+  }
+
+  if (totalMinutes < 60) {
+    return `${totalMinutes}m`;
+  }
+
+  const hours = totalMinutes / 60;
+  const roundedHours = hours >= 10 ? Math.round(hours) : Math.round(hours * 10) / 10;
+  return `${roundedHours}h`;
+}
+
 function getTrackedTaskStatus(
   task: ProjectInternalTask,
   project: Project,
@@ -160,7 +189,10 @@ function getTrackedTaskStatus(
     };
   }
 
-  const activeLog = timeLogs.find(log => !log.timeOut);
+  const todayKey = getLocalDateKey();
+  const activeLog = timeLogs.find(
+    log => !log.timeOut && getLocalDateKey(log.timeIn) === todayKey
+  );
   if (activeLog) {
     return {
       status: 'In Progress',
@@ -218,9 +250,10 @@ function getTaskEventAttendanceState(
       new Date(right.timeOut || right.timeIn).getTime() -
       new Date(left.timeOut || left.timeIn).getTime()
   );
-  const activeLog = sortedLogs.find(log => !log.timeOut) || null;
-  const latestLog = sortedLogs[0] || null;
   const todayKey = getLocalDateKey();
+  const activeLog =
+    sortedLogs.find(log => !log.timeOut && getLocalDateKey(log.timeIn) === todayKey) || null;
+  const latestLog = sortedLogs[0] || null;
   const hasLoggedToday = sortedLogs.some(log => getLocalDateKey(log.timeIn) === todayKey);
   const eventHasNotStarted = !hasEventStartedForToday(project.startDate);
   const lifecycleStatus = getProjectDisplayStatus(project);
@@ -307,10 +340,13 @@ export default function VolunteerTasksScreen({ navigation }: any) {
   const [allVolunteers, setAllVolunteers] = useState<Volunteer[]>([]);
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
   const [volunteerTimeLogs, setVolunteerTimeLogs] = useState<VolunteerTimeLog[]>([]);
+  const [allVolunteerTimeLogs, setAllVolunteerTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedTask, setSelectedTask] = useState<AssignedTask | null>(null);
   const [showDetails, setShowDetails] = useState(false);
+  const [selectedTaskGroupProjectId, setSelectedTaskGroupProjectId] = useState<string | null>(null);
+  const [showTaskGroupDetails, setShowTaskGroupDetails] = useState(false);
   const [selectedManagedEventId, setSelectedManagedEventId] = useState<string | null>(null);
   const [showFieldOfficerBoard, setShowFieldOfficerBoard] = useState(false);
   const [filterStatus, setFilterStatus] = useState<'All' | 'Assigned' | 'In Progress' | 'Completed'>('All');
@@ -334,6 +370,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
         setAllVolunteers([]);
         setVolunteerProfile(null);
         setVolunteerTimeLogs([]);
+        setAllVolunteerTimeLogs([]);
         setVolunteerJoinRecords([]);
         setLoading(false);
         return;
@@ -357,6 +394,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       }, 50);
 
       let nextVolunteerTimeLogs: VolunteerTimeLog[] = [];
+      let nextAllVolunteerTimeLogs: VolunteerTimeLog[] = [];
       let nextVolunteerJoinRecords: VolunteerProjectJoinRecord[] = [];
 
       if (currentVolunteerProfile) {
@@ -374,6 +412,10 @@ export default function VolunteerTasksScreen({ navigation }: any) {
 
         nextVolunteerTimeLogs = await getVolunteerTimeLogs(currentVolunteerProfile.id).catch(error => {
           console.error('Error loading volunteer time logs for task tracking:', error);
+          return [];
+        });
+        nextAllVolunteerTimeLogs = await getAllVolunteerTimeLogs().catch(error => {
+          console.error('Error loading all volunteer time logs for task tracking:', error);
           return [];
         });
 
@@ -405,6 +447,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       setAllProjects(projects);
       setVolunteerProfile(currentVolunteerProfile);
       setVolunteerTimeLogs(nextVolunteerTimeLogs);
+      setAllVolunteerTimeLogs(nextAllVolunteerTimeLogs);
       setVolunteerJoinRecords(nextVolunteerJoinRecords);
       setTasks(nextTasks);
       setSelectedTask(current =>
@@ -421,6 +464,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       setAllVolunteers([]);
       setVolunteerProfile(null);
       setVolunteerTimeLogs([]);
+      setAllVolunteerTimeLogs([]);
       setVolunteerJoinRecords([]);
       setLoadError({
         title: getRequestErrorTitle(error, 'Database Unavailable'),
@@ -509,7 +553,13 @@ export default function VolunteerTasksScreen({ navigation }: any) {
   };
 
   const handleOpenTimeOutReport = (projectId: string) => {
-    const activeLog = volunteerTimeLogs.find(log => log.projectId === projectId && !log.timeOut);
+    const todayKey = getLocalDateKey();
+    const activeLog = volunteerTimeLogs.find(
+      log =>
+        log.projectId === projectId &&
+        !log.timeOut &&
+        getLocalDateKey(log.timeIn) === todayKey
+    );
     if (!activeLog) {
       Alert.alert('No active attendance', 'Time in first before opening the time out report.');
       return;
@@ -747,6 +797,12 @@ export default function VolunteerTasksScreen({ navigation }: any) {
   };
 
   const filteredTasks = filterStatus === 'All' ? tasks : tasks.filter(t => t.status === filterStatus);
+  const filterOptionLabels: Record<'All' | 'Assigned' | 'In Progress' | 'Completed', string> = {
+    All: 'All',
+    Assigned: 'Assigned',
+    'In Progress': 'In Progress',
+    Completed: 'Completed',
+  };
   const hasFieldOfficerAccess = fieldOfficerEvents.length > 0;
   const fieldOfficerEventCounts = useMemo(
     () => ({
@@ -807,6 +863,24 @@ export default function VolunteerTasksScreen({ navigation }: any) {
 
     return Array.from(groups.values()).sort((left, right) => left.projectTitle.localeCompare(right.projectTitle));
   }, [filteredTasks]);
+  const selectedTaskGroup = useMemo(
+    () => groupedFilteredTasks.find(group => group.projectId === selectedTaskGroupProjectId) || null,
+    [groupedFilteredTasks, selectedTaskGroupProjectId]
+  );
+  const selectedTaskGroupProject = useMemo(
+    () =>
+      allProjects.find(
+        project => project.id === selectedTaskGroupProjectId && project.isEvent
+      ) || null,
+    [allProjects, selectedTaskGroupProjectId]
+  );
+
+  const handleBackToTaskGroupDetails = () => {
+    setShowDetails(false);
+    if (selectedTaskGroupProjectId) {
+      setShowTaskGroupDetails(true);
+    }
+  };
 
   useEffect(() => {
     setShowAllFieldOfficerEvents(false);
@@ -1020,20 +1094,32 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       <>
       <View style={styles.taskSummaryRow}>
         <View style={styles.taskSummaryCard}>
+          <View style={styles.taskSummaryIconWrap}>
+            <MaterialIcons name="assignment" size={16} color="#166534" />
+          </View>
           <Text style={styles.taskSummaryValue}>{tasks.length}</Text>
-          <Text style={styles.taskSummaryLabel}>total tasks</Text>
+          <Text style={styles.taskSummaryLabel}>Total</Text>
         </View>
         <View style={styles.taskSummaryCard}>
+          <View style={styles.taskSummaryIconWrap}>
+            <MaterialIcons name="bookmark-added" size={16} color="#166534" />
+          </View>
           <Text style={styles.taskSummaryValue}>{assignedCount}</Text>
-          <Text style={styles.taskSummaryLabel}>assigned</Text>
+          <Text style={styles.taskSummaryLabel}>Assigned</Text>
         </View>
         <View style={styles.taskSummaryCard}>
+          <View style={styles.taskSummaryIconWrap}>
+            <MaterialIcons name="pending-actions" size={16} color="#166534" />
+          </View>
           <Text style={styles.taskSummaryValue}>{inProgressCount}</Text>
-          <Text style={styles.taskSummaryLabel}>in progress</Text>
+          <Text style={styles.taskSummaryLabel}>In Progress</Text>
         </View>
         <View style={styles.taskSummaryCard}>
+          <View style={styles.taskSummaryIconWrap}>
+            <MaterialIcons name="task-alt" size={16} color="#166534" />
+          </View>
           <Text style={styles.taskSummaryValue}>{completedCount}</Text>
-          <Text style={styles.taskSummaryLabel}>completed</Text>
+          <Text style={styles.taskSummaryLabel}>Completed</Text>
         </View>
       </View>
 
@@ -1050,7 +1136,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       ) : (
         <>
           <View style={styles.filterContainer}>
-            {['All', 'Assigned', 'In Progress', 'Completed'].map(status => (
+            {(['All', 'Assigned', 'In Progress', 'Completed'] as const).map(status => (
               <TouchableOpacity
                 key={status}
                 style={[styles.filterButton, filterStatus === status && styles.filterButtonActive]}
@@ -1062,7 +1148,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                     filterStatus === status && styles.filterButtonTextActive,
                   ]}
                 >
-                  {status}
+                  {filterOptionLabels[status]}
                 </Text>
               </TouchableOpacity>
             ))}
@@ -1071,176 +1157,103 @@ export default function VolunteerTasksScreen({ navigation }: any) {
           <View style={styles.taskListContent}>
             {groupedFilteredTasks.map(group => {
               const project = allProjects.find(entry => entry.id === group.projectId) || null;
-              const projectLogs = volunteerTimeLogs.filter(log => log.projectId === group.projectId);
-              const attendanceState = project
-                ? getTaskEventAttendanceState(project, true, projectLogs)
-                : null;
+              const assignedTaskCount = group.tasks.filter(task => task.status === 'Assigned').length;
+              const joinedVolunteerCount = project?.volunteers?.length || 0;
+              const eventAddress = project?.location.address || 'Event details available inside';
+              const eventLogs = allVolunteerTimeLogs.filter(log => log.projectId === group.projectId);
+              const attendanceCount = eventLogs.filter(log => Boolean(log.timeOut)).length;
+              const totalVolunteerMinutes = eventLogs.reduce(
+                (sum, log) => sum + getCompletedLogMinutes(log),
+                0
+              );
+              const eventStatus = project ? getProjectDisplayStatus(project) : 'Planning';
 
               return (
-                <View key={group.projectId} style={styles.taskGroupCard}>
+                <TouchableOpacity
+                  key={group.projectId}
+                  style={styles.taskGroupCard}
+                  activeOpacity={0.88}
+                  onPress={() => {
+                    setSelectedTaskGroupProjectId(group.projectId);
+                    setShowTaskGroupDetails(true);
+                  }}
+                >
                   <View style={styles.taskGroupHeader}>
                     <View style={styles.taskGroupCopy}>
-                      <Text style={styles.taskGroupTitle}>{group.projectTitle}</Text>
-                      <Text style={styles.taskGroupMeta}>
-                        {group.tasks.length} assigned task{group.tasks.length === 1 ? '' : 's'}
+                      <Text style={styles.taskGroupTitle} numberOfLines={2}>{group.projectTitle}</Text>
+                      <Text style={styles.taskGroupMeta} numberOfLines={1}>
+                        {group.tasks.length} task{group.tasks.length === 1 ? '' : 's'} in this event
                       </Text>
                     </View>
                     <View style={styles.taskGroupBadge}>
-                      <Text style={styles.taskGroupBadgeText}>Event tasks</Text>
+                      <Text style={styles.taskGroupBadgeText}>Open</Text>
                     </View>
                   </View>
 
-                  {project ? (
-                    <View style={styles.attendanceCard}>
-                      <View style={styles.attendanceCardHeader}>
-                        <View style={styles.attendanceCardCopy}>
-                          <Text style={styles.attendanceCardTitle}>Daily Attendance</Text>
-                          <Text style={styles.attendanceCardMeta}>
-                            {formatEventDateLabel(project.startDate, project.endDate)}
-                          </Text>
-                        </View>
-                        <View
-                          style={[
-                            styles.attendanceStatusBadge,
-                            attendanceState?.canTimeOut
-                              ? styles.attendanceStatusBadgeActive
-                              : attendanceState?.hasLoggedToday
-                              ? styles.attendanceStatusBadgeDone
-                              : styles.attendanceStatusBadgeIdle,
-                          ]}
-                        >
-                          <Text style={styles.attendanceStatusText}>
-                            {attendanceState?.canTimeOut
-                              ? 'Timed In'
-                              : attendanceState?.hasLoggedToday
-                              ? 'Done Today'
-                              : attendanceState?.eventHasEnded
-                              ? 'Closed'
-                              : 'Ready'}
-                          </Text>
-                        </View>
-                      </View>
-
-                      <Text style={styles.attendanceHelperText}>
-                        {attendanceState?.helperText || 'Attendance is unavailable for this event.'}
+                  <View style={styles.taskGroupMetaRow}>
+                    <View style={styles.taskGroupMetaChip}>
+                      <MaterialIcons name="calendar-month" size={14} color="#166534" />
+                      <Text style={styles.taskGroupMetaChipText} numberOfLines={1}>
+                        {project
+                          ? formatEventDateLabel(project.startDate, project.endDate)
+                          : 'Schedule pending'}
                       </Text>
-
-                      <View style={styles.attendanceLogRow}>
-                        <View style={styles.attendanceLogItem}>
-                          <Text style={styles.attendanceLogLabel}>Latest activity</Text>
-                          <Text style={styles.attendanceLogValue}>
-                            {attendanceState?.latestLog
-                              ? attendanceState.latestLog.timeOut
-                                ? `Time out ${formatTimestamp(attendanceState.latestLog.timeOut)}`
-                                : `Time in ${formatTimestamp(attendanceState.latestLog.timeIn)}`
-                              : 'No attendance yet'}
-                          </Text>
-                        </View>
-                        <View style={styles.attendanceLogItem}>
-                          <Text style={styles.attendanceLogLabel}>Today</Text>
-                          <Text style={styles.attendanceLogValue}>
-                            {attendanceState?.activeLog
-                              ? `Active since ${formatTimestamp(attendanceState.activeLog.timeIn)}`
-                              : attendanceState?.hasLoggedToday
-                              ? 'Completed for today'
-                              : 'Not started'}
-                          </Text>
-                        </View>
-                      </View>
-
-                      <View style={styles.attendanceActionRow}>
-                        <TouchableOpacity
-                          style={[
-                            styles.attendanceButton,
-                            styles.timeInButton,
-                            !attendanceState?.canTimeIn && styles.attendanceButtonDisabled,
-                          ]}
-                          onPress={() => void handleTimeInForProject(group.projectId)}
-                          disabled={!attendanceState?.canTimeIn}
-                        >
-                          <MaterialIcons name="login" size={18} color="#fff" />
-                          <Text style={styles.attendanceButtonText}>
-                            {attendanceState?.eventHasNotStarted
-                              ? 'Await Start'
-                              : attendanceState?.hasLoggedToday
-                              ? 'Done Today'
-                              : attendanceState?.eventHasEnded
-                              ? 'Closed'
-                              : 'Time In'}
-                          </Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                          style={[
-                            styles.attendanceButton,
-                            styles.timeOutButton,
-                            !attendanceState?.canTimeOut && styles.attendanceButtonDisabled,
-                          ]}
-                          onPress={() => handleOpenTimeOutReport(group.projectId)}
-                          disabled={!attendanceState?.canTimeOut}
-                        >
-                          <MaterialIcons name="logout" size={18} color="#fff" />
-                          <Text style={styles.attendanceButtonText}>
-                            {attendanceState?.canTimeOut ? 'Time Out' : 'Report First'}
-                          </Text>
-                        </TouchableOpacity>
-                      </View>
                     </View>
-                  ) : null}
+                    <View style={styles.taskGroupMetaChip}>
+                      <MaterialIcons name="groups" size={14} color="#166534" />
+                      <Text style={styles.taskGroupMetaChipText} numberOfLines={1}>
+                        {joinedVolunteerCount} volunteer{joinedVolunteerCount === 1 ? '' : 's'}
+                      </Text>
+                    </View>
+                    <View style={styles.taskGroupMetaChip}>
+                      <MaterialIcons name="location-on" size={14} color="#166534" />
+                      <Text style={styles.taskGroupMetaChipText} numberOfLines={1}>
+                        {eventAddress}
+                      </Text>
+                    </View>
+                  </View>
 
-                  {group.tasks.map(item => (
-                    <TouchableOpacity
-                      key={item.id}
-                      style={styles.taskCard}
-                      onPress={() => {
-                        setSelectedTask(item);
-                        setShowDetails(true);
-                      }}
-                    >
-                      <View style={styles.taskCardHeader}>
-                        <Text style={styles.taskTitle} numberOfLines={2}>
-                          {item.title}
-                        </Text>
-                        <View
-                          style={[
-                            styles.priorityBadge,
-                            { backgroundColor: getPriorityColor(item.priority) },
-                          ]}
-                        >
-                          <Text style={styles.priorityText}>{item.priority}</Text>
-                        </View>
-                      </View>
+                  <View style={styles.taskGroupStatRow}>
+                    <View style={styles.taskGroupStatCard}>
+                      <Text
+                        style={styles.taskGroupStatValue}
+                        numberOfLines={2}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.7}
+                      >
+                        {attendanceCount}
+                      </Text>
+                      <Text style={styles.taskGroupStatLabel}>Attendance</Text>
+                    </View>
+                    <View style={styles.taskGroupStatCard}>
+                      <Text
+                        style={styles.taskGroupStatValue}
+                        numberOfLines={2}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.7}
+                      >
+                        {formatVolunteerTime(totalVolunteerMinutes)}
+                      </Text>
+                      <Text style={styles.taskGroupStatLabel}>Volunteer Time</Text>
+                    </View>
+                    <View style={styles.taskGroupStatCard}>
+                      <Text
+                        style={styles.taskGroupStatValue}
+                        numberOfLines={2}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.65}
+                      >
+                        {eventStatus}
+                      </Text>
+                      <Text style={styles.taskGroupStatLabel}>Event Status</Text>
+                    </View>
+                  </View>
 
-                      <View style={styles.taskMetaRow}>
-                        <View style={styles.taskMetaChip}>
-                          <MaterialIcons name="category" size={14} color="#166534" />
-                          <Text style={styles.taskMetaChipText}>{item.category}</Text>
-                        </View>
-                        {item.isFieldOfficer ? (
-                          <View style={styles.taskMetaChip}>
-                            <MaterialIcons name="supervisor-account" size={14} color="#166534" />
-                            <Text style={styles.taskMetaChipText}>Field Officer</Text>
-                          </View>
-                        ) : null}
-                      </View>
-
-                      <View style={styles.taskCardFooter}>
-                        <View
-                          style={[
-                            styles.statusBadge,
-                            { backgroundColor: getStatusColor(item.status) },
-                          ]}
-                        >
-                          <Text style={styles.statusText}>{item.status}</Text>
-                        </View>
-                        <Text style={styles.taskUpdatedText}>
-                          Updated {new Date(item.updatedAt).toLocaleDateString()}
-                        </Text>
-                        <MaterialIcons name="chevron-right" size={20} color="#999" />
-                      </View>
-                    </TouchableOpacity>
-                  ))}
-                </View>
+                  <View style={styles.taskGroupFooter}>
+                    <Text style={styles.taskGroupFooterText}>Tap to view this event page</Text>
+                    <MaterialIcons name="chevron-right" size={18} color="#166534" />
+                  </View>
+                </TouchableOpacity>
               );
             })}
           </View>
@@ -1253,37 +1266,277 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       <Modal
         animationType="slide"
         transparent
-        visible={showDetails}
-        onRequestClose={() => setShowDetails(false)}
+        visible={showTaskGroupDetails}
+        onRequestClose={() => setShowTaskGroupDetails(false)}
       >
         <View style={styles.centeredView}>
           <View style={styles.modalView}>
             <TouchableOpacity
               style={styles.closeButton}
-              onPress={() => setShowDetails(false)}
+              onPress={() => setShowTaskGroupDetails(false)}
             >
               <MaterialIcons name="close" size={28} color="#333" />
             </TouchableOpacity>
 
+            {selectedTaskGroup ? (
+              <ScrollView style={styles.modalContent}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalEyebrow}>Event Task Page</Text>
+                  <Text style={styles.modalTitle}>{selectedTaskGroup.projectTitle}</Text>
+                  <Text style={styles.projectNameModal}>
+                    {selectedTaskGroup.tasks.length} task{selectedTaskGroup.tasks.length === 1 ? '' : 's'} assigned in this event
+                  </Text>
+                </View>
+
+                {selectedTaskGroupProject ? (
+                  (() => {
+                    const projectLogs = volunteerTimeLogs.filter(
+                      log => log.projectId === selectedTaskGroup.projectId
+                    );
+                    const attendanceState = getTaskEventAttendanceState(
+                      selectedTaskGroupProject,
+                      true,
+                      projectLogs
+                    );
+
+                    return (
+                      <View style={styles.attendanceCard}>
+                        <View style={styles.attendanceCardHeader}>
+                          <View style={styles.attendanceCardCopy}>
+                            <Text style={styles.attendanceCardTitle}>Daily Attendance</Text>
+                            <Text style={styles.attendanceCardMeta}>
+                              {formatEventDateLabel(
+                                selectedTaskGroupProject.startDate,
+                                selectedTaskGroupProject.endDate
+                              )}
+                            </Text>
+                          </View>
+                          <View
+                            style={[
+                              styles.attendanceStatusBadge,
+                              attendanceState.canTimeOut
+                                ? styles.attendanceStatusBadgeActive
+                                : attendanceState.hasLoggedToday
+                                ? styles.attendanceStatusBadgeDone
+                                : styles.attendanceStatusBadgeIdle,
+                            ]}
+                          >
+                            <Text style={styles.attendanceStatusText}>
+                              {attendanceState.canTimeOut
+                                ? 'Timed In'
+                                : attendanceState.hasLoggedToday
+                                ? 'Done Today'
+                                : attendanceState.eventHasEnded
+                                ? 'Closed'
+                                : 'Ready'}
+                            </Text>
+                          </View>
+                        </View>
+
+                        <Text style={styles.attendanceHelperText}>
+                          {attendanceState.helperText || 'Attendance is unavailable for this event.'}
+                        </Text>
+
+                        <View style={styles.attendanceLogRow}>
+                          <View style={styles.attendanceLogItem}>
+                            <Text style={styles.attendanceLogLabel}>Latest activity</Text>
+                            <Text style={styles.attendanceLogValue}>
+                              {attendanceState.latestLog
+                                ? attendanceState.latestLog.timeOut
+                                  ? `Time out ${formatTimestamp(attendanceState.latestLog.timeOut)}`
+                                  : `Time in ${formatTimestamp(attendanceState.latestLog.timeIn)}`
+                                : 'No attendance yet'}
+                            </Text>
+                          </View>
+                          <View style={styles.attendanceLogItem}>
+                            <Text style={styles.attendanceLogLabel}>Today</Text>
+                            <Text style={styles.attendanceLogValue}>
+                              {attendanceState.activeLog
+                                ? `Active since ${formatTimestamp(attendanceState.activeLog.timeIn)}`
+                                : attendanceState.hasLoggedToday
+                                ? 'Completed for today'
+                                : 'Not started'}
+                            </Text>
+                          </View>
+                        </View>
+
+                        <View style={styles.attendanceActionRow}>
+                          <TouchableOpacity
+                            style={[
+                              styles.attendanceButton,
+                              styles.timeInButton,
+                              !attendanceState.canTimeIn && styles.attendanceButtonDisabled,
+                            ]}
+                            onPress={() => void handleTimeInForProject(selectedTaskGroup.projectId)}
+                            disabled={!attendanceState.canTimeIn}
+                          >
+                            <MaterialIcons name="login" size={18} color="#fff" />
+                            <Text style={styles.attendanceButtonText}>
+                              {attendanceState.eventHasNotStarted
+                                ? 'Await Start'
+                                : attendanceState.hasLoggedToday
+                                ? 'Done Today'
+                                : attendanceState.eventHasEnded
+                                ? 'Closed'
+                                : 'Time In'}
+                            </Text>
+                          </TouchableOpacity>
+
+                          <TouchableOpacity
+                            style={[
+                              styles.attendanceButton,
+                              styles.timeOutButton,
+                              !attendanceState.canTimeOut && styles.attendanceButtonDisabled,
+                            ]}
+                            onPress={() => handleOpenTimeOutReport(selectedTaskGroup.projectId)}
+                            disabled={!attendanceState.canTimeOut}
+                          >
+                            <MaterialIcons name="logout" size={18} color="#fff" />
+                            <Text style={styles.attendanceButtonText}>
+                              {attendanceState.canTimeOut ? 'Time Out' : 'Report First'}
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    );
+                  })()
+                ) : null}
+
+                <View style={styles.taskCardGrid}>
+                  {selectedTaskGroup.tasks.map(item => (
+                    <TouchableOpacity
+                      key={item.id}
+                      style={styles.taskCard}
+                      onPress={() => {
+                        setSelectedTask(item);
+                        setShowTaskGroupDetails(false);
+                        setShowDetails(true);
+                      }}
+                    >
+                      <View style={styles.taskCardHeader}>
+                        <Text style={styles.taskTitle} numberOfLines={2}>
+                          {item.title}
+                        </Text>
+                        <MaterialIcons name="open-in-full" size={16} color="#64748b" />
+                      </View>
+
+                      <Text style={styles.taskCardMetaLine} numberOfLines={1}>
+                        {item.category}
+                      </Text>
+
+                      <View style={styles.taskCardBadgeRow}>
+                        <View
+                          style={[
+                            styles.priorityBadge,
+                            { backgroundColor: getPriorityColor(item.priority) },
+                          ]}
+                        >
+                          <Text style={styles.priorityText}>{item.priority}</Text>
+                        </View>
+                        <View
+                          style={[
+                            styles.statusBadge,
+                            styles.statusBadgeCompact,
+                            { backgroundColor: getStatusColor(item.status) },
+                          ]}
+                        >
+                          <Text style={styles.statusText}>{item.status}</Text>
+                        </View>
+                      </View>
+
+                      <Text style={styles.taskCardSchedule} numberOfLines={2}>
+                        {formatEventDateLabel(item.projectStartDate, item.projectEndDate)}
+                      </Text>
+
+                      <View style={styles.taskCardFooter}>
+                        <Text style={styles.taskTapHintText}>Tap to open</Text>
+                        <MaterialIcons name="chevron-right" size={16} color="#166534" />
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </ScrollView>
+            ) : null}
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="slide"
+        transparent
+        visible={showDetails}
+        onRequestClose={() => setShowDetails(false)}
+      >
+        <View style={styles.centeredView}>
+          <View style={styles.modalView}>
+            <View style={styles.modalTopBar}>
+              <TouchableOpacity
+                style={styles.modalNavButton}
+                onPress={handleBackToTaskGroupDetails}
+              >
+                <MaterialIcons name="arrow-back" size={24} color="#333" />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.modalNavButton}
+                onPress={() => setShowDetails(false)}
+              >
+                <MaterialIcons name="close" size={26} color="#333" />
+              </TouchableOpacity>
+            </View>
+
             {selectedTask && (
               <ScrollView style={styles.modalContent}>
                 <View style={styles.modalHeader}>
+                  <Text style={styles.modalEyebrow}>Task Details</Text>
                   <Text style={styles.modalTitle}>{selectedTask.title}</Text>
-                  <View
-                    style={[
-                      styles.priorityBadgeLarge,
-                      { backgroundColor: getPriorityColor(selectedTask.priority) },
-                    ]}
-                  >
-                    <Text style={styles.priorityText}>{selectedTask.priority}</Text>
+                  <View style={styles.modalHeaderBadges}>
+                    <View
+                      style={[
+                        styles.priorityBadgeLarge,
+                        { backgroundColor: getPriorityColor(selectedTask.priority) },
+                      ]}
+                    >
+                      <Text style={styles.priorityText}>{selectedTask.priority}</Text>
+                    </View>
+                    <View
+                      style={[
+                        styles.statusBadge,
+                        styles.statusReadOnlyBadge,
+                        styles.modalStatusBadge,
+                        { backgroundColor: getStatusColor(selectedTask.status) },
+                      ]}
+                    >
+                      <Text style={styles.statusText}>{selectedTask.status}</Text>
+                    </View>
                   </View>
                 </View>
 
-                <Text style={styles.projectNameModal}>{selectedTask.projectTitle}</Text>
+                <View style={styles.detailOverviewGrid}>
+                  <View style={styles.detailOverviewCard}>
+                    <Text style={styles.detailOverviewLabel}>Event</Text>
+                    <Text style={styles.detailOverviewValue}>{selectedTask.projectTitle}</Text>
+                  </View>
+                  <View style={styles.detailOverviewCard}>
+                    <Text style={styles.detailOverviewLabel}>Schedule</Text>
+                    <Text style={styles.detailOverviewValue}>
+                      {formatEventDateLabel(selectedTask.projectStartDate, selectedTask.projectEndDate)}
+                    </Text>
+                  </View>
+                  <View style={styles.detailOverviewCard}>
+                    <Text style={styles.detailOverviewLabel}>Category</Text>
+                    <Text style={styles.detailOverviewValue}>{selectedTask.category}</Text>
+                  </View>
+                  <View style={styles.detailOverviewCard}>
+                    <Text style={styles.detailOverviewLabel}>Updated</Text>
+                    <Text style={styles.detailOverviewValue}>
+                      {new Date(selectedTask.updatedAt).toLocaleDateString()}
+                    </Text>
+                  </View>
+                </View>
 
                 <View style={styles.infoSection}>
-                  <Text style={styles.infoLabel}>Event Schedule</Text>
-                  <Text style={styles.infoValue}>{formatEventDateLabel(selectedTask.projectStartDate, selectedTask.projectEndDate)}</Text>
+                  <Text style={styles.infoLabel}>Event Name</Text>
+                  <Text style={styles.infoValue}>{selectedTask.projectTitle}</Text>
                 </View>
 
                 {selectedTask.isFieldOfficer ? (
@@ -1294,12 +1547,12 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                 ) : null}
 
                 <View style={styles.infoSection}>
-                  <Text style={styles.infoLabel}>Category</Text>
+                  <Text style={styles.infoLabel}>Task Category</Text>
                   <Text style={styles.infoValue}>{selectedTask.category}</Text>
                 </View>
 
                 <View style={styles.infoSection}>
-                  <Text style={styles.infoLabel}>Description</Text>
+                  <Text style={styles.infoLabel}>Task Description</Text>
                   <Text style={styles.descriptionText}>{selectedTask.description}</Text>
                 </View>
 
@@ -1311,16 +1564,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                 )}
 
                 <View style={styles.infoSection}>
-                  <Text style={styles.infoLabel}>Status</Text>
-                  <View
-                    style={[
-                      styles.statusBadge,
-                      styles.statusReadOnlyBadge,
-                      { backgroundColor: getStatusColor(selectedTask.status) },
-                    ]}
-                  >
-                    <Text style={styles.statusText}>{selectedTask.status}</Text>
-                  </View>
+                  <Text style={styles.infoLabel}>Status Tracking</Text>
                   <Text style={styles.statusReadOnlyHint}>
                     System generated from assignment tracking and attendance logs. Volunteers cannot edit this status. Event status is also automatically updated based on event dates.
                   </Text>
@@ -1517,13 +1761,13 @@ const styles = StyleSheet.create({
     borderBottomColor: '#eee',
   },
   headerTitle: {
-    fontSize: 24,
+    fontSize: 20,
     fontWeight: 'bold',
     color: '#0f172a',
     marginBottom: 4,
   },
   headerSubtitle: {
-    fontSize: 14,
+    fontSize: 12,
     color: '#666',
   },
   topTabBar: {
@@ -1552,7 +1796,7 @@ const styles = StyleSheet.create({
     borderColor: '#166534',
   },
   topTabButtonText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
     color: '#166534',
   },
@@ -1572,7 +1816,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.18)',
   },
   topTabBadgeText: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '800',
     color: '#166534',
   },
@@ -1594,14 +1838,14 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   fieldOfficerSectionTitle: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '800',
     color: '#0f172a',
   },
   fieldOfficerSectionSubtitle: {
     marginTop: 4,
-    fontSize: 13,
-    lineHeight: 19,
+    fontSize: 12,
+    lineHeight: 17,
     color: '#64748b',
   },
   fieldOfficerSectionBadge: {
@@ -1611,7 +1855,7 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
   },
   fieldOfficerSectionBadgeText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
     color: '#166534',
   },
@@ -1633,7 +1877,7 @@ const styles = StyleSheet.create({
     borderColor: '#166534',
   },
   fieldOfficerFilterButtonText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
     color: '#334155',
   },
@@ -1641,8 +1885,8 @@ const styles = StyleSheet.create({
     color: '#ffffff',
   },
   fieldOfficerSectionSummary: {
-    fontSize: 12,
-    lineHeight: 18,
+    fontSize: 11,
+    lineHeight: 16,
     color: '#64748b',
   },
   fieldOfficerEventCard: {
@@ -1670,7 +1914,7 @@ const styles = StyleSheet.create({
   },
   fieldOfficerEventTitle: {
     flex: 1,
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '800',
     color: '#0f172a',
   },
@@ -1683,18 +1927,18 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
   },
   fieldOfficerEventStatusText: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '800',
     color: '#166534',
   },
   fieldOfficerEventProgram: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
     color: '#1d4ed8',
   },
   fieldOfficerEventMeta: {
-    fontSize: 12,
-    lineHeight: 18,
+    fontSize: 11,
+    lineHeight: 16,
     color: '#64748b',
   },
   fieldOfficerMetricsRow: {
@@ -1714,13 +1958,13 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   fieldOfficerMetricValue: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '800',
     color: '#166534',
   },
   fieldOfficerMetricLabel: {
     marginTop: 2,
-    fontSize: 11,
+    fontSize: 10,
     color: '#64748b',
   },
   fieldOfficerOpenRow: {
@@ -1732,7 +1976,7 @@ const styles = StyleSheet.create({
     paddingTop: 12,
   },
   fieldOfficerOpenText: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
     color: '#166534',
   },
@@ -1746,13 +1990,13 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   fieldOfficerEmptyTitle: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '800',
     color: '#0f172a',
   },
   fieldOfficerEmptyText: {
-    fontSize: 12,
-    lineHeight: 18,
+    fontSize: 11,
+    lineHeight: 16,
     color: '#64748b',
   },
   fieldOfficerToggleButton: {
@@ -1765,41 +2009,61 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
   },
   fieldOfficerToggleButtonText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
     color: '#166534',
   },
   taskSummaryRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 4,
+    flexWrap: 'nowrap',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 2,
   },
   taskSummaryCard: {
-    minWidth: 120,
-    flexGrow: 1,
+    width: '23%',
+    flexGrow: 0,
     flexShrink: 1,
     borderRadius: 14,
     backgroundColor: '#ffffff',
     borderWidth: 1,
-    borderColor: '#dbe7df',
-    paddingHorizontal: 14,
-    paddingVertical: 14,
+    borderColor: '#d7e3dc',
+    paddingHorizontal: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 1,
+  },
+  taskSummaryIconWrap: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    marginBottom: 8,
   },
   taskSummaryValue: {
-    fontSize: 22,
+    fontSize: 17,
     fontWeight: '800',
     color: '#166534',
+    textAlign: 'center',
   },
   taskSummaryLabel: {
-    marginTop: 4,
-    fontSize: 11,
+    marginTop: 3,
+    fontSize: 8,
     fontWeight: '700',
     color: '#64748b',
     textTransform: 'uppercase',
-    letterSpacing: 0.6,
+    letterSpacing: 0.2,
+    lineHeight: 11,
+    textAlign: 'center',
   },
   centerContainer: {
     flex: 1,
@@ -1808,7 +2072,7 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     marginTop: 12,
-    fontSize: 16,
+    fontSize: 14,
     color: '#666',
   },
   emptyContainer: {
@@ -1818,14 +2082,14 @@ const styles = StyleSheet.create({
     paddingBottom: 40,
   },
   emptyTitle: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '600',
     color: '#333',
     marginTop: 16,
     marginBottom: 8,
   },
   emptySubtitle: {
-    fontSize: 14,
+    fontSize: 12,
     color: '#999',
     textAlign: 'center',
     paddingHorizontal: 20,
@@ -1836,27 +2100,26 @@ const styles = StyleSheet.create({
   },
   filterContainer: {
     flexDirection: 'row',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-    gap: 8,
+    flexWrap: 'wrap',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    gap: 6,
   },
   filterButton: {
     paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: '#f0f0f0',
+    paddingVertical: 9,
+    borderRadius: 999,
+    backgroundColor: '#f8fafc',
     borderWidth: 1,
-    borderColor: '#ddd',
+    borderColor: '#dbe5ef',
   },
   filterButtonActive: {
-    backgroundColor: '#4CAF50',
-    borderColor: '#4CAF50',
+    backgroundColor: '#166534',
+    borderColor: '#166534',
   },
   filterButtonText: {
-    fontSize: 13,
+    fontSize: 11,
+    lineHeight: 14,
     fontWeight: '600',
     color: '#666',
   },
@@ -1867,45 +2130,136 @@ const styles = StyleSheet.create({
     minHeight: 200,
   },
   taskListContent: {
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    gap: 10,
   },
   taskGroupCard: {
-    borderRadius: 16,
+    borderRadius: 18,
     backgroundColor: '#ffffff',
     borderWidth: 1,
-    borderColor: '#dbe7df',
+    borderColor: '#dbe5ef',
     padding: 14,
     gap: 12,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 2,
   },
   taskGroupHeader: {
     flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  taskGroupIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
+    justifyContent: 'center',
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
   },
   taskGroupCopy: {
     flex: 1,
   },
+  taskGroupEyebrow: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.35,
+    marginBottom: 4,
+  },
   taskGroupTitle: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '800',
     color: '#0f172a',
   },
   taskGroupMeta: {
-    marginTop: 3,
-    fontSize: 12,
+    marginTop: 4,
+    fontSize: 10,
     color: '#64748b',
   },
   taskGroupBadge: {
     borderRadius: 999,
-    backgroundColor: '#dcfce7',
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#dbe5ef',
     paddingHorizontal: 10,
     paddingVertical: 6,
   },
   taskGroupBadgeText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  taskGroupMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  taskGroupMetaChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  taskGroupMetaChipText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  taskGroupStatRow: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  taskGroupStatCard: {
+    flex: 1,
+    minWidth: 0,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#f8fafc',
+    minHeight: 64,
+    paddingVertical: 8,
+    paddingHorizontal: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  taskGroupStatValue: {
     fontSize: 11,
+    lineHeight: 13,
+    fontWeight: '800',
+    color: '#166534',
+    textAlign: 'center',
+  },
+  taskGroupStatLabel: {
+    marginTop: 2,
+    fontSize: 8,
+    fontWeight: '700',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.12,
+    lineHeight: 10,
+    textAlign: 'center',
+  },
+  taskGroupFooter: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    gap: 2,
+    paddingTop: 2,
+  },
+  taskGroupFooterText: {
+    fontSize: 10,
     fontWeight: '700',
     color: '#166534',
   },
@@ -1927,13 +2281,13 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   attendanceCardTitle: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '800',
     color: '#14532d',
   },
   attendanceCardMeta: {
     marginTop: 3,
-    fontSize: 12,
+    fontSize: 11,
     color: '#4b5563',
   },
   attendanceStatusBadge: {
@@ -1951,13 +2305,13 @@ const styles = StyleSheet.create({
     backgroundColor: '#65a30d',
   },
   attendanceStatusText: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '800',
     color: '#ffffff',
   },
   attendanceHelperText: {
-    fontSize: 12,
-    lineHeight: 18,
+    fontSize: 11,
+    lineHeight: 16,
     color: '#475569',
   },
   attendanceLogRow: {
@@ -1976,7 +2330,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   attendanceLogLabel: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '700',
     color: '#64748b',
     textTransform: 'uppercase',
@@ -1984,7 +2338,7 @@ const styles = StyleSheet.create({
   },
   attendanceLogValue: {
     marginTop: 4,
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600',
     color: '#0f172a',
   },
@@ -2014,42 +2368,53 @@ const styles = StyleSheet.create({
     backgroundColor: '#94a3b8',
   },
   attendanceButtonText: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '800',
     color: '#ffffff',
   },
   taskCard: {
-    backgroundColor: '#f8fafc',
-    borderRadius: 12,
-    padding: 16,
+    backgroundColor: '#ffffff',
+    width: '100%',
+    minHeight: 132,
+    borderRadius: 16,
+    padding: 11,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: '#dbe5ef',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.04,
-    shadowRadius: 2,
-    elevation: 1,
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
+    elevation: 2,
+  },
+  taskCardGrid: {
+    gap: 10,
   },
   taskCardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    marginBottom: 8,
-    gap: 12,
+    marginBottom: 6,
+    gap: 6,
   },
   taskTitle: {
     flex: 1,
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: '700',
     color: '#0f172a',
   },
+  taskCardMetaLine: {
+    fontSize: 11,
+    color: '#64748b',
+    marginBottom: 8,
+  },
   priorityBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
     borderRadius: 12,
   },
   priorityText: {
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: '600',
     color: '#fff',
   },
@@ -2063,7 +2428,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
-    marginBottom: 12,
+    marginBottom: 10,
+  },
+  taskCardBadgeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 8,
   },
   taskMetaChip: {
     flexDirection: 'row',
@@ -2077,7 +2448,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   taskMetaChipText: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '700',
     color: '#166534',
   },
@@ -2088,28 +2459,42 @@ const styles = StyleSheet.create({
   },
   taskCardFooter: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
     alignItems: 'center',
-    gap: 10,
-    flexWrap: 'wrap',
+    gap: 4,
+    marginTop: 'auto',
+  },
+  taskCardSchedule: {
+    fontSize: 10,
+    lineHeight: 14,
+    color: '#475569',
+    marginBottom: 8,
   },
   taskUpdatedText: {
     flex: 1,
-    textAlign: 'right',
     fontSize: 11,
     color: '#64748b',
   },
+  taskTapHintText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#166534',
+  },
   statusBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
     borderRadius: 12,
+  },
+  statusBadgeCompact: {
+    alignSelf: 'flex-start',
+    paddingVertical: 3,
   },
   statusReadOnlyBadge: {
     alignSelf: 'flex-start',
     marginBottom: 10,
   },
   statusText: {
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: '600',
     color: '#fff',
   },
@@ -2126,6 +2511,20 @@ const styles = StyleSheet.create({
     minHeight: '70%',
     maxHeight: '90%',
   },
+  modalTopBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingBottom: 6,
+  },
+  modalNavButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   closeButton: {
     alignItems: 'flex-end',
     paddingHorizontal: 20,
@@ -2137,11 +2536,24 @@ const styles = StyleSheet.create({
   modalHeader: {
     marginBottom: 16,
   },
+  modalEyebrow: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
   modalTitle: {
-    fontSize: 22,
+    fontSize: 18,
     fontWeight: 'bold',
     color: '#0f172a',
     marginBottom: 12,
+  },
+  modalHeaderBadges: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
   },
   priorityBadgeLarge: {
     alignSelf: 'flex-start',
@@ -2149,11 +2561,43 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 12,
   },
+  modalStatusBadge: {
+    marginBottom: 0,
+  },
   projectNameModal: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '600',
     color: '#4CAF50',
     marginBottom: 20,
+  },
+  detailOverviewGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginBottom: 20,
+  },
+  detailOverviewCard: {
+    width: '47.8%',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#dbe5ef',
+    backgroundColor: '#f8fafc',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    gap: 6,
+  },
+  detailOverviewLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.35,
+  },
+  detailOverviewValue: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#0f172a',
+    lineHeight: 16,
   },
   fieldOfficerBadge: {
     alignSelf: 'flex-start',
@@ -2167,7 +2611,7 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   fieldOfficerBadgeText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
     color: '#166534',
   },
@@ -2175,29 +2619,29 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   infoLabel: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600',
     color: '#999',
     marginBottom: 6,
   },
   infoValue: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '600',
     color: '#0f172a',
   },
   descriptionText: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#333',
-    lineHeight: 22,
+    lineHeight: 20,
   },
   statusReadOnlyHint: {
     marginBottom: 6,
-    fontSize: 12,
-    lineHeight: 18,
+    fontSize: 11,
+    lineHeight: 16,
     color: '#64748b',
   },
   skillsText: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#059669',
     fontWeight: '600',
   },
@@ -2213,14 +2657,14 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   manageBoardButtonText: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
     color: '#fff',
   },
   fieldOfficerHintText: {
     marginTop: 10,
-    fontSize: 12,
-    lineHeight: 18,
+    fontSize: 11,
+    lineHeight: 16,
     color: '#64748b',
   },
   statusButtonGroup: {
@@ -2240,7 +2684,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#e8f5e9',
   },
   statusButtonText: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '600',
     color: '#666',
   },
@@ -2261,13 +2705,13 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   dateLabel: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600',
     color: '#999',
     marginBottom: 4,
   },
   dateValue: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '600',
     color: '#0f172a',
   },
@@ -2280,7 +2724,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fafc',
   },
   assignmentTitle: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '700',
     color: '#0f172a',
   },
@@ -2295,7 +2739,7 @@ const styles = StyleSheet.create({
   },
   assignmentMeta: {
     marginTop: 4,
-    fontSize: 12,
+    fontSize: 11,
     color: '#64748b',
   },
   assignmentLockBadge: {
@@ -2308,7 +2752,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   assignmentLockText: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '700',
     color: '#92400e',
   },
@@ -2331,7 +2775,7 @@ const styles = StyleSheet.create({
     borderColor: '#166534',
   },
   assignmentButtonText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
     color: '#334155',
   },
@@ -2350,7 +2794,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   joinedVolunteerChipText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
     color: '#166534',
   },

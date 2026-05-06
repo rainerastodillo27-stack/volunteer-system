@@ -76,18 +76,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   brandName: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '800',
     color: '#166534',
     letterSpacing: 0.3,
   },
   brandNameCompact: {
-    fontSize: 19,
+    fontSize: 17,
     textAlign: 'center',
   },
   screenTitle: {
     marginTop: 2,
-    fontSize: 13,
+    fontSize: 12,
     color: '#4b5563',
     fontWeight: '600',
   },

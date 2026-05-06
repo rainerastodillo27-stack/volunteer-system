@@ -13,8 +13,11 @@ import {
   Keyboard,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import type { SubmittedReport } from '../screens/ReportsScreen';
-import type { VolunteerTimeLog } from '../models/types';
+import type {
+  PartnerProjectReportSummary,
+  SubmittedReport,
+} from '../screens/ReportsScreen';
+import type { Project, VolunteerTimeLog } from '../models/types';
 import { isImageMediaUri, pickDocumentFromDevice, pickImageFromDevice } from '../utils/media';
 
 type MaterialIconName = keyof typeof MaterialIcons.glyphMap;
@@ -35,6 +38,7 @@ interface ReportUploadModalProps {
   initialProjectId?: string;
   initialDescription?: string;
   initialMediaUri?: string;
+  partnerProjectSummaries?: PartnerProjectReportSummary[];
 }
 
 export default function ReportUploadModal({
@@ -48,6 +52,7 @@ export default function ReportUploadModal({
   initialProjectId,
   initialDescription,
   initialMediaUri,
+  partnerProjectSummaries = [],
 }: ReportUploadModalProps) {
   const [reportType, setReportType] =
     useState<SubmittedReport['reportType']>('volunteer_engagement');
@@ -60,6 +65,9 @@ export default function ReportUploadModal({
   const [volunteerContribution, setVolunteerContribution] = useState('');
   const [volunteerExperience, setVolunteerExperience] = useState('');
   const [volunteerFollowUp, setVolunteerFollowUp] = useState('');
+  const [collaborationFeedback, setCollaborationFeedback] = useState('');
+  const [volunteerPraise, setVolunteerPraise] = useState('');
+  const [gratitudeNote, setGratitudeNote] = useState('');
   const [metrics, setMetrics] = useState({
     volunteerHours: '',
     verifiedAttendance: '',
@@ -73,6 +81,7 @@ export default function ReportUploadModal({
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const isVolunteer = userRole === 'volunteer';
+  const isPartner = userRole === 'partner';
   const entityLabel = isVolunteer ? 'Event' : 'Project';
   const entityLabelLower = entityLabel.toLowerCase();
 
@@ -138,8 +147,18 @@ export default function ReportUploadModal({
   }, [isVolunteer, selectedProject, volunteerTimeLogs]);
 
   const selectedProjectData = useMemo(
-    () => (selectedProject ? projects.find(project => project.id === selectedProject) : undefined),
+    () =>
+      selectedProject
+        ? (projects.find(project => project.id === selectedProject) as Project | undefined)
+        : undefined,
     [projects, selectedProject]
+  );
+  const selectedPartnerProjectSummary = useMemo(
+    () =>
+      isPartner
+        ? partnerProjectSummaries.find(summary => summary.project.id === selectedProject)
+        : undefined,
+    [isPartner, partnerProjectSummaries, selectedProject]
   );
   const isFieldOfficerForSelectedProject = useMemo(
     () => Boolean(selectedProject && fieldOfficerProjectIds.includes(selectedProject)),
@@ -158,6 +177,11 @@ export default function ReportUploadModal({
       setSelectedProject(current => current || projects[0]?.id);
     }
 
+    if (isPartner) {
+      setReportType('program_impact');
+      setSelectedProject(current => current || projects[0]?.id);
+    }
+
     if (initialProjectId) {
       setSelectedProject(initialProjectId);
     }
@@ -167,7 +191,16 @@ export default function ReportUploadModal({
     if (initialMediaUri) {
       setSelectedPhotoUri(initialMediaUri);
     }
-  }, [isVolunteer, projects, visible, initialProjectId, initialDescription, initialMediaUri, volunteerReportType]);
+  }, [
+    initialDescription,
+    initialMediaUri,
+    initialProjectId,
+    isPartner,
+    isVolunteer,
+    projects,
+    visible,
+    volunteerReportType,
+  ]);
 
   useEffect(() => {
     if (!visible || !isVolunteer) {
@@ -176,6 +209,16 @@ export default function ReportUploadModal({
 
     setReportType(volunteerReportType);
   }, [isVolunteer, visible, volunteerReportType]);
+
+  useEffect(() => {
+    if (!visible || !isPartner || !selectedPartnerProjectSummary) {
+      return;
+    }
+
+    setTitle(selectedPartnerProjectSummary.generatedTitle);
+    setDescription(selectedPartnerProjectSummary.project.description || '');
+    setReportType('program_impact');
+  }, [isPartner, selectedPartnerProjectSummary, visible]);
 
   useEffect(() => {
     if (!visible || !isVolunteer || !selectedProject || title.trim()) {
@@ -228,11 +271,11 @@ export default function ReportUploadModal({
   const validateForm = () => {
     const nextErrors: Record<string, string> = {};
 
-    if (!title.trim()) {
+    if (!title.trim() && !isPartner) {
       nextErrors.title = 'Title is required';
     }
 
-    if (isVolunteer && !selectedProject) {
+    if ((isVolunteer || isPartner) && !selectedProject) {
       nextErrors.project = `${entityLabel} is required`;
     }
 
@@ -245,6 +288,10 @@ export default function ReportUploadModal({
       }
       if (!description.trim()) {
         nextErrors.description = 'Add a short summary for the admin side';
+      }
+    } else if (isPartner) {
+      if (!selectedPartnerProjectSummary) {
+        nextErrors.project = 'Select an approved project';
       }
     } else {
       if (!description.trim()) {
@@ -307,6 +354,9 @@ export default function ReportUploadModal({
     setVolunteerContribution('');
     setVolunteerExperience('');
     setVolunteerFollowUp('');
+    setCollaborationFeedback('');
+    setVolunteerPraise('');
+    setGratitudeNote('');
     setMetrics({
       volunteerHours: '',
       verifiedAttendance: '',
@@ -355,8 +405,43 @@ export default function ReportUploadModal({
     }
 
     const selectedProjectData = selectedProject
-      ? projects.find(project => project.id === selectedProject)
+      ? (projects.find(project => project.id === selectedProject) as Project | undefined)
       : undefined;
+
+    if (isPartner) {
+      if (!selectedProject || !selectedPartnerProjectSummary) {
+        return;
+      }
+
+      const reportData: Omit<
+        SubmittedReport,
+        'id' | 'submittedAt' | 'submittedBy' | 'submitterName' | 'submitterRole' | 'viewedBy'
+      > = {
+        reportType: 'program_impact',
+        title: selectedPartnerProjectSummary.generatedTitle,
+        description: description.trim() || selectedPartnerProjectSummary.project.description || '',
+        projectId: selectedPartnerProjectSummary.project.id,
+        projectTitle: selectedPartnerProjectSummary.project.title,
+        category: selectedPartnerProjectSummary.project.category,
+        metrics: selectedPartnerProjectSummary.metrics,
+        attachments: [],
+        mediaFile: undefined,
+        status: 'Submitted',
+        collaborationFeedback: collaborationFeedback.trim() || undefined,
+        volunteerPraise: volunteerPraise.trim() || undefined,
+        gratitudeNote: gratitudeNote.trim() || undefined,
+      };
+
+      Keyboard.dismiss();
+      const submissionSucceeded = await onSubmit(reportData);
+      if (submissionSucceeded === false) {
+        return;
+      }
+
+      handleReset();
+      onClose();
+      return;
+    }
 
     const volunteerMetricValues = isVolunteer
       ? {
@@ -438,8 +523,11 @@ export default function ReportUploadModal({
     onClose();
 
   }, [
+    collaborationFeedback,
     description,
+    gratitudeNote,
     handleReset,
+    isPartner,
     isVolunteer,
     metrics,
     onSubmit,
@@ -448,7 +536,9 @@ export default function ReportUploadModal({
     selectedDocumentUri,
     selectedPhotoUri,
     selectedProject,
+    selectedPartnerProjectSummary,
     title,
+    volunteerPraise,
     volunteerContribution,
     volunteerExperience,
     volunteerFollowUp,
@@ -456,6 +546,156 @@ export default function ReportUploadModal({
     volunteerTimeLogs,
     onClose,
   ]);
+
+  const renderPartnerFields = () => (
+    <>
+      <View style={styles.partnerIntroCard}>
+        <View style={styles.partnerIntroIcon}>
+          <MaterialIcons name="business-center" size={20} color="#166534" />
+        </View>
+        <View style={styles.partnerIntroContent}>
+          <Text style={styles.partnerIntroTitle}>Approved Project Report</Text>
+          <Text style={styles.partnerIntroText}>
+            Choose one approved project that your account proposed. The title, description, and metrics are generated automatically from linked events, volunteer reports, and verified time logs.
+          </Text>
+        </View>
+      </View>
+
+      <Text style={styles.label}>Approved Project *</Text>
+      <TouchableOpacity
+        style={[styles.projectSelector, errors.project && styles.inputError]}
+        onPress={() => setShowProjectPicker(!showProjectPicker)}
+      >
+        <Text style={styles.projectSelectorText}>
+          {selectedProjectData?.title || `Select ${entityLabelLower}`}
+        </Text>
+        <MaterialIcons
+          name={showProjectPicker ? 'expand-less' : 'expand-more'}
+          size={20}
+          color="#666"
+        />
+      </TouchableOpacity>
+      {errors.project ? <Text style={styles.errorText}>{errors.project}</Text> : null}
+
+      {showProjectPicker ? (
+        <View style={styles.projectList}>
+          {projects.map(project => (
+            <TouchableOpacity
+              key={project.id}
+              style={styles.projectOption}
+              onPress={() => {
+                setSelectedProject(project.id);
+                setShowProjectPicker(false);
+              }}
+            >
+              <Text style={styles.projectOptionText}>{project.title}</Text>
+              <Text style={styles.projectOptionCategory}>
+                {project.programModule || project.category}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      ) : null}
+
+      <Text style={styles.label}>Title</Text>
+      <TextInput
+        style={styles.input}
+        value={selectedPartnerProjectSummary?.generatedTitle || ''}
+        placeholder="Generated project report title"
+        editable={false}
+        placeholderTextColor="#cbd5e1"
+      />
+
+      <Text style={styles.label}>Description</Text>
+      <TextInput
+        style={styles.textArea}
+        value={description}
+        placeholder="Project description"
+        editable={false}
+        multiline
+        numberOfLines={6}
+        placeholderTextColor="#cbd5e1"
+      />
+
+      <Text style={styles.sectionTitle}>Auto-Generated Metrics</Text>
+      <View style={styles.metricsGrid}>
+        <View style={styles.metricInput}>
+          <Text style={styles.metricLabel}>Active Volunteers</Text>
+          <TextInput
+            style={styles.metricInputField}
+            value={String(selectedPartnerProjectSummary?.metrics.activeVolunteers || 0)}
+            editable={false}
+            placeholder="0"
+            placeholderTextColor="#cbd5e1"
+          />
+        </View>
+        <View style={styles.metricInput}>
+          <Text style={styles.metricLabel}>Volunteer Hours</Text>
+          <TextInput
+            style={styles.metricInputField}
+            value={String(selectedPartnerProjectSummary?.metrics.volunteerHours || 0)}
+            editable={false}
+            placeholder="0"
+            placeholderTextColor="#cbd5e1"
+          />
+        </View>
+        <View style={styles.metricInput}>
+          <Text style={styles.metricLabel}>Verified Attendance</Text>
+          <TextInput
+            style={styles.metricInputField}
+            value={String(selectedPartnerProjectSummary?.metrics.verifiedAttendance || 0)}
+            editable={false}
+            placeholder="0"
+            placeholderTextColor="#cbd5e1"
+          />
+        </View>
+        <View style={styles.metricInput}>
+          <Text style={styles.metricLabel}>Beneficiaries Served</Text>
+          <TextInput
+            style={styles.metricInputField}
+            value={String(selectedPartnerProjectSummary?.metrics.beneficiariesServed || 0)}
+            editable={false}
+            placeholder="0"
+            placeholderTextColor="#cbd5e1"
+          />
+        </View>
+      </View>
+
+      <Text style={styles.sectionTitle}>Partner Feedback</Text>
+      <Text style={styles.label}>How Was the Collaboration?</Text>
+      <TextInput
+        style={styles.textArea}
+        value={collaborationFeedback}
+        onChangeText={setCollaborationFeedback}
+        placeholder="Share how the collaboration with volunteers and coordinators went."
+        multiline
+        numberOfLines={4}
+        placeholderTextColor="#cbd5e1"
+      />
+
+      <Text style={styles.label}>Praise for the Volunteers</Text>
+      <TextInput
+        style={styles.textArea}
+        value={volunteerPraise}
+        onChangeText={setVolunteerPraise}
+        placeholder="Highlight volunteer effort, teamwork, or standout support."
+        multiline
+        numberOfLines={4}
+        placeholderTextColor="#cbd5e1"
+      />
+
+      <Text style={styles.label}>Thank You Note</Text>
+      <TextInput
+        style={styles.textArea}
+        value={gratitudeNote}
+        onChangeText={setGratitudeNote}
+        placeholder="Add a short thank-you message for the volunteers."
+        multiline
+        numberOfLines={3}
+        placeholderTextColor="#cbd5e1"
+      />
+    </>
+  );
 
   const renderVolunteerFields = () => (
     <>
@@ -846,7 +1086,7 @@ export default function ReportUploadModal({
         <View style={styles.container}>
           <View style={styles.header}>
             <Text style={styles.title}>
-              {isVolunteer ? 'Volunteer Event Report' : 'New Report'}
+              {isVolunteer ? 'Volunteer Event Report' : isPartner ? 'Partner Project Report' : 'New Report'}
             </Text>
             <TouchableOpacity onPress={handleClose} hitSlop={8}>
               <MaterialIcons name="close" size={24} color="#0f172a" />
@@ -854,7 +1094,11 @@ export default function ReportUploadModal({
           </View>
 
           <ScrollView style={styles.content} showsVerticalScrollIndicator>
-            {isVolunteer ? renderVolunteerFields() : renderStandardFields()}
+            {isVolunteer
+              ? renderVolunteerFields()
+              : isPartner
+              ? renderPartnerFields()
+              : renderStandardFields()}
           </ScrollView>
 
           <View style={styles.footer}>
@@ -963,6 +1207,39 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     color: '#166534',
   },
+  partnerIntroCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    borderRadius: 16,
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    padding: 14,
+    marginBottom: 4,
+  },
+  partnerIntroIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#dbeafe',
+  },
+  partnerIntroContent: {
+    flex: 1,
+    gap: 4,
+  },
+  partnerIntroTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  partnerIntroText: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#334155',
+  },
   typeGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1036,6 +1313,33 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fafc',
     textAlignVertical: 'top',
   },
+  readOnlyCard: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#dbe7dc',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    backgroundColor: '#f8fbf8',
+  },
+  readOnlyCardLarge: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#dbe7dc',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    backgroundColor: '#f8fbf8',
+    minHeight: 110,
+  },
+  readOnlyValue: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  readOnlyDescription: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#334155',
+  },
   projectSelector: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1101,6 +1405,19 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#0f172a',
     backgroundColor: '#f8fafc',
+  },
+  metricReadOnlyField: {
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#dbe7dc',
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    backgroundColor: '#f8fbf8',
+  },
+  metricReadOnlyValue: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
   },
   proofActionRow: {
     flexDirection: 'row',

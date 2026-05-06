@@ -20,7 +20,7 @@ import {
   subscribeToStorageChanges,
   clearStorageCache,
 } from '../models/storage';
-import type { Partner, Project, Volunteer } from '../models/types';
+import type { Partner, PartnerProjectApplication, Project, Volunteer } from '../models/types';
 import { useAuth } from '../contexts/AuthContext';
 import { navigateToAvailableRoute } from '../utils/navigation';
 import { getMappedProjects } from '../utils/projectMap';
@@ -110,6 +110,7 @@ export default function DashboardScreen({ navigation }: any) {
   const [recentUpdates, setRecentUpdates] = useState<any[]>([]);
   const [projectsData, setProjectsData] = useState<Project[]>([]);
   const [partnersData, setPartnersData] = useState<Partner[]>([]);
+  const [partnerApplicationsData, setPartnerApplicationsData] = useState<PartnerProjectApplication[]>([]);
   const [volunteersData, setVolunteersData] = useState<Volunteer[]>([]);
   const [volunteerCompletedProjectIdsByVolunteerId, setVolunteerCompletedProjectIdsByVolunteerId] =
     useState<Record<string, string[]>>({});
@@ -122,11 +123,19 @@ export default function DashboardScreen({ navigation }: any) {
     const startedAt = perfNow();
     try {
       // Load snapshot first (essential UI data)
-      const { projects, partners, users, volunteers, statusUpdates } = await getDashboardSnapshot();
+      const {
+        projects,
+        partners,
+        users,
+        volunteers,
+        statusUpdates,
+        partnerProjectApplications,
+      } = await getDashboardSnapshot();
 
       setLoadError(null);
       setProjectsData(projects);
       setPartnersData(partners);
+      setPartnerApplicationsData(partnerProjectApplications || []);
       setVolunteersData(volunteers);
 
       setProjectStats({
@@ -237,6 +246,7 @@ export default function DashboardScreen({ navigation }: any) {
           'users',
           'projects',
           'partners',
+          'partnerProjectApplications',
           'volunteers',
           'statusUpdates',
           'volunteerProjectJoins',
@@ -372,17 +382,71 @@ export default function DashboardScreen({ navigation }: any) {
   );
 
   const partnerMapAccounts = useMemo(
-    () =>
-      [...partnersData]
+    () => {
+      const projectById = new Map(projectsData.map(project => [project.id, project]));
+      const partnerById = new Map(partnersData.map(partner => [partner.id, partner]));
+      const proposalProjectIdsByPartnerId = new Map<string, Set<string>>();
+      const assignedProposalProjectIds = new Set<string>();
+      const approvedProposalProjectIds = new Set<string>();
+
+      partnerApplicationsData
+        .filter(
+          application =>
+            application.status === 'Approved' &&
+            String(application.projectId || '').startsWith('project-proposal-') &&
+            projectsData.some(project => project.id === application.projectId)
+        )
+        .forEach(application => {
+          approvedProposalProjectIds.add(application.projectId);
+
+          const proposalProject = projectById.get(application.projectId);
+          const matchingPartner =
+            (proposalProject?.partnerId ? partnerById.get(proposalProject.partnerId) || null : null) ||
+            partnersData.find(partner => {
+              if (partner.ownerUserId && application.partnerUserId === partner.ownerUserId) {
+                return true;
+              }
+
+              const partnerEmail = String(partner.contactEmail || '').trim().toLowerCase();
+              const applicationEmail = String(application.partnerEmail || '').trim().toLowerCase();
+              return Boolean(partnerEmail) && partnerEmail === applicationEmail;
+            }) ||
+            null;
+
+          if (!matchingPartner) {
+            return;
+          }
+
+          const currentProjectIds =
+            proposalProjectIdsByPartnerId.get(matchingPartner.id) || new Set<string>();
+          currentProjectIds.add(application.projectId);
+          proposalProjectIdsByPartnerId.set(matchingPartner.id, currentProjectIds);
+          assignedProposalProjectIds.add(application.projectId);
+        });
+
+      const accounts = [...partnersData]
         .sort((left, right) => left.name.localeCompare(right.name))
         .map(partner => ({
           id: partner.id,
           label: partner.name,
-          projectIds: projectsData
-            .filter(project => project.partnerId === partner.id)
-            .map(project => project.id),
-        })),
-    [partnersData, projectsData]
+          projectIds: Array.from(proposalProjectIdsByPartnerId.get(partner.id) || []),
+        }));
+
+      const unassignedProjectIds = Array.from(approvedProposalProjectIds).filter(
+        projectId => !assignedProposalProjectIds.has(projectId)
+      );
+
+      if (unassignedProjectIds.length > 0) {
+        accounts.push({
+          id: 'partner-unassigned',
+          label: 'N/A Partner Account',
+          projectIds: unassignedProjectIds,
+        });
+      }
+
+      return accounts;
+    },
+    [partnerApplicationsData, partnersData, projectsData]
   );
 
   const upcomingProjects = useMemo(() => {
@@ -483,6 +547,9 @@ export default function DashboardScreen({ navigation }: any) {
                 navigateToAvailableRoute(navigation, 'Volunteers', { volunteerId }, { routeName: 'Dashboard' });
               }}
               onPartnerPress={(partnerId: string) => {
+                if (partnerId === 'partner-unassigned') {
+                  return;
+                }
                 navigateToAvailableRoute(navigation, 'Partners', { partnerId }, { routeName: 'Dashboard' });
               }}
             />

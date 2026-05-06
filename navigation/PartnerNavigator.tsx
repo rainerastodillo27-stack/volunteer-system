@@ -1,13 +1,13 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useAuth } from '../contexts/AuthContext';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ScreenBrandHeader from '../components/ScreenBrandHeader';
-import { getMessagesForUser, subscribeToMessages } from '../models/storage';
 
 export type PartnerTabParamList = {
-  Dashboard: undefined;
+  Dashboard: { openProposalModule?: string } | undefined;
   Programs: { programModule?: string; projectId?: string } | undefined;
+  Projects: { projectId?: string } | undefined;
   Map: undefined;
   Messages: { projectId?: string } | undefined;
   Reports: { projectId?: string } | undefined;
@@ -25,6 +25,7 @@ function lazyScreen<T extends object>(loader: () => { default: React.ComponentTy
 
 const PartnerDashboardScreen = lazyScreen(() => require('../screens/PartnerDashboardScreen'));
 const PartnerProgramManagementScreen = lazyScreen(() => require('../screens/PartnerProgramManagementScreen'));
+const PartnerProjectsScreen = lazyScreen(() => require('../screens/PartnerProjectsScreen'));
 const MappingScreen = lazyScreen(() => require('../screens/MappingScreen'));
 const CommunicationHubScreen = lazyScreen(() => require('../screens/CommunicationHubScreen'));
 const PartnerReportsScreen = lazyScreen(() => require('../screens/PartnerReportsScreen'));
@@ -34,6 +35,7 @@ const getIconName = (routeName: keyof PartnerTabParamList) => {
   switch (routeName) {
     case 'Dashboard': return 'dashboard';
     case 'Programs': return 'business-center';
+    case 'Projects': return 'assignment';
     case 'Map': return 'map';
     case 'Messages': return 'mail';
     case 'Reports': return 'insert-chart';
@@ -43,20 +45,7 @@ const getIconName = (routeName: keyof PartnerTabParamList) => {
 };
 
 export default function PartnerNavigator() {
-  const { user } = useAuth();
-  const [messageUnreadCount, setMessageUnreadCount] = useState(0);
-
-  useEffect(() => {
-    if (!user?.id) return;
-    const loadUnreadCount = async () => {
-      try {
-        const messages = await getMessagesForUser(user.id);
-        setMessageUnreadCount(messages.filter(m => !m.read && m.recipientId === user.id).length);
-      } catch {}
-    };
-    loadUnreadCount();
-    return subscribeToMessages(user.id, loadUnreadCount);
-  }, [user?.id]);
+  const insets = useSafeAreaInsets();
 
   return (
     <Tab.Navigator
@@ -66,13 +55,22 @@ export default function PartnerNavigator() {
         tabBarIcon: ({ color, size }) => <MaterialIcons name={getIconName(route.name as keyof PartnerTabParamList)} size={size} color={color} />,
         tabBarActiveTintColor: '#166534',
         tabBarInactiveTintColor: '#999',
-        tabBarStyle: { backgroundColor: '#fff', borderTopColor: '#eee', paddingBottom: 4 },
+        tabBarShowLabel: false,
+        tabBarItemStyle: { paddingTop: 6, paddingBottom: 10 },
+        tabBarStyle: {
+          backgroundColor: '#fff',
+          borderTopColor: '#eee',
+          height: 58 + Math.max(insets.bottom, 16),
+          paddingTop: 6,
+          paddingBottom: Math.max(insets.bottom, 16),
+        },
       })}
     >
       <Tab.Screen name="Dashboard" component={PartnerDashboardScreen} options={{ title: 'Partner Dashboard' }} />
       <Tab.Screen name="Programs" component={PartnerProgramManagementScreen} options={{ title: 'Program Management' }} />
+      <Tab.Screen name="Projects" component={PartnerProjectsScreen} options={{ title: 'My Projects', tabBarLabel: 'Projects' }} />
       <Tab.Screen name="Map" component={MappingScreen} options={{ title: 'Impact Map' }} />
-      <Tab.Screen name="Messages" component={CommunicationHubScreen} options={{ title: 'Messages', tabBarBadge: messageUnreadCount > 0 ? messageUnreadCount : undefined }} />
+      <Tab.Screen name="Messages" component={CommunicationHubScreen} options={{ title: 'Messages' }} />
       <Tab.Screen name="Reports" component={PartnerReportsScreen} options={{ title: 'Reports' }} />
       <Tab.Screen name="Profile" component={ProfileScreen} options={{ title: 'Partner Profile' }} />
     </Tab.Navigator>

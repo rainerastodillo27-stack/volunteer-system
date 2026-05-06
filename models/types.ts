@@ -16,6 +16,15 @@ export type ImpactHubReportType =
   | 'partner_collaboration'
   | 'system_metrics';
 
+export interface AppSettings {
+  notificationsEnabled: boolean;
+  autoRefreshEnabled: boolean;
+  compactDashboard: boolean;
+  approvalConfirmations: boolean;
+  showProgramContext: boolean;
+  startupScreen: 'Dashboard' | 'Projects' | 'Reports' | 'Messages';
+}
+
 // Represents an application account that can sign in to the system.
 export interface User {
   id: string;
@@ -39,6 +48,7 @@ export interface Partner {
   id: string;
   ownerUserId?: string; // Partner account that owns/submitted this org profile
   name: string;
+  stakeholderName?: string;
   description?: string;
   category: 'Education' | 'Livelihood' | 'Nutrition' | 'Disaster';
   sectorType: PartnerSectorType;
@@ -47,6 +57,9 @@ export interface Partner {
   advocacyFocus: AdvocacyFocus[];
   contactEmail?: string;
   contactPhone?: string;
+  region?: string;
+  province?: string;
+  cityMunicipality?: string;
   address?: string;
   status: 'Pending' | 'Approved' | 'Rejected'; // Admin validation
   verificationStatus?: 'Pending' | 'Verified';
@@ -105,6 +118,7 @@ export interface ProgramTrack {
   id: string;
   title: string;
   description?: string;
+  context?: string;
   icon?: string;
   color?: string;
   imageUrl?: string;
@@ -141,10 +155,18 @@ export interface Project {
   volunteers: string[]; // Volunteer IDs
   joinedUserIds?: string[];
   skillsNeeded?: string[]; // Skills required for this project/event
+  communityNeed?: string;
+  expectedDeliverables?: string;
+  attachments?: {
+    url: string;
+    type: 'image' | 'document';
+    description?: string;
+  }[];
   createdAt: string;
   updatedAt: string;
   statusUpdates: StatusUpdate[];
   internalTasks?: ProjectInternalTask[];
+  groupChatDisabled?: boolean;
 }
 
 // Represents one lifecycle update attached to a project.
@@ -368,6 +390,9 @@ export interface PartnerReport {
   sourceReportIds?: string[];
   viewedBy?: string[];
   reviewNotes?: string;
+  collaborationFeedback?: string;
+  volunteerPraise?: string;
+  gratitudeNote?: string;
 }
 
 // Represents a generated final impact file that can be published to partners.

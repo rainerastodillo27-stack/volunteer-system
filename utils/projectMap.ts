@@ -78,8 +78,13 @@ function getProjectImageSources(project: Project): ImageSourcePropType[] {
   }
 
   const imageSources: ImageSourcePropType[] = [];
-  if (isImageMediaUri(project.imageUrl)) {
+  const hasUploadedProjectImage = isImageMediaUri(project.imageUrl);
+  if (hasUploadedProjectImage) {
     imageSources.push({ uri: project.imageUrl });
+  }
+  const isProposalCreatedProject = String(project.id || '').startsWith('project-proposal-');
+  if (isProposalCreatedProject && !hasUploadedProjectImage) {
+    return imageSources;
   }
   const programPhotoSource = getProgramPhotoSource(project);
 
@@ -173,9 +178,19 @@ const KNOWN_PLACE_COORDINATES: Array<{
     longitude: 122.4665,
   },
   {
+    keywords: ['bindoy', 'camudlas bindoy', 'camudlas'],
+    latitude: 10.4026,
+    longitude: 123.0059,
+  },
+  {
     keywords: ['negros occidental'],
     latitude: 10.5,
     longitude: 123.0,
+  },
+  {
+    keywords: ['negros island region', 'nir'],
+    latitude: 10.68,
+    longitude: 122.97,
   },
   {
     keywords: ['philippines', 'philippine', 'pinas'],
@@ -416,6 +431,45 @@ function resolveProjectMapPlacement(project: Project, projects: Project[]): Proj
   };
 }
 
+function spreadOverlappingProjectMarkers(projects: Project[]): Project[] {
+  const projectsByCoordinateKey = new Map<string, Project[]>();
+
+  projects.forEach(project => {
+    const coordinateKey = `${project.location.latitude.toFixed(5)}:${project.location.longitude.toFixed(5)}`;
+    const entries = projectsByCoordinateKey.get(coordinateKey) || [];
+    entries.push(project);
+    projectsByCoordinateKey.set(coordinateKey, entries);
+  });
+
+  return projects.flatMap(project => {
+    const coordinateKey = `${project.location.latitude.toFixed(5)}:${project.location.longitude.toFixed(5)}`;
+    const overlappingProjects = projectsByCoordinateKey.get(coordinateKey) || [];
+
+    if (overlappingProjects.length <= 1) {
+      return project;
+    }
+
+    const projectIndex = overlappingProjects.findIndex(entry => entry.id === project.id);
+    if (projectIndex === -1) {
+      return project;
+    }
+
+    const angle = (Math.PI * 2 * projectIndex) / overlappingProjects.length;
+    const radius = 0.0035;
+    const latitudeOffset = Math.sin(angle) * radius;
+    const longitudeOffset = Math.cos(angle) * radius;
+
+    return {
+      ...project,
+      location: {
+        ...project.location,
+        latitude: project.location.latitude + latitudeOffset,
+        longitude: project.location.longitude + longitudeOffset,
+      },
+    };
+  });
+}
+
 export function inferCoordinatesFromPlace(
   place: string,
   projects: Array<Pick<Project, 'location'>> = []
@@ -504,6 +558,11 @@ export const NEGROS_REGION = {
   longitudeDelta: 0.8,
 };
 
+export const IMPACT_MAP_MIN_REGION = {
+  latitudeDelta: 4.8,
+  longitudeDelta: 4.8,
+};
+
 // Returns the marker color for a project or event based only on lifecycle status.
 export function getProjectMarkerColor(
   project: Pick<Project, 'isEvent' | 'status' | 'startDate' | 'endDate'>
@@ -512,9 +571,11 @@ export function getProjectMarkerColor(
 }
 
 export function getMappedProjects(projects: Project[]): Project[] {
-  return projects
+  const resolvedProjects = projects
     .map(project => resolveProjectMapPlacement(project, projects))
     .filter(project => hasUsableCoordinates(project.location));
+
+  return spreadOverlappingProjectMarkers(resolvedProjects);
 }
 
 // Computes an initial map region that keeps all known projects in view.
@@ -535,7 +596,13 @@ export function getInitialProjectRegion(projects: Project[]) {
   return {
     latitude: (minLatitude + maxLatitude) / 2,
     longitude: (minLongitude + maxLongitude) / 2,
-    latitudeDelta: Math.max((maxLatitude - minLatitude) * 1.8, 0.35),
-    longitudeDelta: Math.max((maxLongitude - minLongitude) * 1.8, 0.35),
+    latitudeDelta: Math.max(
+      (maxLatitude - minLatitude) * 1.8,
+      IMPACT_MAP_MIN_REGION.latitudeDelta
+    ),
+    longitudeDelta: Math.max(
+      (maxLongitude - minLongitude) * 1.8,
+      IMPACT_MAP_MIN_REGION.longitudeDelta
+    ),
   };
 }

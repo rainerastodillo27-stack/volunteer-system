@@ -11,7 +11,6 @@ import {
   ScrollView,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import Constants from 'expo-constants';
 import MapView, { Callout, Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import InlineLoadError from '../components/InlineLoadError';
 import { useAuth } from '../contexts/AuthContext';
@@ -45,9 +44,6 @@ export default function MappingScreen({ navigation }: any) {
   const [showDetails, setShowDetails] = useState(false);
   const [loading, setLoading] = useState(true);
   const mapRef = React.useRef<MapView | null>(null);
-  const mobileGoogleMapsApiKey =
-    (Constants.expoConfig?.extra?.mobileGoogleMapsApiKey as string | undefined) ||
-    (Constants.expoConfig?.extra?.androidGoogleMapsApiKey as string | undefined);
   const mappedProjects = React.useMemo(() => getMappedProjects(projects), [projects]);
   const isVolunteerView = user?.role === 'volunteer';
   const initialRegion = React.useMemo(
@@ -83,7 +79,11 @@ export default function MappingScreen({ navigation }: any) {
 
       const approvedPartnerProjectIds = new Set(
         snapshot.partnerApplications
-          .filter(application => application.status === 'Approved')
+          .filter(
+            application =>
+              application.status === 'Approved' &&
+              String(application.projectId || '').startsWith('project-proposal-')
+          )
           .map(application => application.projectId)
       );
       const joinedVolunteerProjectIds = new Set(
@@ -102,7 +102,7 @@ export default function MappingScreen({ navigation }: any) {
                 (snapshot.volunteerProfile && (project.volunteers || []).includes(snapshot.volunteerProfile.id)) ||
                 (snapshot.volunteerProfile && (project.internalTasks || []).some(task => task.assignedVolunteerId === snapshot.volunteerProfile?.id))
             )
-          : snapshot.projects.filter(project => project.isEvent);
+          : snapshot.projects;
 
       const visibleProjectIds = new Set(visibleProjects.map(project => project.id));
 
@@ -234,13 +234,16 @@ export default function MappingScreen({ navigation }: any) {
                 longitude: project.location.longitude,
               }}
               title={`${index + 1}. ${project.title}`}
-              description={`${project.isEvent ? 'Event' : 'Program'} | ${getProjectDisplayStatus(project)}`}
+              description={`${project.isEvent ? 'Event' : 'Project'} | ${getProjectDisplayStatus(project)}`}
               onPress={() => handleProjectSelection(project.id)}
             >
               <Callout tooltip>
                 <View style={styles.calloutCard}>
                   <Text style={styles.calloutTitle} numberOfLines={2}>
                     {project.title}
+                  </Text>
+                  <Text style={styles.calloutMetaLabel}>
+                    {project.isEvent ? 'Event' : 'Project'}
                   </Text>
 
                   {(() => {
@@ -384,11 +387,6 @@ export default function MappingScreen({ navigation }: any) {
               {`${projects.length - mappedProjects.length} ${projects.length - mappedProjects.length === 1 ? 'item is' : 'items are'} missing a map placement and hidden from the map.`}
             </Text>
           ) : null}
-          {(Platform.OS === 'android' || Platform.OS === 'ios') && !mobileGoogleMapsApiKey ? (
-            <Text style={styles.projectListWarning}>
-              Google Maps mobile key is missing. Add `GOOGLE_MAPS_MOBILE_API_KEY` to `.env`.
-            </Text>
-          ) : null}
         </View>
       ) : null}
 
@@ -435,6 +433,12 @@ export default function MappingScreen({ navigation }: any) {
                 <Text style={styles.description}>{selectedProject.description}</Text>
 
                 <View style={styles.infoGrid}>
+                  <View style={styles.infoItem}>
+                    <Text style={styles.infoLabel}>Type</Text>
+                    <Text style={styles.infoValue}>
+                      {selectedProject.isEvent ? 'Event' : 'Project'}
+                    </Text>
+                  </View>
                   <View style={styles.infoItem}>
                     <Text style={styles.infoLabel}>Category</Text>
                     <Text style={styles.infoValue}>
@@ -546,7 +550,7 @@ const styles = StyleSheet.create({
     paddingTop: 12,
   },
   headerTitle: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: 'bold',
     color: '#333',
   },
@@ -575,6 +579,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
     color: '#0f172a',
+    marginBottom: 4,
+  },
+  calloutMetaLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#475569',
     marginBottom: 8,
   },
   calloutSectionLabel: {
@@ -685,7 +695,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#ecfdf3',
   },
   volunteerCountValue: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '800',
     color: '#166534',
   },
@@ -747,13 +757,13 @@ const styles = StyleSheet.create({
   },
   volunteerEventTitle: {
     marginTop: 4,
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '800',
     color: '#0f172a',
   },
   volunteerEventMeta: {
     marginTop: 10,
-    fontSize: 13,
+    fontSize: 12,
     lineHeight: 19,
     color: '#475569',
   },
@@ -782,7 +792,7 @@ const styles = StyleSheet.create({
   },
   volunteerPrimaryButtonText: {
     color: '#fff',
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '800',
   },
   volunteerHintCard: {
@@ -848,7 +858,7 @@ const styles = StyleSheet.create({
     color: '#333',
   },
   projectTitle: {
-    fontSize: 24,
+    fontSize: 20,
     fontWeight: 'bold',
     color: '#333',
     marginBottom: 12,

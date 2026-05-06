@@ -17,7 +17,6 @@ import { useAuth } from '../contexts/AuthContext';
 import {
   getProject,
   getVolunteerProjectMatches,
-  requestVolunteerProjectJoin,
   getAllVolunteerTimeLogs,
   startVolunteerTimeLog,
   endVolunteerTimeLog,
@@ -41,6 +40,20 @@ function getProjectImageSource(project: Project): ImageSourcePropType {
   return PROGRAM_IMAGE_BY_CATEGORY[project.programModule || project.category];
 }
 
+function getLocalDateKey(value?: string, now: Date = new Date()): string {
+  const date = value ? new Date(value) : now;
+  if (Number.isNaN(date.getTime())) {
+    const fallback = new Date(now);
+    const month = String(fallback.getMonth() + 1).padStart(2, '0');
+    const day = String(fallback.getDate()).padStart(2, '0');
+    return `${fallback.getFullYear()}-${month}-${day}`;
+  }
+
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
 export default function VolunteerProjectDetailsScreen({
   navigation,
   route,
@@ -59,6 +72,10 @@ export default function VolunteerProjectDetailsScreen({
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const [activeTimeLog, setActiveTimeLog] = useState<VolunteerTimeLog | null>(null);
   const hasLoadedOnceRef = useRef(false);
+
+  const handleBackToProgramSuite = useCallback(() => {
+    navigation.navigate('Projects');
+  }, [navigation]);
 
   const loadData = useCallback(async () => {
     if (!projectId || !user?.id) return;
@@ -83,7 +100,10 @@ export default function VolunteerProjectDetailsScreen({
       );
       setTimeLogs(projectTimeLogs);
 
-      const active = projectTimeLogs.find((log) => !log.timeOut);
+      const todayKey = getLocalDateKey();
+      const active = projectTimeLogs.find(
+        (log) => !log.timeOut && getLocalDateKey(log.timeIn) === todayKey
+      );
       setActiveTimeLog(active || null);
       hasLoadedOnceRef.current = true;
     } catch (error) {
@@ -104,27 +124,6 @@ export default function VolunteerProjectDetailsScreen({
       );
     }, [loadData])
   );
-
-  const handleJoinProject = async () => {
-    if (!user?.id || !project) return;
-
-    try {
-      setLoadingAction('join');
-      const match = await requestVolunteerProjectJoin(project.id, user.id);
-      setVolunteerMatches((prev) => [
-        match,
-        ...prev.filter((m) => m.projectId !== project.id),
-      ]);
-      Alert.alert('Request Sent', 'Your event join request was sent to admin. You will be notified when it is approved.');
-    } catch (error) {
-      Alert.alert(
-        'Error',
-        getRequestErrorMessage(error, 'Unable to send join request.')
-      );
-    } finally {
-      setLoadingAction(null);
-    }
-  };
 
   const handleStartTimeLog = async () => {
     if (!user?.id || !project) return;
@@ -183,7 +182,7 @@ export default function VolunteerProjectDetailsScreen({
           <Text style={styles.errorText}>Project not found</Text>
           <TouchableOpacity
             style={styles.backButton}
-            onPress={() => navigation.goBack()}
+            onPress={handleBackToProgramSuite}
           >
             <Text style={styles.backButtonText}>Go Back</Text>
           </TouchableOpacity>
@@ -195,6 +194,7 @@ export default function VolunteerProjectDetailsScreen({
   const currentMatch = volunteerMatches.find((m) => m.projectId === project.id);
   const isJoined = !!currentMatch;
   const isPending = currentMatch?.status === 'Requested';
+  const isEventRecord = Boolean(project.isEvent);
 
   return (
     <View style={styles.container}>
@@ -202,12 +202,14 @@ export default function VolunteerProjectDetailsScreen({
         {/* Header with back button */}
         <View style={styles.header}>
           <TouchableOpacity
-            onPress={() => navigation.goBack()}
+            onPress={handleBackToProgramSuite}
             style={styles.headerButton}
           >
             <MaterialIcons name="arrow-back" size={24} color="#333" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Project Details</Text>
+          <Text style={styles.headerTitle}>
+            {isEventRecord ? 'Event Details' : 'Project Details'}
+          </Text>
           <View style={styles.headerSpacer} />
         </View>
 
@@ -284,7 +286,7 @@ export default function VolunteerProjectDetailsScreen({
           </View>
 
           {/* Time Logging */}
-          {isJoined && !isPending && (
+          {isEventRecord && isJoined && !isPending && (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Time Logging</Text>
 
@@ -354,26 +356,30 @@ export default function VolunteerProjectDetailsScreen({
             </View>
           )}
 
-          {/* Action Button */}
-          <TouchableOpacity
-            style={[
-              styles.actionButton,
-              (isJoined || loadingAction === 'join') &&
-                styles.actionButtonDisabled,
-            ]}
-            onPress={handleJoinProject}
-            disabled={isJoined || loadingAction === 'join'}
-          >
-            <Text style={styles.actionButtonText}>
-              {loadingAction === 'join'
-                ? 'Sending Request...'
-                : isPending
-                  ? 'Request Pending'
+          {isEventRecord ? (
+            <View style={styles.projectNoticeCard}>
+              <MaterialIcons
+                name={isJoined ? 'check-circle-outline' : 'event-available'}
+                size={18}
+                color="#166534"
+              />
+              <Text style={styles.projectNoticeText}>
+                {isPending
+                  ? 'Your event join request is pending admin approval.'
                   : isJoined
-                    ? 'Joined'
-                    : 'Request to Join'}
-            </Text>
-          </TouchableOpacity>
+                    ? 'You already joined this event. Use the time logging section here once you are approved and active.'
+                    : 'Join this event from the volunteer event list.'
+                }
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.projectNoticeCard}>
+              <MaterialIcons name="info-outline" size={18} color="#166534" />
+              <Text style={styles.projectNoticeText}>
+                Volunteers can join events only. Open an event under this project to send a join request.
+              </Text>
+            </View>
+          )}
         </View>
       </ScrollView>
     </View>
@@ -402,11 +408,11 @@ const styles = StyleSheet.create({
     borderBottomColor: '#eee',
   },
   headerButton: {
-    padding: 8,
+    padding: 6,
     marginLeft: -8,
   },
   headerTitle: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '600',
     color: '#333',
   },
@@ -415,19 +421,19 @@ const styles = StyleSheet.create({
   },
   projectImage: {
     width: '100%',
-    height: 200,
+    height: 176,
   },
   content: {
-    padding: 16,
+    padding: 14,
   },
   projectTitle: {
-    fontSize: 24,
+    fontSize: 18,
     fontWeight: 'bold',
     color: '#333',
-    marginBottom: 12,
+    marginBottom: 10,
   },
   statusRow: {
-    marginBottom: 20,
+    marginBottom: 16,
   },
   statusBadge: {
     alignSelf: 'flex-start',
@@ -437,29 +443,29 @@ const styles = StyleSheet.create({
   },
   statusText: {
     color: '#fff',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600',
   },
   section: {
-    marginBottom: 20,
+    marginBottom: 16,
   },
   sectionTitle: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '600',
     color: '#333',
-    marginBottom: 12,
+    marginBottom: 10,
   },
   sectionText: {
-    fontSize: 14,
-    lineHeight: 20,
+    fontSize: 12,
+    lineHeight: 18,
     color: '#666',
   },
   detailRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 12,
-    marginBottom: 16,
-    paddingBottom: 12,
+    marginBottom: 14,
+    paddingBottom: 10,
     borderBottomWidth: 1,
     borderBottomColor: '#eee',
   },
@@ -467,13 +473,13 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   detailLabel: {
-    fontSize: 12,
+    fontSize: 11,
     color: '#999',
     fontWeight: '600',
     marginBottom: 4,
   },
   detailValue: {
-    fontSize: 14,
+    fontSize: 12,
     color: '#333',
     fontWeight: '500',
   },
@@ -485,31 +491,31 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#fcd34d',
     borderRadius: 8,
-    padding: 12,
+    padding: 10,
     marginBottom: 12,
   },
   timeLogContent: {
     flex: 1,
   },
   timeLogStatus: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '600',
     color: '#f59e0b',
   },
   timeLogTime: {
-    fontSize: 12,
+    fontSize: 11,
     color: '#999',
     marginTop: 2,
   },
   timeLogButton: {
     backgroundColor: '#ef4444',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
     borderRadius: 6,
   },
   timeLogButtonText: {
     color: '#fff',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600',
   },
   timeLogStartButton: {
@@ -518,19 +524,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     backgroundColor: '#4CAF50',
-    paddingVertical: 12,
+    paddingVertical: 10,
     borderRadius: 8,
     marginBottom: 12,
   },
   timeLogStartButtonText: {
     color: '#fff',
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '600',
   },
   timeLogsHistory: {
     backgroundColor: '#fff',
     borderRadius: 8,
-    padding: 12,
+    padding: 10,
   },
   timeLogsHistoryTitle: {
     fontSize: 12,
@@ -544,7 +550,7 @@ const styles = StyleSheet.create({
     borderBottomColor: '#f0f0f0',
   },
   timeLogEntryDate: {
-    fontSize: 13,
+    fontSize: 12,
     color: '#333',
     fontWeight: '500',
   },
@@ -553,26 +559,29 @@ const styles = StyleSheet.create({
     color: '#999',
     marginTop: 2,
   },
-  actionButton: {
-    backgroundColor: '#4CAF50',
-    paddingVertical: 14,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginTop: 20,
-    marginBottom: 40,
+  projectNoticeCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    borderRadius: 10,
+    padding: 12,
+    marginTop: 16,
+    marginBottom: 28,
   },
-  actionButtonDisabled: {
-    backgroundColor: '#ccc',
-  },
-  actionButtonText: {
-    color: '#fff',
-    fontSize: 14,
+  projectNoticeText: {
+    flex: 1,
+    color: '#166534',
+    fontSize: 12,
+    lineHeight: 18,
     fontWeight: '600',
   },
   backButton: {
     backgroundColor: '#4CAF50',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
     borderRadius: 6,
   },
   backButtonText: {

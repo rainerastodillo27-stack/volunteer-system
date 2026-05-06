@@ -16,13 +16,12 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import InlineLoadError from '../components/InlineLoadError';
 import { useAuth } from '../contexts/AuthContext';
-import VolunteerImpactMap from '../components/VolunteerImpactMap';
 import {
   getAllProjects,
   getAllUsers,
   getPartnersByOwnerUserId,
-  getVolunteerCompletedProjectIds,
   getVolunteerRecognitionStatus,
+  getVolunteerTimeLogs,
   getUserByEmailOrPhone,
   getVolunteerByUserId,
   savePartner,
@@ -31,14 +30,32 @@ import {
   subscribeToStorageChanges,
 } from '../models/storage';
 import { VolunteerRecognitionStatus } from '../models/storage';
-import { NVCSector, Partner, Project, User, UserType, Volunteer } from '../models/types';
+import { NVCSector, Partner, Project, User, UserType, Volunteer, VolunteerTimeLog } from '../models/types';
 import { isImageMediaUri, pickImageFromDevice } from '../utils/media';
 import { getRequestErrorMessage, getRequestErrorTitle, isAbortLikeError } from '../utils/requestErrors';
+import { getProjectDisplayStatus } from '../utils/projectStatus';
 
 const USER_TYPES: UserType[] = ['Student', 'Adult', 'Senior'];
 const PILLAR_OPTIONS: NVCSector[] = ['Nutrition', 'Education', 'Livelihood'];
 const SAVE_SYNC_RETRY_COUNT = 3;
 const SAVE_SYNC_RETRY_DELAY_MS = 250;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+function getEndOfDay(value?: string): Date | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setHours(23, 59, 59, 999);
+  return date;
+}
+
+function getStartOfDay(value?: string): Date | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
 
 // Displays the signed-in user's profile, volunteer recognition, and edit form.
 export default function ProfileScreen() {
@@ -46,7 +63,7 @@ export default function ProfileScreen() {
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
   const [partnerProfiles, setPartnerProfiles] = useState<Partner[]>([]);
-  const [completedProjectIds, setCompletedProjectIds] = useState<string[]>([]);
+  const [volunteerTimeLogs, setVolunteerTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const [recognitionStatus, setRecognitionStatus] = useState<VolunteerRecognitionStatus>({
     joinedProgramCount: 0,
     isTopVolunteer: false,
@@ -70,7 +87,7 @@ export default function ProfileScreen() {
   const loadVolunteerProfile = useCallback(async () => {
     if (user?.role !== 'volunteer' || !user.id) {
       setVolunteerProfile(null);
-      setCompletedProjectIds([]);
+      setVolunteerTimeLogs([]);
       setRecognitionStatus({
         joinedProgramCount: 0,
         isTopVolunteer: false,
@@ -82,8 +99,8 @@ export default function ProfileScreen() {
       const profile = await getVolunteerByUserId(user.id);
       setVolunteerProfile(profile);
       if (profile?.id) {
-        const completedIds = await getVolunteerCompletedProjectIds(profile.id);
-        setCompletedProjectIds(completedIds);
+        const timeLogs = await getVolunteerTimeLogs(profile.id);
+        setVolunteerTimeLogs(timeLogs);
         setRecognitionStatus({ joinedProgramCount: 0, isTopVolunteer: false });
         // defer heavier recognition check
         setTimeout(async () => {
@@ -93,7 +110,7 @@ export default function ProfileScreen() {
           } catch {}
         }, 50);
       } else {
-        setCompletedProjectIds([]);
+        setVolunteerTimeLogs([]);
         setRecognitionStatus({
           joinedProgramCount: 0,
           isTopVolunteer: false,
@@ -382,7 +399,6 @@ export default function ProfileScreen() {
 
         await saveVolunteer(updatedVolunteerProfile);
         setVolunteerProfile(updatedVolunteerProfile);
-        setCompletedProjectIds(updatedVolunteerProfile.pastProjects || []);
       }
 
       if (user.role === 'partner' && partnerProfiles.length > 0) {
@@ -435,15 +451,11 @@ export default function ProfileScreen() {
     .join('')
     .slice(0, 2)
     .toUpperCase();
-  const completedPrograms = completedProjectIds;
   const joinedProgramCount = recognitionStatus.joinedProgramCount;
   const isTopVolunteer = recognitionStatus.isTopVolunteer;
   const primaryPartnerProfile = partnerProfiles[0] || null;
   const profilePhotoUri = isImageMediaUri(user?.profilePhoto) ? user?.profilePhoto : null;
   const draftProfilePhotoUri = isImageMediaUri(profilePhotoDraft) ? profilePhotoDraft : null;
-  const projectById: Record<string, Project> = Object.fromEntries(
-    projects.map(project => [project.id, project])
-  );
   const joinedEventProjects = projects.filter(project => {
     if (!project.isEvent) return false;
     
@@ -455,6 +467,103 @@ export default function ProfileScreen() {
     
     return isJoinedByUser || isJoinedByVolunteer || isAssignedToTask;
   });
+  const completedEvents = joinedEventProjects
+    .filter(project => getProjectDisplayStatus(project) === 'Completed')
+    .filter(project => {
+      const completedLogs = volunteerTimeLogs
+        .filter(log => log.projectId === project.id && Boolean(log.timeIn) && Boolean(log.timeOut))
+        .sort(
+          (left, right) =>
+            new Date(right.timeOut || right.timeIn).getTime() -
+            new Date(left.timeOut || left.timeIn).getTime()
+        );
+
+      if (completedLogs.length === 0) {
+        return false;
+      }
+
+      const latestCompletedLog = completedLogs[0];
+      const eventEndDay = getEndOfDay(project.endDate || project.startDate);
+      const lastAttendanceDay = getStartOfDay(latestCompletedLog.timeOut || latestCompletedLog.timeIn);
+
+      if (!eventEndDay || !lastAttendanceDay) {
+        return false;
+      }
+
+      const eventEndStartDay = new Date(eventEndDay);
+      eventEndStartDay.setHours(0, 0, 0, 0);
+
+      const absentDaysBeforeEventFinished = Math.max(
+        0,
+        Math.floor((eventEndStartDay.getTime() - lastAttendanceDay.getTime()) / MS_PER_DAY)
+      );
+
+      return absentDaysBeforeEventFinished < 7;
+    })
+    .sort(
+      (left, right) =>
+        new Date(right.endDate || right.startDate).getTime() -
+        new Date(left.endDate || left.startDate).getTime()
+    );
+  const accountOverviewCards = [
+    {
+      label: 'Role',
+      value:
+        user?.role === 'admin'
+          ? 'National Volunteer Coordinator (NVC)'
+          : user?.role === 'partner'
+            ? 'Partner Account'
+            : 'Volunteer',
+    },
+    {
+      label: 'Email',
+      value: user?.email ?? volunteerProfile?.email ?? primaryPartnerProfile?.contactEmail ?? 'Not provided',
+    },
+    {
+      label: 'Phone',
+      value: user?.phone ?? volunteerProfile?.phone ?? primaryPartnerProfile?.contactPhone ?? 'Not provided',
+    },
+    {
+      label: 'Pillars of Interest',
+      value:
+        (user?.pillarsOfInterest || []).length > 0
+          ? user?.pillarsOfInterest?.join(', ')
+          : 'No pillar preferences',
+    },
+    ...(user?.role !== 'partner'
+      ? [
+          {
+            label: 'Profile Type',
+            value: user?.userType || 'Adult',
+          },
+        ]
+      : []),
+  ];
+  const volunteerRegistrationCards = volunteerProfile
+    ? [
+        { label: 'Gender', value: volunteerProfile.gender || 'Not provided' },
+        { label: 'Date of Birth', value: volunteerProfile.dateOfBirth || 'Not provided' },
+        { label: 'Civil Status', value: volunteerProfile.civilStatus || 'Not provided' },
+        { label: 'Home Address', value: volunteerProfile.homeAddress || 'Not provided' },
+        { label: 'Occupation', value: volunteerProfile.occupation || 'Not provided' },
+        { label: 'Workplace or School', value: volunteerProfile.workplaceOrSchool || 'Not provided' },
+        { label: 'College Course', value: volunteerProfile.collegeCourse || 'Not provided' },
+        { label: 'Hobbies and Interests', value: volunteerProfile.hobbiesAndInterests || 'Not provided' },
+        { label: 'Special Skills', value: volunteerProfile.specialSkills || 'Not provided' },
+      ]
+    : [];
+  const volunteerNarrativeCards = volunteerProfile
+    ? [
+        {
+          label: 'Skills Description',
+          value: volunteerProfile.skillsDescription || 'No skills description added yet.',
+        },
+        {
+          label: 'Background',
+          value: volunteerProfile.background || 'No background added yet.',
+        },
+      ]
+    : [];
 
   return (
     <ScrollView style={styles.container}>
@@ -471,19 +580,29 @@ export default function ProfileScreen() {
         </View>
       ) : null}
       <View style={styles.profileCard}>
-        {profilePhotoUri ? (
-          <Image source={{ uri: profilePhotoUri }} style={styles.avatarImage} />
-        ) : (
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>{initials}</Text>
-          </View>
-        )}
+        <View style={styles.profileHero}>
+          <View style={styles.profileHeroIdentity}>
+            {profilePhotoUri ? (
+              <Image source={{ uri: profilePhotoUri }} style={styles.avatarImage} />
+            ) : (
+              <View style={styles.avatar}>
+                <Text style={styles.avatarText}>{initials}</Text>
+              </View>
+            )}
 
-        <Text style={styles.name}>{user?.name ?? 'User'}</Text>
-        <Text style={styles.email}>{user?.email ?? user?.phone ?? 'No contact info'}</Text>
-        {user?.role === 'partner' && primaryPartnerProfile ? (
-          <Text style={styles.subheading}>{primaryPartnerProfile.name}</Text>
-        ) : null}
+            <View style={styles.profileHeroCopy}>
+              <Text style={styles.name}>{user?.name ?? 'User'}</Text>
+              <Text style={styles.email}>{user?.email ?? user?.phone ?? 'No contact info'}</Text>
+              {user?.role === 'partner' && primaryPartnerProfile ? (
+                <Text style={styles.subheading}>{primaryPartnerProfile.name}</Text>
+              ) : null}
+            </View>
+          </View>
+
+          <TouchableOpacity style={styles.editButton} onPress={openEditModal}>
+            <Text style={styles.editButtonText}>Edit Profile</Text>
+          </TouchableOpacity>
+        </View>
 
         {user?.role === 'volunteer' && volunteerProfile && isTopVolunteer && (
           <View style={styles.topVolunteerBadge}>
@@ -499,51 +618,27 @@ export default function ProfileScreen() {
           </View>
         )}
 
-        <TouchableOpacity style={styles.editButton} onPress={openEditModal}>
-          <Text style={styles.editButtonText}>Edit Profile</Text>
-        </TouchableOpacity>
-
         <View style={styles.infoContainer}>
-          <Text style={styles.infoLabel}>Role</Text>
-          <Text style={styles.infoValue}>
-            {user?.role === 'admin'
-              ? 'National Volunteer Coordinator (NVC)'
-                : user?.role === 'partner'
-                ? 'Partner Account'
-                : 'Volunteer'}
-          </Text>
-
-          <Text style={styles.infoLabel}>Email</Text>
-          <Text style={styles.infoValue}>
-            {user?.email ?? volunteerProfile?.email ?? primaryPartnerProfile?.contactEmail ?? 'Not provided'}
-          </Text>
-
-          <Text style={styles.infoLabel}>Phone</Text>
-          <Text style={styles.infoValue}>
-            {user?.phone ?? volunteerProfile?.phone ?? primaryPartnerProfile?.contactPhone ?? 'Not provided'}
-          </Text>
-
-          <Text style={styles.infoLabel}>Pillars of Interest</Text>
-          <Text style={styles.infoValue}>
-            {(user?.pillarsOfInterest || []).length > 0
-              ? user?.pillarsOfInterest?.join(', ')
-              : 'No pillar preferences'}
-          </Text>
-
-          {user?.role !== 'partner' ? (
-            <>
-              <Text style={styles.infoLabel}>Profile Type</Text>
-              <Text style={styles.infoValue}>{user?.userType || 'Adult'}</Text>
-            </>
-          ) : null}
+          <Text style={styles.sectionTitle}>Account Overview</Text>
+          <View style={styles.detailGrid}>
+            {accountOverviewCards.map(card => (
+              <View key={card.label} style={styles.detailInfoCard}>
+                <Text style={styles.detailInfoLabel}>{card.label}</Text>
+                <Text style={styles.detailInfoValue}>{card.value}</Text>
+              </View>
+            ))}
+          </View>
         </View>
 
         {user?.role === 'admin' && (
           <View style={styles.infoContainer}>
-            <Text style={styles.infoLabel}>About</Text>
-            <Text style={styles.infoValue}>
-              Oversees program rollouts, partner validation, and volunteer engagement across Negros Occidental.
-            </Text>
+            <Text style={styles.sectionTitle}>About</Text>
+            <View style={[styles.detailInfoCard, styles.detailInfoCardWide]}>
+              <Text style={styles.detailInfoLabel}>Coordinator Scope</Text>
+              <Text style={styles.detailInfoValue}>
+                Oversees program rollouts, partner validation, and volunteer engagement across Negros Occidental.
+              </Text>
+            </View>
           </View>
         )}
 
@@ -579,35 +674,23 @@ export default function ProfileScreen() {
                 <Text style={styles.statLabel}>Joined Programs</Text>
               </View>
               <View style={styles.stat}>
-                <Text style={styles.statNumber}>{completedProjectIds.length}</Text>
-                <Text style={styles.statLabel}>Completed</Text>
+                <Text style={styles.statNumber}>{completedEvents.length}</Text>
+                <Text style={styles.statLabel}>Completed Events</Text>
               </View>
             </View>
 
             <View style={styles.infoContainer}>
               <Text style={styles.sectionTitle}>Volunteer Registration Details</Text>
-              <Text style={styles.infoLabel}>Gender</Text>
-              <Text style={styles.infoValue}>{volunteerProfile.gender || 'Not provided'}</Text>
+              <View style={styles.detailGrid}>
+                {volunteerRegistrationCards.map(card => (
+                  <View key={card.label} style={styles.detailInfoCard}>
+                    <Text style={styles.detailInfoLabel}>{card.label}</Text>
+                    <Text style={styles.detailInfoValue}>{card.value}</Text>
+                  </View>
+                ))}
+              </View>
 
-              <Text style={styles.infoLabel}>Date of Birth</Text>
-              <Text style={styles.infoValue}>{volunteerProfile.dateOfBirth || 'Not provided'}</Text>
-
-              <Text style={styles.infoLabel}>Civil Status</Text>
-              <Text style={styles.infoValue}>{volunteerProfile.civilStatus || 'Not provided'}</Text>
-
-              <Text style={styles.infoLabel}>Home Address</Text>
-              <Text style={styles.infoValue}>{volunteerProfile.homeAddress || 'Not provided'}</Text>
-
-              <Text style={styles.infoLabel}>Occupation</Text>
-              <Text style={styles.infoValue}>{volunteerProfile.occupation || 'Not provided'}</Text>
-
-              <Text style={styles.infoLabel}>Workplace or School</Text>
-              <Text style={styles.infoValue}>{volunteerProfile.workplaceOrSchool || 'Not provided'}</Text>
-
-              <Text style={styles.infoLabel}>College Course</Text>
-              <Text style={styles.infoValue}>{volunteerProfile.collegeCourse || 'Not provided'}</Text>
-
-              <Text style={styles.infoLabel}>Certifications or Trainings</Text>
+              <Text style={styles.subsectionLabel}>Certifications or Trainings</Text>
               {volunteerProfile.certificationsOrTrainings ? (
                 isImageMediaUri(volunteerProfile.certificationsOrTrainings) ? (
                   <Image
@@ -615,19 +698,17 @@ export default function ProfileScreen() {
                     style={styles.certificateImage}
                   />
                 ) : (
-                  <Text style={styles.infoValue}>{volunteerProfile.certificationsOrTrainings}</Text>
+                  <View style={[styles.detailInfoCard, styles.detailInfoCardWide]}>
+                    <Text style={styles.detailInfoValue}>{volunteerProfile.certificationsOrTrainings}</Text>
+                  </View>
                 )
               ) : (
-                <Text style={styles.infoValue}>Not provided</Text>
+                <View style={[styles.detailInfoCard, styles.detailInfoCardWide]}>
+                  <Text style={styles.detailInfoValue}>Not provided</Text>
+                </View>
               )}
 
-              <Text style={styles.infoLabel}>Hobbies and Interests</Text>
-              <Text style={styles.infoValue}>{volunteerProfile.hobbiesAndInterests || 'Not provided'}</Text>
-
-              <Text style={styles.infoLabel}>Special Skills</Text>
-              <Text style={styles.infoValue}>{volunteerProfile.specialSkills || 'Not provided'}</Text>
-
-              <Text style={styles.infoLabel}>Affiliations</Text>
+              <Text style={styles.subsectionLabel}>Affiliations</Text>
               {volunteerProfile.affiliations && volunteerProfile.affiliations.length > 0 ? (
                 <View style={styles.detailCardList}>
                   {volunteerProfile.affiliations.map((affiliation, index) => (
@@ -645,13 +726,15 @@ export default function ProfileScreen() {
                   ))}
                 </View>
               ) : (
-                <Text style={styles.infoValue}>No affiliations provided.</Text>
+                <View style={[styles.detailInfoCard, styles.detailInfoCardWide]}>
+                  <Text style={styles.detailInfoValue}>No affiliations provided.</Text>
+                </View>
               )}
             </View>
 
             <View style={styles.infoContainer}>
               <Text style={styles.sectionTitle}>Volunteer Activity</Text>
-              <Text style={styles.infoLabel}>Skills</Text>
+              <Text style={styles.subsectionLabel}>Skills</Text>
               {volunteerProfile.skills.length > 0 ? (
                 <View style={styles.skillList}>
                   {volunteerProfile.skills.map(skill => (
@@ -661,39 +744,40 @@ export default function ProfileScreen() {
                   ))}
                 </View>
               ) : (
-                <Text style={styles.infoValue}>No skills added yet.</Text>
+                <View style={[styles.detailInfoCard, styles.detailInfoCardWide]}>
+                  <Text style={styles.detailInfoValue}>No skills added yet.</Text>
+                </View>
               )}
 
-              <Text style={styles.infoLabel}>Skills Description</Text>
-              <Text style={styles.descriptionText}>
-                {volunteerProfile.skillsDescription || 'No skills description added yet.'}
-              </Text>
+              <View style={styles.detailGrid}>
+                {volunteerNarrativeCards.map(card => (
+                  <View key={card.label} style={[styles.detailInfoCard, styles.detailInfoCardWide]}>
+                    <Text style={styles.detailInfoLabel}>{card.label}</Text>
+                    <Text style={styles.descriptionText}>{card.value}</Text>
+                  </View>
+                ))}
+              </View>
 
-              <Text style={styles.infoLabel}>Background</Text>
-              <Text style={styles.infoValue}>{volunteerProfile.background || 'No background added yet.'}</Text>
-
-              {joinedEventProjects.length > 0 && (
-                <VolunteerImpactMap projects={joinedEventProjects} />
-              )}
-
-              <Text style={styles.infoLabel}>Completed Programs</Text>
-              {completedPrograms.length > 0 ? (
+              <Text style={styles.subsectionLabel}>Completed Events</Text>
+              {completedEvents.length > 0 ? (
                 <View style={styles.completedProgramsList}>
-                  {completedPrograms.map(projectId => (
-                    <View key={projectId} style={styles.completedProgramCard}>
+                  {completedEvents.map(project => (
+                    <View key={project.id} style={styles.completedProgramCard}>
                       <Text style={styles.completedProgramTitle}>
-                        {projectById[projectId]?.title || projectId}
+                        {project.title}
                       </Text>
-                      {projectById[projectId]?.location?.address ? (
+                      {project.location?.address ? (
                         <Text style={styles.completedProgramMeta}>
-                          {projectById[projectId]?.location.address}
+                          {project.location.address}
                         </Text>
                       ) : null}
                     </View>
                   ))}
                 </View>
               ) : (
-                <Text style={styles.infoValue}>No completed programs yet.</Text>
+                <View style={[styles.detailInfoCard, styles.detailInfoCardWide]}>
+                  <Text style={styles.detailInfoValue}>No completed events yet.</Text>
+                </View>
               )}
             </View>
           </>
@@ -714,14 +798,12 @@ export default function ProfileScreen() {
                     <Text style={styles.infoLabel}>Sector Type</Text>
                     <Text style={styles.infoValue}>{partnerProfile.sectorType || 'Not provided'}</Text>
 
+                    <Text style={styles.infoLabel}>Stakeholder Name</Text>
+                    <Text style={styles.infoValue}>{partnerProfile.stakeholderName || 'Not provided'}</Text>
+
                     <Text style={styles.infoLabel}>DSWD Accreditation No.</Text>
                     <Text style={styles.infoValue}>
                       {partnerProfile.dswdAccreditationNo || 'Not provided'}
-                    </Text>
-
-                    <Text style={styles.infoLabel}>SEC Registration No.</Text>
-                    <Text style={styles.infoValue}>
-                      {partnerProfile.secRegistrationNo || 'Not provided'}
                     </Text>
 
                     <Text style={styles.infoLabel}>Advocacy Focus</Text>
@@ -736,6 +818,15 @@ export default function ProfileScreen() {
 
                     <Text style={styles.infoLabel}>Contact Phone</Text>
                     <Text style={styles.infoValue}>{partnerProfile.contactPhone || 'Not provided'}</Text>
+
+                    <Text style={styles.infoLabel}>Location</Text>
+                    <Text style={styles.infoValue}>
+                      {partnerProfile.address ||
+                        [partnerProfile.cityMunicipality, partnerProfile.province, partnerProfile.region]
+                          .filter(Boolean)
+                          .join(', ') ||
+                        'Not provided'}
+                    </Text>
 
                     <Text style={styles.infoLabel}>Login Access</Text>
                     <Text style={styles.infoValue}>
@@ -944,56 +1035,70 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
-    padding: 15,
+    backgroundColor: '#eef5ee',
+    padding: 14,
   },
   inlineErrorWrap: {
     marginBottom: 16,
   },
   profileCard: {
     backgroundColor: '#fff',
-    borderRadius: 10,
-    padding: 20,
+    borderRadius: 24,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: '#dbe7df',
+    shadowColor: '#14532d',
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 2,
+  },
+  profileHero: {
+    gap: 14,
+    marginBottom: 14,
+  },
+  profileHeroIdentity: {
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 14,
+  },
+  profileHeroCopy: {
+    flex: 1,
   },
   avatar: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: '#4CAF50',
+    width: 88,
+    height: 88,
+    borderRadius: 28,
+    backgroundColor: '#166534',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 15,
   },
   avatarText: {
-    fontSize: 32,
+    fontSize: 28,
     fontWeight: 'bold',
     color: '#fff',
   },
   avatarImage: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    marginBottom: 15,
+    width: 88,
+    height: 88,
+    borderRadius: 28,
     backgroundColor: '#dbeafe',
   },
   name: {
-    fontSize: 22,
+    fontSize: 19,
     fontWeight: 'bold',
-    marginBottom: 5,
+    marginBottom: 4,
     color: '#333',
   },
   email: {
     fontSize: 14,
     color: '#666',
-    marginBottom: 12,
   },
   subheading: {
-    fontSize: 15,
+    fontSize: 13,
     color: '#4b5563',
     fontWeight: '600',
-    marginBottom: 12,
-    textAlign: 'center',
+    marginTop: 6,
   },
   topVolunteerBadge: {
     width: '100%',
@@ -1036,7 +1141,7 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: 16,
     paddingVertical: 10,
-    marginBottom: 20,
+    alignSelf: 'flex-start',
   },
   editButtonText: {
     color: '#166534',
@@ -1044,10 +1149,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   statusChip: {
+    alignSelf: 'flex-start',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 999,
-    marginBottom: 20,
+    marginBottom: 14,
   },
   statusChipOpen: {
     backgroundColor: '#dcfce7',
@@ -1067,35 +1173,87 @@ const styles = StyleSheet.create({
   },
   statsContainer: {
     flexDirection: 'row',
+    gap: 10,
     width: '100%',
-    justifyContent: 'space-around',
-    marginBottom: 20,
-    paddingBottom: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
+    marginBottom: 16,
   },
   stat: {
+    flex: 1,
     alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 6,
   },
   statNumber: {
-    fontSize: 20,
+    fontSize: 15,
     fontWeight: 'bold',
     color: '#4CAF50',
+    textAlign: 'center',
   },
   statLabel: {
-    fontSize: 12,
+    fontSize: 10,
     color: '#666',
-    marginTop: 5,
+    marginTop: 4,
+    lineHeight: 12,
+    textAlign: 'center',
   },
   infoContainer: {
     width: '100%',
-    marginBottom: 20,
+    marginBottom: 16,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 18,
+    padding: 16,
   },
   sectionTitle: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '700',
     color: '#0f172a',
-    marginBottom: 6,
+    marginBottom: 12,
+  },
+  subsectionLabel: {
+    fontSize: 12,
+    color: '#64748b',
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    marginTop: 14,
+    marginBottom: 8,
+  },
+  detailGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  detailInfoCard: {
+    width: '48.5%',
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dbe7df',
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+  },
+  detailInfoCardWide: {
+    width: '100%',
+  },
+  detailInfoLabel: {
+    fontSize: 10,
+    color: '#64748b',
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.25,
+    marginBottom: 4,
+  },
+  detailInfoValue: {
+    fontSize: 11,
+    color: '#0f172a',
+    lineHeight: 16,
+    fontWeight: '600',
   },
   infoLabel: {
     fontSize: 12,
@@ -1105,7 +1263,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   infoValue: {
-    fontSize: 16,
+    fontSize: 14,
     color: '#333',
     marginTop: 3,
     marginBottom: 10,
@@ -1125,13 +1283,12 @@ const styles = StyleSheet.create({
   },
   skillChipText: {
     color: '#166534',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600',
   },
   descriptionText: {
-    marginTop: 8,
-    fontSize: 15,
-    lineHeight: 22,
+    fontSize: 11,
+    lineHeight: 17,
     color: '#334155',
   },
   detailCardList: {
@@ -1155,18 +1312,17 @@ const styles = StyleSheet.create({
     backgroundColor: '#e2e8f0',
   },
   detailCardTitle: {
-    fontSize: 15,
+    fontSize: 12,
     fontWeight: '700',
     color: '#0f172a',
   },
   detailCardSubtitle: {
     marginTop: 4,
-    fontSize: 13,
+    fontSize: 11,
     color: '#475569',
     fontWeight: '600',
   },
   completedProgramsList: {
-    marginTop: 8,
     gap: 10,
   },
   completedProgramCard: {
@@ -1178,22 +1334,23 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   completedProgramTitle: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '700',
     color: '#0f172a',
   },
   completedProgramMeta: {
     marginTop: 4,
-    fontSize: 12,
-    lineHeight: 18,
+    fontSize: 11,
+    lineHeight: 16,
     color: '#64748b',
   },
   logoutButton: {
     width: '100%',
     backgroundColor: '#f44336',
     paddingVertical: 12,
-    borderRadius: 8,
+    borderRadius: 12,
     alignItems: 'center',
+    marginTop: 4,
   },
   logoutButtonText: {
     color: '#fff',
@@ -1215,17 +1372,17 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   modalTitle: {
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: '700',
     color: '#0f172a',
   },
   modalCancel: {
     color: '#64748b',
-    fontSize: 15,
+    fontSize: 14,
   },
   modalSave: {
     color: '#15803d',
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '700',
   },
   modalBody: {
@@ -1233,7 +1390,7 @@ const styles = StyleSheet.create({
     paddingBottom: 32,
   },
   modalLabel: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#475569',
     marginBottom: 12,
     lineHeight: 20,
@@ -1259,7 +1416,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   modalAvatarFallbackText: {
-    fontSize: 36,
+    fontSize: 32,
     fontWeight: '700',
     color: '#fff',
   },
@@ -1290,6 +1447,14 @@ const styles = StyleSheet.create({
     color: '#475569',
     fontSize: 13,
     fontWeight: '700',
+  },
+  mapCard: {
+    marginTop: 14,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dbe7df',
+    borderRadius: 14,
+    padding: 12,
   },
   input: {
     backgroundColor: '#fff',
