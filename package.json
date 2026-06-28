@@ -46,20 +46,7 @@
     "db:monitor": "node ./scripts/run-python.js -m backend.db_monitor",
     "db:monitor:auto": "node ./scripts/run-python.js -m backend.db_monitor --auto",
     "db:monitor:report": "node ./scripts/run-python.js -m backend.db_monitor",
-    "deploy:bundle": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/create-deployment-bundle.ps1",
-    "test:e2e": "playwright test --project=chromium",
-    "test:e2e:watch": "playwright test --project=chromium-headed",
-    "test:e2e:watch:admin": "playwright test tests/e2e/workflows/admin.spec.ts --project=chromium-headed",
-    "test:e2e:watch:volunteer": "playwright test tests/e2e/workflows/volunteer.spec.ts --project=chromium-headed",
-    "test:e2e:watch:partner": "playwright test tests/e2e/workflows/partner.spec.ts --project=chromium-headed",
-    "test:e2e:watch:cross": "playwright test tests/e2e/workflows/cross-role.spec.ts --project=chromium-headed",
-    "test:e2e:ui": "playwright test --ui",
-    "test:e2e:debug": "playwright test --debug",
-    "test:e2e:volunteer": "playwright test tests/e2e/workflows/volunteer.spec.ts",
-    "test:e2e:admin": "playwright test tests/e2e/workflows/admin.spec.ts",
-    "test:e2e:partner": "playwright test tests/e2e/workflows/partner.spec.ts",
-    "test:e2e:cross": "playwright test tests/e2e/workflows/cross-role.spec.ts",
-    "test:e2e:report": "playwright show-report"
+    "deploy:bundle": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/create-deployment-bundle.ps1"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
@@ -92,9 +79,7 @@
     "react-native-webview": "13.15.0"
   },
   "devDependencies": {
-    "@playwright/test": "^1.60.0",
     "@types/react": "~19.1.10",
-    "playwright": "^1.60.0",
     "typescript": "^5.3.3"
   },
   "private": true
