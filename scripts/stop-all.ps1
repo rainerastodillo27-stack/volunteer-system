@@ -9,7 +9,7 @@ Write-Host " STOPPING VOLUNTEER SYSTEM"
 Write-Host "==========================================="
 Write-Host ""
 
-# ── 1. Kill processes recorded in .dev-pids/*.pid ──────────────────────────
+# -- 1. Kill processes recorded in .dev-pids/*.pid ------------------------
 if (Test-Path $pidDir) {
   Get-ChildItem -Path $pidDir -Filter '*.pid' | ForEach-Object {
     $svc      = $_.BaseName
@@ -25,7 +25,7 @@ if (Test-Path $pidDir) {
   }
 }
 
-# ── 2. Kill anything still holding port 8000 (backend) ─────────────────────
+# -- 2. Kill anything still holding port 8000 (backend) -------------------
 $port8000 = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue |
             Select-Object -ExpandProperty OwningProcess -Unique
 foreach ($pid8000 in $port8000) {
@@ -36,7 +36,7 @@ foreach ($pid8000 in $port8000) {
   }
 }
 
-# ── 3. Kill anything still holding port 8081 (Expo web) ────────────────────
+# -- 3. Kill anything still holding port 8081 (Expo web) ------------------
 $port8081 = Get-NetTCPConnection -LocalPort 8081 -State Listen -ErrorAction SilentlyContinue |
             Select-Object -ExpandProperty OwningProcess -Unique
 foreach ($pid8081 in $port8081) {
@@ -47,7 +47,7 @@ foreach ($pid8081 in $port8081) {
   }
 }
 
-# ── 4. Wait for ports to fully release ─────────────────────────────────────
+# -- 4. Wait for ports to fully release -----------------------------------
 $waited = 0
 while ($waited -lt 8) {
   $still8000 = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue
@@ -57,7 +57,7 @@ while ($waited -lt 8) {
   $waited++
 }
 
-# ── 5. Clear Python cache to ensure fresh code loads ───────────────────────
+# -- 5. Clear Python cache to ensure fresh code loads ---------------------
 Write-Host "  Clearing Python cache..."
 $pycacheDir = Join-Path $projectRoot 'backend\__pycache__'
 if (Test-Path $pycacheDir) {
@@ -65,7 +65,7 @@ if (Test-Path $pycacheDir) {
   Write-Host "  Python cache cleared"
 }
 
-# ── 6. Clear mobile app cache (Expo) ───────────────────────────────────────
+# -- 6. Clear mobile app cache (Expo) -------------------------------------
 Write-Host "  Clearing mobile app cache..."
 $expoDir = Join-Path $projectRoot '.expo'
 if (Test-Path $expoDir) {
@@ -87,7 +87,7 @@ Get-ChildItem -Path $env:TEMP -Filter 'react-*' -ErrorAction SilentlyContinue | 
 }
 Write-Host "  React Native cache cleared"
 
-# ── 7. Clear web cache (Expo web) ──────────────────────────────────────────
+# -- 7. Clear web cache (Expo web) ----------------------------------------
 Write-Host "  Clearing web cache..."
 # Clear Expo web dist build
 $webDistDir = Join-Path $projectRoot 'dist'

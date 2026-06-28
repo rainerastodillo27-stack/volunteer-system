@@ -96,7 +96,7 @@ export default function ProjectCard({ project, onPress }: ProjectCardProps) {
                 <MaterialIcons name="place" size={14} color="#64748b" />
                 <Text style={styles.infoValue} numberOfLines={1}>
                   {project.isEvent && project.locationBarangay
-                    ? `${project.locationBarangay}, ${project.locationCity || ''}`
+                    ? `${project.locationVenue ? project.locationVenue + ', ' : ''}${project.locationBarangay}, ${project.locationCity || ''}`
                     : project.locationCity && project.locationRegion
                     ? `${project.locationCity}, ${project.locationRegion}`
                     : project.location.address}

@@ -78,9 +78,7 @@ export default function ProfileScreen() {
   const [nameDraft, setNameDraft] = useState('');
   const [emailDraft, setEmailDraft] = useState('');
   const [phoneDraft, setPhoneDraft] = useState('');
-  const [passwordDraft, setPasswordDraft] = useState('');
-  const [newPasswordDraft, setNewPasswordDraft] = useState('');
-  const [confirmPasswordDraft, setConfirmPasswordDraft] = useState('');
+
   const [userTypeDraft, setUserTypeDraft] = useState<UserType>('Adult');
   const [pillarsDraft, setPillarsDraft] = useState<NVCSector[]>([]);
   const [skillsDraft, setSkillsDraft] = useState<string[]>([]);
@@ -207,9 +205,7 @@ export default function ProfileScreen() {
     setNameDraft(user.name || '');
     setEmailDraft(user.email || '');
     setPhoneDraft(user.phone || '');
-    setPasswordDraft(user.password || '');
-    setNewPasswordDraft('');
-    setConfirmPasswordDraft('');
+
     setUserTypeDraft(user.userType || 'Adult');
     setPillarsDraft(user.pillarsOfInterest || []);
     setSkillsDraft(volunteerProfile?.skills || []);
@@ -301,16 +297,16 @@ export default function ProfileScreen() {
     setProfilePhotoDraft('');
   };
 
-  // Waits for updated credentials to be readable from shared storage before closing save flow.
-  const waitForCredentialSync = async (identifier: string, password: string, userId: string) => {
-    console.log('[ProfileScreen] Waiting for credential sync');
+  // Waits for updated profile to be readable from shared storage before closing save flow.
+  const waitForProfileSync = async (identifier: string, userId: string) => {
+    console.log('[ProfileScreen] Waiting for profile sync');
     
     for (let attempt = 0; attempt < SAVE_SYNC_RETRY_COUNT; attempt += 1) {
       const syncedUser = await getUserByEmailOrPhone(identifier);
       console.log(`[ProfileScreen] Sync attempt ${attempt + 1}, found user:`, !!syncedUser);
       
-      if (syncedUser && syncedUser.id === userId && syncedUser.password === password) {
-        console.log('[ProfileScreen] Credentials synced successfully!');
+      if (syncedUser && syncedUser.id === userId) {
+        console.log('[ProfileScreen] Profile synced successfully!');
         return syncedUser;
       }
 
@@ -319,7 +315,7 @@ export default function ProfileScreen() {
       }
     }
 
-    console.error('[ProfileScreen] Sync timeout - credentials did not sync');
+    console.error('[ProfileScreen] Sync timeout - profile did not sync');
     throw new Error('Your profile updates did not sync yet. Please try saving again.');
   };
 
@@ -338,22 +334,8 @@ export default function ProfileScreen() {
     
     console.log('[ProfileScreen] Saving profile, photo draft:', profilePhotoDraft?.substring(0, 50));
     
-    // Use new password if provided, otherwise keep current password
-    let normalizedPassword = passwordDraft.trim();
-    if (newPasswordDraft.trim()) {
-      if (newPasswordDraft !== confirmPasswordDraft) {
-        Alert.alert('Validation Error', 'New passwords do not match.');
-        return;
-      }
-      if (newPasswordDraft.trim().length < 6) {
-        Alert.alert('Validation Error', 'Password must be at least 6 characters long.');
-        return;
-      }
-      normalizedPassword = newPasswordDraft.trim();
-    }
-
-    if (!normalizedName || !normalizedPassword) {
-      Alert.alert('Validation Error', 'Name and password are required.');
+    if (!normalizedName) {
+      Alert.alert('Validation Error', 'Name is required.');
       return;
     }
 
@@ -398,7 +380,6 @@ export default function ProfileScreen() {
         name: normalizedName,
         email: normalizedEmail || undefined,
         phone: normalizedPhone || undefined,
-        password: normalizedPassword,
         profilePhoto: profilePhotoDraft || undefined,
         userType: userTypeDraft,
         pillarsOfInterest: pillarsDraft,
@@ -459,9 +440,8 @@ export default function ProfileScreen() {
       }
 
       const loginIdentifier = normalizedEmail || normalizedPhone;
-      await waitForCredentialSync(
+      await waitForProfileSync(
         loginIdentifier,
-        normalizedPassword,
         user.id
       );
 
@@ -470,7 +450,6 @@ export default function ProfileScreen() {
       const changedItems = [];
       if (normalizedEmail !== user.email) changedItems.push('email');
       if (normalizedPhone !== user.phone) changedItems.push('phone');
-      if (newPasswordDraft.trim()) changedItems.push('password');
       
       const changesText = changedItems.length > 0 
         ? ` Your ${changedItems.join(', ')} has been updated.`
@@ -973,30 +952,7 @@ export default function ProfileScreen() {
               editable={!saveLoading}
             />
 
-            <Text style={styles.sectionHeader}>Change Password</Text>
-            <Text style={styles.sectionHint}>Leave blank to keep your current password.</Text>
-            
-            <Text style={styles.fieldLabel}>New Password</Text>
-            <TextInput
-              style={styles.input}
-              value={newPasswordDraft}
-              onChangeText={setNewPasswordDraft}
-              placeholder="Enter new password (min 6 characters)"
-              secureTextEntry
-              editable={!saveLoading}
-              autoCapitalize="none"
-            />
-            
-            <Text style={styles.fieldLabel}>Confirm New Password</Text>
-            <TextInput
-              style={styles.input}
-              value={confirmPasswordDraft}
-              onChangeText={setConfirmPasswordDraft}
-              placeholder="Re-enter new password"
-              secureTextEntry
-              editable={!saveLoading}
-              autoCapitalize="none"
-            />
+
 
             <Text style={styles.fieldLabel}>Profile Type</Text>
             <View style={styles.optionRow}>

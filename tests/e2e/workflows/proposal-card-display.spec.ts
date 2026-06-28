@@ -50,7 +50,7 @@ test('PROP-1: TEST TEST project proposal card displays in admin messages', async
     // Take screenshot of failure
     await page.screenshot({ path: 'test-results/proposal-card-FAILURE.png', fullPage: true });
     console.log('❌ TEST FAILED - Card not found');
-    console.log('Error:', error.message);
+    console.log('Error:', (error as any).message);
     throw error;
   }
 });

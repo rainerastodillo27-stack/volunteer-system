@@ -441,7 +441,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
         .filter(match => match.status === 'Matched' || match.status === 'Completed')
         .map(match => match.projectId)
     );
-    const joinedProjects = projects.filter(p => p.isEvent && (p.joinedUserIds || []).includes(selectedVolunteer.id));
+    const joinedProjects = projects.filter(p => p.isEvent && (p.joinedUserIds || []).includes(selectedVolunteer.userId));
     const eventsFromJoined = new Set(joinedProjects.map(p => p.id));
     const allUniqueEvents = new Set([...eventsFromTimeLogs, ...eventsFromMatches, ...eventsFromJoined]);
     const eventsJoinedCount = allUniqueEvents.size;

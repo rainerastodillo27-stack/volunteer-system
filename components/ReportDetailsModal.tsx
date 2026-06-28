@@ -11,6 +11,7 @@ import {
   Image,
   useWindowDimensions,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import type { SubmittedReport } from '../screens/ReportsScreen';
@@ -47,6 +48,7 @@ export default function ReportDetailsModal({
   const [showApprovalForm, setShowApprovalForm] = useState(false);
   const [actionType, setActionType] = useState<'approve' | 'reject' | null>(null);
   const [previewAttachmentUri, setPreviewAttachmentUri] = useState<string | null>(null);
+  const [isActionLoading, setIsActionLoading] = useState(false);
   const { width } = useWindowDimensions();
 
   const canApprove =
@@ -66,19 +68,29 @@ export default function ReportDetailsModal({
 
   if (!report) return null;
 
-  const handleApprove = () => {
+  const handleApprove = async () => {
     if (onApprove) {
-      onApprove(report.id, approvalNotes);
-      setApprovalNotes('');
-      setShowApprovalForm(false);
+      setIsActionLoading(true);
+      try {
+        await onApprove(report.id, approvalNotes);
+        setApprovalNotes('');
+        setShowApprovalForm(false);
+      } finally {
+        setIsActionLoading(false);
+      }
     }
   };
 
-  const handleReject = () => {
+  const handleReject = async () => {
     if (onReject) {
-      onReject(report.id, approvalNotes);
-      setApprovalNotes('');
-      setShowApprovalForm(false);
+      setIsActionLoading(true);
+      try {
+        await onReject(report.id, approvalNotes);
+        setApprovalNotes('');
+        setShowApprovalForm(false);
+      } finally {
+        setIsActionLoading(false);
+      }
     }
   };
 
@@ -281,7 +293,7 @@ export default function ReportDetailsModal({
               <View style={styles.sectionHeaderRow}>
                 <Text style={styles.sectionTitle}>Key Metrics</Text>
                 <Text style={styles.sectionCaption}>
-                  {Object.values(report.metrics).filter(value => value !== undefined && value !== null && value !== '').length} captured
+                  {Object.values(report.metrics).filter(value => value !== undefined && value !== null).length} captured
                 </Text>
               </View>
                 <View style={[styles.metricsDisplay, isWideLayout && styles.metricsDisplayWide]}>
@@ -289,7 +301,7 @@ export default function ReportDetailsModal({
                   .filter(([key, value]) => {
                     // Filter out volunteerHours metric and empty values
                     if (key === 'volunteerHours') return false;
-                    return value !== undefined && value !== null && value !== '';
+                    return value !== undefined && value !== null;
                   })
                   .map(([key, value]) => (
                     <View key={key} style={styles.metricCard}>
@@ -299,6 +311,89 @@ export default function ReportDetailsModal({
                   ))}
               </View>
             </View>
+
+            {/* Approval Section (Admin Only) */}
+            {canApprove && !showApprovalForm && (
+              <View style={styles.sectionCard}>
+                <Text style={styles.sectionTitle}>Admin Actions</Text>
+                <View style={styles.adminActions}>
+                  <TouchableOpacity
+                    style={[styles.adminActionButton, styles.approveButton]}
+                    onPress={() => {
+                      setActionType('approve');
+                      setShowApprovalForm(true);
+                    }}
+                  >
+                    <MaterialIcons name="check-circle" size={16} color="#fff" />
+                    <Text style={styles.adminActionText}>Approve</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.adminActionButton, styles.rejectButton]}
+                    onPress={() => {
+                      setActionType('reject');
+                      setShowApprovalForm(true);
+                    }}
+                  >
+                    <MaterialIcons name="cancel" size={16} color="#fff" />
+                    <Text style={styles.adminActionText}>Reject</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
+            {/* Approval Form */}
+            {canApprove && showApprovalForm && (
+              <View style={styles.sectionCard}>
+                <Text style={styles.sectionTitle}>
+                  {actionType === 'approve' ? 'Approve Report' : 'Reject Report'}
+                </Text>
+                <Text style={styles.formLabel}>Notes (Optional)</Text>
+                <TextInput
+                  style={styles.notesInput}
+                  placeholder={
+                    actionType === 'approve'
+                      ? 'Add approval notes...'
+                      : 'Explain why this report is being rejected...'
+                  }
+                  value={approvalNotes}
+                  onChangeText={setApprovalNotes}
+                  multiline
+                  numberOfLines={4}
+                  placeholderTextColor="#cbd5e1"
+                  editable={!isActionLoading}
+                />
+                <View style={styles.formActions}>
+                  <TouchableOpacity
+                    disabled={isActionLoading}
+                    style={[styles.formCancelButton, isActionLoading && { opacity: 0.6 }]}
+                    onPress={() => {
+                      setShowApprovalForm(false);
+                      setApprovalNotes('');
+                      setActionType(null);
+                    }}
+                  >
+                    <Text style={styles.formCancelText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    disabled={isActionLoading}
+                    style={[
+                      styles.formSubmitButton,
+                      actionType === 'reject' && styles.formRejectButton,
+                      isActionLoading && { opacity: 0.6 }
+                    ]}
+                    onPress={actionType === 'approve' ? handleApprove : handleReject}
+                  >
+                    {isActionLoading ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <Text style={styles.formSubmitText}>
+                        {actionType === 'approve' ? 'Approve' : 'Reject'}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
 
             {/* Approval History */}
             {report.approvedBy && (

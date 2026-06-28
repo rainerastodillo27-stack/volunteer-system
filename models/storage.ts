@@ -77,7 +77,6 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
 
 const memoryStorageCache = new Map<string, unknown>();
 const sharedStorageCacheTimestamps = new Map<string, number>();
-let mockDataInitializationPromise: Promise<void> | null = null;
 // Shared reads should fail fast enough to keep the UI responsive when the
 // backend is slow or unavailable.
 const REMOTE_STORAGE_TIMEOUT_MS = 30000; // Increased for unstable connections
@@ -2754,7 +2753,7 @@ export async function getAllEvents(): Promise<Project[]> {
 export async function createUserAccount(input: {
   name: string;
   email?: string;
-  password: string;
+  password?: string; // Deprecated: OTP auth — no password needed
   phone?: string;
   role: UserRole;
   userType: UserType;
@@ -2790,11 +2789,11 @@ export async function createUserAccount(input: {
 }): Promise<User> {
   const normalizedEmail = input.email?.trim().toLowerCase();
   const normalizedName = input.name.trim();
-  const normalizedPassword = input.password.trim();
+  const normalizedPassword = input.password?.trim() || '';
   const normalizedPhone = normalizeAccountPhone(input.phone);
 
-  if (!normalizedName || !normalizedPassword) {
-    throw new Error('Name and password are required.');
+  if (!normalizedName) {
+    throw new Error('Name is required.');
   }
 
   if (normalizedEmail && !isValidEmailAddress(normalizedEmail)) {
@@ -2839,7 +2838,7 @@ export async function createUserAccount(input: {
     id: `user-${Date.now()}`,
     name: normalizedName,
     email: normalizedEmail,
-    password: normalizedPassword,
+    ...(normalizedPassword ? { password: normalizedPassword } : {}),
     phone: normalizedPhone || undefined,
     role: input.role,
     userType: input.userType,
@@ -5888,26 +5887,6 @@ export async function clearAllStorage(): Promise<void> {
   }
 }
 
-// Initialize with mock data
-// Triggers the backend bootstrap so login demo accounts are seeded from the database layer.
-export async function initializeMockData(): Promise<void> {
-  if (mockDataInitializationPromise) {
-    return mockDataInitializationPromise;
-  }
-
-  mockDataInitializationPromise = initializeMockDataInternal();
-  try {
-    await mockDataInitializationPromise;
-  } finally {
-    mockDataInitializationPromise = null;
-  }
-}
-
-async function initializeMockDataInternal(): Promise<void> {
-  await requestApiJson('/bootstrap', {
-    method: 'POST',
-  });
-}
 
 async function attachVolunteerToProject(projectId: string, volunteerId: string): Promise<void> {
   const [project, volunteer] = await Promise.all([

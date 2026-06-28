@@ -9,73 +9,6 @@ const PROGRAM_IMAGE_BY_CATEGORY: Partial<Record<Project['category'], ImageSource
   Livelihood: require('../assets/programs/livelihood.jpg'),
 };
 
-const PROGRAM_PHOTO_BY_TITLE: Record<string, ImageSourcePropType> = {
-  'Farm to Fork Program': require('../assets/programs/farm-to-fork.jpg'),
-  'Mingo for Nutritional Support': require('../assets/programs/nutrition.jpg'),
-  'Mingo for Emergency Relief': require('../assets/programs/mingo-relief.jpg'),
-  LoveBags: require('../assets/programs/lovebags.jpg'),
-  'School Support': require('../assets/programs/school-support.jpg'),
-  'Artisans of Hope': require('../assets/programs/artisans-of-hope.jpg'),
-  'Project Joseph': require('../assets/programs/project-joseph.jpg'),
-  'Growing Hope': require('../assets/programs/growing-hope.jpg'),
-  'Peter Project': require('../assets/programs/peter-project.jpg'),
-};
-
-const PROGRAM_PHOTO_MATCHERS: Array<{
-  matches: (project: Project, normalizedTitle: string) => boolean;
-  source: ImageSourcePropType;
-}> = [
-  {
-    matches: (_project, normalizedTitle) => normalizedTitle.includes('farm to fork'),
-    source: require('../assets/programs/farm-to-fork.jpg'),
-  },
-  {
-    matches: (_project, normalizedTitle) =>
-      normalizedTitle.includes('lovebag') || normalizedTitle.includes('school bag'),
-    source: require('../assets/programs/lovebags.jpg'),
-  },
-  {
-    matches: (_project, normalizedTitle) => normalizedTitle.includes('school'),
-    source: require('../assets/programs/school-support.jpg'),
-  },
-  {
-    matches: (_project, normalizedTitle) => normalizedTitle.includes('artisans'),
-    source: require('../assets/programs/artisans-of-hope.jpg'),
-  },
-  {
-    matches: (_project, normalizedTitle) =>
-      normalizedTitle.includes('joseph') || normalizedTitle.includes('sewing'),
-    source: require('../assets/programs/project-joseph.jpg'),
-  },
-  {
-    matches: (_project, normalizedTitle) =>
-      normalizedTitle.includes('growing hope') || normalizedTitle.includes('garden'),
-    source: require('../assets/programs/growing-hope.jpg'),
-  },
-  {
-    matches: (_project, normalizedTitle) => normalizedTitle.includes('peter'),
-    source: require('../assets/programs/peter-project.jpg'),
-  },
-  {
-    matches: (project, normalizedTitle) =>
-      normalizedTitle.includes('mingo') || normalizedTitle.includes('masiglang') || project.category === 'Nutrition',
-    source: require('../assets/programs/nutrition.jpg'),
-  },
-];
-
-function getProgramPhotoSource(project: Project): ImageSourcePropType | undefined {
-  if (!project || !project.title) {
-    return undefined;
-  }
-
-  if (PROGRAM_PHOTO_BY_TITLE[project.title]) {
-    return PROGRAM_PHOTO_BY_TITLE[project.title];
-  }
-
-  const normalizedTitle = project.title.trim().toLowerCase();
-  return PROGRAM_PHOTO_MATCHERS.find((entry) => entry.matches(project, normalizedTitle))?.source;
-}
-
 function getProjectImageSources(project: Project): ImageSourcePropType[] {
   if (!project) {
     return [];
@@ -94,12 +27,6 @@ function getProjectImageSources(project: Project): ImageSourcePropType[] {
   if (isProposalCreatedProject && !hasUploadedProjectImage) {
     return imageSources;
   }
-  const programPhotoSource = getProgramPhotoSource(project);
-
-  if (programPhotoSource) {
-    imageSources.push(programPhotoSource);
-  }
-
   if (project.programModule && project.programModule in PROGRAM_IMAGE_BY_CATEGORY) {
     imageSources.push(
       PROGRAM_IMAGE_BY_CATEGORY[project.programModule as Project['category']] as ImageSourcePropType

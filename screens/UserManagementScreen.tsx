@@ -52,7 +52,6 @@ export default function UserManagementScreen() {
   const [nameDraft, setNameDraft] = useState('');
   const [emailDraft, setEmailDraft] = useState('');
   const [phoneDraft, setPhoneDraft] = useState('');
-  const [passwordDraft, setPasswordDraft] = useState('');
   const [roleDraft, setRoleDraft] = useState<UserRole>('volunteer');
   const [userTypeDraft, setUserTypeDraft] = useState<UserType>('Adult');
   const [pillarsDraft, setPillarsDraft] = useState<NVCSector[]>([]);
@@ -146,7 +145,6 @@ export default function UserManagementScreen() {
     setNameDraft(targetUser.name);
     setEmailDraft(targetUser.email || '');
     setPhoneDraft(targetUser.phone || '');
-    setPasswordDraft(targetUser.password);
     setRoleDraft(targetUser.role);
     setUserTypeDraft(targetUser.userType || 'Adult');
     setPillarsDraft(targetUser.pillarsOfInterest || []);
@@ -162,8 +160,8 @@ export default function UserManagementScreen() {
   // Saves changes made to the selected user account.
   const handleSaveUser = async () => {
     if (!selectedUser) return;
-    if (!nameDraft.trim() || !emailDraft.trim() || !passwordDraft.trim()) {
-      Alert.alert('Validation Error', 'Name, email, and password are required.');
+    if (!nameDraft.trim() || !emailDraft.trim()) {
+      Alert.alert('Validation Error', 'Name and email are required.');
       return;
     }
 
@@ -177,7 +175,6 @@ export default function UserManagementScreen() {
         name: nameDraft.trim(),
         email: emailDraft.trim().toLowerCase(),
         phone: phoneDraft.trim() || undefined,
-        password: passwordDraft.trim(),
         role: roleDraft,
         userType: userTypeDraft,
         pillarsOfInterest: pillarsDraft,
@@ -425,9 +422,12 @@ export default function UserManagementScreen() {
     );
   }
 
-  const adminUsers = users.filter(item => item.role === 'admin');
-  const partnerUsers = users.filter(item => item.role === 'partner');
-  const volunteerUsers = users.filter(item => item.role === 'volunteer');
+  const isApprovedUser = (item: User) =>
+    (item.approvalStatus || (item.role === 'admin' ? 'approved' : 'pending')) === 'approved';
+  const approvedUsers = users.filter(isApprovedUser);
+  const adminUsers = approvedUsers.filter(item => item.role === 'admin');
+  const partnerUsers = approvedUsers.filter(item => item.role === 'partner');
+  const volunteerUsers = approvedUsers.filter(item => item.role === 'volunteer');
   const totalAdmins = adminUsers.length;
   const totalPartners = partnerUsers.length;
   const totalVolunteers = volunteerUsers.length;
@@ -663,7 +663,7 @@ export default function UserManagementScreen() {
       {!loadError || users.length > 0 ? (
       <View style={styles.summaryRow}>
         <View style={styles.summaryCard}>
-          <Text style={styles.summaryValue}>{users.length}</Text>
+          <Text style={styles.summaryValue}>{approvedUsers.length}</Text>
           <Text style={styles.summaryLabel}>Users</Text>
         </View>
         <View style={styles.summaryCard}>
@@ -799,12 +799,7 @@ export default function UserManagementScreen() {
               value={phoneDraft}
               onChangeText={setPhoneDraft}
             />
-            <TextInput
-              style={styles.input}
-              placeholder="Password"
-              value={passwordDraft}
-              onChangeText={setPasswordDraft}
-            />
+
 
             <Text style={styles.fieldLabel}>Role</Text>
             <View style={styles.roleOptions}>
@@ -963,7 +958,7 @@ export default function UserManagementScreen() {
                             linkedVolunteer.certificationsOrTrainings ? (
                               isImageMediaUri(linkedVolunteer.certificationsOrTrainings) ? (
                                 <TouchableOpacity
-                                  onPress={() => setViewImageUrl(linkedVolunteer.certificationsOrTrainings)}
+                                  onPress={() => setViewImageUrl(linkedVolunteer.certificationsOrTrainings || null)}
                                   activeOpacity={0.8}
                                 >
                                   <Image

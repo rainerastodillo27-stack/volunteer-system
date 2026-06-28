@@ -11,6 +11,7 @@ import {
   Alert,
   Image,
   Keyboard,
+  ActivityIndicator,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import type {
@@ -78,6 +79,7 @@ export default function ReportUploadModal({
   });
   const [showProjectPicker, setShowProjectPicker] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const isVolunteer = userRole === 'volunteer';
   const isPartner = userRole === 'partner';
@@ -440,13 +442,18 @@ export default function ReportUploadModal({
       };
 
       Keyboard.dismiss();
-      const submissionSucceeded = await onSubmit(reportData);
-      if (submissionSucceeded === false) {
-        return;
-      }
+      setIsSubmitting(true);
+      try {
+        const submissionSucceeded = await onSubmit(reportData);
+        if (submissionSucceeded === false) {
+          return;
+        }
 
-      handleReset();
-      onClose();
+        handleReset();
+        onClose();
+      } finally {
+        setIsSubmitting(false);
+      }
       return;
     }
 
@@ -506,13 +513,18 @@ export default function ReportUploadModal({
     };
 
     Keyboard.dismiss();
-    const submissionSucceeded = await onSubmit(reportData);
-    if (submissionSucceeded === false) {
-      return;
-    }
+    setIsSubmitting(true);
+    try {
+      const submissionSucceeded = await onSubmit(reportData);
+      if (submissionSucceeded === false) {
+        return;
+      }
 
-    handleReset();
-    onClose();
+      handleReset();
+      onClose();
+    } finally {
+      setIsSubmitting(false);
+    }
 
   }, [
     collaborationFeedback,
@@ -1058,12 +1070,16 @@ export default function ReportUploadModal({
           </ScrollView>
 
           <View style={styles.footer}>
-            <TouchableOpacity onPress={handleClose} style={styles.cancelButton}>
+            <TouchableOpacity onPress={handleClose} style={styles.cancelButton} disabled={isSubmitting}>
               <Text style={styles.cancelButtonText}>Cancel</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={handleSubmit} style={styles.submitButton}>
-              <MaterialIcons name="check-circle" size={18} color="#fff" />
-              <Text style={styles.submitButtonText}>Submit Report</Text>
+            <TouchableOpacity onPress={handleSubmit} style={[styles.submitButton, isSubmitting && { opacity: 0.65 }]} disabled={isSubmitting}>
+              {isSubmitting ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <MaterialIcons name="check-circle" size={18} color="#fff" />
+              )}
+              <Text style={styles.submitButtonText}>{isSubmitting ? 'Submitting...' : 'Submit Report'}</Text>
             </TouchableOpacity>
           </View>
         </View>

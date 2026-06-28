@@ -18,7 +18,6 @@ import {
   DEFAULT_APP_SETTINGS,
   getApiBaseUrl,
   getAppSettings,
-  initializeMockData,
   saveAppSettings,
 } from '../models/storage';
 import { AppSettings } from '../models/types';
@@ -106,20 +105,6 @@ export default function SystemSettingsScreen() {
     }
   };
 
-  const handleSeedBackendData = async () => {
-    setActionKey('seed');
-    try {
-      await initializeMockData();
-      Alert.alert('Updated', 'Demo login accounts have been synchronized to the backend.');
-    } catch (error) {
-      Alert.alert(
-        getRequestErrorTitle(error),
-        getRequestErrorMessage(error, 'Failed to seed demo login accounts into the backend.')
-      );
-    } finally {
-      setActionKey(null);
-    }
-  };
 
   const handleLogout = async () => {
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
@@ -253,19 +238,6 @@ export default function SystemSettingsScreen() {
             <Text style={styles.secondaryButtonText}>Refresh Local Cache</Text>
           )}
         </TouchableOpacity>
-        {isAdmin ? (
-          <TouchableOpacity
-            style={styles.secondaryButton}
-            onPress={() => void handleSeedBackendData()}
-            disabled={actionKey === 'seed'}
-          >
-            {actionKey === 'seed' ? (
-              <ActivityIndicator size="small" color="#166534" />
-            ) : (
-              <Text style={styles.secondaryButtonText}>Seed Demo Login Accounts</Text>
-            )}
-          </TouchableOpacity>
-        ) : null}
         <TouchableOpacity
           style={styles.ghostButton}
           onPress={() => void handleResetSettings()}

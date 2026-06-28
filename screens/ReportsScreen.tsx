@@ -459,6 +459,7 @@ export default function ReportsScreen({ navigation, route }: any) {
   const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const [selectedReportType, setSelectedReportType] = useState<'all' | 'volunteer' | 'partner' | null>(null);
   const [showFilteredReports, setShowFilteredReports] = useState(false);
+  const [actionLoadingKey, setActionLoadingKey] = useState<string | null>(null);
   const reportsLoadInFlightRef = useRef<Promise<void> | null>(null);
   const reportsReloadQueuedRef = useRef(false);
   const hasLoadedReportsRef = useRef(false);
@@ -827,6 +828,8 @@ export default function ReportsScreen({ navigation, route }: any) {
   const handleApproveReport = useCallback(
     async (reportId: string, notes: string) => {
       if (!user?.id) return;
+      const loadingKey = `approveReport-${reportId}`;
+      setActionLoadingKey(loadingKey);
       try {
         await reviewPartnerReport(reportId, user.id, 'Reviewed', notes || undefined);
         setShowDetailsModal(false);
@@ -836,6 +839,8 @@ export default function ReportsScreen({ navigation, route }: any) {
         void loadReportsCoalesced();
       } catch (error: any) {
         Alert.alert('Error', error?.message || 'Failed to approve report.');
+      } finally {
+        setActionLoadingKey(current => (current === loadingKey ? null : current));
       }
     },
     [loadReportsCoalesced, user?.id]
@@ -844,6 +849,8 @@ export default function ReportsScreen({ navigation, route }: any) {
   const handleRejectReport = useCallback(
     async (reportId: string, notes: string) => {
       if (!user?.id) return;
+      const loadingKey = `rejectReport-${reportId}`;
+      setActionLoadingKey(loadingKey);
       try {
         await reviewPartnerReport(reportId, user.id, 'Rejected', notes || undefined);
         setShowDetailsModal(false);
@@ -855,6 +862,8 @@ export default function ReportsScreen({ navigation, route }: any) {
         void loadReportsCoalesced();
       } catch (error: any) {
         Alert.alert('Error', error?.message || 'Failed to reject report.');
+      } finally {
+        setActionLoadingKey(current => (current === loadingKey ? null : current));
       }
     },
     [loadReportsCoalesced, user?.id]

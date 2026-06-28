@@ -408,6 +408,12 @@ export default function LoginScreen() {
   const [signupEmail, setSignupEmail] = useState("");
   const [signupAccountPhone, setSignupAccountPhone] = useState("");
   const [signupPassword, setSignupPassword] = useState("");
+  const [signupOtpCode, setSignupOtpCode] = useState("");
+  const [signupOtpSentEmail, setSignupOtpSentEmail] = useState("");
+  const [signupEmailVerified, setSignupEmailVerified] = useState(false);
+  const [signupOtpLoading, setSignupOtpLoading] = useState(false);
+  const [signupOtpVerifying, setSignupOtpVerifying] = useState(false);
+  const [signupOtpMessage, setSignupOtpMessage] = useState("");
   const [signupUserType, setSignupUserType] = useState<UserType>("Student");
   const [signupPillars, setSignupPillars] = useState<NVCSector[]>([]);
   const [signupRole, setSignupRole] = useState<UserRole>("volunteer");
@@ -936,6 +942,12 @@ export default function LoginScreen() {
     setSignupEmail("");
     setSignupAccountPhone("");
     setSignupPassword("");
+    setSignupOtpCode("");
+    setSignupOtpSentEmail("");
+    setSignupEmailVerified(false);
+    setSignupOtpLoading(false);
+    setSignupOtpVerifying(false);
+    setSignupOtpMessage("");
     setSignupUserType("Student");
     setSignupPillars([]);
     setSignupRole("volunteer");
@@ -1091,6 +1103,87 @@ export default function LoginScreen() {
     setSignupPartnerApplication((current) => ({ ...current, [key]: value }));
   };
 
+  const handleSendSignupOtp = async () => {
+    const normalizedEmail = signupEmail.trim().toLowerCase();
+    if (!normalizedEmail || !normalizedEmail.includes("@")) {
+      Alert.alert("Validation Error", "Please enter a valid email address before requesting a code.");
+      return;
+    }
+
+    try {
+      setSignupOtpLoading(true);
+      setSignupOtpMessage("");
+      setSignupEmailVerified(false);
+      setSignupOtpCode("");
+      const response = await fetch(`${getApiBaseUrl()}/auth/registration-otp/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: normalizedEmail }),
+      });
+      const data = await response.json().catch(() => ({}) as { detail?: string; message?: string });
+      if (!response.ok) {
+        throw new Error(data.detail || "Failed to send verification code.");
+      }
+      setSignupEmail(normalizedEmail);
+      setSignupOtpSentEmail(normalizedEmail);
+      setSignupOtpMessage("Code sent. Check your email.");
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error, "Email Verification Failed"),
+        getRequestErrorMessage(error, "Could not send the verification code.", {
+          backendUrl: getApiBaseUrl(),
+        }),
+      );
+    } finally {
+      setSignupOtpLoading(false);
+    }
+  };
+
+  const handleVerifySignupOtp = async () => {
+    const normalizedEmail = signupEmail.trim().toLowerCase();
+    const trimmedCode = signupOtpCode.trim();
+
+    if (!normalizedEmail || !normalizedEmail.includes("@")) {
+      Alert.alert("Validation Error", "Please enter a valid email address.");
+      return;
+    }
+
+    if (normalizedEmail !== signupOtpSentEmail) {
+      Alert.alert("Verification Required", "Send a new code for this email address first.");
+      return;
+    }
+
+    if (!trimmedCode || trimmedCode.length !== 6) {
+      Alert.alert("Validation Error", "Please enter the 6-digit code sent to your email.");
+      return;
+    }
+
+    try {
+      setSignupOtpVerifying(true);
+      const response = await fetch(`${getApiBaseUrl()}/auth/registration-otp/verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: normalizedEmail, otp: trimmedCode }),
+      });
+      const data = await response.json().catch(() => ({}) as { detail?: string; message?: string });
+      if (!response.ok) {
+        throw new Error(data.detail || "Failed to verify email.");
+      }
+      setSignupEmailVerified(true);
+      setSignupOtpMessage("Email verified.");
+    } catch (error) {
+      setSignupEmailVerified(false);
+      Alert.alert(
+        getRequestErrorTitle(error, "Verification Failed"),
+        getRequestErrorMessage(error, "Could not verify the code.", {
+          backendUrl: getApiBaseUrl(),
+        }),
+      );
+    } finally {
+      setSignupOtpVerifying(false);
+    }
+  };
+
   // Validates and creates a new volunteer or partner account.
   const handleSignup = async () => {
     if (!signupName.trim() || !signupPassword.trim()) {
@@ -1098,16 +1191,21 @@ export default function LoginScreen() {
       return;
     }
 
-    if (!signupEmail.trim() && !signupAccountPhone.trim()) {
+    if (!signupEmail.trim()) {
       Alert.alert(
         "Validation Error",
-        "Please provide an email or phone number.",
+        "Please provide an email address.",
       );
       return;
     }
 
     if (signupEmail.trim() && !signupEmail.includes("@")) {
       Alert.alert("Validation Error", "Please enter a valid email address.");
+      return;
+    }
+
+    if (!signupEmailVerified || signupEmail.trim().toLowerCase() !== signupOtpSentEmail) {
+      Alert.alert("Email Verification Required", "Verify your email with the 6-digit code before creating the account.");
       return;
     }
 
@@ -1214,7 +1312,7 @@ export default function LoginScreen() {
       });
 
       setIdentifier(createdUser.email || createdUser.phone || "");
-      setPassword(createdUser.password);
+      setPassword(createdUser.password || "");
       if (!isWeb && signupRole !== "admin") {
         handleSelectMobileRole(signupRole, { preserveCredentials: true });
       }
@@ -1253,13 +1351,14 @@ export default function LoginScreen() {
 
     setLoginError(null);
     setIdentifier(nextIdentifier);
-    setPassword(account.password);
+    const nextPassword = account.password || "";
+    setPassword(nextPassword);
     if (!isWeb && account.role !== "admin") {
       setSelectedMobileRole(account.role);
     }
     await performLogin(
       nextIdentifier,
-      account.password,
+      nextPassword,
       account.role === "admin" ? null : account.role,
     );
   };
@@ -1782,11 +1881,81 @@ export default function LoginScreen() {
                     placeholder="Email Address"
                     placeholderTextColor="#999"
                     value={signupEmail}
-                    onChangeText={setSignupEmail}
+                    onChangeText={(value) => {
+                      setSignupEmail(value);
+                      setSignupEmailVerified(false);
+                      setSignupOtpCode("");
+                      setSignupOtpMessage("");
+                      if (value.trim().toLowerCase() !== signupOtpSentEmail) {
+                        setSignupOtpSentEmail("");
+                      }
+                    }}
                     keyboardType="email-address"
                     autoCapitalize="none"
                     editable={!signupLoading}
                   />
+                  <View style={styles.signupOtpBox}>
+                    <View style={styles.signupOtpHeader}>
+                      <Text style={styles.signupOtpTitle}>
+                        {signupEmailVerified ? "Email verified" : "Email verification"}
+                      </Text>
+                      <TouchableOpacity
+                        style={[
+                          styles.signupOtpButton,
+                          (signupOtpLoading || signupLoading || !signupEmail.trim()) && styles.buttonDisabled,
+                        ]}
+                        onPress={handleSendSignupOtp}
+                        disabled={signupOtpLoading || signupLoading || !signupEmail.trim()}
+                      >
+                        {signupOtpLoading ? (
+                          <ActivityIndicator color="#fff" size="small" />
+                        ) : (
+                          <Text style={styles.signupOtpButtonText}>
+                            {signupOtpSentEmail ? "Resend Code" : "Send Code"}
+                          </Text>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                    <View style={styles.signupOtpRow}>
+                      <TextInput
+                        style={[styles.input, styles.signupOtpInput]}
+                        placeholder="6-digit code"
+                        placeholderTextColor="#999"
+                        value={signupOtpCode}
+                        onChangeText={(value) => {
+                          setSignupOtpCode(value.replace(/[^0-9]/g, "").slice(0, 6));
+                          setSignupOtpMessage("");
+                        }}
+                        keyboardType="number-pad"
+                        maxLength={6}
+                        editable={!signupLoading && !signupEmailVerified}
+                      />
+                      <TouchableOpacity
+                        style={[
+                          styles.signupOtpVerifyButton,
+                          (signupOtpVerifying || signupLoading || signupEmailVerified || signupOtpCode.length < 6) && styles.buttonDisabled,
+                        ]}
+                        onPress={handleVerifySignupOtp}
+                        disabled={signupOtpVerifying || signupLoading || signupEmailVerified || signupOtpCode.length < 6}
+                      >
+                        {signupOtpVerifying ? (
+                          <ActivityIndicator color="#166534" size="small" />
+                        ) : (
+                          <Text style={styles.signupOtpVerifyText}>Verify</Text>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                    {signupOtpMessage ? (
+                      <Text
+                        style={[
+                          styles.signupOtpMessage,
+                          signupEmailVerified && styles.signupOtpMessageSuccess,
+                        ]}
+                      >
+                        {signupOtpMessage}
+                      </Text>
+                    ) : null}
+                  </View>
                   <TextInput
                     style={styles.input}
                     placeholder="Phone Number"
@@ -2551,10 +2720,10 @@ export default function LoginScreen() {
                   <TouchableOpacity
                     style={[
                       styles.modalPrimaryButton,
-                      signupLoading && styles.buttonDisabled,
+                      (signupLoading || !signupEmailVerified) && styles.buttonDisabled,
                     ]}
                     onPress={handleSignup}
-                    disabled={signupLoading}
+                    disabled={signupLoading || !signupEmailVerified}
                   >
                     {signupLoading ? (
                       <ActivityIndicator color="#fff" />
@@ -2998,6 +3167,77 @@ const styles = StyleSheet.create({
     borderColor: "#ddd",
     fontSize: 16,
     minHeight: 54,
+  },
+  signupOtpBox: {
+    backgroundColor: "#f8fafc",
+    borderWidth: 1,
+    borderColor: "#dbeafe",
+    borderRadius: 12,
+    padding: 12,
+    marginTop: -4,
+    marginBottom: 15,
+  },
+  signupOtpHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    marginBottom: 10,
+  },
+  signupOtpTitle: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: "800",
+    color: "#334155",
+  },
+  signupOtpButton: {
+    backgroundColor: "#16a34a",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    minHeight: 38,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  signupOtpButtonText: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  signupOtpRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  signupOtpInput: {
+    flex: 1,
+    marginBottom: 0,
+    textAlign: "center",
+    letterSpacing: 3,
+    fontWeight: "800",
+  },
+  signupOtpVerifyButton: {
+    borderWidth: 1,
+    borderColor: "#16a34a",
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    minHeight: 48,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#ecfdf5",
+  },
+  signupOtpVerifyText: {
+    color: "#166534",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  signupOtpMessage: {
+    marginTop: 8,
+    fontSize: 12,
+    color: "#475569",
+  },
+  signupOtpMessageSuccess: {
+    color: "#166534",
+    fontWeight: "700",
   },
   compactInput: {
     fontSize: 15,

@@ -662,6 +662,8 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       return;
     }
 
+    const loadingKey = 'confirmAttendance';
+    setActionLoadingKey(loadingKey);
     try {
       const attendancePhoto = await pickImageFromDevice();
       if (!attendancePhoto) {
@@ -697,11 +699,14 @@ export default function VolunteerTasksScreen({ navigation }: any) {
           : current
       );
       showAttendanceNotice('Attendance confirmed for today.');
+      Alert.alert('Attendance Confirmed', 'Attendance confirmed for today.');
     } catch (error) {
       Alert.alert(
         getRequestErrorTitle(error, 'Unable to confirm attendance'),
         getRequestErrorMessage(error, 'Please try again.')
       );
+    } finally {
+      setActionLoadingKey(current => (current === loadingKey ? null : current));
     }
   };
 
@@ -874,6 +879,8 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       return;
     }
 
+    const loadingKey = `assignEventTask-${taskId}`;
+    setActionLoadingKey(loadingKey);
     try {
       const isFieldOfficerForEvent = (eventProject.internalTasks || []).some(
         task => task.isFieldOfficer && isVolunteerAssignedToTask(task, volunteerProfile.id)
@@ -1016,6 +1023,8 @@ export default function VolunteerTasksScreen({ navigation }: any) {
     } catch (error) {
       console.error('Error assigning event task:', error);
       Alert.alert('Error', 'Failed to update the event task assignment.');
+    } finally {
+      setActionLoadingKey(current => (current === loadingKey ? null : current));
     }
   };
 
@@ -1062,6 +1071,10 @@ export default function VolunteerTasksScreen({ navigation }: any) {
         current.map(entry => (entry.id === updatedLog.id ? updatedLog : entry))
       );
       showAttendanceNotice(checked ? 'Attendance marked.' : 'Attendance mark removed.');
+      Alert.alert(
+        checked ? 'Attendance Marked' : 'Attendance Unmarked',
+        checked ? 'Volunteer attendance has been verified.' : 'Volunteer attendance verification has been removed.'
+      );
     } catch (error) {
       setAllVolunteerTimeLogs(current =>
         current.map(entry => (entry.id === log.id ? log : entry))
@@ -1855,14 +1868,20 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                             style={[
                               styles.attendanceButton,
                               styles.timeInButton,
-                              !attendanceState.canConfirmAttendance && styles.attendanceButtonDisabled,
+                              (!attendanceState.canConfirmAttendance || actionLoadingKey === 'confirmAttendance') && styles.attendanceButtonDisabled,
                             ]}
                             onPress={() => void handleConfirmAttendanceForProject(selectedTaskGroup.projectId)}
-                            disabled={!attendanceState.canConfirmAttendance}
+                            disabled={!attendanceState.canConfirmAttendance || actionLoadingKey === 'confirmAttendance'}
                           >
-                            <MaterialIcons name="verified-user" size={18} color="#fff" />
+                            {actionLoadingKey === 'confirmAttendance' ? (
+                              <ActivityIndicator size="small" color="#fff" />
+                            ) : (
+                              <MaterialIcons name="verified-user" size={18} color="#fff" />
+                            )}
                             <Text style={styles.attendanceButtonText}>
-                              {attendanceState.eventHasNotStarted
+                              {actionLoadingKey === 'confirmAttendance'
+                                ? 'Confirming...'
+                                : attendanceState.eventHasNotStarted
                                 ? 'Await Start'
                                 : attendanceState.hasConfirmedToday
                                 ? 'Done Today'

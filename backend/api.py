@@ -3,7 +3,11 @@ import json
 import asyncio
 import threading
 import time
-from datetime import datetime, timezone
+import secrets
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from datetime import datetime, timezone, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -18,10 +22,7 @@ from .app_storage_seed import (
     HOT_STORAGE_TABLES,
     clear_all_postgres_hot_storage,
     clear_postgres_hot_storage_collection,
-    ensure_app_storage_seeded,
     get_postgres_hot_storage_collection,
-    is_demo_seed_enabled,
-    is_demo_seed_unlocked,
     is_hot_storage_key,
     replace_postgres_hot_storage_collection,
 )
@@ -140,6 +141,17 @@ class AuthLoginPayload(BaseModel):
     password: str
 
 
+# Request payload to send a registration OTP.
+class RegistrationOtpSendPayload(BaseModel):
+    email: str
+
+
+# Request payload to verify a registration OTP.
+class RegistrationOtpVerifyPayload(BaseModel):
+    email: str
+    otp: str
+
+
 # Request payload for approving/rejecting user accounts.
 class UserApprovalPayload(BaseModel):
     status: str  # 'approved' or 'rejected'
@@ -251,6 +263,10 @@ class ReportSubmitPayload(BaseModel):
 
 REPORT_MEDIA_FILE_MAX_LENGTH = 500
 APP_TIMEZONE = ZoneInfo("Asia/Manila")
+REMINDER_LEAD_DAYS = 3
+REMINDER_CHECK_INTERVAL_SECONDS = 3600
+_reminder_scheduler_started = False
+_reminder_scheduler_lock = threading.Lock()
 
 
 def _parse_iso_datetime(value: Any) -> datetime | None:
@@ -310,6 +326,221 @@ def _event_attendance_window_has_ended(project: dict[str, Any], now: datetime | 
     current_time = (now or datetime.now(timezone.utc)).astimezone(APP_TIMEZONE)
     end_of_day = end_date.astimezone(APP_TIMEZONE).replace(hour=23, minute=59, second=59, microsecond=999999)
     return current_time > end_of_day
+
+
+def _send_email_message(
+    recipient_email: str,
+    subject: str,
+    text_body: str,
+    html_body: str | None = None,
+) -> None:
+    sender_email = os.getenv("OTP_GMAIL_SENDER", "").strip()
+    app_password = os.getenv("OTP_GMAIL_APP_PASSWORD", "").strip()
+    recipient = str(recipient_email or "").strip()
+
+    if not recipient:
+        raise ValueError("Recipient email is required.")
+
+    if not sender_email or not app_password:
+        print(f"[EMAIL-DEV] Email sender not configured. Would send to {recipient}: {subject}\n{text_body}")
+        return
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = sender_email
+    msg["To"] = recipient
+    msg.attach(MIMEText(text_body, "plain"))
+    if html_body:
+        msg.attach(MIMEText(html_body, "html"))
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        server.login(sender_email, app_password)
+        server.sendmail(sender_email, recipient, msg.as_string())
+
+
+def _ensure_reminder_tables(connection: Any) -> None:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            create table if not exists public.event_email_reminders (
+              reminder_id text primary key,
+              event_id text not null,
+              volunteer_id text not null,
+              volunteer_email text not null,
+              reminder_type text not null,
+              sent_at text not null
+            )
+            """
+        )
+
+
+def _get_reminder_email_for_volunteer(volunteer: dict[str, Any], users_by_id: dict[str, dict[str, Any]]) -> str:
+    email = str(volunteer.get("email") or "").strip().lower()
+    if email:
+        return email
+    user_id = str(volunteer.get("userId") or "").strip()
+    if user_id and user_id in users_by_id:
+        return str(users_by_id[user_id].get("email") or "").strip().lower()
+    return ""
+
+
+def _event_starts_in_reminder_window(event: dict[str, Any], now: datetime) -> bool:
+    start_date = _parse_iso_datetime(event.get("startDate"))
+    if start_date is None:
+        return False
+    local_now = now.astimezone(APP_TIMEZONE)
+    local_start = start_date.astimezone(APP_TIMEZONE)
+    return local_start.date() == (local_now.date() + timedelta(days=REMINDER_LEAD_DAYS))
+
+
+def _send_event_reminder_email(volunteer: dict[str, Any], event: dict[str, Any], recipient_email: str) -> None:
+    volunteer_name = str(volunteer.get("name") or "Volunteer").strip() or "Volunteer"
+    activity_type = "event" if bool(event.get("isEvent")) else "project"
+    event_title = str(event.get("title") or f"your joined {activity_type}").strip()
+    start_date = _parse_iso_datetime(event.get("startDate"))
+    date_label = start_date.astimezone(APP_TIMEZONE).strftime("%B %d, %Y at %I:%M %p") if start_date else "soon"
+    location = event.get("location") if isinstance(event.get("location"), dict) else {}
+    location_text = str(event.get("locationVenue") or location.get("address") or "").strip()
+    subject = f"Reminder: {event_title} is in {REMINDER_LEAD_DAYS} days"
+    text_body = (
+        f"Hi {volunteer_name},\n\n"
+        f"This is a reminder that you joined the {activity_type}: {event_title}.\n"
+        f"Schedule: {date_label}\n"
+        f"{f'Location: {location_text}\n' if location_text else ''}"
+        f"\nPlease check NVC Connect for the latest event details."
+    )
+    html_body = f"""
+    <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:28px;background:#f8fafc;border-radius:12px;">
+      <h2 style="color:#15803d;margin:0 0 12px;">Event Reminder</h2>
+      <p style="color:#334155;">Hi {volunteer_name},</p>
+      <p style="color:#334155;">You joined the {activity_type} <strong>{event_title}</strong>. It is scheduled in {REMINDER_LEAD_DAYS} days.</p>
+      <p style="color:#0f172a;"><strong>Schedule:</strong> {date_label}</p>
+      {f'<p style="color:#0f172a;"><strong>Location:</strong> {location_text}</p>' if location_text else ''}
+      <p style="color:#64748b;font-size:13px;">Please check NVC Connect for the latest event details.</p>
+    </div>
+    """
+    _send_email_message(recipient_email, subject, text_body, html_body)
+
+
+def run_event_reminder_check() -> dict[str, Any]:
+    _require_postgres()
+    sent_count = 0
+    skipped_count = 0
+    now = datetime.now(timezone.utc)
+
+    with get_connection() as connection:
+        _ensure_reminder_tables(connection)
+        upcoming_items = [
+            item for item in (
+                get_postgres_hot_storage_collection(connection, "events") +
+                get_postgres_hot_storage_collection(connection, "projects")
+            )
+            if isinstance(item, dict)
+            and str(item.get("status") or "") not in {"Completed", "Cancelled"}
+            and _event_starts_in_reminder_window(item, now)
+        ]
+        volunteers = get_postgres_hot_storage_collection(connection, "volunteers")
+        users = get_postgres_hot_storage_collection(connection, "users")
+        join_records = get_postgres_hot_storage_collection(connection, "volunteerProjectJoins")
+        users_by_id = {str(user.get("id") or ""): user for user in users if isinstance(user, dict)}
+        volunteers_by_id = {str(volunteer.get("id") or ""): volunteer for volunteer in volunteers if isinstance(volunteer, dict)}
+        volunteers_by_user_id = {
+            str(volunteer.get("userId") or ""): volunteer
+            for volunteer in volunteers
+            if isinstance(volunteer, dict) and str(volunteer.get("userId") or "").strip()
+        }
+
+        with connection.cursor() as cursor:
+            for event in upcoming_items:
+                event_id = str(event.get("id") or "").strip()
+                joined_volunteer_ids = {str(value or "").strip() for value in (event.get("volunteers") or []) if str(value or "").strip()}
+                joined_user_ids = {str(value or "").strip() for value in (event.get("joinedUserIds") or []) if str(value or "").strip()}
+                for record in join_records:
+                    if not isinstance(record, dict) or str(record.get("projectId") or "").strip() != event_id:
+                        continue
+                    volunteer_id = str(record.get("volunteerId") or "").strip()
+                    volunteer_user_id = str(record.get("volunteerUserId") or "").strip()
+                    if volunteer_id:
+                        joined_volunteer_ids.add(volunteer_id)
+                    if volunteer_user_id:
+                        joined_user_ids.add(volunteer_user_id)
+
+                event_volunteers = [
+                    volunteers_by_id[volunteer_id]
+                    for volunteer_id in joined_volunteer_ids
+                    if volunteer_id in volunteers_by_id
+                ]
+                event_volunteers.extend(
+                    volunteers_by_user_id[user_id]
+                    for user_id in joined_user_ids
+                    if user_id in volunteers_by_user_id
+                    and volunteers_by_user_id[user_id] not in event_volunteers
+                )
+
+                for volunteer in event_volunteers:
+                    volunteer_id = str(volunteer.get("id") or "").strip()
+                    recipient_email = _get_reminder_email_for_volunteer(volunteer, users_by_id)
+                    if not volunteer_id or not recipient_email:
+                        skipped_count += 1
+                        continue
+
+                    reminder_id = f"event-3day:{event_id}:{volunteer_id}"
+                    cursor.execute(
+                        "select reminder_id from public.event_email_reminders where reminder_id = %s",
+                        (reminder_id,),
+                    )
+                    if cursor.fetchone():
+                        skipped_count += 1
+                        continue
+
+                    try:
+                        _send_event_reminder_email(volunteer, event, recipient_email)
+                    except Exception as error:
+                        print(f"[REMINDER] Failed to send event reminder to {recipient_email}: {error}")
+                        skipped_count += 1
+                        continue
+
+                    cursor.execute(
+                        """
+                        insert into public.event_email_reminders (
+                          reminder_id, event_id, volunteer_id, volunteer_email, reminder_type, sent_at
+                        )
+                        values (%s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            reminder_id,
+                            event_id,
+                            volunteer_id,
+                            recipient_email,
+                            "event-3day",
+                            datetime.now(timezone.utc).isoformat(),
+                        ),
+                    )
+                    sent_count += 1
+
+        connection.commit()
+
+    return {"sent": sent_count, "skipped": skipped_count}
+
+
+def _event_reminder_scheduler_loop() -> None:
+    while True:
+        try:
+            result = run_event_reminder_check()
+            if result.get("sent"):
+                print(f"[REMINDER] Sent {result['sent']} event reminder email(s).")
+        except Exception as error:
+            print(f"[REMINDER] Reminder check skipped: {error}")
+        time.sleep(REMINDER_CHECK_INTERVAL_SECONDS)
+
+
+def _start_event_reminder_scheduler() -> None:
+    global _reminder_scheduler_started
+    with _reminder_scheduler_lock:
+        if _reminder_scheduler_started:
+            return
+        _reminder_scheduler_started = True
+    threading.Thread(target=_event_reminder_scheduler_loop, daemon=True).start()
 
 
 def _normalize_partner_proposal_date(value: Any, fallback: str) -> str:
@@ -1910,10 +2141,11 @@ def startup() -> None:
         try:
             with get_connection() as connection:
                 ensure_volunteer_time_logs_table_shape(connection)
+                _ensure_reminder_tables(connection)
                 connection.commit()
-            print("[OK] Volunteer time logs schema ensured.")
+            print("[OK] Volunteer time logs and integration schemas ensured.")
         except Exception as error:
-            print(f"[WARN] Volunteer time logs schema ensure skipped: {error}")
+            print(f"[WARN] Schema ensure skipped: {error}")
 
         # Ensure message tables and indexes exist at startup
         try:
@@ -1942,6 +2174,7 @@ def startup() -> None:
             print(f"[WARN] Core programs initialization skipped: {error}")
 
     threading.Thread(target=_initialize_postgres_background, daemon=True).start()
+    _start_event_reminder_scheduler()
 
     # Auto-cleanup: Compress oversized base64 images to prevent slow API responses
     # TEMPORARILY DISABLED - was causing backend to hang on startup
@@ -2006,25 +2239,7 @@ def startup() -> None:
     threading.Thread(target=_warm_projects_snapshot_cache, daemon=True).start()
     print("[INFO] Cache warming enabled - warming projects snapshot in the background")
 
-    if not is_demo_seed_enabled():
-        print("[OK] Backend started; demo seed disabled but auto-seeding empty database")
-        return
 
-    if not is_demo_seed_unlocked():
-        print("[WARN] Demo seed is enabled but locked. Set VOLCRE_ALLOW_DEMO_SEED=true to seed shared storage intentionally.")
-        return
-
-    # Run demo seeding in the background when it is explicitly enabled.
-    def seed_storage():
-        try:
-            ensure_app_storage_seeded()
-            print("[OK] Backend started and demo storage was ensured")
-        except Exception as error:
-            # Don't block startup on database reachability; endpoints still report health.
-            print(f"[WARN] Backend started without ensuring demo storage: {error}")
-    
-    seed_thread = threading.Thread(target=seed_storage, daemon=True)
-    seed_thread.start()
 
 
 @app.get("/health", response_model=None)
@@ -2074,6 +2289,11 @@ def db_health():
     }
 
     return JSONResponse(status_code=status_code, content=payload)
+
+
+@app.post("/admin/reminders/run")
+def run_reminders_now() -> dict[str, Any]:
+    return run_event_reminder_check()
 
 
 # Returns the email username part when an identifier is not a full email or phone.
@@ -2305,6 +2525,111 @@ def _get_demo_account(identifier: str) -> dict[str, Any] | None:
         if normalized_phone and _normalize_phone(account.get("phone", "")) == normalized_phone:
             return account
     return None
+
+
+_registration_otp_store: dict[str, dict[str, Any]] = {}
+_registration_otp_store_lock = threading.Lock()
+REGISTRATION_OTP_TTL_SECONDS = 300
+
+
+def _purge_expired_registration_otps() -> None:
+    now = datetime.now(timezone.utc)
+    with _registration_otp_store_lock:
+        expired_keys = [
+            key
+            for key, value in _registration_otp_store.items()
+            if value["expires_at"] < now
+        ]
+        for key in expired_keys:
+            del _registration_otp_store[key]
+
+
+def _send_registration_otp_email(recipient_email: str, otp: str) -> None:
+    text_body = f"Your NVC Connect registration code is: {otp}\n\nThis code expires in 5 minutes."
+    html_body = f"""
+    <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:32px;background:#f8fafc;border-radius:12px;">
+      <h2 style="color:#15803d;margin-bottom:8px;">NVC Connect</h2>
+      <p style="color:#334155;font-size:15px;">Your registration verification code is:</p>
+      <div style="font-size:40px;font-weight:900;letter-spacing:12px;color:#0f172a;margin:24px 0;">{otp}</div>
+      <p style="color:#64748b;font-size:13px;">This code expires in <strong>5 minutes</strong>.</p>
+    </div>
+    """
+    _send_email_message(recipient_email, "Your NVC Connect Registration Code", text_body, html_body)
+
+
+@app.post("/auth/registration-otp/send")
+def auth_registration_otp_send(payload: RegistrationOtpSendPayload) -> dict[str, Any]:
+    email = str(payload.email or "").strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="A valid email address is required.")
+
+    _purge_expired_registration_otps()
+
+    with _registration_otp_store_lock:
+        existing = _registration_otp_store.get(email)
+        if existing:
+            time_since = (datetime.now(timezone.utc) - existing["issued_at"]).total_seconds()
+            if time_since < 60:
+                wait = int(60 - time_since)
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Please wait {wait} seconds before requesting a new code.",
+                )
+
+    otp = "".join(str(secrets.randbelow(10)) for _ in range(6))
+    now = datetime.now(timezone.utc)
+
+    with _registration_otp_store_lock:
+        _registration_otp_store[email] = {
+            "otp": otp,
+            "issued_at": now,
+            "expires_at": now + timedelta(seconds=REGISTRATION_OTP_TTL_SECONDS),
+        }
+
+    try:
+        _send_registration_otp_email(email, otp)
+    except Exception as smtp_error:
+        print(f"[REGISTRATION-OTP] Failed to send email to {email}: {smtp_error}")
+        with _registration_otp_store_lock:
+            _registration_otp_store.pop(email, None)
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to send verification email. Please contact an administrator to check the email service configuration.",
+        )
+
+    return {"message": "Verification code sent. Check your inbox.", "email": email}
+
+
+@app.post("/auth/registration-otp/verify")
+def auth_registration_otp_verify(payload: RegistrationOtpVerifyPayload) -> dict[str, Any]:
+    email = str(payload.email or "").strip().lower()
+    otp = str(payload.otp or "").strip()
+
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="A valid email address is required.")
+    if not otp or len(otp) != 6 or not otp.isdigit():
+        raise HTTPException(status_code=400, detail="Please enter the 6-digit code sent to your email.")
+
+    _purge_expired_registration_otps()
+
+    with _registration_otp_store_lock:
+        stored = _registration_otp_store.get(email)
+        if stored is None:
+            raise HTTPException(
+                status_code=401,
+                detail="No verification code found. Please request a new one.",
+            )
+        if datetime.now(timezone.utc) > stored["expires_at"]:
+            del _registration_otp_store[email]
+            raise HTTPException(
+                status_code=401,
+                detail="Your verification code has expired. Please request a new one.",
+            )
+        if stored["otp"] != otp:
+            raise HTTPException(status_code=401, detail="Incorrect code. Please try again.")
+        del _registration_otp_store[email]
+
+    return {"verified": True, "email": email, "message": "Email verified."}
 
 @app.post("/auth/login")
 # API endpoint that validates login credentials.
@@ -4539,21 +4864,5 @@ async def clear_all_caches() -> dict[str, Any]:
     return {"status": "ok", "message": "All caches cleared successfully"}
 
 
-@app.post("/bootstrap")
-# API endpoint that seeds app storage with demo data.
-def bootstrap_storage() -> dict[str, str]:
-    if not is_demo_seed_enabled():
-        raise HTTPException(
-            status_code=403,
-            detail="Demo bootstrap is disabled in canonical-only mode.",
-        )
-    if not is_demo_seed_unlocked():
-        raise HTTPException(
-            status_code=403,
-            detail="Demo bootstrap is locked. Set VOLCRE_ALLOW_DEMO_SEED=true only for intentional shared-database seeding.",
-        )
-    ensure_app_storage_seeded()
-    _invalidate_collection_cache()
-    _projects_snapshot_cache.clear()
-    return {"status": "ok"}
+
 

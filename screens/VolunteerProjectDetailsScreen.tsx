@@ -28,18 +28,6 @@ import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/project
 import { getRequestErrorMessage } from '../utils/requestErrors';
 import { getPrimaryProjectImageSource } from '../utils/projectMap';
 
-const PROGRAM_PHOTO_BY_TITLE: Record<string, ImageSourcePropType> = {
-  'Farm to Fork Program': require('../assets/programs/farm-to-fork.jpg'),
-  'Mingo for Nutritional Support': require('../assets/programs/nutrition.jpg'),
-  'Mingo for Emergency Relief': require('../assets/programs/mingo-relief.jpg'),
-  LoveBags: require('../assets/programs/lovebags.jpg'),
-  'School Support': require('../assets/programs/school-support.jpg'),
-  'Artisans of Hope': require('../assets/programs/artisans-of-hope.jpg'),
-  'Project Joseph': require('../assets/programs/project-joseph.jpg'),
-  'Growing Hope': require('../assets/programs/growing-hope.jpg'),
-  'Peter Project': require('../assets/programs/peter-project.jpg'),
-};
-
 export default function VolunteerProjectDetailsScreen({
   navigation,
   route,
@@ -250,7 +238,10 @@ export default function VolunteerProjectDetailsScreen({
                 <MaterialIcons name="location-on" size={20} color="#4CAF50" />
                 <View style={styles.detailContent}>
                   <Text style={styles.detailLabel}>Location</Text>
-                  <Text style={styles.detailValue}>{project.location.address}</Text>
+                  <Text style={styles.detailValue}>
+                    {project.locationVenue ? `${project.locationVenue}, ` : ''}
+                    {project.location.address}
+                  </Text>
                 </View>
               </View>
             )}

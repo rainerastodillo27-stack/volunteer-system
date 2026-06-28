@@ -323,6 +323,7 @@ type ProjectDraft = {
   expectedDeliverables: string;
   attachmentUrl: string;
   isEvent: boolean;
+  locationVenue: string;
 };
 
 type ProjectVolunteerEntry = {
@@ -613,6 +614,7 @@ const createEmptyProjectDraft = (
   expectedDeliverables: '',
   attachmentUrl: '',
   isEvent,
+  locationVenue: '',
 });
 
 const createEmptyProjectTaskDraft = (): ProjectTaskDraft => ({
@@ -655,121 +657,37 @@ function getProgramSuiteChevron(isExpanded: boolean): keyof typeof MaterialIcons
   return isExpanded ? 'expand-less' : 'expand-more';
 }
 
-function getProgramWebOverview(programTitle: string): {
+function getProgramWebOverview(program: {
+  title: string;
+  description?: string;
+  context?: string;
+  projects: Project[];
+  events: Project[];
+}): {
   about: string;
   highlights: { title: string; description: string }[];
 } {
-  const key = programTitle.trim().toLowerCase();
+  const savedAbout =
+    program.description?.trim() ||
+    program.context?.trim() ||
+    program.projects.find(project => project.description?.trim())?.description.trim() ||
+    program.events.find(event => event.description?.trim())?.description.trim();
 
-  if (key.includes('education')) {
-    return {
-      about:
-        'NVC education programs improve schooling for children from poor communities through school supplies, learning infrastructure, teacher support, and classroom resources.',
-      highlights: [
-        {
-          title: 'LoveBags',
-          description: 'School bags and supplies prepared for children who need support to start or continue school.',
-        },
-        {
-          title: 'School Support',
-          description: 'Classroom resources, learning infrastructure, and practical help for public schools and teachers.',
-        },
-        {
-          title: 'School supplies and tools',
-          description: 'Education materials that help students participate in daily lessons with fewer barriers.',
-        },
-      ],
-    };
-  }
-
-  if (key.includes('nutrition')) {
-    return {
-      about:
-        'NVC nutrition programs source from local farmers and produce nutritious food, including Mingo meals, to support undernourished children and emergency feeding needs.',
-      highlights: [
-        {
-          title: 'Mingo for Nutritional Support',
-          description: 'Mingo meals made from rice, mung bean, and moringa help support undernourished children.',
-        },
-        {
-          title: 'Farm to Fork Program',
-          description: 'Local farmers supply produce used for nutrition work, connecting food security with farmer income.',
-        },
-        {
-          title: 'Emergency Relief',
-          description: 'Convenient nutritious food support for disaster response and urgent feeding operations.',
-        },
-        {
-          title: 'Mingo Parties',
-          description: 'Community giving activities that turn shared meals into nutrition support for children.',
-        },
-      ],
-    };
-  }
-
-  if (key.includes('livelihood')) {
-    return {
-      about:
-        'NVC livelihood programs help families improve income by creating earning opportunities for artisans, skilled workers, growers, and fisherfolk.',
-      highlights: [
-        {
-          title: 'Artisans of Hope',
-          description: 'Handmade products and production opportunities that provide artisans with income.',
-        },
-        {
-          title: 'Project Joseph',
-          description: 'Tools and practical support that help skilled workers earn from their trade.',
-        },
-        {
-          title: 'Growing Hope',
-          description: 'Community gardens that support food security and create income from excess harvests.',
-        },
-        {
-          title: 'Peter Project',
-          description: 'Support for fisherfolk, including boats and market pathways for their catch.',
-        },
-      ],
-    };
-  }
-
-  if (key.includes('disaster')) {
-    return {
-      about:
-        'Disaster response programs coordinate relief, recovery, and volunteer support for communities affected by emergencies and severe weather events.',
-      highlights: [
-        {
-          title: 'Relief operations',
-          description: 'Organized support for communities affected by severe weather, emergencies, or urgent needs.',
-        },
-        {
-          title: 'Volunteer mobilization',
-          description: 'Rapid coordination of volunteers, field assignments, and operational support.',
-        },
-        {
-          title: 'Community recovery',
-          description: 'Follow-through assistance for communities after the immediate emergency response.',
-        },
-      ],
-    };
-  }
+  const highlights = [...program.projects, ...program.events]
+    .filter(item => item.title?.trim() || item.description?.trim())
+    .map(item => ({
+      title: item.title?.trim() || (item.isEvent ? 'Scheduled event' : 'Project'),
+      description:
+        item.description?.trim() ||
+        item.communityNeed?.trim() ||
+        item.expectedDeliverables?.trim() ||
+        formatProjectDateRangeLabel(item.startDate, item.endDate),
+    }))
+    .filter(item => item.description.trim());
 
   return {
-    about:
-      'This program groups related projects and events so admins can manage planning, volunteers, reporting, and delivery from one workspace.',
-    highlights: [
-      {
-        title: 'Project planning',
-        description: 'Plan and organize related projects under one program area.',
-      },
-      {
-        title: 'Volunteer coordination',
-        description: 'Manage volunteer needs, assignments, and participation across activities.',
-      },
-      {
-        title: 'Event tracking',
-        description: 'Track scheduled events and their delivery status from one workspace.',
-      },
-    ],
+    about: savedAbout || `${program.title} has no saved overview yet.`,
+    highlights,
   };
 }
 
@@ -1413,10 +1331,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       const newProgram: ProgramTrack = {
         id: newProgramName.trim(),
         title: newProgramName.trim(),
-        description: `Folder for ${newProgramName.trim()} projects.`,
         icon: 'folder',
         color: '#6366f1', // Default indigo
-        imageUrl: 'https://images.unsplash.com/photo-1497366216548-37526070297c?q=80&w=1470&auto=format&fit=crop',
         isActive: true,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -1471,7 +1387,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       const program: ProgramTrack = {
         id,
         title: programDraft.title.trim(),
-        description: programDraft.description.trim() || `Folder for ${programDraft.title.trim()} projects.`,
+        description: programDraft.description.trim() || undefined,
         context: programDraft.context.trim() || undefined,
         icon: programDraft.icon || 'folder',
         color: programDraft.color || '#6366f1',
@@ -1703,6 +1619,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       attachmentUrl:
         (project.attachments || []).find(attachment => attachment.type === 'document')?.url || '',
       isEvent: !!project.isEvent,
+      locationVenue: project.locationVenue || '',
     });
     applyProjectLocationSelectionFromAddress(project.location.address);
     setProjectSaveError(null);
@@ -2217,6 +2134,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       return;
     }
 
+    setActionLoadingKey('saveProjectRecord');
+
     const failProjectSaveValidation = (message: string) => {
       setActionLoadingKey(null);
       setProjectSaveError(message);
@@ -2378,6 +2297,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       locationRegion: selectedLocationRegion?.name,
       locationCity: selectedLocationCity?.displayName,
       locationBarangay: projectDraft.isEvent ? selectedLocationBarangay?.name : undefined,
+      locationVenue: projectDraft.isEvent ? projectDraft.locationVenue.trim() : undefined,
       volunteersNeeded,
       volunteers: existingProject?.volunteers || [],
       joinedUserIds: existingProject?.joinedUserIds || [],
@@ -2454,7 +2374,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     try {
       await saveProjectLikeRecord(projectToSave);
       await loadProjects();
-      setActionLoadingKey(null);
       const successTitle = isEditingExistingRecord
         ? savedProject.isEvent
           ? 'Event Edit Completed'
@@ -2497,6 +2416,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         getRequestErrorTitle(error),
         getRequestErrorMessage(error, 'Failed to save project.')
       );
+    } finally {
+      setActionLoadingKey(null);
     }
   };
 
@@ -2509,6 +2430,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     const selectedRecordType = selectedProject.isEvent ? 'Event' : 'Project';
     const projectToDelete = selectedProject;
     const doDelete = async () => {
+      setActionLoadingKey(`deleteProject-${projectToDelete.id}`);
       try {
         // Optimistically remove from UI
         setProjects(currentProjects => currentProjects.filter(project => project.id !== projectToDelete.id));
@@ -2546,6 +2468,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         } else {
           Alert.alert(getRequestErrorTitle(error), errorMsg);
         }
+      } finally {
+        setActionLoadingKey(null);
       }
     };
 
@@ -2588,6 +2512,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       return;
     }
 
+    setActionLoadingKey('saveStatusUpdate');
     try {
       const now = new Date().toISOString();
       const derivedSystemStatus = getSystemDerivedProjectStatus(currentSelectedProject);
@@ -2636,6 +2561,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         getRequestErrorTitle(error),
         getRequestErrorMessage(error, 'Failed to add status update.')
       );
+    } finally {
+      setActionLoadingKey(null);
     }
   };
 
@@ -2645,6 +2572,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   ) => {
     if (!isAdmin || !user?.id) return;
 
+    setActionLoadingKey(`reviewProposal-${applicationId}`);
     const previousApplications = allPartnerApplications;
     const now = new Date().toISOString();
     setAllPartnerApplications(currentApplications =>
@@ -2668,12 +2596,20 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       await reviewPartnerProjectApplication(applicationId, nextStatus, user.id);
       void loadAllPartnerApplications();
       void loadProjects();
+      closeProgramProposalModal();
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.alert(`Proposal Reviewed\n\nProject proposal ${nextStatus === 'Approved' ? 'approved' : 'rejected'}.`);
+      } else {
+        Alert.alert('Proposal Reviewed', `Project proposal ${nextStatus === 'Approved' ? 'approved' : 'rejected'}.`);
+      }
     } catch (error) {
       setAllPartnerApplications(previousApplications);
       Alert.alert(
         getRequestErrorTitle(error),
         getRequestErrorMessage(error, 'Failed to review partner application.')
       );
+    } finally {
+      setActionLoadingKey(null);
     }
   };
 
@@ -2682,6 +2618,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       return;
     }
 
+    setActionLoadingKey(`reviewReport-${reportId}`);
     const previousReports = partnerReports;
     const now = new Date().toISOString();
     setPartnerReports(currentReports =>
@@ -2701,12 +2638,19 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     try {
       await reviewPartnerReport(reportId, user.id);
       void loadPartnerReportsForProject(selectedProject.id);
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.alert('Report Reviewed\n\nPartner report marked as reviewed.');
+      } else {
+        Alert.alert('Report Reviewed', 'Partner report marked as reviewed.');
+      }
     } catch (error) {
       setPartnerReports(previousReports);
       Alert.alert(
         getRequestErrorTitle(error),
         getRequestErrorMessage(error, 'Failed to review the partner report.')
       );
+    } finally {
+      setActionLoadingKey(null);
     }
   };
 
@@ -2852,6 +2796,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       return;
     }
 
+    setActionLoadingKey(`reviewMatch-${requestEntry.id}`);
     const previousVolunteerMatches = volunteerMatches;
     const previousAllVolunteerMatches = allVolunteerMatches;
     const previousJoinRecords = volunteerJoinRecords;
@@ -2918,6 +2863,22 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       void loadVolunteerJoinsForProject(selectedProject.id);
       void loadVolunteers();
       void loadProjects();
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.alert(
+          `Request Reviewed\n\n${
+            nextStatus === 'Matched'
+              ? 'Volunteer approved and notified.'
+              : 'Volunteer request rejected and volunteer notified.'
+          }`
+        );
+      } else {
+        Alert.alert(
+          'Request Reviewed',
+          nextStatus === 'Matched'
+            ? 'Volunteer approved and notified.'
+            : 'Volunteer request rejected and volunteer notified.'
+        );
+      }
     } catch (error) {
       setVolunteerMatches(previousVolunteerMatches);
       setAllVolunteerMatches(previousAllVolunteerMatches);
@@ -2926,6 +2887,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         getRequestErrorTitle(error),
         getRequestErrorMessage(error, 'Failed to review volunteer request.')
       );
+    } finally {
+      setActionLoadingKey(null);
     }
   };
 
@@ -4042,8 +4005,15 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                     ? 'Create Event'
                     : 'Create Project'}
               </Text>
-              <TouchableOpacity onPress={handleSaveProjectRecord}>
-                <Text style={styles.projectModalSave}>Save</Text>
+              <TouchableOpacity 
+                onPress={handleSaveProjectRecord}
+                disabled={actionLoadingKey === 'saveProjectRecord'}
+              >
+                {actionLoadingKey === 'saveProjectRecord' ? (
+                  <ActivityIndicator size="small" color="#15803d" />
+                ) : (
+                  <Text style={styles.projectModalSave}>Save</Text>
+                )}
               </TouchableOpacity>
             </View>
 
@@ -4298,6 +4268,15 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                       ))}
                     </Picker>
                   </View>
+
+                  <Text style={styles.locationPickerLabel}>Specific Venue</Text>
+                  <TextInput
+                    style={styles.locationVenueInput}
+                    placeholder="e.g. Barangay Hall, Community Gym, school name"
+                    placeholderTextColor="#999"
+                    value={projectDraft.locationVenue}
+                    onChangeText={value => handleProjectDraftChange('locationVenue', value)}
+                  />
                 </>
               ) : null}
 
@@ -4427,18 +4406,26 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           ) : null}
 
           <TouchableOpacity
-            style={styles.submitButton}
+            style={[
+              styles.submitButton,
+              actionLoadingKey === 'saveProjectRecord' && { opacity: 0.7 }
+            ]}
             onPress={handleSaveProjectRecord}
+            disabled={actionLoadingKey === 'saveProjectRecord'}
           >
-            <Text style={styles.submitButtonText}>
-              {editingProjectId
-                ? projectDraft.isEvent
-                  ? 'Update Event'
-                  : 'Update Project'
-                : projectDraft.isEvent
-                  ? 'Create Event'
-                  : 'Create Project'}
-            </Text>
+            {actionLoadingKey === 'saveProjectRecord' ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Text style={styles.submitButtonText}>
+                {editingProjectId
+                  ? projectDraft.isEvent
+                    ? 'Update Event'
+                    : 'Update Project'
+                  : projectDraft.isEvent
+                    ? 'Create Event'
+                    : 'Create Project'}
+              </Text>
+            )}
           </TouchableOpacity>
         </ScrollView>
           </>
@@ -4630,22 +4617,38 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                   {isAdmin && (
                     <View style={styles.applicationActions}>
                       <TouchableOpacity
-                        style={[styles.applicationButton, styles.approveButton]}
+                        style={[
+                          styles.applicationButton, 
+                          styles.approveButton,
+                          actionLoadingKey === `reviewProposal-${pendingProposal.id}` && { opacity: 0.7 }
+                        ]}
                         onPress={async () => {
-                          closeProgramProposalModal();
                           await handleReviewPartnerApplication(pendingProposal.id, 'Approved');
                         }}
+                        disabled={Boolean(actionLoadingKey)}
                       >
-                        <Text style={styles.applicationButtonText}>Approve</Text>
+                        {actionLoadingKey === `reviewProposal-${pendingProposal.id}` ? (
+                          <ActivityIndicator size="small" color="#fff" />
+                        ) : (
+                          <Text style={styles.applicationButtonText}>Approve</Text>
+                        )}
                       </TouchableOpacity>
                       <TouchableOpacity
-                        style={[styles.applicationButton, styles.rejectButton]}
+                        style={[
+                          styles.applicationButton, 
+                          styles.rejectButton,
+                          actionLoadingKey === `reviewProposal-${pendingProposal.id}` && { opacity: 0.7 }
+                        ]}
                         onPress={async () => {
-                          closeProgramProposalModal();
                           await handleReviewPartnerApplication(pendingProposal.id, 'Rejected');
                         }}
+                        disabled={Boolean(actionLoadingKey)}
                       >
-                        <Text style={styles.applicationButtonText}>Reject</Text>
+                        {actionLoadingKey === `reviewProposal-${pendingProposal.id}` ? (
+                          <ActivityIndicator size="small" color="#fff" />
+                        ) : (
+                          <Text style={styles.applicationButtonText}>Reject</Text>
+                        )}
                       </TouchableOpacity>
                     </View>
                   )}
@@ -4670,7 +4673,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       return null;
     }
 
-    const overview = getProgramWebOverview(selectedProgramWebSection.title);
+    const overview = getProgramWebOverview(selectedProgramWebSection);
     const linkedProjects = selectedProgramWebSection.projects;
     const linkedEvents = selectedProgramWebSection.events;
     const linkedProjectIds = new Set([
@@ -5585,7 +5588,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                 onPress={handleDeleteProjectRecord}
                 disabled={Boolean(actionLoadingKey)}
               >
-                <MaterialIcons name="delete-outline" size={18} color="#b91c1c" />
+                {actionLoadingKey === `deleteProject-${activeSelectedProject?.id}` ? (
+                  <ActivityIndicator size="small" color="#b91c1c" />
+                ) : (
+                  <MaterialIcons name="delete-outline" size={18} color="#b91c1c" />
+                )}
                 <Text style={styles.detailsDeleteButtonText}>Delete {detailEntityLabel}</Text>
               </TouchableOpacity>
             </View>
@@ -6094,16 +6101,34 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                                 {!isProjectReadOnly && (
                                   <>
                                 <TouchableOpacity
-                                  style={[styles.applicationButton, styles.approveButton]}
+                                  style={[
+                                    styles.applicationButton, 
+                                    styles.approveButton,
+                                    actionLoadingKey === `reviewMatch-${requestEntry.id}` && { opacity: 0.7 }
+                                  ]}
                                   onPress={() => confirmReviewVolunteerRequest(requestEntry, 'Matched')}
+                                  disabled={Boolean(actionLoadingKey)}
                                 >
-                                  <Text style={styles.applicationButtonText}>Approve</Text>
+                                  {actionLoadingKey === `reviewMatch-${requestEntry.id}` ? (
+                                    <ActivityIndicator size="small" color="#fff" />
+                                  ) : (
+                                    <Text style={styles.applicationButtonText}>Approve</Text>
+                                  )}
                                 </TouchableOpacity>
                                 <TouchableOpacity
-                                  style={[styles.applicationButton, styles.rejectButton]}
+                                  style={[
+                                    styles.applicationButton, 
+                                    styles.rejectButton,
+                                    actionLoadingKey === `reviewMatch-${requestEntry.id}` && { opacity: 0.7 }
+                                  ]}
                                   onPress={() => confirmReviewVolunteerRequest(requestEntry, 'Rejected')}
+                                  disabled={Boolean(actionLoadingKey)}
                                 >
-                                  <Text style={styles.applicationButtonText}>Reject</Text>
+                                  {actionLoadingKey === `reviewMatch-${requestEntry.id}` ? (
+                                    <ActivityIndicator size="small" color="#fff" />
+                                  ) : (
+                                    <Text style={styles.applicationButtonText}>Reject</Text>
+                                  )}
                                 </TouchableOpacity>
                                   </>
                                 )}
@@ -6807,10 +6832,18 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               </View>
 
               <TouchableOpacity
-                style={styles.submitButton}
+                style={[
+                  styles.submitButton,
+                  actionLoadingKey === 'saveStatusUpdate' && { opacity: 0.7 }
+                ]}
                 onPress={handleAddStatusUpdate}
+                disabled={actionLoadingKey === 'saveStatusUpdate'}
               >
-                <Text style={styles.submitButtonText}>Add Update</Text>
+                {actionLoadingKey === 'saveStatusUpdate' ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.submitButtonText}>Add Update</Text>
+                )}
               </TouchableOpacity>
             </ScrollView>
           </View>
@@ -7090,7 +7123,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 16 }}>
               {programSections.map(section => {
                 const track = activeProgramTracks.find(t => t.id === section.module);
-                const overview = getProgramWebOverview(section.title);
+                const overview = getProgramWebOverview(section);
                 return (
                   <View key={section.module} style={{ position: 'relative', flexBasis: 260, flexGrow: 1, maxWidth: 340 }}>
                     <TouchableOpacity
@@ -11672,6 +11705,17 @@ const styles = StyleSheet.create({
   locationPicker: {
     height: 50,
     color: '#334155',
+  },
+  locationVenueInput: {
+    minHeight: 48,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    fontSize: 14,
+    color: '#0f172a',
+    backgroundColor: '#fff',
+    marginBottom: 10,
   },
   locationPickerHelperText: {
     marginTop: 2,

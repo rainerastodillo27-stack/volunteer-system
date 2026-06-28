@@ -71,7 +71,7 @@ const PartnerManagementScreen = lazyScreen(() => require('../screens/PartnerMana
 const AdminReportsScreen = lazyScreen(() => require('../screens/AdminReportsScreen'));
 const ProfileScreen = lazyScreen(() => require('../screens/ProfileScreen'));
 
-const SIDEBAR_WIDTH = 200;
+const SIDEBAR_WIDTH = 260;
 const SIDEBAR_WIDTH_COLLAPSED = 60;
 const CONTENT_GUTTER = 32;
 const CONTENT_GUTTER_COLLAPSED = 80;
@@ -503,6 +503,7 @@ export default function AdminNavigator() {
         component={AdminProjectsScreen}
         options={{
           title: 'Program Management Suite',
+          tabBarLabel: 'Program Suite',
           tabBarBadge: pendingVolunteerRequests.length > 0 ? pendingVolunteerRequests.length : undefined,
         }}
       />

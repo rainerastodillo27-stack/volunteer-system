@@ -355,7 +355,12 @@ export default function VolunteerProjectsScreen({ navigation }: { navigation: an
     const now = Date.now();
     return records
       .filter(project => project.isEvent)
-      .filter(event => !matchByProjectId.has(event.id))
+      .filter(event => {
+        const match = matchByProjectId.get(event.id);
+        // Rejected matches should NOT hide the event — the volunteer can re-apply
+        if (match && match.status !== 'Rejected') return false;
+        return true;
+      })
       .filter(event => {
         const start = new Date(event.startDate).getTime();
         return Number.isNaN(start) || start >= now;
@@ -470,16 +475,29 @@ export default function VolunteerProjectsScreen({ navigation }: { navigation: an
   const renderEventCard = (event: Project) => {
     const match = matchByProjectId.get(event.id);
     const joinedByUser = (event.joinedUserIds || []).includes(user?.id || '');
-    const isJoined = Boolean(match) || joinedByUser;
+    const isJoined = (match?.status === 'Matched' || match?.status === 'Completed') || joinedByUser;
     const isPending = match?.status === 'Requested';
     const visual = getProgramVisual(event.programModule || event.category);
     const statusLabel = getEventStatusLabel(match, joinedByUser);
-    
+    const isLoading = loadingProjectId === event.id;
+
     // Check if event is completed or cancelled
     const eventStatus = event.status || 'Planning';
     const isCompleted = eventStatus === 'Completed';
     const isCancelled = eventStatus === 'Cancelled';
     const isEnded = isCompleted || isCancelled;
+
+    // Check if event is full
+    const volunteersNeeded = event.volunteersNeeded || 0;
+    const currentVolunteers = event.volunteers?.length || 0;
+    const pendingJoinRequests = volunteerMatches.filter(
+      m => m.projectId === event.id && m.status === 'Requested'
+    ).length;
+    const approvedJoinRecords = joinRecords.filter(r => r.projectId === event.id).length;
+    const totalSlotsTaken = currentVolunteers + pendingJoinRequests + approvedJoinRecords;
+    const isFull = volunteersNeeded > 0 && totalSlotsTaken >= volunteersNeeded;
+
+    const isDisabled = isJoined || isEnded || isFull || isLoading;
 
     return (
       <TouchableOpacity
@@ -489,13 +507,19 @@ export default function VolunteerProjectsScreen({ navigation }: { navigation: an
         activeOpacity={0.88}
       >
         <View style={styles.eventImageWrap}>
-          <Image 
-            source={getProjectImageSource(event)} 
-            style={[styles.cardImage, isEnded && styles.cardImageEnded]} 
+          <Image
+            source={getProjectImageSource(event)}
+            style={[styles.cardImage, (isEnded || isFull) && styles.cardImageEnded]}
           />
-          <View style={[styles.floatingBadge, { backgroundColor: visual.color }]}>
-            <MaterialIcons name="event-available" size={15} color="#fff" />
-            <Text style={styles.floatingBadgeText}>{statusLabel}</Text>
+          <View style={[styles.floatingBadge, { backgroundColor: isFull && !isJoined ? '#dc2626' : visual.color }]}>
+            <MaterialIcons
+              name={isFull && !isJoined ? 'group-off' : 'event-available'}
+              size={15}
+              color="#fff"
+            />
+            <Text style={styles.floatingBadgeText}>
+              {isFull && !isJoined ? 'Event Full' : statusLabel}
+            </Text>
           </View>
         </View>
         <View style={styles.cardContent}>
@@ -516,28 +540,51 @@ export default function VolunteerProjectsScreen({ navigation }: { navigation: an
             <Text style={styles.metaText} numberOfLines={2}>{event.location.address}</Text>
           </View>
 
+          {/* Volunteer slots info row */}
+          {volunteersNeeded > 0 ? (
+            <View style={styles.infoRow}>
+              <MaterialIcons name="people" size={16} color={isFull ? '#dc2626' : '#64748b'} />
+              <Text style={[styles.metaText, isFull && { color: '#dc2626', fontWeight: '600' }]}>
+                {isFull
+                  ? `All ${volunteersNeeded} slot${volunteersNeeded === 1 ? '' : 's'} filled`
+                  : `${totalSlotsTaken} / ${volunteersNeeded} volunteer slot${volunteersNeeded === 1 ? '' : 's'} taken`}
+              </Text>
+            </View>
+          ) : null}
+
           <TouchableOpacity
             style={[
               styles.button,
-              { backgroundColor: visual.color },
-              (isJoined || isEnded) && styles.buttonDisabled,
+              { backgroundColor: isFull && !isJoined ? '#dc2626' : visual.color },
+              isDisabled && styles.buttonDisabled,
             ]}
-            onPress={() => !isJoined && !isEnded && handleJoin(event.id)}
-            disabled={isJoined || isEnded || loadingProjectId === event.id}
+            onPress={() => !isDisabled && handleJoin(event.id)}
+            disabled={isDisabled}
             activeOpacity={0.85}
           >
-            <MaterialIcons
-              name={isEnded ? 'event-busy' : isJoined ? 'check-circle' : 'send'}
-              size={18}
-              color="#fff"
-            />
+            {isLoading ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <MaterialIcons
+                name={
+                  isEnded ? 'event-busy'
+                  : isFull && !isJoined ? 'group-off'
+                  : isJoined ? 'check-circle'
+                  : 'send'
+                }
+                size={18}
+                color="#fff"
+              />
+            )}
             <Text style={styles.buttonText}>
-              {loadingProjectId === event.id
+              {isLoading
                 ? 'Sending...'
                 : isCancelled
                 ? 'Event Cancelled'
                 : isCompleted
                 ? 'Event Ended'
+                : isFull && !isJoined
+                ? 'Event Full'
                 : isPending
                 ? 'Pending Approval'
                 : isJoined

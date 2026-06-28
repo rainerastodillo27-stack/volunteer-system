@@ -1,6 +1,6 @@
 import React, { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import ModernTheme from '../utils/modernTheme';
-import { View, FlatList, StyleSheet, Text, TouchableOpacity, Alert, Pressable, Image, ImageSourcePropType, Modal, Platform, TextInput, ScrollView, useWindowDimensions } from 'react-native';
+import { View, FlatList, StyleSheet, Text, TouchableOpacity, Alert, Pressable, Image, ImageSourcePropType, Modal, Platform, TextInput, ScrollView, useWindowDimensions, ActivityIndicator } from 'react-native';
 
 // Safe Platform accessor for web environments
 function getPlatformOS(): string {
@@ -73,12 +73,6 @@ type Recommendation = {
 type ContentFilter = 'All' | 'Programs' | 'Events';
 
 type ProgramWebsiteDetail = {
-  eyebrow: string;
-  title: string;
-  url: string;
-  hero: string;
-  overview: string;
-  projects: { title: string; description: string }[];
   accent: string;
   softAccent: string;
   icon: keyof typeof MaterialIcons.glyphMap;
@@ -86,66 +80,21 @@ type ProgramWebsiteDetail = {
 
 const PROGRAM_WEBSITE_DETAILS: Record<Project['category'], ProgramWebsiteDetail> = {
   Nutrition: {
-    eyebrow: 'Nutrition Projects',
-    title: 'Nutrition',
-    url: 'https://www.nvcfoundation-ph.org/nutrition/',
-    hero: 'Local sourcing, nutritious food production, and Mingo meals for children and emergency feeding needs.',
-    overview:
-      'NVC nutrition work centers on Mingo, a rice, mung bean, and moringa food used to support undernourished children. The program also connects local farmers to a stable buyer while helping fill urgent feeding gaps.',
-    projects: [
-      { title: 'Mingo for Nutritional Support', description: 'Mingo meals for undernourished Filipino children.' },
-      { title: 'Farm to Fork Program', description: 'Local farmers supply harvests used for nutritious food products.' },
-      { title: 'Mingo for Emergency Relief', description: 'Convenient nutrition support for relief operations.' },
-      { title: 'Mingo Parties', description: 'Community giving activities built around Mingo meals.' },
-    ],
     accent: '#dc2626',
     softAccent: '#fee2e2',
     icon: 'restaurant',
   },
   Education: {
-    eyebrow: 'Education Projects',
-    title: 'Education',
-    url: 'https://www.nvcfoundation-ph.org/education/',
-    hero: 'School supplies, classrooms, education tools, and teacher support for children in underserved communities.',
-    overview:
-      'NVC education projects improve schooling for children from poor communities through supplies, infrastructure, and support for teachers and classrooms.',
-    projects: [
-      { title: 'LoveBags', description: 'School bags and supplies for students who need assistance.' },
-      { title: 'School Support', description: 'Classrooms, educational tools, and support for public schools.' },
-    ],
     accent: '#2563eb',
     softAccent: '#dbeafe',
     icon: 'school',
   },
   Livelihood: {
-    eyebrow: 'Livelihood Projects',
-    title: 'Livelihood',
-    url: 'https://www.nvcfoundation-ph.org/livelihood/',
-    hero: 'Income opportunities for families through craft work, tools, gardens, fisherfolk support, and social enterprise.',
-    overview:
-      'NVC livelihood projects help adults earn or increase income through practical support, production opportunities, and community-based enterprise.',
-    projects: [
-      { title: 'Artisans of Hope', description: 'Handmade products that provide artisans with sustainable livelihood.' },
-      { title: 'Project Joseph', description: 'Tools and support that help skilled workers earn more from their abilities.' },
-      { title: 'Growing Hope', description: 'Community gardens for food security and excess produce income.' },
-      { title: 'Peter Project', description: 'Support for fisherfolk, including market support for their catch.' },
-    ],
     accent: '#7c3aed',
     softAccent: '#ede9fe',
     icon: 'work',
   },
   Disaster: {
-    eyebrow: 'Emergency Response',
-    title: 'Disaster',
-    url: 'https://www.nvcfoundation-ph.org/what-we-do/',
-    hero: 'Relief coordination, volunteer mobilization, and recovery support for communities affected by emergencies.',
-    overview:
-      'Disaster work in this system is modeled as an emergency-response program for relief goods, volunteer operations, community recovery, and severe weather support.',
-    projects: [
-      { title: 'Relief Operations', description: 'Organized support for affected communities during urgent needs.' },
-      { title: 'Volunteer Mobilization', description: 'Rapid coordination of volunteers and field support.' },
-      { title: 'Community Recovery', description: 'Follow-through assistance after emergency response work.' },
-    ],
     accent: '#f97316',
     softAccent: '#ffedd5',
     icon: 'warning',
@@ -563,6 +512,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
   const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
   const [allVolunteers, setAllVolunteers] = useState<Volunteer[]>([]);
   const [loadingProjectId, setLoadingProjectId] = useState<string | null>(null);
+  const [actionLoadingKey, setActionLoadingKey] = useState<string | null>(null);
   const [attendanceNotice, setAttendanceNotice] = useState<string | null>(null);
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
   const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
@@ -908,6 +858,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
         );
       });
       showAttendanceNotice('Attendance confirmed for today.');
+      Alert.alert('Attendance Confirmed', 'Attendance confirmed for today.');
     } catch (error) {
       Alert.alert(
         getRequestErrorTitle(error, 'Unable to confirm attendance'),
@@ -1161,6 +1112,36 @@ export default function ProjectsScreen({ navigation, route }: any) {
     () => (programWebsiteProject ? linkedEventsByProgramId.get(programWebsiteProject.id) || [] : []),
     [linkedEventsByProgramId, programWebsiteProject]
   );
+  const programWebsiteContent = useMemo(() => {
+    if (!programWebsiteProject) {
+      return null;
+    }
+
+    const relatedItems = [programWebsiteProject, ...programWebsiteEvents]
+      .filter(item => item.title?.trim() || item.description?.trim())
+      .map(item => ({
+        id: item.id,
+        title: item.title?.trim() || (item.isEvent ? 'Scheduled event' : 'Program'),
+        description:
+          item.description?.trim() ||
+          item.communityNeed?.trim() ||
+          item.expectedDeliverables?.trim() ||
+          formatProjectDateRange(item.startDate, item.endDate),
+      }))
+      .filter(item => item.description.trim());
+
+    return {
+      eyebrow: programWebsiteProject.category,
+      title: programWebsiteProject.title,
+      hero: programWebsiteProject.description?.trim() || `${programWebsiteProject.title} has no saved summary yet.`,
+      overview:
+        programWebsiteProject.description?.trim() ||
+        programWebsiteProject.communityNeed?.trim() ||
+        programWebsiteProject.expectedDeliverables?.trim() ||
+        'Add a program description to show an overview here.',
+      relatedItems,
+    };
+  }, [programWebsiteEvents, programWebsiteProject]);
   const programWebsiteBeneficiariesServed = useMemo(() => {
     if (!programWebsiteProject) {
       return 0;
@@ -1211,6 +1192,8 @@ export default function ProjectsScreen({ navigation, route }: any) {
       return;
     }
 
+    const loadingKey = `assignEventTask-${taskId}`;
+    setActionLoadingKey(loadingKey);
     try {
       const assignableVolunteers = getAssignableVolunteersForEvent(eventProject);
       const assignedVolunteer =
@@ -1292,6 +1275,8 @@ export default function ProjectsScreen({ navigation, route }: any) {
         getRequestErrorTitle(error),
         getRequestErrorMessage(error, 'Failed to update the event assignment.')
       );
+    } finally {
+      setActionLoadingKey(current => (current === loadingKey ? null : current));
     }
   }, [getAssignableVolunteersForEvent, isFieldOfficerForEvent, loadProjectsData]);
 
@@ -2062,10 +2047,15 @@ export default function ProjectsScreen({ navigation, route }: any) {
                                         </Text>
                                         <View style={styles.assignmentChipRow}>
                                           <TouchableOpacity
-                                            style={styles.assignmentChip}
+                                            style={[styles.assignmentChip, actionLoadingKey?.startsWith('assignEventTask-') && { opacity: 0.5 }]}
                                             onPress={() => void handleAssignEventTask(event, task.id)}
+                                            disabled={actionLoadingKey?.startsWith('assignEventTask-') || false}
                                           >
-                                            <Text style={styles.assignmentChipText}>Unassign</Text>
+                                            {actionLoadingKey === `assignEventTask-${task.id}` ? (
+                                              <ActivityIndicator size="small" color="#166534" />
+                                            ) : (
+                                              <Text style={styles.assignmentChipText}>Unassign</Text>
+                                            )}
                                           </TouchableOpacity>
                                           {assignableVolunteers.map(volunteer => (
                                             <TouchableOpacity
@@ -2073,8 +2063,10 @@ export default function ProjectsScreen({ navigation, route }: any) {
                                               style={[
                                                 styles.assignmentChip,
                                                 task.assignedVolunteerId === volunteer.id && styles.assignmentChipActive,
+                                                actionLoadingKey?.startsWith('assignEventTask-') && { opacity: 0.5 },
                                               ]}
                                               onPress={() => void handleAssignEventTask(event, task.id, volunteer.id)}
+                                              disabled={actionLoadingKey?.startsWith('assignEventTask-') || false}
                                             >
                                               <Text
                                                 style={[
@@ -3073,10 +3065,15 @@ export default function ProjectsScreen({ navigation, route }: any) {
                         </Text>
                         <View style={styles.assignmentChipRow}>
                           <TouchableOpacity
-                            style={styles.assignmentChip}
+                            style={[styles.assignmentChip, actionLoadingKey?.startsWith('assignEventTask-') && { opacity: 0.5 }]}
                             onPress={() => void handleAssignEventTask(selectedEvent, task.id)}
+                            disabled={actionLoadingKey?.startsWith('assignEventTask-') || false}
                           >
-                            <Text style={styles.assignmentChipText}>Unassign</Text>
+                            {actionLoadingKey === `assignEventTask-${task.id}` ? (
+                              <ActivityIndicator size="small" color="#166534" />
+                            ) : (
+                              <Text style={styles.assignmentChipText}>Unassign</Text>
+                            )}
                           </TouchableOpacity>
                           {selectedEventAssignableVolunteers.map(volunteer => (
                             <TouchableOpacity
@@ -3084,8 +3081,10 @@ export default function ProjectsScreen({ navigation, route }: any) {
                               style={[
                                 styles.assignmentChip,
                                 task.assignedVolunteerId === volunteer.id && styles.assignmentChipActive,
+                                actionLoadingKey?.startsWith('assignEventTask-') && { opacity: 0.5 },
                               ]}
                               onPress={() => void handleAssignEventTask(selectedEvent, task.id, volunteer.id)}
+                              disabled={actionLoadingKey?.startsWith('assignEventTask-') || false}
                             >
                               <Text
                                 style={[
@@ -3328,14 +3327,14 @@ export default function ProjectsScreen({ navigation, route }: any) {
       </Modal>
 
       <Modal
-        visible={Boolean(programWebsiteProject && programWebsiteDetail)}
+        visible={Boolean(programWebsiteProject && programWebsiteDetail && programWebsiteContent)}
         transparent
         animationType="fade"
         onRequestClose={closeProgramWebsiteDetails}
       >
         <Pressable style={styles.programWebsiteBackdrop} onPress={closeProgramWebsiteDetails}>
           <Pressable style={styles.programWebsiteShell} onPress={() => undefined}>
-            {programWebsiteProject && programWebsiteDetail ? (
+            {programWebsiteProject && programWebsiteDetail && programWebsiteContent ? (
               <>
                 <View style={[styles.programWebsiteHero, { backgroundColor: programWebsiteDetail.accent }]}>
                   <View style={styles.programWebsiteHeroTop}>
@@ -3346,15 +3345,15 @@ export default function ProjectsScreen({ navigation, route }: any) {
                       <MaterialIcons name="close" size={22} color="#fff" />
                     </TouchableOpacity>
                   </View>
-                  <Text style={styles.programWebsiteEyebrow}>{programWebsiteDetail.eyebrow}</Text>
-                  <Text style={styles.programWebsiteTitle}>{programWebsiteDetail.title}</Text>
-                  <Text style={styles.programWebsiteHeroText}>{programWebsiteDetail.hero}</Text>
+                  <Text style={styles.programWebsiteEyebrow}>{programWebsiteContent.eyebrow}</Text>
+                  <Text style={styles.programWebsiteTitle}>{programWebsiteContent.title}</Text>
+                  <Text style={styles.programWebsiteHeroText}>{programWebsiteContent.hero}</Text>
                 </View>
 
                 <ScrollView style={styles.programWebsiteScroll} contentContainerStyle={styles.programWebsiteContent}>
                   <View style={styles.programWebsiteSection}>
                     <Text style={styles.programWebsiteSectionKicker}>Program overview</Text>
-                    <Text style={styles.programWebsiteBody}>{programWebsiteDetail.overview}</Text>
+                    <Text style={styles.programWebsiteBody}>{programWebsiteContent.overview}</Text>
                     {programWebsiteProject.description ? (
                       <View style={[styles.programWebsiteAppNote, { borderColor: programWebsiteDetail.softAccent }]}>
                         <Text style={styles.programWebsiteAppNoteLabel}>Current app program</Text>
@@ -3380,10 +3379,10 @@ export default function ProjectsScreen({ navigation, route }: any) {
                   </View>
 
                   <View style={styles.programWebsiteSection}>
-                    <Text style={styles.programWebsiteSectionKicker}>Featured NVC projects</Text>
+                    <Text style={styles.programWebsiteSectionKicker}>System records</Text>
                     <View style={styles.programWebsiteProjectGrid}>
-                      {programWebsiteDetail.projects.map(project => (
-                        <View key={project.title} style={styles.programWebsiteProjectCard}>
+                      {programWebsiteContent.relatedItems.map(item => (
+                        <View key={item.id} style={styles.programWebsiteProjectCard}>
                           <View
                             style={[
                               styles.programWebsiteProjectIcon,
@@ -3392,8 +3391,8 @@ export default function ProjectsScreen({ navigation, route }: any) {
                           >
                             <MaterialIcons name="eco" size={18} color={programWebsiteDetail.accent} />
                           </View>
-                          <Text style={styles.programWebsiteProjectTitle}>{project.title}</Text>
-                          <Text style={styles.programWebsiteProjectText}>{project.description}</Text>
+                          <Text style={styles.programWebsiteProjectTitle}>{item.title}</Text>
+                          <Text style={styles.programWebsiteProjectText}>{item.description}</Text>
                         </View>
                       ))}
                     </View>

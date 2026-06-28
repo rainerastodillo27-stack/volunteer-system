@@ -29,7 +29,7 @@ export interface AppSettings {
 export interface User {
   id: string;
   email?: string;
-  password: string; // In production, never store plain passwords
+  password?: string; // Deprecated: authentication now uses Gmail + OTP, no password stored
   role: UserRole;
   name: string;
   phone?: string;
@@ -188,6 +188,7 @@ export interface Project {
   locationRegion?: string;
   locationCity?: string;
   locationBarangay?: string; // Only for events
+  locationVenue?: string; // Specific venue description (only for events)
   volunteersNeeded: number;
   volunteers: string[]; // Volunteer IDs
   joinedUserIds?: string[];

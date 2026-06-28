@@ -2332,6 +2332,28 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
 const styles = StyleSheet.create({
 
+  pickerTrigger: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#f8fafc',
+    minHeight: 45,
+  },
+
+  pickerTriggerText: {
+    fontSize: 13,
+    color: '#0f172a',
+  },
+
+  pickerPlaceholder: {
+    color: '#94a3b8',
+  },
+
   container: {
 
     flex: 1,
