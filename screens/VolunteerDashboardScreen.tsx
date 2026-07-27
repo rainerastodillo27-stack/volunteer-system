@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import {
+  ActivityIndicator,
   Alert,
   Modal,
   Platform,
@@ -11,6 +12,8 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import * as AuthSession from 'expo-auth-session';
+import * as WebBrowser from 'expo-web-browser';
 import ProjectTimelineCalendarCard from '../components/ProjectTimelineCalendarCard';
 import { useAuth } from '../contexts/AuthContext';
 import ModernTheme from '../utils/modernTheme';
@@ -22,6 +25,13 @@ import {
   subscribeToMessages,
   subscribeToStorageChanges,
 } from '../models/storage';
+import {
+  syncProjectsToGoogleCalendar,
+  validateGoogleToken,
+  GOOGLE_CLIENT_ID,
+} from '../utils/googleCalendarSync';
+
+WebBrowser.maybeCompleteAuthSession();
 import type {
   AdminPlanningCalendar,
   AdminPlanningItem,
@@ -255,6 +265,13 @@ type DashboardSectionPreview = {
   emptyText: string;
 };
 
+// Stable Google OAuth discovery document (outside component to avoid re-renders)
+const GCAL_DISCOVERY = {
+  authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
+  tokenEndpoint: 'https://oauth2.googleapis.com/token',
+  revocationEndpoint: 'https://oauth2.googleapis.com/revoke',
+};
+
 // Shows a streamlined volunteer dashboard with project details and admin-synced scheduling.
 export default function VolunteerDashboardScreen({ navigation }: any) {
   const { user, logout } = useAuth();
@@ -271,6 +288,199 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
   const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const [selectedDashboardSection, setSelectedDashboardSection] = useState<DashboardSectionPreview | null>(null);
   const [selectedDashboardCard, setSelectedDashboardCard] = useState<DashboardCardPreview | null>(null);
+
+  // ── Google Calendar Sync ────────────────────────────────────────────────────
+  const [gcalSyncing, setGcalSyncing] = useState(false);
+  const [gcalLastSynced, setGcalLastSynced] = useState<string | null>(null);
+  const [gcalAccessToken, setGcalAccessToken] = useState<string | null>(null);
+  const [gcalSyncSuccess, setGcalSyncSuccess] = useState<{ count: number; time: string } | null>(null);
+
+
+  // Mobile: expo-auth-session hook (not used on web)
+  const [gcalAuthRequest, gcalAuthResponse, promptGcalAuth] = AuthSession.useAuthRequest(
+    {
+      clientId: GOOGLE_CLIENT_ID,
+      redirectUri: AuthSession.makeRedirectUri(),
+      scopes: [
+        'openid',
+        'profile',
+        'email',
+        'https://www.googleapis.com/auth/calendar.events',
+      ],
+      responseType: AuthSession.ResponseType.Token,
+      usePKCE: false,
+      extraParams: user?.email ? { login_hint: user.email } : {},
+    },
+    GCAL_DISCOVERY
+  );
+
+  useEffect(() => {
+    if (Platform.OS === 'web') return; // web handled via URL hash above
+    if (gcalAuthResponse?.type === 'success') {
+      const token = gcalAuthResponse.params.access_token;
+      if (token) {
+        setGcalAccessToken(token);
+        void handleGcalSync(token);
+      }
+    } else if (gcalAuthResponse?.type === 'error') {
+      Alert.alert(
+        'Google Sign-In Failed',
+        gcalAuthResponse.error?.message ?? 'Could not sign in with Google. Please try again.'
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gcalAuthResponse]);
+
+  const handleGcalConnectAndSync = async () => {
+    if (gcalSyncing) return;
+
+    // Reuse cached token if still valid
+    if (gcalAccessToken) {
+      const stillValid = await validateGoogleToken(gcalAccessToken);
+      if (stillValid) {
+        await handleGcalSync(gcalAccessToken);
+        return;
+      }
+      setGcalAccessToken(null);
+    }
+
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      // Web: Use Google Identity Services (GIS) — the official modern Google OAuth API.
+      // GIS manages the popup internally and returns the token directly via callback.
+      // No redirect URI configuration needed — only requires the JS origin to be whitelisted.
+      setGcalSyncing(true);
+
+      const requestGisToken = () => {
+        const tokenClient = (window as any).google.accounts.oauth2.initTokenClient({
+          client_id: GOOGLE_CLIENT_ID,
+          scope: [
+            'https://www.googleapis.com/auth/calendar.events',
+            'openid',
+            'profile',
+            'email',
+          ].join(' '),
+          callback: (response: any) => {
+            if (response.error) {
+              setGcalSyncing(false);
+              Alert.alert(
+                'Google Sign-In Failed',
+                response.error_description || response.error || 'Could not sign in with Google.'
+              );
+              return;
+            }
+            const token = response.access_token as string;
+            if (token) {
+              setGcalAccessToken(token);
+              void handleGcalSync(token);
+            }
+          },
+          ...(user?.email ? { hint: user.email } : {}),
+        });
+        tokenClient.requestAccessToken();
+      };
+
+      // Load GIS script if not already loaded
+      if ((window as any).google?.accounts?.oauth2) {
+        requestGisToken();
+      } else {
+        const existing = document.getElementById('gis-script');
+        if (existing) {
+          existing.addEventListener('load', requestGisToken);
+        } else {
+          const script = document.createElement('script');
+          script.id = 'gis-script';
+          script.src = 'https://accounts.google.com/gsi/client';
+          script.async = true;
+          script.defer = true;
+          script.onload = requestGisToken;
+          script.onerror = () => {
+            setGcalSyncing(false);
+            Alert.alert('Error', 'Could not load Google Sign-In. Check your internet connection.');
+          };
+          document.head.appendChild(script);
+        }
+      }
+    } else {
+      // Mobile: use expo-auth-session
+      await promptGcalAuth();
+    }
+  };
+
+
+  const handleGcalSync = async (accessToken: string) => {
+    setGcalSyncing(true);
+    setGcalSyncSuccess(null);
+    try {
+      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'volunteerProfile']);
+      const allProjects = snapshot.projects ?? [];
+
+      // First try: projects explicitly assigned to the volunteer
+      let relevantProjects = allProjects.filter(p =>
+        p.volunteers?.includes(user?.id ?? '') ||
+        p.joinedUserIds?.includes(user?.id ?? '')
+      );
+
+      // Fallback: if no explicitly assigned projects, sync all active visible projects
+      if (relevantProjects.length === 0) {
+        relevantProjects = allProjects.filter(
+          p => p.status !== 'Cancelled' && p.status !== 'Completed'
+        );
+      }
+
+      if (relevantProjects.length === 0) {
+        Alert.alert('Nothing to Sync', 'There are no active events or projects to sync to Google Calendar.');
+        return;
+      }
+
+      const result = await syncProjectsToGoogleCalendar(accessToken, relevantProjects);
+      const syncedAt = new Date().toLocaleString();
+      setGcalLastSynced(syncedAt);
+
+      if (result.synced > 0) {
+        // Show in-screen success banner
+        setGcalSyncSuccess({ count: result.synced, time: syncedAt });
+        setTimeout(() => setGcalSyncSuccess(null), 10000);
+
+        // Show prominent Alert so the user always sees confirmation
+        Alert.alert(
+          '✅ Calendar Sync Successful!',
+          `${result.synced} event${result.synced !== 1 ? 's' : ''} added to your Google Calendar.\n\nA confirmation email has been sent to ${user?.email ?? 'your email'}.`
+        );
+
+        // Send confirmation email
+        if (user?.email) {
+          try {
+            const { getApiBaseUrl } = await import('../models/storage');
+            await fetch(`${getApiBaseUrl()}/notify/gcal-sync`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                recipient_email: user.email,
+                user_name: user.name || user.email,
+                synced_count: result.synced,
+                synced_at: syncedAt,
+              }),
+            });
+          } catch {
+            // Email failure is non-critical
+          }
+        }
+      } else if (result.failed > 0) {
+        Alert.alert(
+          'Sync Failed',
+          `Could not add events to Google Calendar.\n\nErrors:\n${result.errors.slice(0, 3).join('\n')}`
+        );
+      } else {
+        Alert.alert('Nothing to Sync', 'No events were added. They may already be in your calendar.');
+      }
+    } catch (error) {
+      Alert.alert('Sync Failed', 'Could not sync to Google Calendar. Please try again.');
+    } finally {
+      setGcalSyncing(false);
+    }
+  };
+
+  // ───────────────────────────────────────────────────────────────────────────
 
   const isMounted = useRef(true);
   const lastLoadAtRef = useRef(0);
@@ -1004,6 +1214,9 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
           accentColor="#166534"
           emptyText="No volunteer timeline items yet."
           onOpenProject={projectId => openProjects(projectId)}
+          onSyncToCalendar={() => void handleGcalConnectAndSync()}
+          gcalSyncing={gcalSyncing}
+          gcalLastSynced={gcalLastSynced}
         />
 
         {joinedEvents.length > 0 && (
@@ -2017,5 +2230,96 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     color: '#ffffff',
+  },
+
+  // ── Google Calendar sync card ──────────────────────────────────────────────
+  gcalSyncCard: {
+    marginHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 4,
+    backgroundColor: '#f0fdf4',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  gcalSyncRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  gcalSyncLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  gcalSyncIcon: {
+    fontSize: 24,
+  },
+  gcalSyncTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#14532d',
+  },
+  gcalSyncSub: {
+    fontSize: 11,
+    color: '#166534',
+    marginTop: 2,
+  },
+  gcalSyncBtn: {
+    backgroundColor: '#1a73e8',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    minWidth: 64,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  gcalSyncBtnBusy: {
+    backgroundColor: '#93c5fd',
+  },
+  gcalSyncBtnText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  gcalSuccessBanner: {
+    marginHorizontal: 16,
+    marginTop: 6,
+    marginBottom: 4,
+    backgroundColor: '#dcfce7',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#86efac',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  gcalSuccessEmoji: {
+    fontSize: 22,
+  },
+  gcalSuccessTextBlock: {
+    flex: 1,
+  },
+  gcalSuccessTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#14532d',
+  },
+  gcalSuccessSub: {
+    fontSize: 11,
+    color: '#166534',
+    marginTop: 2,
+  },
+  gcalSuccessDismiss: {
+    fontSize: 14,
+    color: '#166534',
+    fontWeight: '700',
+    paddingHorizontal: 4,
   },
 });

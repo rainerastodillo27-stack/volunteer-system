@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import type { AdminPlanningCalendar, AdminPlanningItem, Project } from '../models/types';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 
@@ -27,6 +27,10 @@ type ProjectTimelineCalendarCardProps = {
   focusDate?: string;
   projectFilterIds?: string[];
   onOpenProject?: (projectId: string) => void;
+  // Google Calendar sync
+  onSyncToCalendar?: () => void;
+  gcalSyncing?: boolean;
+  gcalLastSynced?: string | null;
 };
 
 function getMonthGrid(date: Date): Array<number | null> {
@@ -99,6 +103,9 @@ export default function ProjectTimelineCalendarCard({
   focusDate,
   projectFilterIds,
   onOpenProject,
+  onSyncToCalendar,
+  gcalSyncing = false,
+  gcalLastSynced = null,
 }: ProjectTimelineCalendarCardProps) {
   const calendarDate = useMemo(() => {
     if (isValidDateValue(focusDate)) {
@@ -215,6 +222,7 @@ export default function ProjectTimelineCalendarCard({
 
   return (
     <View style={styles.card}>
+      {/* ── Hero Panel (green) ── */}
       <View style={[styles.heroPanel, { backgroundColor: accentColor }]}>
         <View style={styles.syncBadge}>
           <MaterialIcons name="sync" size={14} color="#ecfdf5" />
@@ -234,8 +242,36 @@ export default function ProjectTimelineCalendarCard({
             <Text style={styles.heroStatLabel}>project dates</Text>
           </View>
         </View>
+
+        {/* Google Calendar Sync Button */}
+        {onSyncToCalendar ? (
+          <TouchableOpacity
+            style={[styles.gcalBtn, gcalSyncing && styles.gcalBtnBusy]}
+            onPress={onSyncToCalendar}
+            disabled={gcalSyncing}
+            activeOpacity={0.85}
+          >
+            <View style={styles.gcalBtnLeft}>
+              <Text style={styles.gcalBtnIcon}>📅</Text>
+              <View>
+                <Text style={styles.gcalBtnTitle}>Sync to Google Calendar</Text>
+                {gcalLastSynced ? (
+                  <Text style={styles.gcalBtnSub}>Last synced: {gcalLastSynced}</Text>
+                ) : null}
+              </View>
+            </View>
+            {gcalSyncing ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <View style={styles.gcalBtnAction}>
+                <Text style={styles.gcalBtnActionText}>🔄</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        ) : null}
       </View>
 
+      {/* ── Calendar + Agenda ── */}
       <View style={styles.contentPanel}>
         <View style={styles.calendarPanel}>
           <View style={styles.panelHeader}>
@@ -412,6 +448,53 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: '#dcfce7',
   },
+  // ── Google Calendar Sync Button ──
+  gcalBtn: {
+    marginTop: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.28)',
+  },
+  gcalBtnBusy: {
+    opacity: 0.7,
+  },
+  gcalBtnLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  gcalBtnIcon: {
+    fontSize: 20,
+  },
+  gcalBtnTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  gcalBtnSub: {
+    marginTop: 2,
+    fontSize: 10,
+    color: '#dcfce7',
+  },
+  gcalBtnAction: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.22)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  gcalBtnActionText: {
+    fontSize: 16,
+  },
+  // ── Calendar & Agenda ──
   contentPanel: {
     padding: 14,
     gap: 14,

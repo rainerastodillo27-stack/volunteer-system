@@ -4866,3 +4866,55 @@ async def clear_all_caches() -> dict[str, Any]:
 
 
 
+
+
+class GcalSyncNotifyPayload(BaseModel):
+    recipient_email: str
+    user_name: str
+    synced_count: int
+    synced_at: str
+
+
+@app.post("/notify/gcal-sync")
+async def notify_gcal_sync(payload: GcalSyncNotifyPayload) -> dict[str, Any]:
+    """Sends a confirmation email to the user after a successful Google Calendar sync."""
+    subject = "Your NVC Calendar Has Been Synced to Google Calendar"
+    text_body = (
+        f"Hi {payload.user_name},\n\n"
+        f"Your NVC volunteer schedule has been successfully synced to your Google Calendar.\n\n"
+        f"Events synced: {payload.synced_count}\n"
+        f"Synced at: {payload.synced_at}\n\n"
+        f"You can now view your upcoming volunteer events directly in Google Calendar.\n\n"
+        f"-- NVC Volunteer System"
+    )
+    html_body = f"""
+    <div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;">
+      <div style="background:#166534;padding:28px 32px;">
+        <h1 style="color:#fff;margin:0;font-size:22px;">NVC Volunteer System</h1>
+        <p style="color:#bbf7d0;margin:6px 0 0;font-size:14px;">Google Calendar Sync Confirmation</p>
+      </div>
+      <div style="padding:28px 32px;background:#fff;">
+        <p style="font-size:16px;color:#0f172a;">Hi <strong>{payload.user_name}</strong>,</p>
+        <p style="color:#475569;line-height:1.6;">Your NVC volunteer schedule has been successfully synced to your Google Calendar.</p>
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:16px 20px;margin:20px 0;">
+          <p style="margin:0 0 8px;font-size:13px;color:#166534;font-weight:bold;">Sync Summary</p>
+          <p style="margin:4px 0;color:#14532d;font-size:15px;"><strong>{payload.synced_count}</strong> events added to Google Calendar</p>
+          <p style="margin:4px 0;color:#14532d;font-size:14px;">Synced at: {payload.synced_at}</p>
+        </div>
+      </div>
+      <div style="background:#f8fafc;padding:16px 32px;border-top:1px solid #e2e8f0;text-align:center;">
+        <p style="color:#94a3b8;font-size:12px;margin:0;">NVC Volunteer Management System</p>
+      </div>
+    </div>
+    """
+    try:
+        _send_email_message(
+            recipient_email=payload.recipient_email,
+            subject=subject,
+            text_body=text_body,
+            html_body=html_body,
+        )
+        return {"status": "ok", "message": f"Confirmation email sent to {payload.recipient_email}"}
+    except Exception as e:
+        print(f"[GCAL-NOTIFY] Failed to send email: {e}")
+        return {"status": "error", "message": str(e)}

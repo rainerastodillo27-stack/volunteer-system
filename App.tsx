@@ -8,6 +8,10 @@ import ErrorBoundary from './components/ErrorBoundary';
 import { useNunitoFont } from './utils/fonts';
 import { useEffect } from 'react';
 import * as SplashScreen from 'expo-splash-screen';
+import * as WebBrowser from 'expo-web-browser';
+
+// Must be called at the root level so Google OAuth redirects are caught globally
+WebBrowser.maybeCompleteAuthSession();
 
 // Keep the splash screen visible while fonts load
 SplashScreen.preventAutoHideAsync().catch(() => {});
@@ -22,6 +26,7 @@ const isMobileModeOnWeb = (() => {
   } catch {}
   return false;
 })();
+
 
 // Add Google Fonts for web only
 if (typeof document !== "undefined") {

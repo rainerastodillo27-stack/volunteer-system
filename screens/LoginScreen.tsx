@@ -143,26 +143,6 @@ const ADMIN_DEMO_ACCOUNT: DemoLoginAccount = {
   badge: "ADMIN",
 };
 
-const VOLUNTEER_DEMO_ACCOUNT: DemoLoginAccount = {
-  id: "demo-volunteer",
-  name: "Volunteer Account",
-  identifier: "volunteer@example.com",
-  password: "volunteer123",
-  badge: "VOLUNTEER",
-  mobileRole: "volunteer",
-};
-
-const PARTNER_DEMO_ACCOUNTS: DemoLoginAccount[] = [
-  {
-    id: "demo-partner-kabankalan",
-    name: "Kabankalan LGU",
-    identifier: "partner@livelihoods.org",
-    password: "partner123",
-    badge: "PARTNER",
-    mobileRole: "partner",
-  },
-];
-
 function getVisibleDemoAccounts(
   isWeb: boolean,
   selectedMobileRole: MobileEntryRole | null,
@@ -171,15 +151,8 @@ function getVisibleDemoAccounts(
     return [ADMIN_DEMO_ACCOUNT];
   }
 
-  if (selectedMobileRole === "volunteer") {
-    return [VOLUNTEER_DEMO_ACCOUNT];
-  }
-
-  if (selectedMobileRole === "partner") {
-    return PARTNER_DEMO_ACCOUNTS;
-  }
-
-  return [VOLUNTEER_DEMO_ACCOUNT, ...PARTNER_DEMO_ACCOUNTS];
+  // No demo accounts for mobile — users must sign in with real credentials
+  return [];
 }
 
 // Returns a clean volunteer membership form state for the signup modal.

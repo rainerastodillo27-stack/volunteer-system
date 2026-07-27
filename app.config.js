@@ -142,7 +142,7 @@ module.exports = () => {
         androidGoogleMapsApiKey: mobileGoogleMapsApiKey,
         webGoogleMapsApiKey,
       },
-      plugins: ['expo-font'],
+      plugins: ['expo-font', 'expo-web-browser'],
     },
   };
 };

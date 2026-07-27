@@ -37,6 +37,15 @@ import { useFocusEffect } from '@react-navigation/native';
 import InlineLoadError from '../components/InlineLoadError';
 
 import ProjectTimelineCalendarCard from '../components/ProjectTimelineCalendarCard';
+import * as AuthSession from 'expo-auth-session';
+import * as WebBrowser from 'expo-web-browser';
+import {
+  syncProjectsToGoogleCalendar,
+  validateGoogleToken,
+  GOOGLE_CLIENT_ID,
+} from '../utils/googleCalendarSync';
+
+WebBrowser.maybeCompleteAuthSession();
 
 import { useAuth } from '../contexts/AuthContext';
 
@@ -500,6 +509,145 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
   const [proposalDatePickerMode, setProposalDatePickerMode] = useState<'startDate' | 'endDate'>('startDate');
 
   const [selectedProposalDate, setSelectedProposalDate] = useState(new Date());
+
+  // ── Google Calendar Sync ──────────────────────────────────────────────────
+  const [gcalSyncing, setGcalSyncing] = useState(false);
+  const [gcalLastSynced, setGcalLastSynced] = useState<string | null>(null);
+  const [gcalAccessToken, setGcalAccessToken] = useState<string | null>(null);
+
+  const GCAL_DISCOVERY = {
+    authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
+    tokenEndpoint: 'https://oauth2.googleapis.com/token',
+    revocationEndpoint: 'https://oauth2.googleapis.com/revoke',
+  };
+
+  const [gcalAuthRequest, gcalAuthResponse, promptGcalAuth] = AuthSession.useAuthRequest(
+    {
+      clientId: GOOGLE_CLIENT_ID,
+      redirectUri: AuthSession.makeRedirectUri(),
+      scopes: [
+        'openid',
+        'profile',
+        'email',
+        'https://www.googleapis.com/auth/calendar.events',
+      ],
+      responseType: AuthSession.ResponseType.Token,
+      usePKCE: false,
+      extraParams: user?.email ? { login_hint: user.email } : {},
+    },
+    GCAL_DISCOVERY
+  );
+
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    if (gcalAuthResponse?.type === 'success') {
+      const token = gcalAuthResponse.params.access_token;
+      if (token) {
+        setGcalAccessToken(token);
+        void handleGcalSync(token);
+      }
+    } else if (gcalAuthResponse?.type === 'error') {
+      Alert.alert(
+        'Google Sign-In Failed',
+        gcalAuthResponse.error?.message ?? 'Could not sign in with Google. Please try again.'
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gcalAuthResponse]);
+
+  const handleGcalConnectAndSync = async () => {
+    if (gcalSyncing) return;
+
+    if (gcalAccessToken) {
+      const stillValid = await validateGoogleToken(gcalAccessToken);
+      if (stillValid) {
+        await handleGcalSync(gcalAccessToken);
+        return;
+      }
+      setGcalAccessToken(null);
+    }
+
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      setGcalSyncing(true);
+      const requestGisToken = () => {
+        const tokenClient = (window as any).google.accounts.oauth2.initTokenClient({
+          client_id: GOOGLE_CLIENT_ID,
+          scope: [
+            'https://www.googleapis.com/auth/calendar.events',
+            'openid', 'profile', 'email',
+          ].join(' '),
+          callback: (response: any) => {
+            if (response.error) {
+              setGcalSyncing(false);
+              Alert.alert('Google Sign-In Failed', response.error_description || response.error);
+              return;
+            }
+            const token = response.access_token as string;
+            if (token) {
+              setGcalAccessToken(token);
+              void handleGcalSync(token);
+            }
+          },
+          ...(user?.email ? { hint: user.email } : {}),
+        });
+        tokenClient.requestAccessToken();
+      };
+      if ((window as any).google?.accounts?.oauth2) {
+        requestGisToken();
+      } else {
+        const existing = document.getElementById('gis-script');
+        if (existing) {
+          existing.addEventListener('load', requestGisToken);
+        } else {
+          const script = document.createElement('script');
+          script.id = 'gis-script';
+          script.src = 'https://accounts.google.com/gsi/client';
+          script.async = true;
+          script.defer = true;
+          script.onload = requestGisToken;
+          script.onerror = () => {
+            setGcalSyncing(false);
+            Alert.alert('Error', 'Could not load Google Sign-In.');
+          };
+          document.head.appendChild(script);
+        }
+      }
+    } else {
+      await promptGcalAuth();
+    }
+  };
+
+  const handleGcalSync = async (accessToken: string) => {
+    setGcalSyncing(true);
+    try {
+      // Partners sync their approved/attending projects
+      const relevantProjects = attendingProjects.length ? attendingProjects : activeProjects;
+
+      if (relevantProjects.length === 0) {
+        Alert.alert('Nothing to Sync', 'There are no active projects to sync to Google Calendar.');
+        return;
+      }
+
+      const result = await syncProjectsToGoogleCalendar(accessToken, relevantProjects);
+      const syncedAt = new Date().toLocaleString();
+      setGcalLastSynced(syncedAt);
+
+      if (result.synced > 0) {
+        Alert.alert(
+          '✅ Calendar Sync Successful!',
+          `${result.synced} project${result.synced !== 1 ? 's' : ''} added to your Google Calendar.`
+        );
+      } else if (result.failed > 0) {
+        Alert.alert('Sync Failed', `Could not add projects to Google Calendar.\n\n${result.errors.slice(0, 3).join('\n')}`);
+      } else {
+        Alert.alert('Nothing to Sync', 'No projects were added. They may already be in your calendar.');
+      }
+    } catch (error) {
+      Alert.alert('Sync Failed', 'Could not sync to Google Calendar. Please try again.');
+    } finally {
+      setGcalSyncing(false);
+    }
+  };
 
 
 
@@ -1634,6 +1782,10 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
           })
 
         }
+
+        onSyncToCalendar={() => void handleGcalConnectAndSync()}
+        gcalSyncing={gcalSyncing}
+        gcalLastSynced={gcalLastSynced}
 
       />
 
