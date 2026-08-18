@@ -62,13 +62,9 @@ import {
 
   getAllUsers,
 
-  getConversation,
-
   getMessagesForUser,
 
   getProject,
-
-  getProjectGroupMessages,
 
   getProjectsScreenSnapshot,
 
@@ -76,15 +72,9 @@ import {
 
   markMessageAsRead,
 
-  saveMessage,
-
   saveEvent,
 
-  saveProjectGroupMessage,
-
   saveProject,
-
-  subscribeToMessages,
 
   subscribeToStorageChanges,
 
@@ -93,6 +83,20 @@ import {
   reviewPartnerProjectApplication,
 
 } from '../models/storage';
+
+import {
+
+  subscribeToDirectMessages,
+
+  subscribeToGroupMessages,
+
+  sendDirectMessage,
+
+  sendGroupMessage,
+
+  markDirectMessageReadFirestore,
+
+} from '../utils/firestoreMessaging';
 
 import {
 
@@ -973,53 +977,47 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
 
 
-  const loadMessages = async () => {
+  // Firestore real-time listener — tears down automatically when conversation changes.
+  useEffect(() => {
 
     if (!user) return;
 
-    try {
+    if (selectedUser) {
 
-      if (selectedUser) {
+      // Subscribe to real-time DM thread via Firestore
+      const unsubscribe = subscribeToDirectMessages(user.id, selectedUser.id, (msgs) => {
 
-        const chat = await getConversation(user.id, selectedUser.id);
+        setMessages(dedupeProposalReviewCards(msgs));
 
-        setMessages(dedupeProposalReviewCards(chat));
+        // Mark unread messages as read
+        const unread = msgs.filter(m => !m.read && (m as any).recipientId === user.id);
+        unread.forEach(m => {
+          void markDirectMessageReadFirestore(m.id, m.senderId, (m as any).recipientId);
+          void markMessageAsRead(m.id);
+        });
+        if (unread.length > 0) void loadData();
 
-        const unread = chat.filter(m => !m.read && m.recipientId === user.id);
+      });
 
-        if (unread.length > 0) {
+      return unsubscribe;
 
-          await Promise.all(unread.map(m => markMessageAsRead(m.id)));
+    } else if (selectedProjectChat) {
 
-          void loadData();
+      // Subscribe to real-time group chat via Firestore
+      const unsubscribe = subscribeToGroupMessages(selectedProjectChat.project.id, (msgs) => {
 
-        }
+        setMessages(dedupeProposalReviewCards(msgs));
 
-      } else if (selectedProjectChat) {
+      });
 
-        const chat = await getProjectGroupMessages(selectedProjectChat.project.id, user.id);
-
-        setMessages(dedupeProposalReviewCards(chat));
-
-      }
-
-    } catch (e) {
-
-      // Gracefully handle errors - set empty messages and silently fail
-      setMessages([]);
-
-      // Only log for debugging if not a known API error
-      const errorMsg = e instanceof Error ? e.message : String(e);
-
-      if (!errorMsg.includes('API request failed')) {
-
-        console.warn(`[CommunicationHub] Error loading messages: ${errorMsg}`);
-
-      }
+      return unsubscribe;
 
     }
 
-  };
+    return undefined;
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, selectedUser?.id, selectedProjectChat?.project.id]);
 
 
 
@@ -1077,93 +1075,12 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
 
 
-  useEffect(() => {
-
-    if (!user?.id) {
-
-      return;
-
-    }
+  // Legacy subscribeToMessages removed — Firestore onSnapshot handles real-time updates.
 
 
 
-    return subscribeToMessages(user.id, event => {
-
-      if (event.type === 'message.changed') {
-
-        const incoming = event.message;
-
-        const activeUser = selectedUserRef.current;
-
-        const isActiveConversation = Boolean(
-
-          activeUser &&
-
-          ((incoming.senderId === user.id && incoming.recipientId === activeUser.id) ||
-
-            (incoming.senderId === activeUser.id && incoming.recipientId === user.id))
-
-        );
-
-
-
-        if (isActiveConversation) {
-
-          setMessages(current => upsertChatMessage(current, incoming));
-
-          if (!incoming.read && incoming.recipientId === user.id) {
-
-            void markMessageAsRead(incoming.id).then(() => {
-
-              void loadData();
-
-            });
-
-          }
-
-        } else {
-
-          void loadData();
-
-        }
-
-        return;
-
-      }
-
-
-
-      if (event.type === 'project-group-message.changed') {
-
-        const incoming = event.message;
-
-        const activeProjectChat = selectedProjectChatRef.current;
-
-
-
-        if (activeProjectChat?.project.id === incoming.projectId) {
-
-          setMessages(current => upsertChatMessage(current, incoming));
-
-        }
-
-      }
-
-    });
-
-  }, [loadData, user?.id]);
-
-
-
-  useEffect(() => {
-
-    if (view === 'detail') {
-
-      void loadMessages();
-
-    }
-
-  }, [selectedUser, selectedProjectChat, view]);
+  // Real-time subscription is handled by the Firestore useEffect above;
+  // no manual loadMessages() call needed when switching conversations.
 
 
 
@@ -1360,19 +1277,19 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       if (selectedUser) {
 
-        const fullMsg: Message = { ...msg, recipientId: selectedUser.id, read: false };
+        const fullMsg = { ...msg, recipientId: selectedUser.id, read: false };
 
-        await saveMessage(fullMsg);
+        await sendDirectMessage(fullMsg);
 
-        setMessages(curr => [...curr, fullMsg]);
+        // Firestore onSnapshot will add it to messages automatically
 
       } else if (selectedProjectChat) {
 
-        const fullMsg: ProjectGroupMessage = { ...msg, projectId: selectedProjectChat.project.id, kind: 'scope-proposal' as any };
+        const fullMsg = { ...msg, projectId: selectedProjectChat.project.id, kind: 'scope-proposal' as any };
 
-        await saveProjectGroupMessage(fullMsg);
+        await sendGroupMessage(fullMsg);
 
-        // Don't add optimistically - let WebSocket broadcast handle it to avoid duplicates
+        // Firestore onSnapshot will add it to messages automatically
 
       }
 
@@ -1426,7 +1343,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       if (selectedUser) {
 
-        await saveMessage({ ...msg, recipientId: selectedUser.id, read: false });
+        await sendDirectMessage({ ...msg, recipientId: selectedUser.id, read: false });
 
       }
 
@@ -1866,19 +1783,19 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       if (selectedUser) {
 
-        const fullMsg: Message = { ...msg, recipientId: selectedUser.id, read: false };
+        const fullMsg = { ...msg, recipientId: selectedUser.id, read: false };
 
-        await saveMessage(fullMsg);
+        await sendDirectMessage(fullMsg);
 
-        setMessages(curr => [...curr, fullMsg]);
+        // Firestore onSnapshot will add it to messages in real-time
 
       } else if (selectedProjectChat) {
 
-        const fullMsg: ProjectGroupMessage = { ...msg, projectId: selectedProjectChat.project.id, kind: 'message' };
+        const fullMsg = { ...msg, projectId: selectedProjectChat.project.id, kind: 'message' as const };
 
-        await saveProjectGroupMessage(fullMsg);
+        await sendGroupMessage(fullMsg);
 
-        // Don't add optimistically - let WebSocket broadcast handle it to avoid duplicates
+        // Firestore onSnapshot will add it to messages in real-time
 
       }
 
@@ -2095,9 +2012,6 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       // Reload data in background without blocking UI
       console.log('Reloading data in background...');
       void loadData();
-      if (selectedUser) {
-        void loadMessages();
-      }
 
 
 
