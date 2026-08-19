@@ -66,6 +66,9 @@ export interface User {
     certificationsOrTrainings?: string;
     hobbiesAndInterests?: string;
     specialSkills?: string;
+    validIdPhoto?: string;
+    skills?: string[];
+    affiliations?: VolunteerAffiliation[];
   };
 }
 
@@ -108,6 +111,7 @@ export interface ProjectInternalTask {
   assignedVolunteerName?: string;
   assignedVolunteerIds?: string[];
   assignedVolunteerNames?: string[];
+  volunteersNeeded?: number;
   isFieldOfficer?: boolean;
   skillsNeeded: string[]; // Skills required for this specific task
   createdAt: string;
@@ -190,6 +194,7 @@ export interface Project {
   locationBarangay?: string; // Only for events
   locationVenue?: string; // Specific venue description (only for events)
   volunteersNeeded: number;
+  volunteerRequirements?: string[];
   volunteers: string[]; // Volunteer IDs
   joinedUserIds?: string[];
   skillsNeeded?: string[]; // Skills required for this project/event

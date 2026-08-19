@@ -13,6 +13,7 @@
 import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import { Project } from '../models/types';
+import { getApiBaseUrl } from '../models/storage';
 
 // Required so the auth session redirect works correctly on mobile
 WebBrowser.maybeCompleteAuthSession();
@@ -24,6 +25,7 @@ WebBrowser.maybeCompleteAuthSession();
  * Replace this with the one from your Google Cloud Console credentials page.
  */
 export const GOOGLE_CLIENT_ID =
+  process.env.EXPO_PUBLIC_GOOGLE_OAUTH_CLIENT_ID ||
   '761439905958-24ag4ap26ec46m9va2lakpprat6p5gd6.apps.googleusercontent.com';
 
 const GOOGLE_CALENDAR_API = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
@@ -56,13 +58,25 @@ export interface SyncResult {
   errors: string[];
 }
 
+export type CalendarSyncRole = 'volunteer' | 'partner';
+
+type CalendarSyncEmailPayload = {
+  recipientEmail?: string;
+  userName: string;
+  syncedCount: number;
+  role: CalendarSyncRole;
+  calendarUrl?: string;
+};
+
+export const GOOGLE_CALENDAR_WEB_URL = 'https://calendar.google.com/calendar/u/0/r';
+
 // ─── OAuth Hook Config ────────────────────────────────────────────────────────
 
 /**
  * Returns the discovery document and request config needed by expo-auth-session.
  * Call this inside a component using useAuthRequest().
  */
-export function getGoogleAuthConfig() {
+export function getGoogleAuthConfig(loginHint?: string) {
   const discovery = {
     authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
     tokenEndpoint: 'https://oauth2.googleapis.com/token',
@@ -79,10 +93,54 @@ export function getGoogleAuthConfig() {
     usePKCE: false,
     extraParams: {
       access_type: 'online',
+      prompt: 'select_account',
+      ...(loginHint?.trim() ? { login_hint: loginHint.trim() } : {}),
     },
   };
 
   return { discovery, request, redirectUri };
+}
+
+function normalizeEmail(value?: string | null): string {
+  return String(value || '').trim().toLowerCase();
+}
+
+export async function getGoogleCalendarAccountEmail(accessToken: string): Promise<string> {
+  const response = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Unable to verify the selected Google account.');
+  }
+
+  const profile = (await response.json().catch(() => ({}))) as { email?: string };
+  return normalizeEmail(profile.email);
+}
+
+export async function assertGoogleCalendarAccountMatchesUser(
+  accessToken: string,
+  expectedEmail?: string | null
+): Promise<string> {
+  const expected = normalizeEmail(expectedEmail);
+  if (!expected) {
+    return getGoogleCalendarAccountEmail(accessToken);
+  }
+
+  const selectedEmail = await getGoogleCalendarAccountEmail(accessToken);
+  if (!selectedEmail) {
+    throw new Error('Google did not return an email for the selected account.');
+  }
+
+  if (selectedEmail !== expected) {
+    throw new Error(
+      `You selected ${selectedEmail}, but this NVC account is signed in as ${expected}. Choose the matching Google account before syncing.`
+    );
+  }
+
+  return selectedEmail;
 }
 
 // ─── Event Formatting ─────────────────────────────────────────────────────────
@@ -138,6 +196,17 @@ export function formatProjectAsGoogleEvent(project: Project): GoogleCalendarEven
   };
 }
 
+function getStableGoogleEventId(project: Project): string {
+  const source = `nvc:${project.id}`;
+  let hash = 5381;
+
+  for (let index = 0; index < source.length; index += 1) {
+    hash = ((hash << 5) + hash + source.charCodeAt(index)) >>> 0;
+  }
+
+  return `nvc${hash.toString(16)}${String(project.id || '').length.toString(16)}`.toLowerCase();
+}
+
 // ─── Sync Function ────────────────────────────────────────────────────────────
 
 /**
@@ -157,20 +226,43 @@ export async function syncProjectsToGoogleCalendar(
     try {
       const event = formatProjectAsGoogleEvent(project);
 
+      const eventId = getStableGoogleEventId(project);
       const response = await fetch(GOOGLE_CALENDAR_API, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(event),
+        body: JSON.stringify({
+          id: eventId,
+          ...event,
+        }),
       });
 
       if (!response.ok) {
         const body = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
         const msg = body?.error?.message ?? `HTTP ${response.status}`;
-        result.failed++;
-        result.errors.push(`"${project.title}": ${msg}`);
+        if (response.status === 409) {
+          const updateResponse = await fetch(`${GOOGLE_CALENDAR_API}/${encodeURIComponent(eventId)}`, {
+            method: 'PATCH',
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(event),
+          });
+
+          if (updateResponse.ok) {
+            result.synced++;
+          } else {
+            const updateBody = (await updateResponse.json().catch(() => ({}))) as { error?: { message?: string } };
+            result.failed++;
+            result.errors.push(`"${project.title}": ${updateBody?.error?.message ?? `HTTP ${updateResponse.status}`}`);
+          }
+        } else {
+          result.failed++;
+          result.errors.push(`"${project.title}": ${msg}`);
+        }
       } else {
         result.synced++;
       }
@@ -186,6 +278,35 @@ export async function syncProjectsToGoogleCalendar(
   }
 
   return result;
+}
+
+export async function sendGoogleCalendarSyncEmail({
+  recipientEmail,
+  userName,
+  syncedCount,
+  role,
+  calendarUrl = GOOGLE_CALENDAR_WEB_URL,
+}: CalendarSyncEmailPayload): Promise<void> {
+  if (!recipientEmail?.trim() || syncedCount <= 0) {
+    return;
+  }
+
+  await fetch(`${getApiBaseUrl()}/notify/gcal-sync`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      recipient_email: recipientEmail.trim(),
+      user_name: userName || 'NVC user',
+      synced_count: syncedCount,
+      synced_at: new Date().toLocaleString(),
+      schedule_type: role,
+      calendar_url: calendarUrl,
+    }),
+  }).catch(error => {
+    console.error('Failed to send Google Calendar sync email:', error);
+  });
 }
 
 // ─── Token Validation ─────────────────────────────────────────────────────────

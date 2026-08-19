@@ -1,47 +1,43 @@
-import { useFonts } from 'expo-font';
 import { Platform } from 'react-native';
-import * as SplashScreen from 'expo-splash-screen';
-
-// Keep the splash screen visible while fonts are loading
-SplashScreen.preventAutoHideAsync().catch(() => {});
+import { useFonts } from 'expo-font';
 
 /**
- * Hook to load and manage Nunito font family across the app
- * Handles both mobile (via expo-font) and web (via Google Fonts)
+ * Hook to manage DM Sans font family across the app
+ * In bare React Native, fonts are linked at the native level (Xcode/Android)
+ * This hook simply returns true since fonts are pre-loaded
  */
-export function useNunitoFont() {
-  // On web, fonts are already injected via Google Fonts in App.tsx
-  // Skip the font loading hook to prevent blocking the UI
-  if (Platform.OS === 'web') {
-    return true;
-  }
+export function useDMSansFont() {
+  // Fonts are linked at native level, so they're always available
+  return true;
+}
 
+export function useNunitoFont() {
   const [fontsLoaded] = useFonts({
-    'Nunito-Regular': require('../assets/fonts/Nunito-Regular.ttf'),
-    'Nunito-Bold': require('../assets/fonts/Nunito-Bold.ttf'),
-    'Nunito-SemiBold': require('../assets/fonts/Nunito-SemiBold.ttf'),
+    Nunito: require('../assets/fonts/Nunito-Regular.ttf'),
     'Nunito-Light': require('../assets/fonts/Nunito-Light.ttf'),
+    'Nunito-SemiBold': require('../assets/fonts/Nunito-SemiBold.ttf'),
+    'Nunito-Bold': require('../assets/fonts/Nunito-Bold.ttf'),
     'Nunito-ExtraBold': require('../assets/fonts/Nunito-ExtraBold.ttf'),
   });
 
-  return fontsLoaded;
+  return Platform.OS === 'web' || fontsLoaded;
 }
 
 /**
  * Global default font family to use throughout the app
  */
 export const GLOBAL_FONT_FAMILY = Platform.select({
-  web: 'Nunito, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-  default: 'Nunito-Regular',
+  web: "'Nunito', sans-serif",
+  default: 'Nunito',
 });
 
 /**
  * Font weight mappings for Nunito font
  */
 export const FONT_WEIGHTS = {
-  light: Platform.select({ web: '300', default: 'Nunito-Light' }),
-  normal: Platform.select({ web: '400', default: 'Nunito-Regular' }),
-  semibold: Platform.select({ web: '600', default: 'Nunito-SemiBold' }),
-  bold: Platform.select({ web: '700', default: 'Nunito-Bold' }),
-  extrabold: Platform.select({ web: '800', default: 'Nunito-ExtraBold' }),
+  light: Platform.select({ web: '300', default: '300' }),
+  normal: Platform.select({ web: '400', default: '400' }),
+  semibold: Platform.select({ web: '600', default: '600' }),
+  bold: Platform.select({ web: '700', default: '700' }),
+  extrabold: Platform.select({ web: '800', default: '800' }),
 } as const;

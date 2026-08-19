@@ -39,7 +39,7 @@ function isDatabaseUnavailableMessage(message: string): boolean {
 }
 
 function getFriendlyDatabaseUnavailableMessage(): string {
-  return 'We can’t connect to the database right now. Start the backend and Expo using npm run all:bg or npm run all, then try again.';
+  return 'We can’t connect to the database right now. Start the backend and web app using npm run all:bg or npm run all, then try again.';
 }
 
 export function getRequestErrorMessage(

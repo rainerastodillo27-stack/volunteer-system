@@ -11,7 +11,6 @@ export function formatProjectLocation(project: Project): string {
   // For events with barangay
   if (project.isEvent && project.locationBarangay) {
     const parts = [
-      project.locationVenue,
       project.locationBarangay,
       project.locationCity,
       project.locationRegion,
@@ -37,8 +36,7 @@ export function formatProjectLocation(project: Project): string {
 export function formatProjectLocationShort(project: Project): string {
   // For events with barangay
   if (project.isEvent && project.locationBarangay && project.locationCity) {
-    const venuePrefix = project.locationVenue ? `${project.locationVenue}, ` : '';
-    return `${venuePrefix}${project.locationBarangay}, ${project.locationCity}`;
+    return `${project.locationBarangay}, ${project.locationCity}`;
   }
   
   // For projects or events without barangay

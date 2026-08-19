@@ -12,7 +12,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { File, Paths } from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import DownloadPreviewModal from './DownloadPreviewModal';
 import type { SubmittedReport } from '../screens/ReportsScreen';
@@ -174,6 +174,7 @@ async function downloadFile(
 ) {
   const safeFilename = filename.replace(/[\\/:*?"<>|]+/g, '-');
 
+  // Web version: use browser download
   if (typeof document !== 'undefined' && typeof window !== 'undefined') {
     const blob = new Blob([content], { type });
     const url = window.URL.createObjectURL(blob);
@@ -187,26 +188,25 @@ async function downloadFile(
     return;
   }
 
+  // Native version: use file system and share
   try {
-    const sharingAvailable = await Sharing.isAvailableAsync();
-    if (!sharingAvailable) {
-      Alert.alert('Download Unavailable', fallbackMessage);
-      return;
-    }
+    const filePath = `${FileSystem.cacheDirectory || ''}${safeFilename}`;
+    
+    // Write file to cache
+    await FileSystem.writeAsStringAsync(filePath, content, {
+      encoding: FileSystem.EncodingType.UTF8,
+    });
 
-    const file = new File(Paths.cache, safeFilename);
-    if (file.exists) {
-      file.delete();
-    }
-    file.create();
-    file.write(content);
-
-    await Sharing.shareAsync(file.uri, {
+    // Share the file
+    await Sharing.shareAsync(filePath, {
       mimeType: type,
       dialogTitle: safeFilename,
-      UTI: type === 'application/pdf' ? 'com.adobe.pdf' : undefined,
     });
   } catch (error) {
+    if (error instanceof Error && error.message === 'User did not share') {
+      // User cancelled, don't show error
+      return;
+    }
     console.error('Unable to save report file:', error);
     Alert.alert('Download Failed', fallbackMessage);
   }

@@ -21,11 +21,35 @@ const LazyTabNavigator = (props: Record<string, unknown>) => {
   return <TabNavigator {...props} />;
 };
 
+// Returns true only when running in a browser WITHOUT ?mode=mobile
+function getIsMobileMode(): boolean {
+  if (Platform.OS !== 'web') return false;
+  try {
+    if (typeof window !== 'undefined' && window?.location?.search) {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('mode') === 'mobile';
+    }
+  } catch {
+    // ignore
+  }
+  return false;
+}
+
 // Switches between the login flow and the authenticated tab navigator.
 export default function StackNavigator() {
-  const { user, loading } = useAuth();
+  const { user, loading, logout } = useAuth();
   const startupLoggedRef = useRef(false);
   const showBlockingStartupLoader = loading && Platform.OS === 'web';
+
+  // If mobile mode is active and the logged-in user is an admin, force logout.
+  const isMobileMode = getIsMobileMode();
+  const isAdminInMobileMode = isMobileMode && user?.role === 'admin';
+
+  useEffect(() => {
+    if (isAdminInMobileMode && logout) {
+      void logout();
+    }
+  }, [isAdminInMobileMode, logout]);
 
   useEffect(() => {
     if (loading || startupLoggedRef.current) {
@@ -59,13 +83,16 @@ export default function StackNavigator() {
     );
   }
 
+  // In mobile mode, admin accounts must not pass through — treat as logged out.
+  const effectiveUser = isAdminInMobileMode ? null : user;
+
   return (
     <Stack.Navigator
       screenOptions={{
         headerShown: false,
       }}
     >
-      {user ? (
+      {effectiveUser ? (
         <Stack.Screen name="Main" component={LazyTabNavigator} />
       ) : (
         <Stack.Screen name="Login" component={LazyLoginScreen} />
@@ -73,6 +100,7 @@ export default function StackNavigator() {
     </Stack.Navigator>
   );
 }
+
 
 const styles = StyleSheet.create({
   loadingScreen: {

@@ -104,7 +104,7 @@ function getGoogleMapsScriptUrl(apiKey: string) {
   });
 
   const url = `https://maps.googleapis.com/maps/api/js?${params.toString()}`;
-  console.log('[Maps] Loading Google Maps from:', url);
+  console.log('[Maps] Loading Google Maps JavaScript API.');
   return url;
 }
 
@@ -178,7 +178,6 @@ export function loadGoogleMaps(apiKey: string) {
     script.async = true;
     script.defer = true;
     script.src = getGoogleMapsScriptUrl(normalizedApiKey);
-    console.log('[Maps] API key last 4 chars:', normalizedApiKey.slice(-4));
     script.addEventListener('error', handleError, { once: true });
     document.head.appendChild(script);
   });

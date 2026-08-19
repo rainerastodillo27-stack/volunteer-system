@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import Constants from 'expo-constants';
 import ModernTheme from '../utils/modernTheme';
 import {
   View,
@@ -12,7 +13,6 @@ import {
   ScrollView,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import Constants from 'expo-constants';
 import { useAuth } from '../contexts/AuthContext';
 import { Partner, Project, Volunteer, VolunteerProjectJoinRecord } from '../models/types';
 import {
@@ -117,7 +117,14 @@ const MAP_STYLE_PRESETS: MapStylePreset[] = [
 
 function getWebGoogleMapsApiKey() {
   const expoExtra = Constants.expoConfig?.extra as { webGoogleMapsApiKey?: string } | undefined;
-  return expoExtra?.webGoogleMapsApiKey || process.env.EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY || '';
+  return (
+    process.env.EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY ||
+    expoExtra?.webGoogleMapsApiKey ||
+    process.env.GOOGLE_MAPS_WEB_API_KEY ||
+    process.env.GOOGLE_MAPS_API_KEY ||
+    process.env.VITE_GOOGLE_MAPS_WEB_API_KEY ||
+    ''
+  );
 }
 
 function getCurrentWebOrigin() {
@@ -132,7 +139,7 @@ function getGoogleMapsErrorMessage(error: unknown, apiKey: string) {
   const currentOrigin = getCurrentWebOrigin();
 
   if (!apiKey.trim()) {
-    return 'Google Maps web key is missing. Add GOOGLE_MAPS_WEB_API_KEY to .env and restart Expo.';
+    return 'Google Maps web key is missing. Add EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY to .env and restart the web app.';
   }
 
   const message = error instanceof Error ? error.message : '';
@@ -142,6 +149,22 @@ function getGoogleMapsErrorMessage(error: unknown, apiKey: string) {
   }
 
   return `Google Maps could not load: ${message || 'Unknown error. Check browser console for details.'}`;
+}
+
+function getMapLegendTitle(selectedMapStyleKey: MapStylePresetKey) {
+  return selectedMapStyleKey === 'volunteer-view' ? 'Event Status' : 'Project Status';
+}
+
+function getMapLegendTotalLabel(selectedMapStyleKey: MapStylePresetKey, count: number) {
+  if (selectedMapStyleKey === 'volunteer-view') {
+    return `Total ${count === 1 ? 'Event' : 'Events'}`;
+  }
+
+  return `Total ${count === 1 ? 'Project' : 'Projects'}`;
+}
+
+function getMapLegendFootnote(selectedMapStyleKey: MapStylePresetKey) {
+  return selectedMapStyleKey === 'volunteer-view' ? 'Volunteer events' : 'Across Philippines';
 }
 
 // Displays the web version of the project map using the Google Maps JavaScript API.
@@ -154,7 +177,7 @@ export default function MappingScreen({ navigation }: any) {
   const [showDetails, setShowDetails] = useState(false);
   const [showMapStyleMenu, setShowMapStyleMenu] = useState(false);
   const [showVolunteerMenu, setShowVolunteerMenu] = useState(false);
-  const [selectedMapStyleKey, setSelectedMapStyleKey] = useState<MapStylePresetKey>('admin-overview');
+  const [selectedMapStyleKey, setSelectedMapStyleKey] = useState<MapStylePresetKey>('partner-view');
   const [selectedVolunteerId, setSelectedVolunteerId] = useState<string | null>(null);
   const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -275,6 +298,14 @@ export default function MappingScreen({ navigation }: any) {
   );
   const selectedMapStyle =
     MAP_STYLE_PRESETS.find(preset => preset.key === selectedMapStyleKey) || MAP_STYLE_PRESETS[0];
+  const featuredProject = mappedProjects[0] || null;
+  const statusLegend = [
+    { label: 'In Progress', color: '#5B9B57' },
+    { label: 'Planned', color: '#5F8FDC' },
+    { label: 'Completed', color: '#8E58D6' },
+    { label: 'On Hold', color: '#E7A23D' },
+    { label: 'Cancelled', color: '#B95258' },
+  ];
 
   useEffect(() => {
     void loadProjects();
@@ -385,7 +416,7 @@ export default function MappingScreen({ navigation }: any) {
             const container = document.createElement('div');
             container.style.minWidth = '220px';
             container.style.maxWidth = '280px';
-            container.style.fontFamily = 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+            container.style.fontFamily = 'DM Sans, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
             container.style.fontSize = '12px';
             container.style.lineHeight = '16px';
 
@@ -691,32 +722,24 @@ export default function MappingScreen({ navigation }: any) {
     <View style={styles.container}>
       <View style={styles.header}>
         <View style={styles.headerTopRow}>
-          <View style={styles.headerTextBlock}>
-            <Text style={styles.headerTitle}>Negros Programs and Events</Text>
-            <Text style={styles.headerSubtitle}>
-              {user?.role === 'admin'
-                ? 'Google Maps view for Negros Occidental, Philippines'
-                : user?.role === 'partner'
-                ? 'Only approved partner proposals appear as pins'
-                : 'Only events you joined appear as pins'}
-            </Text>
+          <View style={styles.mapTitleGroup}>
+            <View style={styles.titleIconShell}>
+              <MaterialIcons name="location-on" size={30} color="#5A8F52" />
+            </View>
+            <View style={styles.headerTextBlock}>
+              <Text style={styles.headerTitle}>Community Impact Map</Text>
+              <Text style={styles.headerSubtitle}>Switch between admin, volunteer, and partner{`\n`}views to inspect mapped project activity.</Text>
+            </View>
           </View>
-
-          <TouchableOpacity
-            style={[
-              styles.mapStyleButton,
-              {
-                backgroundColor: selectedMapStyle.chipBg,
-                borderColor: selectedMapStyle.chipBorder,
-              },
-            ]}
-            onPress={() => setShowMapStyleMenu(true)}
-          >
-            <MaterialIcons name="tune" size={18} color={selectedMapStyle.accentColor} />
-            <Text style={[styles.mapStyleButtonText, { color: selectedMapStyle.accentColor }]}>
-              {selectedMapStyle.label}
-            </Text>
-            <MaterialIcons name="keyboard-arrow-down" size={22} color={selectedMapStyle.accentColor} />
+          <TouchableOpacity style={styles.workspaceButton} onPress={() => setShowMapStyleMenu(true)}>
+            <MaterialIcons name="business" size={28} color="#5A8F52" />
+            <Text style={styles.workspaceButtonText}>Philippine Business for Social Progress</Text>
+            <MaterialIcons name="keyboard-arrow-down" size={24} color="#334155" />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.viewButton} onPress={() => setShowMapStyleMenu(true)}>
+            <MaterialIcons name="tune" size={27} color="#5A8F52" />
+            <Text style={styles.viewButtonText}>{selectedMapStyle.label}</Text>
+            <MaterialIcons name="keyboard-arrow-down" size={24} color="#334155" />
           </TouchableOpacity>
         </View>
       </View>
@@ -760,6 +783,21 @@ export default function MappingScreen({ navigation }: any) {
         ]}
       >
         <MapHost ref={mapElementRef} style={styles.webMapFrame} />
+        <View style={styles.mapLegend}>
+          <Text style={styles.legendTitle}>{getMapLegendTitle(selectedMapStyleKey)}</Text>
+          {statusLegend.map(status => (
+            <View key={status.label} style={styles.legendRow}>
+              <MaterialIcons name="location-on" size={25} color={status.color} />
+              <Text style={styles.legendText}>{status.label}</Text>
+            </View>
+          ))}
+          <View style={styles.legendDivider} />
+          <Text style={styles.legendTotalLabel}>
+            {getMapLegendTotalLabel(selectedMapStyleKey, mappedProjects.length)}
+          </Text>
+          <Text style={styles.legendTotal}>{mappedProjects.length}</Text>
+          <Text style={styles.legendFootnote}>{getMapLegendFootnote(selectedMapStyleKey)}</Text>
+        </View>
         {mapError ? (
           <View style={[styles.mapErrorOverlay, { backgroundColor: selectedMapStyle.errorBg }]}>
             <View style={[styles.mapErrorCard, { borderColor: selectedMapStyle.errorBorder }]}>
@@ -770,42 +808,25 @@ export default function MappingScreen({ navigation }: any) {
         ) : null}
       </View>
 
-      <View style={styles.projectListContainer}>
-        <Text style={styles.projectListTitle}>Google Maps markers ({mappedProjects.length})</Text>
-        <ScrollView style={styles.markerList} showsVerticalScrollIndicator={false}>
-          {mappedProjects.map(project => {
-            const volunteerEntries = markerVolunteerEntriesByProjectId.get(project.id) || [];
-            const previewNames = volunteerEntries.slice(0, 3).map(entry => entry.label).join(', ');
-            const extraCount = Math.max(volunteerEntries.length - 3, 0);
-
-            return (
-              <TouchableOpacity
-                key={`marker-list-${project.id}`}
-                style={styles.markerListItem}
-                activeOpacity={0.82}
-                onPress={() => {
-                  setSelectedProject(project);
-                  setShowDetails(true);
-                }}
-              >
-                <View style={[styles.markerListPin, { backgroundColor: getProjectMarkerColor(project) }]}>
-                  <Text style={styles.markerListPinText}>{volunteerEntries.length}</Text>
-                </View>
-                <View style={styles.markerListCopy}>
-                  <Text style={styles.markerListName} numberOfLines={1}>
-                    {project.title}
-                  </Text>
-                  <Text style={styles.markerListMeta} numberOfLines={1}>
-                    {volunteerEntries.length} volunteer{volunteerEntries.length === 1 ? '' : 's'}
-                    {previewNames ? `: ${previewNames}${extraCount ? ` +${extraCount} more` : ''}` : ''}
-                  </Text>
-                </View>
-                <MaterialIcons name="chevron-right" size={18} color="#94a3b8" />
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-      </View>
+      {featuredProject ? (
+        <TouchableOpacity style={styles.featuredProjectCard} activeOpacity={0.88} onPress={() => { setSelectedProject(featuredProject); setShowDetails(true); }}>
+          <View style={styles.featuredIconShell}><MaterialIcons name="school" size={45} color="#4C8249" /></View>
+          <View style={styles.featuredCopy}>
+            <Text style={styles.featuredTitle} numberOfLines={1}>{featuredProject.title}</Text>
+            <View style={styles.featuredBadges}>
+              <View style={styles.categoryBadge}><Text style={styles.categoryBadgeText}>{featuredProject.category}</Text></View>
+              <View style={styles.progressBadge}><View style={styles.progressDot} /><Text style={styles.progressBadgeText}>{getProjectDisplayStatus(featuredProject)}</Text></View>
+            </View>
+            <View style={styles.featuredMeta}>
+              <View style={styles.metaItem}><MaterialIcons name="location-on" size={23} color="#5B6470" /><Text style={styles.metaText} numberOfLines={1}>{featuredProject.location.address || 'Philippines'}</Text></View>
+              <View style={styles.metaItem}><MaterialIcons name="calendar-today" size={20} color="#5B6470" /><Text style={styles.metaText}>{new Date(featuredProject.startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</Text></View>
+            </View>
+          </View>
+          <View style={styles.volunteerSummary}><MaterialIcons name="groups-2" size={40} color="#5B6470" /><View><Text style={styles.volunteerNumber}>{(markerVolunteerEntriesByProjectId.get(featuredProject.id) || []).length} / {featuredProject.volunteersNeeded || 0}</Text><Text style={styles.volunteerLabel}>Volunteers</Text></View></View>
+          <View style={styles.cardDivider} />
+          <View style={styles.detailsButton}><Text style={styles.detailsButtonText}>View Details</Text><MaterialIcons name="arrow-forward" size={24} color="#4C8249" /></View>
+        </TouchableOpacity>
+      ) : null}
 
       <Modal animationType="slide" transparent visible={showDetails} onRequestClose={() => setShowDetails(false)}>
         <View style={styles.centeredView}>
@@ -965,7 +986,7 @@ export default function MappingScreen({ navigation }: any) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: ModernTheme.colors.background.secondary,
+    backgroundColor: '#FFFFFF',
   },
   centerContainer: {
     flex: 1,
@@ -980,7 +1001,9 @@ const styles = StyleSheet.create({
   },
   webMapContainer: {
     position: 'relative',
-    height: 420,
+    height: 490,
+    marginHorizontal: 31,
+    borderRadius: 20,
     backgroundColor: ModernTheme.colors.neutral[200],
     borderBottomWidth: 0,
     borderBottomColor: 'transparent',
@@ -1022,30 +1045,32 @@ const styles = StyleSheet.create({
   },
   header: {
     backgroundColor: ModernTheme.colors.background.card,
-    paddingHorizontal: ModernTheme.spacing[4],
-    paddingVertical: ModernTheme.spacing[3],
+    paddingHorizontal: 31,
+    paddingTop: 15,
+    paddingBottom: 32,
     borderBottomWidth: 0,
     borderBottomColor: 'transparent',
     ...ModernTheme.shadows.sm,
   },
   headerTopRow: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    gap: ModernTheme.spacing[3],
+    gap: 22,
   },
   headerTextBlock: {
     flex: 1,
   },
   headerTitle: {
-    fontSize: ModernTheme.typography.fontSize['2xl'],
+    fontSize: 25,
     fontWeight: '700' as const,
     color: ModernTheme.colors.text.primary,
   },
   headerSubtitle: {
-    fontSize: ModernTheme.typography.fontSize.sm,
-    color: ModernTheme.colors.text.tertiary,
-    marginTop: ModernTheme.spacing[1],
+    fontSize: 17,
+    lineHeight: 25,
+    color: '#68758A',
+    marginTop: 3,
   },
   mapStyleButton: {
     flexDirection: 'row',
@@ -1111,7 +1136,129 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#64748b',
   },
-  centeredView: {
+  mapTitleGroup: {
+    flex: 1,
+    minWidth: 360,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 20,
+  },
+  titleIconShell: {
+    width: 78,
+    height: 78,
+    borderRadius: 39,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F2F8F1',
+  },
+  workspaceButton: {
+    width: 460,
+    height: 70,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 23,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+  },
+  workspaceButtonText: {
+    flex: 1,
+    color: '#263244',
+    fontSize: 17,
+    fontWeight: '800',
+  },
+  viewButton: {
+    width: 296,
+    height: 70,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 22,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+  },
+  viewButtonText: {
+    flex: 1,
+    color: '#263244',
+    fontSize: 17,
+    fontWeight: '800',
+    textTransform: 'capitalize',
+  },
+  mapLegend: {
+    position: 'absolute',
+    top: 27,
+    left: 31,
+    width: 196,
+    borderRadius: 15,
+    paddingTop: 20,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255,255,255,0.96)',
+    shadowColor: '#334155',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.11,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  legendTitle: {
+    marginHorizontal: 23,
+    marginBottom: 14,
+    color: '#263244',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  legendRow: {
+    height: 38,
+    paddingHorizontal: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  legendText: { color: '#596579', fontSize: 15, fontWeight: '600' },
+  legendDivider: { height: 1, backgroundColor: '#E1E7ED', marginTop: 10 },
+  legendTotalLabel: { marginHorizontal: 23, marginTop: 18, color: '#39465A', fontSize: 14, fontWeight: '800' },
+  legendTotal: { marginHorizontal: 23, marginTop: 8, color: '#4D894B', fontSize: 36, fontWeight: '800' },
+  legendFootnote: { marginHorizontal: 23, marginBottom: 21, color: '#6B778B', fontSize: 14, fontWeight: '600' },
+  featuredProjectCard: {
+    minHeight: 160,
+    marginHorizontal: 31,
+    marginTop: 30,
+    paddingHorizontal: 28,
+    paddingVertical: 27,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#E4E9EE',
+    backgroundColor: '#FFFFFF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 25,
+    shadowColor: '#334155',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.05,
+    shadowRadius: 9,
+    elevation: 2,
+  },
+  featuredIconShell: { width: 90, height: 104, borderRadius: 17, backgroundColor: '#F0F8EF', alignItems: 'center', justifyContent: 'center' },
+  featuredCopy: { flex: 1, alignSelf: 'stretch', justifyContent: 'center', minWidth: 280 },
+  featuredTitle: { color: '#172238', fontSize: 25, fontWeight: '800' },
+  featuredBadges: { marginTop: 9, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  categoryBadge: { borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6, backgroundColor: '#F0F8EF' },
+  categoryBadgeText: { color: '#4B8649', fontSize: 15, fontWeight: '800' },
+  progressBadge: { borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6, backgroundColor: '#F0F8EF', flexDirection: 'row', alignItems: 'center', gap: 7 },
+  progressDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: '#5A9855' },
+  progressBadgeText: { color: '#4B8649', fontSize: 15, fontWeight: '800' },
+  featuredMeta: { marginTop: 17, flexDirection: 'row', alignItems: 'center', gap: 24 },
+  metaItem: { maxWidth: 300, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  metaText: { color: '#485569', fontSize: 16, fontWeight: '600' },
+  volunteerSummary: { width: 250, paddingLeft: 24, borderLeftWidth: 1, borderLeftColor: '#E4E9EE', flexDirection: 'row', alignItems: 'center', gap: 17 },
+  volunteerNumber: { color: '#263244', fontSize: 17, fontWeight: '800' },
+  volunteerLabel: { marginTop: 2, color: '#536074', fontSize: 15, fontWeight: '600' },
+  cardDivider: { width: 1, height: 57, backgroundColor: '#E4E9EE' },
+  detailsButton: { width: 186, height: 54, borderWidth: 2, borderColor: '#78A974', borderRadius: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 14 },
+  detailsButtonText: { color: '#4C8249', fontSize: 16, fontWeight: '800' },  centeredView: {
     flex: 1,
     justifyContent: 'flex-end',
     backgroundColor: 'rgba(0, 0, 0, 0.5)',

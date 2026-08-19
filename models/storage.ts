@@ -2779,6 +2779,7 @@ export async function createUserAccount(input: {
     certificationsOrTrainings?: string;
     hobbiesAndInterests?: string;
     specialSkills?: string;
+    validIdPhoto?: string;
     skills: string[];
     videoBriefingUrl?: string;
     affiliations?: Array<{

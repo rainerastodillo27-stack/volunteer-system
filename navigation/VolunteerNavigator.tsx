@@ -6,6 +6,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
 import ScreenBrandHeader from '../components/ScreenBrandHeader';
 import VolunteerDashboardScreen from '../screens/VolunteerDashboardScreen';
+import VolunteerEventsScreen from '../screens/VolunteerEventsScreen';
 import VolunteerProjectsScreen from '../screens/VolunteerProjectsScreen';
 import VolunteerTasksScreen from '../screens/VolunteerTasksScreen';
 import MappingScreen from '../screens/MappingScreen';
@@ -19,6 +20,7 @@ export type VolunteerTabParamList = {
   Dashboard: undefined;
   Projects: { projectId?: string } | undefined;
   ProjectDetails: { projectId: string };
+  Events: undefined;
   Tasks: undefined;
   Map: undefined;
   Messages: { projectId?: string } | undefined;
@@ -32,6 +34,7 @@ const getIconName = (routeName: keyof VolunteerTabParamList) => {
   switch (routeName) {
     case 'Dashboard': return 'dashboard';
     case 'Projects': return 'business-center';
+    case 'Events': return 'event';
     case 'Tasks': return 'assignment';
     case 'Map': return 'map';
     case 'Messages': return 'mail';
@@ -113,6 +116,7 @@ export default function VolunteerNavigator() {
       <Tab.Screen name="Dashboard" component={VolunteerDashboardScreen} options={{ title: 'Volunteer Dashboard' }} />
       <Tab.Screen name="Projects" component={VolunteerProjectsScreen} options={{ title: 'Projects' }} />
       <Tab.Screen name="ProjectDetails" component={VolunteerProjectDetailsScreen} options={{ title: 'Project Details', tabBarButton: () => null }} />
+      <Tab.Screen name="Events" component={VolunteerEventsScreen} options={{ title: 'Events' }} />
       <Tab.Screen name="Tasks" component={VolunteerTasksScreen} options={{ title: 'My Tasks' }} />
       <Tab.Screen name="Map" component={MappingScreen} options={{ title: 'Impact Map' }} />
       <Tab.Screen name="Messages" component={CommunicationHubScreen} options={{ title: 'Messages', tabBarBadge: messageUnreadCount > 0 ? messageUnreadCount : undefined }} />

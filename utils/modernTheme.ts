@@ -95,8 +95,8 @@ export const ModernTheme = {
   // Typography - Modern, clean font stack
   typography: {
     fontFamily: {
-      primary: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-      display: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      primary: "'DM Sans', sans-serif",
+      display: "'DM Sans', sans-serif",
       mono: '"SF Mono", "Consolas", "Liberation Mono", monospace',
     },
 

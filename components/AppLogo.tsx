@@ -1,5 +1,6 @@
 import React from 'react';
 import { StyleSheet, Image } from 'react-native';
+import logoImage from '../assets/nvc-logo.png';
 
 type AppLogoProps = {
   width?: number;
@@ -11,7 +12,7 @@ export default function AppLogo({ width = 96 }: AppLogoProps) {
 
   return (
     <Image
-      source={require('../assets/nvc-logo.png')}
+      source={logoImage}
       style={[styles.logo, { width, height }]}
       resizeMode="contain"
     />
@@ -21,5 +22,6 @@ export default function AppLogo({ width = 96 }: AppLogoProps) {
 const styles = StyleSheet.create({
   logo: {
     resizeMode: 'contain',
+    backgroundColor: 'transparent',
   },
 });

@@ -13,7 +13,9 @@ import {
   useWindowDimensions,
   Image,
 } from "react-native";
+import { format, parseISO } from "date-fns";
 import ModernTheme from "../utils/modernTheme";
+import loginBackgroundImage from "../assets/about-us-2020.jpg";
 
 // Safe Platform accessor for web environments
 function getPlatformOS(): string {
@@ -49,9 +51,8 @@ function getIsWeb(): boolean {
   }
   return true;
 }
-import { MaterialIcons } from "@expo/vector-icons";
+import { MaterialIcons } from '@expo/vector-icons';
 import { Picker } from "@react-native-picker/picker";
-import DateTimePicker from "@react-native-community/datetimepicker";
 import {
   createUserAccount,
   getAllProjects,
@@ -114,6 +115,7 @@ type SignupVolunteerSheetState = {
   skills: string[];
   affiliationOrg1: string;
   affiliationPos1: string;
+  validIdPhoto: string;
 };
 
 type SignupPartnerApplicationState = {
@@ -143,6 +145,26 @@ const ADMIN_DEMO_ACCOUNT: DemoLoginAccount = {
   badge: "ADMIN",
 };
 
+const VOLUNTEER_DEMO_ACCOUNT: DemoLoginAccount = {
+  id: "demo-volunteer",
+  name: "Volunteer Account",
+  identifier: "volunteer@example.com",
+  password: "volunteer123",
+  badge: "VOLUNTEER",
+  mobileRole: "volunteer",
+};
+
+const PARTNER_DEMO_ACCOUNTS: DemoLoginAccount[] = [
+  {
+    id: "demo-partner-kabankalan",
+    name: "Kabankalan LGU",
+    identifier: "partner@livelihoods.org",
+    password: "partner123",
+    badge: "PARTNER",
+    mobileRole: "partner",
+  },
+];
+
 function getVisibleDemoAccounts(
   isWeb: boolean,
   selectedMobileRole: MobileEntryRole | null,
@@ -151,8 +173,15 @@ function getVisibleDemoAccounts(
     return [ADMIN_DEMO_ACCOUNT];
   }
 
-  // No demo accounts for mobile — users must sign in with real credentials
-  return [];
+  if (selectedMobileRole === "volunteer") {
+    return [VOLUNTEER_DEMO_ACCOUNT];
+  }
+
+  if (selectedMobileRole === "partner") {
+    return PARTNER_DEMO_ACCOUNTS;
+  }
+
+  return [VOLUNTEER_DEMO_ACCOUNT, ...PARTNER_DEMO_ACCOUNTS];
 }
 
 // Returns a clean volunteer membership form state for the signup modal.
@@ -173,6 +202,7 @@ function createEmptySignupVolunteerSheet(): SignupVolunteerSheetState {
     skills: [],
     affiliationOrg1: "",
     affiliationPos1: "",
+    validIdPhoto: "",
   };
 }
 
@@ -185,6 +215,22 @@ function createEmptySignupPartnerApplication(): SignupPartnerApplicationState {
     secRegistrationNo: "",
     advocacyFocus: [],
   };
+}
+
+function toTitleCase(value: string): string {
+  return value.replace(/\b[a-z]/g, (letter) => letter.toUpperCase());
+}
+
+function normalizeNameInput(value: string): string {
+  return toTitleCase(value);
+}
+
+function normalizeProfessionalInput(value: string): string {
+  return toTitleCase(value);
+}
+
+function normalizePhoneInput(value: string): string {
+  return value.replace(/\D/g, "").slice(0, 11);
 }
 
 function normalizeLoginPhone(value?: string): string {
@@ -365,7 +411,7 @@ export default function LoginScreen() {
   const isWeb = getIsWeb();
   const { width: screenWidth } = useWindowDimensions();
   const isCompactLayout = screenWidth < 480;
-  const stackSelectionCards = screenWidth < 420;
+  const stackSelectionCards = screenWidth < 600;
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -377,16 +423,20 @@ export default function LoginScreen() {
   const [showSignupModal, setShowSignupModal] = useState(false);
   const [signupStep, setSignupStep] = useState<SignupStep>("role");
   const [signupLoading, setSignupLoading] = useState(false);
+  const [signupValidationError, setSignupValidationError] = useState<string | null>(null);
+  const [signupSuccessData, setSignupSuccessData] = useState<{
+    title: string;
+    message: string;
+    role: UserRole;
+    name: string;
+    organizationName?: string;
+    contact: string;
+    submittedAt: string;
+  } | null>(null);
   const [signupName, setSignupName] = useState("");
   const [signupEmail, setSignupEmail] = useState("");
   const [signupAccountPhone, setSignupAccountPhone] = useState("");
   const [signupPassword, setSignupPassword] = useState("");
-  const [signupOtpCode, setSignupOtpCode] = useState("");
-  const [signupOtpSentEmail, setSignupOtpSentEmail] = useState("");
-  const [signupEmailVerified, setSignupEmailVerified] = useState(false);
-  const [signupOtpLoading, setSignupOtpLoading] = useState(false);
-  const [signupOtpVerifying, setSignupOtpVerifying] = useState(false);
-  const [signupOtpMessage, setSignupOtpMessage] = useState("");
   const [signupUserType, setSignupUserType] = useState<UserType>("Student");
   const [signupPillars, setSignupPillars] = useState<NVCSector[]>([]);
   const [signupRole, setSignupRole] = useState<UserRole>("volunteer");
@@ -413,8 +463,9 @@ export default function LoginScreen() {
   const [selectedMobileRole, setSelectedMobileRole] =
     useState<MobileEntryRole | null>(null);
   const [showYearPicker, setShowYearPicker] = useState(false);
+  const [showMonthPicker, setShowMonthPicker] = useState(false);
+  const [showDayPicker, setShowDayPicker] = useState(false);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
-  const [showDatePicker, setShowDatePicker] = useState(false);
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [selectedRegionCode, setSelectedRegionCode] = useState("");
   const [selectedCityCode, setSelectedCityCode] = useState("");
@@ -438,7 +489,7 @@ export default function LoginScreen() {
 
   useEffect(() => {
     if (signupVolunteerSheet.dateOfBirth) {
-      const parsedDate = new Date(signupVolunteerSheet.dateOfBirth);
+      const parsedDate = parseISO(signupVolunteerSheet.dateOfBirth);
       if (!Number.isNaN(parsedDate.getTime())) {
         setSelectedDate(parsedDate);
         setSelectedYear(parsedDate.getFullYear());
@@ -457,6 +508,8 @@ export default function LoginScreen() {
       });
     }
   }, [showYearPicker, selectedYear]);
+
+  const selectedDay = selectedDate.getDate();
 
   useEffect(() => {
     const addressParts = [
@@ -761,6 +814,14 @@ export default function LoginScreen() {
         return;
       }
 
+      if (!isWeb && user.role === "admin") {
+        showLoginError(
+          "Access Restricted",
+          "Admin accounts can only log in on the web portal.",
+        );
+        return;
+      }
+
       if (!isWeb && activeMobileRole && user.role !== activeMobileRole) {
         showLoginError(
           "Role Mismatch",
@@ -835,6 +896,14 @@ export default function LoginScreen() {
         showLoginError(
           "Login Failed",
           "The backend did not return an account for this sign-in attempt. Please try again.",
+        );
+        return;
+      }
+
+      if (!isWeb && user.role === "admin") {
+        showLoginError(
+          "Access Restricted",
+          "Admin accounts can only log in on the web portal.",
         );
         return;
       }
@@ -915,12 +984,6 @@ export default function LoginScreen() {
     setSignupEmail("");
     setSignupAccountPhone("");
     setSignupPassword("");
-    setSignupOtpCode("");
-    setSignupOtpSentEmail("");
-    setSignupEmailVerified(false);
-    setSignupOtpLoading(false);
-    setSignupOtpVerifying(false);
-    setSignupOtpMessage("");
     setSignupUserType("Student");
     setSignupPillars([]);
     setSignupRole("volunteer");
@@ -1010,6 +1073,23 @@ export default function LoginScreen() {
     }
   };
 
+  const handlePickValidIdPhoto = async () => {
+    try {
+      const selectedImage = await pickImageFromDevice();
+      if (!selectedImage) {
+        return;
+      }
+
+      updateSignupVolunteerSheet("validIdPhoto", selectedImage);
+    } catch (error: any) {
+      Alert.alert(
+        "ID Upload Failed",
+        error?.message ||
+        "Unable to open the photo library for ID upload.",
+      );
+    }
+  };
+
   const handleAddCustomVolunteerSkill = () => {
     const normalizedSkill = customVolunteerSkill.trim();
     if (!normalizedSkill) {
@@ -1076,120 +1156,67 @@ export default function LoginScreen() {
     setSignupPartnerApplication((current) => ({ ...current, [key]: value }));
   };
 
-  const handleSendSignupOtp = async () => {
-    const normalizedEmail = signupEmail.trim().toLowerCase();
-    if (!normalizedEmail || !normalizedEmail.includes("@")) {
-      Alert.alert("Validation Error", "Please enter a valid email address before requesting a code.");
-      return;
-    }
-
-    try {
-      setSignupOtpLoading(true);
-      setSignupOtpMessage("");
-      setSignupEmailVerified(false);
-      setSignupOtpCode("");
-      const response = await fetch(`${getApiBaseUrl()}/auth/registration-otp/send`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: normalizedEmail }),
-      });
-      const data = await response.json().catch(() => ({}) as { detail?: string; message?: string });
-      if (!response.ok) {
-        throw new Error(data.detail || "Failed to send verification code.");
-      }
-      setSignupEmail(normalizedEmail);
-      setSignupOtpSentEmail(normalizedEmail);
-      setSignupOtpMessage("Code sent. Check your email.");
-    } catch (error) {
-      Alert.alert(
-        getRequestErrorTitle(error, "Email Verification Failed"),
-        getRequestErrorMessage(error, "Could not send the verification code.", {
-          backendUrl: getApiBaseUrl(),
-        }),
-      );
-    } finally {
-      setSignupOtpLoading(false);
-    }
-  };
-
-  const handleVerifySignupOtp = async () => {
-    const normalizedEmail = signupEmail.trim().toLowerCase();
-    const trimmedCode = signupOtpCode.trim();
-
-    if (!normalizedEmail || !normalizedEmail.includes("@")) {
-      Alert.alert("Validation Error", "Please enter a valid email address.");
-      return;
-    }
-
-    if (normalizedEmail !== signupOtpSentEmail) {
-      Alert.alert("Verification Required", "Send a new code for this email address first.");
-      return;
-    }
-
-    if (!trimmedCode || trimmedCode.length !== 6) {
-      Alert.alert("Validation Error", "Please enter the 6-digit code sent to your email.");
-      return;
-    }
-
-    try {
-      setSignupOtpVerifying(true);
-      const response = await fetch(`${getApiBaseUrl()}/auth/registration-otp/verify`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: normalizedEmail, otp: trimmedCode }),
-      });
-      const data = await response.json().catch(() => ({}) as { detail?: string; message?: string });
-      if (!response.ok) {
-        throw new Error(data.detail || "Failed to verify email.");
-      }
-      setSignupEmailVerified(true);
-      setSignupOtpMessage("Email verified.");
-    } catch (error) {
-      setSignupEmailVerified(false);
-      Alert.alert(
-        getRequestErrorTitle(error, "Verification Failed"),
-        getRequestErrorMessage(error, "Could not verify the code.", {
-          backendUrl: getApiBaseUrl(),
-        }),
-      );
-    } finally {
-      setSignupOtpVerifying(false);
-    }
-  };
-
   // Validates and creates a new volunteer or partner account.
   const handleSignup = async () => {
+    setSignupValidationError(null);
+
     if (!signupName.trim() || !signupPassword.trim()) {
-      Alert.alert("Validation Error", "Name and password are required.");
+      const errorMsg = "Name and password are required.";
+      setSignupValidationError(errorMsg);
+      Alert.alert("Validation Error", errorMsg);
       return;
     }
 
-    if (!signupEmail.trim()) {
-      Alert.alert(
-        "Validation Error",
-        "Please provide an email address.",
-      );
+    if (signupName.trim().length < 2) {
+      const errorMsg = "Full name must be at least 2 characters long.";
+      setSignupValidationError(errorMsg);
+      Alert.alert("Validation Error", errorMsg);
+      return;
+    }
+
+    if (signupPassword.length < 6) {
+      const errorMsg = "Password must be at least 6 characters.";
+      setSignupValidationError(errorMsg);
+      Alert.alert("Validation Error", errorMsg);
+      return;
+    }
+
+    if (
+      signupAccountPhone.trim() &&
+      !/^09\d{9}$/.test(signupAccountPhone.trim())
+    ) {
+      const errorMsg = "Please enter a valid 11-digit Philippine mobile number (e.g. 09171234567).";
+      setSignupValidationError(errorMsg);
+      Alert.alert("Validation Error", errorMsg);
+      return;
+    }
+
+    if (!signupEmail.trim() && !signupAccountPhone.trim()) {
+      const errorMsg = "Please provide an email or phone number.";
+      setSignupValidationError(errorMsg);
+      Alert.alert("Validation Error", errorMsg);
       return;
     }
 
     if (signupEmail.trim() && !signupEmail.includes("@")) {
-      Alert.alert("Validation Error", "Please enter a valid email address.");
-      return;
-    }
-
-    if (!signupEmailVerified || signupEmail.trim().toLowerCase() !== signupOtpSentEmail) {
-      Alert.alert("Email Verification Required", "Verify your email with the 6-digit code before creating the account.");
+      const errorMsg = "Please enter a valid email address.";
+      setSignupValidationError(errorMsg);
+      Alert.alert("Validation Error", errorMsg);
       return;
     }
 
     if (signupRole === "partner") {
       if (!signupPartnerApplication.organizationName.trim()) {
-        Alert.alert("Validation Error", "Organization name is required.");
+        const errorMsg = "Organization name is required.";
+        setSignupValidationError(errorMsg);
+        Alert.alert("Validation Error", errorMsg);
         return;
       }
 
       if (signupPartnerApplication.advocacyFocus.length === 0) {
-        Alert.alert("Validation Error", "Select at least one advocacy focus.");
+        const errorMsg = "Select at least one advocacy focus.";
+        setSignupValidationError(errorMsg);
+        Alert.alert("Validation Error", errorMsg);
         return;
       }
     }
@@ -1206,29 +1233,31 @@ export default function LoginScreen() {
         !signupVolunteerSheet.occupation.trim() ||
         !signupVolunteerSheet.workplaceOrSchool.trim()
       ) {
-        Alert.alert(
-          "Validation Error",
-          "Complete the volunteer membership information sheet before creating the account.",
-        );
+        const errorMsg = "Complete the volunteer membership information sheet before creating the account.";
+        setSignupValidationError(errorMsg);
+        Alert.alert("Validation Error", errorMsg);
         return;
       }
 
       if (!signupAcceptedCommitment) {
-        Alert.alert(
-          "Validation Error",
-          "You must accept the NVC volunteer commitment before creating the account.",
-        );
+        const errorMsg = "You must accept the NVC volunteer commitment before creating the account.";
+        setSignupValidationError(errorMsg);
+        Alert.alert("Validation Error", errorMsg);
         return;
       }
     }
 
     try {
       setSignupLoading(true);
+      
+      // Allow visual loading modal to be clearly seen
+      await new Promise((resolve) => setTimeout(resolve, 1400));
+
       const createdUser = await createUserAccount({
         name: signupName,
         email: signupEmail,
         password: signupPassword,
-        phone: signupAccountPhone,
+        phone: normalizePhoneInput(signupAccountPhone),
         role: signupRole,
         userType: signupUserType,
         pillarsOfInterest:
@@ -1269,6 +1298,7 @@ export default function LoginScreen() {
               collegeCourse: signupVolunteerSheet.collegeCourse.trim(),
               certificationsOrTrainings:
                 signupVolunteerSheet.certificationsOrTrainings.trim(),
+              validIdPhoto: signupVolunteerSheet.validIdPhoto.trim(),
               specialSkills: '',
               skills: signupVolunteerSheet.skills,
               affiliations: [
@@ -1289,22 +1319,46 @@ export default function LoginScreen() {
       if (!isWeb && signupRole !== "admin") {
         handleSelectMobileRole(signupRole, { preserveCredentials: true });
       }
-      setShowSignupModal(false);
-      resetSignupForm();
-      Alert.alert(
-        signupRole === "admin" ? "Admin Account Created" : "Application Submitted",
+
+      
+      const successTitle =
+        signupRole === "admin"
+          ? "Admin Account Created"
+          : "Confirmed Registration";
+      const successMessage =
         signupRole === "admin"
           ? "The new admin account is ready to sign in on the web portal."
           : signupRole === "partner"
-            ? "Your partner application was submitted. An admin must verify and approve it before partner login is unlocked."
-            : "Your volunteer account was submitted. An admin must approve it before volunteer login is unlocked.",
-      );
+            ? "Your partner application was successfully submitted. An admin must verify and approve it before partner login is unlocked."
+            : "Confirmed Registration. Your application has been sent to Volunteer Management for approval.";
+
+      const applicantName = signupName.trim();
+      const applicantOrg = signupRole === "partner" ? signupPartnerApplication.organizationName.trim() : undefined;
+      const applicantContact = signupEmail.trim() || signupAccountPhone.trim();
+
+      setSignupSuccessData({
+        title: successTitle,
+        message: successMessage,
+        role: signupRole,
+        name: applicantName,
+        organizationName: applicantOrg,
+        contact: applicantContact,
+        submittedAt: new Date().toLocaleDateString(undefined, {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+      });
     } catch (error) {
+      const errMsg = getRequestErrorMessage(error, "Failed to create account.", {
+        backendUrl: getApiBaseUrl(),
+      });
+      setSignupValidationError(errMsg);
       Alert.alert(
         getRequestErrorTitle(error, "Sign Up Error"),
-        getRequestErrorMessage(error, "Failed to create account.", {
-          backendUrl: getApiBaseUrl(),
-        }),
+        errMsg,
       );
     } finally {
       setSignupLoading(false);
@@ -1398,7 +1452,7 @@ export default function LoginScreen() {
     <>
       {isWeb ? (
         <ImageBackground
-          source={require("../assets/about-us-2020.jpg")}
+          source={loginBackgroundImage}
           style={styles.webBackgroundImage}
           resizeMode="cover"
         >
@@ -1426,18 +1480,16 @@ export default function LoginScreen() {
           {isWeb ? (
             <View style={styles.webHeroPane}>
               <View style={styles.leftBrandHeader}>
-                <AppLogo width={72} />
+                <AppLogo width={160} />
               </View>
               <View style={styles.pillBadge}>
                 <Text style={styles.pillBadgeText}>NVC FOUNDATION</Text>
               </View>
-              <Text style={styles.webHeroHeading}>
-                FIGHT HUNGER.{"\n"}BUILD HOPE.
+              <Text style={styles.webHeroHeadingOriginal}>
+                A nation free from hunger and poverty,
               </Text>
-              <Text style={styles.webHeroText}>
-                Connecting volunteers, partner organizations, and community
-                programs to provide nutrition, access to quality education, and
-                livelihood opportunities for Negros.
+              <Text style={styles.webHeroSubHeadingOriginal}>
+                built through personal social responsibility and collaborative partnerships.
               </Text>
             </View>
           ) : null}
@@ -1452,11 +1504,7 @@ export default function LoginScreen() {
           >
             {!isWeb ? (
               <View style={styles.brandSection}>
-                <AppLogo width={138} />
-                <Text style={styles.title}>NVC</Text>
-                <Text style={styles.subtitle}>
-                  Volunteer coordination platform
-                </Text>
+                <AppLogo width={220} />
               </View>
             ) : null}
 
@@ -1505,134 +1553,264 @@ export default function LoginScreen() {
             </View>
 
             {!isWeb && !selectedMobileRole ? (
-              <>
-                <View style={styles.selectionDashboard}>
-                  <Text style={styles.selectionTitle}>
-                    Choose Your Mobile Portal
-                  </Text>
-                  <Text style={styles.selectionSubtitle}>
-                    Select whether you are signing in as a volunteer or a
-                    partner organization before continuing.
-                  </Text>
+              <View style={styles.mobilePortalContainer}>
+                {/* Top Nav Bar */}
+                <View style={styles.mobileTopBar}>
+                  <View style={{ flex: 1 }} />
+                  <View style={styles.mobileTopHelpRow}>
+                    <MaterialIcons name="auto-awesome" size={13} color="#166534" style={{ marginRight: 4 }} />
+                    <Text style={styles.mobileTopHelpText}>New here? Choose a portal to begin</Text>
+                  </View>
+                </View>
 
+                {/* Main Header */}
+                <View style={styles.portalHeroHeader}>
+                  <Text style={styles.portalEyebrow}>GET STARTED</Text>
+                  <Text style={styles.portalHeadline}>Choose Your Mobile Portal</Text>
+                  <Text style={styles.portalSubtext}>
+                    Select whether you are signing in as a volunteer or a partner organization before continuing.
+                  </Text>
+                </View>
+
+                {/* Cards Grid */}
+                <View style={[styles.portalGridContainer, stackSelectionCards && styles.portalGridContainerStacked]}>
+                  {/* Volunteer Card */}
+                  <View style={styles.portalTileCard}>
+                    <View style={styles.volunteerBadgeIconWrap}>
+                      <MaterialIcons name="volunteer-activism" size={24} color="#e11d48" />
+                    </View>
+                    <Text style={styles.portalTileTitle}>Volunteer</Text>
+                    <Text style={styles.portalTileDescription}>
+                      Join projects, track your hours, and manage your volunteer activities.
+                    </Text>
+                    <TouchableOpacity
+                      style={styles.portalTileButton}
+                      onPress={() => handleSelectMobileRole("volunteer")}
+                      activeOpacity={0.88}
+                    >
+                      <Text style={styles.portalTileButtonText}>Continue as Volunteer</Text>
+                      <MaterialIcons name="arrow-forward" size={16} color="#ffffff" />
+                    </TouchableOpacity>
+                  </View>
+
+                  {/* Partner Organization Card */}
+                  <View style={styles.portalTileCard}>
+                    <View style={styles.partnerBadgeIconWrap}>
+                      <MaterialIcons name="domain" size={24} color="#2563eb" />
+                    </View>
+                    <Text style={styles.portalTileTitle}>Partner Organization</Text>
+                    <Text style={styles.portalTileDescription}>
+                      Coordinate organization projects, submit reports, and collaborate with NVC.
+                    </Text>
+                    <TouchableOpacity
+                      style={styles.portalTileButton}
+                      onPress={() => handleSelectMobileRole("partner")}
+                      activeOpacity={0.88}
+                    >
+                      <Text style={styles.portalTileButtonText}>Continue as Partner Organization</Text>
+                      <MaterialIcons name="arrow-forward" size={16} color="#ffffff" />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Bottom Sign up link */}
+                <TouchableOpacity
+                  style={styles.portalSignupFooter}
+                  onPress={openSignupModal}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.portalSignupFooterText}>
+                    Sign up as a Volunteer or Partner
+                  </Text>
+                </TouchableOpacity>
+
+                {renderQuickLoginSection()}
+              </View>
+            ) : !isWeb && selectedMobileRole ? (
+              <View style={styles.mobileLoginContainer}>
+                {/* Back to portal selector */}
+                <TouchableOpacity
+                  style={styles.loginBackNavButton}
+                  onPress={handleBackToRoleSelection}
+                  activeOpacity={0.8}
+                >
+                  <MaterialIcons name="arrow-back" size={16} color="#166534" />
+                  <Text style={styles.loginBackNavText}>Change portal</Text>
+                </TouchableOpacity>
+
+                {/* Centered Welcome Header */}
+                <View style={styles.loginCenterHeader}>
+                  <View style={styles.loginTopIconSquare}>
+                    <MaterialIcons name="login" size={22} color="#ffffff" />
+                  </View>
+                  <Text style={styles.loginHeaderTitle}>Welcome back</Text>
+                  <Text style={styles.loginHeaderSubtitle}>
+                    Log in to your account
+                  </Text>
+                </View>
+
+                {/* Login Card Form */}
+                <View style={styles.loginBoxCard}>
+                  {/* Continue with Google */}
                   <TouchableOpacity
-                    style={[
-                      styles.selectionCard,
-                      stackSelectionCards && styles.selectionCardStacked,
-                    ]}
-                    onPress={() => handleSelectMobileRole("volunteer")}
-                    activeOpacity={0.9}
+                    style={styles.googleLoginButton}
+                    onPress={() => {
+                      Alert.alert(
+                        "Google Sign-In",
+                        "Google Sign-In is configured for mobile builds. Please use your credentials or quick demo logins below."
+                      );
+                    }}
+                    activeOpacity={0.85}
                   >
-                    <View style={styles.selectionIconWrap}>
-                      <MaterialIcons
-                        name="volunteer-activism"
-                        size={28}
-                        color="#166534"
-                      />
+                    <View style={styles.googleGIcon}>
+                      <Text style={styles.googleGText}>G</Text>
                     </View>
-                    <View style={styles.selectionCopy}>
-                      <Text style={styles.selectionCardTitle}>Volunteer</Text>
-                      <Text style={styles.selectionCardDescription}>
-                        Join projects, track your hours, and manage your
-                        volunteer activities.
-                      </Text>
-                      <Text style={styles.selectionCardAction}>
-                        Continue as Volunteer
-                      </Text>
-                    </View>
+                    <Text style={styles.googleLoginButtonText}>Continue with Google</Text>
                   </TouchableOpacity>
 
-                  <TouchableOpacity
-                    style={[
-                      styles.selectionCard,
-                      styles.selectionCardPartner,
-                      stackSelectionCards && styles.selectionCardStacked,
-                    ]}
-                    onPress={() => handleSelectMobileRole("partner")}
-                    activeOpacity={0.9}
-                  >
-                    <View
-                      style={[
-                        styles.selectionIconWrap,
-                        styles.selectionIconWrapPartner,
-                      ]}
-                    >
-                      <MaterialIcons
-                        name="business"
-                        size={28}
-                        color="#92400e"
+                  {/* OR Divider */}
+                  <View style={styles.loginOrDivider}>
+                    <View style={styles.loginDividerLine} />
+                    <Text style={styles.loginDividerText}>OR</Text>
+                    <View style={styles.loginDividerLine} />
+                  </View>
+
+                  {/* Email / Username field */}
+                  <View style={styles.inputFieldGroup}>
+                    <Text style={styles.inputFieldLabel}>Email</Text>
+                    <View style={styles.inputBoxWithIcon}>
+                      <MaterialIcons name="mail-outline" size={18} color="#94a3b8" style={styles.inputLeftIcon} />
+                      <TextInput
+                        style={styles.cleanTextInput}
+                        placeholder="you@example.com"
+                        placeholderTextColor="#94a3b8"
+                        value={identifier}
+                        onChangeText={(value) => {
+                          setIdentifier(value);
+                          if (loginError) setLoginError(null);
+                        }}
+                        autoCapitalize="none"
+                        keyboardType="email-address"
+                        editable={!loading}
                       />
                     </View>
-                    <View style={styles.selectionCopy}>
-                      <Text style={styles.selectionCardTitle}>
-                        Partner Organization
-                      </Text>
-                      <Text style={styles.selectionCardDescription}>
-                        Coordinate organization projects, submit reports, and
-                        collaborate with NVC.
-                      </Text>
-                      <Text
-                        style={[
-                          styles.selectionCardAction,
-                          styles.selectionCardActionPartner,
-                        ]}
+                  </View>
+
+                  {/* Password field */}
+                  <View style={styles.inputFieldGroup}>
+                    <View style={styles.passwordFieldHeaderRow}>
+                      <Text style={styles.inputFieldLabel}>Password</Text>
+                      <TouchableOpacity
+                        onPress={() => {
+                          Alert.alert(
+                            "Forgot Password",
+                            "Please contact your NVC system administrator to recover or reset your account password."
+                          );
+                        }}
                       >
-                        Continue as Partner Organization
-                      </Text>
+                        <Text style={styles.forgotPasswordLinkText}>Forgot password?</Text>
+                      </TouchableOpacity>
                     </View>
+                    <View style={styles.inputBoxWithIcon}>
+                      <MaterialIcons name="lock-outline" size={18} color="#94a3b8" style={styles.inputLeftIcon} />
+                      <TextInput
+                        style={styles.cleanTextInput}
+                        placeholder="••••••••"
+                        placeholderTextColor="#94a3b8"
+                        value={password}
+                        onChangeText={(value) => {
+                          setPassword(value);
+                          if (loginError) setLoginError(null);
+                        }}
+                        secureTextEntry
+                        editable={!loading}
+                        autoCapitalize="none"
+                      />
+                    </View>
+                  </View>
+
+                  {loginError ? (
+                    <InlineLoadError
+                      title={loginError.title}
+                      message={loginError.message}
+                    />
+                  ) : null}
+
+                  {/* Primary Login button */}
+                  <TouchableOpacity
+                    style={[
+                      styles.loginSubmitButton,
+                      loading && styles.buttonDisabled,
+                      (!identifier || !password) && styles.loginSubmitButtonInactive,
+                    ]}
+                    onPress={() => {
+                      void handleLogin();
+                    }}
+                    disabled={loading || !identifier || !password}
+                    activeOpacity={0.88}
+                  >
+                    {loading ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <Text style={styles.loginSubmitButtonText}>Log in</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+
+                {/* Bottom link: Don't have an account? Create one */}
+                <View style={styles.loginBottomPromptRow}>
+                  <Text style={styles.loginBottomPromptText}>Don't have an account? </Text>
+                  <TouchableOpacity onPress={openSignupModal} activeOpacity={0.8}>
+                    <Text style={styles.loginBottomPromptLink}>Create one</Text>
                   </TouchableOpacity>
                 </View>
 
                 {renderQuickLoginSection()}
 
-                <TouchableOpacity onPress={openSignupModal}>
-                  <Text style={styles.signupText}>
-                    Sign up as Volunteer or Partner
-                  </Text>
-                </TouchableOpacity>
-              </>
+                {visibleSavedAccounts.length > 0 && (
+                  <View style={styles.demoSection}>
+                    <Text style={styles.demoTitle}>
+                      {`Saved ${selectedMobileRoleLabel} Accounts:`}
+                    </Text>
+                    {visibleSavedAccounts.map((account) => (
+                      <TouchableOpacity
+                        key={account.id}
+                        style={[
+                          styles.savedAccountCard,
+                          loading && styles.accountCardDisabled,
+                        ]}
+                        onPress={() => {
+                          void handleUseSavedAccount(account);
+                        }}
+                        activeOpacity={0.85}
+                        disabled={loading}
+                      >
+                        <View style={styles.savedAccountHeader}>
+                          <Text style={styles.savedAccountName}>
+                            {account.name}
+                          </Text>
+                          <Text style={styles.savedAccountRole}>
+                            {account.role}
+                          </Text>
+                        </View>
+                        <Text style={styles.savedAccountCredential}>
+                          {account.email ||
+                            account.phone ||
+                            "No login identifier"}
+                        </Text>
+                        <Text style={styles.savedAccountPassword}>
+                          {account.password}
+                        </Text>
+                        <Text style={styles.savedAccountHint}>
+                          Tap to sign in instantly
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+              </View>
             ) : (
               <>
-                {!isWeb && selectedMobileRole ? (
-                  <View style={styles.mobileRoleBanner}>
-                    <TouchableOpacity
-                      style={styles.backToRoleButton}
-                      onPress={handleBackToRoleSelection}
-                      activeOpacity={0.85}
-                    >
-                      <MaterialIcons
-                        name="arrow-back"
-                        size={18}
-                        color="#166534"
-                      />
-                      <Text style={styles.backToRoleText}>
-                        Change account type
-                      </Text>
-                    </TouchableOpacity>
-                    <View style={styles.mobileRoleBannerHeader}>
-                      <MaterialIcons
-                        name={
-                          selectedMobileRole === "partner"
-                            ? "business"
-                            : "volunteer-activism"
-                        }
-                        size={22}
-                        color={
-                          selectedMobileRole === "partner"
-                            ? "#92400e"
-                            : "#166534"
-                        }
-                      />
-                      <Text style={styles.mobileRoleBannerTitle}>
-                        {selectedMobileRoleTitle}
-                      </Text>
-                    </View>
-                    <Text style={styles.mobileRoleBannerText}>
-                      {selectedMobileRoleHint}
-                    </Text>
-                  </View>
-                ) : null}
-
                 <TextInput
                   style={[styles.input, isCompactLayout && styles.compactInput]}
                   placeholder="Email, Username, or Phone"
@@ -1693,11 +1871,7 @@ export default function LoginScreen() {
 
                 {visibleSavedAccounts.length > 0 && (
                   <View style={styles.demoSection}>
-                    <Text style={styles.demoTitle}>
-                      {isWeb
-                        ? "Saved Admin Accounts:"
-                        : `Saved ${selectedMobileRoleLabel} Accounts:`}
-                    </Text>
+                    <Text style={styles.demoTitle}>Saved Admin Accounts:</Text>
                     {visibleSavedAccounts.map((account) => (
                       <TouchableOpacity
                         key={account.id}
@@ -1735,19 +1909,9 @@ export default function LoginScreen() {
                   </View>
                 )}
 
-                {isWeb ? (
-                  <TouchableOpacity onPress={openSignupModal}>
-                    <Text style={styles.signupText}>Sign up as Admin</Text>
-                  </TouchableOpacity>
-                ) : (
-                  <TouchableOpacity onPress={openSignupModal}>
-                    <Text style={styles.signupText}>
-                      {!selectedMobileRole
-                        ? "Sign up as Volunteer or Partner"
-                        : `Sign up as ${selectedMobileRoleLabel}`}
-                    </Text>
-                  </TouchableOpacity>
-                )}
+                <TouchableOpacity onPress={openSignupModal}>
+                  <Text style={styles.signupText}>Sign up as Admin</Text>
+                </TouchableOpacity>
               </>
             )}
           </View>
@@ -1763,654 +1927,651 @@ export default function LoginScreen() {
         >
           <View style={styles.modalOverlay}>
             <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>
-                {signupStep === "role"
-                  ? "Choose Account Type"
-                  : signupRole === "admin"
-                    ? "Admin Registration"
-                    : signupRole === "partner"
-                      ? "Partner Registration"
-                      : "Volunteer Registration"}
-              </Text>
-              <Text style={styles.modalSubtitle}>
-                {signupStep === "role"
-                  ? "Choose how you want to sign up. Access after registration will follow the selected role."
-                  : signupRole === "admin"
-                    ? "Create another administrator account for the web management portal."
-                    : signupRole === "volunteer"
-                      ? "Register with email or phone, choose a profile type, and complete the volunteer membership information sheet."
-                      : "Submit your organization application with DSWD details. Partner login is unlocked after admin approval."}
-              </Text>
+              {signupLoading ? (
+                <View style={{ alignItems: "center", paddingVertical: 40, width: "100%" }}>
+                  <View style={styles.submissionLoadingSpinnerWrap}>
+                    <ActivityIndicator size="large" color="#166534" />
+                  </View>
+                  <Text style={styles.submissionLoadingTitle}>
+                    {signupRole === "partner"
+                      ? "Submitting Partner Application"
+                      : signupRole === "volunteer"
+                        ? "Submitting Volunteer Registration"
+                        : "Creating Admin Account"}
+                  </Text>
+                  <Text style={styles.submissionLoadingSubtitle}>
+                    {signupRole === "partner"
+                      ? "Submitting your organization application to admin for verification and review..."
+                      : signupRole === "volunteer"
+                        ? "Saving your volunteer membership sheet and profile details..."
+                        : "Setting up your administrator credentials..."}
+                  </Text>
+                </View>
+              ) : signupSuccessData ? (
+                <View style={{ alignItems: "center", width: "100%", paddingVertical: 10 }}>
+                  <View style={styles.submissionSuccessBadgeWrap}>
+                    <MaterialIcons name="check" size={32} color="#166534" />
+                  </View>
+                  <Text style={styles.submissionSuccessHeadline}>
+                    Confirmed Registration
+                  </Text>
+                  <View style={styles.submissionRoleTag}>
+                    <Text style={styles.submissionRoleTagText}>
+                      {signupSuccessData.role === "partner"
+                        ? "Partner Registration"
+                        : signupSuccessData.role === "volunteer"
+                          ? "Volunteer Registration"
+                          : "Admin Account"}
+                    </Text>
+                  </View>
 
-              {signupStep === "role" ? (
-                <View style={styles.signupRoleChoiceGrid}>
-                  {[
-                    {
-                      role: "volunteer" as const,
-                      icon: "volunteer-activism" as const,
-                      title: "Volunteer",
-                      description:
-                        "Join projects, log hours, and access volunteer-only screens after approval.",
-                    },
-                    {
-                      role: "partner" as const,
-                      icon: "business" as const,
-                      title: "Partner Organization",
-                      description:
-                        "Submit an organization application and access partner tools after approval.",
-                    },
-                  ].map((option) => (
-                    <TouchableOpacity
-                      key={option.role}
-                      style={styles.signupRoleCard}
-                      onPress={() => handleSelectSignupRole(option.role)}
-                      activeOpacity={0.7}
-                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                    >
-                      <View style={styles.signupRoleCardHeader}>
-                        <MaterialIcons
-                          name={option.icon}
-                          size={22}
-                          color="#166534"
-                        />
-                        <Text style={styles.signupRoleCardTitle}>
-                          {option.title}
+                  <View style={styles.confirmationSummaryCard}>
+                    <View style={styles.confirmationSummaryRow}>
+                      <Text style={styles.confirmationSummaryLabel}>Applicant</Text>
+                      <Text style={styles.confirmationSummaryValue}>
+                        {signupSuccessData.name}
+                      </Text>
+                    </View>
+                    {signupSuccessData.organizationName ? (
+                      <View style={styles.confirmationSummaryRow}>
+                        <Text style={styles.confirmationSummaryLabel}>Organization</Text>
+                        <Text style={styles.confirmationSummaryValue}>
+                          {signupSuccessData.organizationName}
                         </Text>
                       </View>
-                      <Text style={styles.signupRoleCardDescription}>
-                        {option.description}
+                    ) : null}
+                    <View style={styles.confirmationSummaryRow}>
+                      <Text style={styles.confirmationSummaryLabel}>Contact</Text>
+                      <Text style={styles.confirmationSummaryValue}>
+                        {signupSuccessData.contact}
                       </Text>
-                      <Text style={styles.signupRoleCardAction}>
-                        {option.role === "volunteer"
-                          ? "Continue as Volunteer"
-                          : "Continue as Partner"}
+                    </View>
+                    <View style={styles.confirmationSummaryRow}>
+                      <Text style={styles.confirmationSummaryLabel}>Submitted</Text>
+                      <Text style={styles.confirmationSummaryValue}>
+                        {signupSuccessData.submittedAt}
                       </Text>
-                    </TouchableOpacity>
-                  ))}
+                    </View>
+                    <View style={[styles.confirmationSummaryRow, { borderBottomWidth: 0, paddingBottom: 0 }]}>
+                      <Text style={styles.confirmationSummaryLabel}>Review Status</Text>
+                      <View style={styles.confirmationStatusPill}>
+                        <Text style={styles.confirmationStatusPillText}>
+                          {signupSuccessData.role === "admin"
+                            ? "Active"
+                            : "Sent to Volunteer Management"}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+
+                  <Text style={styles.submissionConfirmationNote}>
+                    {signupSuccessData.role === "volunteer"
+                      ? "Confirmed Registration. Your application has been sent to Volunteer Management for approval."
+                      : signupSuccessData.message}
+                  </Text>
+
+                  <TouchableOpacity
+                    style={styles.submissionSuccessButton}
+                    onPress={() => {
+                      setSignupSuccessData(null);
+                      closeSignupModal();
+                    }}
+                  >
+                    <MaterialIcons name="done-all" size={18} color="#fff" style={{ marginRight: 6 }} />
+                    <Text style={styles.submissionSuccessButtonText}>
+                      Got It, Back to Login
+                    </Text>
+                  </TouchableOpacity>
                 </View>
               ) : (
-                <ScrollView
-                  style={styles.modalForm}
-                  contentContainerStyle={styles.modalFormContent}
-                  showsVerticalScrollIndicator={false}
-                  keyboardShouldPersistTaps="handled"
-                  nestedScrollEnabled
-                  scrollEnabled={true}
-                >
-                  <TextInput
-                    style={styles.input}
-                    placeholder={
-                      signupRole === "partner"
-                        ? "Primary Contact Name"
-                        : "Full Name"
-                    }
-                    placeholderTextColor="#999"
-                    value={signupName}
-                    onChangeText={setSignupName}
-                    editable={!signupLoading}
-                  />
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Email Address"
-                    placeholderTextColor="#999"
-                    value={signupEmail}
-                    onChangeText={(value) => {
-                      setSignupEmail(value);
-                      setSignupEmailVerified(false);
-                      setSignupOtpCode("");
-                      setSignupOtpMessage("");
-                      if (value.trim().toLowerCase() !== signupOtpSentEmail) {
-                        setSignupOtpSentEmail("");
-                      }
-                    }}
-                    keyboardType="email-address"
-                    autoCapitalize="none"
-                    editable={!signupLoading}
-                  />
-                  <View style={styles.signupOtpBox}>
-                    <View style={styles.signupOtpHeader}>
-                      <Text style={styles.signupOtpTitle}>
-                        {signupEmailVerified ? "Email verified" : "Email verification"}
-                      </Text>
-                      <TouchableOpacity
-                        style={[
-                          styles.signupOtpButton,
-                          (signupOtpLoading || signupLoading || !signupEmail.trim()) && styles.buttonDisabled,
-                        ]}
-                        onPress={handleSendSignupOtp}
-                        disabled={signupOtpLoading || signupLoading || !signupEmail.trim()}
-                      >
-                        {signupOtpLoading ? (
-                          <ActivityIndicator color="#fff" size="small" />
-                        ) : (
-                          <Text style={styles.signupOtpButtonText}>
-                            {signupOtpSentEmail ? "Resend Code" : "Send Code"}
+                <>
+                  <Text style={styles.modalTitle}>
+                    {signupStep === "role"
+                      ? "Choose Account Type"
+                      : signupRole === "admin"
+                        ? "Admin Registration"
+                        : signupRole === "partner"
+                          ? "Partner Registration"
+                          : "Volunteer Registration"}
+                  </Text>
+                  <Text style={styles.modalSubtitle}>
+                    {signupStep === "role"
+                      ? "Choose how you want to sign up. Access after registration will follow the selected role."
+                      : signupRole === "admin"
+                        ? "Create another administrator account for the web management portal."
+                        : signupRole === "volunteer"
+                          ? "Register with email or phone, choose a profile type, and complete the volunteer membership information sheet."
+                          : "Submit your organization application with DSWD details. Partner login is unlocked after admin approval."}
+                  </Text>
+
+                  {signupStep === "role" ? (
+                    <View style={styles.signupRoleChoiceGrid}>
+                      {[
+                        {
+                          role: "volunteer" as const,
+                          icon: "volunteer-activism" as const,
+                          title: "Volunteer",
+                          description:
+                            "Join projects, log hours, and access volunteer-only screens after approval.",
+                        },
+                        {
+                          role: "partner" as const,
+                          icon: "business" as const,
+                          title: "Partner Organization",
+                          description:
+                            "Submit an organization application and access partner tools after approval.",
+                        },
+                      ].map((option) => (
+                        <TouchableOpacity
+                          key={option.role}
+                          style={styles.signupRoleCard}
+                          onPress={() => handleSelectSignupRole(option.role)}
+                          activeOpacity={0.7}
+                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        >
+                          <View style={styles.signupRoleCardHeader}>
+                            <MaterialIcons
+                              name={option.icon}
+                              size={22}
+                              color="#166534"
+                            />
+                            <Text style={styles.signupRoleCardTitle}>
+                              {option.title}
+                            </Text>
+                          </View>
+                          <Text style={styles.signupRoleCardDescription}>
+                            {option.description}
                           </Text>
-                        )}
-                      </TouchableOpacity>
+                          <Text style={styles.signupRoleCardAction}>
+                            {option.role === "volunteer"
+                              ? "Continue as Volunteer"
+                              : "Continue as Partner"}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
                     </View>
-                    <View style={styles.signupOtpRow}>
-                      <TextInput
-                        style={[styles.input, styles.signupOtpInput]}
-                        placeholder="6-digit code"
-                        placeholderTextColor="#999"
-                        value={signupOtpCode}
-                        onChangeText={(value) => {
-                          setSignupOtpCode(value.replace(/[^0-9]/g, "").slice(0, 6));
-                          setSignupOtpMessage("");
-                        }}
-                        keyboardType="number-pad"
-                        maxLength={6}
-                        editable={!signupLoading && !signupEmailVerified}
-                      />
-                      <TouchableOpacity
-                        style={[
-                          styles.signupOtpVerifyButton,
-                          (signupOtpVerifying || signupLoading || signupEmailVerified || signupOtpCode.length < 6) && styles.buttonDisabled,
-                        ]}
-                        onPress={handleVerifySignupOtp}
-                        disabled={signupOtpVerifying || signupLoading || signupEmailVerified || signupOtpCode.length < 6}
-                      >
-                        {signupOtpVerifying ? (
-                          <ActivityIndicator color="#166534" size="small" />
-                        ) : (
-                          <Text style={styles.signupOtpVerifyText}>Verify</Text>
-                        )}
-                      </TouchableOpacity>
-                    </View>
-                    {signupOtpMessage ? (
-                      <Text
-                        style={[
-                          styles.signupOtpMessage,
-                          signupEmailVerified && styles.signupOtpMessageSuccess,
-                        ]}
-                      >
-                        {signupOtpMessage}
-                      </Text>
-                    ) : null}
-                  </View>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Phone Number"
-                    placeholderTextColor="#999"
-                    value={signupAccountPhone}
-                    onChangeText={setSignupAccountPhone}
-                    keyboardType="phone-pad"
-                    editable={!signupLoading}
-                  />
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Password"
-                    placeholderTextColor="#999"
-                    value={signupPassword}
-                    onChangeText={setSignupPassword}
-                    secureTextEntry
-                    editable={!signupLoading}
-                  />
-
-                  {signupRole === "volunteer" ? (
-                    <>
-                      <Text style={styles.modalSectionLabel}>
-                        Profile Creation
-                      </Text>
-                      <View style={styles.roleSelector}>
-                        {(["Student", "Adult", "Senior"] as const).map(
-                          (userType) => (
-                            <TouchableOpacity
-                              key={userType}
-                              style={[
-                                styles.roleChip,
-                                signupUserType === userType &&
-                                styles.roleChipActive,
-                              ]}
-                              onPress={() => {
-                                setSignupUserType(userType);
-                              }}
-                              disabled={signupLoading}
-                              hitSlop={8}
-                            >
-                              <Text
+                  ) : (
+                    <ScrollView
+                      style={styles.modalForm}
+                      contentContainerStyle={styles.modalFormContent}
+                      showsVerticalScrollIndicator={false}
+                    >
+                      {signupRole === "admin" ? (
+                        <>
+                          <TextInput
+                            style={styles.input}
+                            placeholder="Full Name"
+                            placeholderTextColor="#999"
+                            value={signupName}
+                            onChangeText={(value) => setSignupName(normalizeNameInput(value))}
+                            editable={!signupLoading}
+                            autoCapitalize="words"
+                          />
+                          <TextInput
+                            style={styles.input}
+                            placeholder="Email Address"
+                            placeholderTextColor="#999"
+                            keyboardType="email-address"
+                            autoCapitalize="none"
+                            value={signupEmail}
+                            onChangeText={setSignupEmail}
+                            editable={!signupLoading}
+                          />
+                          <TextInput
+                            style={styles.input}
+                            placeholder="Password"
+                            placeholderTextColor="#999"
+                            secureTextEntry
+                            value={signupPassword}
+                            onChangeText={setSignupPassword}
+                            editable={!signupLoading}
+                            autoCapitalize="none"
+                          />
+                        </>
+                      ) : signupRole === "partner" ? (
+                        <>
+                          <Text style={styles.modalSectionLabel}>
+                            Organization Information
+                          </Text>
+                          <TextInput
+                            style={styles.input}
+                            placeholder="Organization Name"
+                            placeholderTextColor="#999"
+                            value={signupPartnerApplication.organizationName}
+                            onChangeText={(value) =>
+                              updateSignupPartnerApplication("organizationName", normalizeNameInput(value))
+                            }
+                            editable={!signupLoading}
+                            autoCapitalize="words"
+                          />
+                          <Text style={styles.modalSectionSubLabel}>Sector Type</Text>
+                          <View style={styles.pillarGrid}>
+                            {(["NGO", "Hospital", "Institution", "Private"] as const).map((sector) => (
+                              <TouchableOpacity
+                                key={sector}
                                 style={[
-                                  styles.roleChipText,
-                                  signupUserType === userType &&
-                                  styles.roleChipTextActive,
+                                  styles.pillarChip,
+                                  signupPartnerApplication.sectorType === sector &&
+                                  styles.pillarChipActive,
                                 ]}
+                                onPress={() =>
+                                  updateSignupPartnerApplication("sectorType", sector)
+                                }
+                                disabled={signupLoading}
                               >
-                                {userType}
-                              </Text>
-                            </TouchableOpacity>
-                          ),
-                        )}
-                      </View>
+                                <Text
+                                  style={[
+                                    styles.pillarChipText,
+                                    signupPartnerApplication.sectorType === sector &&
+                                    styles.pillarChipTextActive,
+                                  ]}
+                                >
+                                  {sector}
+                                </Text>
+                              </TouchableOpacity>
+                            ))}
+                          </View>
 
-                    </>
-                  ) : signupRole === "partner" ? (
-                    <>
-                      <Text style={styles.modalSectionLabel}>
-                        Organization Application
-                      </Text>
-                      <TextInput
-                        style={styles.input}
-                        placeholder="Organization Name"
-                        placeholderTextColor="#999"
-                        value={signupPartnerApplication.organizationName}
-                        onChangeText={(value) =>
-                          updateSignupPartnerApplication(
-                            "organizationName",
-                            value,
-                          )
-                        }
-                        editable={!signupLoading}
-                      />
-
-                      <Text style={styles.modalSectionSubLabel}>
-                        Sector Type
-                      </Text>
-                      <View style={styles.pillarGrid}>
-                        {(
-                          ["NGO", "Hospital", "Institution", "Private"] as const
-                        ).map((sector) => {
-                          const selected =
-                            signupPartnerApplication.sectorType === sector;
-                          return (
-                            <TouchableOpacity
-                              key={sector}
-                              style={[
-                                styles.pillarChip,
-                                selected && styles.pillarChipActive,
-                              ]}
-                              onPress={() =>
+                          {signupPartnerApplication.sectorType === "NGO" && (
+                            <TextInput
+                              style={styles.input}
+                              placeholder="DSWD Accreditation No. (Optional)"
+                              placeholderTextColor="#999"
+                              value={signupPartnerApplication.dswdAccreditationNo}
+                              onChangeText={(value) =>
                                 updateSignupPartnerApplication(
-                                  "sectorType",
-                                  sector,
+                                  "dswdAccreditationNo",
+                                  value,
                                 )
                               }
-                              disabled={signupLoading}
-                            >
-                              <Text
+                              editable={!signupLoading}
+                            />
+                          )}
+
+                          <TextInput
+                            style={styles.input}
+                            placeholder="SEC Registration No. (Optional)"
+                            placeholderTextColor="#999"
+                            value={signupPartnerApplication.secRegistrationNo}
+                            onChangeText={(value) =>
+                              updateSignupPartnerApplication("secRegistrationNo", value)
+                            }
+                            editable={!signupLoading}
+                          />
+
+                          <Text style={styles.modalSectionSubLabel}>
+                            Advocacy Focus (Select at least one)
+                          </Text>
+                          <View style={styles.pillarGrid}>
+                            {(["Nutrition", "Education", "Livelihood", "Disaster"] as const).map((focus) => {
+                              const isSelected =
+                                signupPartnerApplication.advocacyFocus.includes(focus);
+                              return (
+                                <TouchableOpacity
+                                  key={focus}
+                                  style={[
+                                    styles.pillarChip,
+                                    isSelected && styles.pillarChipActive,
+                                  ]}
+                                  onPress={() => {
+                                    const next = isSelected
+                                      ? signupPartnerApplication.advocacyFocus.filter(
+                                        (f) => f !== focus,
+                                      )
+                                      : [...signupPartnerApplication.advocacyFocus, focus];
+                                    updateSignupPartnerApplication("advocacyFocus", next);
+                                  }}
+                                  disabled={signupLoading}
+                                >
+                                  <Text
+                                    style={[
+                                      styles.pillarChipText,
+                                      isSelected && styles.pillarChipTextActive,
+                                    ]}
+                                  >
+                                    {focus}
+                                  </Text>
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </View>
+
+                          <Text style={styles.modalSectionLabel}>
+                            Account Information
+                          </Text>
+                          <TextInput
+                            style={styles.input}
+                            placeholder="Contact Person Full Name"
+                            placeholderTextColor="#999"
+                            value={signupName}
+                            onChangeText={(value) => setSignupName(normalizeNameInput(value))}
+                            editable={!signupLoading}
+                            autoCapitalize="words"
+                          />
+                          <TextInput
+                            style={styles.input}
+                            placeholder="Email Address"
+                            placeholderTextColor="#999"
+                            keyboardType="email-address"
+                            autoCapitalize="none"
+                            value={signupEmail}
+                            onChangeText={setSignupEmail}
+                            editable={!signupLoading}
+                          />
+                          <TextInput
+                            style={styles.input}
+                            placeholder="Phone Number (e.g. 09171234567)"
+                            placeholderTextColor="#999"
+                            keyboardType="phone-pad"
+                            maxLength={11}
+                            value={signupAccountPhone}
+                            onChangeText={(value) => setSignupAccountPhone(normalizePhoneInput(value))}
+                            editable={!signupLoading}
+                          />
+                          <TextInput
+                            style={styles.input}
+                            placeholder="Password"
+                            placeholderTextColor="#999"
+                            secureTextEntry
+                            value={signupPassword}
+                            onChangeText={setSignupPassword}
+                            editable={!signupLoading}
+                          />
+                        </>
+                      ) : (
+                        <>
+                          <Text style={styles.modalSectionLabel}>
+                            Account Information
+                          </Text>
+                          <TextInput
+                            style={styles.input}
+                            placeholder="Full Name"
+                            placeholderTextColor="#999"
+                            value={signupName}
+                            onChangeText={(value) => setSignupName(normalizeNameInput(value))}
+                            editable={!signupLoading}
+                            autoCapitalize="words"
+                          />
+                          <TextInput
+                            style={styles.input}
+                            placeholder="Email Address"
+                            placeholderTextColor="#999"
+                            keyboardType="email-address"
+                            autoCapitalize="none"
+                            value={signupEmail}
+                            onChangeText={setSignupEmail}
+                            editable={!signupLoading}
+                          />
+                          <TextInput
+                            style={styles.input}
+                            placeholder="Phone Number (e.g. 09171234567)"
+                            placeholderTextColor="#999"
+                            keyboardType="phone-pad"
+                            maxLength={11}
+                            value={signupAccountPhone}
+                            onChangeText={(value) => setSignupAccountPhone(normalizePhoneInput(value))}
+                            editable={!signupLoading}
+                          />
+                          <TextInput
+                            style={styles.input}
+                            placeholder="Password"
+                            placeholderTextColor="#999"
+                            secureTextEntry
+                            value={signupPassword}
+                            onChangeText={setSignupPassword}
+                            editable={!signupLoading}
+                            autoCapitalize="none"
+                          />
+
+                          <Text style={styles.modalSectionLabel}>Volunteer Profile</Text>
+                           <Text style={styles.modalSectionSubLabel}>Profile Type</Text>
+                          <View style={styles.roleSelector}>
+                            {["Student", "Adult", "Corporate"].map((type) => (
+                              <TouchableOpacity
+                                key={type}
                                 style={[
-                                  styles.pillarChipText,
-                                  selected && styles.pillarChipTextActive,
+                                  styles.roleChip,
+                                  signupUserType === type && styles.roleChipActive,
                                 ]}
+                                onPress={() => setSignupUserType(type as UserType)}
+                                disabled={signupLoading}
                               >
-                                {sector}
-                              </Text>
-                            </TouchableOpacity>
-                          );
-                        })}
-                      </View>
+                                <Text
+                                  style={[
+                                    styles.roleChipText,
+                                    signupUserType === type &&
+                                    styles.roleChipTextActive,
+                                  ]}
+                                >
+                                  {type}
+                                </Text>
+                              </TouchableOpacity>
+                            ))}
+                          </View>
 
-                      <Text style={styles.fieldLabel}>
-                        DSWD Accreditation Number
-                      </Text>
-                      <Text style={styles.fieldHelpText}>
-                        Enter your DSWD accreditation number (optional).
-                      </Text>
-                      <TextInput
-                        style={styles.input}
-                        placeholder="DSWD Accreditation No. (optional)"
-                        placeholderTextColor="#999"
-                        value={signupPartnerApplication.dswdAccreditationNo}
-                        onChangeText={(value) =>
-                          updateSignupPartnerApplication(
-                            "dswdAccreditationNo",
-                            value,
-                          )
-                        }
-                        autoCapitalize="characters"
-                        editable={!signupLoading}
-                      />
+                          <Text style={styles.modalSectionLabel}>
+                            Membership Information Sheet
+                          </Text>
+                          <Text style={styles.modalSectionSubLabel}>Gender</Text>
+                          <View style={styles.genderGrid}>
+                            {["Male", "Female", "Prefer not to say"].map((g) => {
+                              const isSelected = signupVolunteerSheet.gender === g;
+                              return (
+                                <TouchableOpacity
+                                  key={g}
+                                  style={[
+                                    styles.genderChip,
+                                    isSelected && styles.genderChipActive,
+                                  ]}
+                                  onPress={() =>
+                                    updateSignupVolunteerSheet("gender", g)
+                                  }
+                                  disabled={signupLoading}
+                                >
+                                  <Text
+                                    style={[
+                                      styles.genderChipText,
+                                      isSelected && styles.genderChipTextActive,
+                                    ]}
+                                  >
+                                    {g}
+                                  </Text>
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </View>
 
-                      <TextInput
-                        style={styles.input}
-                        placeholder="SEC Registration No. (optional)"
-                        placeholderTextColor="#999"
-                        value={signupPartnerApplication.secRegistrationNo}
-                        onChangeText={(value) =>
-                          updateSignupPartnerApplication(
-                            "secRegistrationNo",
-                            value,
-                          )
-                        }
-                        autoCapitalize="characters"
-                        editable={!signupLoading}
-                      />
-
-                      <Text style={styles.modalSectionSubLabel}>
-                        Advocacy Focus
-                      </Text>
-                      <View style={styles.pillarGrid}>
-                        {(
-                          [
-                            "Nutrition",
-                            "Education",
-                            "Livelihood",
-                            "Disaster",
-                          ] as const
-                        ).map((focus) => {
-                          const selected =
-                            signupPartnerApplication.advocacyFocus.includes(
-                              focus,
-                            );
-                          return (
-                            <TouchableOpacity
-                              key={focus}
-                              style={[
-                                styles.pillarChip,
-                                selected && styles.pillarChipActive,
-                              ]}
-                              onPress={() =>
-                                updateSignupPartnerApplication(
-                                  "advocacyFocus",
-                                  selected
-                                    ? signupPartnerApplication.advocacyFocus.filter(
-                                      (item) => item !== focus,
-                                    )
-                                    : [
-                                      ...signupPartnerApplication.advocacyFocus,
-                                      focus,
-                                    ],
-                                )
-                              }
-                              disabled={signupLoading}
-                            >
-                              <Text
-                                style={[
-                                  styles.pillarChipText,
-                                  selected && styles.pillarChipTextActive,
-                                ]}
-                              >
-                                {focus}
-                              </Text>
-                            </TouchableOpacity>
-                          );
-                        })}
-                      </View>
-
-                      <View style={styles.partnerLockNotice}>
-                        <MaterialIcons
-                          name="verified-user"
-                          size={18}
-                          color="#92400e"
-                        />
-                        <Text style={styles.partnerLockNoticeText}>
-                          Admin will review your application and unlock partner
-                          login after approval.
-                        </Text>
-                      </View>
-                    </>
-                  ) : null}
-
-                  {signupRole === "volunteer" && (
-                    <>
-                      <Text style={styles.modalSectionLabel}>
-                        NVC Membership Information Sheet
-                      </Text>
-
-                      <Text style={styles.modalSectionSubLabel}>Gender</Text>
-                      <View style={styles.genderGrid}>
-                        {["Male", "Female", "Other"].map((gender) => (
+                          <Text style={styles.modalSectionSubLabel}>
+                            Date of Birth
+                          </Text>
                           <TouchableOpacity
-                            key={gender}
-                            style={[
-                              styles.genderChip,
-                              signupVolunteerSheet.gender === gender &&
-                              styles.genderChipActive,
-                            ]}
-                            onPress={() => {
-                              updateSignupVolunteerSheet("gender", gender);
-                            }}
+                            style={styles.datePickerButton}
+                            onPress={() => setShowYearPicker(true)}
                             disabled={signupLoading}
-                            hitSlop={8}
                           >
-                            <Text
-                              style={[
-                                styles.genderChipText,
-                                signupVolunteerSheet.gender === gender &&
-                                styles.genderChipTextActive,
-                              ]}
-                            >
-                              {gender}
+                            <MaterialIcons
+                              name="calendar-today"
+                              size={20}
+                              color="#fff"
+                            />
+                            <Text style={styles.datePickerButtonText}>
+                              {signupVolunteerSheet.dateOfBirth
+                                ? format(parseISO(signupVolunteerSheet.dateOfBirth), "MMMM d, yyyy")
+                                : "Select Birth Date..."}
                             </Text>
                           </TouchableOpacity>
-                        ))}
-                      </View>
 
-                      <Text style={styles.modalSectionSubLabel}>
-                        Date of Birth
-                      </Text>
-                      {getPlatformOS() === "web" ? (
-                        <input
-                          type="date"
-                          value={signupVolunteerSheet.dateOfBirth}
-                          max={new Date().toISOString().split("T")[0]}
-                          onChange={(event) => {
-                            updateSignupVolunteerSheet(
-                              "dateOfBirth",
-                              event.target.value,
-                            );
-                          }}
-                          disabled={signupLoading}
-                          style={{
-                            width: "100%",
-                            padding: "12px 16px",
-                            borderRadius: "12px",
-                            border: "1px solid #ddd",
-                            fontSize: "16px",
-                            color: "#333",
-                            backgroundColor: "#fff",
-                            minHeight: "54px",
-                            boxSizing: "border-box",
-                            fontFamily: "inherit",
-                            marginBottom: "15px",
-                            outline: "none",
-                            cursor: "pointer",
-                          }}
-                        />
-                      ) : (
-                        <TouchableOpacity
-                          style={[styles.button, styles.datePickerButton]}
-                          onPress={() => {
-                            setShowYearPicker(true);
-                          }}
-                          disabled={signupLoading}
-                          hitSlop={8}
-                        >
-                          <MaterialIcons
-                            name="calendar-today"
-                            size={20}
-                            color="#fff"
-                          />
-                          <Text style={styles.datePickerButtonText}>
-                            {signupVolunteerSheet.dateOfBirth
-                              ? new Date(
-                                signupVolunteerSheet.dateOfBirth,
-                              ).toLocaleDateString("en-US", {
-                                year: "numeric",
-                                month: "long",
-                                day: "numeric",
-                              })
-                              : "Select Date of Birth"}
+                          <Text style={styles.modalSectionSubLabel}>
+                            Civil Status
                           </Text>
-                        </TouchableOpacity>
-                      )}
+                          <View style={styles.pickerContainer}>
+                            <Picker
+                              selectedValue={signupVolunteerSheet.civilStatus}
+                              enabled={!signupLoading}
+                              onValueChange={(itemValue: string) =>
+                                updateSignupVolunteerSheet("civilStatus", itemValue)
+                              }
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Select Civil Status..." value="" />
+                              {["Single", "Married", "Widowed", "Separated"].map((status) => (
+                                <Picker.Item key={status} label={status} value={status} />
+                              ))}
+                            </Picker>
+                          </View>
 
-                      <Text style={styles.modalSectionSubLabel}>
-                        Civil Status
-                      </Text>
-                      <View style={styles.pickerContainer}>
-                        <Picker
-                          selectedValue={signupVolunteerSheet.civilStatus}
-                          onValueChange={(itemValue: string) =>
-                            updateSignupVolunteerSheet("civilStatus", itemValue)
-                          }
-                          enabled={!signupLoading}
-                          style={styles.picker}
-                        >
-                          <Picker.Item
-                            label="Select Civil Status..."
-                            value=""
-                          />
-                          {[
-                            "Single",
-                            "Married",
-                            "Widowed",
-                            "Separated",
-                            "Domestic Partnership",
-                          ].map((status) => (
-                            <Picker.Item
-                              key={status}
-                              label={status}
-                              value={status}
-                            />
-                          ))}
-                        </Picker>
-                      </View>
+                          <Text style={styles.modalSectionLabel}>Home Address</Text>
+                          <View style={styles.locationField}>
+                            <Text style={styles.modalSectionSubLabel}>Region</Text>
+                            <View style={styles.pickerContainer}>
+                              <Picker
+                                selectedValue={selectedRegionCode}
+                                onValueChange={(itemValue: string) =>
+                                  handleSelectRegion(itemValue)
+                                }
+                                enabled={!signupLoading}
+                                style={styles.picker}
+                              >
+                                <Picker.Item label="Select Region..." value="" />
+                                {PHRegions.map((region) => (
+                                  <Picker.Item
+                                    key={region.code}
+                                    label={region.name}
+                                    value={region.code}
+                                  />
+                                ))}
+                              </Picker>
+                            </View>
 
-                      <Text style={styles.modalSectionLabel}>
-                        Home Address (Philippines)
-                      </Text>
+                            <Text style={styles.modalSectionSubLabel}>
+                              City / Municipality
+                            </Text>
+                            <View style={styles.pickerContainer}>
+                              <Picker
+                                selectedValue={selectedCityCode}
+                                onValueChange={(itemValue: string) =>
+                                  handleSelectCity(itemValue)
+                                }
+                                enabled={!signupLoading && selectedRegionCode !== ""}
+                                style={styles.picker}
+                              >
+                                <Picker.Item
+                                  label="Select City / Municipality..."
+                                  value=""
+                                />
+                                {filteredCities.map((city) => (
+                                  <Picker.Item
+                                    key={city.code}
+                                    label={city.displayName}
+                                    value={city.code}
+                                  />
+                                ))}
+                              </Picker>
+                            </View>
 
-                      <Text style={styles.modalSectionSubLabel}>Region</Text>
-                      <View style={styles.pickerContainer}>
-                        <Picker
-                          selectedValue={selectedRegionCode}
-                          onValueChange={(itemValue: string) =>
-                            handleSelectRegion(itemValue)
-                          }
-                          enabled={!signupLoading}
-                          style={styles.picker}
-                        >
-                          <Picker.Item label="Select Region..." value="" />
-                          {PHRegions.map((region) => (
-                            <Picker.Item
-                              key={region.code}
-                              label={region.name}
-                              value={region.code}
-                            />
-                          ))}
-                        </Picker>
-                      </View>
+                            <Text style={styles.modalSectionSubLabel}>Barangay</Text>
+                            <View style={styles.pickerContainer}>
+                              <Picker
+                                selectedValue={
+                                  signupVolunteerSheet.homeAddressBarangay
+                                }
+                                onValueChange={(itemValue: string) =>
+                                  handleSelectBarangay(itemValue)
+                                }
+                                enabled={!signupLoading && selectedCityCode !== ""}
+                                style={styles.picker}
+                              >
+                                <Picker.Item label="Select Barangay..." value="" />
+                                {filteredBarangays.map((barangay) => (
+                                  <Picker.Item
+                                    key={barangay.code}
+                                    label={barangay.displayName}
+                                    value={barangay.name}
+                                  />
+                                ))}
+                              </Picker>
+                            </View>
+                          </View>
 
-                      <Text style={styles.modalSectionSubLabel}>
-                        City / Municipality
-                      </Text>
-                      <View style={styles.pickerContainer}>
-                        <Picker
-                          selectedValue={selectedCityCode}
-                          onValueChange={(itemValue: string) =>
-                            handleSelectCity(itemValue)
-                          }
-                          enabled={!signupLoading && selectedRegionCode !== ""}
-                          style={styles.picker}
-                        >
-                          <Picker.Item
-                            label="Select City / Municipality..."
-                            value=""
-                          />
-                          {filteredCities.map((city) => (
-                            <Picker.Item
-                              key={city.code}
-                              label={city.displayName}
-                              value={city.code}
-                            />
-                          ))}
-                        </Picker>
-                      </View>
-
-                      <Text style={styles.modalSectionSubLabel}>Barangay</Text>
-                      <View style={styles.pickerContainer}>
-                        <Picker
-                          selectedValue={
-                            signupVolunteerSheet.homeAddressBarangay
-                          }
-                          onValueChange={(itemValue: string) =>
-                            handleSelectBarangay(itemValue)
-                          }
-                          enabled={!signupLoading && selectedCityCode !== ""}
-                          style={styles.picker}
-                        >
-                          <Picker.Item label="Select Barangay..." value="" />
-                          {filteredBarangays.map((barangay) => (
-                            <Picker.Item
-                              key={barangay.code}
-                              label={barangay.displayName}
-                              value={barangay.name}
-                            />
-                          ))}
-                        </Picker>
-                      </View>
-
-                      <Text style={styles.modalSectionLabel}>
-                        Professional Information
-                      </Text>
-                      <TextInput
-                        style={styles.input}
-                        placeholder="Occupation"
-                        placeholderTextColor="#999"
-                        value={signupVolunteerSheet.occupation}
-                        onChangeText={(value) =>
-                          updateSignupVolunteerSheet("occupation", value)
-                        }
-                        editable={!signupLoading}
-                      />
-                      <TextInput
-                        style={styles.input}
-                        placeholder="Workplace or School"
-                        placeholderTextColor="#999"
-                        value={signupVolunteerSheet.workplaceOrSchool}
-                        onChangeText={(value) =>
-                          updateSignupVolunteerSheet("workplaceOrSchool", value)
-                        }
-                        editable={!signupLoading}
-                      />
-                      <TextInput
-                        style={styles.input}
-                        placeholder="College Course"
-                        placeholderTextColor="#999"
-                        value={signupVolunteerSheet.collegeCourse}
-                        onChangeText={(value) =>
-                          updateSignupVolunteerSheet("collegeCourse", value)
-                        }
-                        editable={!signupLoading}
-                      />
-                      <Text style={styles.modalSectionSubLabel}>
-                        Skills (Select all that apply)
-                      </Text>
-                      <View style={styles.dropdownWrap}>
-                        <TouchableOpacity
-                          style={styles.dropdownTrigger}
-                          onPress={() => {
-                            setShowSkillsDropdown((current) => !current);
-                          }}
-                          disabled={signupLoading}
-                          activeOpacity={0.85}
-                          hitSlop={8}
-                        >
-                          <Text
-                            style={[
-                              styles.dropdownTriggerText,
-                              signupVolunteerSheet.skills.length === 0 &&
-                              styles.dropdownPlaceholder,
-                            ]}
-                            numberOfLines={2}
-                          >
-                            {signupVolunteerSheet.skills.length > 0
-                              ? signupVolunteerSheet.skills.join(", ")
-                              : "Select skills"}
+                          <Text style={styles.modalSectionSubLabel}>
+                            Street Address / House Number
                           </Text>
-                          <MaterialIcons
-                            name={
-                              showSkillsDropdown
-                                ? "keyboard-arrow-up"
-                                : "keyboard-arrow-down"
+                          <TextInput
+                            style={styles.input}
+                            placeholder="House No., Street Name, Subdivision..."
+                            placeholderTextColor="#999"
+                            value={signupVolunteerSheet.homeAddress}
+                            onChangeText={(value) =>
+                              updateSignupVolunteerSheet("homeAddress", normalizeProfessionalInput(value))
                             }
-                            size={22}
-                            color="#475569"
+                            editable={!signupLoading}
+                            autoCapitalize="words"
                           />
-                        </TouchableOpacity>
-                        {showSkillsDropdown ? (
-                          <View style={styles.dropdownMenu}>
+
+                          <Text style={styles.modalSectionLabel}>
+                            Professional Information
+                          </Text>
+                          <TextInput
+                            style={styles.input}
+                            placeholder="Occupation"
+                            placeholderTextColor="#999"
+                            value={signupVolunteerSheet.occupation}
+                            onChangeText={(value) =>
+                              updateSignupVolunteerSheet("occupation", normalizeProfessionalInput(value))
+                            }
+                            editable={!signupLoading}
+                            autoCapitalize="words"
+                          />
+                          <TextInput
+                            style={styles.input}
+                            placeholder="Workplace or School"
+                            placeholderTextColor="#999"
+                            value={signupVolunteerSheet.workplaceOrSchool}
+                            onChangeText={(value) =>
+                              updateSignupVolunteerSheet("workplaceOrSchool", normalizeProfessionalInput(value))
+                            }
+                            editable={!signupLoading}
+                            autoCapitalize="words"
+                          />
+                          <TextInput
+                            style={styles.input}
+                            placeholder="College Course"
+                            placeholderTextColor="#999"
+                            value={signupVolunteerSheet.collegeCourse}
+                            onChangeText={(value) =>
+                              updateSignupVolunteerSheet("collegeCourse", normalizeProfessionalInput(value))
+                            }
+                            editable={!signupLoading}
+                            autoCapitalize="words"
+                          />
+
+                          <Text style={styles.modalSectionLabel}>
+                            Background & Skills
+                          </Text>
+                          <View style={styles.customSkillRow}>
+                            <TextInput
+                              style={styles.customSkillInput}
+                              placeholder="Enter custom skill..."
+                              placeholderTextColor="#999"
+                              value={customVolunteerSkill}
+                              onChangeText={setCustomVolunteerSkill}
+                              onSubmitEditing={handleAddCustomVolunteerSkill}
+                              editable={!signupLoading}
+                            />
+                            <TouchableOpacity
+                              style={styles.customSkillAddButton}
+                              onPress={handleAddCustomVolunteerSkill}
+                              disabled={signupLoading}
+                            >
+                              <MaterialIcons name="add" size={18} color="#fff" />
+                              <Text style={styles.customSkillAddButtonText}>Add</Text>
+                            </TouchableOpacity>
+                          </View>
+
+                          <Text style={styles.modalSectionSubLabel}>
+                            Select Skills (Select all that apply)
+                          </Text>
+                          <View style={styles.skillsGrid}>
                             {availableSkills.map((skill) => {
                               const isSelected =
                                 signupVolunteerSheet.skills.includes(skill);
@@ -2418,30 +2579,16 @@ export default function LoginScreen() {
                                 <TouchableOpacity
                                   key={skill}
                                   style={[
-                                    styles.dropdownOption,
-                                    isSelected && styles.dropdownOptionSelected,
+                                    styles.skillChip,
+                                    isSelected && styles.skillChipActive,
                                   ]}
-                                  onPress={() =>
-                                    handleToggleVolunteerSkill(skill)
-                                  }
+                                  onPress={() => handleToggleVolunteerSkill(skill)}
                                   disabled={signupLoading}
-                                  activeOpacity={0.8}
-                                  hitSlop={4}
                                 >
-                                  <MaterialIcons
-                                    name={
-                                      isSelected
-                                        ? "check-box"
-                                        : "check-box-outline-blank"
-                                    }
-                                    size={19}
-                                    color={isSelected ? "#166534" : "#64748b"}
-                                  />
                                   <Text
                                     style={[
-                                      styles.dropdownOptionText,
-                                      isSelected &&
-                                      styles.dropdownOptionTextSelected,
+                                      styles.skillChipText,
+                                      isSelected && styles.skillChipTextActive,
                                     ]}
                                   >
                                     {skill}
@@ -2450,267 +2597,286 @@ export default function LoginScreen() {
                               );
                             })}
                           </View>
-                        ) : null}
-                      </View>
 
-                      <View style={styles.customSkillRow}>
-                        <TextInput
-                          style={styles.customSkillInput}
-                          placeholder="Add custom skill"
-                          placeholderTextColor="#9ca3af"
-                          value={customVolunteerSkill}
-                          onChangeText={setCustomVolunteerSkill}
-                          onSubmitEditing={handleAddCustomVolunteerSkill}
-                          returnKeyType="done"
-                          editable={!signupLoading}
-                        />
-                        <TouchableOpacity
-                          style={styles.customSkillAddButton}
-                          onPress={handleAddCustomVolunteerSkill}
-                          disabled={signupLoading}
-                        >
-                          <MaterialIcons name="add" size={18} color="#fff" />
-                          <Text style={styles.customSkillAddButtonText}>
-                            Add
+                          <Text style={styles.modalSectionLabel}>
+                            Credentials & Certificates (Optional)
                           </Text>
-                        </TouchableOpacity>
-                      </View>
-
-                      <Text style={styles.modalSectionLabel}>
-                        Certifications & Media
-                      </Text>
-
-                      <View style={styles.uploadActionsRow}>
-                        <TouchableOpacity
-                          style={[
-                            styles.button,
-                            styles.uploadButton,
-                            signupLoading && { opacity: 0.6 },
-                          ]}
-                          onPress={handlePickVolunteerCertificate}
-                          disabled={signupLoading}
-                        >
-                          <Text style={styles.uploadButtonText}>
-                            {signupVolunteerSheet.certificationsOrTrainings
-                              ? "Change Certificate Photo"
-                              : "Upload Certificate Photo"}
+                          {signupVolunteerSheet.certificationsOrTrainings ? (
+                            <View style={styles.certificatePreviewCard}>
+                              <Image
+                                source={{
+                                  uri: signupVolunteerSheet.certificationsOrTrainings,
+                                }}
+                                style={styles.certificatePreviewImage}
+                                resizeMode="cover"
+                              />
+                              <View style={styles.certificatePreviewFooter}>
+                                <Text
+                                  style={styles.certificatePreviewLabel}
+                                  numberOfLines={1}
+                                >
+                                  Uploaded Certificate
+                                </Text>
+                                <TouchableOpacity
+                                  onPress={() =>
+                                    updateSignupVolunteerSheet(
+                                      "certificationsOrTrainings",
+                                      "",
+                                    )
+                                  }
+                                  disabled={signupLoading}
+                                >
+                                  <Text style={styles.certificateRemoveText}>
+                                    Remove
+                                  </Text>
+                                </TouchableOpacity>
+                              </View>
+                            </View>
+                          ) : (
+                            <View style={styles.uploadActionsRow}>
+                              <TouchableOpacity
+                                style={styles.uploadButton}
+                                onPress={handlePickVolunteerCertificate}
+                                disabled={signupLoading}
+                              >
+                                <Text style={styles.uploadButtonText}>
+                                  Upload Certificate Image
+                                </Text>
+                              </TouchableOpacity>
+                            </View>
+                          )}
+                          <Text style={styles.certificateHelperText}>
+                            Upload any professional training certificate or credentials
+                            related to disasters, feeding programs or child
+                            care.
                           </Text>
-                        </TouchableOpacity>
-                        {signupVolunteerSheet.certificationsOrTrainings ? (
+
+                          <Text style={styles.modalSectionLabel}>
+                            Valid ID (Required)
+                          </Text>
+                          {signupVolunteerSheet.validIdPhoto ? (
+                            <View style={styles.certificatePreviewCard}>
+                              <Image
+                                source={{
+                                  uri: signupVolunteerSheet.validIdPhoto,
+                                }}
+                                style={styles.certificatePreviewImage}
+                                resizeMode="cover"
+                              />
+                              <View style={styles.certificatePreviewFooter}>
+                                <Text
+                                  style={styles.certificatePreviewLabel}
+                                  numberOfLines={1}
+                                >
+                                  Uploaded ID
+                                </Text>
+                                <TouchableOpacity
+                                  onPress={() =>
+                                    updateSignupVolunteerSheet(
+                                      "validIdPhoto",
+                                      "",
+                                    )
+                                  }
+                                  disabled={signupLoading}
+                                >
+                                  <Text style={styles.certificateRemoveText}>
+                                    Remove
+                                  </Text>
+                                </TouchableOpacity>
+                              </View>
+                            </View>
+                          ) : (
+                            <View style={styles.uploadActionsRow}>
+                              <TouchableOpacity
+                                style={styles.uploadButton}
+                                onPress={handlePickValidIdPhoto}
+                                disabled={signupLoading}
+                              >
+                                <Text style={styles.uploadButtonText}>
+                                  Upload Valid ID Image
+                                </Text>
+                              </TouchableOpacity>
+                            </View>
+                          )}
+                          <Text style={styles.certificateHelperText}>
+                            Please upload a clear image of any government-issued Valid ID.
+                          </Text>
+
+                          <Text style={styles.modalSectionLabel}>Orientation Video</Text>
+                          <View style={styles.briefingVideoCard}>
+                            <View style={styles.briefingVideoPreview}>
+                              <MaterialIcons
+                                name="play-circle-outline"
+                                size={56}
+                                color="#fff"
+                              />
+                              <Text style={styles.briefingVideoPreviewText}>
+                                Watch NVC Introduction Video
+                              </Text>
+                            </View>
+                            <Text style={styles.briefingVideoTitle}>
+                              About NVC Foundation, Inc.
+                            </Text>
+                            <Text style={styles.briefingVideoDescription}>
+                              Watch the brief video to understand our mission, values,
+                              and guidelines for all registered volunteers.
+                            </Text>
+                          </View>
+
+                          <Text style={styles.modalSectionSubLabel}>
+                            Affiliations (if any)
+                          </Text>
+                          <View style={styles.affiliationRow}>
+                            <TextInput
+                              style={[styles.input, styles.affiliationInput]}
+                              placeholder="Organization"
+                              placeholderTextColor="#999"
+                              value={signupVolunteerSheet.affiliationOrg1}
+                              onChangeText={(value) =>
+                                updateSignupVolunteerSheet("affiliationOrg1", normalizeProfessionalInput(value))
+                              }
+                              editable={!signupLoading}
+                              autoCapitalize="words"
+                            />
+                            <TextInput
+                              style={[styles.input, styles.affiliationInput]}
+                              placeholder="Position"
+                              placeholderTextColor="#999"
+                              value={signupVolunteerSheet.affiliationPos1}
+                              onChangeText={(value) =>
+                                updateSignupVolunteerSheet("affiliationPos1", normalizeProfessionalInput(value))
+                              }
+                              editable={!signupLoading}
+                              autoCapitalize="words"
+                            />
+                          </View>
+                          <Text style={styles.modalSectionLabel}>Commitment</Text>
+                          <View style={styles.commitmentCard}>
+                            <Text style={styles.commitmentParagraph}>
+                              I{" "}
+                              {signupName.trim() ||
+                                "_______________________________"}
+                              , voluntarily and freely commit myself to be a member
+                              of the NVC Foundation, Inc. I believe in the
+                              foundation's ideals, objectives and directions which
+                              are aimed to fight hunger and poverty by providing
+                              nutrition, access to quality education for children
+                              and livelihood opportunities for the poor.
+                            </Text>
+                            <Text style={styles.commitmentParagraph}>
+                              As a full pledged member, I have read the NVC's
+                              volunteers manual and I commit:
+                            </Text>
+                            <Text style={styles.commitmentBullet}>
+                              - To actively participate in the Foundation's projects
+                              and activities.
+                            </Text>
+                            <Text style={styles.commitmentBullet}>
+                              - To willingly work towards positive and peaceful
+                              change.
+                            </Text>
+                            <Text style={styles.commitmentBullet}>
+                              - To refrain from using one's personal participation
+                              in NVC, or using NVC's collective activities, for
+                              partisan politics, whether it be for personal
+                              advantage or endorsement of any politician or
+                              political party.
+                            </Text>
+                            <Text style={styles.commitmentBullet}>
+                              - To insure that my personal interests do not conflict
+                              with those of NVC's.
+                            </Text>
+                          </View>
+
                           <TouchableOpacity
-                            style={[styles.button, styles.cancelUploadButton]}
+                            style={styles.commitmentAcceptanceRow}
                             onPress={() =>
-                              updateSignupVolunteerSheet(
-                                "certificationsOrTrainings",
-                                "",
-                              )
+                              setSignupAcceptedCommitment((current) => !current)
                             }
                             disabled={signupLoading}
+                            activeOpacity={0.8}
                           >
-                            <Text style={styles.cancelUploadButtonText}>
-                              Cancel Upload
+                            <MaterialIcons
+                              name={
+                                signupAcceptedCommitment
+                                  ? "check-box"
+                                  : "check-box-outline-blank"
+                              }
+                              size={22}
+                              color={
+                                signupAcceptedCommitment ? "#166534" : "#64748b"
+                              }
+                            />
+                            <Text style={styles.commitmentAcceptanceText}>
+                              I have read and accept the NVC volunteer commitment.
                             </Text>
                           </TouchableOpacity>
-                        ) : null}
-                      </View>
-                      <Text style={styles.certificateHelperText}>
-                        Upload a clear photo of your certificate of training.
-                      </Text>
-                      {signupVolunteerSheet.certificationsOrTrainings ? (
-                        <View style={styles.certificatePreviewCard}>
-                          {isImageMediaUri(
-                            signupVolunteerSheet.certificationsOrTrainings,
-                          ) ? (
-                            <Image
-                              source={{
-                                uri: signupVolunteerSheet.certificationsOrTrainings,
-                              }}
-                              style={styles.certificatePreviewImage as any}
-                            />
-                          ) : null}
-                          <View style={styles.certificatePreviewFooter}>
-                            <Text style={styles.certificatePreviewLabel}>
-                              Certificate photo selected
-                            </Text>
-                            <TouchableOpacity
-                              onPress={() =>
-                                updateSignupVolunteerSheet(
-                                  "certificationsOrTrainings",
-                                  "",
-                                )
-                              }
-                              disabled={signupLoading}
-                            >
-                              <Text style={styles.certificateRemoveText}>
-                                Remove
-                              </Text>
-                            </TouchableOpacity>
-                          </View>
-                        </View>
-                      ) : null}
+                        </>
+                      )}
+                    </ScrollView>
+                  )}
 
-                      <Text style={styles.modalSectionSubLabel}>
-                        Video Briefing
-                      </Text>
-                      <View style={styles.briefingVideoCard}>
-                        <View style={styles.briefingVideoPreview}>
-                          <MaterialIcons
-                            name="play-circle-filled"
-                            size={58}
-                            color="#ffffff"
-                          />
-                          <Text style={styles.briefingVideoPreviewText}>
-                            Placeholder video
+                  {signupStep === "role" ? (
+                    <View style={styles.modalActions}>
+                      <TouchableOpacity
+                        style={styles.modalSecondaryButton}
+                        onPress={closeSignupModal}
+                      >
+                        <Text style={styles.modalSecondaryText}>Cancel</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ) : (
+                    <>
+                      {signupValidationError && (
+                        <View style={styles.validationErrorBanner}>
+                          <MaterialIcons name="error-outline" size={16} color="#b91c1c" />
+                          <Text style={styles.validationErrorBannerText}>
+                            {signupValidationError}
                           </Text>
                         </View>
-                        <Text style={styles.briefingVideoTitle}>
-                          Volunteer orientation briefing
-                        </Text>
-                        <Text style={styles.briefingVideoDescription}>
-                          Volunteers should finish watching the orientation
-                          video before submitting registration. This placeholder
-                          can be replaced with the final video later.
-                        </Text>
-                      </View>
+                      )}
 
-                      <Text style={styles.modalSectionSubLabel}>
-                        Affiliations (if any)
-                      </Text>
-                      <View style={styles.affiliationRow}>
-                        <TextInput
-                          style={[styles.input, styles.affiliationInput]}
-                          placeholder="Organization"
-                          placeholderTextColor="#999"
-                          value={signupVolunteerSheet.affiliationOrg1}
-                          onChangeText={(value) =>
-                            updateSignupVolunteerSheet("affiliationOrg1", value)
-                          }
-                          editable={!signupLoading}
-                        />
-                        <TextInput
-                          style={[styles.input, styles.affiliationInput]}
-                          placeholder="Position"
-                          placeholderTextColor="#999"
-                          value={signupVolunteerSheet.affiliationPos1}
-                          onChangeText={(value) =>
-                            updateSignupVolunteerSheet("affiliationPos1", value)
-                          }
-                          editable={!signupLoading}
-                        />
+                      <View style={styles.modalActions}>
+                        <TouchableOpacity
+                          style={styles.modalSecondaryButton}
+                          onPress={() => {
+                            setSignupValidationError(null);
+                            if (signupRole === "admin") {
+                              closeSignupModal();
+                            } else {
+                              setSignupStep("role");
+                            }
+                          }}
+                          disabled={signupLoading}
+                        >
+                          <Text style={styles.modalSecondaryText}>
+                            {signupRole === "admin" ? "Cancel" : "Back"}
+                          </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[
+                            styles.modalPrimaryButton,
+                            signupLoading && styles.buttonDisabled,
+                          ]}
+                          onPress={handleSignup}
+                          disabled={signupLoading}
+                        >
+                          {signupLoading ? (
+                            <ActivityIndicator color="#fff" />
+                          ) : (
+                            <Text style={styles.modalPrimaryText}>
+                              {signupRole === "admin"
+                                ? "Create Admin Account"
+                                : signupRole === "partner"
+                                  ? "Submit Application"
+                                  : "Create Volunteer Account"}
+                            </Text>
+                          )}
+                        </TouchableOpacity>
                       </View>
-                      <Text style={styles.modalSectionLabel}>Commitment</Text>
-                      <View style={styles.commitmentCard}>
-                        <Text style={styles.commitmentParagraph}>
-                          I{" "}
-                          {signupName.trim() ||
-                            "_______________________________"}
-                          , voluntarily and freely commit myself to be a member
-                          of the NVC Foundation, Inc. I believe in the
-                          foundation's ideals, objectives and directions which
-                          are aimed to fight hunger and poverty by providing
-                          nutrition, access to quality education for children
-                          and livelihood opportunities for the poor.
-                        </Text>
-                        <Text style={styles.commitmentParagraph}>
-                          As a full pledged member, I have read the NVC's
-                          volunteers manual and I commit:
-                        </Text>
-                        <Text style={styles.commitmentBullet}>
-                          - To actively participate in the Foundation's projects
-                          and activities.
-                        </Text>
-                        <Text style={styles.commitmentBullet}>
-                          - To willingly work towards positive and peaceful
-                          change.
-                        </Text>
-                        <Text style={styles.commitmentBullet}>
-                          - To refrain from using one's personal participation
-                          in NVC, or using NVC's collective activities, for
-                          partisan politics, whether it be for personal
-                          advantage or endorsement of any politician or
-                          political party.
-                        </Text>
-                        <Text style={styles.commitmentBullet}>
-                          - To insure that my personal interests do not conflict
-                          with those of NVC's.
-                        </Text>
-                      </View>
-
-                      <TouchableOpacity
-                        style={styles.commitmentAcceptanceRow}
-                        onPress={() =>
-                          setSignupAcceptedCommitment((current) => !current)
-                        }
-                        disabled={signupLoading}
-                        activeOpacity={0.8}
-                      >
-                        <MaterialIcons
-                          name={
-                            signupAcceptedCommitment
-                              ? "check-box"
-                              : "check-box-outline-blank"
-                          }
-                          size={22}
-                          color={
-                            signupAcceptedCommitment ? "#166534" : "#64748b"
-                          }
-                        />
-                        <Text style={styles.commitmentAcceptanceText}>
-                          I have read and accept the NVC volunteer commitment.
-                        </Text>
-                      </TouchableOpacity>
                     </>
                   )}
-                </ScrollView>
-              )}
-
-              {signupStep === "role" ? (
-                <View style={styles.modalActions}>
-                  <TouchableOpacity
-                    style={styles.modalSecondaryButton}
-                    onPress={closeSignupModal}
-                  >
-                    <Text style={styles.modalSecondaryText}>Cancel</Text>
-                  </TouchableOpacity>
-                </View>
-              ) : (
-                <View style={styles.modalActions}>
-                  <TouchableOpacity
-                    style={styles.modalSecondaryButton}
-                    onPress={() => {
-                      if (signupRole === "admin") {
-                        closeSignupModal();
-                      } else {
-                        setSignupStep("role");
-                      }
-                    }}
-                    disabled={signupLoading}
-                  >
-                    <Text style={styles.modalSecondaryText}>
-                      {signupRole === "admin" ? "Cancel" : "Back"}
-                    </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[
-                      styles.modalPrimaryButton,
-                      (signupLoading || !signupEmailVerified) && styles.buttonDisabled,
-                    ]}
-                    onPress={handleSignup}
-                    disabled={signupLoading || !signupEmailVerified}
-                  >
-                    {signupLoading ? (
-                      <ActivityIndicator color="#fff" />
-                    ) : (
-                      <Text style={styles.modalPrimaryText}>
-                        {signupRole === "admin"
-                          ? "Create Admin Account"
-                          : signupRole === "partner"
-                            ? "Submit Application"
-                            : "Create Volunteer Account"}
-                      </Text>
-                    )}
-                  </TouchableOpacity>
-                </View>
+                </>
               )}
             </View>
           </View>
@@ -2755,7 +2921,7 @@ export default function LoginScreen() {
                           newDate.setFullYear(year);
                           setSelectedDate(newDate);
                           setShowYearPicker(false);
-                          setShowDatePicker(true);
+                          setShowMonthPicker(true);
                         }}
                       >
                         <Text
@@ -2782,38 +2948,139 @@ export default function LoginScreen() {
             </Modal>
           )}
 
-          {/* Date Picker Modal */}
-          {showDatePicker && (
-            <DateTimePicker
-              value={selectedDate}
-              mode="date"
-              display={getPlatformOS() === "ios" ? "spinner" : "default"}
-              onChange={(event: unknown, date: Date | undefined) => {
-                if (getPlatformOS() === "android") {
-                  setShowDatePicker(false);
-                }
-                if (date) {
-                  setSelectedDate(date);
-                  const year = date.getFullYear();
-                  const month = String(date.getMonth() + 1).padStart(2, "0");
-                  const day = String(date.getDate()).padStart(2, "0");
-                  updateSignupVolunteerSheet(
-                    "dateOfBirth",
-                    `${year}-${month}-${day}`,
-                  );
-                }
-              }}
-              maximumDate={new Date()}
-            />
+          {/* Month Picker Modal */}
+          {showMonthPicker && (
+            <Modal
+              visible={showMonthPicker}
+              transparent
+              animationType="fade"
+              onRequestClose={() => setShowMonthPicker(false)}
+            >
+              <View style={styles.yearPickerOverlay}>
+                <View style={styles.yearPickerModal}>
+                  <View style={styles.yearPickerHeader}>
+                    <Text style={styles.yearPickerTitle}>
+                      Select Birth Month
+                    </Text>
+                    <TouchableOpacity onPress={() => setShowMonthPicker(false)}>
+                      <MaterialIcons name="close" size={24} color="#666" />
+                    </TouchableOpacity>
+                  </View>
+
+                  <ScrollView style={styles.yearPickerList}>
+                    {[
+                      "January",
+                      "February",
+                      "March",
+                      "April",
+                      "May",
+                      "June",
+                      "July",
+                      "August",
+                      "September",
+                      "October",
+                      "November",
+                      "December",
+                    ].map((monthName, index) => (
+                      <TouchableOpacity
+                        key={monthName}
+                        style={[
+                          styles.yearPickerItem,
+                          selectedDate.getMonth() === index &&
+                            styles.yearPickerItemSelected,
+                        ]}
+                        onPress={() => {
+                          const nextDate = new Date(selectedDate);
+                          nextDate.setMonth(index);
+                          setSelectedDate(nextDate);
+                          setShowMonthPicker(false);
+                          setShowDayPicker(true);
+                        }}
+                      >
+                        <Text
+                          style={[
+                            styles.yearPickerItemText,
+                            selectedDate.getMonth() === index &&
+                              styles.yearPickerItemTextSelected,
+                          ]}
+                        >
+                          {monthName}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+
+                  <TouchableOpacity
+                    style={styles.yearPickerCancel}
+                    onPress={() => setShowMonthPicker(false)}
+                  >
+                    <Text style={styles.yearPickerCancelText}>Cancel</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </Modal>
           )}
 
-          {/* iOS Date Picker Close Button */}
-          {getPlatformOS() === "ios" && showDatePicker && (
-            <View style={styles.iosDatePickerActions}>
-              <TouchableOpacity onPress={() => setShowDatePicker(false)}>
-                <Text style={styles.iosDatePickerButton}>Done</Text>
-              </TouchableOpacity>
-            </View>
+          {/* Day Picker Modal */}
+          {showDayPicker && (
+            <Modal
+              visible={showDayPicker}
+              transparent
+              animationType="fade"
+              onRequestClose={() => setShowDayPicker(false)}
+            >
+              <View style={styles.yearPickerOverlay}>
+                <View style={styles.yearPickerModal}>
+                  <View style={styles.yearPickerHeader}>
+                    <Text style={styles.yearPickerTitle}>Select Birth Day</Text>
+                    <TouchableOpacity onPress={() => setShowDayPicker(false)}>
+                      <MaterialIcons name="close" size={24} color="#666" />
+                    </TouchableOpacity>
+                  </View>
+
+                  <ScrollView style={styles.yearPickerList}>
+                    {Array.from(
+                      { length: new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 0).getDate() },
+                      (_, i) => i + 1,
+                    ).map((day) => (
+                      <TouchableOpacity
+                        key={day}
+                        style={[
+                          styles.yearPickerItem,
+                          selectedDay === day && styles.yearPickerItemSelected,
+                        ]}
+                        onPress={() => {
+                          const nextDate = new Date(selectedDate);
+                          nextDate.setDate(day);
+                          setSelectedDate(nextDate);
+                          setShowDayPicker(false);
+                          const year = nextDate.getFullYear();
+                          const month = String(nextDate.getMonth() + 1).padStart(2, "0");
+                          const dayText = String(nextDate.getDate()).padStart(2, "0");
+                          updateSignupVolunteerSheet("dateOfBirth", `${year}-${month}-${dayText}`);
+                        }}
+                      >
+                        <Text
+                          style={[
+                            styles.yearPickerItemText,
+                            selectedDay === day && styles.yearPickerItemTextSelected,
+                          ]}
+                        >
+                          {day}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+
+                  <TouchableOpacity
+                    style={styles.yearPickerCancel}
+                    onPress={() => setShowDayPicker(false)}
+                  >
+                    <Text style={styles.yearPickerCancelText}>Cancel</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </Modal>
           )}
         </Modal>
       ) : null}
@@ -2888,6 +3155,31 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     letterSpacing: 1,
     marginBottom: 16,
+  },
+  webHeroHeadingOriginal: {
+    color: "#ffffff",
+    fontSize: 42,
+    fontWeight: "900",
+    lineHeight: 52,
+    marginBottom: 16,
+    maxWidth: 620,
+    textShadowColor: "rgba(0, 0, 0, 0.45)",
+    textShadowOffset: { width: 0, height: 4 },
+    textShadowRadius: 12,
+    fontFamily: "'DM Sans', sans-serif",
+    letterSpacing: -0.5,
+  },
+  webHeroSubHeadingOriginal: {
+    color: "#ecfdf5",
+    fontSize: 20,
+    fontWeight: "600",
+    lineHeight: 32,
+    maxWidth: 580,
+    textShadowColor: "rgba(0, 0, 0, 0.35)",
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 8,
+    fontFamily: "'DM Sans', sans-serif",
+    letterSpacing: 0.2,
   },
   webHeroHeading: {
     color: "#fff",
@@ -3009,11 +3301,374 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#0f172a",
     marginBottom: 4,
+    fontFamily: "'Nunito', sans-serif",
   },
   webAccessNoticeText: {
     fontSize: 13,
     lineHeight: 20,
     color: "#475569",
+    fontFamily: "'Nunito', sans-serif",
+  },
+  mobilePortalContainer: {
+    width: "100%",
+    maxWidth: 860,
+    alignSelf: "center",
+    paddingHorizontal: 8,
+    paddingTop: 4,
+    paddingBottom: 20,
+  },
+  mobileTopBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 12,
+    marginBottom: 24,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f1f5f9",
+    width: "100%",
+  },
+  mobileTopBrand: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  mobileBrandLogoBox: {
+    width: 28,
+    height: 28,
+    borderRadius: 7,
+    backgroundColor: "#0f172a",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  mobileBrandLogoLetter: {
+    color: "#ffffff",
+    fontSize: 15,
+    fontWeight: "900",
+    fontFamily: "'Nunito', sans-serif",
+  },
+  mobileBrandTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#0f172a",
+    fontFamily: "'Nunito', sans-serif",
+  },
+  mobileTopHelpRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  mobileTopHelpText: {
+    fontSize: 12,
+    color: "#64748b",
+    fontFamily: "'Nunito', sans-serif",
+  },
+  portalHeroHeader: {
+    alignItems: "center",
+    marginBottom: 28,
+    paddingHorizontal: 8,
+  },
+  portalEyebrow: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: "#166534",
+    letterSpacing: 1.5,
+    textTransform: "uppercase",
+    marginBottom: 8,
+    fontFamily: "'Nunito', sans-serif",
+  },
+  portalHeadline: {
+    fontSize: 28,
+    fontWeight: "900",
+    color: "#0f172a",
+    textAlign: "center",
+    marginBottom: 8,
+    fontFamily: "'Nunito', sans-serif",
+    letterSpacing: -0.5,
+  },
+  portalSubtext: {
+    fontSize: 14,
+    lineHeight: 22,
+    color: "#64748b",
+    textAlign: "center",
+    maxWidth: 520,
+    fontFamily: "'Nunito', sans-serif",
+  },
+  portalGridContainer: {
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: 18,
+    marginBottom: 24,
+  },
+  portalGridContainerStacked: {
+    flexDirection: "column",
+  },
+  portalTileCard: {
+    flex: 1,
+    maxWidth: 380,
+    backgroundColor: "#ffffff",
+    borderRadius: 20,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    shadowColor: "#0f172a",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.04,
+    shadowRadius: 12,
+    elevation: 2,
+  },
+  volunteerBadgeIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: "#ffe4e6",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 16,
+  },
+  partnerBadgeIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: "#eff6ff",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 16,
+  },
+  portalTileTitle: {
+    fontSize: 19,
+    fontWeight: "800",
+    color: "#0f172a",
+    marginBottom: 6,
+    fontFamily: "'Nunito', sans-serif",
+  },
+  portalTileDescription: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: "#64748b",
+    marginBottom: 20,
+    minHeight: 40,
+    fontFamily: "'Nunito', sans-serif",
+  },
+  portalTileButton: {
+    backgroundColor: "#166534",
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  portalTileButtonText: {
+    color: "#ffffff",
+    fontSize: 13,
+    fontWeight: "700",
+    fontFamily: "'Nunito', sans-serif",
+  },
+  portalSignupFooter: {
+    alignSelf: "center",
+    paddingVertical: 10,
+    marginBottom: 16,
+  },
+  portalSignupFooterText: {
+    color: "#166534",
+    fontSize: 14,
+    fontWeight: "700",
+    fontFamily: "'Nunito', sans-serif",
+    textAlign: "center",
+  },
+  mobileLoginContainer: {
+    width: "100%",
+    maxWidth: 440,
+    alignSelf: "center",
+    paddingHorizontal: 8,
+    paddingTop: 4,
+    paddingBottom: 24,
+  },
+  loginBackNavButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    alignSelf: "flex-start",
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: "#f0fdf4",
+    borderWidth: 1,
+    borderColor: "#dcfce7",
+    marginBottom: 20,
+  },
+  loginBackNavText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#166534",
+    fontFamily: "'Nunito', sans-serif",
+  },
+  loginCenterHeader: {
+    alignItems: "center",
+    marginBottom: 22,
+  },
+  loginTopIconSquare: {
+    width: 52,
+    height: 52,
+    borderRadius: 14,
+    backgroundColor: "#166534",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
+    shadowColor: "#166534",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  loginHeaderTitle: {
+    fontSize: 26,
+    fontWeight: "900",
+    color: "#166534",
+    marginBottom: 4,
+    fontFamily: "'Nunito', sans-serif",
+  },
+  loginHeaderSubtitle: {
+    fontSize: 14,
+    color: "#64748b",
+    fontFamily: "'Nunito', sans-serif",
+  },
+  loginBoxCard: {
+    backgroundColor: "#ffffff",
+    borderRadius: 20,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    shadowColor: "#0f172a",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.05,
+    shadowRadius: 14,
+    elevation: 2,
+    marginBottom: 16,
+  },
+  googleLoginButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    height: 48,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    backgroundColor: "#ffffff",
+  },
+  googleGIcon: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: "#ea4335",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  googleGText: {
+    color: "#ffffff",
+    fontSize: 12,
+    fontWeight: "900",
+    fontFamily: "'Nunito', sans-serif",
+  },
+  googleLoginButtonText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#166534",
+    fontFamily: "'Nunito', sans-serif",
+  },
+  loginOrDivider: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginVertical: 18,
+    gap: 12,
+  },
+  loginDividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: "#e2e8f0",
+  },
+  loginDividerText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#94a3b8",
+    fontFamily: "'Nunito', sans-serif",
+  },
+  inputFieldGroup: {
+    marginBottom: 16,
+  },
+  inputFieldLabel: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#166534",
+    marginBottom: 6,
+    fontFamily: "'Nunito', sans-serif",
+  },
+  passwordFieldHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 6,
+  },
+  forgotPasswordLinkText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#166534",
+    fontFamily: "'Nunito', sans-serif",
+  },
+  inputBoxWithIcon: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    borderRadius: 10,
+    backgroundColor: "#ffffff",
+    paddingHorizontal: 12,
+    height: 48,
+  },
+  inputLeftIcon: {
+    marginRight: 8,
+  },
+  cleanTextInput: {
+    flex: 1,
+    height: "100%",
+    fontSize: 14,
+    color: "#0f172a",
+    fontFamily: "'Nunito', sans-serif",
+  },
+  loginSubmitButton: {
+    backgroundColor: "#166534",
+    borderRadius: 10,
+    height: 48,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 8,
+  },
+  loginSubmitButtonInactive: {
+    backgroundColor: "#a7f3d0",
+    opacity: 0.85,
+  },
+  loginSubmitButtonText: {
+    color: "#ffffff",
+    fontSize: 14,
+    fontWeight: "700",
+    fontFamily: "'Nunito', sans-serif",
+  },
+  loginBottomPromptRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 20,
+  },
+  loginBottomPromptText: {
+    fontSize: 13,
+    color: "#64748b",
+    fontFamily: "'Nunito', sans-serif",
+  },
+  loginBottomPromptLink: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#166534",
+    fontFamily: "'Nunito', sans-serif",
   },
   selectionDashboard: {
     gap: 14,
@@ -3024,12 +3679,14 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#0f172a",
     textAlign: "center",
+    fontFamily: "'Nunito', sans-serif",
   },
   selectionSubtitle: {
     fontSize: 14,
     lineHeight: 22,
     color: "#475569",
     textAlign: "center",
+    fontFamily: "'Nunito', sans-serif",
   },
   selectionCard: {
     flexDirection: "row",
@@ -3141,77 +3798,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     minHeight: 54,
   },
-  signupOtpBox: {
-    backgroundColor: "#f8fafc",
-    borderWidth: 1,
-    borderColor: "#dbeafe",
-    borderRadius: 12,
-    padding: 12,
-    marginTop: -4,
-    marginBottom: 15,
-  },
-  signupOtpHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 10,
-    marginBottom: 10,
-  },
-  signupOtpTitle: {
-    flex: 1,
-    fontSize: 13,
-    fontWeight: "800",
-    color: "#334155",
-  },
-  signupOtpButton: {
-    backgroundColor: "#16a34a",
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    minHeight: 38,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  signupOtpButtonText: {
-    color: "#fff",
-    fontSize: 13,
-    fontWeight: "800",
-  },
-  signupOtpRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-  signupOtpInput: {
-    flex: 1,
-    marginBottom: 0,
-    textAlign: "center",
-    letterSpacing: 3,
-    fontWeight: "800",
-  },
-  signupOtpVerifyButton: {
-    borderWidth: 1,
-    borderColor: "#16a34a",
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    minHeight: 48,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#ecfdf5",
-  },
-  signupOtpVerifyText: {
-    color: "#166534",
-    fontSize: 13,
-    fontWeight: "800",
-  },
-  signupOtpMessage: {
-    marginTop: 8,
-    fontSize: 12,
-    color: "#475569",
-  },
-  signupOtpMessageSuccess: {
-    color: "#166534",
-    fontWeight: "700",
-  },
   compactInput: {
     fontSize: 15,
     paddingHorizontal: 14,
@@ -3219,7 +3805,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   button: {
-    backgroundColor: "#4CAF50",
+    backgroundColor: "#166534",
     borderRadius: 12,
     paddingVertical: 15,
     alignItems: "center",
@@ -3601,6 +4187,189 @@ const styles = StyleSheet.create({
     color: "#666",
     marginTop: 16,
     textAlign: "center",
+  },
+  submissionModalOverlay: {
+    flex: 1,
+    width: "100%",
+    height: "100%",
+    backgroundColor: "rgba(15, 23, 42, 0.72)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+    zIndex: 99999,
+  },
+  submissionLoadingOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(15, 23, 42, 0.72)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+    borderRadius: 16,
+    zIndex: 99999,
+  },
+  submissionLoadingCard: {
+    backgroundColor: "#ffffff",
+    borderRadius: 20,
+    paddingVertical: 28,
+    paddingHorizontal: 24,
+    alignItems: "center",
+    maxWidth: 440,
+    width: "100%",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.25,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  submissionLoadingSpinnerWrap: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: "#dcfce7",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 16,
+  },
+  submissionLoadingTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#0f172a",
+    textAlign: "center",
+    marginBottom: 8,
+  },
+  submissionLoadingSubtitle: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: "#475569",
+    textAlign: "center",
+    marginBottom: 8,
+  },
+  submissionSuccessBadgeWrap: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: "#dcfce7",
+    borderWidth: 3,
+    borderColor: "#86efac",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
+  },
+  submissionSuccessHeadline: {
+    fontSize: 22,
+    fontWeight: "800",
+    color: "#0f172a",
+    letterSpacing: -0.5,
+    textAlign: "center",
+    marginBottom: 6,
+  },
+  submissionRoleTag: {
+    backgroundColor: "#f0fdf4",
+    borderWidth: 1,
+    borderColor: "#bbf7d0",
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 999,
+    marginBottom: 14,
+  },
+  submissionRoleTagText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#166534",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  confirmationSummaryCard: {
+    width: "100%",
+    backgroundColor: "#f8fafc",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    marginBottom: 14,
+  },
+  confirmationSummaryRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f1f5f9",
+    gap: 8,
+  },
+  confirmationSummaryLabel: {
+    fontSize: 12,
+    color: "#64748b",
+    fontWeight: "600",
+  },
+  confirmationSummaryValue: {
+    flex: 1,
+    fontSize: 13,
+    color: "#0f172a",
+    fontWeight: "700",
+    textAlign: "right",
+  },
+  confirmationStatusPill: {
+    backgroundColor: "#fef3c7",
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 999,
+  },
+  confirmationStatusPillText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#92400e",
+  },
+  submissionConfirmationNote: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: "#475569",
+    textAlign: "center",
+    marginBottom: 18,
+    paddingHorizontal: 8,
+  },
+  submissionSuccessButton: {
+    backgroundColor: "#166534",
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "100%",
+    shadowColor: "#166534",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  submissionSuccessButtonText: {
+    color: "#ffffff",
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  validationErrorBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#fef2f2",
+    borderWidth: 1,
+    borderColor: "#fecaca",
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginBottom: 14,
+    gap: 8,
+  },
+  validationErrorBannerText: {
+    flex: 1,
+    fontSize: 12,
+    color: "#b91c1c",
+    fontWeight: "600",
   },
   textArea: {
     minHeight: 80,

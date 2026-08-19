@@ -2,12 +2,90 @@ import { ImageSourcePropType } from 'react-native';
 import { Project } from '../models/types';
 import { getProjectStatusColor } from './projectStatus';
 import { isImageMediaUri } from './media';
+import artisansOfHopeImage from '../assets/programs/artisans-of-hope.jpg';
+import educationImage from '../assets/programs/education.jpg';
+import farmToForkImage from '../assets/programs/farm-to-fork.jpg';
+import growingHopeImage from '../assets/programs/growing-hope.jpg';
+import livelihoodImage from '../assets/programs/livelihood.jpg';
+import lovebagsImage from '../assets/programs/lovebags.jpg';
+import mingoReliefImage from '../assets/programs/mingo-relief.jpg';
+import nutritionImage from '../assets/programs/nutrition.jpg';
+import peterProjectImage from '../assets/programs/peter-project.jpg';
+import projectJosephImage from '../assets/programs/project-joseph.jpg';
+import schoolSupportImage from '../assets/programs/school-support.jpg';
 
 const PROGRAM_IMAGE_BY_CATEGORY: Partial<Record<Project['category'], ImageSourcePropType>> = {
-  Nutrition: require('../assets/programs/nutrition.jpg'),
-  Education: require('../assets/programs/education.jpg'),
-  Livelihood: require('../assets/programs/livelihood.jpg'),
+  Nutrition: nutritionImage,
+  Education: educationImage,
+  Livelihood: livelihoodImage,
 };
+
+const PROGRAM_PHOTO_BY_TITLE: Record<string, ImageSourcePropType> = {
+  'Farm to Fork Program': farmToForkImage,
+  'Mingo for Nutritional Support': nutritionImage,
+  'Mingo for Emergency Relief': mingoReliefImage,
+  LoveBags: lovebagsImage,
+  'School Support': schoolSupportImage,
+  'Artisans of Hope': artisansOfHopeImage,
+  'Project Joseph': projectJosephImage,
+  'Growing Hope': growingHopeImage,
+  'Peter Project': peterProjectImage,
+};
+
+const PROGRAM_PHOTO_MATCHERS: Array<{
+  matches: (project: Project, normalizedTitle: string) => boolean;
+  source: ImageSourcePropType;
+}> = [
+  {
+    matches: (_project, normalizedTitle) => normalizedTitle.includes('farm to fork'),
+    source: farmToForkImage,
+  },
+  {
+    matches: (_project, normalizedTitle) =>
+      normalizedTitle.includes('lovebag') || normalizedTitle.includes('school bag'),
+    source: lovebagsImage,
+  },
+  {
+    matches: (_project, normalizedTitle) => normalizedTitle.includes('school'),
+    source: schoolSupportImage,
+  },
+  {
+    matches: (_project, normalizedTitle) => normalizedTitle.includes('artisans'),
+    source: artisansOfHopeImage,
+  },
+  {
+    matches: (_project, normalizedTitle) =>
+      normalizedTitle.includes('joseph') || normalizedTitle.includes('sewing'),
+    source: projectJosephImage,
+  },
+  {
+    matches: (_project, normalizedTitle) =>
+      normalizedTitle.includes('growing hope') || normalizedTitle.includes('garden'),
+    source: growingHopeImage,
+  },
+  {
+    matches: (_project, normalizedTitle) => normalizedTitle.includes('peter'),
+    source: peterProjectImage,
+  },
+  {
+    matches: (project, normalizedTitle) =>
+      normalizedTitle.includes('mingo') || normalizedTitle.includes('masiglang') || project.category === 'Nutrition',
+    source: nutritionImage,
+  },
+];
+
+function getProgramPhotoSource(project: Project): ImageSourcePropType | undefined {
+  if (!project || !project.title) {
+    return undefined;
+  }
+
+  if (PROGRAM_PHOTO_BY_TITLE[project.title]) {
+    return PROGRAM_PHOTO_BY_TITLE[project.title];
+  }
+
+  const normalizedTitle = project.title.trim().toLowerCase();
+  return PROGRAM_PHOTO_MATCHERS.find((entry) => entry.matches(project, normalizedTitle))?.source;
+}
 
 function getProjectImageSources(project: Project): ImageSourcePropType[] {
   if (!project) {
@@ -27,6 +105,12 @@ function getProjectImageSources(project: Project): ImageSourcePropType[] {
   if (isProposalCreatedProject && !hasUploadedProjectImage) {
     return imageSources;
   }
+  const programPhotoSource = getProgramPhotoSource(project);
+
+  if (programPhotoSource) {
+    imageSources.push(programPhotoSource);
+  }
+
   if (project.programModule && project.programModule in PROGRAM_IMAGE_BY_CATEGORY) {
     imageSources.push(
       PROGRAM_IMAGE_BY_CATEGORY[project.programModule as Project['category']] as ImageSourcePropType

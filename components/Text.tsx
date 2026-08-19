@@ -19,13 +19,8 @@ export const Text: React.FC<NunitoTextProps> = ({
 }) => {
   const fontStyle = StyleSheet.create({
     text: {
-      fontFamily: Platform.select({
-        web: GLOBAL_FONT_FAMILY,
-        default: weight ? FONT_WEIGHTS[weight] : 'Nunito-Regular',
-      }),
-      ...(Platform.OS === 'web' && weight && {
-        fontWeight: FONT_WEIGHTS[weight] as any,
-      }),
+      fontFamily: GLOBAL_FONT_FAMILY,
+      fontWeight: FONT_WEIGHTS[weight] as any,
     },
   });
 

@@ -497,7 +497,7 @@ export default function VolunteerProjectsScreen({ navigation }: { navigation: an
     const totalSlotsTaken = currentVolunteers + pendingJoinRequests + approvedJoinRecords;
     const isFull = volunteersNeeded > 0 && totalSlotsTaken >= volunteersNeeded;
 
-    const isDisabled = isJoined || isEnded || isFull || isLoading;
+    const isDisabled = isJoined || isPending || isEnded || isFull || isLoading;
 
     return (
       <TouchableOpacity

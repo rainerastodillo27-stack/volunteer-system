@@ -4873,18 +4873,21 @@ class GcalSyncNotifyPayload(BaseModel):
     user_name: str
     synced_count: int
     synced_at: str
+    schedule_type: str = "volunteer"
+    calendar_url: str = "https://calendar.google.com/calendar/u/0/r"
 
 
 @app.post("/notify/gcal-sync")
 async def notify_gcal_sync(payload: GcalSyncNotifyPayload) -> dict[str, Any]:
     """Sends a confirmation email to the user after a successful Google Calendar sync."""
     subject = "Your NVC Calendar Has Been Synced to Google Calendar"
+    schedule_label = "partner project schedule" if payload.schedule_type == "partner" else "volunteer event schedule"
     text_body = (
         f"Hi {payload.user_name},\n\n"
-        f"Your NVC volunteer schedule has been successfully synced to your Google Calendar.\n\n"
-        f"Events synced: {payload.synced_count}\n"
+        f"Your NVC {schedule_label} has been successfully synced to your Google Calendar.\n\n"
+        f"Schedule items synced: {payload.synced_count}\n"
         f"Synced at: {payload.synced_at}\n\n"
-        f"You can now view your upcoming volunteer events directly in Google Calendar.\n\n"
+        f"Open your Google Calendar here: {payload.calendar_url}\n\n"
         f"-- NVC Volunteer System"
     )
     html_body = f"""
@@ -4895,12 +4898,16 @@ async def notify_gcal_sync(payload: GcalSyncNotifyPayload) -> dict[str, Any]:
       </div>
       <div style="padding:28px 32px;background:#fff;">
         <p style="font-size:16px;color:#0f172a;">Hi <strong>{payload.user_name}</strong>,</p>
-        <p style="color:#475569;line-height:1.6;">Your NVC volunteer schedule has been successfully synced to your Google Calendar.</p>
+        <p style="color:#475569;line-height:1.6;">Your NVC {schedule_label} has been successfully synced to your Google Calendar.</p>
         <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:16px 20px;margin:20px 0;">
           <p style="margin:0 0 8px;font-size:13px;color:#166534;font-weight:bold;">Sync Summary</p>
-          <p style="margin:4px 0;color:#14532d;font-size:15px;"><strong>{payload.synced_count}</strong> events added to Google Calendar</p>
+          <p style="margin:4px 0;color:#14532d;font-size:15px;"><strong>{payload.synced_count}</strong> schedule items added or updated in Google Calendar</p>
           <p style="margin:4px 0;color:#14532d;font-size:14px;">Synced at: {payload.synced_at}</p>
         </div>
+        <p style="color:#475569;line-height:1.6;">Open Google Calendar to view your updated NVC schedule.</p>
+        <p style="margin:20px 0;">
+          <a href="{payload.calendar_url}" style="display:inline-block;background:#166534;color:#ffffff;text-decoration:none;font-weight:bold;border-radius:8px;padding:12px 18px;">Open Google Calendar</a>
+        </p>
       </div>
       <div style="background:#f8fafc;padding:16px 32px;border-top:1px solid #e2e8f0;text-align:center;">
         <p style="color:#94a3b8;font-size:12px;margin:0;">NVC Volunteer Management System</p>

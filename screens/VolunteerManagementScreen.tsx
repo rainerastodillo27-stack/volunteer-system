@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
-import { Volunteer, Project, VolunteerProjectMatch, VolunteerTimeLog } from '../models/types';
+import { Volunteer, Project, VolunteerProjectMatch, VolunteerTimeLog, User, UserType, NVCSector, VolunteerAffiliation } from '../models/types';
 import {
   assignVolunteerToProject,
   getAllVolunteers,
@@ -24,12 +24,16 @@ import {
   getVolunteerProjectMatches,
   saveVolunteer,
   subscribeToStorageChanges,
+  approveUser,
+  rejectUser,
+  getUser,
 } from '../models/storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../contexts/AuthContext';
 import InlineLoadError from '../components/InlineLoadError';
 import { getProjectDisplayStatus } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
+import { getAttachmentLabel, isImageMediaUri, openAttachmentUri } from '../utils/media';
 
 // Lets admins inspect volunteers, update availability, and assign projects.
 export default function VolunteerManagementScreen({ navigation, route }: any) {
@@ -50,6 +54,10 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   const [daysPerWeek, setDaysPerWeek] = useState('3');
   const [hoursPerWeek, setHoursPerWeek] = useState('12');
   const [availableDays, setAvailableDays] = useState<string[]>(['Monday', 'Wednesday', 'Saturday']);
+  const [statusFilter, setStatusFilter] = useState<'All' | 'Pending' | 'Approved'>('All');
+  const [selectedUser, setSelectedUser] = useState<User | null>(null);
+  const [showRejectModal, setShowRejectModal] = useState(false);
+  const [rejectionReason, setRejectionReason] = useState('');
 
   useEffect(() => {
     if (navigation) {
@@ -101,7 +109,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
 
     // Select the volunteer and load their details
     setSelectedVolunteer(targetVolunteer);
-    void loadSelectedVolunteerDetails(targetVolunteer.id);
+    void loadSelectedVolunteerDetails(targetVolunteer.id, targetVolunteer.userId);
     setView('detail');
     // Clear the param after processing
     navigation.setParams({ volunteerId: undefined });
@@ -121,7 +129,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
           void loadTimeLogs();
         }, 100);
         if (selectedVolunteer) {
-          void loadSelectedVolunteerDetails(selectedVolunteer.id);
+          void loadSelectedVolunteerDetails(selectedVolunteer.id, selectedVolunteer.userId);
         }
       }
     );
@@ -179,9 +187,8 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     }
   };
 
-  // Loads match history and completed projects for the selected volunteer.
-  const loadSelectedVolunteerDetails = async (volunteerId: string) => {
-    // Load matches first for immediate UI; fetch completed project ids deferred
+  // Loads match history, completed projects, and linked user account for the selected volunteer.
+  const loadSelectedVolunteerDetails = async (volunteerId: string, linkedUserId?: string) => {
     try {
       const matches = await getVolunteerProjectMatches(volunteerId);
       setVolunteerMatches(matches);
@@ -196,6 +203,17 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
         setSelectedVolunteerCompletedProjectIds(completedProjectIds);
       } catch {}
     }, 50);
+
+    try {
+      if (linkedUserId) {
+        const linkedUser = await getUser(linkedUserId);
+        setSelectedUser(linkedUser);
+      } else {
+        setSelectedUser(null);
+      }
+    } catch {
+      setSelectedUser(null);
+    }
   };
 
   // Opens the detail view for the chosen volunteer.
@@ -206,13 +224,94 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     }
 
     setSelectedVolunteer(volunteer);
-    void loadSelectedVolunteerDetails(volunteer.id);
+    void loadSelectedVolunteerDetails(volunteer.id, volunteer.userId);
     setView('detail');
   };
 
   // Closes the availability editor after save or cancel.
   const closeAvailabilityModal = () => {
     setShowAvailabilityModal(false);
+  };
+
+  const closeRejectModal = () => {
+    setShowRejectModal(false);
+    setRejectionReason('');
+  };
+
+  const handleApproveVolunteer = async () => {
+    if (!isAdmin) {
+      Alert.alert('Access Restricted', 'Only admin accounts can approve volunteers.');
+      return;
+    }
+    if (!selectedVolunteer) return;
+    const adminId = user?.id || '';
+    const previousVolunteers = volunteers;
+    const previousSelected = selectedVolunteer;
+    try {
+      const updated = {
+        ...selectedVolunteer,
+        registrationStatus: 'Approved' as const,
+        reviewedBy: adminId,
+        reviewedAt: new Date().toISOString(),
+      };
+      setVolunteers(current =>
+        current.map(v => (v.id === updated.id ? updated : v))
+      );
+      setSelectedVolunteer(updated);
+      setActionNotice('Volunteer application approved.');
+      if (selectedVolunteer.userId) {
+        await approveUser(selectedVolunteer.userId, adminId);
+      } else {
+        await saveVolunteer(updated);
+      }
+      void loadVolunteers();
+    } catch (error) {
+      setVolunteers(previousVolunteers);
+      setSelectedVolunteer(previousSelected);
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to approve volunteer application.')
+      );
+    }
+  };
+
+  const handleRejectVolunteer = async () => {
+    if (!isAdmin) {
+      Alert.alert('Access Restricted', 'Only admin accounts can reject volunteers.');
+      return;
+    }
+    if (!selectedVolunteer) return;
+    const adminId = user?.id || '';
+    const previousVolunteers = volunteers;
+    const previousSelected = selectedVolunteer;
+    const reason = rejectionReason.trim() || 'Application did not meet requirements.';
+    try {
+      const updated = {
+        ...selectedVolunteer,
+        registrationStatus: 'Rejected' as const,
+        reviewedBy: adminId,
+        reviewedAt: new Date().toISOString(),
+      };
+      setVolunteers(current =>
+        current.map(v => (v.id === updated.id ? updated : v))
+      );
+      setSelectedVolunteer(updated);
+      closeRejectModal();
+      setActionNotice('Volunteer application rejected.');
+      if (selectedVolunteer.userId) {
+        await rejectUser(selectedVolunteer.userId, reason, adminId);
+      } else {
+        await saveVolunteer(updated);
+      }
+      void loadVolunteers();
+    } catch (error) {
+      setVolunteers(previousVolunteers);
+      setSelectedVolunteer(previousSelected);
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to reject volunteer application.')
+      );
+    }
   };
 
   // Assigns the selected volunteer to an in-progress event.
@@ -245,7 +344,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
       setVolunteerMatches(currentMatches =>
         currentMatches.map(match => (match.id === optimisticMatch.id ? savedMatch : match))
       );
-      void loadSelectedVolunteerDetails(selectedVolunteer.id);
+      void loadSelectedVolunteerDetails(selectedVolunteer.id, selectedVolunteer.userId);
     } catch (error) {
       setVolunteerMatches(previousVolunteerMatches);
       Alert.alert(
@@ -441,10 +540,13 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
         .filter(match => match.status === 'Matched' || match.status === 'Completed')
         .map(match => match.projectId)
     );
-    const joinedProjects = projects.filter(p => p.isEvent && (p.joinedUserIds || []).includes(selectedVolunteer.userId));
+    const joinedProjects = projects.filter(p => p.isEvent && (p.joinedUserIds || []).includes(selectedVolunteer.id));
     const eventsFromJoined = new Set(joinedProjects.map(p => p.id));
     const allUniqueEvents = new Set([...eventsFromTimeLogs, ...eventsFromMatches, ...eventsFromJoined]);
     const eventsJoinedCount = allUniqueEvents.size;
+    const photoReportsCount = selectedVolunteerTimeLogs.filter(log =>
+      Boolean(log.attendancePhoto || log.completionPhoto || log.completionReport)
+    ).length;
     
     const completedProjects = selectedVolunteerCompletedProjectIds.map(projectId => {
       const project = projects.find(projectEntry => projectEntry.id === projectId);
@@ -455,6 +557,16 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
         isEvent: project?.isEvent,
       };
     });
+    const completedEventsCount = completedProjects.filter(projectEntry => Boolean(projectEntry.isEvent)).length;
+
+    const isApplicationPending = selectedVolunteer.registrationStatus === 'Pending';
+    const membershipSheet = selectedUser?.volunteerMembershipSheet;
+    const pillarsOfInterest = selectedUser?.pillarsOfInterest || [];
+    const userType: UserType | undefined = selectedUser?.userType;
+    const certificateUri = (membershipSheet?.certificationsOrTrainings || selectedVolunteer.certificationsOrTrainings || '').trim();
+    const availableDaysLabel = selectedVolunteer.availability?.availableDays?.length
+      ? selectedVolunteer.availability.availableDays.join(', ')
+      : '-';
 
     return (
       <View style={styles.container}>
@@ -462,7 +574,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
           <TouchableOpacity onPress={() => setView('list')}>
             <MaterialIcons name="arrow-back" size={24} color="#333" />
           </TouchableOpacity>
-          <Text style={styles.title}>Volunteer Profile</Text>
+          <Text style={styles.title}>{isApplicationPending ? 'Volunteer Application' : 'Volunteer Profile'}</Text>
           <View style={{ width: 24 }} />
         </View>
 
@@ -475,276 +587,576 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
           </View>
         ) : null}
 
-        <View style={styles.card}>
-          <View style={styles.avatarSection}>
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>{selectedVolunteer.name.charAt(0)}</Text>
-            </View>
-            <View>
-              <Text style={styles.volunteerName}>{selectedVolunteer.name}</Text>
-              <Text style={styles.volunteerEmail}>{selectedVolunteer.email}</Text>
-              <View
-                style={[
-                  styles.statusBadge,
-                  selectedVolunteer.engagementStatus === 'Busy'
-                    ? styles.statusBusy
-                    : styles.statusOpen,
-                ]}
-              >
-                <Text style={styles.statusBadgeText}>
-                  {selectedVolunteer.engagementStatus}
-                </Text>
-              </View>
-            </View>
-          </View>
-
-          <View style={styles.statsGrid}>
-            <View style={styles.stat}>
-              <MaterialIcons name="event" size={24} color="#4CAF50" />
-              <Text style={styles.statValue}>{eventsJoinedCount}</Text>
-              <Text style={styles.statLabel}>Events Joined</Text>
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Availability</Text>
-            <TouchableOpacity
-              style={styles.editButton}
-              onPress={() => {
-                setDaysPerWeek(selectedVolunteer.availability.daysPerWeek.toString());
-                setHoursPerWeek(selectedVolunteer.availability.hoursPerWeek.toString());
-                setAvailableDays([...selectedVolunteer.availability.availableDays]);
-                setShowAvailabilityModal(true);
-              }}
-            >
-              <MaterialIcons name="edit" size={16} color="#4CAF50" />
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.availabilityInfo}>
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Volunteer status:</Text>
-              <Text style={styles.infoValue}>{selectedVolunteer.engagementStatus}</Text>
-            </View>
-            <Text style={styles.availableDaysLabel}>Available on:</Text>
-            <View style={styles.daysContainer}>
-              {selectedVolunteer.availability.availableDays.map(day => (
-                <View key={day} style={styles.dayBadge}>
-                  <Text style={styles.dayBadgeText}>{day.substring(0, 3)}</Text>
-                </View>
-              ))}
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Skills</Text>
-          <View style={styles.skillsContainer}>
-            {selectedVolunteer.skills.map(skill => (
-              <View key={skill} style={styles.skillTag}>
-                <Text style={styles.skillTagText}>{skill}</Text>
-              </View>
-            ))}
-          </View>
-        </View>
-
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Time Log History</Text>
-            <Text style={styles.sectionSummary}>
-              {selectedVolunteerTimeLogs.length} total record{selectedVolunteerTimeLogs.length === 1 ? '' : 's'}
-            </Text>
-          </View>
-
-          {selectedVolunteerTimeLogs.length === 0 ? (
-            <Text style={styles.emptyText}>No time in or time out records yet</Text>
-          ) : (
-            selectedVolunteerTimeLogs.map(log => {
-              const linkedProject = projects.find(project => project.id === log.projectId);
-              const durationHours = getLogDurationHours(log);
-
-              return (
-                <View key={log.id} style={styles.timeLogCard}>
-                  <View style={styles.timeLogHeader}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.projectName}>
-                        {linkedProject?.title || 'Project'}
-                      </Text>
-                      <Text style={styles.projectCategory}>
-                        {linkedProject?.category || 'Volunteer activity'}
-                      </Text>
-                    </View>
-                    <View
-                      style={[
-                        styles.timeLogStatusBadge,
-                        log.timeOut ? styles.timeLogStatusCompleted : styles.timeLogStatusActive,
-                      ]}
-                    >
-                      <Text style={styles.timeLogStatusText}>
-                        {log.timeOut ? 'Timed Out' : 'Timed In'}
-                      </Text>
+        {isApplicationPending ? (
+          <>
+            <View style={styles.applicationCard}>
+              <View style={styles.applicationCardTopRow}>
+                <View style={[styles.applicationAvatarRow, { marginBottom: 0, flex: 1 }]}>
+                  <View style={styles.applicationAvatar}>
+                    <Text style={styles.applicationAvatarText}>{selectedVolunteer.name.charAt(0)}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.applicationName}>{selectedVolunteer.name}</Text>
+                    {selectedVolunteer.email ? (
+                      <Text style={styles.applicationEmail}>{selectedVolunteer.email}</Text>
+                    ) : null}
+                    {selectedVolunteer.phone ? (
+                      <Text style={styles.applicationPhone}>{selectedVolunteer.phone}</Text>
+                    ) : null}
+                    <View style={[styles.registrationBadge, styles.registrationBadgePending]}>
+                      <Text style={styles.registrationBadgeText}>Pending Review</Text>
                     </View>
                   </View>
+                </View>
 
-                  <Text style={styles.timeLogMeta}>Time In: {formatTimestamp(log.timeIn)}</Text>
-                  <Text style={styles.timeLogMeta}>
-                    {log.timeOut
-                      ? `Time Out: ${formatTimestamp(log.timeOut)}`
-                      : 'Time Out still pending'}
-                  </Text>
-                  <Text style={styles.timeLogMeta}>
-                    Hours Logged: {log.timeOut ? durationHours.toFixed(1) : '--'}
-                  </Text>
-                  {log.note ? (
-                    <Text style={styles.timeLogNote}>Note: {log.note}</Text>
-                  ) : null}
-                  {log.completionPhoto || log.completionReport ? (
-                    <>
-                      <Text style={styles.timeLogMeta}>
-                        Completion Proof: {log.completionPhoto ? 'Photo uploaded' : ''}
-                        {log.completionPhoto && log.completionReport ? ' and ' : ''}
-                        {log.completionReport ? 'Report submitted' : ''}
-                      </Text>
-                      {log.completionReport ? (
-                        <Text style={styles.timeLogProofText}>
-                          Report: {log.completionReport}
+                <View style={styles.applicationActionRow}>
+                  <TouchableOpacity
+                    style={[styles.reviewActionButton, styles.reviewApproveButton]}
+                    onPress={() => {
+                      if (Platform.OS === 'web') {
+                        const ok = window.confirm('Approve this volunteer application?');
+                        if (!ok) return;
+                        void handleApproveVolunteer();
+                      } else {
+                        Alert.alert(
+                          'Approve Application',
+                          'Approve this volunteer application?',
+                          [
+                            { text: 'Cancel', style: 'cancel' },
+                            { text: 'Approve', style: 'default', onPress: () => void handleApproveVolunteer() },
+                          ]
+                        );
+                      }
+                    }}
+                  >
+                    <MaterialIcons name="check-circle" size={18} color="#fff" />
+                    <Text style={styles.reviewActionButtonText}>Approve</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.reviewActionButton, styles.reviewRejectButton]}
+                    onPress={() => setShowRejectModal(true)}
+                  >
+                    <MaterialIcons name="cancel" size={18} color="#fff" />
+                    <Text style={styles.reviewActionButtonText}>Reject</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              <View style={styles.applicationCardDivider} />
+
+              <View style={styles.applicationCardMetaRow}>
+                <View style={styles.applicationCardMetaItem}>
+                  <MaterialIcons name="person" size={16} color="#64748b" />
+                  <View style={{ marginLeft: 8 }}>
+                    <Text style={styles.applicationInfoLabel}>User Type</Text>
+                    <Text style={styles.applicationInfoValue}>
+                      {userType || membershipSheet ? (userType || 'Adult') : 'Adult'}
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.applicationCardMetaItem}>
+                  <MaterialIcons name="calendar-month" size={16} color="#64748b" />
+                  <View style={{ marginLeft: 8 }}>
+                    <Text style={styles.applicationInfoLabel}>Submitted</Text>
+                    <Text style={styles.applicationInfoValue}>
+                      {format(new Date(selectedUser?.createdAt || selectedVolunteer.createdAt), 'PPpp')}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            </View>
+
+            <View style={styles.applicationGrid}>
+              <View style={styles.applicationGridColumn}>
+                <View style={styles.applicationPanel}>
+                  <View style={styles.applicationPanelHeader}>
+                    <MaterialIcons name="person" size={16} color="#166534" />
+                    <Text style={styles.applicationPanelTitle}>Personal Information</Text>
+                  </View>
+                  <View style={styles.applicationFieldList}>
+                    {[
+                      { label: 'Gender', value: membershipSheet?.gender || selectedVolunteer.gender || '-' },
+                      { label: 'Date of Birth', value: membershipSheet?.dateOfBirth || selectedVolunteer.dateOfBirth || '-' },
+                      { label: 'Civil Status', value: membershipSheet?.civilStatus || selectedVolunteer.civilStatus || '-' },
+                      { label: 'Volunteer Status', value: selectedVolunteer.engagementStatus || '-' },
+                      { label: 'Available on', value: availableDaysLabel },
+                    ].map(field => (
+                      <View key={field.label} style={styles.applicationFieldRow}>
+                        <Text style={styles.applicationFieldLabel}>{field.label}</Text>
+                        <Text style={styles.applicationFieldValue}>{field.value}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+
+                <View style={styles.applicationPanel}>
+                  <View style={styles.applicationPanelHeader}>
+                    <MaterialIcons name="location-on" size={16} color="#166534" />
+                    <Text style={styles.applicationPanelTitle}>Contact &amp; Address</Text>
+                  </View>
+                  <View style={styles.applicationFieldList}>
+                    {[
+                      { label: 'Full Address', value: membershipSheet?.homeAddress || selectedVolunteer.homeAddress || '-' },
+                      { label: 'Region', value: membershipSheet?.homeAddressRegion || selectedVolunteer.homeAddressRegion || '-' },
+                      { label: 'City / Municipality', value: membershipSheet?.homeAddressCityMunicipality || selectedVolunteer.homeAddressCityMunicipality || '-' },
+                      { label: 'Barangay', value: membershipSheet?.homeAddressBarangay || selectedVolunteer.homeAddressBarangay || '-' },
+                    ].map(field => (
+                      <View key={field.label} style={styles.applicationFieldRow}>
+                        <Text style={styles.applicationFieldLabel}>{field.label}</Text>
+                        <Text style={styles.applicationFieldValue}>{field.value}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+
+                <View style={styles.applicationPanel}>
+                  <View style={styles.applicationPanelHeader}>
+                    <MaterialIcons name="school" size={16} color="#166534" />
+                    <Text style={styles.applicationPanelTitle}>Education &amp; Work</Text>
+                  </View>
+                  <View style={styles.applicationFieldList}>
+                    {[
+                      { label: 'Occupation', value: membershipSheet?.occupation || selectedVolunteer.occupation || '-' },
+                      { label: 'Workplace / School', value: membershipSheet?.workplaceOrSchool || selectedVolunteer.workplaceOrSchool || '-' },
+                      { label: 'College Course', value: membershipSheet?.collegeCourse || selectedVolunteer.collegeCourse || '-' },
+                    ].map(field => (
+                      <View key={field.label} style={styles.applicationFieldRow}>
+                        <Text style={styles.applicationFieldLabel}>{field.label}</Text>
+                        <Text style={styles.applicationFieldValue}>{field.value}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              </View>
+
+              <View style={styles.applicationGridColumn}>
+                <View style={styles.applicationPanel}>
+                  <View style={styles.applicationPanelHeader}>
+                    <MaterialIcons name="star" size={16} color="#166534" />
+                    <Text style={styles.applicationPanelTitle}>Skills &amp; Interests</Text>
+                  </View>
+                  <View style={styles.applicationFieldList}>
+                    <View style={styles.applicationFieldRow}>
+                      <Text style={[styles.applicationFieldLabel, { flex: 1 }]}>Certifications / Trainings</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                        {certificateUri && isImageMediaUri(certificateUri) ? (
+                          <TouchableOpacity
+                            onPress={async () => {
+                              try {
+                                await openAttachmentUri(certificateUri);
+                              } catch (error: any) {
+                                Alert.alert(
+                                  'Unable to Open Certificate',
+                                  error?.message || 'Certificate attachment could not be opened.',
+                                );
+                              }
+                            }}
+                            style={{ padding: 6, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8 }}
+                          >
+                            <MaterialIcons name="visibility" size={16} color="#166534" />
+                          </TouchableOpacity>
+                        ) : null}
+                        <Text style={styles.applicationFieldValue}>
+                          {certificateUri
+                            ? isImageMediaUri(certificateUri)
+                              ? getAttachmentLabel(certificateUri)
+                              : certificateUri
+                            : '-'}
                         </Text>
-                      ) : null}
-                    </>
-                  ) : null}
-                </View>
-              );
-            })
-          )}
-        </View>
-
-        {matchedProjects.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Assigned Projects</Text>
-            {matchedProjects.map(project => (
-              <View key={project.id} style={styles.projectItem}>
-                <View style={styles.projectInfo}>
-                  <Text style={styles.projectName}>{project.title}</Text>
-                  <Text style={styles.projectCategory}>{project.category}</Text>
-                </View>
-                <MaterialIcons name="check-circle" size={20} color="#4CAF50" />
-              </View>
-            ))}
-          </View>
-        )}
-
-        {pendingProjects.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Pending Join Requests</Text>
-            {pendingProjects.map(project => (
-              <View key={project.id} style={styles.projectItem}>
-                <View style={styles.projectInfo}>
-                  <Text style={styles.projectName}>{project.title}</Text>
-                  <Text style={styles.projectCategory}>{project.category}</Text>
-                </View>
-                <View style={styles.pendingRequestBadge}>
-                  <Text style={styles.pendingRequestBadgeText}>Pending</Text>
-                </View>
-              </View>
-            ))}
-          </View>
-        )}
-
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Match Records</Text>
-            <Text style={styles.sectionSummary}>
-              {matchRecords.length} total record{matchRecords.length === 1 ? '' : 's'}
-            </Text>
-          </View>
-
-          {matchRecords.length === 0 ? (
-            <Text style={styles.emptyText}>No match records yet</Text>
-          ) : (
-            matchRecords.map(match => {
-              const statusStyle =
-                match.status === 'Matched'
-                  ? styles.matchRecordStatusMatched
-                  : match.status === 'Requested'
-                  ? styles.matchRecordStatusRequested
-                  : match.status === 'Completed'
-                  ? styles.matchRecordStatusCompleted
-                  : styles.matchRecordStatusInactive;
-
-              return (
-                <View key={match.id} style={styles.matchRecordCard}>
-                  <View style={styles.matchRecordHeader}>
-                    <View style={styles.projectInfo}>
-                      <Text style={styles.projectName}>{match.projectTitle}</Text>
-                      <Text style={styles.projectCategory}>{match.projectCategory}</Text>
+                      </View>
                     </View>
-                    <View style={[styles.matchRecordStatusBadge, statusStyle]}>
-                      <Text style={styles.matchRecordStatusText}>{match.status}</Text>
+
+                    {selectedVolunteer.skills && selectedVolunteer.skills.length > 0 ? (
+                      <View style={{ marginTop: 10 }}>
+                        <Text style={styles.applicationFieldLabel}>Tagged Skills</Text>
+                        <View style={styles.applicationSkillsWrap}>
+                          {selectedVolunteer.skills.map(skill => (
+                            <View key={skill} style={styles.applicationSkillTag}>
+                              <Text style={styles.applicationSkillTagText}>{skill}</Text>
+                            </View>
+                          ))}
+                        </View>
+                      </View>
+                    ) : null}
+                  </View>
+                </View>
+
+                <View style={styles.applicationStatRow}>
+                  <View style={styles.applicationStatCard}>
+                    <MaterialIcons name="event" size={20} color="#166534" />
+                    <Text style={styles.applicationStatValue}>{eventsJoinedCount}</Text>
+                    <Text style={styles.applicationStatLabel}>Events Joined</Text>
+                  </View>
+                  <View style={styles.applicationStatCard}>
+                    <MaterialIcons name="photo-camera" size={20} color="#166534" />
+                    <Text style={styles.applicationStatValue}>{photoReportsCount}</Text>
+                    <Text style={styles.applicationStatLabel}>Photo Reports</Text>
+                  </View>
+                  <View style={styles.applicationStatCard}>
+                    <MaterialIcons name="check-circle" size={20} color="#166534" />
+                    <Text style={styles.applicationStatValue}>{completedEventsCount}</Text>
+                    <Text style={styles.applicationStatLabel}>Completed Events</Text>
+                  </View>
+                </View>
+
+                <View style={styles.applicationPanel}>
+                  <View style={styles.applicationPanelHeader}>
+                    <MaterialIcons name="event-available" size={16} color="#166534" />
+                    <Text style={styles.applicationPanelTitle}>Available Events</Text>
+                  </View>
+                  <Text style={styles.applicationStatValue}>{availableProjects.length}</Text>
+                  {availableProjects.length === 0 ? (
+                    <Text style={styles.applicationAvailableEmpty}>No available events</Text>
+                  ) : (
+                    <View style={{ marginTop: 8, gap: 6 }}>
+                      {availableProjects.slice(0, 3).map(projectEntry => (
+                        <Text key={projectEntry.id} style={styles.applicationAvailableItem}>
+                          {projectEntry.title}
+                        </Text>
+                      ))}
+                    </View>
+                  )}
+                </View>
+              </View>
+
+              <View style={styles.applicationGridColumn}>
+                <View style={styles.applicationPanel}>
+                  <View style={styles.applicationPanelHeader}>
+                    <MaterialIcons name="bar-chart" size={16} color="#166534" />
+                    <Text style={styles.applicationPanelTitle}>Activity Overview</Text>
+                  </View>
+                  {[
+                    { label: 'Events Joined', icon: 'event', value: eventsJoinedCount },
+                    { label: 'Photo Reports', icon: 'photo-camera', value: photoReportsCount },
+                    { label: 'Completed Events', icon: 'check-circle', value: completedEventsCount },
+                    { label: 'Available Events', icon: 'event-available', value: availableProjects.length },
+                  ].map(row => (
+                    <View key={row.label} style={styles.applicationOverviewRow}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <MaterialIcons name={row.icon as any} size={16} color="#64748b" style={{ marginRight: 10 }} />
+                        <Text style={styles.applicationOverviewLabel}>{row.label}</Text>
+                      </View>
+                      <Text style={styles.applicationOverviewValue}>{row.value}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            </View>
+          </>
+        ) : (
+          <>
+            {/* Header card */}
+            <View style={styles.applicationCard}>
+              <View style={styles.applicationCardTopRow}>
+                <View style={[styles.applicationAvatarRow, { marginBottom: 0, flex: 1 }]}>
+                  <View style={styles.applicationAvatar}>
+                    <Text style={styles.applicationAvatarText}>{selectedVolunteer.name.charAt(0)}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.applicationName}>{selectedVolunteer.name}</Text>
+                    {selectedVolunteer.email ? (
+                      <Text style={styles.applicationEmail}>{selectedVolunteer.email}</Text>
+                    ) : null}
+                    {selectedVolunteer.phone ? (
+                      <Text style={styles.applicationPhone}>{selectedVolunteer.phone}</Text>
+                    ) : null}
+                    <View style={[styles.registrationBadge, styles.registrationBadgeApproved]}>
+                      <Text style={styles.registrationBadgeText}>{selectedVolunteer.engagementStatus || 'Approved'}</Text>
                     </View>
                   </View>
-
-                  <Text style={styles.matchRecordMeta}>
-                    Updated: {format(new Date(match.matchedAt), 'PPpp')}
-                  </Text>
-                  <Text style={styles.matchRecordMeta}>
-                    Hours Contributed: {match.hoursContributed.toFixed(1)}
-                  </Text>
                 </View>
-              );
-            })
-          )}
-        </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Completed Events</Text>
-          {completedProjects.filter(p => p.isEvent).length === 0 ? (
-            <Text style={styles.emptyText}>No completed events yet</Text>
-          ) : (
-            completedProjects.filter(p => p.isEvent).map(project => (
-              <View key={project.id} style={styles.projectItem}>
-                <View style={styles.projectInfo}>
-                  <Text style={styles.projectName}>{project.title}</Text>
-                  <Text style={styles.projectCategory}>
-                    {project.category || 'Completed event'}
-                  </Text>
-                </View>
-                <MaterialIcons name="task-alt" size={20} color="#16a34a" />
-              </View>
-            ))
-          )}
-        </View>
-
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>
-              Available Events ({availableProjects.filter(p => p.isEvent).length})
-            </Text>
-          </View>
-
-          {availableProjects.filter(p => p.isEvent).length === 0 ? (
-            <Text style={styles.emptyText}>No available events</Text>
-          ) : (
-            availableProjects.filter(p => p.isEvent).map(project => (
-              <View key={project.id} style={styles.matchCard}>
-                <View style={styles.matchContent}>
-                  <Text style={styles.projectName}>{project.title}</Text>
-                  <Text style={styles.projectCategory}>{project.category}</Text>
-                  <Text style={styles.matchDetails}>
-                    Volunteers: {project.volunteers.length}/{project.volunteersNeeded}
-                  </Text>
-                </View>
                 <TouchableOpacity
-                  style={styles.matchButton}
-                  onPress={() => handleMatchVolunteer(project.id)}
+                  style={[styles.editButton, { padding: 10, borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10 }]}
+                  onPress={() => {
+                    setDaysPerWeek(selectedVolunteer.availability.daysPerWeek.toString());
+                    setHoursPerWeek(selectedVolunteer.availability.hoursPerWeek.toString());
+                    setAvailableDays([...selectedVolunteer.availability.availableDays]);
+                    setShowAvailabilityModal(true);
+                  }}
                 >
-                  <MaterialIcons name="add-circle" size={24} color="#4CAF50" />
+                  <MaterialIcons name="edit" size={18} color="#166534" />
                 </TouchableOpacity>
               </View>
-            ))
-          )}
-        </View>
+
+              <View style={styles.applicationCardDivider} />
+
+              <View style={styles.applicationCardMetaRow}>
+                <View style={styles.applicationCardMetaItem}>
+                  <MaterialIcons name="person" size={16} color="#64748b" />
+                  <View style={{ marginLeft: 8 }}>
+                    <Text style={styles.applicationInfoLabel}>User Type</Text>
+                    <Text style={styles.applicationInfoValue}>
+                      {userType || membershipSheet ? (userType || 'Adult') : 'Adult'}
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.applicationCardMetaItem}>
+                  <MaterialIcons name="calendar-month" size={16} color="#64748b" />
+                  <View style={{ marginLeft: 8 }}>
+                    <Text style={styles.applicationInfoLabel}>Member Since</Text>
+                    <Text style={styles.applicationInfoValue}>
+                      {format(new Date(selectedUser?.createdAt || selectedVolunteer.createdAt), 'PPpp')}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            </View>
+
+            {/* Grid */}
+            <View style={styles.applicationGrid}>
+              {/* Left column */}
+              <View style={styles.applicationGridColumn}>
+                <View style={styles.applicationPanel}>
+                  <View style={styles.applicationPanelHeader}>
+                    <MaterialIcons name="person" size={16} color="#166534" />
+                    <Text style={styles.applicationPanelTitle}>Personal Information</Text>
+                  </View>
+                  <View style={styles.applicationFieldList}>
+                    {[
+                      { label: 'Gender', value: membershipSheet?.gender || selectedVolunteer.gender || '-' },
+                      { label: 'Date of Birth', value: membershipSheet?.dateOfBirth || selectedVolunteer.dateOfBirth || '-' },
+                      { label: 'Civil Status', value: membershipSheet?.civilStatus || selectedVolunteer.civilStatus || '-' },
+                      { label: 'Volunteer Status', value: selectedVolunteer.engagementStatus || '-' },
+                      { label: 'Available on', value: availableDaysLabel },
+                    ].map(field => (
+                      <View key={field.label} style={styles.applicationFieldRow}>
+                        <Text style={styles.applicationFieldLabel}>{field.label}</Text>
+                        <Text style={styles.applicationFieldValue}>{field.value}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+
+                <View style={styles.applicationPanel}>
+                  <View style={styles.applicationPanelHeader}>
+                    <MaterialIcons name="location-on" size={16} color="#166534" />
+                    <Text style={styles.applicationPanelTitle}>Contact &amp; Address</Text>
+                  </View>
+                  <View style={styles.applicationFieldList}>
+                    {[
+                      { label: 'Full Address', value: membershipSheet?.homeAddress || selectedVolunteer.homeAddress || '-' },
+                      { label: 'Region', value: membershipSheet?.homeAddressRegion || selectedVolunteer.homeAddressRegion || '-' },
+                      { label: 'City / Municipality', value: membershipSheet?.homeAddressCityMunicipality || selectedVolunteer.homeAddressCityMunicipality || '-' },
+                      { label: 'Barangay', value: membershipSheet?.homeAddressBarangay || selectedVolunteer.homeAddressBarangay || '-' },
+                    ].map(field => (
+                      <View key={field.label} style={styles.applicationFieldRow}>
+                        <Text style={styles.applicationFieldLabel}>{field.label}</Text>
+                        <Text style={styles.applicationFieldValue}>{field.value}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+
+                <View style={styles.applicationPanel}>
+                  <View style={styles.applicationPanelHeader}>
+                    <MaterialIcons name="school" size={16} color="#166534" />
+                    <Text style={styles.applicationPanelTitle}>Education &amp; Work</Text>
+                  </View>
+                  <View style={styles.applicationFieldList}>
+                    {[
+                      { label: 'Occupation', value: membershipSheet?.occupation || selectedVolunteer.occupation || '-' },
+                      { label: 'Workplace / School', value: membershipSheet?.workplaceOrSchool || selectedVolunteer.workplaceOrSchool || '-' },
+                      { label: 'College Course', value: membershipSheet?.collegeCourse || selectedVolunteer.collegeCourse || '-' },
+                    ].map(field => (
+                      <View key={field.label} style={styles.applicationFieldRow}>
+                        <Text style={styles.applicationFieldLabel}>{field.label}</Text>
+                        <Text style={styles.applicationFieldValue}>{field.value}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              </View>
+
+              {/* Middle column */}
+              <View style={styles.applicationGridColumn}>
+                <View style={styles.applicationPanel}>
+                  <View style={styles.applicationPanelHeader}>
+                    <MaterialIcons name="star" size={16} color="#166534" />
+                    <Text style={styles.applicationPanelTitle}>Skills &amp; Interests</Text>
+                  </View>
+                  <View style={styles.applicationFieldList}>
+                    <View style={styles.applicationFieldRow}>
+                      <Text style={[styles.applicationFieldLabel, { flex: 1 }]}>Certifications / Trainings</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                        {certificateUri && isImageMediaUri(certificateUri) ? (
+                          <TouchableOpacity
+                            onPress={async () => {
+                              try {
+                                await openAttachmentUri(certificateUri);
+                              } catch (error: any) {
+                                Alert.alert(
+                                  'Unable to Open Certificate',
+                                  error?.message || 'Certificate attachment could not be opened.',
+                                );
+                              }
+                            }}
+                            style={{ padding: 6, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8 }}
+                          >
+                            <MaterialIcons name="visibility" size={16} color="#166534" />
+                          </TouchableOpacity>
+                        ) : null}
+                        <Text style={styles.applicationFieldValue}>
+                          {certificateUri
+                            ? isImageMediaUri(certificateUri)
+                              ? getAttachmentLabel(certificateUri)
+                              : certificateUri
+                            : '-'}
+                        </Text>
+                      </View>
+                    </View>
+
+                    {selectedVolunteer.skills && selectedVolunteer.skills.length > 0 ? (
+                      <View style={{ marginTop: 10 }}>
+                        <Text style={styles.applicationFieldLabel}>Tagged Skills</Text>
+                        <View style={styles.applicationSkillsWrap}>
+                          {selectedVolunteer.skills.map(skill => (
+                            <View key={skill} style={styles.applicationSkillTag}>
+                              <Text style={styles.applicationSkillTagText}>{skill}</Text>
+                            </View>
+                          ))}
+                        </View>
+                      </View>
+                    ) : null}
+                  </View>
+                </View>
+
+                <View style={styles.applicationStatRow}>
+                  <View style={styles.applicationStatCard}>
+                    <MaterialIcons name="event" size={20} color="#166534" />
+                    <Text style={styles.applicationStatValue}>{eventsJoinedCount}</Text>
+                    <Text style={styles.applicationStatLabel}>Events Joined</Text>
+                    <Text style={[styles.applicationStatLabel, { color: '#94a3b8' }]}>Total records</Text>
+                  </View>
+                  <View style={styles.applicationStatCard}>
+                    <MaterialIcons name="photo-camera" size={20} color="#166534" />
+                    <Text style={styles.applicationStatValue}>{photoReportsCount}</Text>
+                    <Text style={styles.applicationStatLabel}>Photo Reports</Text>
+                    <Text style={[styles.applicationStatLabel, { color: '#94a3b8' }]}>Total records</Text>
+                  </View>
+                  <View style={styles.applicationStatCard}>
+                    <MaterialIcons name="check-circle" size={20} color="#166534" />
+                    <Text style={styles.applicationStatValue}>{completedEventsCount}</Text>
+                    <Text style={styles.applicationStatLabel}>Completed Events</Text>
+                    <Text style={[styles.applicationStatLabel, { color: '#94a3b8' }]}>Total records</Text>
+                  </View>
+                </View>
+
+                <View style={styles.applicationPanel}>
+                  <View style={styles.applicationPanelHeader}>
+                    <MaterialIcons name="event-available" size={16} color="#166534" />
+                    <Text style={styles.applicationPanelTitle}>Available Events</Text>
+                    <MaterialIcons name="chevron-right" size={16} color="#94a3b8" style={{ marginLeft: 'auto' }} />
+                  </View>
+                  <Text style={styles.applicationStatValue}>{availableProjects.length}</Text>
+                  {availableProjects.length === 0 ? (
+                    <Text style={styles.applicationAvailableEmpty}>No available events</Text>
+                  ) : (
+                    <View style={{ marginTop: 8, gap: 6 }}>
+                      {availableProjects.slice(0, 3).map(projectEntry => (
+                        <View key={projectEntry.id} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <Text style={styles.applicationAvailableItem}>{projectEntry.title}</Text>
+                          <TouchableOpacity onPress={() => handleMatchVolunteer(projectEntry.id)}>
+                            <MaterialIcons name="add-circle" size={20} color="#4CAF50" />
+                          </TouchableOpacity>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                </View>
+              </View>
+
+              {/* Right column */}
+              <View style={styles.applicationGridColumn}>
+                <View style={styles.applicationPanel}>
+                  <View style={styles.applicationPanelHeader}>
+                    <MaterialIcons name="bar-chart" size={16} color="#166534" />
+                    <Text style={styles.applicationPanelTitle}>Activity Overview</Text>
+                  </View>
+                  {[
+                    { label: 'Events Joined', icon: 'event', value: eventsJoinedCount },
+                    { label: 'Photo Reports', icon: 'photo-camera', value: photoReportsCount },
+                    { label: 'Completed Events', icon: 'check-circle', value: completedEventsCount },
+                    { label: 'Available Events', icon: 'event-available', value: availableProjects.length },
+                  ].map(row => (
+                    <View key={row.label} style={styles.applicationOverviewRow}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <MaterialIcons name={row.icon as any} size={16} color="#64748b" style={{ marginRight: 10 }} />
+                        <Text style={styles.applicationOverviewLabel}>{row.label}</Text>
+                      </View>
+                      <Text style={styles.applicationOverviewValue}>{row.value}</Text>
+                    </View>
+                  ))}
+                </View>
+
+                {/* Match Records */}
+                <View style={styles.applicationPanel}>
+                  <View style={styles.applicationPanelHeader}>
+                    <MaterialIcons name="assignment" size={16} color="#166534" />
+                    <Text style={styles.applicationPanelTitle}>Match Records</Text>
+                    <Text style={[styles.applicationInfoLabel, { marginLeft: 'auto' }]}>{matchRecords.length} total</Text>
+                  </View>
+                  {matchRecords.length === 0 ? (
+                    <Text style={styles.applicationAvailableEmpty}>No match records yet</Text>
+                  ) : (
+                    matchRecords.slice(0, 4).map(match => {
+                      const statusStyle =
+                        match.status === 'Matched'
+                          ? styles.matchRecordStatusMatched
+                          : match.status === 'Requested'
+                          ? styles.matchRecordStatusRequested
+                          : match.status === 'Completed'
+                          ? styles.matchRecordStatusCompleted
+                          : styles.matchRecordStatusInactive;
+                      return (
+                        <View key={match.id} style={styles.applicationOverviewRow}>
+                          <Text style={[styles.applicationOverviewLabel, { flex: 1 }]} numberOfLines={1}>{match.projectTitle}</Text>
+                          <View style={[styles.matchRecordStatusBadge, statusStyle]}>
+                            <Text style={styles.matchRecordStatusText}>{match.status}</Text>
+                          </View>
+                        </View>
+                      );
+                    })
+                  )}
+                </View>
+              </View>
+            </View>
+
+            {/* Time Log History */}
+            <View style={[styles.applicationSection, { marginBottom: 10 }]}>
+              <Text style={styles.applicationSectionTitle}>
+                Time Log History ({selectedVolunteerTimeLogs.length})
+              </Text>
+              {selectedVolunteerTimeLogs.length === 0 ? (
+                <Text style={styles.applicationAvailableEmpty}>No time in or time out records yet</Text>
+              ) : (
+                selectedVolunteerTimeLogs.map(log => {
+                  const linkedProject = projects.find(project => project.id === log.projectId);
+                  const durationHours = getLogDurationHours(log);
+                  return (
+                    <View key={log.id} style={styles.timeLogCard}>
+                      <View style={styles.timeLogHeader}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.projectName}>{linkedProject?.title || 'Project'}</Text>
+                          <Text style={styles.projectCategory}>{linkedProject?.category || 'Volunteer activity'}</Text>
+                        </View>
+                        <View style={[styles.timeLogStatusBadge, log.timeOut ? styles.timeLogStatusCompleted : styles.timeLogStatusActive]}>
+                          <Text style={styles.timeLogStatusText}>{log.timeOut ? 'Timed Out' : 'Timed In'}</Text>
+                        </View>
+                      </View>
+                      <Text style={styles.timeLogMeta}>Time In: {formatTimestamp(log.timeIn)}</Text>
+                      <Text style={styles.timeLogMeta}>
+                        {log.timeOut ? `Time Out: ${formatTimestamp(log.timeOut)}` : 'Time Out still pending'}
+                      </Text>
+                      <Text style={styles.timeLogMeta}>Hours Logged: {log.timeOut ? durationHours.toFixed(1) : '--'}</Text>
+                      {log.note ? <Text style={styles.timeLogNote}>Note: {log.note}</Text> : null}
+                    </View>
+                  );
+                })
+              )}
+            </View>
+          </>
+        )}
 
         <Modal
           visible={showAvailabilityModal}
@@ -821,28 +1233,133 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
             </ScrollView>
           </View>
         </Modal>
+
+        <Modal
+          visible={showRejectModal}
+          animationType="slide"
+          onRequestClose={closeRejectModal}
+        >
+          <View style={styles.modalContainer}>
+            <View style={styles.modalHeader}>
+              <TouchableOpacity onPress={closeRejectModal}>
+                <MaterialIcons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+              <Text style={styles.modalTitle}>Reject Application</Text>
+              <View style={{ width: 24 }} />
+            </View>
+            <ScrollView style={styles.modalContent}>
+              <Text style={styles.label}>Reason for rejection (optional)</Text>
+              <TextInput
+                style={[styles.input, { minHeight: 120, textAlignVertical: 'top' }]}
+                placeholder="Explain why the application is being rejected..."
+                placeholderTextColor="#999"
+                multiline={true}
+                numberOfLines={5}
+                value={rejectionReason}
+                onChangeText={setRejectionReason}
+              />
+              <View style={{ flexDirection: 'row', gap: 12 }}>
+                <TouchableOpacity
+                  style={[styles.submitButton, { flex: 1, backgroundColor: '#94a3b8' }]}
+                  onPress={closeRejectModal}
+                >
+                  <Text style={styles.submitButtonText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.submitButton, { flex: 1, backgroundColor: '#dc2626' }]}
+                  onPress={() => void handleRejectVolunteer()}
+                >
+                  <Text style={styles.submitButtonText}>Confirm Reject</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </Modal>
       </ScrollView>
     </View>
     );
   }
 
-  const sortedVolunteers = [...volunteers].sort((left, right) => left.name.localeCompare(right.name));
+  const sortedVolunteers = [...volunteers]
+    .filter(volunteer => {
+      if (statusFilter === 'Pending') return volunteer.registrationStatus === 'Pending';
+      if (statusFilter === 'Approved') return volunteer.registrationStatus !== 'Pending';
+      return true;
+    })
+    .sort((left, right) => left.name.localeCompare(right.name));
+  const approvedVolunteers = volunteers.filter(volunteer => volunteer.registrationStatus !== 'Pending').length;
+  const pendingApplications = Math.max(0, volunteers.length - approvedVolunteers);
 
   return (
     <View style={styles.container}>
       <View style={styles.titleRow}>
         <Text style={styles.title}>Volunteer Management</Text>
-        <TouchableOpacity
-          style={styles.reportButton}
-          onPress={handleDownloadVolunteerHoursReport}
-        >
-          <MaterialIcons
-            name={Platform.OS === 'web' ? 'download' : 'summarize'}
-            size={16}
-            color="#fff"
-          />
-          <Text style={styles.reportButtonText}>Download Hours Report</Text>
-        </TouchableOpacity>
+      </View>
+      <Text style={styles.managementSubtitle}>Manage volunteer applications, approvals, and profiles.</Text>
+      <View style={styles.managementStats}>
+        {[
+          { icon: 'description', value: pendingApplications, label: 'New Applications', color: '#8b5cf6', filter: 'Pending' },
+          { icon: 'check-circle-outline', value: approvedVolunteers, label: 'Approved Volunteers', color: '#4f874b', filter: 'Approved' },
+          { icon: 'groups', value: volunteers.length, label: 'Total Volunteers', color: '#3b67f3', filter: 'All' },
+          { icon: 'assignment', value: '', label: 'Reports', color: '#e99b34', filter: null },
+        ].map(item => {
+          const isSelected = item.filter && statusFilter === item.filter;
+          return (
+            <TouchableOpacity
+              key={item.label}
+              style={[
+                styles.managementStat,
+                isSelected ? { borderColor: item.color, borderWidth: 2 } : null
+              ]}
+              onPress={
+                item.label === 'Reports'
+                  ? handleDownloadVolunteerHoursReport
+                  : () => setStatusFilter(item.filter as any)
+              }
+            >
+              <View style={[styles.managementStatIcon, { backgroundColor: item.color + '16' }]}>
+                <MaterialIcons name={item.icon as any} size={31} color={item.color} />
+              </View>
+              <View>
+                <Text style={styles.managementStatValue}>{item.value}</Text>
+                <Text style={styles.managementStatLabel}>{item.label}</Text>
+              </View>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+      <View style={styles.managementPanel}>
+        <Text style={styles.managementPanelTitle}>Volunteer Management</Text>
+        <View style={styles.managementActions}>
+          {[
+            { icon: 'assignment', title: 'Volunteer Applications', body: 'Review and manage new volunteer applications.', color: '#8b5cf6', action: 'View Applications', filter: 'Pending' },
+            { icon: 'badge', title: 'Approved Volunteers', body: 'View and manage all approved volunteers.', color: '#4f874b', action: 'View Approved Volunteers', filter: 'Approved' },
+            { icon: 'account-circle', title: 'Volunteer Profiles', body: 'Browse and manage volunteer profiles and information.', color: '#3b67f3', action: 'View Volunteer Profiles', filter: 'All' },
+          ].map(item => {
+            const isSelected = statusFilter === item.filter;
+            return (
+              <TouchableOpacity
+                key={item.title}
+                style={[
+                  styles.managementAction,
+                  { borderColor: isSelected ? item.color : item.color + '28', borderWidth: isSelected ? 2 : 1 }
+                ]}
+                onPress={() => setStatusFilter(item.filter as any)}
+              >
+                <View style={[styles.managementActionIcon, { backgroundColor: item.color + '14' }]}>
+                  <MaterialIcons name={item.icon as any} size={54} color={item.color} />
+                </View>
+                <Text style={styles.managementActionTitle}>{item.title}</Text>
+                <Text style={styles.managementActionBody}>{item.body}</Text>
+                <View style={[styles.managementActionButton, { borderColor: item.color, backgroundColor: isSelected ? item.color : 'transparent' }]}>
+                  <Text style={[styles.managementActionButtonText, { color: isSelected ? '#fff' : item.color }]}>
+                    {item.action}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
       </View>
       {actionNotice ? (
         <View style={styles.noticeBanner}>
@@ -862,6 +1379,16 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
             }}
           />
         ) : null}
+      </View>
+      <View style={{ paddingHorizontal: 16, paddingVertical: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }} {...({} as any)}>
+        <Text style={{ fontSize: 16, fontWeight: '700', color: '#1e293b' }}>
+          {statusFilter === 'Pending' ? 'Volunteer Applications' : statusFilter === 'Approved' ? 'Approved Volunteers' : 'All Volunteers'} ({sortedVolunteers.length})
+        </Text>
+        {statusFilter !== 'All' && (
+          <TouchableOpacity onPress={() => setStatusFilter('All')} style={{ paddingVertical: 6, paddingHorizontal: 12, backgroundColor: '#f1f5f9', borderRadius: 8 }}>
+            <Text style={{ fontSize: 13, fontWeight: '700', color: '#475569' }}>Clear Filter</Text>
+          </TouchableOpacity>
+        )}
       </View>
       <FlatList
         data={sortedVolunteers}
@@ -888,16 +1415,36 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                   {volunteer.rating}
                 </Text>
               </View>
-              <Text
-                style={[
-                  styles.volunteerCardStatus,
-                  volunteer.engagementStatus === 'Busy'
-                    ? styles.volunteerCardStatusBusy
-                    : styles.volunteerCardStatusOpen,
-                ]}
-              >
-                {volunteer.engagementStatus}
-              </Text>
+              {(volunteer.registrationStatus && volunteer.registrationStatus !== 'Approved') ? (
+                <View
+                  style={[
+                    styles.registrationBadge,
+                    styles.listRegistrationBadge,
+                    volunteer.registrationStatus === 'Pending'
+                      ? styles.registrationBadgePending
+                      : volunteer.registrationStatus === 'Rejected'
+                      ? styles.registrationBadgeRejected
+                      : styles.registrationBadgeApproved,
+                  ]}
+                >
+                  <Text style={styles.registrationBadgeText}>
+                    {volunteer.registrationStatus === 'Pending' ? '⏳ Application Pending' :
+                     volunteer.registrationStatus === 'Rejected' ? '✕ Application Rejected' :
+                     volunteer.registrationStatus}
+                  </Text>
+                </View>
+              ) : (
+                <Text
+                  style={[
+                    styles.volunteerCardStatus,
+                    volunteer.engagementStatus === 'Busy'
+                      ? styles.volunteerCardStatusBusy
+                      : styles.volunteerCardStatusOpen,
+                  ]}
+                >
+                  {volunteer.engagementStatus}
+                </Text>
+              )}
             </View>
             <MaterialIcons name="arrow-forward" size={20} color="#999" />
           </TouchableOpacity>
@@ -910,6 +1457,23 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
 }
 
 const styles = StyleSheet.create({
+  managementSubtitle: { marginHorizontal: 16, marginBottom: 24, fontSize: 16, color: '#64748b', fontFamily: 'Nunito' },
+  managementStats: { flexDirection: 'row', flexWrap: 'wrap', gap: 24, marginHorizontal: 16, marginBottom: 28 },
+  managementStat: { flex: 1, minWidth: 220, flexDirection: 'row', alignItems: 'center', gap: 18, padding: 24, borderRadius: 16, backgroundColor: '#fff', borderWidth: 1, borderColor: '#edf0f4' },
+  managementStatIcon: { width: 68, height: 68, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  managementStatValue: { fontSize: 29, fontWeight: '800', color: '#111827', fontFamily: 'Nunito' },
+  managementStatLabel: { fontSize: 16, color: '#334155', marginTop: 2, fontFamily: 'Nunito' },
+  managementStatNote: { alignSelf: 'flex-start', marginTop: 10, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 7, backgroundColor: '#f4f7fb', fontWeight: '700', fontFamily: 'Nunito' },
+  managementPanel: { marginHorizontal: 16, padding: 22, backgroundColor: '#fff', borderWidth: 1, borderColor: '#edf0f4', borderRadius: 18 },
+  managementPanelTitle: { fontSize: 18, fontWeight: '800', color: '#172033', marginBottom: 20, fontFamily: 'Nunito' },
+  managementActions: { flexDirection: 'row', gap: 24, flexWrap: 'wrap' },
+  managementAction: { flex: 1, minWidth: 260, alignItems: 'center', padding: 28, borderWidth: 1, borderRadius: 15, backgroundColor: '#fff' },
+  managementActionIcon: { width: 118, height: 118, borderRadius: 59, alignItems: 'center', justifyContent: 'center', marginBottom: 18 },
+  managementActionTitle: { fontSize: 19, fontWeight: '800', color: '#172033', textAlign: 'center', fontFamily: 'Nunito' },
+  managementActionBody: { marginTop: 9, fontSize: 15, lineHeight: 22, color: '#475569', textAlign: 'center', maxWidth: 240, fontFamily: 'Nunito' },
+  managementActionNote: { marginTop: 16, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, backgroundColor: '#f4f7fb', fontWeight: '700', fontFamily: 'Nunito' },
+  managementActionButton: { alignSelf: 'stretch', marginTop: 20, paddingVertical: 12, borderWidth: 1, borderRadius: 8, alignItems: 'center' },
+  managementActionButtonText: { fontSize: 15, fontWeight: '800', fontFamily: 'Nunito' },
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
@@ -918,6 +1482,7 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: 'bold',
     color: '#333',
+    fontFamily: 'Nunito',
   },
   titleRow: {
     paddingHorizontal: 16,
@@ -941,6 +1506,7 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 12,
     fontWeight: '700',
+    fontFamily: 'Nunito',
   },
   noticeBanner: {
     flexDirection: 'row',
@@ -960,6 +1526,7 @@ const styles = StyleSheet.create({
     color: '#14532d',
     fontSize: 13,
     fontWeight: '700',
+    fontFamily: 'Nunito',
   },
   registrationSummaryCard: {
     backgroundColor: '#fff7ed',
@@ -972,12 +1539,14 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#9a3412',
+    fontFamily: 'Nunito',
   },
   registrationSummaryText: {
     marginTop: 4,
     fontSize: 12,
     color: '#7c2d12',
     lineHeight: 18,
+    fontFamily: 'Nunito',
   },
   listContent: {
     paddingHorizontal: 12,
@@ -1017,16 +1586,19 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: 'bold',
     fontSize: 14,
+    fontFamily: 'Nunito',
   },
   volunteerName: {
     fontSize: 13,
     fontWeight: 'bold',
     color: '#333',
+    fontFamily: 'Nunito',
   },
   volunteerEmail: {
     fontSize: 11,
     color: '#666',
     marginTop: 2,
+    fontFamily: 'Nunito',
   },
   statusBadge: {
     alignSelf: 'flex-start',
@@ -1045,6 +1617,7 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
     color: '#1f2937',
+    fontFamily: 'Nunito',
   },
   registrationBadge: {
     alignSelf: 'flex-start',
@@ -1066,6 +1639,7 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
     color: '#1f2937',
+    fontFamily: 'Nunito',
   },
   statsGrid: {
     flexDirection: 'row',
@@ -1083,11 +1657,13 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#333',
     marginTop: 2,
+    fontFamily: 'Nunito',
   },
   statLabel: {
     fontSize: 10,
     color: '#999',
     marginTop: 2,
+    fontFamily: 'Nunito',
   },
   section: {
     backgroundColor: '#fff',
@@ -1106,11 +1682,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: 'bold',
     color: '#333',
+    fontFamily: 'Nunito',
   },
   sectionSummary: {
     fontSize: 11,
     color: '#64748b',
     fontWeight: '600',
+    fontFamily: 'Nunito',
   },
   editButton: {
     padding: 8,
@@ -1139,6 +1717,7 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 12,
     fontWeight: '700',
+    fontFamily: 'Nunito',
   },
   availabilityInfo: {
     gap: 6,
@@ -1150,17 +1729,20 @@ const styles = StyleSheet.create({
   infoLabel: {
     fontSize: 12,
     color: '#666',
+    fontFamily: 'Nunito',
   },
   infoValue: {
     fontSize: 12,
     fontWeight: '600',
     color: '#333',
+    fontFamily: 'Nunito',
   },
   availableDaysLabel: {
     fontSize: 12,
     fontWeight: '600',
     color: '#333',
     marginTop: 6,
+    fontFamily: 'Nunito',
   },
   daysContainer: {
     flexDirection: 'row',
@@ -1177,6 +1759,7 @@ const styles = StyleSheet.create({
     color: '#1976d2',
     fontSize: 11,
     fontWeight: '600',
+    fontFamily: 'Nunito',
   },
   skillsContainer: {
     flexDirection: 'row',
@@ -1193,6 +1776,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#333',
     fontWeight: '500',
+    fontFamily: 'Nunito',
   },
   timeLogCard: {
     backgroundColor: '#f8fafc',
@@ -1223,23 +1807,27 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
     color: '#1f2937',
+    fontFamily: 'Nunito',
   },
   timeLogMeta: {
     fontSize: 11,
     color: '#334155',
     marginTop: 2,
+    fontFamily: 'Nunito',
   },
   timeLogNote: {
     fontSize: 11,
     color: '#475569',
     marginTop: 4,
     fontStyle: 'italic',
+    fontFamily: 'Nunito',
   },
   timeLogProofText: {
     fontSize: 11,
     color: '#334155',
     marginTop: 4,
     lineHeight: 16,
+    fontFamily: 'Nunito',
   },
   projectItem: {
     flexDirection: 'row',
@@ -1256,11 +1844,13 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: '#333',
+    fontFamily: 'Nunito',
   },
   projectCategory: {
     fontSize: 11,
     color: '#666',
     marginTop: 2,
+    fontFamily: 'Nunito',
   },
   pendingRequestBadge: {
     backgroundColor: '#fef3c7',
@@ -1272,6 +1862,7 @@ const styles = StyleSheet.create({
     color: '#92400e',
     fontSize: 10,
     fontWeight: '700',
+    fontFamily: 'Nunito',
   },
   matchRecordCard: {
     backgroundColor: '#f8fafc',
@@ -1307,17 +1898,20 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     color: '#1f2937',
+    fontFamily: 'Nunito',
   },
   matchRecordMeta: {
     fontSize: 12,
     color: '#475569',
     marginTop: 6,
+    fontFamily: 'Nunito',
   },
   emptyText: {
     color: '#999',
     fontSize: 13,
     textAlign: 'center',
     paddingVertical: 20,
+    fontFamily: 'Nunito',
   },
   emptyState: {
     flex: 1,
@@ -1341,6 +1935,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#666',
     marginTop: 4,
+    fontFamily: 'Nunito',
   },
   matchButton: {
     width: 32,
@@ -1372,11 +1967,13 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: 'bold',
     fontSize: 13,
+    fontFamily: 'Nunito',
   },
   volunteerCardName: {
     fontSize: 13,
     fontWeight: '600',
     color: '#333',
+    fontFamily: 'Nunito',
   },
   volunteerCardMeta: {
     flexDirection: 'row',
@@ -1388,11 +1985,13 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#666',
     marginRight: 8,
+    fontFamily: 'Nunito',
   },
   volunteerCardStatus: {
     marginTop: 4,
     fontSize: 11,
     fontWeight: '700',
+    fontFamily: 'Nunito',
   },
   listRegistrationBadge: {
     marginTop: 6,
@@ -1411,6 +2010,7 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 11,
     fontWeight: '700',
+    fontFamily: 'Nunito',
   },
   volunteerCardStatusOpen: {
     color: '#15803d',
@@ -1436,6 +2036,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
     color: '#333',
+    fontFamily: 'Nunito',
   },
   modalContent: {
     flex: 1,
@@ -1446,6 +2047,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#333',
     marginBottom: 8,
+    fontFamily: 'Nunito',
   },
   labelRight: {
     marginBottom: 0,
@@ -1458,6 +2060,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#14532d',
+    fontFamily: 'Nunito',
   },
   labelTop: {
     marginTop: 4,
@@ -1480,6 +2083,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#333',
     marginBottom: 20,
+    fontFamily: 'Nunito',
   },
   inputWithLabel: {
     flex: 1,
@@ -1517,6 +2121,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: '#666',
+    fontFamily: 'Nunito',
   },
   dayButtonTextSelected: {
     color: '#fff',
@@ -1531,5 +2136,336 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: 'bold',
+    fontFamily: 'Nunito',
+  },
+  applicationCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 20,
+    marginHorizontal: 12,
+    marginTop: 8,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  applicationCardTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 16,
+  },
+  applicationCardDivider: {
+    height: 1,
+    backgroundColor: '#f1f5f9',
+    marginTop: 16,
+    marginBottom: 14,
+  },
+  applicationCardMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 16,
+    justifyContent: 'space-between',
+  },
+  applicationCardMetaItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minWidth: 220,
+  },
+  applicationAvatarRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    marginBottom: 18,
+  },
+  applicationAvatar: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: '#8b5cf6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  applicationAvatarText: {
+    color: '#fff',
+    fontSize: 22,
+    fontWeight: '800',
+    fontFamily: 'Nunito',
+  },
+  applicationName: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0f172a',
+    fontFamily: 'Nunito',
+  },
+  applicationEmail: {
+    fontSize: 13,
+    color: '#475569',
+    marginTop: 3,
+    fontFamily: 'Nunito',
+  },
+  applicationPhone: {
+    fontSize: 13,
+    color: '#475569',
+    marginTop: 2,
+    fontFamily: 'Nunito',
+  },
+  applicationActionRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  applicationGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginHorizontal: 12,
+    marginBottom: 10,
+  },
+  applicationGridColumn: {
+    flex: 1,
+    minWidth: 280,
+    gap: 10,
+  },
+  applicationPanel: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  applicationPanelHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 14,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  applicationPanelTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#1e293b',
+    fontFamily: 'Nunito',
+  },
+  applicationStatRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  applicationStatCard: {
+    flex: 1,
+    minWidth: 150,
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  applicationStatValue: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#0f172a',
+    marginTop: 8,
+    fontFamily: 'Nunito',
+  },
+  applicationStatLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#64748b',
+    marginTop: 4,
+    textAlign: 'center',
+    fontFamily: 'Nunito',
+  },
+  applicationAvailableEmpty: {
+    fontSize: 12,
+    color: '#94a3b8',
+    marginTop: 6,
+    fontFamily: 'Nunito',
+  },
+  applicationAvailableItem: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#1e293b',
+    fontFamily: 'Nunito',
+  },
+  applicationOverviewRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  applicationOverviewLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#334155',
+    fontFamily: 'Nunito',
+  },
+  applicationOverviewValue: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0f172a',
+    fontFamily: 'Nunito',
+  },
+  applicationSection: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    padding: 18,
+    marginHorizontal: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  applicationSectionTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#1e293b',
+    marginBottom: 14,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+    fontFamily: 'Nunito',
+  },
+  applicationInfoGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  applicationInfoItem: {
+    flex: 1,
+    minWidth: 140,
+    backgroundColor: '#f8fafc',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  applicationInfoLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    fontFamily: 'Nunito',
+  },
+  applicationInfoValue: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginTop: 4,
+    fontFamily: 'Nunito',
+  },
+  applicationPillarsRow: {
+    marginTop: 14,
+    gap: 8,
+  },
+  applicationPillarsWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 8,
+  },
+  applicationPillarTag: {
+    backgroundColor: '#ede9fe',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  applicationPillarTagText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#6d28d9',
+    fontFamily: 'Nunito',
+  },
+  applicationFieldList: {
+    gap: 10,
+  },
+  applicationFieldRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  applicationFieldBlock: {
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  applicationFieldLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#64748b',
+    minWidth: 140,
+    fontFamily: 'Nunito',
+  },
+  applicationFieldValue: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#1e293b',
+    flex: 1,
+    textAlign: 'right',
+    fontFamily: 'Nunito',
+  },
+  applicationFieldBlockValue: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#1e293b',
+    lineHeight: 19,
+    marginTop: 6,
+    fontFamily: 'Nunito',
+  },
+  applicationEmptyValue: {
+    fontSize: 13,
+    fontStyle: 'italic',
+    color: '#94a3b8',
+    paddingVertical: 10,
+    textAlign: 'center',
+    fontFamily: 'Nunito',
+  },
+  applicationSkillsWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 8,
+  },
+  applicationSkillTag: {
+    backgroundColor: '#e0f2fe',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+  },
+  applicationSkillTagText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#0369a1',
+    fontFamily: 'Nunito',
+  },
+  applicationAffiliationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  applicationAffiliationOrg: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1e293b',
+    fontFamily: 'Nunito',
+  },
+  applicationAffiliationPos: {
+    fontSize: 12,
+    color: '#64748b',
+    marginTop: 2,
+    fontFamily: 'Nunito',
   },
 });

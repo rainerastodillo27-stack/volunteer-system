@@ -155,6 +155,31 @@ export default function PartnerProgramManagementScreen() {
     return byModule;
   }, [partnerApplications]);
 
+  const approvedProposalProjects = useMemo(
+    () =>
+      partnerApplications
+        .filter(application => application.status === 'Approved')
+        .map(application => {
+          const title =
+            application.proposalDetails?.proposedTitle ||
+            application.proposalDetails?.targetProjectTitle ||
+            'Approved proposal';
+          const module =
+            getProgramModuleFromProposalProjectId(application.projectId) ||
+            application.proposalDetails?.requestedProgramModule ||
+            'Program';
+
+          return {
+            id: application.id,
+            title,
+            module,
+            projectId: application.projectId,
+          };
+        })
+        .sort((left, right) => left.title.localeCompare(right.title)),
+    [partnerApplications]
+  );
+
   const handleOpenProposal = (card: ProgramCardConfig) => {
     navigation.navigate('Messages', {
       newProposalModule: card.module,
@@ -215,6 +240,29 @@ export default function PartnerProgramManagementScreen() {
           </View>
         );
       })}
+
+      <View style={styles.sectionSpacer} />
+
+      <Text style={styles.availableProgramHeader}>Approved Proposal Projects</Text>
+      {approvedProposalProjects.length === 0 ? (
+        <View style={styles.emptyCard}>
+          <Text style={styles.emptyText}>No approved proposal projects yet.</Text>
+        </View>
+      ) : null}
+      {approvedProposalProjects.map(project => (
+        <View key={project.id} style={[styles.programCard, styles.approvedCard]}>
+          <View style={styles.programHeader}>
+            <View style={[styles.iconBadge, { backgroundColor: '#166534' }]}>
+              <MaterialIcons name="check-circle" size={20} color="#fff" />
+            </View>
+            <View style={styles.programCopy}>
+              <Text style={styles.programTitle}>{project.title}</Text>
+              <Text style={styles.programDescription}>{project.module}</Text>
+            </View>
+          </View>
+          <Text style={styles.approvedStatusText}>Approved</Text>
+        </View>
+      ))}
     </ScrollView>
   );
 }
@@ -261,6 +309,9 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     fontWeight: '600',
     color: '#64748b',
+  },
+  sectionSpacer: {
+    height: 4,
   },
   programCard: {
     backgroundColor: '#fff',
@@ -318,6 +369,18 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
     textAlign: 'center',
+  },
+  approvedCard: {
+    borderColor: '#bbf7d0',
+    backgroundColor: '#f0fdf4',
+  },
+  approvedStatusText: {
+    marginTop: 8,
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#166534',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
   },
   secondaryButton: {
     backgroundColor: '#dcfce7',

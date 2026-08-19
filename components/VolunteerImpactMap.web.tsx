@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import Constants from 'expo-constants';
 import { View, Text, StyleSheet, TouchableOpacity, Modal, ScrollView } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import Constants from 'expo-constants';
 import { Project } from '../models/types';
 import {
   PHILIPPINES_BOUNDS,
@@ -88,6 +88,7 @@ type VolunteerImpactMapProps = {
   title?: string;
   subtitle?: string;
   initialMapStyleKey?: MapStylePresetKey;
+  dashboardVariant?: boolean;
   volunteerAccounts?: MapAccountOption[];
   partnerAccounts?: MapAccountOption[];
   onVolunteerPress?: (volunteerId: string) => void;
@@ -96,7 +97,14 @@ type VolunteerImpactMapProps = {
 
 function getWebGoogleMapsApiKey() {
   const expoExtra = Constants.expoConfig?.extra as { webGoogleMapsApiKey?: string } | undefined;
-  return expoExtra?.webGoogleMapsApiKey || process.env.EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY || '';
+  return (
+    process.env.EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY ||
+    expoExtra?.webGoogleMapsApiKey ||
+    process.env.GOOGLE_MAPS_WEB_API_KEY ||
+    process.env.GOOGLE_MAPS_API_KEY ||
+    process.env.VITE_GOOGLE_MAPS_WEB_API_KEY ||
+    ''
+  );
 }
 
 function getCurrentWebOrigin() {
@@ -111,7 +119,7 @@ function getGoogleMapsErrorMessage(apiKey: string) {
   const currentOrigin = getCurrentWebOrigin();
 
   if (!apiKey.trim()) {
-    return 'Google Maps web key is missing. Add GOOGLE_MAPS_WEB_API_KEY to .env and restart Expo.';
+    return 'Google Maps web key is missing. Add EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY to .env and restart the web app.';
   }
 
   return `Google Maps could not load for the impact map. Allow ${currentOrigin} in your Google Maps web key referrers and make sure the Maps JavaScript API is enabled.`;
@@ -194,12 +202,33 @@ function getMappedCountLabel(selectedMapStyleKey: MapStylePresetKey, count: numb
   return `${count} mapped ${count === 1 ? 'project' : 'projects'}`;
 }
 
+function getMapLegendTitle(selectedMapStyleKey: MapStylePresetKey) {
+  return selectedMapStyleKey === 'volunteer-view' ? 'Event Status' : 'Project Status';
+}
+
+function getMapLegendTotalLabel(selectedMapStyleKey: MapStylePresetKey, count: number) {
+  if (selectedMapStyleKey === 'volunteer-view') {
+    return `Total ${count === 1 ? 'Event' : 'Events'}`;
+  }
+
+  return `Total ${count === 1 ? 'Project' : 'Projects'}`;
+}
+
+function getMapLegendFootnote(selectedMapStyleKey: MapStylePresetKey, selectedStatus: string | null) {
+  if (selectedStatus) {
+    return 'Clear filter';
+  }
+
+  return selectedMapStyleKey === 'volunteer-view' ? 'Volunteer events' : 'Across Philippines';
+}
+
 // Displays the project impact map using the Google Maps JavaScript API on web.
 export default function VolunteerImpactMap({
   projects,
   title = 'Personal Impact Map',
   subtitle = 'Pinned places where you completed volunteer work.',
   initialMapStyleKey = 'volunteer-view',
+  dashboardVariant = false,
   volunteerAccounts,
   partnerAccounts,
   onVolunteerPress,
@@ -224,6 +253,7 @@ export default function VolunteerImpactMap({
   const [mapError, setMapError] = useState<string | null>(null);
   const [showMapStyleMenu, setShowMapStyleMenu] = useState(false);
   const [showAccountMenu, setShowAccountMenu] = useState(false);
+  const [selectedStatus, setSelectedStatus] = useState<string | null>(null);
   const [selectedMapStyleKey, setSelectedMapStyleKey] =
     useState<MapStylePresetKey>(initialMapStyleKey);
   const [selectedVolunteerId, setSelectedVolunteerId] = useState<string | null>(
@@ -277,7 +307,7 @@ export default function VolunteerImpactMap({
       ? partnerOptions.find(option => option.id === selectedPartnerId) || partnerOptions[0] || null
       : null;
 
-  const displayProjects =
+  const scopedProjects =
     selectedMapStyleKey === 'admin-overview'
       ? mappedProjects
       : selectedMapStyleKey === 'volunteer-view'
@@ -287,6 +317,12 @@ export default function VolunteerImpactMap({
       : hasPartnerScope
       ? selectedAccountOption?.mappedProjects || []
       : mappedProjects;
+  const displayProjects = selectedStatus
+    ? scopedProjects.filter(project => {
+        const status = getProjectDisplayStatus(project);
+        return selectedStatus === 'Planned' ? status === 'Planning' : status === selectedStatus;
+      })
+    : scopedProjects;
 
   useEffect(() => {
     setSelectedProject(displayProjects[0] || null);
@@ -387,7 +423,7 @@ export default function VolunteerImpactMap({
             const container = document.createElement('div');
             container.style.minWidth = '220px';
             container.style.maxWidth = '280px';
-            container.style.fontFamily = 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+            container.style.fontFamily = 'DM Sans, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
             container.style.fontSize = '12px';
             container.style.lineHeight = '16px';
 
@@ -582,29 +618,103 @@ export default function VolunteerImpactMap({
   const accountPickerTitle = getAccountPickerTitle(selectedMapStyleKey);
   const accountIconName = getAccountIconName(selectedMapStyleKey);
 
+  const statusLegend = [
+    { label: 'In Progress', color: '#5b9b57' }, { label: 'Planned', color: '#5f8fdc' },
+    { label: 'Completed', color: '#8e58d6' }, { label: 'On Hold', color: '#e7a23d' },
+    { label: 'Cancelled', color: '#b95258' },
+  ];
+
   return (
     <View style={styles.section}>
-      <View style={styles.headerRow}>
-        <View style={styles.headerIdentity}>
+      {dashboardVariant ? (
+        <View style={styles.dashboardTabs}>
+          <TouchableOpacity
+            style={[
+              styles.dashboardTab,
+              selectedMapStyleKey === 'partner-view' && styles.dashboardTabActive,
+            ]}
+            onPress={() => setSelectedMapStyleKey('partner-view')}
+          >
+            <MaterialIcons
+              name="handshake"
+              size={27}
+              color={selectedMapStyleKey === 'partner-view' ? '#5a8f52' : '#64748b'}
+            />
+            <Text
+              style={[
+                styles.dashboardTabText,
+                selectedMapStyleKey === 'partner-view' && styles.dashboardTabTextActive,
+              ]}
+            >
+              Partner
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.dashboardTab,
+              selectedMapStyleKey === 'volunteer-view' && styles.dashboardTabActive,
+            ]}
+            onPress={() => setSelectedMapStyleKey('volunteer-view')}
+          >
+            <MaterialIcons
+              name="group"
+              size={27}
+              color={selectedMapStyleKey === 'volunteer-view' ? '#5a8f52' : '#64748b'}
+            />
+            <Text
+              style={[
+                styles.dashboardTabText,
+                selectedMapStyleKey === 'volunteer-view' && styles.dashboardTabTextActive,
+              ]}
+            >
+              Volunteer
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.dashboardTab,
+              selectedMapStyleKey === 'admin-overview' && styles.dashboardTabActive,
+            ]}
+            onPress={() => setSelectedMapStyleKey('admin-overview')}
+          >
+            <MaterialIcons
+              name="event"
+              size={27}
+              color={selectedMapStyleKey === 'admin-overview' ? '#5a8f52' : '#64748b'}
+            />
+            <Text
+              style={[
+                styles.dashboardTabText,
+                selectedMapStyleKey === 'admin-overview' && styles.dashboardTabTextActive,
+              ]}
+            >
+              Events
+            </Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+      <View style={[styles.headerRow, dashboardVariant && styles.dashboardHeaderRow]}>
+        <View style={[styles.headerIdentity, dashboardVariant && styles.dashboardHeaderIdentity]}>
           <View
             style={[
               styles.headerIcon,
+              dashboardVariant && styles.dashboardHeaderIcon,
               {
-                backgroundColor: selectedMapStyle.chipBg,
-                borderColor: selectedMapStyle.chipBorder,
+                backgroundColor: dashboardVariant ? '#f2f8f1' : selectedMapStyle.chipBg,
+                borderColor: dashboardVariant ? '#f2f8f1' : selectedMapStyle.chipBorder,
               },
             ]}
           >
-            <MaterialIcons name="place" size={18} color={selectedMapStyle.accentColor} />
+            <MaterialIcons name="place" size={dashboardVariant ? 30 : 18} color={dashboardVariant ? '#5a8f52' : selectedMapStyle.accentColor} />
           </View>
           <View style={styles.headerCopy}>
-            <Text style={styles.title}>{title}</Text>
-            <Text style={styles.subtitle}>{subtitle}</Text>
+            <Text style={[styles.title, dashboardVariant && styles.dashboardTitle]}>{title}</Text>
+            <Text style={[styles.subtitle, dashboardVariant && styles.dashboardSubtitle]}>{subtitle}</Text>
           </View>
         </View>
 
-        <View style={styles.headerActions}>
-          {showAccountPicker ? (
+        <View style={[styles.headerActions, dashboardVariant && styles.dashboardHeaderActions]}>
+          {!dashboardVariant && showAccountPicker ? (
             <TouchableOpacity
               style={[
                 styles.mapStyleButton,
@@ -634,18 +744,19 @@ export default function VolunteerImpactMap({
           <TouchableOpacity
             style={[
               styles.mapStyleButton,
+              dashboardVariant && styles.dashboardViewButton,
               {
-                backgroundColor: selectedMapStyle.chipBg,
-                borderColor: selectedMapStyle.chipBorder,
+                backgroundColor: dashboardVariant ? '#ffffff' : selectedMapStyle.chipBg,
+                borderColor: dashboardVariant ? '#e2e8f0' : selectedMapStyle.chipBorder,
               },
             ]}
             onPress={() => setShowMapStyleMenu(true)}
           >
-            <MaterialIcons name="tune" size={18} color={selectedMapStyle.accentColor} />
-            <Text style={[styles.mapStyleButtonText, { color: selectedMapStyle.accentColor }]}>
+            <MaterialIcons name="tune" size={dashboardVariant ? 27 : 18} color={dashboardVariant ? '#5a8f52' : selectedMapStyle.accentColor} />
+            <Text style={[styles.mapStyleButtonText, dashboardVariant && styles.dashboardViewButtonText, { color: dashboardVariant ? '#334155' : selectedMapStyle.accentColor }]}>
               {selectedMapStyle.label}
             </Text>
-            <MaterialIcons name="keyboard-arrow-down" size={22} color={selectedMapStyle.accentColor} />
+            <MaterialIcons name="keyboard-arrow-down" size={22} color={dashboardVariant ? '#334155' : selectedMapStyle.accentColor} />
           </TouchableOpacity>
         </View>
       </View>
@@ -653,6 +764,7 @@ export default function VolunteerImpactMap({
       <View
         style={[
           styles.mapShell,
+          dashboardVariant && styles.dashboardMapShell,
           {
             backgroundColor: selectedMapStyle.shellBg,
             borderColor: selectedMapStyle.shellBorder,
@@ -660,6 +772,26 @@ export default function VolunteerImpactMap({
         ]}
       >
         <MapHost ref={mapElementRef} style={styles.mapHost} />
+        {dashboardVariant ? (
+          <View style={styles.mapLegend}>
+            <Text style={styles.legendTitle}>{getMapLegendTitle(selectedMapStyleKey)}</Text>
+            {statusLegend.map(status => <TouchableOpacity key={status.label} style={[styles.legendRow, selectedStatus === status.label && styles.legendRowActive]} onPress={() => setSelectedStatus(current => current === status.label ? null : status.label)}>
+              <MaterialIcons name="location-on" size={24} color={status.color} />
+              <Text style={styles.legendLabel}>{status.label}</Text>
+              {selectedStatus === status.label ? <MaterialIcons name="check" size={16} color={status.color} /> : null}
+            </TouchableOpacity>)}
+            <View style={styles.legendDivider} />
+            <Text style={styles.legendTotalLabel}>
+              {getMapLegendTotalLabel(selectedMapStyleKey, displayProjects.length)}
+            </Text>
+            <Text style={styles.legendTotal}>{displayProjects.length}</Text>
+            <TouchableOpacity onPress={() => setSelectedStatus(null)}>
+              <Text style={styles.legendFootnote}>
+                {getMapLegendFootnote(selectedMapStyleKey, selectedStatus)}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
         {mapError ? (
           <View style={[styles.errorOverlay, { backgroundColor: selectedMapStyle.errorBg }]}>
             <View style={[styles.errorCard, { borderColor: selectedMapStyle.errorBorder }]}>
@@ -778,6 +910,39 @@ const styles = StyleSheet.create({
     width: '100%',
     marginBottom: 20,
   },
+  dashboardMapShell: {
+    height: 490,
+    borderWidth: 0,
+    borderRadius: 20,
+  },
+  dashboardTabs: { flexDirection: 'row', height: 68, borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 15, overflow: 'hidden' },
+  dashboardTab: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 13, backgroundColor: '#ffffff', borderRightWidth: 1, borderRightColor: '#e2e8f0' },
+  dashboardTabActive: { backgroundColor: '#f5faf4', borderBottomWidth: 3, borderBottomColor: '#5a8f52' },
+  dashboardTabText: { fontSize: 17, fontWeight: '800', color: '#1e293b' },
+  dashboardTabTextActive: { color: '#5a8f52' },
+  dashboardHeaderRow: { display: 'none' },
+  dashboardHeaderIdentity: { display: 'none' },
+  dashboardHeaderActions: { maxWidth: '100%', justifyContent: 'flex-start', gap: 20 },
+  workspaceButton: { flexDirection: 'row', alignItems: 'center', gap: 17, paddingHorizontal: 24, paddingVertical: 17, borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 14, backgroundColor: '#ffffff' },
+  workspaceButtonText: { fontSize: 17, fontWeight: '700', color: '#1e293b' },
+  dashboardViewButton: { borderRadius: 14, paddingHorizontal: 22, paddingVertical: 17 },
+  dashboardViewButtonText: { fontSize: 17, fontWeight: '700' },
+  dashboardHeaderIcon: { width: 76, height: 76, borderRadius: 38 },
+  dashboardTitle: { fontSize: 25 },
+  dashboardSubtitle: { fontSize: 17 },
+  mapLegend: {
+    position: 'absolute', top: 26, left: 30, width: 196, paddingHorizontal: 22, paddingVertical: 18,
+    borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.97)', shadowColor: '#0f172a',
+    shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 4,
+  },
+  legendTitle: { fontSize: 14, fontWeight: '800', color: '#1e293b', marginBottom: 13 },
+  legendRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
+  legendRowActive: { backgroundColor: '#f0f8ef', borderRadius: 8, paddingHorizontal: 4 },
+  legendLabel: { fontSize: 14, color: '#64748b', fontWeight: '600' },
+  legendDivider: { height: 1, backgroundColor: '#e2e8f0', marginHorizontal: -22, marginTop: 5, marginBottom: 16 },
+  legendTotalLabel: { fontSize: 14, fontWeight: '800', color: '#334155' },
+  legendTotal: { color: '#5a8f52', fontSize: 35, fontWeight: '800', marginTop: 6 },
+  legendFootnote: { fontSize: 13, color: '#64748b', fontWeight: '600' },
   headerRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',

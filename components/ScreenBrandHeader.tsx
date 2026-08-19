@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { StyleSheet, Text, View, useWindowDimensions, Modal, TouchableOpacity, ScrollView, Pressable } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
-import AppLogo from './AppLogo';
 import { PartnerProjectApplication, User, VolunteerProjectMatch } from '../models/types';
 
 type NotificationMessage = {
@@ -233,12 +232,7 @@ export default function ScreenBrandHeader({
     <>
       <View style={[styles.container, { paddingTop: Math.max(12, insets.top + 8) }]}>
         <View style={[styles.brandBlock, isCompact && styles.brandBlockCompact]}>
-
-          <View style={[styles.logoWrap, isCompact && styles.logoWrapCompact]}>
-            <AppLogo width={isCompact ? 62 : 78} />
-          </View>
           <View style={[styles.copyBlock, isCompact && styles.copyBlockCompact]}>
-            <Text style={[styles.brandName, isCompact && styles.brandNameCompact]}>NVC</Text>
             <Text style={[styles.screenTitle, isCompact && styles.screenTitleCompact]} numberOfLines={2}>
               {title}
             </Text>
@@ -320,16 +314,15 @@ export default function ScreenBrandHeader({
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#ffffff',
     paddingHorizontal: 16,
     paddingTop: 14,
     paddingBottom: 10,
   },
   brandBlock: {
     backgroundColor: '#ffffff',
-    borderRadius: 18,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingHorizontal: 4,
+    paddingVertical: 8,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
@@ -377,9 +370,9 @@ const styles = StyleSheet.create({
   },
   screenTitle: {
     marginTop: 2,
-    fontSize: 12,
-    color: '#4b5563',
-    fontWeight: '600',
+    fontSize: 18,
+    color: '#17212f',
+    fontWeight: '700',
   },
   screenTitleCompact: {
     textAlign: 'center',

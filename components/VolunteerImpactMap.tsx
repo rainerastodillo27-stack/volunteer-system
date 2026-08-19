@@ -255,6 +255,7 @@ type VolunteerImpactMapProps = {
   title?: string;
   subtitle?: string;
   initialMapStyleKey?: MapStylePresetKey;
+  dashboardVariant?: boolean;
   volunteerAccounts?: MapAccountOption[];
   partnerAccounts?: MapAccountOption[];
   onVolunteerPress?: (volunteerId: string) => void;
@@ -463,6 +464,8 @@ export default function VolunteerImpactMap({
     onVolunteerPress?.(volunteerId);
   }, [onVolunteerPress]);
 
+  const mapRegion = useMemo(() => getInitialProjectRegion(displayProjects) as Region, [displayProjects]);
+
   if (!hasAnyMapData) {
     return null;
   }
@@ -477,11 +480,6 @@ export default function VolunteerImpactMap({
     selectedAccountOption
   );
   const nativeMapType = getNativeMapType(selectedMapStyle);
-  const mapRegion = useMemo(() => getInitialProjectRegion(displayProjects) as Region, [displayProjects]);
-  const mapContentKey = useMemo(
-    () => `${selectedMapStyleKey}:${displayProjects.map(project => project.id).join('|')}`,
-    [displayProjects, selectedMapStyleKey]
-  );
 
   return (
     <View style={styles.section}>

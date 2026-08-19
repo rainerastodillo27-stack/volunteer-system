@@ -1,3 +1,5 @@
+import rawAddressIndex from './philippineAddressIndex.json';
+
 // Precomputed Philippine address helpers backed by PSGC 2025-2Q data.
 // Regenerate utils/philippineAddressIndex.json with:
 //   node scripts/generate-address-index.js
@@ -29,7 +31,7 @@ type PhilippineAddressIndex = {
   barangaysByCity: Record<string, PHBarangay[]>;
 };
 
-const addressIndex = require('./philippineAddressIndex.json') as PhilippineAddressIndex;
+const addressIndex = rawAddressIndex as PhilippineAddressIndex;
 
 const cleanLabel = (value: string | undefined | null) => (value ?? '').replace(/\s+/g, ' ').trim();
 
@@ -42,6 +44,11 @@ export const getCitiesByRegion = (regionCode: string): PHCityMunicipality[] => {
 
   return addressIndex.citiesByRegion[regionCode] ?? [];
 };
+
+export const getAllCities = (): PHCityMunicipality[] =>
+  Object.values(addressIndex.citiesByRegion)
+    .flat()
+    .sort((left, right) => left.displayName.localeCompare(right.displayName));
 
 export const getBarangaysByCity = (cityCode: string): PHBarangay[] => {
   if (!cityCode) {

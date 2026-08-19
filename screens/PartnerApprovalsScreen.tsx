@@ -374,6 +374,6 @@ const styles = StyleSheet.create({
   partnerSector: { fontSize: ModernTheme.typography.fontSize.sm, color: ModernTheme.colors.text.secondary, marginTop: ModernTheme.spacing[1] },
   inputGroup: { gap: ModernTheme.spacing[2] },
   label: { fontSize: ModernTheme.typography.fontSize.md, fontWeight: ModernTheme.typography.fontWeight.semibold, color: ModernTheme.colors.text.primary },
-  textInput: { borderWidth: 1, borderColor: ModernTheme.colors.border.medium, borderRadius: ModernTheme.borderRadius.md, padding: ModernTheme.spacing[3], fontSize: ModernTheme.typography.fontSize.md, color: ModernTheme.colors.text.primary, fontFamily: 'System', textAlignVertical: 'top' },
+  textInput: { borderWidth: 1, borderColor: ModernTheme.colors.border.medium, borderRadius: ModernTheme.borderRadius.md, padding: ModernTheme.spacing[3], fontSize: ModernTheme.typography.fontSize.md, color: ModernTheme.colors.text.primary, fontFamily: 'DM Sans', textAlignVertical: 'top' },
   modalActions: { flexDirection: 'row', gap: ModernTheme.spacing[3], marginTop: ModernTheme.spacing[5], marginBottom: ModernTheme.spacing[5] },
 });

@@ -1,16 +1,16 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import ModernTheme from '../utils/modernTheme';
 import {
   View,
   Text,
   StyleSheet,
-  FlatList,
   TouchableOpacity,
   Alert,
   Modal,
   TextInput,
   ScrollView,
   Image,
+  Platform,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -36,9 +36,7 @@ import { isImageMediaUri } from '../utils/media';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 const roleOptions: UserRole[] = ['admin', 'partner', 'volunteer'];
-const NEW_ACCOUNT_WINDOW_MS = 1000 * 60 * 60 * 24 * 3;
 
-// Lets admins review, edit, and remove application user accounts.
 export default function UserManagementScreen() {
   const { user, isAdmin } = useAuth();
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
@@ -49,30 +47,31 @@ export default function UserManagementScreen() {
   const [pendingUserApprovals, setPendingUserApprovals] = useState<User[]>([]);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [showActionMenuUser, setShowActionMenuUser] = useState<User | null>(null);
+
+  // Form state drafts
   const [nameDraft, setNameDraft] = useState('');
   const [emailDraft, setEmailDraft] = useState('');
   const [phoneDraft, setPhoneDraft] = useState('');
+  const [passwordDraft, setPasswordDraft] = useState('');
   const [roleDraft, setRoleDraft] = useState<UserRole>('volunteer');
   const [userTypeDraft, setUserTypeDraft] = useState<UserType>('Adult');
   const [pillarsDraft, setPillarsDraft] = useState<NVCSector[]>([]);
-  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
-  const [expandedUserRoles, setExpandedUserRoles] = useState<Record<UserRole, boolean>>({
-    admin: false,
-    partner: true,
-    volunteer: true,
-  });
-  const [reviewTarget, setReviewTarget] = useState<
-    | { type: 'user'; record: User }
-    | null
-  >(null);
-  const [viewImageUrl, setViewImageUrl] = useState<string | null>(null);
 
-  // Loads and sorts all user accounts for the admin management table.
+  const [reviewTarget, setReviewTarget] = useState<{ type: 'user'; record: User } | null>(null);
+  const [accountSearch, setAccountSearch] = useState('');
+  const [accountFilter, setAccountFilter] = useState<'all' | UserRole>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'pending'>('all');
+  const [showStatusDropdown, setShowStatusDropdown] = useState(false);
+  const [showTypeDropdown, setShowTypeDropdown] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
+
+  // Load user data
   const loadUsers = useCallback(async () => {
     try {
-      // Load users and partners quickly; defer volunteers and pending approvals
       const [allUsers, allPartners] = await Promise.all([getAllUsers(), getAllPartners()]);
-      let pending: User[] = [];
       setVolunteers([]);
       setPendingUserApprovals([]);
       setTimeout(async () => {
@@ -85,9 +84,9 @@ export default function UserManagementScreen() {
           setPendingUserApprovals(pendingApprovals);
         } catch {}
       }, 50);
+
       const sortedUsers = [...allUsers].sort((a, b) => {
-        const createdAtDiff =
-          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        const createdAtDiff = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
         if (!Number.isNaN(createdAtDiff) && createdAtDiff !== 0) {
           return createdAtDiff;
         }
@@ -95,7 +94,6 @@ export default function UserManagementScreen() {
       });
       setUsers(sortedUsers);
       setPartners(allPartners);
-      setLastSyncedAt(new Date().toISOString());
       setLoadError(null);
     } catch (error) {
       setLoadError({
@@ -107,10 +105,7 @@ export default function UserManagementScreen() {
 
   useFocusEffect(
     React.useCallback(() => {
-      if (!isAdmin) {
-        return undefined;
-      }
-
+      if (!isAdmin) return undefined;
       void loadUsers();
       return subscribeToStorageChanges(['users', 'partners', 'volunteers'], () => {
         void loadUsers();
@@ -119,45 +114,79 @@ export default function UserManagementScreen() {
   );
 
   React.useEffect(() => {
-    if (!successNotice) {
-      return undefined;
-    }
-
-    const timer = setTimeout(() => {
-      setSuccessNotice(null);
-    }, 4000);
-
+    if (!successNotice) return undefined;
+    const timer = setTimeout(() => setSuccessNotice(null), 4000);
     return () => clearTimeout(timer);
   }, [successNotice]);
 
-  // Flags recently created accounts so they can be visually highlighted.
-  const isNewAccount = (createdAt: string) => {
-    const createdTime = new Date(createdAt).getTime();
-    if (Number.isNaN(createdTime)) {
-      return false;
-    }
-    return Date.now() - createdTime <= NEW_ACCOUNT_WINDOW_MS;
-  };
-
-  // Opens the edit modal with the selected user's current values.
+  // Open / Close Modals
   const openEditModal = (targetUser: User) => {
     setSelectedUser(targetUser);
     setNameDraft(targetUser.name);
     setEmailDraft(targetUser.email || '');
     setPhoneDraft(targetUser.phone || '');
+    setPasswordDraft(targetUser.password || 'password123');
     setRoleDraft(targetUser.role);
     setUserTypeDraft(targetUser.userType || 'Adult');
     setPillarsDraft(targetUser.pillarsOfInterest || []);
     setShowEditModal(true);
+    setShowActionMenuUser(null);
   };
 
-  // Closes the user editor and clears the current selection.
   const closeEditModal = () => {
     setShowEditModal(false);
     setSelectedUser(null);
   };
 
-  // Saves changes made to the selected user account.
+  const openAddModal = () => {
+    setNameDraft('');
+    setEmailDraft('');
+    setPhoneDraft('');
+    setPasswordDraft('Password123!');
+    setRoleDraft('volunteer');
+    setUserTypeDraft('Adult');
+    setPillarsDraft([]);
+    setShowAddModal(true);
+  };
+
+  const closeAddModal = () => {
+    setShowAddModal(false);
+  };
+
+  // Add user logic
+  const handleAddUser = async () => {
+    if (!nameDraft.trim() || !emailDraft.trim()) {
+      Alert.alert('Validation Error', 'Name and Email are required.');
+      return;
+    }
+
+    try {
+      const newUser: User = {
+        id: `user-${Date.now()}`,
+        name: nameDraft.trim(),
+        email: emailDraft.trim().toLowerCase(),
+        phone: phoneDraft.trim() || undefined,
+        password: passwordDraft.trim() || 'Password123!',
+        role: roleDraft,
+        userType: userTypeDraft,
+        pillarsOfInterest: pillarsDraft,
+        createdAt: new Date().toISOString(),
+        approvalStatus: 'approved',
+      };
+
+      await saveUser(newUser);
+      closeAddModal();
+      setSuccessNotice({
+        title: 'User Added',
+        message: `Account for ${newUser.name} created successfully.`,
+      });
+      void loadUsers();
+    } catch (error) {
+      Alert.alert(getRequestErrorTitle(error), getRequestErrorMessage(error, 'Failed to add user.'));
+    }
+  };
+
+  // Save changes logic
   const handleSaveUser = async () => {
     if (!selectedUser) return;
     if (!nameDraft.trim() || !emailDraft.trim()) {
@@ -165,250 +194,144 @@ export default function UserManagementScreen() {
       return;
     }
 
-    const previousUsers = users;
-    const previousPartners = partners;
-    const previousVolunteers = volunteers;
-
     try {
       const updatedUser: User = {
         ...selectedUser,
         name: nameDraft.trim(),
         email: emailDraft.trim().toLowerCase(),
         phone: phoneDraft.trim() || undefined,
+        password: passwordDraft.trim() || selectedUser.password || 'Password123!',
         role: roleDraft,
         userType: userTypeDraft,
         pillarsOfInterest: pillarsDraft,
       };
-      const linkedPartners = partners.filter(partner => {
-        if (partner.ownerUserId) {
-          return partner.ownerUserId === selectedUser.id;
-        }
-
-        return (
-          (partner.contactEmail || '').trim().toLowerCase() === (selectedUser.email || '').trim().toLowerCase() ||
-          (partner.contactPhone || '').trim() === (selectedUser.phone || '').trim()
-        );
-      });
-
-      const linkedVolunteers = volunteers.filter(volunteer => {
-        if (volunteer.userId) {
-          return volunteer.userId === selectedUser.id;
-        }
-
-        return (
-          (volunteer.email || '').trim().toLowerCase() === (selectedUser.email || '').trim().toLowerCase() ||
-          (volunteer.phone || '').trim() === (selectedUser.phone || '').trim()
-        );
-      });
-      const nextPartners = partners.map(partner =>
-        linkedPartners.some(linkedPartner => linkedPartner.id === partner.id)
-          ? {
-            ...partner,
-            ownerUserId: updatedUser.id,
-            contactEmail: updatedUser.email,
-            contactPhone: updatedUser.phone,
-          }
-          : partner
-      );
-      const nextVolunteers = volunteers.map(volunteer =>
-        linkedVolunteers.some(linkedVolunteer => linkedVolunteer.id === volunteer.id)
-          ? {
-            ...volunteer,
-            userId: updatedUser.id,
-            name: updatedUser.name,
-            email: updatedUser.email || '',
-            phone: updatedUser.phone || '',
-          }
-          : volunteer
-      );
-      setUsers(currentUsers =>
-        currentUsers.map(currentUser => (currentUser.id === updatedUser.id ? updatedUser : currentUser))
-      );
-      setPartners(nextPartners);
-      setVolunteers(nextVolunteers);
-      if (reviewTarget?.type === 'user' && reviewTarget.record.id === updatedUser.id) {
-        setReviewTarget({ type: 'user', record: updatedUser });
-      }
-      closeEditModal();
-      setSuccessNotice({
-        title: 'Changes Saved',
-        message: `${updatedUser.name}'s account details were updated successfully.`,
-      });
 
       await saveUser(updatedUser);
 
-      await Promise.all([
-        ...linkedPartners.map(partner =>
-          savePartner({
-            ...partner,
-            ownerUserId: updatedUser.id,
-            contactEmail: updatedUser.email,
-            contactPhone: updatedUser.phone,
-          })
-        ),
-        ...linkedVolunteers.map(volunteer =>
-          saveVolunteer({
-            ...volunteer,
-            userId: updatedUser.id,
+      // Sync linked volunteer and partner profile records
+      try {
+        const [volunteers, partnersList] = await Promise.all([
+          getAllVolunteers(),
+          getAllPartners(),
+        ]);
+
+        const linkedVolunteer = volunteers.find(
+          v => v.userId === updatedUser.id || (v.email && v.email.toLowerCase() === updatedUser.email?.toLowerCase())
+        );
+        if (linkedVolunteer && updatedUser.email) {
+          await saveVolunteer({
+            ...linkedVolunteer,
             name: updatedUser.name,
-            email: updatedUser.email || '',
-            phone: updatedUser.phone || '',
-          })
-        ),
-      ]);
-      if (user?.id === updatedUser.id) {
-        await setCurrentUser(updatedUser);
+            email: updatedUser.email,
+            phone: updatedUser.phone || linkedVolunteer.phone,
+          });
+        }
+
+        const linkedPartner = partnersList.find(
+          p => p.ownerUserId === updatedUser.id || (p.contactEmail && p.contactEmail.toLowerCase() === updatedUser.email?.toLowerCase())
+        );
+        if (linkedPartner) {
+          await savePartner({
+            ...linkedPartner,
+            name: updatedUser.name,
+            contactEmail: updatedUser.email || linkedPartner.contactEmail,
+            contactPhone: updatedUser.phone || linkedPartner.contactPhone,
+          });
+        }
+      } catch (syncErr) {
+        console.warn('Profile sync notice:', syncErr);
       }
-      void loadUsers();
-    } catch (error) {
-      setUsers(previousUsers);
-      setPartners(previousPartners);
-      setVolunteers(previousVolunteers);
-      Alert.alert(
-        getRequestErrorTitle(error),
-        getRequestErrorMessage(error, 'Failed to update user.')
-      );
-    }
-  };
 
-  const performDeleteUser = async (targetUser: User) => {
-    const previousUsers = users;
-    const previousPendingApprovals = pendingUserApprovals;
-    setUsers(currentUsers => currentUsers.filter(currentUser => currentUser.id !== targetUser.id));
-    setPendingUserApprovals(currentUsers =>
-      currentUsers.filter(currentUser => currentUser.id !== targetUser.id)
-    );
-    if (reviewTarget?.type === 'user' && reviewTarget.record.id === targetUser.id) {
-      closeReviewModal();
-    }
-    if (selectedUser?.id === targetUser.id) {
       closeEditModal();
-    }
-    setSuccessNotice({
-      title: 'Deletion Complete',
-      message: `${targetUser.name}'s account and linked application records were deleted.`,
-    });
-
-    try {
-      await deleteUser(targetUser.id);
+      setSuccessNotice({
+        title: 'Changes Saved',
+        message: `${updatedUser.name}'s details were updated successfully.`,
+      });
       void loadUsers();
     } catch (error) {
-      setUsers(previousUsers);
-      setPendingUserApprovals(previousPendingApprovals);
-      Alert.alert(
-        getRequestErrorTitle(error),
-        getRequestErrorMessage(error, 'Failed to delete user account.')
-      );
+      Alert.alert(getRequestErrorTitle(error), getRequestErrorMessage(error, 'Failed to update user.'));
     }
   };
 
-  // Confirms and deletes a user account that is not the active admin session.
-  const handleDeleteUser = (targetUser: User) => {
+  // Delete user logic
+  const handleDeleteUser = async (targetUser: User) => {
+    setShowActionMenuUser(null);
     if (targetUser.id === user?.id) {
       Alert.alert('Restricted', 'You cannot delete the currently signed-in admin account.');
       return;
     }
 
-    void performDeleteUser(targetUser);
-  };
-
-  const handleApproveUser = async (targetUser: User) => {
-    if (!user?.id) {
-      return;
-    }
-
-    const previousUsers = users;
-    const previousPendingApprovals = pendingUserApprovals;
-    const now = new Date().toISOString();
-    const optimisticApprovedUser: User = {
-      ...targetUser,
-      approvalStatus: 'approved',
-      approvedBy: user.id,
-      approvedAt: now,
-      rejectionReason: undefined,
+    const executeDelete = async () => {
+      try {
+        await deleteUser(targetUser.id);
+        setSuccessNotice({
+          title: 'Account Deleted',
+          message: `${targetUser.name}'s account has been removed.`,
+        });
+        void loadUsers();
+      } catch (error) {
+        Alert.alert(getRequestErrorTitle(error), getRequestErrorMessage(error, 'Failed to delete user account.'));
+      }
     };
-    setUsers(currentUsers =>
-      currentUsers.map(currentUser =>
-        currentUser.id === targetUser.id ? optimisticApprovedUser : currentUser
-      )
-    );
-    setPendingUserApprovals(currentUsers =>
-      currentUsers.filter(currentUser => currentUser.id !== targetUser.id)
-    );
-    if (reviewTarget?.type === 'user' && reviewTarget.record.id === targetUser.id) {
-      closeReviewModal();
-    }
-    setSuccessNotice({
-      title: 'Approval Complete',
-      message: `${targetUser.name}'s account has been approved and login access is now unlocked.`,
-    });
 
-    try {
-      const approvedUser = await approveUser(targetUser.id, user.id);
-      setUsers(currentUsers =>
-        currentUsers.map(currentUser =>
-          currentUser.id === targetUser.id ? approvedUser : currentUser
-        )
-      );
-      void loadUsers();
-    } catch (error) {
-      setUsers(previousUsers);
-      setPendingUserApprovals(previousPendingApprovals);
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      if (window.confirm(`Are you sure you want to delete ${targetUser.name}'s account? This action cannot be undone.`)) {
+        await executeDelete();
+      }
+    } else {
       Alert.alert(
-        getRequestErrorTitle(error),
-        getRequestErrorMessage(error, 'Failed to approve user account.')
+        'Delete Account',
+        `Are you sure you want to delete ${targetUser.name}'s account? This action cannot be undone.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Delete',
+            style: 'destructive',
+            onPress: () => {
+              void executeDelete();
+            },
+          },
+        ]
       );
     }
   };
 
-  const handleRejectUser = async (targetUser: User) => {
-    if (!user?.id) {
-      return;
-    }
+  // CSV Export logic
+  const handleExportCSV = () => {
+    const csvContent =
+      'Name,Email,Role,Status,Joined\n' +
+      users.map(u => `"${u.name}","${u.email}","${u.role}","${u.approvalStatus || 'Active'}","${u.createdAt}"`).join('\n');
 
-    const previousUsers = users;
-    const previousPendingApprovals = pendingUserApprovals;
-    setUsers(currentUsers =>
-      currentUsers.filter(currentUser => currentUser.id !== targetUser.id)
-    );
-    setPendingUserApprovals(currentUsers =>
-      currentUsers.filter(currentUser => currentUser.id !== targetUser.id)
-    );
-    if (reviewTarget?.type === 'user' && reviewTarget.record.id === targetUser.id) {
-      closeReviewModal();
-    }
-    setSuccessNotice({
-      title: 'Deletion Complete',
-      message: `${targetUser.name}'s unapproved account was deleted from the approval queue.`,
-    });
-
-    try {
-      await rejectUser(targetUser.id, 'Account rejected by administrator.', user.id);
-      void loadUsers();
-    } catch (error) {
-      setUsers(previousUsers);
-      setPendingUserApprovals(previousPendingApprovals);
-      Alert.alert(
-        getRequestErrorTitle(error),
-        getRequestErrorMessage(error, 'Failed to reject user account.')
-      );
+    if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.setAttribute('download', `user_export_${format(new Date(), 'yyyy-MM-dd')}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } else {
+      Alert.alert('Export Complete', `${users.length} user records ready for export.`);
     }
   };
 
   const openUserReview = (targetUser: User) => {
     setReviewTarget({ type: 'user', record: targetUser });
+    setShowActionMenuUser(null);
   };
 
   const closeReviewModal = () => {
     setReviewTarget(null);
   };
 
-  const toggleUserRoleSection = (role: UserRole) => {
-    setExpandedUserRoles(current => ({
-      ...current,
-      [role]: !current[role],
-    }));
-  };
+  const getLinkedPartnerForUser = (targetUser: User) =>
+    partners.find(partner => {
+      if (partner.ownerUserId) return partner.ownerUserId === targetUser.id;
+      return (
+        (partner.contactEmail || '').trim().toLowerCase() === (targetUser.email || '').trim().toLowerCase() ||
+        (partner.contactPhone || '').trim() === (targetUser.phone || '').trim()
+      );
+    }) || null;
 
   if (!isAdmin) {
     return (
@@ -422,633 +345,705 @@ export default function UserManagementScreen() {
     );
   }
 
-  const isApprovedUser = (item: User) =>
-    (item.approvalStatus || (item.role === 'admin' ? 'approved' : 'pending')) === 'approved';
-  const approvedUsers = users.filter(isApprovedUser);
-  const adminUsers = approvedUsers.filter(item => item.role === 'admin');
-  const partnerUsers = approvedUsers.filter(item => item.role === 'partner');
-  const volunteerUsers = approvedUsers.filter(item => item.role === 'volunteer');
+  // Summary stats
+  const adminUsers = users.filter(item => item.role === 'admin');
+  const partnerUsers = users.filter(item => item.role === 'partner');
+  const volunteerUsers = users.filter(item => item.role === 'volunteer');
   const totalAdmins = adminUsers.length;
   const totalPartners = partnerUsers.length;
   const totalVolunteers = volunteerUsers.length;
-  const pendingPartnerApprovals = pendingUserApprovals.filter(item => item.role === 'partner').length;
-  const pendingVolunteerApprovals = pendingUserApprovals.filter(item => item.role === 'volunteer').length;
-  const getLinkedPartnerForUser = (targetUser: User) =>
-    partners.find(partner => {
-      if (partner.ownerUserId) {
-        return partner.ownerUserId === targetUser.id;
-      }
 
-      return (
-        (partner.contactEmail || '').trim().toLowerCase() === (targetUser.email || '').trim().toLowerCase() ||
-        (partner.contactPhone || '').trim() === (targetUser.phone || '').trim()
-      );
-    }) || null;
-  const getLinkedVolunteerForUser = (targetUser: User) =>
-    volunteers.find(volunteer => {
-      if (volunteer.userId) {
-        return volunteer.userId === targetUser.id;
-      }
+  // Filtered users list
+  const visibleUsers = users.filter(account => {
+    const roleMatches = accountFilter === 'all' || account.role === accountFilter;
+            const isPending = account.approvalStatus?.toLowerCase() === 'pending';
+    const statusMatches =
+      statusFilter === 'all' ||
+      (statusFilter === 'pending' && isPending) ||
+      (statusFilter === 'active' && !isPending);
 
-      return (
-        (volunteer.email || '').trim().toLowerCase() === (targetUser.email || '').trim().toLowerCase() ||
-        (volunteer.phone || '').trim() === (targetUser.phone || '').trim()
-      );
-    }) || null;
+    const partner = getLinkedPartnerForUser(account);
+    const query = accountSearch.trim().toLowerCase();
+    const searchMatches =
+      !query ||
+      [account.name, account.email, account.phone, partner?.name]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+        .includes(query);
 
-  const renderPendingApprovalCard = (pendingUser: User) => {
-    return (
-      <TouchableOpacity
-        key={pendingUser.id}
-        style={styles.requestTile}
-        activeOpacity={0.88}
-        onPress={() => openUserReview(pendingUser)}
-      >
-        <View style={styles.requestTileHeader}>
-          <View style={styles.requestTileAvatar}>
-            <Text style={styles.requestTileAvatarText}>
-              {(pendingUser.name || pendingUser.email || '?').charAt(0).toUpperCase()}
-            </Text>
-          </View>
-          <View style={[styles.requestBadge, styles.requestRolePill]}>
-            <Text style={[styles.requestBadgeText, styles.requestRolePillText]}>
-              {pendingUser.role}
-            </Text>
-          </View>
-        </View>
-        <Text style={styles.requestTileName} numberOfLines={1}>
-          {pendingUser.name || pendingUser.email || 'Unnamed applicant'}
-        </Text>
-        <Text style={styles.requestTileHint}>Tap to view full application</Text>
-      </TouchableOpacity>
-    );
-  };
+    return roleMatches && statusMatches && searchMatches;
+  });
 
-  const renderUserCard = (item: User) => {
-    const linkedPartners = partners.filter(partner => {
-      if (partner.ownerUserId) {
-        return partner.ownerUserId === item.id;
-      }
-
-      return (
-        (partner.contactEmail || '').trim().toLowerCase() === (item.email || '').trim().toLowerCase() ||
-        (partner.contactPhone || '').trim() === (item.phone || '').trim()
-      );
-    });
-    const linkedVolunteer = getLinkedVolunteerForUser(item);
-
-    return (
-      <View key={item.id} style={styles.userCard}>
-        <View style={styles.userHeader}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>{item.name.charAt(0).toUpperCase()}</Text>
-          </View>
-          <View style={styles.userInfo}>
-            <View style={styles.nameRow}>
-              <Text style={styles.userName}>{item.name}</Text>
-              {isNewAccount(item.createdAt) && (
-                <View style={styles.newBadge}>
-                  <Text style={styles.newBadgeText}>New</Text>
-                </View>
-              )}
-            </View>
-            <Text style={styles.userMeta}>{item.email}</Text>
-            <Text style={styles.userMeta}>{item.phone || 'No phone number'}</Text>
-            <Text style={styles.userMeta}>{item.userType || 'No profile type'}</Text>
-            <Text style={styles.userMeta}>
-              Created {format(new Date(item.createdAt), 'MMM dd, yyyy hh:mm a')}
-            </Text>
-            {item.role === 'partner' ? (
-              linkedPartners.length > 0 ? (
-                linkedPartners.map(partner => (
-                  <View key={partner.id} style={styles.linkedRecordBox}>
-                    <Text style={styles.linkedRecordTitle}>{partner.name}</Text>
-                    <Text style={styles.linkedRecordMeta}>
-                      {partner.status} • {partner.sectorType} • DSWD {partner.dswdAccreditationNo || 'Not provided'}
-                    </Text>
-                  </View>
-                ))
-              ) : (
-                <View style={styles.linkedRecordBox}>
-                  <Text style={styles.linkedRecordMeta}>No linked partner organization record yet.</Text>
-                </View>
-              )
-            ) : null}
-            {item.role === 'volunteer' && linkedVolunteer ? (
-              <View style={styles.linkedRecordBox}>
-                <Text style={styles.linkedRecordTitle}>{linkedVolunteer.name}</Text>
-                <Text style={styles.linkedRecordMeta}>
-                  {linkedVolunteer.registrationStatus || 'Pending'} • {linkedVolunteer.occupation || 'No occupation provided'}
-                </Text>
-              </View>
-            ) : null}
-          </View>
-          <View style={styles.roleBadge}>
-            <Text style={styles.roleBadgeText}>{item.role}</Text>
-          </View>
-        </View>
-
-        <View style={styles.actionsRow}>
-          <TouchableOpacity style={styles.editButton} onPress={() => openEditModal(item)}>
-            <MaterialIcons name="edit" size={16} color="#166534" />
-            <Text style={styles.editButtonText}>Edit</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.deleteButton} onPress={() => handleDeleteUser(item)}>
-            <MaterialIcons name="delete-outline" size={16} color="#b91c1c" />
-            <Text style={styles.deleteButtonText}>Delete</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  };
-
-  const renderReviewField = (
-    label: string,
-    value: React.ReactNode,
-    options?: { wide?: boolean }
-  ) => (
-    <View style={[styles.reviewField, options?.wide && styles.reviewFieldWide]}>
-      <Text style={styles.reviewRowLabel}>{label}</Text>
-      {typeof value === 'string' || typeof value === 'number' ? (
-        <Text style={styles.reviewRowValue}>{value}</Text>
-      ) : (
-        value
-      )}
-    </View>
-  );
-
-  const renderReviewSection = (title: string, children: React.ReactNode) => (
-    <View style={styles.reviewSectionCard}>
-      <Text style={styles.reviewSectionTitle}>{title}</Text>
-      <View style={styles.reviewFieldGrid}>{children}</View>
-    </View>
-  );
-
-  const userSections: Array<{
-    id: string;
-    role: UserRole;
-    title: string;
-    subtitle: string;
-    users: User[];
-  }> = [
-    {
-      id: 'section-partners',
-      role: 'partner',
-      title: 'Partner Accounts',
-      subtitle: 'Review, edit, or delete approved partner accounts from this section.',
-      users: partnerUsers,
-    },
-    {
-      id: 'section-volunteers',
-      role: 'volunteer',
-      title: 'Volunteer Accounts',
-      subtitle: 'Review, edit, or delete approved volunteer accounts from this section.',
-      users: volunteerUsers,
-    },
-    {
-      id: 'section-admins',
-      role: 'admin',
-      title: 'Admin Accounts',
-      subtitle: 'Admin users are shown separately; expand only when you need account actions.',
-      users: adminUsers,
-    },
-  ];
+  // Pagination bounds
+  const totalItems = visibleUsers.length;
+  const totalPages = Math.ceil(totalItems / itemsPerPage) || 1;
+  const paginatedUsers = visibleUsers.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+  const startItem = totalItems === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1;
+  const endItem = Math.min(currentPage * itemsPerPage, totalItems);
 
   return (
     <View style={styles.container}>
-      <View style={styles.pageHeader}>
-        <View style={styles.pageHeaderTop}>
-          <View style={styles.pageHeaderTextWrap}>
-            <Text style={styles.title}>User Management</Text>
-            <Text style={styles.pageSubtitle}>
-              Review approvals and manage user accounts from one place.
-            </Text>
-          </View>
-          <TouchableOpacity style={styles.refreshButton} onPress={() => void loadUsers()}>
-            <MaterialIcons name="refresh" size={16} color="#166534" />
-            <Text style={styles.refreshButtonText}>Refresh</Text>
-          </TouchableOpacity>
-        </View>
-        <Text style={styles.syncText}>
-          {lastSyncedAt
-            ? `Last synced ${format(new Date(lastSyncedAt), 'MMM dd, yyyy hh:mm a')}`
-            : loadError
-            ? 'Unable to sync users right now.'
-            : 'Syncing users...'}
-        </Text>
-      </View>
-
-      {loadError ? (
-        <View style={styles.bannerWrap}>
-          <InlineLoadError
-            title={loadError.title}
-            message={loadError.message}
-            onRetry={() => void loadUsers()}
-          />
-        </View>
-      ) : null}
-
-      {successNotice ? (
-        <View style={styles.bannerWrap}>
-          <View style={styles.successBanner}>
-            <MaterialIcons name="check-circle" size={18} color="#166534" />
-            <View style={styles.successBannerTextWrap}>
-              <Text style={styles.successBannerTitle}>{successNotice.title}</Text>
-              <Text style={styles.successBannerMessage}>{successNotice.message}</Text>
+      <ScrollView style={styles.mainScrollView} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        {/* Header Section */}
+        <View style={styles.headerRow}>
+          <View style={styles.headerLeft}>
+            <View style={styles.headerIconContainer}>
+              <MaterialIcons name="person-outline" size={24} color="#16a34a" />
+            </View>
+            <View style={styles.headerTextWrap}>
+              <Text style={styles.pageTitle}>User Management</Text>
+              <Text style={styles.pageSubtitle}>Manage and oversee all user accounts in the system.</Text>
             </View>
           </View>
+          <View style={styles.headerActions}>
+            <TouchableOpacity style={styles.primaryAddButton} onPress={openAddModal} activeOpacity={0.85}>
+              <MaterialIcons name="add" size={20} color="#ffffff" />
+              <Text style={styles.primaryAddButtonText}>Add New User</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.secondaryExportButton} onPress={handleExportCSV} activeOpacity={0.85}>
+              <MaterialIcons name="file-download" size={18} color="#475569" />
+              <Text style={styles.secondaryExportButtonText}>Export</Text>
+            </TouchableOpacity>
+          </View>
         </View>
-      ) : null}
 
-      {!loadError || users.length > 0 ? (
-      <View style={styles.summaryRow}>
-        <View style={styles.summaryCard}>
-          <Text style={styles.summaryValue}>{approvedUsers.length}</Text>
-          <Text style={styles.summaryLabel}>Users</Text>
-        </View>
-        <View style={styles.summaryCard}>
-          <Text style={styles.summaryValue}>{totalAdmins}</Text>
-          <Text style={styles.summaryLabel}>Admins</Text>
-        </View>
-        <View style={styles.summaryCard}>
-          <Text style={styles.summaryValue}>{totalPartners}</Text>
-          <Text style={styles.summaryLabel}>Partners</Text>
-        </View>
-        <View style={styles.summaryCard}>
-          <Text style={styles.summaryValue}>{totalVolunteers}</Text>
-          <Text style={styles.summaryLabel}>Volunteers</Text>
-        </View>
-      </View>
-      ) : null}
+        {loadError ? (
+          <View style={styles.bannerWrap}>
+            <InlineLoadError title={loadError.title} message={loadError.message} onRetry={() => void loadUsers()} />
+          </View>
+        ) : null}
 
-      <FlatList
-        data={userSections}
-        keyExtractor={item => item.id}
-        contentContainerStyle={styles.listContent}
-        ListHeaderComponent={
-          <>
-            <View style={styles.requestSection}>
-              <View style={styles.requestQueueHeader}>
-                <View style={styles.requestQueueTitleWrap}>
-                  <Text style={styles.requestSectionTitle}>User Approval Queue</Text>
-                  <Text style={styles.requestSectionSubtitle}>
-                    Click a name to open the full application and review the details.
-                  </Text>
-                </View>
-                <View style={styles.requestQueueBadge}>
-                  <Text style={styles.requestQueueBadgeText}>{pendingUserApprovals.length} pending</Text>
-                </View>
+        {successNotice ? (
+          <View style={styles.bannerWrap}>
+            <View style={styles.successBanner}>
+              <MaterialIcons name="check-circle" size={18} color="#166534" />
+              <View style={styles.successBannerTextWrap}>
+                <Text style={styles.successBannerTitle}>{successNotice.title}</Text>
+                <Text style={styles.successBannerMessage}>{successNotice.message}</Text>
               </View>
-              <View style={styles.requestQueueSummaryRow}>
-                <View style={styles.requestSummaryCard}>
-                  <Text style={styles.requestSummaryValue}>{pendingUserApprovals.length}</Text>
-                  <Text style={styles.requestSummaryLabel}>Total requests</Text>
-                </View>
-                <View style={styles.requestSummaryCard}>
-                  <Text style={styles.requestSummaryValue}>{pendingPartnerApprovals}</Text>
-                  <Text style={styles.requestSummaryLabel}>Partner applications</Text>
-                </View>
-                <View style={styles.requestSummaryCard}>
-                  <Text style={styles.requestSummaryValue}>{pendingVolunteerApprovals}</Text>
-                  <Text style={styles.requestSummaryLabel}>Volunteer applications</Text>
-                </View>
-              </View>
-              {pendingUserApprovals.length === 0 ? (
-                <Text style={styles.requestEmptyText}>No users are waiting for approval.</Text>
-              ) : (
-                <View style={styles.requestTileGrid}>
-                  {pendingUserApprovals.map(renderPendingApprovalCard)}
-                </View>
-              )}
             </View>
+          </View>
+        ) : null}
 
-          </>
-        }
-        renderItem={({ item }) => {
-          const isExpanded = expandedUserRoles[item.role];
-
-          return (
-            <View style={styles.userRoleSection}>
-              <TouchableOpacity
-                style={styles.userTypeBox}
-                onPress={() => toggleUserRoleSection(item.role)}
-                activeOpacity={0.85}
-              >
-                <View style={styles.userTypeBoxHeader}>
-                  <View style={styles.userTypeBoxTextWrap}>
-                    <Text style={styles.requestSectionTitle}>{item.title}</Text>
-                    <Text style={styles.requestSectionSubtitle}>{item.subtitle}</Text>
-                  </View>
-                  <View style={styles.userTypeBoxMeta}>
-                    <View style={styles.userTypeCountBadge}>
-                      <Text style={styles.userTypeCountText}>{item.users.length}</Text>
-                    </View>
-                    <MaterialIcons
-                      name={isExpanded ? 'expand-less' : 'expand-more'}
-                      size={24}
-                      color="#0f172a"
-                    />
-                  </View>
-                </View>
-              </TouchableOpacity>
-
-              {isExpanded ? (
-                item.users.length > 0 ? (
-                  item.users.map(renderUserCard)
-                ) : (
-                  <View style={styles.userRoleEmptyState}>
-                    <Text style={styles.requestEmptyText}>No accounts in this section.</Text>
-                  </View>
-                )
-              ) : null}
+        {/* 4 Summary Cards Grid */}
+        <View style={styles.summaryGrid}>
+          {/* Card 1: Total Users */}
+          <View style={styles.summaryCard}>
+            <View style={[styles.summaryIconBox, { backgroundColor: '#f0fdf4' }]}>
+              <MaterialIcons name="person-outline" size={24} color="#16a34a" />
             </View>
-          );
-        }}
-      />
-      <Modal visible={showEditModal} animationType="slide" onRequestClose={closeEditModal}>
-        <View style={styles.modalContainer}>
-          <View style={styles.modalHeader}>
-            <TouchableOpacity onPress={closeEditModal}>
-              <Text style={styles.modalCancel}>Cancel</Text>
-            </TouchableOpacity>
-            <Text style={styles.modalTitle}>Edit User</Text>
-            <TouchableOpacity onPress={handleSaveUser}>
-              <Text style={styles.modalSave}>Save</Text>
-            </TouchableOpacity>
+            <View style={styles.summaryContent}>
+              <Text style={styles.summaryNumber}>{users.length}</Text>
+              <Text style={styles.summaryTitle}>Total Users</Text>
+              <Text style={styles.summarySubtext}>All registered accounts</Text>
+            </View>
           </View>
 
-          <View style={styles.modalBody}>
-            <TextInput
-              style={styles.input}
-              placeholder="Full name"
-              value={nameDraft}
-              onChangeText={setNameDraft}
-            />
-            <TextInput
-              style={styles.input}
-              placeholder="Email"
-              autoCapitalize="none"
-              keyboardType="email-address"
-              value={emailDraft}
-              onChangeText={setEmailDraft}
-            />
-            <TextInput
-              style={styles.input}
-              placeholder="Phone"
-              keyboardType="phone-pad"
-              value={phoneDraft}
-              onChangeText={setPhoneDraft}
-            />
-
-
-            <Text style={styles.fieldLabel}>Role</Text>
-            <View style={styles.roleOptions}>
-              {roleOptions.map(role => (
-                <TouchableOpacity
-                  key={role}
-                  style={[styles.roleOption, roleDraft === role && styles.roleOptionActive]}
-                  onPress={() => setRoleDraft(role)}
-                >
-                  <Text style={[styles.roleOptionText, roleDraft === role && styles.roleOptionTextActive]}>
-                    {role}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+          {/* Card 2: Administrators */}
+          <View style={styles.summaryCard}>
+            <View style={[styles.summaryIconBox, { backgroundColor: '#eff6ff' }]}>
+              <MaterialIcons name="shield" size={22} color="#2563eb" />
             </View>
+            <View style={styles.summaryContent}>
+              <Text style={styles.summaryNumber}>{totalAdmins}</Text>
+              <Text style={styles.summaryTitle}>Administrators</Text>
+              <Text style={styles.summarySubtext}>System administrators</Text>
+            </View>
+          </View>
 
-            <Text style={styles.fieldLabel}>Profile Type</Text>
-            <View style={styles.roleOptions}>
-              {(['Student', 'Adult', 'Senior'] as const).map(userType => (
-                <TouchableOpacity
-                  key={userType}
-                  style={[styles.roleOption, userTypeDraft === userType && styles.roleOptionActive]}
-                  onPress={() => setUserTypeDraft(userType)}
-                >
-                  <Text style={[styles.roleOptionText, userTypeDraft === userType && styles.roleOptionTextActive]}>
-                    {userType}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+          {/* Card 3: Partners */}
+          <View style={styles.summaryCard}>
+            <View style={[styles.summaryIconBox, { backgroundColor: '#f3e8ff' }]}>
+              <MaterialIcons name="handshake" size={22} color="#9333ea" />
+            </View>
+            <View style={styles.summaryContent}>
+              <Text style={styles.summaryNumber}>{totalPartners}</Text>
+              <Text style={styles.summaryTitle}>Partners</Text>
+              <Text style={styles.summarySubtext}>Partner accounts</Text>
+            </View>
+          </View>
+
+          {/* Card 4: Volunteers */}
+          <View style={styles.summaryCard}>
+            <View style={[styles.summaryIconBox, { backgroundColor: '#fff7ed' }]}>
+              <MaterialIcons name="favorite" size={22} color="#ea580c" />
+            </View>
+            <View style={styles.summaryContent}>
+              <Text style={styles.summaryNumber}>{totalVolunteers}</Text>
+              <Text style={styles.summaryTitle}>Volunteers</Text>
+              <Text style={styles.summarySubtext}>Volunteer accounts</Text>
             </View>
           </View>
         </View>
-      </Modal>
 
-      <Modal visible={Boolean(reviewTarget)} animationType="slide" onRequestClose={closeReviewModal}>
-        <View style={styles.reviewModalContainer}>
-          <View style={styles.reviewModalHeader}>
-            <TouchableOpacity style={styles.reviewCloseButton} onPress={closeReviewModal}>
-              <MaterialIcons name="close" size={18} color="#334155" />
-              <Text style={styles.reviewCloseButtonText}>Close</Text>
-            </TouchableOpacity>
-            <View style={styles.reviewHeaderTitleWrap}>
-              <Text style={styles.reviewModalTitle}>User Review</Text>
-              <Text style={styles.reviewModalSubtitle}>
-                Review the application details and choose whether to approve or reject the request.
+        {/* Tab Navigation */}
+        <View style={styles.tabsContainer}>
+          {([
+            { key: 'all', label: 'All Accounts' },
+            { key: 'admin', label: 'Administrators' },
+            { key: 'partner', label: 'Partners' },
+            { key: 'volunteer', label: 'Volunteers' },
+          ] as const).map(tab => (
+            <TouchableOpacity
+              key={tab.key}
+              onPress={() => {
+                setAccountFilter(tab.key);
+                setCurrentPage(1);
+              }}
+              style={[styles.tabButton, accountFilter === tab.key && styles.tabButtonActive]}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.tabButtonText, accountFilter === tab.key && styles.tabButtonTextActive]}>
+                {tab.label}
               </Text>
-            </View>
-            <View style={styles.modalHeaderSpacer} />
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* Search & Filter Toolbar */}
+        <View style={styles.toolbarContainer}>
+          <View style={styles.searchBox}>
+            <MaterialIcons name="search" size={20} color="#94a3b8" />
+            <TextInput
+              value={accountSearch}
+              onChangeText={text => {
+                setAccountSearch(text);
+                setCurrentPage(1);
+              }}
+              placeholder="Search users by name, email, or organization..."
+              placeholderTextColor="#94a3b8"
+              style={styles.searchInput}
+            />
           </View>
 
-          <ScrollView style={styles.reviewModalBody} contentContainerStyle={styles.reviewContent}>
-            {reviewTarget?.type === 'user' ? (
-              <View style={styles.reviewPanel}>
-                <View style={styles.reviewSummaryCard}>
-                  <View style={styles.reviewAvatar}>
-                    <Text style={styles.reviewAvatarText}>
-                      {(reviewTarget.record.name || reviewTarget.record.email || '?').charAt(0).toUpperCase()}
-                    </Text>
-                  </View>
-                  <View style={styles.reviewSummaryText}>
-                    <Text style={styles.reviewApplicantName}>{reviewTarget.record.name || 'Unnamed applicant'}</Text>
-                    <Text style={styles.reviewApplicantMeta}>
-                      {reviewTarget.record.email || 'No email'} / {reviewTarget.record.phone || 'No phone'}
-                    </Text>
-                    <Text style={styles.reviewApplicantSupport}>
-                      Submitted {format(new Date(reviewTarget.record.createdAt), 'MMM dd, yyyy hh:mm a')}
-                    </Text>
-                  </View>
-                  <View style={styles.reviewStatusStack}>
-                    <View style={styles.reviewRoleBadge}>
-                      <Text style={styles.reviewRoleBadgeText}>{reviewTarget.record.role}</Text>
-                    </View>
-                    <View style={styles.reviewPendingBadge}>
-                      <Text style={styles.reviewPendingBadgeText}>{reviewTarget.record.approvalStatus || 'pending'}</Text>
-                    </View>
-                  </View>
-                </View>
+          <View style={styles.toolbarRight}>
+            {/* Account Type Dropdown */}
+            <TouchableOpacity
+              style={styles.filterDropdownButton}
+              onPress={() => {
+                setShowTypeDropdown(!showTypeDropdown);
+                setShowStatusDropdown(false);
+              }}
+            >
+              <MaterialIcons name="manage-accounts" size={18} color="#64748b" />
+              <Text style={styles.filterDropdownText}>
+                {accountFilter === 'all' ? 'Account Type' : accountFilter.charAt(0).toUpperCase() + accountFilter.slice(1)}
+              </Text>
+              <MaterialIcons name="keyboard-arrow-down" size={18} color="#64748b" />
+            </TouchableOpacity>
 
-                {renderReviewSection(
-                  'Account Details',
-                  <>
-                    {renderReviewField('Full Name', reviewTarget.record.name || 'Not provided')}
-                    {renderReviewField('Role', reviewTarget.record.role)}
-                    {renderReviewField('Email', reviewTarget.record.email || 'Not provided')}
-                    {renderReviewField('Phone', reviewTarget.record.phone || 'Not provided')}
-                    {renderReviewField('Profile Type', reviewTarget.record.userType || 'Not provided')}
-                    {renderReviewField('Approval Status', reviewTarget.record.approvalStatus || 'pending')}
-                    {renderReviewField(
-                      'Submitted',
-                      format(new Date(reviewTarget.record.createdAt), 'MMM dd, yyyy hh:mm a'),
-                      { wide: true }
-                    )}
-                  </>
-                )}
+            {/* Status Dropdown */}
+            <TouchableOpacity
+              style={styles.filterDropdownButton}
+              onPress={() => {
+                setShowStatusDropdown(!showStatusDropdown);
+                setShowTypeDropdown(false);
+              }}
+            >
+              <Text style={styles.filterDropdownText}>
+                {statusFilter === 'all' ? 'Status' : statusFilter.charAt(0).toUpperCase() + statusFilter.slice(1)}
+              </Text>
+              <MaterialIcons name="keyboard-arrow-down" size={18} color="#64748b" />
+            </TouchableOpacity>
 
-                {reviewTarget.record.role === 'partner'
-                  ? (() => {
-                      const linkedPartner = getLinkedPartnerForUser(reviewTarget.record);
-                      if (!linkedPartner) {
-                        return renderReviewSection(
-                          'Partner Application',
-                          renderReviewField('Application Record', 'No partner application record found.', { wide: true })
-                        );
-                      }
-
-                      return renderReviewSection(
-                        'Partner Application',
-                        <>
-                          {renderReviewField('Organization Name', linkedPartner.name)}
-                          {renderReviewField('Stakeholder Name', linkedPartner.stakeholderName || 'Not provided')}
-                          {renderReviewField('Sector Type', linkedPartner.sectorType)}
-                          {renderReviewField('DSWD Accreditation No.', linkedPartner.dswdAccreditationNo || 'Not provided')}
-                          {renderReviewField(
-                            'Advocacy Focus',
-                            linkedPartner.advocacyFocus.length > 0 ? linkedPartner.advocacyFocus.join(', ') : 'Not provided'
-                          )}
-                          {renderReviewField('Verification Status', linkedPartner.verificationStatus || 'Pending')}
-                          {renderReviewField('Contact Email', linkedPartner.contactEmail || 'Not provided')}
-                          {renderReviewField('Contact Phone', linkedPartner.contactPhone || 'Not provided')}
-                          {renderReviewField('Region', linkedPartner.region || 'Not provided')}
-                          {renderReviewField('Province', linkedPartner.province || 'Not provided')}
-                          {renderReviewField('City / Municipality', linkedPartner.cityMunicipality || 'Not provided')}
-                          {renderReviewField('Address', linkedPartner.address || 'Not provided', { wide: true })}
-                          {renderReviewField('Description', linkedPartner.description || 'Not provided', { wide: true })}
-                        </>
-                      );
-                    })()
-                  : null}
-
-                {reviewTarget.record.role === 'volunteer'
-                  ? (() => {
-                      const linkedVolunteer = getLinkedVolunteerForUser(reviewTarget.record);
-                      if (!linkedVolunteer) {
-                        return renderReviewSection(
-                          'Volunteer Membership Form',
-                          renderReviewField('Application Record', 'No volunteer profile record found.', { wide: true })
-                        );
-                      }
-
-                      return renderReviewSection(
-                        'Volunteer Membership Form',
-                        <>
-                          {renderReviewField('Gender', linkedVolunteer.gender || 'Not provided')}
-                          {renderReviewField('Date of Birth', linkedVolunteer.dateOfBirth || 'Not provided')}
-                          {renderReviewField('Civil Status', linkedVolunteer.civilStatus || 'Not provided')}
-                          {renderReviewField('Registration Status', linkedVolunteer.registrationStatus || 'Pending')}
-                          {renderReviewField('Home Address', linkedVolunteer.homeAddress || 'Not provided', { wide: true })}
-                          {renderReviewField('Region', linkedVolunteer.homeAddressRegion || 'Not provided')}
-                          {renderReviewField('City / Municipality', linkedVolunteer.homeAddressCityMunicipality || 'Not provided')}
-                          {renderReviewField('Barangay', linkedVolunteer.homeAddressBarangay || 'Not provided')}
-                          {renderReviewField('Occupation', linkedVolunteer.occupation || 'Not provided')}
-                          {renderReviewField('Workplace / School', linkedVolunteer.workplaceOrSchool || 'Not provided')}
-                          {renderReviewField('College Course', linkedVolunteer.collegeCourse || 'Not provided')}
-                          {renderReviewField(
-                            'Certifications / Trainings',
-                            linkedVolunteer.certificationsOrTrainings ? (
-                              isImageMediaUri(linkedVolunteer.certificationsOrTrainings) ? (
-                                <TouchableOpacity
-                                  onPress={() => setViewImageUrl(linkedVolunteer.certificationsOrTrainings || null)}
-                                  activeOpacity={0.8}
-                                >
-                                  <Image
-                                    source={{ uri: linkedVolunteer.certificationsOrTrainings }}
-                                    style={styles.reviewCertificateImage}
-                                  />
-                                </TouchableOpacity>
-                              ) : (
-                                <Text style={styles.reviewRowValue}>{linkedVolunteer.certificationsOrTrainings}</Text>
-                              )
-                            ) : (
-                              'Not provided'
-                            ),
-                            { wide: true }
-                          )}
-                          {renderReviewField('Video Briefing URL', linkedVolunteer.videoBriefingUrl || 'Not provided', { wide: true })}
-                          {renderReviewField(
-                            'Affiliations',
-                            linkedVolunteer.affiliations && linkedVolunteer.affiliations.length > 0
-                              ? linkedVolunteer.affiliations
-                                  .map(affiliation =>
-                                    `${affiliation.organization || 'Organization not provided'} - ${affiliation.position || 'Position not provided'}`
-                                  )
-                                  .join('\n')
-                              : 'No affiliations provided.',
-                            { wide: true }
-                          )}
-                        </>
-                      );
-                    })()
-                  : null}
-              </View>
-            ) : null}
-          </ScrollView>
-
-          {reviewTarget ? (
-            <View style={styles.reviewActionFooter}>
-              {reviewTarget.type === 'user' ? (
-                <View style={styles.reviewActionBar}>
-                  <View style={styles.reviewActionCopy}>
-                    <Text style={styles.reviewActionTitle}>Decision</Text>
-                    <Text style={styles.reviewActionDescription}>
-                      Approve to unlock account access. Reject will remove the pending application from the system.
-                    </Text>
-                  </View>
-                  <View style={styles.reviewActionButtons}>
-                    <TouchableOpacity
-                      style={[styles.requestActionButton, styles.approveActionButton]}
-                      onPress={() => handleApproveUser(reviewTarget.record)}
-                    >
-                      <MaterialIcons name="check-circle-outline" size={16} color="#166534" />
-                      <Text style={[styles.requestActionButtonText, styles.approveActionButtonText]}>Approve</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.requestActionButton, styles.reviewRejectButton]}
-                      onPress={() => handleRejectUser(reviewTarget.record)}
-                    >
-                      <MaterialIcons name="block" size={16} color="#991b1b" />
-                      <Text style={[styles.requestActionButtonText, styles.rejectActionButtonText]}>Reject</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              ) : null}
-            </View>
-          ) : null}
+            {/* Refresh Button */}
+            <TouchableOpacity
+              style={styles.refreshIconButton}
+              onPress={() => void loadUsers()}
+              activeOpacity={0.7}
+            >
+              <MaterialIcons name="refresh" size={18} color="#475569" />
+            </TouchableOpacity>
+          </View>
         </View>
-      </Modal>
 
-      {/* Image Viewer Modal */}
-      <Modal
-        visible={Boolean(viewImageUrl)}
-        animationType="fade"
-        transparent={true}
-        onRequestClose={() => setViewImageUrl(null)}
-      >
-        <View style={styles.imageViewerOverlay}>
-          <TouchableOpacity
-            style={styles.imageViewerCloseButton}
-            onPress={() => setViewImageUrl(null)}
-          >
-            <MaterialIcons name="close" size={28} color="#fff" />
-          </TouchableOpacity>
-          {viewImageUrl && (
-            <Image
-              source={{ uri: viewImageUrl }}
-              style={styles.imageViewerImage}
-              resizeMode="contain"
-            />
+        {/* Dropdown Options Overlays */}
+        {showTypeDropdown && (
+          <View style={styles.dropdownMenuOverlay}>
+            {(['all', 'admin', 'partner', 'volunteer'] as const).map(typeKey => (
+              <TouchableOpacity
+                key={typeKey}
+                style={[styles.dropdownMenuItem, accountFilter === typeKey && styles.dropdownMenuItemActive]}
+                onPress={() => {
+                  setAccountFilter(typeKey);
+                  setShowTypeDropdown(false);
+                  setCurrentPage(1);
+                }}
+              >
+                <Text style={[styles.dropdownMenuText, accountFilter === typeKey && styles.dropdownMenuTextActive]}>
+                  {typeKey === 'all' ? 'All Account Types' : typeKey.charAt(0).toUpperCase() + typeKey.slice(1)}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+
+        {showStatusDropdown && (
+          <View style={[styles.dropdownMenuOverlay, { right: 70 }]}>
+            {(['all', 'active', 'pending'] as const).map(statKey => (
+              <TouchableOpacity
+                key={statKey}
+                style={[styles.dropdownMenuItem, statusFilter === statKey && styles.dropdownMenuItemActive]}
+                onPress={() => {
+                  setStatusFilter(statKey);
+                  setShowStatusDropdown(false);
+                  setCurrentPage(1);
+                }}
+              >
+                <Text style={[styles.dropdownMenuText, statusFilter === statKey && styles.dropdownMenuTextActive]}>
+                  {statKey === 'all' ? 'All Statuses' : statKey.charAt(0).toUpperCase() + statKey.slice(1)}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+
+        {/* Data Table */}
+        <View style={styles.tableContainer}>
+          <View style={styles.tableHeaderRow}>
+            <View style={[styles.colCell, styles.colUser]}>
+              <Text style={styles.thText}>USER</Text>
+              <MaterialIcons name="unfold-more" size={14} color="#94a3b8" />
+            </View>
+            <View style={[styles.colCell, styles.colType]}>
+              <Text style={styles.thText}>ACCOUNT TYPE</Text>
+              <MaterialIcons name="unfold-more" size={14} color="#94a3b8" />
+            </View>
+            <View style={[styles.colCell, styles.colEmail]}>
+              <Text style={styles.thText}>EMAIL</Text>
+            </View>
+            <View style={[styles.colCell, styles.colOrg]}>
+              <Text style={styles.thText}>ORGANIZATION</Text>
+              <MaterialIcons name="unfold-more" size={14} color="#94a3b8" />
+            </View>
+            <View style={[styles.colCell, styles.colStatus]}>
+              <Text style={styles.thText}>STATUS</Text>
+              <MaterialIcons name="unfold-more" size={14} color="#94a3b8" />
+            </View>
+            <View style={[styles.colCell, styles.colJoined]}>
+              <Text style={styles.thText}>JOINED</Text>
+              <MaterialIcons name="unfold-more" size={14} color="#94a3b8" />
+            </View>
+            <View style={[styles.colCell, styles.colActions]}>
+              <Text style={styles.thText}>ACTIONS</Text>
+            </View>
+          </View>
+
+          {paginatedUsers.map(account => {
+            const partner = getLinkedPartnerForUser(account);
+                    const isPending = account.approvalStatus?.toLowerCase() === 'pending';
+
+            // Role Badge styling
+            let badgeBg = '#f0fdf4';
+            let badgeText = '#16a34a';
+            let badgeIcon = 'handshake';
+            let roleLabel = 'Partner';
+            let avatarBg = '#dcfce7';
+            let avatarTextColor = '#15803d';
+
+            if (account.role === 'admin') {
+              badgeBg = '#eff6ff';
+              badgeText = '#2563eb';
+              badgeIcon = 'shield';
+              roleLabel = 'Administrator';
+              avatarBg = '#dbeafe';
+              avatarTextColor = '#1d4ed8';
+            } else if (account.role === 'volunteer') {
+              badgeBg = '#fff7ed';
+              badgeText = '#ea580c';
+              badgeIcon = 'favorite';
+              roleLabel = 'Volunteer';
+              avatarBg = '#ffedd5';
+              avatarTextColor = '#c2410c';
+            }
+
+            const formattedDate = format(new Date(account.createdAt || Date.now()), 'MMM dd, yyyy');
+
+            return (
+              <View key={account.id} style={styles.tableBodyRow}>
+                {/* User Column */}
+                <View style={[styles.colCell, styles.colUser]}>
+                  <View style={[styles.avatarCircle, { backgroundColor: avatarBg }]}>
+                    <Text style={[styles.avatarText, { color: avatarTextColor }]}>
+                      {account.name.charAt(0).toUpperCase()}
+                    </Text>
+                  </View>
+                  <View style={styles.userNameMeta}>
+                    <Text style={styles.userNameText}>{account.name}</Text>
+                    <Text style={styles.userSubText}>{account.phone || account.userType || roleLabel}</Text>
+                  </View>
+                </View>
+
+                {/* Account Type Column */}
+                <View style={[styles.colCell, styles.colType]}>
+                  <View style={[styles.rolePill, { backgroundColor: badgeBg }]}>
+                    <MaterialIcons name={badgeIcon as any} size={14} color={badgeText} />
+                    <Text style={[styles.rolePillText, { color: badgeText }]}>{roleLabel}</Text>
+                  </View>
+                </View>
+
+                {/* Email Column */}
+                <View style={[styles.colCell, styles.colEmail]}>
+                  <Text style={styles.tdText} numberOfLines={1}>
+                    {account.email || '—'}
+                  </Text>
+                </View>
+
+                {/* Organization Column */}
+                <View style={[styles.colCell, styles.colOrg]}>
+                  <Text style={styles.tdText} numberOfLines={1}>
+                    {partner?.name || (account.role === 'admin' ? 'NVC' : '—')}
+                  </Text>
+                </View>
+
+                {/* Status Column */}
+                <View style={[styles.colCell, styles.colStatus]}>
+                  <View style={[styles.statusPill, isPending ? styles.statusPillPending : styles.statusPillActive]}>
+                    <View style={[styles.statusDot, isPending ? styles.statusDotPending : styles.statusDotActive]} />
+                    <Text style={[styles.statusText, isPending ? styles.statusTextPending : styles.statusTextActive]}>
+                      {isPending ? 'Pending' : 'Active'}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Joined Column */}
+                <View style={[styles.colCell, styles.colJoined]}>
+                  <Text style={styles.tdText}>{formattedDate}</Text>
+                </View>
+
+                {/* Actions Column */}
+                <View style={[styles.colCell, styles.colActions]}>
+                  <TouchableOpacity
+                    style={[styles.actionIconButton, styles.actionBtnView]}
+                    onPress={() => openUserReview(account)}
+                    activeOpacity={0.75}
+                    accessibilityLabel="View details"
+                  >
+                    <MaterialIcons name="visibility" size={17} color="#475569" />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.actionIconButton, styles.actionBtnEdit]}
+                    onPress={() => openEditModal(account)}
+                    activeOpacity={0.75}
+                    accessibilityLabel="Edit account"
+                  >
+                    <MaterialIcons name="edit" size={17} color="#15803d" />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[
+                      styles.actionIconButton,
+                      styles.actionBtnDelete,
+                      account.id === user?.id && styles.actionBtnDisabled,
+                    ]}
+                    onPress={() => handleDeleteUser(account)}
+                    activeOpacity={0.75}
+                    disabled={account.id === user?.id}
+                    accessibilityLabel="Delete account"
+                  >
+                    <MaterialIcons
+                      name="delete-outline"
+                      size={17}
+                      color={account.id === user?.id ? "#cbd5e1" : "#ef4444"}
+                    />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            );
+          })}
+
+          {paginatedUsers.length === 0 && (
+            <View style={styles.emptyTableState}>
+              <MaterialIcons name="person-search" size={36} color="#cbd5e1" />
+              <Text style={styles.emptyTableText}>No accounts found matching search or filters.</Text>
+            </View>
           )}
         </View>
+
+        {/* Footer Pagination */}
+        <View style={styles.paginationFooter}>
+          <Text style={styles.paginationCountText}>
+            Showing {startItem} to {endItem} of {totalItems} users
+          </Text>
+
+          <View style={styles.paginationControls}>
+            <TouchableOpacity
+              style={[styles.pageNavButton, currentPage === 1 && styles.pageNavButtonDisabled]}
+              onPress={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+              disabled={currentPage === 1}
+            >
+              <MaterialIcons name="chevron-left" size={20} color={currentPage === 1 ? '#cbd5e1' : '#475569'} />
+            </TouchableOpacity>
+
+            {Array.from({ length: totalPages }, (_, i) => i + 1).map(pageNum => (
+              <TouchableOpacity
+                key={pageNum}
+                style={[styles.pageNumberButton, currentPage === pageNum && styles.pageNumberButtonActive]}
+                onPress={() => setCurrentPage(pageNum)}
+              >
+                <Text style={[styles.pageNumberText, currentPage === pageNum && styles.pageNumberTextActive]}>
+                  {pageNum}
+                </Text>
+              </TouchableOpacity>
+            ))}
+
+            <TouchableOpacity
+              style={[styles.pageNavButton, currentPage === totalPages && styles.pageNavButtonDisabled]}
+              onPress={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+              disabled={currentPage === totalPages}
+            >
+              <MaterialIcons name="chevron-right" size={20} color={currentPage === totalPages ? '#cbd5e1' : '#475569'} />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </ScrollView>
+
+      {/* Add New User Modal */}
+      <Modal visible={showAddModal} animationType="slide" transparent onRequestClose={closeAddModal}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContentCard}>
+            <View style={styles.modalHeaderBar}>
+              <Text style={styles.modalHeadingTitle}>Add New User</Text>
+              <TouchableOpacity onPress={closeAddModal}>
+                <MaterialIcons name="close" size={22} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={styles.modalFormBody}>
+              <Text style={styles.inputLabel}>Full Name</Text>
+              <TextInput style={styles.formInput} placeholder="e.g. Maria Santos" value={nameDraft} onChangeText={setNameDraft} />
+
+              <Text style={styles.inputLabel}>Email Address</Text>
+              <TextInput
+                style={styles.formInput}
+                placeholder="maria.santos@email.com"
+                keyboardType="email-address"
+                autoCapitalize="none"
+                value={emailDraft}
+                onChangeText={setEmailDraft}
+              />
+
+              <Text style={styles.inputLabel}>Phone Number</Text>
+              <TextInput style={styles.formInput} placeholder="0918 123 4567" keyboardType="phone-pad" value={phoneDraft} onChangeText={setPhoneDraft} />
+
+              <Text style={styles.inputLabel}>Role</Text>
+              <View style={styles.optionRow}>
+                {roleOptions.map(r => (
+                  <TouchableOpacity
+                    key={r}
+                    style={[styles.optionChip, roleDraft === r && styles.optionChipActive]}
+                    onPress={() => setRoleDraft(r)}
+                  >
+                    <Text style={[styles.optionChipText, roleDraft === r && styles.optionChipTextActive]}>
+                      {r.charAt(0).toUpperCase() + r.slice(1)}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <Text style={styles.inputLabel}>Default Password</Text>
+              <TextInput style={styles.formInput} placeholder="Password" value={passwordDraft} onChangeText={setPasswordDraft} secureTextEntry />
+            </ScrollView>
+
+            <View style={styles.modalFooterActions}>
+              <TouchableOpacity style={styles.cancelFormButton} onPress={closeAddModal}>
+                <Text style={styles.cancelFormButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.submitFormButton} onPress={handleAddUser}>
+                <Text style={styles.submitFormButtonText}>Create User</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Edit User Modal */}
+      <Modal visible={showEditModal} animationType="slide" transparent onRequestClose={closeEditModal}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContentCard}>
+            <View style={styles.modalHeaderBar}>
+              <Text style={styles.modalHeadingTitle}>Edit User Details</Text>
+              <TouchableOpacity onPress={closeEditModal}>
+                <MaterialIcons name="close" size={22} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={styles.modalFormBody}>
+              <Text style={styles.inputLabel}>Full Name</Text>
+              <TextInput style={styles.formInput} value={nameDraft} onChangeText={setNameDraft} />
+
+              <Text style={styles.inputLabel}>Email Address</Text>
+              <TextInput style={styles.formInput} value={emailDraft} onChangeText={setEmailDraft} keyboardType="email-address" autoCapitalize="none" />
+
+              <Text style={styles.inputLabel}>Phone Number</Text>
+              <TextInput style={styles.formInput} value={phoneDraft} onChangeText={setPhoneDraft} keyboardType="phone-pad" />
+
+              <Text style={styles.inputLabel}>Role</Text>
+              <View style={styles.optionRow}>
+                {roleOptions.map(r => (
+                  <TouchableOpacity
+                    key={r}
+                    style={[styles.optionChip, roleDraft === r && styles.optionChipActive]}
+                    onPress={() => setRoleDraft(r)}
+                  >
+                    <Text style={[styles.optionChipText, roleDraft === r && styles.optionChipTextActive]}>
+                      {r.charAt(0).toUpperCase() + r.slice(1)}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <Text style={styles.inputLabel}>User Type</Text>
+              <View style={styles.optionRow}>
+                {(['Student', 'Adult', 'Senior'] as const).map(t => (
+                  <TouchableOpacity
+                    key={t}
+                    style={[styles.optionChip, userTypeDraft === t && styles.optionChipActive]}
+                    onPress={() => setUserTypeDraft(t)}
+                  >
+                    <Text style={[styles.optionChipText, userTypeDraft === t && styles.optionChipTextActive]}>
+                      {t}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <Text style={styles.inputLabel}>Password</Text>
+              <TextInput style={styles.formInput} value={passwordDraft} onChangeText={setPasswordDraft} secureTextEntry />
+
+              {selectedUser && selectedUser.id !== user?.id && (
+                <>
+                  <View style={{ marginTop: 20, paddingTop: 16, borderTopWidth: 1, borderTopColor: '#e2e8f0' }}>
+                    <TouchableOpacity 
+                      style={styles.deleteAccountButton} 
+                      onPress={() => {
+                        const target = selectedUser;
+                        closeEditModal();
+                        handleDeleteUser(target);
+                      }}
+                    >
+                      <MaterialIcons name="delete-outline" size={18} color="#ef4444" />
+                      <Text style={styles.deleteAccountButtonText}>Delete This Account</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
+            </ScrollView>
+
+            <View style={styles.modalFooterActions}>
+              <TouchableOpacity style={styles.cancelFormButton} onPress={closeEditModal}>
+                <Text style={styles.cancelFormButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.submitFormButton} onPress={handleSaveUser}>
+                <Text style={styles.submitFormButtonText}>Save Changes</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Review Modal */}
+      <Modal visible={Boolean(reviewTarget)} animationType="slide" onRequestClose={closeReviewModal}>
+        {reviewTarget && (
+          <View style={styles.reviewModalContainer}>
+            <View style={styles.reviewModalHeader}>
+              <TouchableOpacity style={styles.reviewCloseButton} onPress={closeReviewModal}>
+                <MaterialIcons name="close" size={18} color="#334155" />
+                <Text style={styles.reviewCloseButtonText}>Close</Text>
+              </TouchableOpacity>
+              <Text style={styles.reviewModalTitle}>User Account Details</Text>
+              <View style={{ width: 80 }} />
+            </View>
+            <ScrollView style={styles.reviewModalBodyContent}>
+              {/* Profile Header */}
+              <View style={styles.reviewSummaryBox}>
+                <View style={styles.reviewAvatarBig}>
+                  <Text style={styles.reviewAvatarTextBig}>
+                    {reviewTarget.record.name.charAt(0).toUpperCase()}
+                  </Text>
+                </View>
+                <View>
+                  <Text style={styles.reviewNameText}>{reviewTarget.record.name}</Text>
+                  <Text style={styles.reviewSubText}>{reviewTarget.record.email}</Text>
+                </View>
+              </View>
+
+              {/* Account Details Section */}
+              <View style={styles.reviewDetailsSection}>
+                <Text style={styles.reviewSectionTitle}>Account Information</Text>
+                
+                <View style={styles.reviewDetailRow}>
+                  <Text style={styles.reviewDetailLabel}>User ID</Text>
+                  <Text style={styles.reviewDetailValue}>{reviewTarget.record.id}</Text>
+                </View>
+
+                <View style={styles.reviewDetailRow}>
+                  <Text style={styles.reviewDetailLabel}>Role</Text>
+                  <View style={[styles.reviewRolePill, { 
+                    backgroundColor: reviewTarget.record.role === 'admin' ? '#eff6ff' : 
+                                     reviewTarget.record.role === 'partner' ? '#f3e8ff' : '#fff7ed',
+                  }]}>
+                    <Text style={[styles.reviewRolePillText, {
+                      color: reviewTarget.record.role === 'admin' ? '#2563eb' : 
+                             reviewTarget.record.role === 'partner' ? '#9333ea' : '#ea580c',
+                    }]}>
+                      {reviewTarget.record.role.charAt(0).toUpperCase() + reviewTarget.record.role.slice(1)}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.reviewDetailRow}>
+                  <Text style={styles.reviewDetailLabel}>Status</Text>
+                  <View style={[styles.reviewStatusPill, { 
+                    backgroundColor: reviewTarget.record.approvalStatus === 'pending' ? '#fffbeb' : '#f0fdf4',
+                  }]}>
+                    <View style={[styles.reviewStatusDot, { 
+                      backgroundColor: reviewTarget.record.approvalStatus === 'pending' ? '#d97706' : '#16a34a',
+                    }]} />
+                    <Text style={[styles.reviewStatusText, {
+                      color: reviewTarget.record.approvalStatus === 'pending' ? '#b45309' : '#15803d',
+                    }]}>
+                      {reviewTarget.record.approvalStatus === 'pending' ? 'Pending' : 'Active'}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.reviewDetailRow}>
+                  <Text style={styles.reviewDetailLabel}>Phone</Text>
+                  <Text style={styles.reviewDetailValue}>{reviewTarget.record.phone || 'Not provided'}</Text>
+                </View>
+
+                <View style={styles.reviewDetailRow}>
+                  <Text style={styles.reviewDetailLabel}>User Type</Text>
+                  <Text style={styles.reviewDetailValue}>{reviewTarget.record.userType || 'Adult'}</Text>
+                </View>
+
+                <View style={styles.reviewDetailRow}>
+                  <Text style={styles.reviewDetailLabel}>Organization</Text>
+                  <Text style={styles.reviewDetailValue}>{getLinkedPartnerForUser(reviewTarget.record)?.name || (reviewTarget.record.role === 'admin' ? 'NVC' : '—')}</Text>
+                </View>
+
+                <View style={styles.reviewDetailRow}>
+                  <Text style={styles.reviewDetailLabel}>Joined</Text>
+                  <Text style={styles.reviewDetailValue}>{format(new Date(reviewTarget.record.createdAt || Date.now()), 'MMM dd, yyyy HH:mm')}</Text>
+                </View>
+
+                {reviewTarget.record.pillarsOfInterest && reviewTarget.record.pillarsOfInterest.length > 0 && (
+                  <View style={styles.reviewDetailRow}>
+                    <Text style={styles.reviewDetailLabel}>Interests</Text>
+                    <View style={styles.reviewInterestsWrap}>
+                      {reviewTarget.record.pillarsOfInterest.map((p, i) => (
+                        <View key={i} style={styles.reviewInterestChip}>
+                          <Text style={styles.reviewInterestText}>{p}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+                )}
+              </View>
+            </ScrollView>
+          </View>
+        )}
       </Modal>
     </View>
   );
@@ -1057,244 +1052,655 @@ export default function UserManagementScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: ModernTheme.colors.background.secondary,
+    backgroundColor: '#f8fafc',
   },
-  pageHeader: {
-    backgroundColor: ModernTheme.colors.background.card,
-    paddingHorizontal: ModernTheme.spacing[4],
-    paddingTop: ModernTheme.spacing[3.5],
-    paddingBottom: ModernTheme.spacing[3],
-    borderBottomWidth: 0,
-    borderBottomColor: 'transparent',
-    ...ModernTheme.shadows.sm,
-  },
-  pageHeaderTop: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: ModernTheme.spacing[3],
-  },
-  pageHeaderTextWrap: {
+  mainScrollView: {
     flex: 1,
-    minWidth: 0,
   },
-  title: {
-    fontSize: ModernTheme.typography.fontSize['2xl'],
-    fontWeight: ModernTheme.typography.fontWeight.bold,
-    color: ModernTheme.colors.text.primary,
+  scrollContent: {
+    padding: 24,
+    maxWidth: 1280,
+    alignSelf: 'center',
+    width: '100%',
+  },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 24,
+    flexWrap: 'wrap',
+    gap: 16,
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+  },
+  headerIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1,
+    borderColor: '#dcfce7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerTextWrap: {
+    justifyContent: 'center',
+  },
+  pageTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#0f172a',
+    fontFamily: 'DM Sans, sans-serif',
   },
   pageSubtitle: {
-    marginTop: ModernTheme.spacing[1],
-    fontSize: ModernTheme.typography.fontSize.sm,
-    color: ModernTheme.colors.text.secondary,
+    fontSize: 14,
+    color: '#64748b',
+    marginTop: 2,
+    fontFamily: 'DM Sans, sans-serif',
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  primaryAddButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#15803d',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+    shadowColor: '#15803d',
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  primaryAddButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '600',
+    fontFamily: 'DM Sans, sans-serif',
+  },
+  secondaryExportButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  secondaryExportButtonText: {
+    color: '#334155',
+    fontSize: 14,
+    fontWeight: '600',
+    fontFamily: 'DM Sans, sans-serif',
   },
   bannerWrap: {
-    paddingHorizontal: ModernTheme.spacing[4],
-    paddingTop: ModernTheme.spacing[2.5],
-  },
-  syncText: {
-    fontSize: ModernTheme.typography.fontSize.sm,
-    color: ModernTheme.colors.text.secondary,
-    marginTop: ModernTheme.spacing[2],
+    marginBottom: 16,
   },
   successBanner: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: ModernTheme.spacing[2.5],
-    backgroundColor: ModernTheme.colors.primary[100],
-    borderWidth: 0,
-    borderColor: 'transparent',
-    borderRadius: ModernTheme.borderRadius.lg,
-    paddingHorizontal: ModernTheme.spacing[3.5],
-    paddingVertical: ModernTheme.spacing[3],
-    ...ModernTheme.shadows.sm,
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    borderRadius: 8,
+    padding: 12,
   },
   successBannerTextWrap: {
     flex: 1,
   },
   successBannerTitle: {
-    fontSize: ModernTheme.typography.fontSize.sm,
-    fontWeight: ModernTheme.typography.fontWeight.bold,
-    color: ModernTheme.colors.primary[700],
-  },
-  successBannerMessage: {
-    marginTop: ModernTheme.spacing[0.5],
-    fontSize: ModernTheme.typography.fontSize.sm,
-    lineHeight: 18,
-    color: ModernTheme.colors.primary[700],
-  },
-  refreshButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: ModernTheme.spacing[1.5],
-    backgroundColor: ModernTheme.colors.primary[100],
-    borderRadius: ModernTheme.borderRadius.lg,
-    paddingHorizontal: ModernTheme.spacing[3],
-    paddingVertical: ModernTheme.spacing[2.5],
-    ...ModernTheme.shadows.xs,
-  },
-  refreshButtonText: {
-    fontSize: ModernTheme.typography.fontSize.sm,
-    fontWeight: ModernTheme.typography.fontWeight.semibold,
-    color: ModernTheme.colors.primary[700],
-  },
-  summaryRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 6,
-  },
-  summaryCard: {
-    flexGrow: 1,
-    flexBasis: '23%',
-    minWidth: 140,
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-  },
-  summaryValue: {
-    fontSize: 22,
-    fontWeight: '800',
+    fontSize: 14,
+    fontWeight: '700',
     color: '#166534',
   },
-  summaryLabel: {
-    marginTop: 2,
-    fontSize: 12,
-    color: '#64748b',
+  successBannerMessage: {
+    fontSize: 13,
+    color: '#15803d',
   },
-  listContent: {
-    paddingBottom: 20,
+
+  // Summary Grid
+  summaryGrid: {
+    flexDirection: 'row',
+    gap: 16,
+    marginBottom: 24,
+    flexWrap: 'wrap',
   },
-  userCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 10,
+  summaryCard: {
+    flex: 1,
+    minWidth: 220,
+    backgroundColor: '#ffffff',
     borderWidth: 1,
-    borderColor: '#e5e7eb',
-  },
-  userHeader: {
+    borderColor: '#e2e8f0',
+    borderRadius: 12,
+    padding: 16,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 14,
+    shadowColor: '#000',
+    shadowOpacity: 0.02,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
   },
-  avatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#4CAF50',
-    justifyContent: 'center',
+  summaryIconBox: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  avatarText: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 16,
-  },
-  userInfo: {
+  summaryContent: {
     flex: 1,
   },
-  nameRow: {
+  summaryNumber: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#0f172a',
+    fontFamily: 'DM Sans, sans-serif',
+  },
+  summaryTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#334155',
+    marginTop: 2,
+    fontFamily: 'DM Sans, sans-serif',
+  },
+  summarySubtext: {
+    fontSize: 11,
+    color: '#64748b',
+    marginTop: 1,
+    fontFamily: 'DM Sans, sans-serif',
+  },
+
+  // Tabs
+  tabsContainer: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+    marginBottom: 20,
+    gap: 24,
+  },
+  tabButton: {
+    paddingVertical: 12,
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
+  },
+  tabButtonActive: {
+    borderBottomColor: '#16a34a',
+  },
+  tabButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#64748b',
+    fontFamily: 'DM Sans, sans-serif',
+  },
+  tabButtonTextActive: {
+    color: '#16a34a',
+    fontWeight: '700',
+  },
+
+  // Search & Filter Toolbar
+  toolbarContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+    flexWrap: 'wrap',
+    gap: 12,
+    zIndex: 10,
+  },
+  searchBox: {
+    flex: 1,
+    minWidth: 280,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    flexWrap: 'wrap',
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    height: 42,
   },
-  userName: {
-    fontSize: 15,
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: '#0f172a',
+    fontFamily: 'DM Sans, sans-serif',
+    outlineStyle: 'none' as any,
+  },
+  toolbarRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  filterDropdownButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    height: 42,
+  },
+  filterDropdownText: {
+    fontSize: 13,
+    color: '#334155',
+    fontWeight: '500',
+    fontFamily: 'DM Sans, sans-serif',
+  },
+  refreshIconButton: {
+    width: 42,
+    height: 42,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dropdownMenuOverlay: {
+    position: 'absolute',
+    top: 220,
+    right: 120,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 8,
+    paddingVertical: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    zIndex: 100,
+    minWidth: 160,
+  },
+  dropdownMenuItem: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  dropdownMenuItemActive: {
+    backgroundColor: '#f0fdf4',
+  },
+  dropdownMenuText: {
+    fontSize: 13,
+    color: '#334155',
+  },
+  dropdownMenuTextActive: {
+    color: '#16a34a',
     fontWeight: '700',
-    color: '#111827',
   },
-  newBadge: {
-    backgroundColor: '#fef3c7',
-    borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+
+  // Table
+  tableContainer: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 12,
+    overflow: 'hidden',
   },
-  newBadgeText: {
-    fontSize: 10,
+  tableHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+  },
+  thText: {
+    fontSize: 11,
     fontWeight: '700',
-    color: '#92400e',
-    textTransform: 'uppercase',
+    color: '#64748b',
+    letterSpacing: 0.5,
+    fontFamily: 'DM Sans, sans-serif',
   },
-  userMeta: {
+  tableBodyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
+  colCell: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  colUser: {
+    flex: 2.2,
+    minWidth: 180,
+  },
+  colType: {
+    flex: 1.4,
+    minWidth: 130,
+  },
+  colEmail: {
+    flex: 2,
+    minWidth: 180,
+  },
+  colOrg: {
+    flex: 1.6,
+    minWidth: 130,
+  },
+  colStatus: {
+    flex: 1.2,
+    minWidth: 100,
+  },
+  colJoined: {
+    flex: 1.3,
+    minWidth: 110,
+  },
+  colActions: {
+    flex: 1.4,
+    minWidth: 125,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 6,
+  },
+  avatarCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarText: {
+    fontSize: 14,
+    fontWeight: '700',
+    fontFamily: 'DM Sans, sans-serif',
+  },
+  userNameMeta: {
+    marginLeft: 10,
+  },
+  userNameText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0f172a',
+    fontFamily: 'DM Sans, sans-serif',
+  },
+  userSubText: {
     fontSize: 12,
     color: '#64748b',
-    marginTop: 4,
-    lineHeight: 18,
+    marginTop: 1,
+    fontFamily: 'DM Sans, sans-serif',
   },
-  linkedRecordBox: {
-    marginTop: 8,
-    backgroundColor: '#f8fafc',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#dbeafe',
+
+  // Pills
+  rolePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingVertical: 4,
+    borderRadius: 14,
   },
-  linkedRecordTitle: {
+  rolePillText: {
     fontSize: 12,
+    fontWeight: '600',
+    fontFamily: 'DM Sans, sans-serif',
+  },
+  statusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 14,
+  },
+  statusPillActive: {
+    backgroundColor: '#f0fdf4',
+  },
+  statusPillPending: {
+    backgroundColor: '#fffbeb',
+  },
+  statusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  statusDotActive: {
+    backgroundColor: '#16a34a',
+  },
+  statusDotPending: {
+    backgroundColor: '#d97706',
+  },
+  statusText: {
+    fontSize: 12,
+    fontWeight: '600',
+    fontFamily: 'DM Sans, sans-serif',
+  },
+  statusTextActive: {
+    color: '#15803d',
+  },
+  statusTextPending: {
+    color: '#b45309',
+  },
+  tdText: {
+    fontSize: 13,
+    color: '#334155',
+    fontFamily: 'DM Sans, sans-serif',
+  },
+  actionIconButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+  },
+  actionBtnView: {
+    backgroundColor: '#f8fafc',
+    borderColor: '#e2e8f0',
+  },
+  actionBtnEdit: {
+    backgroundColor: '#f0fdf4',
+    borderColor: '#bbf7d0',
+  },
+  actionBtnDelete: {
+    backgroundColor: '#fef2f2',
+    borderColor: '#fecaca',
+  },
+  actionBtnDisabled: {
+    backgroundColor: '#f8fafc',
+    borderColor: '#e2e8f0',
+    opacity: 0.45,
+  },
+  emptyTableState: {
+    padding: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyTableText: {
+    fontSize: 14,
+    color: '#64748b',
+    marginTop: 8,
+  },
+
+  // Pagination Footer
+  paginationFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 16,
+    paddingVertical: 8,
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  paginationCountText: {
+    fontSize: 13,
+    color: '#64748b',
+    fontFamily: 'DM Sans, sans-serif',
+  },
+  paginationControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  pageNavButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ffffff',
+  },
+  pageNavButtonDisabled: {
+    backgroundColor: '#f8fafc',
+  },
+  pageNumberButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ffffff',
+  },
+  pageNumberButtonActive: {
+    borderColor: '#16a34a',
+    backgroundColor: '#f0fdf4',
+  },
+  pageNumberText: {
+    fontSize: 13,
+    color: '#334155',
+    fontWeight: '500',
+  },
+  pageNumberTextActive: {
+    color: '#16a34a',
+    fontWeight: '700',
+  },
+
+  // Modals
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.4)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  modalContentCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    width: '100%',
+    maxWidth: 500,
+    maxHeight: '90%',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 10 },
+  },
+  modalHeaderBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  modalHeadingTitle: {
+    fontSize: 18,
     fontWeight: '700',
     color: '#0f172a',
   },
-  linkedRecordMeta: {
-    marginTop: 4,
-    fontSize: 11,
-    color: '#475569',
-    lineHeight: 16,
+  modalFormBody: {
+    padding: 20,
   },
-  roleBadge: {
-    backgroundColor: '#ecfdf5',
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+  inputLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#334155',
+    marginBottom: 6,
+    marginTop: 12,
   },
-  roleBadgeText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#166534',
-    textTransform: 'uppercase',
-  },
-  actionsRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 14,
-  },
-  editButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#dcfce7',
+  formInput: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 10,
+    fontSize: 14,
+    color: '#0f172a',
   },
-  editButtonText: {
-    color: '#166534',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  deleteButton: {
+  optionRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#fee2e2',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    gap: 8,
   },
-  deleteButtonText: {
-    color: '#b91c1c',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  emptyState: {
+  optionChip: {
     flex: 1,
+    paddingVertical: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+  },
+  optionChipActive: {
+    borderColor: '#16a34a',
+    backgroundColor: '#f0fdf4',
+  },
+  optionChipText: {
+    fontSize: 13,
+    color: '#475569',
+  },
+  optionChipTextActive: {
+    color: '#16a34a',
+    fontWeight: '700',
+  },
+  modalFooterActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+    backgroundColor: '#f8fafc',
+  },
+  cancelFormButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 6,
+  },
+  cancelFormButtonText: {
+    color: '#64748b',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  submitFormButton: {
+    backgroundColor: '#15803d',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 6,
+  },
+  submitFormButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+
+  // Empty state
+  emptyState: {
+    padding: 40,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1303,580 +1709,155 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#64748b',
   },
-  modalContainer: {
-    flex: 1,
-    backgroundColor: '#f8fafc',
+  title: {
+    fontSize: 20,
+    fontWeight: '700',
   },
   reviewModalContainer: {
     flex: 1,
-    backgroundColor: '#eef2f7',
-  },
-  modalHeader: {
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  modalTitle: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: '#0f172a',
-  },
-  modalCancel: {
-    color: '#64748b',
-    fontSize: 15,
-  },
-  modalSave: {
-    color: '#15803d',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  modalBody: {
-    padding: 16,
+    backgroundColor: '#ffffff',
   },
   reviewModalHeader: {
-    minHeight: 76,
-    paddingHorizontal: 24,
-    paddingVertical: 16,
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#dbe3ee',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 16,
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
   },
   reviewCloseButton: {
-    minWidth: 96,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    backgroundColor: '#f8fafc',
+    gap: 4,
   },
   reviewCloseButtonText: {
-    fontSize: 13,
-    fontWeight: '700',
+    fontSize: 14,
     color: '#334155',
-  },
-  reviewHeaderTitleWrap: {
-    flex: 1,
-    alignItems: 'center',
   },
   reviewModalTitle: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  reviewModalSubtitle: {
-    marginTop: 4,
-    fontSize: 13,
-    lineHeight: 18,
-    color: '#64748b',
-    textAlign: 'center',
-  },
-  reviewModalBody: {
-    flex: 1,
-  },
-  input: {
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 12,
-    padding: 14,
-    fontSize: 15,
-    color: '#0f172a',
-    marginBottom: 12,
-  },
-  fieldLabel: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#334155',
-    marginBottom: 8,
-  },
-  roleOptions: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  roleOption: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 10,
-    backgroundColor: '#e2e8f0',
-  },
-  roleOptionActive: {
-    backgroundColor: '#166534',
-  },
-  roleOptionText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#475569',
-    textTransform: 'capitalize',
-  },
-  roleOptionTextActive: {
-    color: '#fff',
-  },
-  requestSection: {
-    marginTop: 10,
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 14,
-    marginHorizontal: 16,
-    marginBottom: 6,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-  },
-  requestQueueHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: 12,
-    marginBottom: 14,
-  },
-  requestQueueTitleWrap: {
-    flex: 1,
-  },
-  requestQueueBadge: {
-    minWidth: 92,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 14,
-    backgroundColor: '#dcfce7',
-    alignItems: 'center',
-  },
-  requestQueueBadgeText: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#166534',
-  },
-  requestQueueSummaryRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-    marginBottom: 14,
-  },
-  requestSummaryCard: {
-    flexGrow: 1,
-    minWidth: 120,
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  requestSummaryValue: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  requestSummaryLabel: {
-    marginTop: 2,
-    fontSize: 11,
-    color: '#64748b',
-  },
-  userRoleSection: {
-    marginTop: 6,
-    marginBottom: 4,
-    paddingHorizontal: 16,
-  },
-  userTypeBox: {
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-  },
-  userTypeBoxHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  userTypeBoxTextWrap: {
-    flex: 1,
-  },
-  userTypeBoxMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  userTypeCountBadge: {
-    minWidth: 30,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 999,
-    backgroundColor: '#dcfce7',
-    alignItems: 'center',
-  },
-  userTypeCountText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#166534',
-  },
-  userRoleEmptyState: {
-    paddingTop: 10,
-  },
-  requestSectionTitle: {
     fontSize: 16,
-    fontWeight: '800',
-    color: '#0f172a',
-    marginBottom: 2,
-  },
-  requestSectionSubtitle: {
-    fontSize: 12,
-    color: '#64748b',
-    lineHeight: 18,
-    marginBottom: 10,
-  },
-  requestEmptyText: {
-    fontSize: 14,
-    color: '#64748b',
-    fontStyle: 'italic',
-  },
-  requestTileGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-  },
-  requestTile: {
-    flexGrow: 1,
-    flexBasis: '23%',
-    minWidth: 180,
-    maxWidth: 260,
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#dbe3ee',
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    shadowColor: '#0f172a',
-    shadowOpacity: 0.03,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 1,
-  },
-  requestTileHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-    marginBottom: 10,
-  },
-  requestTileAvatar: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#166534',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  requestTileAvatarText: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#ffffff',
-  },
-  requestTileName: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#0f172a',
-    marginBottom: 4,
-  },
-  requestTileHint: {
-    fontSize: 11,
-    lineHeight: 16,
-    color: '#64748b',
-  },
-  requestRolePill: {
-    backgroundColor: '#e0f2fe',
-  },
-  requestRolePillText: {
-    color: '#075985',
-  },
-  requestMeta: {
-    fontSize: 12,
-    color: '#64748b',
-    lineHeight: 18,
-  },
-  requestBadge: {
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  requestBadgePending: {
-    backgroundColor: '#fef3c7',
-  },
-  requestBadgeRejected: {
-    backgroundColor: '#fee2e2',
-  },
-  requestBadgeText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#92400e',
-    textTransform: 'uppercase',
-  },
-  requestBadgeTextRejected: {
-    color: '#b91c1c',
-  },
-  requestActionRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  requestActionButton: {
-    flexGrow: 1,
-    minWidth: 120,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-  },
-  verifyActionButton: {
-    backgroundColor: '#dbeafe',
-  },
-  approveActionButton: {
-    backgroundColor: '#dcfce7',
-  },
-  rejectActionButton: {
-    backgroundColor: '#fee2e2',
-  },
-  reviewDeleteButton: {
-    backgroundColor: '#fee2e2',
-    borderWidth: 1,
-    borderColor: '#fecaca',
-  },
-  reviewRejectButton: {
-    backgroundColor: '#fff1f2',
-    borderWidth: 1,
-    borderColor: '#fecdd3',
-  },
-  reviewActionButton: {
-    backgroundColor: '#e0f2fe',
-  },
-  requestActionButtonText: {
-    fontSize: 13,
     fontWeight: '700',
   },
-  reviewActionButtonText: {
-    color: '#075985',
+  reviewModalBodyContent: {
+    padding: 20,
   },
-  approveActionButtonText: {
-    color: '#166534',
-  },
-  rejectActionButtonText: {
-    color: '#b91c1c',
-  },
-  modalHeaderSpacer: {
-    width: 96,
-  },
-  reviewContent: {
-    width: '100%',
-    maxWidth: 980,
-    alignSelf: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 120,
-  },
-  reviewPanel: {
-    gap: 18,
-  },
-  reviewSummaryCard: {
+  reviewSummaryBox: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 16,
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#dbe3ee',
-    borderRadius: 18,
-    padding: 20,
-    shadowColor: '#0f172a',
-    shadowOpacity: 0.05,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 2,
   },
-  reviewAvatar: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#166534',
+  reviewAvatarBig: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#dcfce7',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  reviewAvatarText: {
-    color: '#ffffff',
-    fontSize: 20,
-    fontWeight: '800',
+  reviewAvatarTextBig: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#15803d',
   },
-  reviewSummaryText: {
-    flex: 1,
-    minWidth: 0,
-  },
-  reviewApplicantName: {
-    fontSize: 20,
-    fontWeight: '800',
+  reviewNameText: {
+    fontSize: 18,
+    fontWeight: '700',
     color: '#0f172a',
   },
-  reviewApplicantMeta: {
-    marginTop: 4,
-    fontSize: 13,
+  reviewSubText: {
+    fontSize: 14,
     color: '#64748b',
   },
-  reviewApplicantSupport: {
-    marginTop: 8,
-    fontSize: 12,
-    color: '#475569',
-  },
-  reviewStatusStack: {
-    alignItems: 'flex-end',
-    gap: 8,
-  },
-  reviewRoleBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 999,
-    backgroundColor: '#e0f2fe',
-  },
-  reviewRoleBadgeText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#075985',
-    textTransform: 'uppercase',
-  },
-  reviewPendingBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 999,
-    backgroundColor: '#fef3c7',
-  },
-  reviewPendingBadgeText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#92400e',
-    textTransform: 'uppercase',
-  },
-  reviewSectionCard: {
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#dbe3ee',
-    borderRadius: 18,
-    padding: 18,
-    shadowColor: '#0f172a',
-    shadowOpacity: 0.04,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 1,
+  reviewDetailsSection: {
+    marginTop: 24,
+    paddingTop: 20,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
   },
   reviewSectionTitle: {
     fontSize: 16,
-    fontWeight: '800',
+    fontWeight: '700',
     color: '#0f172a',
-    marginBottom: 14,
+    marginBottom: 16,
   },
-  reviewFieldGrid: {
+  reviewDetailRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-  },
-  reviewField: {
-    flexGrow: 1,
-    flexBasis: '48%',
-    minWidth: 220,
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-  },
-  reviewFieldWide: {
-    flexBasis: '100%',
-  },
-  reviewRowLabel: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#475569',
-    textTransform: 'uppercase',
-  },
-  reviewRowValue: {
-    fontSize: 14,
-    color: '#0f172a',
-    lineHeight: 20,
-    marginTop: 6,
-  },
-  reviewCertificateImage: {
-    width: '100%',
-    height: 260,
-    borderRadius: 8,
-    marginTop: 8,
-    backgroundColor: '#e2e8f0',
-  },
-  reviewActionFooter: {
-    paddingHorizontal: 20,
-    paddingBottom: 18,
-    paddingTop: 14,
-    backgroundColor: '#ffffff',
-    borderTopWidth: 1,
-    borderTopColor: '#dbe3ee',
-  },
-  reviewActionBar: {
-    width: '100%',
-    maxWidth: 980,
-    alignSelf: 'center',
-    flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    flexWrap: 'wrap',
-    gap: 16,
+    alignItems: 'flex-start',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
   },
-  reviewActionCopy: {
+  reviewDetailLabel: {
+    fontSize: 14,
+    color: '#64748b',
     flex: 1,
   },
-  reviewActionTitle: {
+  reviewDetailValue: {
     fontSize: 14,
-    fontWeight: '800',
+    fontWeight: '600',
     color: '#0f172a',
+    flex: 1.5,
+    textAlign: 'right',
   },
-  reviewActionDescription: {
-    marginTop: 4,
+  reviewRolePill: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  reviewRolePillText: {
     fontSize: 12,
-    lineHeight: 18,
-    color: '#64748b',
+    fontWeight: '600',
   },
-  reviewActionButtons: {
+  reviewStatusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  reviewStatusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  reviewStatusText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  reviewInterestsWrap: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 10,
+    gap: 6,
+    flex: 1.5,
+    justifyContent: 'flex-end',
   },
-  imageViewerOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.95)',
-    justifyContent: 'center',
+  reviewInterestChip: {
+    backgroundColor: '#f0fdf4',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  reviewInterestText: {
+    fontSize: 11,
+    color: '#166534',
+    fontWeight: '500',
+  },
+  deleteAccountButton: {
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    borderRadius: 8,
   },
-  imageViewerCloseButton: {
-    position: 'absolute',
-    top: 40,
-    right: 20,
-    zIndex: 10,
-    padding: 10,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    borderRadius: 20,
-  },
-  imageViewerImage: {
-    width: '90%',
-    height: '80%',
+  deleteAccountButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#ef4444',
   },
 });

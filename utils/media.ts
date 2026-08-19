@@ -1,6 +1,6 @@
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
-import { Linking } from 'react-native';
+import { Linking, Platform } from 'react-native';
 import { compressImage } from './imageCompression';
 
 // Safe Platform accessor for web environments
@@ -15,7 +15,6 @@ function getPlatformOS(): string {
 
 const IMAGE_FILE_PATTERN = /\.(png|jpe?g|gif|webp|bmp|heic|heif)(\?.*)?$/i;
 const DATA_URI_PATTERN = /^data:([^;,]+)(;base64)?,/i;
-const IMAGE_PICKER_QUALITY = 0.4;
 
 // Returns true when the provided string can be rendered as an image preview.
 export function isImageMediaUri(value?: string | null): boolean {
@@ -115,50 +114,94 @@ export function getPrimaryReportMediaUri(
 
 // Opens the device photo picker and returns a persistable image URI/data URI.
 export async function pickImageFromDevice(): Promise<string | null> {
-  if (getPlatformOS() !== 'web') {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      throw new Error('Photo library access is required to upload an image.');
-    }
+  if (Platform.OS === 'web') {
+    return new Promise((resolve) => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/*';
+      input.onchange = (e: any) => {
+        const file = e.target.files?.[0];
+        if (!file) {
+          resolve(null);
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = (event: any) => {
+          resolve(event.target.result);
+        };
+        reader.onerror = () => {
+          resolve(null);
+        };
+        reader.readAsDataURL(file);
+      };
+      input.click();
+    });
   }
 
-  const result = await ImagePicker.launchImageLibraryAsync({
-    mediaTypes: ['images'],
-    allowsEditing: true,
-    quality: IMAGE_PICKER_QUALITY,
-    base64: true,
-  });
+  try {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      base64: true,
+      quality: 0.4,
+    });
 
-  if (result.canceled || !result.assets?.length) {
+    if (result.canceled || !result.assets || result.assets.length === 0) {
+      return null;
+    }
+
+    const asset = result.assets[0];
+    if (asset.base64) {
+      const imageDataUri = `data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}`;
+      const optimizedImage = await compressImage(imageDataUri);
+      return optimizedImage || imageDataUri;
+    }
+
+    return asset.uri;
+  } catch (error) {
+    console.error('Error picking image:', error);
     return null;
   }
-
-  const asset = result.assets[0];
-  if (asset.base64) {
-    const imageDataUri = `data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}`;
-    const optimizedImage = await compressImage(imageDataUri);
-    return optimizedImage || imageDataUri;
-  }
-
-  return asset.uri;
 }
 
 // Opens the device file picker for documents and returns a persistable file URI/data URI.
 export async function pickDocumentFromDevice(): Promise<string | null> {
-  const result = await DocumentPicker.getDocumentAsync({
-    copyToCacheDirectory: true,
-    multiple: false,
-    base64: true,
-  });
+  if (Platform.OS === 'web') {
+    return new Promise((resolve) => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '*/*';
+      input.onchange = (e: any) => {
+        const file = e.target.files?.[0];
+        if (!file) {
+          resolve(null);
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = (event: any) => {
+          resolve(event.target.result);
+        };
+        reader.onerror = () => {
+          resolve(null);
+        };
+        reader.readAsDataURL(file);
+      };
+      input.click();
+    });
+  }
 
-  if (result.canceled || !result.assets?.length) {
+  try {
+    const result = await DocumentPicker.getDocumentAsync({
+      type: '*/*',
+      copyToCacheDirectory: true,
+    });
+
+    if (result.canceled || !result.assets || result.assets.length === 0) {
+      return null;
+    }
+
+    return result.assets[0].uri;
+  } catch (error) {
+    console.error('Error picking document:', error);
     return null;
   }
-
-  const asset = result.assets[0];
-  if (asset.base64) {
-    return `data:${asset.mimeType || 'application/octet-stream'};base64,${asset.base64}`;
-  }
-
-  return asset.uri;
 }

@@ -1,5 +1,5 @@
-import { Alert } from 'react-native';
-import { File, Paths } from 'expo-file-system';
+import { Alert, Platform } from 'react-native';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 
 function sanitizeFilename(filename: string): string {
@@ -129,24 +129,31 @@ export async function downloadPdfFile(
   }
 
   try {
-    const sharingAvailable = await Sharing.isAvailableAsync();
-    if (!sharingAvailable) {
-      Alert.alert('Download Unavailable', fallbackMessage);
-      return;
-    }
+    if (Platform.OS === 'web') {
+      const blob = new Blob([pdfContent], { type: 'application/pdf' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = safeFilename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } else {
+      // Native: Write file to cache directory using expo-file-system and share
+      const filePath = `${FileSystem.cacheDirectory}${safeFilename}`;
+      await FileSystem.writeAsStringAsync(filePath, pdfContent, {
+        encoding: FileSystem.EncodingType.UTF8,
+      });
 
-    const file = new File(Paths.cache, safeFilename);
-    if (file.exists) {
-      file.delete();
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(filePath, {
+          mimeType: 'application/pdf',
+          dialogTitle: safeFilename,
+          UTI: 'com.adobe.pdf',
+        });
+      }
     }
-    file.create();
-    file.write(pdfContent);
-
-    await Sharing.shareAsync(file.uri, {
-      mimeType: 'application/pdf',
-      dialogTitle: safeFilename,
-      UTI: 'com.adobe.pdf',
-    });
   } catch (error) {
     console.error('Unable to save PDF:', error);
     Alert.alert('Download Failed', fallbackMessage);

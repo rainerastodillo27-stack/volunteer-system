@@ -4,6 +4,8 @@ import {
 
   Alert,
 
+  ActivityIndicator,
+
   Image,
 
   Modal,
@@ -25,8 +27,10 @@ import {
   type ImageStyle,
 
 } from 'react-native';
+import * as AuthSession from 'expo-auth-session';
 
-import { MaterialIcons, Ionicons } from '@expo/vector-icons';
+import { MaterialIcons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
 
 import { Picker } from '@react-native-picker/picker';
 
@@ -37,15 +41,12 @@ import { useFocusEffect } from '@react-navigation/native';
 import InlineLoadError from '../components/InlineLoadError';
 
 import ProjectTimelineCalendarCard from '../components/ProjectTimelineCalendarCard';
-import * as AuthSession from 'expo-auth-session';
-import * as WebBrowser from 'expo-web-browser';
 import {
+  assertGoogleCalendarAccountMatchesUser,
+  getGoogleAuthConfig,
+  sendGoogleCalendarSyncEmail,
   syncProjectsToGoogleCalendar,
-  validateGoogleToken,
-  GOOGLE_CLIENT_ID,
 } from '../utils/googleCalendarSync';
-
-WebBrowser.maybeCompleteAuthSession();
 
 import { useAuth } from '../contexts/AuthContext';
 
@@ -509,145 +510,12 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
   const [proposalDatePickerMode, setProposalDatePickerMode] = useState<'startDate' | 'endDate'>('startDate');
 
   const [selectedProposalDate, setSelectedProposalDate] = useState(new Date());
-
-  // ── Google Calendar Sync ──────────────────────────────────────────────────
-  const [gcalSyncing, setGcalSyncing] = useState(false);
-  const [gcalLastSynced, setGcalLastSynced] = useState<string | null>(null);
-  const [gcalAccessToken, setGcalAccessToken] = useState<string | null>(null);
-
-  const GCAL_DISCOVERY = {
-    authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
-    tokenEndpoint: 'https://oauth2.googleapis.com/token',
-    revocationEndpoint: 'https://oauth2.googleapis.com/revoke',
-  };
-
-  const [gcalAuthRequest, gcalAuthResponse, promptGcalAuth] = AuthSession.useAuthRequest(
-    {
-      clientId: GOOGLE_CLIENT_ID,
-      redirectUri: AuthSession.makeRedirectUri(),
-      scopes: [
-        'openid',
-        'profile',
-        'email',
-        'https://www.googleapis.com/auth/calendar.events',
-      ],
-      responseType: AuthSession.ResponseType.Token,
-      usePKCE: false,
-      extraParams: user?.email ? { login_hint: user.email } : {},
-    },
-    GCAL_DISCOVERY
+  const [calendarSyncing, setCalendarSyncing] = useState(false);
+  const googleAuthConfig = useMemo(() => getGoogleAuthConfig(user?.email), [user?.email]);
+  const [googleAuthRequest, , promptGoogleAuth] = AuthSession.useAuthRequest(
+    googleAuthConfig.request,
+    googleAuthConfig.discovery
   );
-
-  useEffect(() => {
-    if (Platform.OS === 'web') return;
-    if (gcalAuthResponse?.type === 'success') {
-      const token = gcalAuthResponse.params.access_token;
-      if (token) {
-        setGcalAccessToken(token);
-        void handleGcalSync(token);
-      }
-    } else if (gcalAuthResponse?.type === 'error') {
-      Alert.alert(
-        'Google Sign-In Failed',
-        gcalAuthResponse.error?.message ?? 'Could not sign in with Google. Please try again.'
-      );
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gcalAuthResponse]);
-
-  const handleGcalConnectAndSync = async () => {
-    if (gcalSyncing) return;
-
-    if (gcalAccessToken) {
-      const stillValid = await validateGoogleToken(gcalAccessToken);
-      if (stillValid) {
-        await handleGcalSync(gcalAccessToken);
-        return;
-      }
-      setGcalAccessToken(null);
-    }
-
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      setGcalSyncing(true);
-      const requestGisToken = () => {
-        const tokenClient = (window as any).google.accounts.oauth2.initTokenClient({
-          client_id: GOOGLE_CLIENT_ID,
-          scope: [
-            'https://www.googleapis.com/auth/calendar.events',
-            'openid', 'profile', 'email',
-          ].join(' '),
-          callback: (response: any) => {
-            if (response.error) {
-              setGcalSyncing(false);
-              Alert.alert('Google Sign-In Failed', response.error_description || response.error);
-              return;
-            }
-            const token = response.access_token as string;
-            if (token) {
-              setGcalAccessToken(token);
-              void handleGcalSync(token);
-            }
-          },
-          ...(user?.email ? { hint: user.email } : {}),
-        });
-        tokenClient.requestAccessToken();
-      };
-      if ((window as any).google?.accounts?.oauth2) {
-        requestGisToken();
-      } else {
-        const existing = document.getElementById('gis-script');
-        if (existing) {
-          existing.addEventListener('load', requestGisToken);
-        } else {
-          const script = document.createElement('script');
-          script.id = 'gis-script';
-          script.src = 'https://accounts.google.com/gsi/client';
-          script.async = true;
-          script.defer = true;
-          script.onload = requestGisToken;
-          script.onerror = () => {
-            setGcalSyncing(false);
-            Alert.alert('Error', 'Could not load Google Sign-In.');
-          };
-          document.head.appendChild(script);
-        }
-      }
-    } else {
-      await promptGcalAuth();
-    }
-  };
-
-  const handleGcalSync = async (accessToken: string) => {
-    setGcalSyncing(true);
-    try {
-      // Partners sync their approved/attending projects
-      const relevantProjects = attendingProjects.length ? attendingProjects : activeProjects;
-
-      if (relevantProjects.length === 0) {
-        Alert.alert('Nothing to Sync', 'There are no active projects to sync to Google Calendar.');
-        return;
-      }
-
-      const result = await syncProjectsToGoogleCalendar(accessToken, relevantProjects);
-      const syncedAt = new Date().toLocaleString();
-      setGcalLastSynced(syncedAt);
-
-      if (result.synced > 0) {
-        Alert.alert(
-          '✅ Calendar Sync Successful!',
-          `${result.synced} project${result.synced !== 1 ? 's' : ''} added to your Google Calendar.`
-        );
-      } else if (result.failed > 0) {
-        Alert.alert('Sync Failed', `Could not add projects to Google Calendar.\n\n${result.errors.slice(0, 3).join('\n')}`);
-      } else {
-        Alert.alert('Nothing to Sync', 'No projects were added. They may already be in your calendar.');
-      }
-    } catch (error) {
-      Alert.alert('Sync Failed', 'Could not sync to Google Calendar. Please try again.');
-    } finally {
-      setGcalSyncing(false);
-    }
-  };
 
 
 
@@ -802,12 +670,13 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
       ...projects.filter(project => {
         const title = String(project.title || '').toLowerCase();
         const id = String(project.id || '').toLowerCase();
+        const module = getProgramModule(project);
         return (
           !project.isEvent &&
           !project.parentProjectId &&
           !id.startsWith('project-proposal-') &&
-          title.includes('program') &&
-          !title.includes('proposal')
+          !title.includes('proposal') &&
+          (Boolean(module) || title.includes('program') || title.includes('education') || title.includes('nutrition') || title.includes('livelihood') || title.includes('disaster') || title.includes('relief') || title.includes('support'))
         );
       }),
     ];
@@ -927,6 +796,58 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
     [attendingProjects]
 
   );
+
+  const handleSyncPartnerCalendar = React.useCallback(async () => {
+    if (!user?.id) {
+      Alert.alert('Login Required', 'Please sign in before syncing your calendar.');
+      return;
+    }
+
+    const approvedProjects = attendingProjects.filter(project => !project.isEvent);
+    if (approvedProjects.length === 0) {
+      Alert.alert(
+        'No Approved Projects',
+        'Only projects approved by the admin for your partner account can be synced.'
+      );
+      return;
+    }
+
+    setCalendarSyncing(true);
+    try {
+      if (!googleAuthRequest) {
+        throw new Error('Google sign-in is still initializing. Try again in a moment.');
+      }
+
+      const authResult = await promptGoogleAuth();
+      const accessToken = authResult.type === 'success' ? authResult.authentication?.accessToken : undefined;
+      if (!accessToken) {
+        throw new Error('Google Calendar permission was not granted.');
+      }
+
+      await assertGoogleCalendarAccountMatchesUser(accessToken, user.email);
+
+      const result = await syncProjectsToGoogleCalendar(accessToken, approvedProjects);
+      if (!result.success && result.synced === 0) {
+        throw new Error(result.errors[0] || 'Google Calendar sync failed.');
+      }
+
+      await sendGoogleCalendarSyncEmail({
+        recipientEmail: user.email,
+        userName: user.name,
+        syncedCount: result.synced,
+        role: 'partner',
+      });
+
+      Alert.alert(
+        'Calendar Synced',
+        `${result.synced} approved project${result.synced === 1 ? '' : 's'} added or updated in your Google Calendar.`
+      );
+    } catch (error) {
+      Alert.alert('Sync Failed', getRequestErrorMessage(error, 'Unable to sync your Google Calendar.'));
+    } finally {
+      setCalendarSyncing(false);
+    }
+  }, [attendingProjects, googleAuthRequest, promptGoogleAuth, user]);
 
 
 
@@ -1493,13 +1414,18 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
       setActionProjectId(proposalProjectId);
 
-      await submitPartnerProgramProposal(proposalProjectId, user, {
+      const submittedApplication = await submitPartnerProgramProposal(proposalProjectId, user, {
 
         programModule: selectedModule,
 
         proposalDetails,
 
       });
+
+      setPartnerApplications(current => [
+        submittedApplication,
+        ...current.filter(application => application.id !== submittedApplication.id),
+      ].sort((a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime()));
 
       setShowProposalModal(false);
 
@@ -1746,6 +1672,41 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
       ) : null}
 
 
+      <View style={{ marginBottom: 4 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, paddingHorizontal: 4 }}>
+          <View>
+            <Text style={{ fontSize: 16, fontWeight: '700', color: '#166534' }}>Partner Project Calendar</Text>
+            <Text style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
+              {timelineProjectIds?.length
+                ? 'Your approved proposals aligned with admin planning calendar.'
+                : 'Review shared project schedule and admin planning dates.'}
+            </Text>
+          </View>
+          <TouchableOpacity
+            onPress={() => void handleSyncPartnerCalendar()}
+            disabled={calendarSyncing}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 5,
+              backgroundColor: '#f0fdf4',
+              borderWidth: 1,
+              borderColor: '#bbf7d0',
+              borderRadius: 20,
+              paddingVertical: 6,
+              paddingHorizontal: 12,
+            }}
+          >
+            {calendarSyncing ? (
+              <ActivityIndicator size={12} color="#16a34a" />
+            ) : (
+              <MaterialIcons name="sync" size={14} color="#16a34a" />
+            )}
+            <Text style={{ fontSize: 12, fontWeight: '600', color: '#16a34a' }}>
+              {calendarSyncing ? 'Syncing...' : 'Sync Calendar'}
+            </Text>
+          </TouchableOpacity>
+        </View>
 
       <ProjectTimelineCalendarCard
 
@@ -1783,11 +1744,9 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
         }
 
-        onSyncToCalendar={() => void handleGcalConnectAndSync()}
-        gcalSyncing={gcalSyncing}
-        gcalLastSynced={gcalLastSynced}
-
       />
+      </View>
+
 
 
 
@@ -2483,28 +2442,6 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
 
 const styles = StyleSheet.create({
-
-  pickerTrigger: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    backgroundColor: '#f8fafc',
-    minHeight: 45,
-  },
-
-  pickerTriggerText: {
-    fontSize: 13,
-    color: '#0f172a',
-  },
-
-  pickerPlaceholder: {
-    color: '#94a3b8',
-  },
 
   container: {
 
@@ -4009,6 +3946,42 @@ const styles = StyleSheet.create({
     fontSize: 13,
 
     lineHeight: 20,
+
+  },
+
+  pickerTrigger: {
+
+    flexDirection: 'row',
+
+    alignItems: 'center',
+
+    borderWidth: 1,
+
+    borderColor: '#cbd5e1',
+
+    borderRadius: 8,
+
+    padding: 12,
+
+    backgroundColor: '#fff',
+
+    gap: 8,
+
+  },
+
+  pickerTriggerText: {
+
+    fontSize: 16,
+
+    color: '#0f172a',
+
+    fontWeight: '500',
+
+  },
+
+  pickerPlaceholder: {
+
+    color: '#94a3b8',
 
   },
 

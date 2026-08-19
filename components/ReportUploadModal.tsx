@@ -11,7 +11,6 @@ import {
   Alert,
   Image,
   Keyboard,
-  ActivityIndicator,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import type {
@@ -79,7 +78,6 @@ export default function ReportUploadModal({
   });
   const [showProjectPicker, setShowProjectPicker] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const isVolunteer = userRole === 'volunteer';
   const isPartner = userRole === 'partner';
@@ -442,18 +440,13 @@ export default function ReportUploadModal({
       };
 
       Keyboard.dismiss();
-      setIsSubmitting(true);
-      try {
-        const submissionSucceeded = await onSubmit(reportData);
-        if (submissionSucceeded === false) {
-          return;
-        }
-
-        handleReset();
-        onClose();
-      } finally {
-        setIsSubmitting(false);
+      const submissionSucceeded = await onSubmit(reportData);
+      if (submissionSucceeded === false) {
+        return;
       }
+
+      handleReset();
+      onClose();
       return;
     }
 
@@ -513,18 +506,13 @@ export default function ReportUploadModal({
     };
 
     Keyboard.dismiss();
-    setIsSubmitting(true);
-    try {
-      const submissionSucceeded = await onSubmit(reportData);
-      if (submissionSucceeded === false) {
-        return;
-      }
-
-      handleReset();
-      onClose();
-    } finally {
-      setIsSubmitting(false);
+    const submissionSucceeded = await onSubmit(reportData);
+    if (submissionSucceeded === false) {
+      return;
     }
+
+    handleReset();
+    onClose();
 
   }, [
     collaborationFeedback,
@@ -808,30 +796,7 @@ export default function ReportUploadModal({
         </Text>
       </View>
 
-      <Text style={styles.sectionTitle}>Auto-generated Event Metrics</Text>
-      <Text style={styles.sectionHelper}>
-        Attendance count, event task count, and field photo are generated automatically from your event records.
-      </Text>
-      <View style={styles.autoMetricsCard}>
-        <View style={styles.autoMetricRow}>
-          <Text style={styles.autoMetricLabel}>Volunteer Attendance Count</Text>
-          <Text style={styles.autoMetricValue}>
-            {selectedProject ? volunteerMetrics.attendanceDays : 'Select an event'}
-          </Text>
-        </View>
-        <View style={styles.autoMetricRow}>
-          <Text style={styles.autoMetricLabel}>Event Task Count</Text>
-          <Text style={styles.autoMetricValue}>
-            {selectedProject ? volunteerMetrics.tasksCompleted : 'Select an event'}
-          </Text>
-        </View>
-        <View style={styles.autoMetricRow}>
-          <Text style={styles.autoMetricLabel}>Volunteer Event Joins</Text>
-          <Text style={styles.autoMetricValue}>
-            {selectedProject ? volunteerMetrics.volunteerEventJoins : 'Select an event'}
-          </Text>
-        </View>
-      </View>
+
 
       <Text style={styles.sectionTitle}>Report Photo</Text>
       <Text style={styles.sectionHelper}>
@@ -892,23 +857,7 @@ export default function ReportUploadModal({
         </View>
       )}
 
-      <Text style={styles.sectionTitle}>Beneficiary Count</Text>
-      <Text style={styles.sectionHelper}>
-        Enter the number of beneficiaries served during this event.
-      </Text>
-      <View style={styles.metricsGrid}>
-        <View style={styles.metricInput}>
-          <Text style={styles.metricLabel}>Beneficiary Count</Text>
-          <TextInput
-            style={styles.metricInputField}
-            placeholder="0"
-            value={metrics.beneficiariesServed}
-            onChangeText={value => handleMetricChange('beneficiariesServed', value)}
-            keyboardType="number-pad"
-            placeholderTextColor="#cbd5e1"
-          />
-        </View>
-      </View>
+
 
       <Text style={styles.sectionTitle}>Short Admin Summary</Text>
       <Text style={styles.sectionHelper}>
@@ -1070,16 +1019,12 @@ export default function ReportUploadModal({
           </ScrollView>
 
           <View style={styles.footer}>
-            <TouchableOpacity onPress={handleClose} style={styles.cancelButton} disabled={isSubmitting}>
+            <TouchableOpacity onPress={handleClose} style={styles.cancelButton}>
               <Text style={styles.cancelButtonText}>Cancel</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={handleSubmit} style={[styles.submitButton, isSubmitting && { opacity: 0.65 }]} disabled={isSubmitting}>
-              {isSubmitting ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <MaterialIcons name="check-circle" size={18} color="#fff" />
-              )}
-              <Text style={styles.submitButtonText}>{isSubmitting ? 'Submitting...' : 'Submit Report'}</Text>
+            <TouchableOpacity onPress={handleSubmit} style={styles.submitButton}>
+              <MaterialIcons name="check-circle" size={18} color="#fff" />
+              <Text style={styles.submitButtonText}>Submit Report</Text>
             </TouchableOpacity>
           </View>
         </View>

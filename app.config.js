@@ -103,7 +103,11 @@ module.exports = () => {
     process.env.GOOGLE_MAPS_MOBILE_API_KEY ||
     process.env.GOOGLE_MAPS_ANDROID_API_KEY ||
     '';
-  const webGoogleMapsApiKey = process.env.GOOGLE_MAPS_WEB_API_KEY || '';
+  const webGoogleMapsApiKey =
+    process.env.EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY ||
+    process.env.GOOGLE_MAPS_WEB_API_KEY ||
+    process.env.GOOGLE_MAPS_API_KEY ||
+    '';
 
   return {
     expo: {

@@ -1,551 +1,291 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { MaterialIcons } from '@expo/vector-icons';
-import { useFocusEffect } from '@react-navigation/native';
 import {
-  ActivityIndicator,
-  Alert,
-  Modal,
-  Platform,
   ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
   View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Platform,
+  Alert,
+  ActivityIndicator,
+  Linking,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as AuthSession from 'expo-auth-session';
-import * as WebBrowser from 'expo-web-browser';
-import ProjectTimelineCalendarCard from '../components/ProjectTimelineCalendarCard';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Svg, { Circle, Path } from 'react-native-svg';
+import { MaterialIcons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
-import ModernTheme from '../utils/modernTheme';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
+import type { VolunteerTabParamList } from '../navigation/VolunteerNavigator';
 import {
+  getProjectsScreenSnapshot,
   getDashboardTimelineSnapshot,
   getMessagesForUser,
-  getProjectsScreenSnapshot,
   reconcileApprovedVolunteerEventMemberships,
-  subscribeToMessages,
   subscribeToStorageChanges,
+  subscribeToMessages,
+  joinProjectEvent,
 } from '../models/storage';
+import type { Project, Volunteer, VolunteerTimeLog, AdminPlanningItem, ProgramTrack } from '../models/types';
+import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
+import { getRequestErrorMessage } from '../utils/requestErrors';
+import { debounce } from '../utils/navigation';
+import { openAddGoogleCalendarEvent, fetchGoogleCalendarEvents, getStoredCalendarConfig } from '../utils/calendarSync';
 import {
+  GOOGLE_CALENDAR_WEB_URL,
+  assertGoogleCalendarAccountMatchesUser,
+  getGoogleAuthConfig,
+  sendGoogleCalendarSyncEmail,
   syncProjectsToGoogleCalendar,
-  validateGoogleToken,
-  GOOGLE_CLIENT_ID,
 } from '../utils/googleCalendarSync';
 
-WebBrowser.maybeCompleteAuthSession();
-import type {
-  AdminPlanningCalendar,
-  AdminPlanningItem,
-  Project,
-  ProgramTrack,
-  Volunteer,
-  VolunteerProjectJoinRecord,
-  VolunteerProjectMatch,
-  VolunteerTimeLog,
-} from '../models/types';
-import { navigateToAvailableRoute, debounce } from '../utils/navigation';
-import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
-import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
-import { formatProjectLocation } from '../utils/locationFormat';
-
-function formatLongDate(value?: string): string {
-  if (!value) {
-    return 'To be announced';
-  }
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return 'To be announced';
-  }
-
-  return date.toLocaleDateString(undefined, {
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-  });
-}
-
-function formatDateRangeLabel(startDate?: string, endDate?: string): string {
-  const formattedStartDate = formatLongDate(startDate);
-  const formattedEndDate = formatLongDate(endDate);
-
-  if (formattedStartDate === formattedEndDate) {
-    return formattedStartDate;
-  }
-
-  if (formattedStartDate === 'To be announced') {
-    return formattedEndDate;
-  }
-
-  if (formattedEndDate === 'To be announced') {
-    return formattedStartDate;
-  }
-
-  return `${formattedStartDate} - ${formattedEndDate}`;
-}
-
-function getUpcomingProject(projects: Project[]): Project | null {
-  const now = new Date();
-
-  return (
-    [...projects]
-      .filter(project => {
-        if (getProjectDisplayStatus(project) === 'Cancelled') {
-          return false;
-        }
-
-        const endDate = new Date(project.endDate || project.startDate);
-        return !Number.isNaN(endDate.getTime()) && endDate >= now;
-      })
-      .sort((left, right) => new Date(left.startDate).getTime() - new Date(right.startDate).getTime())[0] || null
-  );
-}
+type VolunteerNavProp = BottomTabNavigationProp<VolunteerTabParamList>;
 
 function isVolunteerOpportunityOpen(project: Project): boolean {
   const status = getProjectDisplayStatus(project);
   return status !== 'Completed' && status !== 'Cancelled';
 }
 
-// Normalizes text into searchable word tokens for skill matching
-const normalizeWords = (value?: string) =>
-  (value || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter((word) => word.length > 2);
+function getGoogleEventsForDay(
+  day: number,
+  month: number,
+  year: number,
+  events: any[]
+): any[] {
+  const targetStart = new Date(year, month, day, 0, 0, 0, 0).getTime();
+  const targetEnd = new Date(year, month, day, 23, 59, 59, 999).getTime();
 
-// Removes duplicate terms while preserving display order
-const unique = (values: string[]) => Array.from(new Set(values));
+  return events.filter(event => {
+    let startStr = event.start?.dateTime || event.start?.date;
+    let endStr = event.end?.dateTime || event.end?.date;
+    if (!startStr) return false;
+    
+    let startMs = new Date(startStr).getTime();
+    let endMs = endStr ? new Date(endStr).getTime() : startMs;
 
-// Category-specific keywords for better matching
-const CATEGORY_KEYWORDS: Record<Project['category'], string[]> = {
-  Nutrition: ['nutrition', 'food', 'feeding', 'meal', 'health', 'diet'],
-  Education: ['education', 'school', 'teaching', 'learning', 'student', 'training'],
-  Livelihood: ['livelihood', 'income', 'business', 'employment', 'skills', 'work'],
-  Disaster: ['disaster', 'relief', 'emergency', 'response', 'rescue', 'recovery'],
-};
+    if (event.start?.date && event.end?.date) {
+      endMs = endMs - 1000;
+    }
 
-// Checks if event matches volunteer skills
-function checkEventSkillMatch(project: Project, volunteer: Volunteer | null): {
-  hasMatch: boolean;
-  matchedSkills: string[];
-} {
-  if (!volunteer || !project.isEvent) {
-    return { hasMatch: false, matchedSkills: [] };
+    return (startMs <= targetEnd && endMs >= targetStart);
+  });
+}
+
+function formatGoogleEventTime(event: any): string {
+  if (event.start?.date) {
+    return 'All Day';
   }
-
-  const skillTerms = unique([
-    ...((volunteer.skills || []).flatMap(normalizeWords)),
-    ...normalizeWords(volunteer.skillsDescription),
-    ...normalizeWords(volunteer.specialSkills),
-  ]);
-
-  const projectTerms = unique([
-    ...normalizeWords(project.title),
-    ...normalizeWords(project.description),
-    ...((project.skillsNeeded || []).flatMap(normalizeWords)),
-    ...CATEGORY_KEYWORDS[project.category],
-  ]);
-
-  const matchedTerms = skillTerms.filter((term) => projectTerms.includes(term)).slice(0, 3);
   
-  return {
-    hasMatch: matchedTerms.length > 0,
-    matchedSkills: matchedTerms,
-  };
-}
+  const startStr = event.start?.dateTime;
+  const endStr = event.end?.dateTime;
+  if (!startStr) return 'TBD';
 
-function inferProgramTrackFocus(track: ProgramTrack): Project['category'] | null {
-  const text = `${track.id || ''} ${track.title || ''}`.toLowerCase();
-  if (text.includes('education')) return 'Education';
-  if (text.includes('livelihood')) return 'Livelihood';
-  if (text.includes('nutrition')) return 'Nutrition';
-  if (text.includes('disaster')) return 'Disaster';
-  return null;
-}
+  const start = new Date(startStr);
+  const end = endStr ? new Date(endStr) : null;
 
-function getProjectProgramId(project: Project, programTracks: ProgramTrack[] = []): string {
-  if (project.parentProjectId) {
-    return project.parentProjectId;
-  }
-
-  const projectFocus = project.programModule || project.category;
-  const matchingTrack = programTracks.find(track => inferProgramTrackFocus(track) === projectFocus);
-  return matchingTrack?.id || projectFocus;
-}
-
-function isVolunteerProjectRecord(project: Project, programTracks: ProgramTrack[] = []): boolean {
-  if (project.isEvent) {
-    return false;
-  }
-
-  if (project.parentProjectId) {
-    return true;
-  }
-
-  if (String(project.id || '').startsWith('project-proposal-')) {
-    return true;
-  }
-
-  return false;
-}
-
-function isVolunteerAssignedToTask(
-  task: { assignedVolunteerId?: string; assignedVolunteerIds?: string[] },
-  volunteerId?: string | null
-): boolean {
-  if (!volunteerId) {
-    return false;
-  }
-
-  const assignedVolunteerIds = Array.from(
-    new Set(
-      [
-        ...(Array.isArray(task.assignedVolunteerIds) ? task.assignedVolunteerIds : []),
-        task.assignedVolunteerId,
-      ]
-        .map(value => String(value || '').trim())
-        .filter(Boolean)
-    )
-  );
-
-  return assignedVolunteerIds.includes(volunteerId);
-}
-
-function getVolunteerStatusTone(status?: Volunteer['registrationStatus']) {
-  switch (status) {
-    case 'Approved':
-      return {
-        badge: '#dcfce7',
-        text: '#166534',
-      };
-    case 'Rejected':
-      return {
-        badge: '#fee2e2',
-        text: '#b91c1c',
-      };
-    default:
-      return {
-        badge: '#fef3c7',
-        text: '#b45309',
-      };
-  }
-}
-
-type DashboardPreviewField = {
-  label: string;
-  value: string;
-};
-
-type DashboardCardPreview = {
-  id: string;
-  kind: 'event' | 'project' | 'program';
-  eyebrow: string;
-  title: string;
-  description: string;
-  badgeLabel?: string;
-  badgeColor?: string;
-  details: DashboardPreviewField[];
-  targetProjectId?: string;
-  targetProgramId?: string;
-  ctaLabel: string;
-  skillMatch?: {
-    hasMatch: boolean;
-    matchedSkills: string[];
+  const formatTime = (d: Date) => {
+    return d.toLocaleTimeString(undefined, {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    });
   };
 
-};
+  if (end) {
+    return `${formatTime(start)} - ${formatTime(end)}`;
+  }
+  return formatTime(start);
+}
 
-type DashboardSectionPreview = {
-  id: string;
-  title: string;
-  eyebrow?: string;
-  subtitle: string;
-  items: DashboardCardPreview[];
-  emptyTitle: string;
-  emptyText: string;
-};
+export default function VolunteerDashboardScreen() {
+  const { user } = useAuth();
+  const navigation = useNavigation<VolunteerNavProp>();
+  const insets = useSafeAreaInsets();
 
-// Stable Google OAuth discovery document (outside component to avoid re-renders)
-const GCAL_DISCOVERY = {
-  authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
-  tokenEndpoint: 'https://oauth2.googleapis.com/token',
-  revocationEndpoint: 'https://oauth2.googleapis.com/revoke',
-};
-
-// Shows a streamlined volunteer dashboard with project details and admin-synced scheduling.
-export default function VolunteerDashboardScreen({ navigation }: any) {
-  const { user, logout } = useAuth();
   const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
   const [timeLogs, setTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const [unreadMessages, setUnreadMessages] = useState(0);
-  const [planningCalendars, setPlanningCalendars] = useState<AdminPlanningCalendar[]>([]);
   const [planningItems, setPlanningItems] = useState<AdminPlanningItem[]>([]);
   const [programTracks, setProgramTracks] = useState<ProgramTrack[]>([]);
-  const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
-  const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
-  const [selectedDashboardSection, setSelectedDashboardSection] = useState<DashboardSectionPreview | null>(null);
-  const [selectedDashboardCard, setSelectedDashboardCard] = useState<DashboardCardPreview | null>(null);
 
-  // ── Google Calendar Sync ────────────────────────────────────────────────────
-  const [gcalSyncing, setGcalSyncing] = useState(false);
-  const [gcalLastSynced, setGcalLastSynced] = useState<string | null>(null);
-  const [gcalAccessToken, setGcalAccessToken] = useState<string | null>(null);
-  const [gcalSyncSuccess, setGcalSyncSuccess] = useState<{ count: number; time: string } | null>(null);
+  const [currentDate, setCurrentDate] = useState(new Date(2026, 6, 27));
 
-
-  // Mobile: expo-auth-session hook (not used on web)
-  const [gcalAuthRequest, gcalAuthResponse, promptGcalAuth] = AuthSession.useAuthRequest(
-    {
-      clientId: GOOGLE_CLIENT_ID,
-      redirectUri: AuthSession.makeRedirectUri(),
-      scopes: [
-        'openid',
-        'profile',
-        'email',
-        'https://www.googleapis.com/auth/calendar.events',
-      ],
-      responseType: AuthSession.ResponseType.Token,
-      usePKCE: false,
-      extraParams: user?.email ? { login_hint: user.email } : {},
-    },
-    GCAL_DISCOVERY
+  // Google Calendar Integration states
+  const [calendarSettings, setCalendarSettings] = useState({
+    calendarId: 'en.philippines#holiday@group.v.calendar.google.com',
+    apiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY || process.env.GOOGLE_MAPS_WEB_API_KEY || process.env.GOOGLE_MAPS_API_KEY || process.env.VITE_GOOGLE_MAPS_WEB_API_KEY || '',
+  });
+  const [googleEvents, setGoogleEvents] = useState<any[]>([]);
+  const [calendarError, setCalendarError] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const googleAuthConfig = useMemo(() => getGoogleAuthConfig(user?.email), [user?.email]);
+  const [googleAuthRequest, , promptGoogleAuth] = AuthSession.useAuthRequest(
+    googleAuthConfig.request,
+    googleAuthConfig.discovery
   );
 
+  // Load calendar settings on mount
   useEffect(() => {
-    if (Platform.OS === 'web') return; // web handled via URL hash above
-    if (gcalAuthResponse?.type === 'success') {
-      const token = gcalAuthResponse.params.access_token;
-      if (token) {
-        setGcalAccessToken(token);
-        void handleGcalSync(token);
-      }
-    } else if (gcalAuthResponse?.type === 'error') {
-      Alert.alert(
-        'Google Sign-In Failed',
-        gcalAuthResponse.error?.message ?? 'Could not sign in with Google. Please try again.'
-      );
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gcalAuthResponse]);
-
-  const handleGcalConnectAndSync = async () => {
-    if (gcalSyncing) return;
-
-    // Reuse cached token if still valid
-    if (gcalAccessToken) {
-      const stillValid = await validateGoogleToken(gcalAccessToken);
-      if (stillValid) {
-        await handleGcalSync(gcalAccessToken);
-        return;
-      }
-      setGcalAccessToken(null);
-    }
-
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      // Web: Use Google Identity Services (GIS) — the official modern Google OAuth API.
-      // GIS manages the popup internally and returns the token directly via callback.
-      // No redirect URI configuration needed — only requires the JS origin to be whitelisted.
-      setGcalSyncing(true);
-
-      const requestGisToken = () => {
-        const tokenClient = (window as any).google.accounts.oauth2.initTokenClient({
-          client_id: GOOGLE_CLIENT_ID,
-          scope: [
-            'https://www.googleapis.com/auth/calendar.events',
-            'openid',
-            'profile',
-            'email',
-          ].join(' '),
-          callback: (response: any) => {
-            if (response.error) {
-              setGcalSyncing(false);
-              Alert.alert(
-                'Google Sign-In Failed',
-                response.error_description || response.error || 'Could not sign in with Google.'
-              );
-              return;
-            }
-            const token = response.access_token as string;
-            if (token) {
-              setGcalAccessToken(token);
-              void handleGcalSync(token);
-            }
-          },
-          ...(user?.email ? { hint: user.email } : {}),
-        });
-        tokenClient.requestAccessToken();
-      };
-
-      // Load GIS script if not already loaded
-      if ((window as any).google?.accounts?.oauth2) {
-        requestGisToken();
-      } else {
-        const existing = document.getElementById('gis-script');
-        if (existing) {
-          existing.addEventListener('load', requestGisToken);
-        } else {
-          const script = document.createElement('script');
-          script.id = 'gis-script';
-          script.src = 'https://accounts.google.com/gsi/client';
-          script.async = true;
-          script.defer = true;
-          script.onload = requestGisToken;
-          script.onerror = () => {
-            setGcalSyncing(false);
-            Alert.alert('Error', 'Could not load Google Sign-In. Check your internet connection.');
-          };
-          document.head.appendChild(script);
-        }
-      }
-    } else {
-      // Mobile: use expo-auth-session
-      await promptGcalAuth();
-    }
-  };
-
-
-  const handleGcalSync = async (accessToken: string) => {
-    setGcalSyncing(true);
-    setGcalSyncSuccess(null);
-    try {
-      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'volunteerProfile']);
-      const allProjects = snapshot.projects ?? [];
-
-      // First try: projects explicitly assigned to the volunteer
-      let relevantProjects = allProjects.filter(p =>
-        p.volunteers?.includes(user?.id ?? '') ||
-        p.joinedUserIds?.includes(user?.id ?? '')
-      );
-
-      // Fallback: if no explicitly assigned projects, sync all active visible projects
-      if (relevantProjects.length === 0) {
-        relevantProjects = allProjects.filter(
-          p => p.status !== 'Cancelled' && p.status !== 'Completed'
-        );
-      }
-
-      if (relevantProjects.length === 0) {
-        Alert.alert('Nothing to Sync', 'There are no active events or projects to sync to Google Calendar.');
-        return;
-      }
-
-      const result = await syncProjectsToGoogleCalendar(accessToken, relevantProjects);
-      const syncedAt = new Date().toLocaleString();
-      setGcalLastSynced(syncedAt);
-
-      if (result.synced > 0) {
-        // Show in-screen success banner
-        setGcalSyncSuccess({ count: result.synced, time: syncedAt });
-        setTimeout(() => setGcalSyncSuccess(null), 10000);
-
-        // Show prominent Alert so the user always sees confirmation
-        Alert.alert(
-          '✅ Calendar Sync Successful!',
-          `${result.synced} event${result.synced !== 1 ? 's' : ''} added to your Google Calendar.\n\nA confirmation email has been sent to ${user?.email ?? 'your email'}.`
-        );
-
-        // Send confirmation email
-        if (user?.email) {
-          try {
-            const { getApiBaseUrl } = await import('../models/storage');
-            await fetch(`${getApiBaseUrl()}/notify/gcal-sync`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                recipient_email: user.email,
-                user_name: user.name || user.email,
-                synced_count: result.synced,
-                synced_at: syncedAt,
-              }),
-            });
-          } catch {
-            // Email failure is non-critical
-          }
-        }
-      } else if (result.failed > 0) {
-        Alert.alert(
-          'Sync Failed',
-          `Could not add events to Google Calendar.\n\nErrors:\n${result.errors.slice(0, 3).join('\n')}`
-        );
-      } else {
-        Alert.alert('Nothing to Sync', 'No events were added. They may already be in your calendar.');
-      }
-    } catch (error) {
-      Alert.alert('Sync Failed', 'Could not sync to Google Calendar. Please try again.');
-    } finally {
-      setGcalSyncing(false);
-    }
-  };
-
-  // ───────────────────────────────────────────────────────────────────────────
-
-  const isMounted = useRef(true);
-  const lastLoadAtRef = useRef(0);
-  const activeLoadPromiseRef = useRef<Promise<void> | null>(null);
-  const DASHBOARD_LOAD_COOLDOWN_MS = 1000;
-
-  useEffect(() => {
-    return () => {
-      isMounted.current = false;
+    const loadSettings = async () => {
+      const config = await getStoredCalendarConfig();
+      setCalendarSettings(config);
     };
+    loadSettings();
   }, []);
 
-  const loadDashboardData = React.useCallback(async (force = false) => {
-    if (!user?.id || !isMounted.current) {
-      return;
-    }
+  // Fetch events when currentDate or calendarSettings change
+  useEffect(() => {
+    let active = true;
+    const fetchGCalEvents = async () => {
+      setCalendarError(null);
+      const year = currentDate.getFullYear();
+      const month = currentDate.getMonth();
+      const timeMin = new Date(year, month - 1, 20).toISOString();
+      const timeMax = new Date(year, month + 1, 10).toISOString();
 
-    if (!force && activeLoadPromiseRef.current) {
-      return activeLoadPromiseRef.current;
-    }
+      const { items, error } = await fetchGoogleCalendarEvents(
+        calendarSettings.calendarId,
+        calendarSettings.apiKey,
+        timeMin,
+        timeMax
+      );
 
-    if (!force && Date.now() - lastLoadAtRef.current < DASHBOARD_LOAD_COOLDOWN_MS) {
-      return;
-    }
-
-    const loadPromise = (async () => {
-      try {
-        await reconcileApprovedVolunteerEventMemberships();
-        const [projectSnapshot, timelineSnapshot, messages] = await Promise.all([
-          getProjectsScreenSnapshot(user, [
-            'projects',
-            'volunteerProfile',
-            'volunteerMatches',
-            'volunteerProjectJoins',
-            'timeLogs',
-            'programTracks',
-          ]),
-          getDashboardTimelineSnapshot(),
-          getMessagesForUser(user.id),
-        ]);
-
-        setProjects(projectSnapshot.projects);
-        setVolunteerProfile(projectSnapshot.volunteerProfile);
-        setVolunteerMatches(projectSnapshot.volunteerMatches || []);
-        setVolunteerJoinRecords(projectSnapshot.volunteerJoinRecords || []);
-        setTimeLogs(projectSnapshot.timeLogs);
-        setProgramTracks(projectSnapshot.programTracks || []);
-        setPlanningCalendars(timelineSnapshot.planningCalendars);
-        setPlanningItems(timelineSnapshot.planningItems);
-        setUnreadMessages(messages.filter(message => !message.read && message.recipientId === user.id).length);
-        setLoadError(null);
-        lastLoadAtRef.current = Date.now();
-      } catch (error) {
-        setLoadError({
-          title: getRequestErrorTitle(error),
-          message: getRequestErrorMessage(error, 'Failed to load the volunteer dashboard.'),
-        });
-      } finally {
-        setLoading(false);
-        activeLoadPromiseRef.current = null;
+      if (active) {
+        if (error) {
+          // If Google Calendar API key is restricted or blocked, show a friendly status instead of breaking
+          setCalendarError(
+            error.includes('blocked') || error.includes('not configured') || error.includes('403')
+              ? 'Using system schedule (Google Calendar API key not configured in Settings)'
+              : error
+          );
+          setGoogleEvents([]);
+        } else {
+          setGoogleEvents(items);
+        }
       }
-    })();
+    };
 
-    activeLoadPromiseRef.current = loadPromise;
-    return loadPromise;
+    fetchGCalEvents();
+    return () => {
+      active = false;
+    };
+  }, [currentDate, calendarSettings]);
+
+  const handleSyncCalendar = async () => {
+    if (syncing) {
+      return;
+    }
+
+    if (!user?.id) {
+      Alert.alert('Login Required', 'Please sign in before syncing your calendar.');
+      setSyncStatus({ type: 'error', message: 'Sign in before syncing your calendar.' });
+      return;
+    }
+
+    const volunteerId = volunteerProfile?.id || '';
+    const joinedEvents = projects.filter(project => {
+      if (!project.isEvent) {
+        return false;
+      }
+
+      return (
+        project.joinedUserIds?.includes(user.id) ||
+        (volunteerId ? project.volunteers?.includes(volunteerId) : false) ||
+        (volunteerProfile?.pastProjects || []).includes(project.id)
+      );
+    });
+
+    if (joinedEvents.length === 0) {
+      Alert.alert(
+        'No Joined Events',
+        'Only events joined by your volunteer account can be synced. Join an event first, then sync again.'
+      );
+      setSyncStatus({ type: 'error', message: 'No joined events were found to sync.' });
+      return;
+    }
+
+    setSyncing(true);
+    setSyncStatus(null);
+    try {
+      if (!googleAuthRequest) {
+        throw new Error('Google sign-in is still initializing. Try again in a moment.');
+      }
+
+      const authResult = await promptGoogleAuth();
+      const accessToken = authResult.type === 'success' ? authResult.authentication?.accessToken : undefined;
+      if (!accessToken) {
+        throw new Error('Google Calendar permission was not granted.');
+      }
+
+      await assertGoogleCalendarAccountMatchesUser(accessToken, user.email);
+
+      const result = await syncProjectsToGoogleCalendar(accessToken, joinedEvents);
+      if (!result.success && result.synced === 0) {
+        throw new Error(result.errors[0] || 'Google Calendar sync failed.');
+      }
+
+      await sendGoogleCalendarSyncEmail({
+        recipientEmail: user.email,
+        userName: user.name,
+        syncedCount: result.synced,
+        role: 'volunteer',
+        calendarUrl: GOOGLE_CALENDAR_WEB_URL,
+      });
+
+      if (!result.success) {
+        const message = `${result.synced} joined event${result.synced === 1 ? '' : 's'} synced, ${result.failed} failed.`;
+        setSyncStatus({ type: 'error', message });
+        Alert.alert('Calendar Partially Synced', `${message}\n\n${result.errors.slice(0, 2).join('\n')}`);
+        return;
+      }
+
+      const successMessage = `${result.synced} joined event${result.synced === 1 ? '' : 's'} added or updated in your Google Calendar.`;
+      setSyncStatus({ type: 'success', message: successMessage });
+      Alert.alert(
+        'Calendar Synced',
+        successMessage
+      );
+    } catch (err) {
+      console.error('Failed to sync calendar:', err);
+      const message = getRequestErrorMessage(err, 'Unable to sync your Google Calendar.');
+      setSyncStatus({ type: 'error', message });
+      Alert.alert('Sync Failed', message);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const loadDashboardData = React.useCallback(async (force = false) => {
+    if (!user?.id) return;
+    try {
+      await reconcileApprovedVolunteerEventMemberships();
+      const [projectSnapshot, timelineSnapshot, messages] = await Promise.all([
+        getProjectsScreenSnapshot(user, [
+          'projects',
+          'volunteerProfile',
+          'timeLogs',
+          'programTracks',
+        ]),
+        getDashboardTimelineSnapshot(),
+        getMessagesForUser(user.id),
+      ]);
+
+      setProjects(projectSnapshot.projects);
+      setVolunteerProfile(projectSnapshot.volunteerProfile);
+      setTimeLogs(projectSnapshot.timeLogs);
+      setProgramTracks(projectSnapshot.programTracks || []);
+      setPlanningItems(timelineSnapshot.planningItems);
+      setUnreadMessages(messages.filter(msg => !msg.read && msg.recipientId === user.id).length);
+    } catch (err) {
+      console.error('Failed to load dashboard:', err);
+    } finally {
+      setLoading(false);
+    }
   }, [user]);
 
   const isLoaded = useRef(false);
@@ -563,7 +303,6 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
           'events',
           'programs',
           'volunteerProjectJoins',
-          'volunteerMatches',
           'volunteerTimeLogs',
           'adminPlanningCalendars',
           'programTracks',
@@ -576,1750 +315,955 @@ export default function VolunteerDashboardScreen({ navigation }: any) {
   );
 
   useEffect(() => {
-    if (!user?.id) {
-      return;
-    }
-
-    const refreshUnreadMessages = async () => {
-      try {
-        const messages = await getMessagesForUser(user.id);
-        setUnreadMessages(messages.filter(message => !message.read && message.recipientId === user.id).length);
-      } catch (error) {
-        console.error('Failed to refresh volunteer unread messages:', error);
-      }
-    };
-
-    return subscribeToMessages(user.id, event => {
-      if (event.type === 'message.changed') {
-        void refreshUnreadMessages();
-      }
+    if (!user?.id) return;
+    return subscribeToMessages(user.id, () => {
+      void loadDashboardData();
     });
-  }, [user?.id]);
+  }, [user?.id, loadDashboardData]);
 
-  const joinedEvents = useMemo(
-    () =>
-      projects.filter(
-        project =>
-          project.isEvent &&
-          (
-            (project.joinedUserIds || []).includes(user?.id || '') ||
-            (volunteerProfile ? project.volunteers.includes(volunteerProfile.id) : false) ||
-            (volunteerProfile
-              ? volunteerMatches.some(
-                match =>
-                  match.projectId === project.id &&
-                  match.volunteerId === volunteerProfile.id &&
-                  (match.status === 'Matched' || match.status === 'Completed')
-              )
-              : false) ||
-            (volunteerProfile
-              ? volunteerJoinRecords.some(
-                record =>
-                  record.projectId === project.id &&
-                  record.volunteerId === volunteerProfile.id &&
-                  (record.participationStatus || 'Active') === 'Active'
-              )
-              : false) ||
-            (volunteerProfile ? (project.internalTasks || []).some(task => isVolunteerAssignedToTask(task, volunteerProfile.id)) : false)
-          )
-      ),
-    [projects, user?.id, volunteerProfile, volunteerMatches, volunteerJoinRecords]
-  );
+  // Joined Events calculation
+  const joinedEventsCount = useMemo(() => {
+    return projects.filter(
+      project =>
+        project.isEvent &&
+        (
+          (project.joinedUserIds || []).includes(user?.id || '') ||
+          (volunteerProfile ? project.volunteers.includes(volunteerProfile.id) : false)
+        )
+    ).length;
+  }, [projects, user?.id, volunteerProfile]);
 
-  const assignedEvents = useMemo(
-    () =>
-      projects.filter(
-        project =>
-          project.isEvent &&
-          Boolean(volunteerProfile) &&
-          (project.internalTasks || []).some(task => isVolunteerAssignedToTask(task, volunteerProfile?.id))
-      ),
-    [projects, volunteerProfile]
-  );
+  // Calendar setup
+  const year = currentDate.getFullYear();
+  const month = currentDate.getMonth();
+  const monthLabel = currentDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const firstDayIndex = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
 
-  const availableEvents = useMemo(
-    () =>
-      projects.filter(
-        project =>
-          project.isEvent &&
-          isVolunteerOpportunityOpen(project) &&
-          !(
-            (project.joinedUserIds || []).includes(user?.id || '') ||
-            (volunteerProfile ? project.volunteers.includes(volunteerProfile.id) : false) ||
-            (volunteerProfile
-              ? volunteerMatches.some(
-                match =>
-                  match.projectId === project.id &&
-                  match.volunteerId === volunteerProfile.id &&
-                  (match.status === 'Matched' || match.status === 'Completed' || match.status === 'Requested')
-              )
-              : false) ||
-            (volunteerProfile
-              ? volunteerJoinRecords.some(
-                record =>
-                  record.projectId === project.id &&
-                  record.volunteerId === volunteerProfile.id &&
-                  (record.participationStatus || 'Active') === 'Active'
-              )
-              : false) ||
-            (volunteerProfile ? (project.internalTasks || []).some(task => isVolunteerAssignedToTask(task, volunteerProfile.id)) : false)
-          )
-      ),
-    [projects, user?.id, volunteerProfile, volunteerMatches, volunteerJoinRecords]
-  );
-
-  const joinedProjects = useMemo(
-    () =>
-      projects.filter(
-        project =>
-          isVolunteerProjectRecord(project, programTracks) &&
-          (
-            (project.joinedUserIds || []).includes(user?.id || '') ||
-            (volunteerProfile ? project.volunteers.includes(volunteerProfile.id) : false) ||
-            (volunteerProfile ? (project.internalTasks || []).some(task => isVolunteerAssignedToTask(task, volunteerProfile.id)) : false)
-          )
-      ),
-    [programTracks, projects, user?.id, volunteerProfile]
-  );
-
-  const availableProjects = useMemo(
-    () =>
-      projects.filter(
-        project =>
-          isVolunteerProjectRecord(project, programTracks) &&
-          isVolunteerOpportunityOpen(project) &&
-          !(
-            (project.joinedUserIds || []).includes(user?.id || '') ||
-            (volunteerProfile ? project.volunteers.includes(volunteerProfile.id) : false) ||
-            (volunteerProfile ? (project.internalTasks || []).some(task => isVolunteerAssignedToTask(task, volunteerProfile.id)) : false)
-          )
-      ),
-    [programTracks, projects, user?.id, volunteerProfile]
-  );
-  const programOverviewCards = useMemo(
-    () => {
-      // Only show programs that exist in the database (no hardcoded defaults)
-      const activeTracks = programTracks.filter(track => track.isActive !== false);
-
-      return activeTracks.map(track => {
-        // Count only actual projects that belong to this program.
-        const moduleProjectCount = projects.filter(
-          project =>
-            isVolunteerProjectRecord(project, programTracks) &&
-            getProjectProgramId(project, programTracks) === track.id &&
-            isVolunteerOpportunityOpen(project)
-        ).length;
-
-        return {
-          label: track.title,
-          value: String(moduleProjectCount),
-          meta: `${moduleProjectCount} project${moduleProjectCount === 1 ? '' : 's'} available`,
-        };
-      });
-    },
-    [projects, programTracks]
-  );
-
-  const upcomingEvent = useMemo(() => getUpcomingProject(assignedEvents), [assignedEvents]);
-  const suggestedEvent = useMemo(
-    () => getUpcomingProject(projects.filter(project => project.isEvent)),
-    [projects]
-  );
-  const featuredEvent = upcomingEvent || suggestedEvent || null;
-  const featuredEventIsAssigned = Boolean(upcomingEvent);
-  const volunteerTone = getVolunteerStatusTone(volunteerProfile?.registrationStatus);
-
-  const totalHours = volunteerProfile?.totalHoursContributed || 0;
-  const completedLogs = timeLogs.filter(log => Boolean(log.timeOut)).length;
-  const featuredEventDateRange = featuredEvent
-    ? formatDateRangeLabel(featuredEvent.startDate, featuredEvent.endDate)
-    : 'To be announced';
-  const assignedEventIds = assignedEvents.map(project => project.id);
-
-  const openProjects = React.useCallback(
-    (projectId?: string) => {
-      if (projectId) {
-        navigateToAvailableRoute(navigation, 'Lifecycle', { projectId });
-        return;
-      }
-
-      navigateToAvailableRoute(navigation, 'Projects');
-    },
-    [navigation]
-  );
-
-  const openTasks = React.useCallback(() => {
-    navigateToAvailableRoute(navigation, 'Tasks');
-  }, [navigation]);
-
-  const openMessages = React.useCallback(() => {
-    navigateToAvailableRoute(navigation, 'Messages');
-  }, [navigation]);
-
-  const openDashboardSection = React.useCallback((section: DashboardSectionPreview) => {
-    setSelectedDashboardSection(section);
-  }, []);
-
-  const navigateToCard = React.useCallback(
-    (card: DashboardCardPreview) => {
-      if (card.kind === 'program') {
-        const handled = navigateToAvailableRoute(
-          navigation,
-          'Projects',
-          card.targetProgramId ? { programId: card.targetProgramId } : undefined
-        );
-
-        if (!handled) {
-          openProjects();
-        }
-        return;
-      }
-
-      if (card.targetProjectId) {
-        const handled = navigateToAvailableRoute(
-          navigation,
-          'ProjectDetails',
-          { projectId: card.targetProjectId }
-        );
-
-        if (!handled) {
-          openProjects(card.targetProjectId);
-        }
-      }
-    },
-    [navigation, openProjects]
-  );
-
-  const openDashboardCardFromList = React.useCallback((card: DashboardCardPreview) => {
-    setSelectedDashboardSection(null);
-    navigateToCard(card);
-  }, [navigateToCard]);
-
-  const navigateFromDashboardCard = React.useCallback(
-    (card: DashboardCardPreview) => {
-      setSelectedDashboardCard(null);
-      navigateToCard(card);
-    },
-    [navigateToCard]
-  );
-
-  const featuredEventCard = useMemo<DashboardCardPreview | null>(
-    () =>
-      featuredEvent
-        ? {
-          id: `featured-${featuredEvent.id}`,
-          kind: 'event',
-          eyebrow: featuredEventIsAssigned ? 'Your Next Event' : 'Suggested Event',
-          title: featuredEvent.title,
-          description: featuredEvent.description || 'View the event summary, schedule, and location.',
-          badgeLabel: getProjectDisplayStatus(featuredEvent),
-          badgeColor: getProjectStatusColor(featuredEvent),
-          details: [
-            { label: 'Campaign', value: featuredEvent.programModule || featuredEvent.category },
-            { label: 'Schedule', value: featuredEventDateRange },
-            { label: 'Venue', value: formatProjectLocation(featuredEvent) },
-            {
-              label: 'Volunteer Slots',
-              value: `${featuredEvent.volunteers.length}/${featuredEvent.volunteersNeeded}`,
-            },
-          ],
-          targetProjectId: featuredEvent.id,
-          ctaLabel: 'Open Event Details',
-        }
-        : null,
-    [featuredEvent, featuredEventDateRange, featuredEventIsAssigned]
-  );
-
-  const joinedEventCards = useMemo<DashboardCardPreview[]>(
-    () =>
-      joinedEvents.map(project => ({
-        id: `joined-event-${project.id}`,
-        kind: 'event',
-        eyebrow: 'Joined Event',
-        title: project.title,
-        description: project.description || 'Open the full event details.',
-        badgeLabel: getProjectDisplayStatus(project),
-        badgeColor: getProjectStatusColor(project),
-        details: [
-          { label: 'Campaign', value: project.programModule || project.category },
-          { label: 'Schedule', value: formatDateRangeLabel(project.startDate, project.endDate) },
-          { label: 'Location', value: project.location?.address || 'Location TBA' },
-        ],
-        targetProjectId: project.id,
-        ctaLabel: 'Open Event Details',
-      })),
-    [joinedEvents]
-  );
-
-  const availableEventCards = useMemo<DashboardCardPreview[]>(
-    () =>
-      availableEvents.map(project => {
-        const skillMatch = checkEventSkillMatch(project, volunteerProfile);
-        return {
-          id: `available-event-${project.id}`,
-          kind: 'event',
-          eyebrow: 'Available Event',
-          title: project.title,
-          description: project.description || 'Open the full event details.',
-          badgeLabel: getProjectDisplayStatus(project),
-          badgeColor: getProjectStatusColor(project),
-          details: [
-            { label: 'Campaign', value: project.programModule || project.category },
-            { label: 'Schedule', value: formatDateRangeLabel(project.startDate, project.endDate) },
-            { label: 'Location', value: project.location?.address || 'Location TBA' },
-          ],
-          targetProjectId: project.id,
-          ctaLabel: 'Open Event Details',
-          skillMatch,
-        };
-      }),
-    [availableEvents, volunteerProfile]
-  );
-
-  const joinedProjectCards = useMemo<DashboardCardPreview[]>(
-    () =>
-      joinedProjects.map(project => ({
-        id: `joined-project-${project.id}`,
-        kind: 'project',
-        eyebrow: 'Joined Project',
-        title: project.title,
-        description: project.description || 'Open the full project details.',
-        badgeLabel: getProjectDisplayStatus(project),
-        badgeColor: getProjectStatusColor(project),
-        details: [
-          { label: 'Program', value: project.programModule || project.category },
-          { label: 'Timeline', value: formatDateRangeLabel(project.startDate, project.endDate) },
-          { label: 'Location', value: project.location?.address || 'Location TBA' },
-        ],
-        targetProjectId: project.id,
-        ctaLabel: 'Open Project Details',
-      })),
-    [joinedProjects]
-  );
-
-  const availableProjectCards = useMemo<DashboardCardPreview[]>(
-    () =>
-      availableProjects.map(project => ({
-        id: `available-project-${project.id}`,
-        kind: 'project',
-        eyebrow: 'Available Project',
-        title: project.title,
-        description: project.description || 'Open the full project details.',
-        badgeLabel: getProjectDisplayStatus(project),
-        badgeColor: getProjectStatusColor(project),
-        details: [
-          { label: 'Program', value: project.programModule || project.category },
-          { label: 'Timeline', value: formatDateRangeLabel(project.startDate, project.endDate) },
-          { label: 'Location', value: project.location?.address || 'Location TBA' },
-        ],
-        targetProjectId: project.id,
-        ctaLabel: 'Open Project Details',
-      })),
-    [availableProjects]
-  );
-
-  const programCards = useMemo<DashboardCardPreview[]>(
-    () =>
-      programOverviewCards.map(card => ({
-        id: `program-${card.label}`,
-        kind: 'program',
-        eyebrow: 'Program',
-        title: card.label,
-        description: card.meta,
-        details: [
-          { label: 'Available Projects', value: card.value },
-          { label: 'Summary', value: card.meta },
-        ],
-        targetProgramId: card.label,
-        ctaLabel: 'Browse Program',
-      })),
-    [programOverviewCards]
-  );
-
-  const renderSectionCard = React.useCallback(
-    (section: DashboardSectionPreview) => {
-      const firstItem = section.items[0];
-
-      return (
-        <TouchableOpacity
-          key={section.id}
-          style={styles.sectionSummaryCard}
-          onPress={() => openDashboardSection(section)}
-          activeOpacity={0.88}
-        >
-          <View style={styles.sectionSummaryHeader}>
-            <View style={styles.sectionSummaryHeaderCopy}>
-              {section.eyebrow ? <Text style={styles.sectionSummaryEyebrow}>{section.eyebrow}</Text> : null}
-              <Text style={styles.sectionSummaryTitle}>{section.title}</Text>
-            </View>
-            <View style={styles.sectionSummaryCountBadge}>
-              <Text style={styles.sectionSummaryCountText}>
-                {section.items.length} item{section.items.length === 1 ? '' : 's'}
-              </Text>
-            </View>
-          </View>
-
-          <Text style={styles.sectionSummarySubtitle}>
-            {section.items.length > 0
-              ? firstItem?.title
-                ? `Tap to open the list. First item: ${firstItem.title}`
-                : section.subtitle
-              : section.emptyText}
-          </Text>
-
-          <View style={styles.sectionSummaryFooter}>
-            <Text style={styles.sectionSummaryFooterText}>
-              {section.items.length > 0 ? 'Tap to view list' : 'No items yet'}
-            </Text>
-            <MaterialIcons name="chevron-right" size={18} color="#166534" />
-          </View>
-        </TouchableOpacity>
-      );
-    },
-    [openDashboardSection]
-  );
-
-  const featuredEventSection = useMemo<DashboardSectionPreview>(
-    () => ({
-      id: 'featured-event',
-      title: 'Event Details',
-      eyebrow: 'Next Priority',
-      subtitle: 'Open the list to review your current featured event.',
-      items: featuredEventCard ? [featuredEventCard] : [],
-      emptyTitle: 'No event assigned yet',
-      emptyText: 'Ask the admin or field officer to assign you to a task, or browse available events.',
-    }),
-    [featuredEventCard]
-  );
-
-  const joinedEventsSection = useMemo<DashboardSectionPreview>(
-    () => ({
-      id: 'joined-events',
-      title: 'Your Joined Events',
-      subtitle: 'Open the list to review all events you joined.',
-      items: joinedEventCards,
-      emptyTitle: 'No joined events yet',
-      emptyText: 'Your joined events will appear here.',
-    }),
-    [joinedEventCards]
-  );
-
-  const availableEventsSection = useMemo<DashboardSectionPreview>(
-    () => ({
-      id: 'available-events',
-      title: 'Available Events',
-      subtitle: 'Open the list to browse events you can still join.',
-      items: availableEventCards,
-      emptyTitle: 'No available events',
-      emptyText: 'No open events are available right now.',
-    }),
-    [availableEventCards]
-  );
-
-  const programsSection = useMemo<DashboardSectionPreview>(
-    () => ({
-      id: 'programs',
-      title: 'Programs',
-      subtitle: 'Open the list to browse current program areas.',
-      items: programCards,
-      emptyTitle: 'No programs available',
-      emptyText: 'No program areas are available right now.',
-    }),
-    [programCards]
-  );
-
-  const joinedProjectsSection = useMemo<DashboardSectionPreview>(
-    () => ({
-      id: 'joined-projects',
-      title: 'Your Joined Programs',
-      subtitle: 'Open the list to review the programs you joined.',
-      items: joinedProjectCards,
-      emptyTitle: 'No joined programs yet',
-      emptyText: 'Your joined programs will appear here.',
-    }),
-    [joinedProjectCards]
-  );
-
-  const availableProjectsSection = useMemo<DashboardSectionPreview>(
-    () => ({
-      id: 'available-projects',
-      title: 'Available Projects',
-      subtitle: 'Open the list to browse projects you can still join.',
-      items: availableProjectCards,
-      emptyTitle: 'No available projects',
-      emptyText: 'No open projects are available right now.',
-    }),
-    [availableProjectCards]
-  );
-
-  const handleLogout = async () => {
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      if (window.confirm('Are you sure you want to logout?')) {
-        await logout();
-      }
-      return;
+  const calendarCells = useMemo(() => {
+    const cells = [];
+    for (let i = 0; i < firstDayIndex; i++) {
+      cells.push({ day: '', isBlank: true });
     }
+    for (let i = 1; i <= daysInMonth; i++) {
+      cells.push({ day: i, isBlank: false });
+    }
+    return cells;
+  }, [firstDayIndex, daysInMonth]);
 
-    Alert.alert('Logout', 'Are you sure you want to logout?', [
-      { text: 'Cancel' },
-      { text: 'Logout', onPress: async () => await logout() },
-    ]);
+  const getDayStatus = (dayNum: number) => {
+    const isToday = year === 2026 && month === 6 && dayNum === 27; // Mock today as Jul 27
+    
+    // Check if day has a project or timeline planning item
+    const hasTimeline = planningItems.some(item => {
+      if (!item.startDate) return false;
+      const itemDate = new Date(item.startDate);
+      return (
+        itemDate.getFullYear() === year &&
+        itemDate.getMonth() === month &&
+        itemDate.getDate() === dayNum
+      );
+    });
+
+    const hasProject = projects.some(proj => {
+      if (!proj.startDate) return false;
+      const projDate = new Date(proj.startDate);
+      return (
+        projDate.getFullYear() === year &&
+        projDate.getMonth() === month &&
+        projDate.getDate() === dayNum
+      );
+    });
+
+    const hasGoogleEvent = getGoogleEventsForDay(dayNum, month, year, googleEvents).length > 0;
+
+    return {
+      isToday,
+      isMarked: hasTimeline || hasProject || hasGoogleEvent,
+    };
   };
 
-  if (loading && !volunteerProfile && projects.length === 0) {
+  const handlePrevMonth = () => {
+    setCurrentDate(new Date(year, month - 1, 1));
+  };
+
+  const handleNextMonth = () => {
+    setCurrentDate(new Date(year, month + 1, 1));
+  };
+
+  // Timeline list merging database + gcal + mockup fallbacks
+  const displayTimeline = useMemo(() => {
+    const realTimeline = planningItems
+      .filter(item => item.startDate)
+      .map(item => ({
+        id: item.id,
+        startDate: item.startDate,
+        title: item.title,
+        htmlLink: undefined,
+      }));
+
+    const googleTimeline = googleEvents.map(event => ({
+      id: `google-${event.id}`,
+      startDate: event.start?.dateTime || event.start?.date || '',
+      title: event.summary || 'Google Calendar Event',
+      htmlLink: event.htmlLink,
+    }));
+
+    const combined = [...realTimeline, ...googleTimeline]
+      .filter(item => item.startDate)
+      .sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime())
+      .slice(0, 5);
+
+    if (combined.length > 0) return combined;
+
+    // Mock timeline as fallback
+    return [
+      { id: 't-1', startDate: '2026-07-07', title: 'Feeding program site visit, Iloilo', htmlLink: undefined },
+      { id: 't-2', startDate: '2026-07-15', title: 'Volunteer orientation, new intake', htmlLink: undefined },
+      { id: 't-3', startDate: '2026-07-23', title: 'Livelihood workshop, Bacolod chapter', htmlLink: undefined },
+      { id: 't-4', startDate: '2026-07-29', title: 'Admin timeline review, Q3 planning', htmlLink: undefined },
+    ];
+  }, [planningItems, googleEvents]);
+
+  const formatTimelineDate = (dateStr?: string) => {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    if (Number.isNaN(d.getTime())) return dateStr;
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return `${months[d.getMonth()]} ${d.getDate()}`;
+  };
+
+  // Projects list merging database + mockup fallbacks
+  const displayProjects = useMemo(() => {
+    const realAvailable = projects
+      .filter(p => p.isEvent && isVolunteerOpportunityOpen(p))
+      .slice(0, 3);
+
+    if (realAvailable.length > 0) return realAvailable;
+
+    return [
+      {
+        id: 'mock-p-1',
+        title: 'Mingo Meals packing',
+        category: 'Nutrition',
+        location: { address: 'Bacolod City' },
+        volunteersNeeded: 4,
+        isMock: true,
+      },
+      {
+        id: 'mock-p-2',
+        title: 'After-school tutoring',
+        category: 'Education',
+        location: { address: 'Iloilo chapter' },
+        volunteersNeeded: 2,
+        isMock: true,
+      },
+      {
+        id: 'mock-p-3',
+        title: 'Livelihood skills workshop',
+        category: 'Livelihood',
+        location: { address: 'Negros Occidental' },
+        volunteersNeeded: 6,
+        isMock: true,
+      },
+    ] as any[];
+  }, [projects]);
+
+  const handleJoinProject = async (project: any) => {
+    if (project.isMock) {
+      Alert.alert('Mock Action', 'Join request submitted! (Simulated)');
+      return;
+    }
+    if (!volunteerProfile?.id) {
+      Alert.alert('Error', 'Profile not loaded yet');
+      return;
+    }
+    try {
+      setLoading(true);
+      await joinProjectEvent(project.id, volunteerProfile.id);
+      Alert.alert('Success', `Successfully requested to join "${project.title}"!`);
+      await loadDashboardData(true);
+    } catch (err) {
+      Alert.alert('Error', getRequestErrorMessage(err, 'Failed to join project'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getProjectIcon = (category: string) => {
+    switch (category) {
+      case 'Nutrition':
+        return (
+          <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
+            <Path d="M12 2C9 6 5 9 5 14a7 7 0 0 0 14 0c0-5-4-8-7-12Z" stroke="#C97F1F" strokeWidth={2} />
+          </Svg>
+        );
+      case 'Education':
+        return (
+          <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
+            <Path d="M4 6l8-3 8 3-8 3-8-3Z" stroke="#1F3A2E" strokeWidth={2} />
+            <Path d="M4 6v7l8 3 8-3V6" stroke="#1F3A2E" strokeWidth={2} />
+          </Svg>
+        );
+      case 'Livelihood':
+        return (
+          <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
+            <rect x="4" y="10" width="16" height="9" rx="1.5" stroke="#B0432B" strokeWidth={2} />
+            <Path d="M8 10V7a4 4 0 0 1 8 0v3" stroke="#B0432B" strokeWidth={2} />
+          </Svg>
+        );
+      default:
+        return <MaterialIcons name="help-outline" size={16} color="#5B564C" />;
+    }
+  };
+
+  if (loading && projects.length === 0) {
     return (
-      <View style={styles.loadingContainer}>
-        <View style={styles.loadingCard}>
-          <MaterialIcons name="calendar-month" size={34} color="#166534" />
-          <Text style={styles.loadingTitle}>Preparing your dashboard</Text>
-          <Text style={styles.loadingText}>Loading your projects, tasks, and timeline.</Text>
-        </View>
+      <View style={styles.loadingWrapper}>
+        <ActivityIndicator size="large" color="#1F3A2E" />
       </View>
     );
   }
 
   return (
-    <>
-      <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <View style={styles.headerCard}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>{user?.name?.charAt(0) || 'V'}</Text>
+    <View style={[styles.rootContainer, { paddingTop: Math.max(insets.top, 12) }]}>
+      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        
+        {/* HEADER */}
+        <View style={styles.header}>
+          <View style={styles.headerTop}>
+            <View>
+              <Text style={styles.greetingLabel}>Volunteer Workspace</Text>
+              <Text style={styles.greetingName}>Hello, {user?.name || 'Volunteer'}</Text>
+            </View>
+            <View style={styles.avatar}>
+              <Text style={styles.avatarText}>{user?.name?.charAt(0) || 'V'}</Text>
+            </View>
           </View>
-          <View style={styles.headerCopy}>
-            <Text style={styles.role}>Volunteer Workspace</Text>
-            <Text style={styles.greeting}>Hello, {user?.name || 'Volunteer'}</Text>
-            <Text style={styles.headerHint}>Track your service, schedule, tasks, and messages in one place.</Text>
+          <Text style={styles.headerSub}>Track your service, schedule, tasks, and messages in one place.</Text>
+          <View style={styles.statusPill}>
+            <View style={styles.statusDot} />
+            <View style={styles.statusText}>
+              <Text style={styles.statusTitle}>
+                Account status: {volunteerProfile?.registrationStatus || 'Approved'}
+              </Text>
+              <Text style={styles.statusDesc}>Your service dashboard is ready.</Text>
+            </View>
           </View>
-          <TouchableOpacity onPress={handleLogout} style={styles.iconButton}>
-            <MaterialIcons name="logout" size={22} color="#166534" />
+        </View>
+
+        {/* STATS */}
+        <View style={styles.statsRow}>
+          <View style={styles.statCard}>
+            <Text style={styles.statNum}>{joinedEventsCount}</Text>
+            <Text style={styles.statLabel}>Joined events</Text>
+          </View>
+          <TouchableOpacity
+            style={styles.statCard}
+            onPress={() => navigation.navigate('Messages')}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.statNum}>{unreadMessages}</Text>
+            <Text style={styles.statLabel}>Unread messages</Text>
           </TouchableOpacity>
         </View>
 
-        {loadError ? (
-          <View style={styles.errorCard}>
-            <MaterialIcons name="error-outline" size={20} color="#b91c1c" />
-            <View style={styles.errorCopy}>
-              <Text style={styles.errorTitle}>{loadError.title}</Text>
-              <Text style={styles.errorText}>{loadError.message}</Text>
+        {/* PRIORITY */}
+        <View style={styles.priorityCard}>
+          <View style={styles.priorityIcon}>
+            <MaterialIcons name="access-time" size={18} color="#22201B" />
+          </View>
+          <View style={styles.priorityCopy}>
+            <Text style={styles.priorityTitle}>Next priority: Event details</Text>
+            <Text style={styles.priorityDesc}>See what needs attention first, then review your next event.</Text>
+          </View>
+        </View>
+
+        {/* CALENDAR */}
+        <View style={styles.section}>
+          <View style={styles.sectionHead}>
+            <View>
+              <Text style={styles.sectionTitle}>Volunteer calendar</Text>
+              <Text style={styles.sectionSub}>Shared project schedule and admin timeline</Text>
             </View>
-            <TouchableOpacity onPress={() => void loadDashboardData(true)}>
-              <Text style={styles.errorAction}>Retry</Text>
+            <TouchableOpacity
+              onPress={handleSyncCalendar}
+              disabled={syncing}
+              style={[styles.syncButton, syncing && styles.syncButtonDisabled]}
+            >
+              {syncing ? (
+                <ActivityIndicator size={12} color="#16a34a" />
+              ) : (
+                <MaterialIcons name="sync" size={14} color="#16a34a" />
+              )}
+              <Text style={styles.syncButtonText}>{syncing ? 'Syncing...' : 'Sync Calendar'}</Text>
             </TouchableOpacity>
           </View>
-        ) : null}
-
-        <View style={styles.heroCard}>
-          <View style={styles.heroAccentCircle} />
-          <View style={styles.heroAccentCircleSmall} />
-          <View style={styles.heroTopRow}>
-            <View style={styles.heroChip}>
-              <MaterialIcons name="verified" size={14} color="#14532d" />
-              <Text style={styles.heroChipText}>Account Status</Text>
-            </View>
-            <View style={[styles.statusBadge, { backgroundColor: volunteerTone.badge }]}>
-              <Text style={[styles.statusBadgeText, { color: volunteerTone.text }]}>
-                {volunteerProfile?.registrationStatus || 'Pending'}
+          {syncStatus ? (
+            <View
+              style={[
+                styles.syncStatus,
+                syncStatus.type === 'success' ? styles.syncStatusSuccess : styles.syncStatusError,
+              ]}
+            >
+              <MaterialIcons
+                name={syncStatus.type === 'success' ? 'check-circle-outline' : 'error-outline'}
+                size={14}
+                color={syncStatus.type === 'success' ? '#166534' : '#b91c1c'}
+              />
+              <Text
+                style={[
+                  styles.syncStatusText,
+                  syncStatus.type === 'success' ? styles.syncStatusSuccessText : styles.syncStatusErrorText,
+                ]}
+              >
+                {syncStatus.message}
               </Text>
             </View>
-          </View>
-
-          <Text style={styles.heroTitle}>Your service dashboard is ready.</Text>
-          <Text style={styles.heroSubtitle}>
-            See what needs attention first, review your next event, and jump straight into projects, tasks, or messages.
-          </Text>
-
-          <View style={styles.metricRow}>
-            <View style={styles.metricCard}>
-              <MaterialIcons name="event-available" size={16} color="#bbf7d0" />
-              <Text style={styles.metricValue}>{joinedEvents.length}</Text>
-              <Text style={styles.metricLabel}>Joined Events</Text>
+          ) : null}
+          
+          <View style={styles.calCard}>
+            <View style={styles.calBadge}>
+              <MaterialIcons name="done" size={10} color="#2C4C3B" style={{ marginRight: 4 }} />
+              <Text style={styles.calBadgeText}>Admin calendar synced</Text>
             </View>
-            <View style={styles.metricCard}>
-              <MaterialIcons name="mark-email-unread" size={16} color="#bbf7d0" />
-              <Text style={styles.metricValue}>{unreadMessages}</Text>
-              <Text style={styles.metricLabel}>Unread Messages</Text>
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.quickActionRow}>
-          <TouchableOpacity style={[styles.quickActionCard, styles.quickActionPrimary]} onPress={() => openProjects()}>
-            <View style={styles.quickActionIcon}>
-              <MaterialIcons name="work-outline" size={20} color="#166534" />
-            </View>
-            <View style={styles.quickActionCopy}>
-              <Text style={styles.quickActionTitle}>Find Projects</Text>
-              <Text style={styles.quickActionText}>Browse events and service opportunities.</Text>
-            </View>
-            <MaterialIcons name="chevron-right" size={20} color="#166534" />
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.quickActionCard} onPress={openTasks}>
-            <View style={styles.quickActionIcon}>
-              <MaterialIcons name="task-alt" size={20} color="#166534" />
-            </View>
-            <View style={styles.quickActionCopy}>
-              <Text style={styles.quickActionTitle}>My Tasks</Text>
-              <Text style={styles.quickActionText}>Check assignments and field responsibilities.</Text>
-            </View>
-            <MaterialIcons name="chevron-right" size={20} color="#94a3b8" />
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.quickActionCard} onPress={openMessages}>
-            <View style={styles.quickActionIcon}>
-              <MaterialIcons name="chat-bubble-outline" size={20} color="#166534" />
-            </View>
-            <View style={styles.quickActionCopy}>
-              <Text style={styles.quickActionTitle}>Messages</Text>
-              <Text style={styles.quickActionText}>Read admin and project updates.</Text>
-            </View>
-            {unreadMessages > 0 ? (
-              <View style={styles.messageCountBadge}>
-                <Text style={styles.messageCountText}>{unreadMessages > 99 ? '99+' : unreadMessages}</Text>
+            <View style={styles.calHeader}>
+              <Text style={styles.calMonth}>{monthLabel}</Text>
+              <View style={styles.calNav}>
+                <TouchableOpacity onPress={handlePrevMonth} style={styles.calNavButton}>
+                  <Text style={styles.calNavButtonText}>‹</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={handleNextMonth} style={styles.calNavButton}>
+                  <Text style={styles.calNavButtonText}>›</Text>
+                </TouchableOpacity>
               </View>
-            ) : (
-              <MaterialIcons name="chevron-right" size={20} color="#94a3b8" />
-            )}
-          </TouchableOpacity>
+            </View>
+
+
+            {/* Calendar Grid */}
+            <View style={styles.calGrid}>
+              {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(dow => (
+                <Text key={dow} style={styles.calDow}>{dow}</Text>
+              ))}
+              {calendarCells.map((cell, idx) => {
+                if (cell.isBlank) {
+                  return <View key={`blank-${idx}`} style={styles.calDayBlank} />;
+                }
+                const { isToday, isMarked } = getDayStatus(cell.day as number);
+                return (
+                  <View
+                    key={`day-${cell.day}`}
+                    style={[
+                      styles.calDayCell,
+                      isToday && styles.calDayToday,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.calDayText,
+                        isToday && styles.calDayTodayText,
+                        isMarked && !isToday && styles.calDayMarkedText,
+                      ]}
+                    >
+                      {cell.day}
+                    </Text>
+                    {isMarked && (
+                      <View style={[styles.calDotMarker, isToday && styles.calDotMarkerToday]} />
+                    )}
+                  </View>
+                );
+              })}
+            </View>
+
+            <View style={styles.calFoot}>
+              <View style={styles.calMetric}>
+                <Text style={styles.calMetricNum}>{planningItems.length || 5}</Text>
+                <Text style={styles.calMetricLabel}>Timeline items</Text>
+              </View>
+              <View style={styles.calMetric}>
+                <Text style={styles.calMetricNum}>
+                  {projects.filter(p => p.isEvent).length}
+                </Text>
+                <Text style={styles.calMetricLabel}>Project dates</Text>
+              </View>
+            </View>
+          </View>
         </View>
 
+        {/* TIMELINE */}
         <View style={styles.section}>
-          <View style={styles.detailCard}>
-            <View style={styles.sectionHeader}>
-              <View>
-                <Text style={styles.sectionEyebrow}>Next Priority</Text>
-                <Text style={styles.sectionTitle}>Event Details</Text>
-              </View>
-              <TouchableOpacity onPress={() => openDashboardSection(featuredEventSection)}>
-                <Text style={styles.linkText}>{featuredEventSection.items.length ? 'Open list' : 'View status'}</Text>
-              </TouchableOpacity>
+          <View style={styles.sectionHead}>
+            <View>
+              <Text style={styles.sectionTitle}>Upcoming timeline</Text>
+              <Text style={styles.sectionSub}>Projects and admin plans</Text>
             </View>
-
-            {renderSectionCard(featuredEventSection)}
           </View>
+          <View style={[styles.calCard, { paddingVertical: 14, paddingHorizontal: 16 }]}>
+            {displayTimeline.map((item, idx) => {
+              const content = (
+                <View style={styles.timelineItem}>
+                  <View style={styles.timelineDotWrap}>
+                    <View style={[styles.timelineDot, item.htmlLink && { backgroundColor: '#10b981' }]} />
+                    {idx < displayTimeline.length - 1 && <View style={styles.timelineLine} />}
+                  </View>
+                  <View style={styles.timelineContent}>
+                    <Text style={styles.timelineDate}>{formatTimelineDate(item.startDate)}</Text>
+                    <Text style={[styles.timelineTitle, item.htmlLink && { color: '#047857' }]}>
+                      {item.title} {item.htmlLink && '(Google Cal)'}
+                    </Text>
+                  </View>
+                </View>
+              );
 
-        </View>
-
-        <ProjectTimelineCalendarCard
-          title="Volunteer Event Calendar"
-          subtitle={
-            assignedEventIds.length
-              ? 'Your assigned events are shown with the admin planning timeline below.'
-              : 'Review the shared project schedule and upcoming admin timeline in one view.'
-          }
-          projects={projects}
-          planningCalendars={planningCalendars}
-          planningItems={planningItems}
-          projectFilterIds={assignedEventIds.length ? assignedEventIds : undefined}
-          accentColor="#166534"
-          emptyText="No volunteer timeline items yet."
-          onOpenProject={projectId => openProjects(projectId)}
-          onSyncToCalendar={() => void handleGcalConnectAndSync()}
-          gcalSyncing={gcalSyncing}
-          gcalLastSynced={gcalLastSynced}
-        />
-
-        {joinedEvents.length > 0 && (
-          <View style={styles.detailCard}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Your Joined Events</Text>
-              <TouchableOpacity onPress={() => openDashboardSection(joinedEventsSection)}>
-                <Text style={styles.linkText}>Open list</Text>
-              </TouchableOpacity>
-            </View>
-
-            {renderSectionCard(joinedEventsSection)}
-          </View>
-        )}
-
-        {availableEvents.length > 0 && (
-          <View style={styles.detailCard}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Available Events</Text>
-              <TouchableOpacity onPress={() => openDashboardSection(availableEventsSection)}>
-                <Text style={styles.linkText}>Open list</Text>
-              </TouchableOpacity>
-            </View>
-
-            <Text style={styles.sectionSubtitle}>Events you can join and contribute to</Text>
-
-            {renderSectionCard(availableEventsSection)}
-          </View>
-        )}
-
-        <View style={styles.detailCard}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Programs</Text>
-            <TouchableOpacity onPress={() => openDashboardSection(programsSection)}>
-              <Text style={styles.linkText}>Open list</Text>
-            </TouchableOpacity>
-          </View>
-
-          <Text style={styles.sectionSubtitle}>The three core program areas currently available in the system</Text>
-
-          {renderSectionCard(programsSection)}
-        </View>
-
-        {joinedProjects.length > 0 && (
-          <View style={styles.detailCard}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Your Joined Programs</Text>
-              <TouchableOpacity onPress={() => openDashboardSection(joinedProjectsSection)}>
-                <Text style={styles.linkText}>Open list</Text>
-              </TouchableOpacity>
-            </View>
-
-            {renderSectionCard(joinedProjectsSection)}
-          </View>
-        )}
-
-        {availableProjects.length > 0 && (
-          <View style={styles.detailCard}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Available Projects</Text>
-              <TouchableOpacity onPress={() => openDashboardSection(availableProjectsSection)}>
-                <Text style={styles.linkText}>Open list</Text>
-              </TouchableOpacity>
-            </View>
-
-            <Text style={styles.sectionSubtitle}>Projects you can join and contribute to</Text>
-
-            {renderSectionCard(availableProjectsSection)}
-          </View>
-        )}
-      </ScrollView>
-      <Modal
-        visible={Boolean(selectedDashboardSection)}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setSelectedDashboardSection(null)}
-      >
-        <View style={styles.previewModalBackdrop}>
-          <View style={styles.previewModalCard}>
-            <View style={styles.previewModalHeader}>
-              <View style={styles.previewModalHeaderCopy}>
-                <Text style={styles.previewModalEyebrow}>{selectedDashboardSection?.eyebrow || 'Dashboard List'}</Text>
-                <Text style={styles.previewModalTitle}>{selectedDashboardSection?.title || 'Items'}</Text>
-              </View>
-              <TouchableOpacity
-                style={styles.previewModalClose}
-                onPress={() => setSelectedDashboardSection(null)}
-                activeOpacity={0.85}
-              >
-                <MaterialIcons name="close" size={20} color="#475569" />
-              </TouchableOpacity>
-            </View>
-
-            <Text style={styles.previewModalDescription}>
-              {selectedDashboardSection?.items.length
-                ? selectedDashboardSection?.subtitle
-                : selectedDashboardSection?.emptyText || 'No items available.'}
-            </Text>
-
-            <ScrollView style={styles.sectionListModalScroll} contentContainerStyle={styles.sectionListModalContent}>
-              {selectedDashboardSection?.items.length ? (
-                selectedDashboardSection.items.map(item => (
+              if (item.htmlLink) {
+                return (
                   <TouchableOpacity
                     key={item.id}
-                    style={styles.sectionListItem}
-                    onPress={() => openDashboardCardFromList(item)}
-                    activeOpacity={0.88}
+                    onPress={() => {
+                      Linking.openURL(item.htmlLink).catch(err => {
+                        console.error('Failed to open link:', err);
+                      });
+                    }}
+                    activeOpacity={0.8}
                   >
-                    <View style={styles.sectionListItemHeader}>
-                      <View style={styles.sectionListItemHeaderCopy}>
-                        <Text style={styles.sectionListItemEyebrow}>{item.eyebrow}</Text>
-                        <Text style={styles.sectionListItemTitle} numberOfLines={2}>
-                          {item.title}
-                        </Text>
-                        {item.skillMatch?.hasMatch && (
-                          <View style={styles.skillMatchBadge}>
-                            <MaterialIcons name="stars" size={14} color="#16a34a" />
-                            <Text style={styles.skillMatchText}>
-                              Skills Match: {item.skillMatch.matchedSkills.join(', ')}
-                            </Text>
-                          </View>
-                        )}
-                      </View>
-                      {item.badgeLabel ? (
-                        <View
-                          style={[
-                            styles.previewCardBadge,
-                            item.badgeColor ? { backgroundColor: `${item.badgeColor}1F`, borderColor: item.badgeColor } : null,
-                          ]}
-                        >
-                          <Text
-                            style={[
-                              styles.previewCardBadgeText,
-                              item.badgeColor ? { color: item.badgeColor } : null,
-                            ]}
-                          >
-                            {item.badgeLabel}
-                          </Text>
-                        </View>
-                      ) : (
-                        <MaterialIcons name="chevron-right" size={18} color="#94a3b8" />
-                      )}
-                    </View>
-
-                    <Text style={styles.sectionListItemDescription} numberOfLines={2}>
-                      {item.description}
-                    </Text>
-
-                    <View style={styles.sectionListItemFooter}>
-                      <Text style={styles.sectionListItemFooterText}>Tap to open</Text>
-                      <MaterialIcons name="north-east" size={16} color="#166534" />
-                    </View>
+                    {content}
                   </TouchableOpacity>
-                ))
-              ) : (
-                <View style={styles.emptyStateCard}>
-                  <MaterialIcons name="inbox" size={28} color="#94a3b8" />
-                  <Text style={styles.emptyStateTitle}>{selectedDashboardSection?.emptyTitle || 'Nothing here yet'}</Text>
-                  <Text style={styles.emptySectionText}>{selectedDashboardSection?.emptyText || 'No items available.'}</Text>
-                </View>
-              )}
-            </ScrollView>
+                );
+              }
+
+              return <View key={item.id}>{content}</View>;
+            })}
           </View>
         </View>
-      </Modal>
-      <Modal
-        visible={Boolean(selectedDashboardCard)}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setSelectedDashboardCard(null)}
-      >
-        <View style={styles.previewModalBackdrop}>
-          <View style={styles.previewModalCard}>
-            <View style={styles.previewModalHeader}>
-              <View style={styles.previewModalHeaderCopy}>
-                <Text style={styles.previewModalEyebrow}>{selectedDashboardCard?.eyebrow || 'Details'}</Text>
-                <Text style={styles.previewModalTitle}>{selectedDashboardCard?.title || 'Details'}</Text>
-              </View>
-              <TouchableOpacity
-                style={styles.previewModalClose}
-                onPress={() => setSelectedDashboardCard(null)}
-                activeOpacity={0.85}
-              >
-                <MaterialIcons name="close" size={20} color="#475569" />
-              </TouchableOpacity>
+
+        {/* PROGRAMS */}
+        <View style={styles.section}>
+          <View style={styles.sectionHead}>
+            <View>
+              <Text style={styles.sectionTitle}>Programs</Text>
+              <Text style={styles.sectionSub}>The three core program areas in the system</Text>
             </View>
-
-            {selectedDashboardCard?.description ? (
-              <Text style={styles.previewModalDescription}>{selectedDashboardCard.description}</Text>
-            ) : null}
-
-            <View style={styles.previewModalDetails}>
-              {(selectedDashboardCard?.details || []).map(detail => (
-                <View key={`${selectedDashboardCard?.id}-${detail.label}`} style={styles.previewModalDetailRow}>
-                  <Text style={styles.previewModalDetailLabel}>{detail.label}</Text>
-                  <Text style={styles.previewModalDetailValue}>{detail.value}</Text>
-                </View>
-              ))}
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.programsContainer}>
+            <View style={[styles.programCard, styles.programCardN]}>
+              <Text style={styles.programTitle}>Nutrition</Text>
+              <Text style={styles.programDesc}>Mingo Meals and feeding protocols.</Text>
             </View>
+            <View style={[styles.programCard, styles.programCardE]}>
+              <Text style={styles.programTitle}>Education</Text>
+              <Text style={styles.programDesc}>Formal and non-formal learning.</Text>
+            </View>
+            <View style={[styles.programCard, styles.programCardL]}>
+              <Text style={styles.programTitle}>Livelihood</Text>
+              <Text style={styles.programDesc}>Community income projects.</Text>
+            </View>
+          </ScrollView>
+        </View>
 
-            <TouchableOpacity
-              style={styles.previewModalAction}
-              onPress={() => {
-                if (selectedDashboardCard) {
-                  navigateFromDashboardCard(selectedDashboardCard);
-                }
-              }}
-              activeOpacity={0.88}
-            >
-              <Text style={styles.previewModalActionText}>
-                {selectedDashboardCard?.ctaLabel || 'Open Details'}
-              </Text>
-              <MaterialIcons name="north-east" size={18} color="#ffffff" />
+        {/* PROJECTS */}
+        <View style={styles.section}>
+          <View style={styles.sectionHead}>
+            <View>
+              <Text style={styles.sectionTitle}>Available events</Text>
+              <Text style={styles.sectionSub}>Events you can join and contribute to</Text>
+            </View>
+            <TouchableOpacity onPress={() => navigation.navigate('Events')}>
+              <Text style={styles.sectionLink}>See all</Text>
             </TouchableOpacity>
           </View>
+
+          {displayProjects.map(project => (
+            <View key={project.id} style={styles.projectRow}>
+              <View style={styles.projectIcon}>
+                {getProjectIcon(project.category)}
+              </View>
+              <View style={styles.projectInfo}>
+                <Text style={styles.projectTitleText}>{project.title}</Text>
+                <Text style={styles.projectMeta}>
+                  {project.location?.address || 'Bacolod City'} · {project.volunteersNeeded || 4} volunteers needed
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.projectJoin}
+                onPress={() => handleJoinProject(project)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.projectJoinText}>Join</Text>
+              </TouchableOpacity>
+            </View>
+          ))}
         </View>
-      </Modal>
-    </>
+
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  rootContainer: {
     flex: 1,
-    backgroundColor: ModernTheme.colors.background.secondary,
+    backgroundColor: '#FAF5E9',
   },
-  content: {
-    padding: ModernTheme.spacing[3.5],
-    paddingBottom: ModernTheme.spacing[8],
-    gap: ModernTheme.spacing[3.5],
-  },
-  loadingContainer: {
+  scrollView: {
     flex: 1,
-    alignItems: 'center',
+  },
+  scrollContent: {
+    paddingBottom: 40,
+  },
+  loadingWrapper: {
+    flex: 1,
     justifyContent: 'center',
-    backgroundColor: ModernTheme.colors.background.primary,
-    padding: ModernTheme.spacing[6],
-  },
-  loadingCard: {
-    width: '100%',
-    maxWidth: 360,
-    borderRadius: ModernTheme.borderRadius.xl,
-    backgroundColor: ModernTheme.colors.background.card,
     alignItems: 'center',
-    paddingHorizontal: ModernTheme.spacing[5],
-    paddingVertical: ModernTheme.spacing[5.5],
-    borderWidth: 0,
-    borderColor: 'transparent',
-    gap: ModernTheme.spacing[2.5],
-    ...ModernTheme.shadows.lg,
+    backgroundColor: '#FAF5E9',
   },
-  loadingTitle: {
-    fontSize: ModernTheme.typography.fontSize.lg,
-    fontWeight: ModernTheme.typography.fontWeight.bold,
-    color: ModernTheme.colors.text.primary,
+  header: {
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 22,
+    backgroundColor: '#1F3A2E',
+    borderBottomLeftRadius: 26,
+    borderBottomRightRadius: 26,
   },
-  loadingText: {
-    textAlign: 'center',
-    fontSize: ModernTheme.typography.fontSize.sm,
-    lineHeight: 18,
-    color: ModernTheme.colors.text.secondary,
-  },
-  headerCard: {
+  headerTop: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: ModernTheme.spacing[3],
-    borderRadius: ModernTheme.borderRadius['2xl'],
-    backgroundColor: ModernTheme.colors.background.card,
-    paddingHorizontal: ModernTheme.spacing[3.5],
-    paddingVertical: ModernTheme.spacing[3],
-    borderWidth: 0,
-    borderColor: 'transparent',
-    ...ModernTheme.shadows.md,
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  greetingLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#E8A33D',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+  },
+  greetingName: {
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
+    fontWeight: '600',
+    fontSize: 20,
+    color: '#ffffff',
+    marginTop: 4,
   },
   avatar: {
-    width: 48,
-    height: 48,
-    borderRadius: ModernTheme.borderRadius.lg,
-    backgroundColor: ModernTheme.colors.primary[900],
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#E8A33D',
     alignItems: 'center',
     justifyContent: 'center',
-    ...ModernTheme.shadows.sm,
   },
   avatarText: {
-    color: ModernTheme.colors.text.inverse,
-    fontSize: ModernTheme.typography.fontSize.lg,
-    fontWeight: ModernTheme.typography.fontWeight.bold,
-  },
-  headerCopy: {
-    flex: 1,
-  },
-  greeting: {
-    marginTop: ModernTheme.spacing[0.5],
-    fontSize: ModernTheme.typography.fontSize.xl,
-    fontWeight: ModernTheme.typography.fontWeight.bold,
-    color: ModernTheme.colors.text.primary,
-  },
-  role: {
-    fontSize: ModernTheme.typography.fontSize.xs,
-    color: ModernTheme.colors.primary[700],
-    fontWeight: ModernTheme.typography.fontWeight.bold,
-    letterSpacing: ModernTheme.typography.letterSpacing.wide,
-    textTransform: 'uppercase',
-  },
-  headerHint: {
-    marginTop: 5,
-    fontSize: 11,
-    lineHeight: 16,
-    color: '#64748b',
-  },
-  iconButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#f0fdf4',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  errorCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    borderRadius: 16,
-    backgroundColor: '#fef2f2',
-    borderWidth: 1,
-    borderColor: '#fecaca',
-    padding: 12,
-  },
-  errorCopy: {
-    flex: 1,
-  },
-  errorTitle: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#991b1b',
-  },
-  errorText: {
-    marginTop: 3,
-    fontSize: 11,
-    lineHeight: 16,
-    color: '#b91c1c',
-  },
-  errorAction: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#991b1b',
-  },
-  heroCard: {
-    position: 'relative',
-    overflow: 'hidden',
-    borderRadius: 24,
-    backgroundColor: '#14532d',
-    padding: 18,
-    shadowColor: '#14532d',
-    shadowOpacity: 0.22,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 10 },
-    elevation: 4,
-  },
-  heroAccentCircle: {
-    position: 'absolute',
-    width: 180,
-    height: 180,
-    borderRadius: 90,
-    backgroundColor: 'rgba(187,247,208,0.14)',
-    right: -70,
-    top: -56,
-  },
-  heroAccentCircleSmall: {
-    position: 'absolute',
-    width: 92,
-    height: 92,
-    borderRadius: 46,
-    backgroundColor: 'rgba(250,204,21,0.12)',
-    right: 32,
-    bottom: -42,
-  },
-  heroTopRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 12,
-  },
-  heroChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    backgroundColor: '#bbf7d0',
-  },
-  heroChipText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#166534',
-  },
-  statusBadge: {
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  statusBadgeText: {
-    fontSize: 11,
-    fontWeight: '800',
-  },
-  heroTitle: {
-    marginTop: 18,
-    fontSize: 20,
-    lineHeight: 28,
-    fontWeight: '800',
-    color: '#ffffff',
-  },
-  heroSubtitle: {
-    marginTop: 6,
-    fontSize: 12,
-    lineHeight: 18,
-    color: '#dcfce7',
-  },
-  metricRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 16,
-  },
-  metricCard: {
-    flex: 1,
-    borderRadius: 16,
-    backgroundColor: 'rgba(255,255,255,0.13)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.16)',
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-  },
-  metricValue: {
-    marginTop: 6,
-    fontSize: 17,
-    fontWeight: '800',
-    color: '#ffffff',
-  },
-  metricLabel: {
-    marginTop: 3,
-    fontSize: 10,
-    lineHeight: 13,
-    color: '#dcfce7',
-  },
-  section: {
-    gap: 14,
-  },
-  detailCard: {
-    borderRadius: 20,
-    backgroundColor: '#ffffff',
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#dbe7df',
-  },
-  profileCard: {
-    borderRadius: 20,
-    backgroundColor: '#ffffff',
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#dbe7df',
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    gap: 12,
-    marginBottom: 12,
-  },
-  sectionEyebrow: {
-    marginBottom: 3,
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#166534',
-    textTransform: 'uppercase',
-    letterSpacing: 0.7,
-  },
-  sectionTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  linkText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#166534',
-  },
-  sectionSubtitle: {
-    fontSize: 11,
-    color: '#64748b',
-    marginBottom: 10,
-  },
-  sectionSummaryCard: {
-    borderRadius: 18,
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#dbe7df',
-    padding: 12,
-    gap: 10,
-  },
-  sectionSummaryHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: 10,
-  },
-  sectionSummaryHeaderCopy: {
-    flex: 1,
-    minWidth: 0,
-  },
-  sectionSummaryEyebrow: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#166534',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  sectionSummaryTitle: {
-    marginTop: 4,
-    fontSize: 14,
-    lineHeight: 19,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  sectionSummaryCountBadge: {
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#bbf7d0',
-    backgroundColor: '#f0fdf4',
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-  },
-  sectionSummaryCountText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#166534',
-  },
-  sectionSummarySubtitle: {
-    fontSize: 11,
-    lineHeight: 17,
-    color: '#475569',
-  },
-  sectionSummaryFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderTopWidth: 1,
-    borderTopColor: '#e2e8f0',
-    paddingTop: 10,
-  },
-  sectionSummaryFooterText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#166534',
-  },
-  previewCardBadge: {
-    borderRadius: 999,
-    borderWidth: 1,
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-  },
-  previewCardBadgeText: {
-    fontSize: 10,
-    fontWeight: '800',
-  },
-  detailHeroPanel: {
-    borderRadius: 18,
-    backgroundColor: '#f4fbf6',
-    borderWidth: 1,
-    borderColor: '#cfe8d6',
-    padding: 14,
-    marginBottom: 12,
-    gap: 10,
-  },
-  detailHeroChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    alignSelf: 'flex-start',
-    borderRadius: 999,
-    backgroundColor: '#dcfce7',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  detailHeroChipText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#166534',
-  },
-  detailHeroTitle: {
-    fontSize: 17,
-    lineHeight: 24,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  detailHeroText: {
-    fontSize: 12,
-    lineHeight: 18,
-    color: '#475569',
-  },
-  detailSummaryGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-  },
-  detailSummaryCard: {
-    minWidth: 132,
-    flexGrow: 1,
-    flexShrink: 1,
-    borderRadius: 16,
-    backgroundColor: '#fbfdfb',
-    borderWidth: 1,
-    borderColor: '#e4ede7',
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-  },
-  detailSummaryEyebrow: {
-    fontSize: 10,
-    lineHeight: 14,
-    fontWeight: '800',
-    color: '#64748b',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  detailSummaryValue: {
-    marginTop: 6,
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  detailSummaryMeta: {
-    marginTop: 6,
-    fontSize: 10,
-    lineHeight: 15,
-    color: '#64748b',
-  },
-  detailGrid: {
-    gap: 12,
-  },
-  detailRow: {
-    flexDirection: 'row',
-    gap: 14,
-    alignItems: 'flex-start',
-  },
-  detailLabel: {
-    width: 112,
-    fontSize: 11,
-    lineHeight: 18,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '700',
-    color: '#64748b',
+    color: '#22201B',
+    fontSize: 15,
   },
-  detailValue: {
+  headerSub: {
+    fontSize: 12.5,
+    color: '#CBD6CF',
+    lineHeight: 18,
+    marginBottom: 16,
+  },
+  statusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.16)',
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  statusDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 4.5,
+    backgroundColor: '#6FCF8F',
+    marginRight: 10,
+  },
+  statusText: {
     flex: 1,
-    fontSize: 12,
-    lineHeight: 20,
-    color: '#0f172a',
+  },
+  statusTitle: {
+    fontWeight: '700',
+    fontSize: 13,
+    color: '#ffffff',
+  },
+  statusDesc: {
+    fontSize: 11.5,
+    color: '#CBD6CF',
+    marginTop: 2,
+  },
+  statsRow: {
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: 20,
+    paddingTop: 16,
+  },
+  statCard: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#DED2B4',
+    borderRadius: 16,
+    padding: 14,
+  },
+  statNum: {
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '600',
+    fontSize: 26,
+    color: '#1F3A2E',
   },
-  emptySectionText: {
-    fontSize: 12,
-    lineHeight: 18,
-    color: '#64748b',
+  statLabel: {
+    fontSize: 11.5,
+    color: '#5B564C',
+    marginTop: 2,
   },
-  emptyStateCard: {
-    alignItems: 'center',
-    borderRadius: 18,
-    backgroundColor: '#f8fafc',
+  priorityCard: {
+    marginHorizontal: 20,
+    marginTop: 18,
+    backgroundColor: '#F2E9D8',
     borderWidth: 1,
-    borderColor: '#e2e8f0',
-    padding: 16,
-    gap: 8,
-  },
-  emptyStateTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  emptyStateButton: {
-    marginTop: 4,
-    borderRadius: 999,
-    backgroundColor: '#166534',
+    borderStyle: 'dashed',
+    borderColor: '#C97F1F',
+    borderRadius: 16,
+    paddingVertical: 14,
     paddingHorizontal: 16,
-    paddingVertical: 9,
-  },
-  emptyStateButtonText: {
-    color: '#ffffff',
-    fontSize: 11,
-    fontWeight: '800',
-  },
-  profileIdentity: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    marginBottom: 14,
   },
-  profileAvatarLarge: {
-    width: 62,
-    height: 62,
-    borderRadius: 20,
-    backgroundColor: '#e6f7cd',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  smallEditButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#f0fdf4',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  profileAvatarText: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: '#166534',
-  },
-  profileIdentityCopy: {
-    flex: 1,
-  },
-  profileName: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  profileMeta: {
-    marginTop: 4,
-    fontSize: 11,
-    color: '#64748b',
-  },
-  quickActionRow: {
-    gap: 10,
-  },
-  quickActionCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: 18,
-    backgroundColor: '#ffffff',
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#d8e7dc',
-    gap: 10,
-  },
-  quickActionPrimary: {
-    backgroundColor: '#f7fee7',
-    borderColor: '#bef264',
-  },
-  quickActionIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 13,
-    backgroundColor: '#dcfce7',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  quickActionCopy: {
-    flex: 1,
-  },
-  quickActionTitle: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  quickActionText: {
-    marginTop: 3,
-    fontSize: 11,
-    lineHeight: 16,
-    color: '#64748b',
-  },
-  messageCountBadge: {
-    minWidth: 24,
-    height: 24,
-    borderRadius: 12,
-    paddingHorizontal: 8,
-    backgroundColor: '#dc2626',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  messageCountText: {
-    color: '#ffffff',
-    fontSize: 11,
-    fontWeight: '800',
-  },
-  projectsList: {
-    gap: 10,
-  },
-  projectItem: {
-    borderRadius: 16,
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    padding: 12,
-    gap: 9,
-  },
-  projectItemHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    gap: 10,
-  },
-  projectItemBadges: {
-    alignItems: 'flex-end',
-    gap: 5,
-  },
-  projectItemTitle: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  projectItemBadge: {
-    borderRadius: 999,
-    backgroundColor: '#dcfce7',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
-  projectItemBadgeText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#166534',
-  },
-  projectItemStatusBadge: {
-    borderRadius: 999,
-    borderWidth: 1,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
-  projectItemStatusBadgeText: {
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  projectItemDescription: {
-    fontSize: 11,
-    lineHeight: 16,
-    color: '#475569',
-  },
-  projectItemMeta: {
-    gap: 6,
-  },
-  projectItemMetaItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  projectItemMetaText: {
-    fontSize: 10,
-    color: '#64748b',
-  },
-  previewModalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(15,23,42,0.42)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 18,
-  },
-  previewModalCard: {
-    width: '100%',
-    maxWidth: 460,
-    borderRadius: 24,
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#dbe7df',
-    padding: 18,
-    gap: 14,
-  },
-  previewModalHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  previewModalHeaderCopy: {
-    flex: 1,
-  },
-  previewModalEyebrow: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#166534',
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  previewModalTitle: {
-    marginTop: 5,
-    fontSize: 18,
-    lineHeight: 24,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  previewModalClose: {
+  priorityIcon: {
     width: 34,
     height: 34,
-    borderRadius: 17,
-    backgroundColor: '#f8fafc',
+    borderRadius: 10,
+    backgroundColor: '#E8A33D',
     alignItems: 'center',
     justifyContent: 'center',
+    marginRight: 12,
   },
-  previewModalDescription: {
-    fontSize: 12,
-    lineHeight: 19,
-    color: '#475569',
-  },
-  previewModalDetails: {
-    gap: 10,
-  },
-  sectionListModalScroll: {
-    maxHeight: 380,
-  },
-  sectionListModalContent: {
-    gap: 10,
-  },
-  sectionListItem: {
-    borderRadius: 18,
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#dbe7df',
-    padding: 12,
-    gap: 10,
-  },
-  sectionListItemHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: 10,
-  },
-  sectionListItemHeaderCopy: {
+  priorityCopy: {
     flex: 1,
-    minWidth: 0,
   },
-  sectionListItemEyebrow: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#166534',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+  priorityTitle: {
+    fontWeight: '700',
+    fontSize: 12.5,
+    color: '#22201B',
   },
-  sectionListItemTitle: {
-    marginTop: 4,
-    fontSize: 14,
-    lineHeight: 19,
-    fontWeight: '800',
-    color: '#0f172a',
+  priorityDesc: {
+    fontSize: 11.5,
+    color: '#5B564C',
+    marginTop: 2,
   },
-  skillMatchBadge: {
-    marginTop: 6,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#dcfce7',
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    borderRadius: 6,
-    gap: 4,
-    alignSelf: 'flex-start',
+  section: {
+    marginHorizontal: 20,
+    marginTop: 26,
   },
-  skillMatchText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#166534',
-  },
-  sectionListItemDescription: {
-    fontSize: 11,
-    lineHeight: 17,
-    color: '#475569',
-  },
-  sectionListItemFooter: {
+  sectionHead: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    borderTopWidth: 1,
-    borderTopColor: '#e2e8f0',
-    paddingTop: 10,
+    marginBottom: 14,
   },
-  sectionListItemFooterText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#166534',
-  },
-  previewModalDetailRow: {
-    borderRadius: 16,
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    gap: 4,
-  },
-  previewModalDetailLabel: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#64748b',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  previewModalDetailValue: {
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: '700',
-    color: '#0f172a',
-  },
-  previewModalAction: {
-    marginTop: 4,
-    borderRadius: 16,
-    backgroundColor: '#166534',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+  syncButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-  },
-  previewModalActionText: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#ffffff',
-  },
-
-  // ── Google Calendar sync card ──────────────────────────────────────────────
-  gcalSyncCard: {
-    marginHorizontal: 16,
-    marginTop: 10,
-    marginBottom: 4,
+    gap: 5,
     backgroundColor: '#f0fdf4',
-    borderRadius: 16,
     borderWidth: 1,
     borderColor: '#bbf7d0',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    borderRadius: 20,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
   },
-  gcalSyncRow: {
+  syncButtonDisabled: {
+    opacity: 0.65,
+  },
+  syncButtonText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#16a34a',
+  },
+  syncStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    marginBottom: 12,
+  },
+  syncStatusSuccess: {
+    backgroundColor: '#f0fdf4',
+    borderColor: '#bbf7d0',
+  },
+  syncStatusError: {
+    backgroundColor: '#fef2f2',
+    borderColor: '#fecaca',
+  },
+  syncStatusText: {
+    flex: 1,
+    fontSize: 11.5,
+    fontWeight: '600',
+  },
+  syncStatusSuccessText: {
+    color: '#166534',
+  },
+  syncStatusErrorText: {
+    color: '#b91c1c',
+  },
+
+  sectionTitle: {
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
+    fontWeight: '600',
+    fontSize: 18,
+    color: '#22201B',
+  },
+  sectionSub: {
+    fontSize: 11.5,
+    color: '#5B564C',
+    marginTop: 2,
+  },
+  sectionLink: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#B0432B',
+  },
+  calCard: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#DED2B4',
+    borderRadius: 18,
+    padding: 16,
+  },
+  calBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#E4EEE7',
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 100,
+    alignSelf: 'flex-start',
+    marginBottom: 12,
+  },
+  calBadgeText: {
+    color: '#2C4C3B',
+    fontSize: 10.5,
+    fontWeight: '700',
+  },
+  calHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 10,
+    marginBottom: 10,
   },
-  gcalSyncLeft: {
+  calMonth: {
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
+    fontWeight: '600',
+    fontSize: 14.5,
+    color: '#22201B',
+  },
+  calNav: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    flex: 1,
+    gap: 8,
   },
-  gcalSyncIcon: {
-    fontSize: 24,
-  },
-  gcalSyncTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#14532d',
-  },
-  gcalSyncSub: {
-    fontSize: 11,
-    color: '#166534',
-    marginTop: 2,
-  },
-  gcalSyncBtn: {
-    backgroundColor: '#1a73e8',
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    minWidth: 64,
+  calNavButton: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#F2E9D8',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  gcalSyncBtnBusy: {
-    backgroundColor: '#93c5fd',
-  },
-  gcalSyncBtnText: {
-    color: '#ffffff',
-    fontSize: 12,
+  calNavButtonText: {
+    fontSize: 11,
+    color: '#5B564C',
     fontWeight: '700',
   },
-  gcalSuccessBanner: {
-    marginHorizontal: 16,
-    marginTop: 6,
-    marginBottom: 4,
-    backgroundColor: '#dcfce7',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#86efac',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+  calGrid: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  calDow: {
+    width: '14.28%',
+    textAlign: 'center',
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#5B564C',
+    paddingBottom: 6,
+  },
+  calDayBlank: {
+    width: '14.28%',
+    height: 30,
+  },
+  calDayCell: {
+    width: '14.28%',
+    height: 30,
+    justifyContent: 'center',
     alignItems: 'center',
+    borderRadius: 8,
+    position: 'relative',
+    marginVertical: 2,
+  },
+  calDayText: {
+    fontSize: 11.5,
+    color: '#22201B',
+  },
+  calDayToday: {
+    backgroundColor: '#1F3A2E',
+  },
+  calDayTodayText: {
+    color: '#ffffff',
+    fontWeight: '700',
+  },
+  calDayMarkedText: {
+    fontWeight: '700',
+    color: '#B0432B',
+  },
+  calDotMarker: {
+    position: 'absolute',
+    bottom: 2,
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#B0432B',
+  },
+  calDotMarkerToday: {
+    backgroundColor: '#ffffff',
+  },
+  calFoot: {
+    flexDirection: 'row',
     gap: 10,
+    marginTop: 14,
+    paddingTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: '#DED2B4',
   },
-  gcalSuccessEmoji: {
-    fontSize: 22,
-  },
-  gcalSuccessTextBlock: {
+  calMetric: {
     flex: 1,
   },
-  gcalSuccessTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#14532d',
+  calMetricNum: {
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
+    fontWeight: '600',
+    fontSize: 17,
+    color: '#1F3A2E',
   },
-  gcalSuccessSub: {
-    fontSize: 11,
-    color: '#166534',
+  calMetricLabel: {
+    fontSize: 10.5,
+    color: '#5B564C',
     marginTop: 2,
   },
-  gcalSuccessDismiss: {
-    fontSize: 14,
-    color: '#166534',
+  timelineItem: {
+    flexDirection: 'row',
+    paddingVertical: 12,
+  },
+  timelineDotWrap: {
+    alignItems: 'center',
+    width: 16,
+    marginRight: 10,
+  },
+  timelineDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 4.5,
+    backgroundColor: '#C97F1F',
+    marginTop: 4,
+  },
+  timelineLine: {
+    width: 1.5,
+    flex: 1,
+    backgroundColor: '#DED2B4',
+    marginTop: 4,
+  },
+  timelineContent: {
+    flex: 1,
+  },
+  timelineDate: {
+    fontSize: 10.5,
     fontWeight: '700',
-    paddingHorizontal: 4,
+    color: '#5B564C',
+    letterSpacing: 0.3,
+    textTransform: 'uppercase',
+  },
+  timelineTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#22201B',
+    marginTop: 2,
+  },
+  programsContainer: {
+    paddingRight: 20,
+  },
+  programCard: {
+    width: 150,
+    borderRadius: 16,
+    paddingVertical: 16,
+    paddingHorizontal: 14,
+    marginRight: 12,
+  },
+  programCardN: {
+    backgroundColor: '#C97F1F',
+  },
+  programCardE: {
+    backgroundColor: '#1F3A2E',
+  },
+  programCardL: {
+    backgroundColor: '#B0432B',
+  },
+  programTitle: {
+    fontWeight: '700',
+    fontSize: 13.5,
+    color: '#ffffff',
+    marginBottom: 6,
+  },
+  programDesc: {
+    fontSize: 11,
+    lineHeight: 14,
+    color: '#ffffff',
+    opacity: 0.9,
+  },
+  projectRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#DED2B4',
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 10,
+  },
+  projectIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: '#F2E9D8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  projectInfo: {
+    flex: 1,
+  },
+  projectTitleText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#22201B',
+  },
+  projectMeta: {
+    fontSize: 11,
+    color: '#5B564C',
+    marginTop: 2,
+  },
+  projectJoin: {
+    backgroundColor: '#F2E9D8',
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderRadius: 100,
+  },
+  projectJoinText: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#1F3A2E',
   },
 });
