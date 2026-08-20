@@ -1979,7 +1979,14 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
           const proposalProjectId = buildProgramProposalProjectId(module);
 
-          const buttonLabel = isRejected ? 'Revise & Resubmit' : application && !isRejected ? 'Submit Another Proposal' : 'Submit Project Proposal';
+          const proposalSubmissionLocked = isPending || isApproved;
+          const buttonLabel = isRejected
+            ? 'Revise & Resubmit'
+            : isPending
+              ? 'Proposal Pending Review'
+              : isApproved
+                ? 'Proposal Approved'
+                : 'Submit Project Proposal';
 
 
 
@@ -2033,11 +2040,14 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
               <TouchableOpacity
 
-                style={[styles.primaryButton, actionProjectId === proposalProjectId && styles.timeButtonDisabled]}
+                style={[
+                  styles.primaryButton,
+                  (actionProjectId === proposalProjectId || proposalSubmissionLocked) && styles.timeButtonDisabled,
+                ]}
 
                 onPress={() => openProposalForm(module, programCard.id)}
 
-                disabled={actionProjectId === proposalProjectId}
+                disabled={actionProjectId === proposalProjectId || proposalSubmissionLocked}
 
               >
 

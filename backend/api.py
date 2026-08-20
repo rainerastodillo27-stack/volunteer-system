@@ -2367,6 +2367,163 @@ def _get_user_by_id(user_id: str, connection: Any) -> dict[str, Any] | None:
     return _postgres_get_hot_item_by_id(connection, "users", user_id)
 
 
+def _resolve_admin_message_user_id(connection: Any, preferred_user_id: str | None = None) -> str:
+    preferred_id = str(preferred_user_id or "").strip()
+    if preferred_id:
+        preferred_user = _get_user_by_id(preferred_id, connection)
+        if preferred_user and str(preferred_user.get("role") or "") == "admin":
+            return preferred_id
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            select users_id
+            from users
+            where role = 'admin'
+            order by
+              case when lower(coalesce(email, '')) = 'admin@nvc.org' then 0 else 1 end,
+              created_at asc nulls last,
+              users_id asc
+            limit 1
+            """
+        )
+        row = cursor.fetchone()
+
+    if row is not None and row[0]:
+        return str(row[0])
+
+    return preferred_id or "user-admin-1780189738"
+
+
+_PROPOSAL_CARD_PREFIX = "___PROPOSAL_CARD___:"
+
+
+def _proposal_card_payload(content: Any) -> dict[str, Any] | None:
+    raw_content = str(content or "")
+    if not raw_content.startswith(_PROPOSAL_CARD_PREFIX):
+        return None
+    try:
+        payload = json.loads(raw_content[len(_PROPOSAL_CARD_PREFIX) :])
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _proposal_card_application_id(card: dict[str, Any]) -> str:
+    nested_application = card.get("application")
+    return str(
+        card.get("applicationId")
+        or card.get("id")
+        or (nested_application.get("id") if isinstance(nested_application, dict) else "")
+        or ""
+    ).strip()
+
+
+def _proposal_card_message_timestamp(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _reconcile_partner_proposal_submission_cards(
+    connection: Any, application_id: str | None = None
+) -> int:
+    """Finalize proposal submission cards that already have a review-result card."""
+    from psycopg.rows import dict_row
+
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            select id as messages_id, sender_id, recipient_id, content, timestamp
+            from public.messages
+            where content like '___PROPOSAL_CARD___:%%'
+            order by timestamp asc, id asc
+            """
+        )
+        rows = cursor.fetchall()
+
+        parsed_rows: list[dict[str, Any]] = []
+        for row in rows:
+            card = _proposal_card_payload(row.get("content"))
+            if card is None:
+                continue
+            card_application_id = _proposal_card_application_id(card)
+            if not card_application_id or (application_id and card_application_id != application_id):
+                continue
+            parsed_rows.append({**row, "card": card, "application_id": card_application_id})
+
+        submission_rows = [
+            row for row in parsed_rows if not str(row["messages_id"]).startswith("review-card-")
+        ]
+        review_rows = [
+            row
+            for row in parsed_rows
+            if str(row["messages_id"]).startswith("review-card-")
+            and str(row["card"].get("status") or "") in {"Approved", "Rejected"}
+        ]
+
+        reconciled = 0
+        canonical_admin_id = _resolve_admin_message_user_id(connection)
+        assigned_submission_ids: set[str] = set()
+        for review_row in sorted(
+            review_rows, key=lambda row: _proposal_card_message_timestamp(row.get("timestamp"))
+        ):
+            review_card = review_row["card"]
+            review_timestamp = _proposal_card_message_timestamp(review_row.get("timestamp"))
+            review_sender_id = str(review_row.get("sender_id") or "")
+            expected_admin_ids = {review_sender_id, canonical_admin_id}
+            candidates = [
+                row
+                for row in submission_rows
+                if row["application_id"] == review_row["application_id"]
+                and str(row["messages_id"]) not in assigned_submission_ids
+                and str(row.get("sender_id") or "") == str(review_row.get("recipient_id") or "")
+                and str(row.get("recipient_id") or "") in expected_admin_ids
+                and _proposal_card_message_timestamp(row.get("timestamp")) <= review_timestamp
+            ]
+            if not candidates:
+                continue
+
+            # A legacy client could emit a duplicate card after a submission.
+            # Prefer the canonical API-generated submission, then the newest
+            # eligible message, and never assign one submission to two reviews.
+            submission_row = max(
+                candidates,
+                key=lambda row: (
+                    str(row["messages_id"]).startswith("msg-proposal-"),
+                    _proposal_card_message_timestamp(row.get("timestamp")),
+                ),
+            )
+            submission_card = submission_row["card"]
+            reconciled_card = {
+                **submission_card,
+                "status": review_card["status"],
+                "reviewedBy": review_card.get("reviewedBy"),
+                "reviewedAt": review_card.get("reviewedAt") or review_timestamp.isoformat(),
+                "reviewNotes": review_card.get("reviewNotes"),
+            }
+            if review_card.get("approvedProjectId"):
+                reconciled_card["approvedProjectId"] = review_card["approvedProjectId"]
+            if review_card.get("approvedProjectTitle"):
+                reconciled_card["approvedProjectTitle"] = review_card["approvedProjectTitle"]
+
+            cursor.execute(
+                "update public.messages set content = %s where id = %s",
+                (
+                    f"{_PROPOSAL_CARD_PREFIX}{json.dumps(reconciled_card)}",
+                    submission_row["messages_id"],
+                ),
+            )
+            submission_row["card"] = reconciled_card
+            assigned_submission_ids.add(str(submission_row["messages_id"]))
+            reconciled += 1
+
+    return reconciled
+
+
 # Retrieves all users from storage.
 def _get_all_users_from_storage(connection: Any) -> list[dict[str, Any]]:
     _require_postgres()
@@ -3410,7 +3567,12 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
         )
         if existing_application is not None:
             existing_status = str(existing_application.get("status") or "").strip()
-            if existing_status in {"Pending", "Rejected"}:
+            if existing_status == "Rejected":
+                try:
+                    previous_revision_number = int(existing_application.get("revisionNumber") or 0)
+                except (TypeError, ValueError):
+                    previous_revision_number = 0
+                resubmitted_at = datetime.now(timezone.utc).isoformat()
                 refreshed_application = {
                     **existing_application,
                     "projectId": str(existing_application.get("projectId") or proposal_project_id),
@@ -3423,7 +3585,9 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
                         target_project,
                     ),
                     "status": "Pending",
-                    "requestedAt": datetime.now(timezone.utc).isoformat(),
+                    "requestedAt": resubmitted_at,
+                    "resubmittedAt": resubmitted_at,
+                    "revisionNumber": previous_revision_number + 1,
                     "reviewedAt": None if existing_status == "Rejected" else existing_application.get("reviewedAt"),
                     "reviewedBy": None if existing_status == "Rejected" else existing_application.get("reviewedBy"),
                     "reviewNotes": None,
@@ -3434,12 +3598,13 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
                 
                 # Create a proposal message card for the resubmission
                 try:
-                    admin_id = "user-admin-1780189738"  # Admin user ID
                     proposal_message_id = f"msg-proposal-{int(datetime.now(timezone.utc).timestamp() * 1000)}"
                     proposal_content = f'___PROPOSAL_CARD___:{json.dumps(refreshed_application)}'
+                    proposal_timestamp = datetime.now(timezone.utc).isoformat()
                     
                     from .db import get_connection as db_get_connection
                     with db_get_connection() as msg_connection:
+                        admin_id = _resolve_admin_message_user_id(msg_connection)
                         with msg_connection.cursor() as cursor:
                             cursor.execute(
                                 """
@@ -3454,12 +3619,13 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
                                     admin_id,
                                     None,
                                     proposal_content,
-                                    datetime.now(timezone.utc).isoformat(),
+                                    proposal_timestamp,
                                     False,
                                     json.dumps([]),
                                 ),
                             )
                         msg_connection.commit()
+                    _invalidate_collection_cache(["messages"])
                     
                     # Broadcast the new message
                     message_data = {
@@ -3468,7 +3634,7 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
                         "recipientId": admin_id,
                         "projectId": None,
                         "content": proposal_content,
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "timestamp": proposal_timestamp,
                         "read": False,
                         "attachments": [],
                     }
@@ -3478,6 +3644,18 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
                     pass
                 
                 return {"application": refreshed_application}
+
+            if existing_status == "Pending":
+                raise HTTPException(
+                    status_code=409,
+                    detail="This proposal is already pending admin review and cannot be resubmitted.",
+                )
+
+            if existing_status == "Approved":
+                raise HTTPException(
+                    status_code=409,
+                    detail="This proposal has already been approved and cannot be revised or resubmitted.",
+                )
 
             return {"application": existing_application}
 
@@ -3494,6 +3672,7 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
             ),
             "status": "Pending",
             "requestedAt": datetime.now(timezone.utc).isoformat(),
+            "revisionNumber": 0,
         }
         _postgres_upsert_hot_item(connection, "partnerProjectApplications", application)
         connection.commit()
@@ -3503,12 +3682,13 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
     
     # Send proposal card message to admin
     try:
-        admin_id = "user-admin-1780189738"  # Admin user ID
         proposal_message_id = f"msg-proposal-{int(datetime.now(timezone.utc).timestamp() * 1000)}"
         proposal_content = f'___PROPOSAL_CARD___:{json.dumps(application)}'
+        proposal_timestamp = datetime.now(timezone.utc).isoformat()
         
         from .db import get_connection as db_get_connection
         with db_get_connection() as msg_connection:
+            admin_id = _resolve_admin_message_user_id(msg_connection)
             with msg_connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -3523,12 +3703,13 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
                         admin_id,
                         None,
                         proposal_content,
-                        datetime.now(timezone.utc).isoformat(),
+                        proposal_timestamp,
                         False,
                         json.dumps([]),
                     ),
                 )
             msg_connection.commit()
+        _invalidate_collection_cache(["messages"])
         
         # Broadcast the new message
         message_data = {
@@ -3537,7 +3718,7 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
             "recipientId": admin_id,
             "projectId": None,
             "content": proposal_content,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": proposal_timestamp,
             "read": False,
             "attachments": [],
         }
@@ -3568,6 +3749,7 @@ async def review_partner_project_application(
 
     broadcast_keys = ["partnerProjectApplications"]
     generated_project: dict[str, Any] | None = None
+    review_message_data: dict[str, Any] | None = None
     ensure_message_storage()
     with get_connection() as connection:
         application = _postgres_get_hot_item_by_id(connection, "partnerProjectApplications", application_id)
@@ -3713,6 +3895,9 @@ async def review_partner_project_application(
 
         if next_status in {"Rejected", "Approved"}:
             broadcast_keys.append("messages")
+            message_sender_id = _resolve_admin_message_user_id(connection, reviewed_by)
+            message_recipient_id = str(updated_application.get("partnerUserId") or "")
+            message_id = f"review-card-{int(datetime.now(timezone.utc).timestamp() * 1000)}-{next_status.lower()}"
             proposal_details = updated_application.get("proposalDetails")
             if not isinstance(proposal_details, dict):
                 proposal_details = {}
@@ -3742,9 +3927,9 @@ async def review_partner_project_application(
                     on conflict (id) do nothing
                     """,
                     (
-                        f"review-card-{int(datetime.now(timezone.utc).timestamp() * 1000)}-{next_status.lower()}",
-                        reviewed_by,
-                        updated_application.get("partnerUserId"),
+                        message_id,
+                        message_sender_id,
+                        message_recipient_id,
                         None,
                         f"___PROPOSAL_CARD___:{json.dumps(returned_card)}",
                         reviewed_at,
@@ -3752,11 +3937,27 @@ async def review_partner_project_application(
                         "[]",
                     ),
                 )
+            review_message_data = {
+                "id": message_id,
+                "senderId": message_sender_id,
+                "recipientId": message_recipient_id,
+                "projectId": None,
+                "content": f"___PROPOSAL_CARD___:{json.dumps(returned_card)}",
+                "timestamp": reviewed_at,
+                "read": False,
+                "attachments": [],
+            }
+            # Keep the partner's submitted card as a historical snapshot of
+            # its final review state, alongside this separate admin result card.
+            _reconcile_partner_proposal_submission_cards(connection, application_id)
 
         connection.commit()
+        _invalidate_collection_cache(broadcast_keys)
         _projects_snapshot_cache.clear()
 
     asyncio.create_task(connection_manager.broadcast_storage_event(broadcast_keys))
+    if review_message_data is not None:
+        asyncio.create_task(connection_manager.broadcast_message_event(review_message_data))
     response: dict[str, Any] = {"application": updated_application}
     if generated_project is not None:
         response["project"] = generated_project
@@ -4000,6 +4201,22 @@ def get_messages(user_id: str, limit: int = 500) -> dict[str, list[dict[str, Any
                     (other_user_ids,),
                 )
                 role_by_id = {r["id"]: str(r["role"] or "") for r in cursor.fetchall()}
+            canonical_admin_id = _resolve_admin_message_user_id(connection)
+            if canonical_admin_id:
+                role_by_id[canonical_admin_id] = "admin"
+                for row in rows:
+                    content = str(row.get("content") or "")
+                    if not content.startswith("___PROPOSAL_CARD___:"):
+                        continue
+                    other_user_id = (
+                        row["recipient_id"] if row["sender_id"] == user_id else row["sender_id"]
+                    )
+                    if role_by_id.get(other_user_id, ""):
+                        continue
+                    if row["recipient_id"] == user_id:
+                        row["sender_id"] = canonical_admin_id
+                    elif row["sender_id"] == user_id:
+                        row["recipient_id"] = canonical_admin_id
             batch_time = time.time() - batch_start
 
             filter_start = time.time()
@@ -4036,6 +4253,7 @@ def get_conversation(user1: str, user2: str, limit: int = 200) -> dict[str, list
 
     with get_connection() as connection:
         _assert_direct_message_access(connection, user1, user2)
+        canonical_admin_id = _resolve_admin_message_user_id(connection)
         query_start = time.time()
         with connection.cursor(row_factory=dict_row) as cursor:
             # Limit must be an integer literal, not parameterized
@@ -4052,6 +4270,38 @@ def get_conversation(user1: str, user2: str, limit: int = 200) -> dict[str, list
                 (user1, user2, user2, user1),
             )
             rows = cursor.fetchall()
+
+            # Older review cards could have been written with an admin ID that
+            # no longer exists in users. Surface those cards in the current
+            # admin conversation and normalize their sender for the client.
+            partner_user_id = ""
+            if user1 == canonical_admin_id:
+                partner_user_id = user2
+            elif user2 == canonical_admin_id:
+                partner_user_id = user1
+
+            if partner_user_id:
+                cursor.execute(
+                    f"""
+                    select messages.id as messages_id, messages.sender_id, messages.recipient_id,
+                           messages.project_id, messages.content, messages.timestamp,
+                           messages.read, messages.attachments
+                    from public.messages as messages
+                    left join users as sender on sender.users_id = messages.sender_id
+                    where messages.recipient_id = %s
+                      and messages.content like '___PROPOSAL_CARD___:%%'
+                      and sender.users_id is null
+                    order by messages.timestamp asc, messages.id asc
+                    limit {limit}
+                    """,
+                    (partner_user_id,),
+                )
+                legacy_rows = cursor.fetchall()
+                for legacy_row in legacy_rows:
+                    legacy_row["sender_id"] = canonical_admin_id
+                rows.extend(legacy_rows)
+                rows.sort(key=lambda row: (row["timestamp"], row["messages_id"]))
+                rows = rows[:limit]
         query_time = time.time() - query_start
         total_time = time.time() - request_start
         if total_time > 2.0:

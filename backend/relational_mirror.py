@@ -872,21 +872,6 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("source_report_ids", False),
         ],
     },
-    "publishedImpactReports": {
-        "table": "reports",
-        "columns": [
-            ("id", False),
-            ("project_id", False),
-            ("generated_by", False),
-            ("generated_at", False),
-            ("report_file", False),
-            ("format", False),
-            ("published_at", False),
-            ("download_content", False),
-            ("download_mime_type", False),
-            ("source_report_ids", False),
-        ],
-    },
     "adminPlanningCalendars": {
         "table": "admin_planning_calendars",
         "columns": [
@@ -1047,16 +1032,6 @@ FIELD_NAME_MAPS: dict[str, dict[str, str]] = {
         "reviewedAt": "reviewed_at",
         "reviewedBy": "reviewed_by",
         "mediaFile": "media_file",
-    },
-    "publishedImpactReports": {
-        "projectId": "project_id",
-        "generatedBy": "generated_by",
-        "generatedAt": "generated_at",
-        "reportFile": "report_file",
-        "downloadContent": "download_content",
-        "downloadMimeType": "download_mime_type",
-        "sourceReportIds": "source_report_ids",
-        "publishedAt": "published_at",
     },
     "adminPlanningCalendars": {
         "planningItems": "planning_items",
@@ -1575,20 +1550,6 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             _normalize_string_list(item.get("sourceReportIds")),
         )
 
-    if key == "publishedImpactReports":
-        return (
-            item.get("id"),
-            item.get("projectId"),
-            item.get("generatedBy"),
-            item.get("generatedAt"),
-            item.get("reportFile"),
-            item.get("format"),
-            item.get("publishedAt"),
-            item.get("downloadContent"),
-            item.get("downloadMimeType"),
-            _normalize_string_list(item.get("sourceReportIds")),
-        )
-
     if key == "adminPlanningCalendars":
         return (
             item.get("id"),
@@ -1632,8 +1593,6 @@ def _row_id(key: str, row: dict[str, Any]) -> Any:
 def _row_filter_clause(key: str) -> str | None:
     if key == "partnerReports":
         return "generated_at is null"
-    if key == "publishedImpactReports":
-        return "generated_at is not null"
     return None
 
 
@@ -1935,20 +1894,6 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "reviewedAt": row["reviewed_at"],
             "reviewedBy": row["reviewed_by"],
             "sourceReportIds": row["source_report_ids"] or [],
-        }
-
-    if key == "publishedImpactReports":
-        return {
-            "id": row_id,
-            "projectId": row["project_id"],
-            "generatedBy": row["generated_by"],
-            "generatedAt": row["generated_at"],
-            "reportFile": row["report_file"],
-            "format": row["format"],
-            "downloadContent": row["download_content"],
-            "downloadMimeType": row["download_mime_type"],
-            "sourceReportIds": row["source_report_ids"] or [],
-            "publishedAt": row["published_at"],
         }
 
     if key == "adminPlanningCalendars":

@@ -51,7 +51,6 @@ const PREFETCH_KEYS_BY_ROLE = {
     'partnerReports',
     'volunteerProjectJoins',
     'partnerProjectApplications',
-    'publishedImpactReports',
     'adminPlanningCalendars',
     'programs',
   ],
@@ -69,7 +68,6 @@ const PREFETCH_KEYS_BY_ROLE = {
     'partners',
     'partnerProjectApplications',
     'partnerReports',
-    'publishedImpactReports',
   ],
 } as const satisfies Record<string, string[]>;
 

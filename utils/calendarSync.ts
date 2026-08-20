@@ -1,6 +1,5 @@
-import { Linking, Alert } from 'react-native';
+import { Linking } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Project } from '../models/types';
 
 export interface CalendarConfig {
   calendarId: string;
@@ -98,36 +97,6 @@ export async function openAddGoogleCalendarEvent({
   } catch (err) {
     console.error('Failed to open Google Calendar template link:', err);
   }
-}
-
-/**
- * Syncs user's schedule of joined/proposed events directly to Google Calendar.
- */
-export async function syncUserScheduleToGoogleCalendar(
-  projects: Project[],
-  roleLabel: 'volunteer' | 'partner' = 'volunteer'
-): Promise<void> {
-  if (!projects || projects.length === 0) {
-    Alert.alert(
-      'No Schedule to Sync',
-      roleLabel === 'volunteer'
-        ? 'You have not joined any project events yet. Join an event first to sync your schedule!'
-        : 'You have no project proposals yet. Submit a proposal first to sync your schedule!'
-    );
-    return;
-  }
-
-  // Pick the upcoming or first project event
-  const targetProject = projects[0];
-  const locationText = typeof targetProject.location === 'string' ? targetProject.location : targetProject.location?.address || '';
-
-  await openAddGoogleCalendarEvent({
-    title: targetProject.title,
-    details: `${roleLabel === 'volunteer' ? 'NVC Volunteer Event' : 'NVC Partner Project'}: ${targetProject.description || targetProject.title}`,
-    location: locationText,
-    startDate: targetProject.startDate,
-    endDate: targetProject.endDate,
-  });
 }
 
 /**

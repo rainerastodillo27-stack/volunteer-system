@@ -18,7 +18,6 @@ CANONICAL_STORAGE_TABLES = {
     "volunteerProjectJoins": "volunteer_event_joins",
     "partnerProjectApplications": "partner_project_applications",
     "partnerReports": "reports",
-    "publishedImpactReports": "reports",
     "adminPlanningCalendars": "admin_planning_calendars",
     "adminPlanningItems": "admin_planning_items",
 }

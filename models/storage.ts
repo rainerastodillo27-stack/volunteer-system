@@ -31,12 +31,10 @@ import {
   ProjectGroupMessage,
   StatusUpdate,
   VolunteerProjectMatch,
-  SectorNeed,
   VolunteerTimeLog,
   PartnerProjectApplication,
   PartnerProjectProposalDetails,
   ProgramTrack,
-  PublishedImpactReport,
   VolunteerProjectJoinRecord,
 } from './types';
 import { NVCSector, UserRole } from './types';
@@ -58,7 +56,6 @@ const STORAGE_KEYS = {
   VOLUNTEER_PROJECT_JOINS: 'volunteerProjectJoins',
   PARTNER_PROJECT_APPLICATIONS: 'partnerProjectApplications',
   PARTNER_REPORTS: 'partnerReports',
-  PUBLISHED_IMPACT_REPORTS: 'publishedImpactReports',
   ADMIN_PLANNING_CALENDARS: 'adminPlanningCalendars',
   ADMIN_PLANNING_ITEMS: 'adminPlanningItems',
   PROGRAM_TRACKS: 'programTracks',
@@ -104,8 +101,8 @@ const API_REQUEST_RETRY_BASE_MS = 800; // Reduced from 1s
 const API_REQUEST_RETRY_MAX_MS = 5000; // Reduced from 8s
 const SHARED_STORAGE_CACHE_TTL_MS = 600000; // Increased from 5m to 10m
 const PROJECTS_SNAPSHOT_CACHE_TTL_MS = 120000; // Increased from 1m to 2m
-const MESSAGES_CACHE_TTL_MS = 30000; // 30s cache for message list — invalidated on send/receive
-const CONVERSATION_CACHE_TTL_MS = 20000; // 20s cache for individual conversations
+const MESSAGES_CACHE_TTL_MS = 3000; // 3s — Firestore handles real-time; short TTL prevents stale proposal cards
+const CONVERSATION_CACHE_TTL_MS = 3000; // 3s — same reason
 const STORAGE_CHANGE_POLL_INTERVAL_MS = 5000; // Increased from 3s to 5s
 const STORAGE_CHANGE_DEBOUNCE_MS = 800; // Increased from 500ms
 const STORAGE_CHANGE_CALLBACK_COOLDOWN_MS = 1500; // Increased from 1s
@@ -573,32 +570,6 @@ async function sendSystemMessage(
   });
 }
 
-const PROPOSAL_CARD_MESSAGE_PREFIX = '___PROPOSAL_CARD___:';
-
-function buildPartnerProposalCardMessageContent(
-  application: PartnerProjectApplication,
-  partnerUser: Pick<User, 'id' | 'name'>,
-  requestedProgramModule?: string | null,
-  extraData?: Record<string, unknown>
-): string {
-  const proposalDetails: Partial<PartnerProjectProposalDetails> = application.proposalDetails || {};
-  return `${PROPOSAL_CARD_MESSAGE_PREFIX}${JSON.stringify({
-    ...proposalDetails,
-    proposedVolunteersNeeded: Number(proposalDetails.proposedVolunteersNeeded) || 0,
-    requestedProgramModule:
-      proposalDetails.requestedProgramModule ||
-      requestedProgramModule ||
-      getProgramModuleFromProposalProjectId(application.projectId) ||
-      undefined,
-    status: application.status || 'Pending',
-    proposedById: partnerUser.id,
-    proposedByName: partnerUser.name,
-    applicationId: application.id,
-    timestamp: application.requestedAt || new Date().toISOString(),
-    ...extraData,
-  })}`;
-}
-
 async function notifyAdminAboutPartnerProjectJoin(
   projectId: string,
   partnerUser: Pick<User, 'id' | 'name' | 'email'>,
@@ -627,9 +598,7 @@ async function notifyAdminAboutPartnerProjectJoin(
   await sendSystemMessage(
     partnerUser.id,
     adminUser.id,
-    application
-      ? buildPartnerProposalCardMessageContent(application, partnerUser, requestedProgramModule)
-      : `${partnerUser.name}${partnerEmail} submitted a project proposal for ${targetLabel}. Review it in the Communication Hub to approve or reject.`
+    `${partnerUser.name}${partnerEmail} submitted a project proposal for ${targetLabel}. Review it in the Communication Hub to approve or reject.`
   );
 
   // Also send a lightweight confirmation back to the partner so they see a record in Messages.
@@ -643,30 +612,6 @@ async function notifyAdminAboutPartnerProjectJoin(
     // Confirmation is best-effort — don't fail the main flow if it errors.
     console.warn('Failed to send partner confirmation message:', err);
   }
-}
-
-async function notifyPartnerAboutProjectJoinReview(
-  application: PartnerProjectApplication,
-  reviewedBy: string
-): Promise<void> {
-  const requestedProgramModule = getProgramModuleFromProposalProjectId(application.projectId);
-  const reviewNotes = (application as any).reviewNotes;
-
-  await sendSystemMessage(
-    reviewedBy,
-    application.partnerUserId,
-    buildPartnerProposalCardMessageContent(
-      application,
-      { id: application.partnerUserId, name: application.partnerName },
-      requestedProgramModule,
-      {
-        reviewedBy,
-        reviewedAt: application.reviewedAt || new Date().toISOString(),
-        reviewNotes: reviewNotes || null,
-        projectId: application.projectId,
-      }
-    )
-  );
 }
 
 async function notifyAdminAboutVolunteerProjectJoinRequest(
@@ -1042,7 +987,6 @@ async function fetchRemoteStorageItems(
     'volunteerProjectJoins',
     'partnerProjectApplications',
     'partnerReports',
-    'publishedImpactReports',
   ];
   const sortedKeys = [...keys].sort();
   const sortedAdminKeys = [...adminDashboardKeys].sort();
@@ -1665,7 +1609,6 @@ export async function getDashboardSnapshot(): Promise<{
   volunteerProjectJoins: VolunteerProjectJoinRecord[];
   partnerProjectApplications: PartnerProjectApplication[];
   partnerReports: PartnerReport[];
-  publishedImpactReports: PublishedImpactReport[];
   adminPlanningCalendars: AdminPlanningCalendar[];
   adminPlanningItems: AdminPlanningItem[];
 }> {
@@ -1687,7 +1630,6 @@ export async function getDashboardSnapshot(): Promise<{
     STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
     STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
     STORAGE_KEYS.PARTNER_REPORTS,
-    STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS,
   ]);
 
   const partners = ((allItems[STORAGE_KEYS.PARTNERS] as Partner[] | null) || [])
@@ -1717,7 +1659,6 @@ export async function getDashboardSnapshot(): Promise<{
     volunteerProjectJoins: (allItems[STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS] as VolunteerProjectJoinRecord[] | null) || [],
     partnerProjectApplications: (allItems[STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS] as PartnerProjectApplication[] | null) || [],
     partnerReports: (allItems[STORAGE_KEYS.PARTNER_REPORTS] as PartnerReport[] | null) || [],
-    publishedImpactReports: (allItems[STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS] as PublishedImpactReport[] | null) || [],
     adminPlanningCalendars: (allItems[STORAGE_KEYS.ADMIN_PLANNING_CALENDARS] as AdminPlanningCalendar[] | null) || [],
     adminPlanningItems: collectPlanningItemsFromCalendars(
       (allItems[STORAGE_KEYS.ADMIN_PLANNING_CALENDARS] as AdminPlanningCalendar[] | null) || []
@@ -1738,7 +1679,6 @@ export async function getPartnerDashboardSnapshot(): Promise<{
   statusUpdates: StatusUpdate[];
   partnerApplications: PartnerProjectApplication[];
   partnerReports: PartnerReport[];
-  publishedImpactReports: PublishedImpactReport[];
   volunteerMatches: VolunteerProjectMatch[];
   volunteerTimeLogs: VolunteerTimeLog[];
   volunteerProjectJoins: VolunteerProjectJoinRecord[];
@@ -1759,7 +1699,6 @@ export async function getPartnerDashboardSnapshot(): Promise<{
     STORAGE_KEYS.STATUS_UPDATES,
     STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
     STORAGE_KEYS.PARTNER_REPORTS,
-    STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS,
     STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
   ]);
 
@@ -1874,8 +1813,6 @@ export async function getPartnerDashboardSnapshot(): Promise<{
     statusUpdates: (coreItems[STORAGE_KEYS.STATUS_UPDATES] as StatusUpdate[] | null) || [],
     partnerApplications,
     partnerReports: (coreItems[STORAGE_KEYS.PARTNER_REPORTS] as PartnerReport[] | null) || [],
-    publishedImpactReports:
-      (coreItems[STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS] as PublishedImpactReport[] | null) || [],
     volunteerMatches: (supplementalItems[STORAGE_KEYS.VOLUNTEER_MATCHES] as VolunteerProjectMatch[] | null) || [],
     volunteerTimeLogs: (supplementalItems[STORAGE_KEYS.VOLUNTEER_TIME_LOGS] as VolunteerTimeLog[] | null) || [],
     volunteerProjectJoins: (supplementalItems[STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS] as VolunteerProjectJoinRecord[] | null) || [],
@@ -1914,7 +1851,6 @@ export async function getDashboardTimelineSnapshot(): Promise<DashboardTimelineS
           STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
           STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
           STORAGE_KEYS.PARTNER_REPORTS,
-          STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS,
         ]);
       } catch (error) {
         console.warn('Supplemental timeline data failed to load (non-blocking):', error);
@@ -2173,7 +2109,6 @@ export async function deleteProgram(programId: string): Promise<void> {
     statusUpdates,
     partnerApplications,
     partnerReports,
-    publishedImpactReports,
     volunteerJoinRecords,
     volunteerMatches,
     volunteerTimeLogs,
@@ -2184,7 +2119,6 @@ export async function deleteProgram(programId: string): Promise<void> {
     getStorageItem<StatusUpdate[]>(STORAGE_KEYS.STATUS_UPDATES),
     getStorageItem<PartnerProjectApplication[]>(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS),
     getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS),
-    getStorageItem<PublishedImpactReport[]>(STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS),
     getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS),
     getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES),
     getStorageItem<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS),
@@ -2218,10 +2152,6 @@ export async function deleteProgram(programId: string): Promise<void> {
     setStorageItem(
       STORAGE_KEYS.PARTNER_REPORTS,
       (partnerReports || []).filter(r => !allRemovalIds.has(r.projectId))
-    ),
-    setStorageItem(
-      STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS,
-      (publishedImpactReports || []).filter(r => !allRemovalIds.has(r.projectId))
     ),
     setStorageItem(
       STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
@@ -2258,7 +2188,6 @@ export async function deleteProgram(programId: string): Promise<void> {
     STORAGE_KEYS.STATUS_UPDATES,
     STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
     STORAGE_KEYS.PARTNER_REPORTS,
-    STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS,
     STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
     STORAGE_KEYS.VOLUNTEER_MATCHES,
     STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
@@ -3495,7 +3424,6 @@ export async function deletePartner(partnerId: string): Promise<void> {
     STORAGE_KEYS.STATUS_UPDATES,
     STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
     STORAGE_KEYS.PARTNER_REPORTS,
-    STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS,
     STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
     STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
     STORAGE_KEYS.PROJECT_GROUP_MESSAGES,
@@ -3507,7 +3435,6 @@ export async function deletePartner(partnerId: string): Promise<void> {
     STORAGE_KEYS.STATUS_UPDATES,
     STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
     STORAGE_KEYS.PARTNER_REPORTS,
-    STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS,
     STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
     STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
     STORAGE_KEYS.PROJECT_GROUP_MESSAGES,
@@ -3655,7 +3582,6 @@ export async function deleteProject(projectId: string): Promise<void> {
     statusUpdates,
     partnerApplications,
     partnerReports,
-    publishedImpactReports,
     volunteerJoinRecords,
     volunteerMatches,
     volunteerTimeLogs,
@@ -3670,7 +3596,6 @@ export async function deleteProject(projectId: string): Promise<void> {
       getStorageItem<StatusUpdate[]>(STORAGE_KEYS.STATUS_UPDATES),
       getStorageItem<PartnerProjectApplication[]>(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS),
       getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS),
-      getStorageItem<PublishedImpactReport[]>(STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS),
       getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS),
       getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES),
       getStorageItem<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS),
@@ -3712,10 +3637,6 @@ export async function deleteProject(projectId: string): Promise<void> {
       (partnerReports || []).filter(report => !relatedProjectIds.has(report.projectId))
     ),
     setStorageItem(
-      STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS,
-      (publishedImpactReports || []).filter(report => !relatedProjectIds.has(report.projectId))
-    ),
-    setStorageItem(
       STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
       (volunteerJoinRecords || []).filter(record => !relatedProjectIds.has(record.projectId))
     ),
@@ -3747,7 +3668,6 @@ export async function deleteProject(projectId: string): Promise<void> {
     STORAGE_KEYS.STATUS_UPDATES,
     STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
     STORAGE_KEYS.PARTNER_REPORTS,
-    STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS,
     STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
     STORAGE_KEYS.VOLUNTEER_MATCHES,
     STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
@@ -3762,7 +3682,6 @@ export async function deleteProject(projectId: string): Promise<void> {
     STORAGE_KEYS.STATUS_UPDATES,
     STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
     STORAGE_KEYS.PARTNER_REPORTS,
-    STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS,
     STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
     STORAGE_KEYS.VOLUNTEER_MATCHES,
     STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
@@ -3780,7 +3699,6 @@ export async function deleteEvent(eventId: string): Promise<void> {
     statusUpdates,
     partnerApplications,
     partnerReports,
-    publishedImpactReports,
     volunteerJoinRecords,
     volunteerMatches,
     volunteerTimeLogs,
@@ -3794,7 +3712,6 @@ export async function deleteEvent(eventId: string): Promise<void> {
       getStorageItem<StatusUpdate[]>(STORAGE_KEYS.STATUS_UPDATES),
       getStorageItem<PartnerProjectApplication[]>(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS),
       getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS),
-      getStorageItem<PublishedImpactReport[]>(STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS),
       getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS),
       getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES),
       getStorageItem<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS),
@@ -3824,10 +3741,6 @@ export async function deleteEvent(eventId: string): Promise<void> {
     setStorageItem(
       STORAGE_KEYS.PARTNER_REPORTS,
       (partnerReports || []).filter(report => !relatedEventIds.has(report.projectId))
-    ),
-    setStorageItem(
-      STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS,
-      (publishedImpactReports || []).filter(report => !relatedEventIds.has(report.projectId))
     ),
     setStorageItem(
       STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
@@ -3860,7 +3773,6 @@ export async function deleteEvent(eventId: string): Promise<void> {
     STORAGE_KEYS.STATUS_UPDATES,
     STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
     STORAGE_KEYS.PARTNER_REPORTS,
-    STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS,
     STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
     STORAGE_KEYS.VOLUNTEER_MATCHES,
     STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
@@ -3874,7 +3786,6 @@ export async function deleteEvent(eventId: string): Promise<void> {
     STORAGE_KEYS.STATUS_UPDATES,
     STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
     STORAGE_KEYS.PARTNER_REPORTS,
-    STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS,
     STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
     STORAGE_KEYS.VOLUNTEER_MATCHES,
     STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
@@ -4362,7 +4273,7 @@ export async function getConversation(userId1: string, userId2: string): Promise
     return cached.data;
   }
   const payload = await requestApiJson<{ messages?: Message[] }>(
-    `/messages/conversation?user1=${encodeURIComponent(userId1)}&user2=${encodeURIComponent(userId2)}&limit=10000`
+    `/messages/conversation?user1=${encodeURIComponent(userId1)}&user2=${encodeURIComponent(userId2)}&limit=500`
   );
   const messages = payload.messages || [];
   conversationCache.set(cacheKey, { data: messages, timestamp: Date.now() });
@@ -5120,16 +5031,6 @@ export async function submitPartnerProgramProposal(
 
   await updatePartnerProjectApplicationCache(payload.application);
 
-  // Notify admin (and confirm to partner) about the new proposal.
-  // Send messages asynchronously so proposal submission returns promptly.
-  void notifyAdminAboutPartnerProjectJoin(payload.application.projectId, {
-    id: partnerUser.id,
-    name: partnerUser.name,
-    email: partnerUser.email || '',
-  }, payload.application).catch(error => {
-    console.warn('Failed to notify admin about partner proposal:', error);
-  });
-
   return payload.application;
 }
 
@@ -5174,9 +5075,6 @@ export async function reviewPartnerProjectApplication(
   if (payload.project) {
     await updateApprovedProposalProjectCache(payload.project);
   }
-
-  // Send notification card back to partner with review result
-  void notifyPartnerAboutProjectJoinReview(payload.application, reviewedBy);
 
   return payload.application;
 }
@@ -5597,246 +5495,6 @@ export async function reviewPartnerReport(
   return updatedReport;
 }
 
-// Saves one generated impact file entry.
-export async function savePublishedImpactReport(report: PublishedImpactReport): Promise<void> {
-  const reports =
-    await getStorageItem<PublishedImpactReport[]>(STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS) || [];
-  const existingIndex = reports.findIndex(entry => entry.id === report.id);
-  if (existingIndex >= 0) {
-    reports[existingIndex] = report;
-  } else {
-    reports.push(report);
-  }
-  await setStorageItem(STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS, reports);
-}
-
-// Returns generated impact files for a specific project.
-export async function getPublishedImpactReportsByProject(
-  projectId: string
-): Promise<PublishedImpactReport[]> {
-  const reports =
-    await getStorageItem<PublishedImpactReport[]>(STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS) || [];
-  return reports
-    .filter(report => report.projectId === projectId)
-    .sort((a, b) => new Date(b.generatedAt).getTime() - new Date(a.generatedAt).getTime());
-}
-
-// Returns every generated impact file regardless of partner visibility.
-export async function getAllPublishedImpactReports(): Promise<PublishedImpactReport[]> {
-  const reports =
-    await getStorageItem<PublishedImpactReport[]>(STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS) || [];
-  return reports.sort((a, b) => new Date(b.generatedAt).getTime() - new Date(a.generatedAt).getTime());
-}
-
-// Returns only partner-visible impact files for the owning partner user.
-export async function getPublishedImpactReportsByPartnerUser(
-  partnerUserId: string
-): Promise<PublishedImpactReport[]> {
-  const [reports, projects, partnerApplications] = await Promise.all([
-    getStorageItem<PublishedImpactReport[]>(STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS),
-    getAllProjects(),
-    getPartnerProjectApplicationsByUser(partnerUserId),
-  ]);
-
-  const approvedApplicationProjectIds = new Set(
-    partnerApplications
-      .filter(application => application.status === 'Approved')
-      .map(application => application.projectId)
-  );
-  const allowedProjectIds = new Set(
-    projects
-      .filter(project => approvedApplicationProjectIds.has(project.id))
-      .map(project => project.id)
-  );
-
-  return (reports || [])
-    .filter(report => Boolean(report.publishedAt) && allowedProjectIds.has(report.projectId))
-    .sort((a, b) => new Date(b.generatedAt).getTime() - new Date(a.generatedAt).getTime());
-}
-
-function formatMetricLabel(metricKey: string): string {
-  return metricKey
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, character => character.toUpperCase());
-}
-
-function escapeCsvValue(value: string | number | undefined): string {
-  const text = String(value ?? '').replace(/"/g, '""');
-  return `"${text}"`;
-}
-
-function buildGeneratedImpactTextReport(project: Project, reports: PartnerReport[]): string {
-  const totals = reports.reduce<Record<string, number>>((accumulator, report) => {
-    Object.entries(report.metrics || {}).forEach(([key, value]) => {
-      if (typeof value === 'number') {
-        accumulator[key] = (accumulator[key] || 0) + value;
-      }
-    });
-    return accumulator;
-  }, {});
-
-  const volunteerCount = reports.filter(report => report.submitterRole === 'volunteer').length;
-  const partnerCount = reports.filter(report => report.submitterRole === 'partner').length;
-  const totalImpact = reports.reduce((sum, report) => sum + (report.impactCount || 0), 0);
-  const metricLines = Object.entries(totals)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => `- ${formatMetricLabel(key)}: ${value}`);
-
-  const reportDetails = reports.map((report, index) => {
-    const metricSummary = Object.entries(report.metrics || {})
-      .filter(([, value]) => typeof value === 'number')
-      .map(([key, value]) => `${formatMetricLabel(key)}=${value}`)
-      .join(', ');
-
-    return [
-      `${index + 1}. ${report.title || `${report.submitterName || report.partnerName || 'User'} Report`}`,
-      `   Submitted by: ${report.submitterName || report.partnerName || 'User'} (${report.submitterRole || 'partner'})`,
-      `   Type: ${report.reportType}`,
-      `   Date: ${new Date(report.createdAt).toLocaleString()}`,
-      `   Impact Count: ${report.impactCount || 0}`,
-      `   Description: ${report.description || 'No description provided.'}`,
-      `   Metrics: ${metricSummary || 'No numeric metrics submitted.'}`,
-      `   Media: ${report.mediaFile || 'No media attached.'}`,
-    ].join('\n');
-  });
-
-  return [
-    'Volunteer System Impact Summary',
-    `Project: ${project.title}`,
-    `Category: ${project.category}`,
-    `Status: ${project.status}`,
-    `Location: ${project.location}`,
-    `Schedule: ${project.startDate} to ${project.endDate}`,
-    `Generated: ${new Date().toLocaleString()}`,
-    '',
-    'Submission Summary',
-    `- Total Submitted Reports: ${reports.length}`,
-    `- Volunteer Reports: ${volunteerCount}`,
-    `- Partner Reports: ${partnerCount}`,
-    `- Total Impact Count: ${totalImpact}`,
-    ...(metricLines.length > 0 ? ['', 'Metric Totals', ...metricLines] : ['', 'Metric Totals', '- No numeric metrics submitted.']),
-    '',
-    'Submitted Report Details',
-    ...(reportDetails.length > 0 ? reportDetails : ['No reports have been submitted for this project yet.']),
-  ].join('\n');
-}
-
-function buildGeneratedImpactCsvReport(project: Project, reports: PartnerReport[]): string {
-  const headers = [
-    'Project',
-    'Project Status',
-    'Title',
-    'Submitter Name',
-    'Submitter Role',
-    'Report Type',
-    'Submitted At',
-    'Impact Count',
-    'Description',
-    'Metrics',
-    'Media File',
-  ];
-
-  const rows = reports.map(report => {
-    const metricSummary = Object.entries(report.metrics || {})
-      .filter(([, value]) => typeof value === 'number')
-      .map(([key, value]) => `${formatMetricLabel(key)}=${value}`)
-      .join('; ');
-
-    return [
-      project.title,
-      project.status,
-      report.title || `${report.submitterName || report.partnerName || 'User'} Report`,
-      report.submitterName || report.partnerName || 'User',
-      report.submitterRole || 'partner',
-      report.reportType,
-      report.createdAt,
-      report.impactCount || 0,
-      report.description || '',
-      metricSummary,
-      report.mediaFile || '',
-    ]
-      .map(escapeCsvValue)
-      .join(',');
-  });
-
-  return [headers.map(escapeCsvValue).join(','), ...rows].join('\n');
-}
-
-// Generates readable text and spreadsheet exports from submitted project reports.
-export async function generateFinalImpactReports(
-  projectId: string,
-  generatedBy: string
-): Promise<PublishedImpactReport[]> {
-  const project = await getProject(projectId);
-  if (!project) {
-    throw new Error('Project not found.');
-  }
-
-  const submittedReports =
-    (await getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [])
-      .filter(report => report.projectId === projectId)
-      .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
-
-  const timestamp = Date.now();
-  const slug = project.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  const generatedAt = new Date().toISOString();
-  const reports: PublishedImpactReport[] = [
-    {
-      id: `impact-${projectId}-pdf-${timestamp}`,
-      projectId,
-      generatedBy,
-      generatedAt,
-      reportFile: `${slug || 'project'}-impact-report-${timestamp}.pdf`,
-      format: 'PDF',
-      downloadContent: buildGeneratedImpactTextReport(project, submittedReports),
-      downloadMimeType: 'text/plain;charset=utf-8;',
-      sourceReportIds: submittedReports.map(report => report.id),
-    },
-    {
-      id: `impact-${projectId}-excel-${timestamp}`,
-      projectId,
-      generatedBy,
-      generatedAt,
-      reportFile: `${slug || 'project'}-impact-report-${timestamp}.xlsx`,
-      format: 'Excel',
-      downloadContent: buildGeneratedImpactCsvReport(project, submittedReports),
-      downloadMimeType: 'text/csv;charset=utf-8;',
-      sourceReportIds: submittedReports.map(report => report.id),
-    },
-  ];
-
-  const existingReports =
-    await getStorageItem<PublishedImpactReport[]>(STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS) || [];
-  const nextReports = existingReports.filter(
-    report =>
-      report.projectId !== projectId ||
-      Boolean(report.publishedAt) ||
-      !reports.some(generatedReport => generatedReport.format === report.format)
-  );
-  await setStorageItem(STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS, [...nextReports, ...reports]);
-
-  return reports;
-}
-
-// Publishes a generated impact file to the partner portal.
-export async function publishImpactReport(reportId: string): Promise<PublishedImpactReport> {
-  const reports =
-    await getStorageItem<PublishedImpactReport[]>(STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS) || [];
-  const reportIndex = reports.findIndex(report => report.id === reportId);
-  if (reportIndex === -1) {
-    throw new Error('Generated impact report not found.');
-  }
-
-  const updatedReport: PublishedImpactReport = {
-    ...reports[reportIndex],
-    publishedAt: new Date().toISOString(),
-  };
-  reports[reportIndex] = updatedReport;
-  await setStorageItem(STORAGE_KEYS.PUBLISHED_IMPACT_REPORTS, reports);
-  return updatedReport;
-}
-
 // Adds a user directly to an event once access has been approved.
 export async function joinProjectEvent(
   projectId: string,
@@ -5861,11 +5519,6 @@ export async function joinProjectEvent(
     project: payload.project,
     volunteerProfile: payload.volunteerProfile || null,
   };
-}
-
-// Returns the static sector-need cards shown in partner dashboards.
-export async function getSectorNeeds(): Promise<SectorNeed[]> {
-  return [];
 }
 
 // Clear all storage (for testing/logout)

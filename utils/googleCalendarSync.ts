@@ -308,20 +308,3 @@ export async function sendGoogleCalendarSyncEmail({
     console.error('Failed to send Google Calendar sync email:', error);
   });
 }
-
-// ─── Token Validation ─────────────────────────────────────────────────────────
-
-/**
- * Quick check to verify an access token is still valid by calling the
- * Google tokeninfo endpoint. Returns true if valid, false otherwise.
- */
-export async function validateGoogleToken(accessToken: string): Promise<boolean> {
-  try {
-    const response = await fetch(
-      `https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${encodeURIComponent(accessToken)}`
-    );
-    return response.ok;
-  } catch {
-    return false;
-  }
-}

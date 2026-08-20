@@ -137,6 +137,8 @@ type DemoLoginAccount = {
   mobileRole?: MobileEntryRole;
 };
 
+type RegistrationOtpPhase = "idle" | "sent" | "verified";
+
 const ADMIN_DEMO_ACCOUNT: DemoLoginAccount = {
   id: "demo-admin",
   name: "Admin Account",
@@ -235,6 +237,10 @@ function normalizePhoneInput(value: string): string {
 
 function normalizeLoginPhone(value?: string): string {
   return (value || "").replace(/\D/g, "");
+}
+
+function normalizeEmailInput(value: string): string {
+  return value.trim().toLowerCase();
 }
 
 function getUserNotFoundDisplay(): { title: string; message: string } {
@@ -435,6 +441,13 @@ export default function LoginScreen() {
   } | null>(null);
   const [signupName, setSignupName] = useState("");
   const [signupEmail, setSignupEmail] = useState("");
+  const [signupEmailForOtp, setSignupEmailForOtp] = useState("");
+  const [signupOtpCode, setSignupOtpCode] = useState("");
+  const [signupOtpPhase, setSignupOtpPhase] =
+    useState<RegistrationOtpPhase>("idle");
+  const [signupOtpLoading, setSignupOtpLoading] = useState(false);
+  const [signupOtpAction, setSignupOtpAction] =
+    useState<"send" | "verify" | null>(null);
   const [signupAccountPhone, setSignupAccountPhone] = useState("");
   const [signupPassword, setSignupPassword] = useState("");
   const [signupUserType, setSignupUserType] = useState<UserType>("Student");
@@ -982,6 +995,11 @@ export default function LoginScreen() {
   const resetSignupForm = () => {
     setSignupName("");
     setSignupEmail("");
+    setSignupEmailForOtp("");
+    setSignupOtpCode("");
+    setSignupOtpPhase("idle");
+    setSignupOtpLoading(false);
+    setSignupOtpAction(null);
     setSignupAccountPhone("");
     setSignupPassword("");
     setSignupUserType("Student");
@@ -1036,6 +1054,19 @@ export default function LoginScreen() {
     if (!options?.preserveCredentials) {
       setIdentifier("");
       setPassword("");
+    }
+  };
+
+  const updateSignupEmail = (value: string) => {
+    setSignupEmail(value);
+    setSignupValidationError(null);
+    const normalizedEmail = normalizeEmailInput(value);
+    if (
+      signupOtpPhase !== "idle" &&
+      normalizedEmail !== normalizeEmailInput(signupEmailForOtp)
+    ) {
+      setSignupOtpCode("");
+      setSignupOtpPhase("idle");
     }
   };
 
@@ -1156,6 +1187,111 @@ export default function LoginScreen() {
     setSignupPartnerApplication((current) => ({ ...current, [key]: value }));
   };
 
+  const requestSignupEmailVerificationCode = async () => {
+    const email = normalizeEmailInput(signupEmail);
+    setSignupValidationError(null);
+
+    if (!email || !email.includes("@")) {
+      const errorMsg = "Enter a valid email address before requesting a verification code.";
+      setSignupValidationError(errorMsg);
+      Alert.alert("Validation Error", errorMsg);
+      return;
+    }
+
+    try {
+      setSignupOtpLoading(true);
+      setSignupOtpAction("send");
+      const response = await fetch(`${getApiBaseUrl()}/auth/registration-otp/send`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ email }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        detail?: string;
+        message?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(payload.detail || "Unable to send verification code.");
+      }
+
+      setSignupEmailForOtp(email);
+      setSignupOtpCode("");
+      setSignupOtpPhase("sent");
+      Alert.alert("Verification Code Sent", payload.message || "Check your email inbox for the 6-digit code.");
+    } catch (error) {
+      const errMsg = getRequestErrorMessage(error, "Unable to send verification code.", {
+        backendUrl: getApiBaseUrl(),
+      });
+      setSignupValidationError(errMsg);
+      Alert.alert("Verification Error", errMsg);
+    } finally {
+      setSignupOtpLoading(false);
+      setSignupOtpAction(null);
+    }
+  };
+
+  const verifySignupEmailCode = async () => {
+    const email = normalizeEmailInput(signupEmail);
+    const otp = signupOtpCode.trim();
+    setSignupValidationError(null);
+
+    if (!email || !email.includes("@")) {
+      const errorMsg = "Enter the email address that received the code.";
+      setSignupValidationError(errorMsg);
+      Alert.alert("Validation Error", errorMsg);
+      return;
+    }
+
+    if (email !== normalizeEmailInput(signupEmailForOtp)) {
+      const errorMsg = "Request a new verification code for this email address.";
+      setSignupValidationError(errorMsg);
+      Alert.alert("Validation Error", errorMsg);
+      return;
+    }
+
+    if (!/^\d{6}$/.test(otp)) {
+      const errorMsg = "Enter the 6-digit verification code sent to your email.";
+      setSignupValidationError(errorMsg);
+      Alert.alert("Validation Error", errorMsg);
+      return;
+    }
+
+    try {
+      setSignupOtpLoading(true);
+      setSignupOtpAction("verify");
+      const response = await fetch(`${getApiBaseUrl()}/auth/registration-otp/verify`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ email, otp }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        detail?: string;
+        message?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(payload.detail || "Unable to verify email code.");
+      }
+
+      setSignupOtpPhase("verified");
+      Alert.alert("Email Verified", payload.message || "Your email address has been verified.");
+    } catch (error) {
+      const errMsg = getRequestErrorMessage(error, "Unable to verify email code.", {
+        backendUrl: getApiBaseUrl(),
+      });
+      setSignupValidationError(errMsg);
+      Alert.alert("Verification Error", errMsg);
+    } finally {
+      setSignupOtpLoading(false);
+      setSignupOtpAction(null);
+    }
+  };
+
   // Validates and creates a new volunteer or partner account.
   const handleSignup = async () => {
     setSignupValidationError(null);
@@ -1191,6 +1327,13 @@ export default function LoginScreen() {
       return;
     }
 
+    if (signupRole !== "admin" && !signupEmail.trim()) {
+      const errorMsg = "Email verification is required for volunteer and partner registration.";
+      setSignupValidationError(errorMsg);
+      Alert.alert("Validation Error", errorMsg);
+      return;
+    }
+
     if (!signupEmail.trim() && !signupAccountPhone.trim()) {
       const errorMsg = "Please provide an email or phone number.";
       setSignupValidationError(errorMsg);
@@ -1205,12 +1348,38 @@ export default function LoginScreen() {
       return;
     }
 
+    if (
+      signupRole !== "admin" &&
+      (signupOtpPhase !== "verified" ||
+        normalizeEmailInput(signupEmail) !== normalizeEmailInput(signupEmailForOtp))
+    ) {
+      const errorMsg = "Verify your email address with the 6-digit code before submitting.";
+      setSignupValidationError(errorMsg);
+      Alert.alert("Validation Error", errorMsg);
+      return;
+    }
+
     if (signupRole === "partner") {
       if (!signupPartnerApplication.organizationName.trim()) {
         const errorMsg = "Organization name is required.";
         setSignupValidationError(errorMsg);
         Alert.alert("Validation Error", errorMsg);
         return;
+      }
+
+      if (signupPartnerApplication.dswdAccreditationNo.trim()) {
+        const dswdValidation = await validateDswdAccreditationNo(
+          signupPartnerApplication.dswdAccreditationNo,
+        );
+        if (!dswdValidation.valid) {
+          const reason =
+            dswdValidation.reason === "Invalid format"
+              ? "Use a valid DSWD accreditation format with at least 6 letters, numbers, dashes, or slashes."
+              : dswdValidation.reason || "The DSWD accreditation number could not be verified.";
+          setSignupValidationError(reason);
+          Alert.alert("Validation Error", reason);
+          return;
+        }
       }
 
       if (signupPartnerApplication.advocacyFocus.length === 0) {
@@ -1408,6 +1577,95 @@ export default function LoginScreen() {
     : selectedMobileRole
       ? `${selectedMobileRoleLabel} Quick Sign In`
       : "Quick Demo Sign In";
+
+  const renderSignupEmailVerificationControls = () => {
+    if (signupRole === "admin") {
+      return null;
+    }
+
+    const normalizedEmail = normalizeEmailInput(signupEmail);
+    const isVerified =
+      signupOtpPhase === "verified" &&
+      normalizedEmail === normalizeEmailInput(signupEmailForOtp);
+    const canRequestCode =
+      Boolean(normalizedEmail) &&
+      normalizedEmail.includes("@") &&
+      !signupLoading &&
+      !signupOtpLoading;
+    const canVerifyCode =
+      signupOtpPhase === "sent" &&
+      /^\d{6}$/.test(signupOtpCode.trim()) &&
+      !signupLoading &&
+      !signupOtpLoading;
+
+    return (
+      <View style={styles.emailVerificationCard}>
+        <View style={styles.emailVerificationHeader}>
+          <MaterialIcons
+            name={isVerified ? "verified" : "mark-email-unread"}
+            size={18}
+            color={isVerified ? "#166534" : "#475569"}
+          />
+          <Text style={styles.emailVerificationTitle}>
+            {isVerified ? "Email Verified" : "Email Verification Required"}
+          </Text>
+        </View>
+        <Text style={styles.emailVerificationText}>
+          {isVerified
+            ? `Verified ${signupEmailForOtp}.`
+            : "Send a 6-digit code to this email and verify it before submitting."}
+        </Text>
+        {!isVerified ? (
+          <>
+            <View style={styles.emailVerificationActions}>
+              <TextInput
+                style={[styles.input, styles.otpInput]}
+                placeholder="6-digit code"
+                placeholderTextColor="#999"
+                keyboardType="number-pad"
+                maxLength={6}
+                value={signupOtpCode}
+                onChangeText={(value) =>
+                  setSignupOtpCode(value.replace(/\D/g, "").slice(0, 6))
+                }
+                editable={!signupLoading && !signupOtpLoading && signupOtpPhase === "sent"}
+              />
+              <TouchableOpacity
+                style={[
+                  styles.otpActionButton,
+                  (!canVerifyCode || signupOtpLoading) && styles.buttonDisabled,
+                ]}
+                onPress={verifySignupEmailCode}
+                disabled={!canVerifyCode || signupOtpLoading}
+              >
+                {signupOtpLoading && signupOtpAction === "verify" ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.otpActionButtonText}>Verify</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity
+              style={[
+                styles.otpSendButton,
+                (!canRequestCode || signupOtpLoading) && styles.otpSendButtonDisabled,
+              ]}
+              onPress={requestSignupEmailVerificationCode}
+              disabled={!canRequestCode || signupOtpLoading}
+            >
+              {signupOtpLoading && signupOtpAction === "send" ? (
+                <ActivityIndicator color="#166534" />
+              ) : (
+                <Text style={styles.otpSendButtonText}>
+                  {signupOtpPhase === "sent" ? "Resend Verification Code" : "Send Verification Code"}
+                </Text>
+              )}
+            </TouchableOpacity>
+          </>
+        ) : null}
+      </View>
+    );
+  };
 
   const renderQuickLoginSection = () => (
     <View style={styles.demoSection}>
@@ -1651,30 +1909,6 @@ export default function LoginScreen() {
 
                 {/* Login Card Form */}
                 <View style={styles.loginBoxCard}>
-                  {/* Continue with Google */}
-                  <TouchableOpacity
-                    style={styles.googleLoginButton}
-                    onPress={() => {
-                      Alert.alert(
-                        "Google Sign-In",
-                        "Google Sign-In is configured for mobile builds. Please use your credentials or quick demo logins below."
-                      );
-                    }}
-                    activeOpacity={0.85}
-                  >
-                    <View style={styles.googleGIcon}>
-                      <Text style={styles.googleGText}>G</Text>
-                    </View>
-                    <Text style={styles.googleLoginButtonText}>Continue with Google</Text>
-                  </TouchableOpacity>
-
-                  {/* OR Divider */}
-                  <View style={styles.loginOrDivider}>
-                    <View style={styles.loginDividerLine} />
-                    <Text style={styles.loginDividerText}>OR</Text>
-                    <View style={styles.loginDividerLine} />
-                  </View>
-
                   {/* Email / Username field */}
                   <View style={styles.inputFieldGroup}>
                     <Text style={styles.inputFieldLabel}>Email</Text>
@@ -2172,21 +2406,20 @@ export default function LoginScreen() {
                             ))}
                           </View>
 
-                          {signupPartnerApplication.sectorType === "NGO" && (
-                            <TextInput
-                              style={styles.input}
-                              placeholder="DSWD Accreditation No. (Optional)"
-                              placeholderTextColor="#999"
-                              value={signupPartnerApplication.dswdAccreditationNo}
-                              onChangeText={(value) =>
-                                updateSignupPartnerApplication(
-                                  "dswdAccreditationNo",
-                                  value,
-                                )
-                              }
-                              editable={!signupLoading}
-                            />
-                          )}
+                          <TextInput
+                            style={styles.input}
+                            placeholder="DSWD Accreditation No. (Optional)"
+                            placeholderTextColor="#999"
+                            value={signupPartnerApplication.dswdAccreditationNo}
+                            onChangeText={(value) =>
+                              updateSignupPartnerApplication(
+                                "dswdAccreditationNo",
+                                value.trim().toUpperCase(),
+                              )
+                            }
+                            editable={!signupLoading}
+                            autoCapitalize="characters"
+                          />
 
                           <TextInput
                             style={styles.input}
@@ -2255,9 +2488,10 @@ export default function LoginScreen() {
                             keyboardType="email-address"
                             autoCapitalize="none"
                             value={signupEmail}
-                            onChangeText={setSignupEmail}
+                            onChangeText={updateSignupEmail}
                             editable={!signupLoading}
                           />
+                          {renderSignupEmailVerificationControls()}
                           <TextInput
                             style={styles.input}
                             placeholder="Phone Number (e.g. 09171234567)"
@@ -2299,9 +2533,10 @@ export default function LoginScreen() {
                             keyboardType="email-address"
                             autoCapitalize="none"
                             value={signupEmail}
-                            onChangeText={setSignupEmail}
+                            onChangeText={updateSignupEmail}
                             editable={!signupLoading}
                           />
+                          {renderSignupEmailVerificationControls()}
                           <TextInput
                             style={styles.input}
                             placeholder="Phone Number (e.g. 09171234567)"
@@ -3545,54 +3780,6 @@ const styles = StyleSheet.create({
     elevation: 2,
     marginBottom: 16,
   },
-  googleLoginButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
-    height: 48,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-    backgroundColor: "#ffffff",
-  },
-  googleGIcon: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: "#ea4335",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  googleGText: {
-    color: "#ffffff",
-    fontSize: 12,
-    fontWeight: "900",
-    fontFamily: "'Nunito', sans-serif",
-  },
-  googleLoginButtonText: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: "#166534",
-    fontFamily: "'Nunito', sans-serif",
-  },
-  loginOrDivider: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginVertical: 18,
-    gap: 12,
-  },
-  loginDividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: "#e2e8f0",
-  },
-  loginDividerText: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: "#94a3b8",
-    fontFamily: "'Nunito', sans-serif",
-  },
   inputFieldGroup: {
     marginBottom: 16,
   },
@@ -3797,6 +3984,78 @@ const styles = StyleSheet.create({
     borderColor: "#ddd",
     fontSize: 16,
     minHeight: 54,
+  },
+  emailVerificationCard: {
+    borderWidth: 1,
+    borderColor: "#bbf7d0",
+    backgroundColor: "#f0fdf4",
+    borderRadius: 12,
+    padding: 12,
+    marginTop: -4,
+    marginBottom: 15,
+  },
+  emailVerificationHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 6,
+  },
+  emailVerificationTitle: {
+    flex: 1,
+    fontSize: 13,
+    color: "#14532d",
+    fontWeight: "800",
+  },
+  emailVerificationText: {
+    fontSize: 12,
+    color: "#475569",
+    lineHeight: 17,
+    marginBottom: 10,
+  },
+  emailVerificationActions: {
+    flexDirection: "row",
+    gap: 8,
+    alignItems: "stretch",
+  },
+  otpInput: {
+    flex: 1,
+    marginBottom: 0,
+    minHeight: 46,
+    paddingVertical: 11,
+    textAlign: "center",
+    fontWeight: "800",
+  },
+  otpActionButton: {
+    width: 92,
+    borderRadius: 10,
+    backgroundColor: "#166534",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 10,
+  },
+  otpActionButtonText: {
+    color: "#ffffff",
+    fontWeight: "800",
+    fontSize: 13,
+  },
+  otpSendButton: {
+    marginTop: 8,
+    minHeight: 42,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#86efac",
+    backgroundColor: "#ffffff",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 12,
+  },
+  otpSendButtonDisabled: {
+    opacity: 0.55,
+  },
+  otpSendButtonText: {
+    color: "#166534",
+    fontWeight: "800",
+    fontSize: 13,
   },
   compactInput: {
     fontSize: 15,

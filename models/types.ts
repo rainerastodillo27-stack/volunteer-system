@@ -445,20 +445,6 @@ export interface PartnerReport {
   gratitudeNote?: string;
 }
 
-// Represents a generated final impact file that can be published to partners.
-export interface PublishedImpactReport {
-  id: string;
-  projectId: string;
-  generatedBy: string;
-  generatedAt: string;
-  reportFile: string;
-  format: 'PDF' | 'Excel';
-  downloadContent?: string;
-  downloadMimeType?: string;
-  sourceReportIds?: string[];
-  publishedAt?: string;
-}
-
 // Represents top-level admin dashboard statistics.
 export interface AdminStats {
   totalPartners: number;
@@ -468,12 +454,4 @@ export interface AdminStats {
   activeProjects: number;
   totalVolunteers: number;
   totalHoursContributed: number;
-}
-
-// Represents the organization's sector goals shown on partner dashboards.
-export interface SectorNeed {
-  sector: NVCSector;
-  title: string;
-  description: string;
-  goalAmount: number;
 }

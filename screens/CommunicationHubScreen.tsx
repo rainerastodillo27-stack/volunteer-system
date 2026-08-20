@@ -62,9 +62,17 @@ import {
 
   getAllUsers,
 
+  getConversation,
+
+  getUserByEmailOrPhone,
+
   getProject,
 
+  getMessagesForUser,
+
   getProjectsScreenSnapshot,
+
+  invalidateMessageCache,
 
   leaveVolunteerEventGroup,
 
@@ -77,6 +85,8 @@ import {
   submitPartnerProgramProposal,
 
   reviewPartnerProjectApplication,
+
+  subscribeToMessages,
 
 } from '../models/storage';
 
@@ -119,10 +129,6 @@ import { navigateToAvailableRoute } from '../utils/navigation';
 import { isImageMediaUri, pickDocumentFromDevice, pickImageFromDevice } from '../utils/media';
 
 import { getRequestErrorMessage } from '../utils/requestErrors';
-
-import ProposalCard from '../components/ProposalCard';
-
-
 
 function LazyDateTimePicker(props: any) {
 
@@ -227,6 +233,8 @@ type ProjectChatItem = {
 };
 
 const PROPOSAL_PREFIX = '___PROPOSAL_CARD___:';
+// WebSocket delivery is immediate. This covers a temporarily disconnected socket.
+const DIRECT_BACKEND_MESSAGE_POLL_MS = 1000;
 
 
 
@@ -252,37 +260,95 @@ function getProposalReviewCardKey(message: ChatMessage): string | null {
   try {
     const data = JSON.parse(message.content.replace(PROPOSAL_PREFIX, ''));
     const status = String(data.status || '').trim();
-    const applicationId = String(data.applicationId || data.application?.id || '').trim();
-    const reviewedAt = String(data.reviewedAt || '').trim();
-    const reviewedBy = String(data.reviewedBy || '').trim();
-    if (!applicationId || !reviewedAt || !reviewedBy || !['Approved', 'Rejected'].includes(status)) {
+    const applicationId = String(data.applicationId || data.id || data.application?.id || '').trim();
+    const stateTimestamp = String(
+      data.reviewedAt || data.resubmittedAt || data.requestedAt || data.timestamp || ''
+    ).trim();
+    if (!applicationId || !status || !stateTimestamp) {
       return null;
     }
 
-    return [applicationId, status, reviewedAt, reviewedBy, message.senderId].join(':');
+    // A revision is a new message in the audit history. Only cards for the
+    // same submission/review event are duplicates of one another.
+    const cardKind = message.id.startsWith('review-card-') ? 'review-result' : 'submission';
+    return [applicationId, status, stateTimestamp, cardKind].join(':');
   } catch (_) {
     return null;
   }
 }
 
 function dedupeProposalReviewCards(messagesToDedupe: ChatMessage[]): ChatMessage[] {
-  const seenReviewCards = new Set<string>();
+  const newestCardByState = new Map<string, ChatMessage>();
+
+  const isBackendProposalCard = (message: ChatMessage) =>
+    message.id.startsWith('msg-proposal-') || message.id.startsWith('review-card-');
+
+  messagesToDedupe.forEach(message => {
+    const proposalCardKey = getProposalReviewCardKey(message);
+    if (!proposalCardKey) return;
+
+    const existingMessage = newestCardByState.get(proposalCardKey);
+    const shouldReplace =
+      !existingMessage ||
+      (isBackendProposalCard(message) && !isBackendProposalCard(existingMessage)) ||
+      (isBackendProposalCard(message) === isBackendProposalCard(existingMessage) &&
+        new Date(message.timestamp).getTime() >= new Date(existingMessage.timestamp).getTime());
+    if (shouldReplace) {
+      newestCardByState.set(proposalCardKey, message);
+    }
+  });
+
   return messagesToDedupe.filter(message => {
     const reviewCardKey = getProposalReviewCardKey(message);
     if (!reviewCardKey) {
       return true;
     }
 
-    if (seenReviewCards.has(reviewCardKey)) {
-      return false;
-    }
-
-    seenReviewCards.add(reviewCardKey);
-    return true;
+    return newestCardByState.get(reviewCardKey)?.id === message.id;
   });
 }
 
+function mergeChatMessageLists<T extends ChatMessage>(...messageGroups: T[][]): T[] {
+  const byId = new Map<string, T>();
+  messageGroups.flat().forEach(message => {
+    byId.set(message.id, message);
+  });
 
+  return dedupeProposalReviewCards(Array.from(byId.values())).sort(
+    (left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime()
+  ) as T[];
+}
+
+function getDirectMessagesBetween(messagesToFilter: Message[], userId1: string, userId2: string): Message[] {
+  return messagesToFilter.filter(message =>
+    (message.senderId === userId1 && message.recipientId === userId2) ||
+    (message.senderId === userId2 && message.recipientId === userId1)
+  );
+}
+
+function getMessagePreviewText(message?: Message): string {
+  if (!message?.content) {
+    return 'Start a conversation';
+  }
+
+  if (!message.content.startsWith(PROPOSAL_PREFIX)) {
+    return message.content;
+  }
+
+  try {
+    const application = JSON.parse(message.content.replace(PROPOSAL_PREFIX, ''));
+    const proposalDetails = application.proposalDetails || {};
+    const title =
+      proposalDetails.proposedTitle ||
+      application.proposedTitle ||
+      proposalDetails.targetProjectTitle ||
+      'Project proposal';
+    const status = application.status || 'Pending';
+    return `${title} - Proposal ${status}`;
+  } catch {
+    return 'Project proposal';
+  }
+}
 
 function upsertChatMessage(current: ChatMessage[], incoming: ChatMessage): ChatMessage[] {
 
@@ -438,6 +504,11 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   const { user } = useAuth();
 
+  // Older browser sessions can contain the pre-migration admin ID. Resolve
+  // the current account once so this screen always uses the backend identity
+  // when reading a direct-message thread.
+  const [messageUserId, setMessageUserId] = useState(user?.id || '');
+
   const insets = useSafeAreaInsets();
 
   const { width } = useWindowDimensions();
@@ -481,6 +552,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
 
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
+
+  const [directMessages, setDirectMessages] = useState<Message[]>([]);
 
   const [projectChats, setProjectChats] = useState<ProjectChatItem[]>([]);
 
@@ -549,6 +622,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   const selectedProjectChatRef = useRef<ProjectChatItem | null>(null);
 
+  const directMessagesRef = useRef<Message[]>([]);
+
 
 
   const [proposalForm, setProposalForm] = useState<ProposalFormState>(() =>
@@ -571,6 +646,31 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   const [locCity, setLocCity] = useState('');
 
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!user) {
+      setMessageUserId('');
+      return undefined;
+    }
+
+    setMessageUserId(user.id);
+    const identifier = user.email || user.phone || '';
+    if (!identifier) return undefined;
+
+    void getUserByEmailOrPhone(identifier)
+      .then(canonicalUser => {
+        if (!cancelled && canonicalUser?.role === user.role) {
+          setMessageUserId(canonicalUser.id);
+        }
+      })
+      .catch(() => null);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.email, user?.id, user?.phone, user?.role]);
+
 
 
   useEffect(() => {
@@ -581,6 +681,61 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       navigation.setOptions({ headerShown: true });
     }
   }, [view, isWide, navigation]);
+
+  // The backend emits this for every direct-message write, including proposal
+  // review cards. Update the active conversation as soon as the event arrives.
+  useEffect(() => {
+    if (!user) return undefined;
+
+    if (!messageUserId) return undefined;
+
+    return subscribeToMessages(messageUserId, event => {
+      if (event.type === 'project-group-message.changed') {
+        invalidateMessageCache(undefined, undefined, event.message.projectId);
+        if (selectedProjectChatRef.current?.project.id === event.message.projectId) {
+          setMessages(current => mergeChatMessageLists(current as ProjectGroupMessage[], [event.message]));
+        }
+        return;
+      }
+
+      if (event.type !== 'message.changed') return;
+
+      const incomingMessage = event.message;
+      const otherUserId = incomingMessage.senderId === messageUserId
+        ? incomingMessage.recipientId
+        : incomingMessage.senderId;
+
+      if (!otherUserId) return;
+
+      invalidateMessageCache(messageUserId, otherUserId);
+      const mergedMessages = mergeChatMessageLists(directMessagesRef.current, [incomingMessage]);
+      directMessagesRef.current = mergedMessages;
+      setDirectMessages(mergedMessages);
+
+      setConversations(current => current
+        .map(conversation => {
+          if (conversation.user.id !== otherUserId) return conversation;
+          const isNewUnreadMessage =
+            conversation.lastMessage?.id !== incomingMessage.id &&
+            incomingMessage.recipientId === messageUserId &&
+            !incomingMessage.read;
+          return {
+            ...conversation,
+            lastMessage: incomingMessage,
+            unreadCount: conversation.unreadCount + (isNewUnreadMessage ? 1 : 0),
+          };
+        })
+        .sort((left, right) =>
+          new Date(right.lastMessage?.timestamp || 0).getTime() -
+          new Date(left.lastMessage?.timestamp || 0).getTime()
+        )
+      );
+
+      if (selectedUserRef.current?.id === otherUserId) {
+        setMessages(current => mergeChatMessageLists(current as Message[], [incomingMessage]));
+      }
+    });
+  }, [messageUserId, user]);
 
   const availableSections: SidebarSection[] = isVolunteer
 
@@ -596,17 +751,20 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   const loadData = useCallback(async () => {
 
-    if (!user) return;
+    if (!user || !messageUserId) return;
 
     try {
+      invalidateMessageCache(messageUserId);
 
-      const [usersResult, snapshotResult, messagesResult, partnerApplicationsResult] = await Promise.allSettled([
+      const [usersResult, snapshotResult, firestoreMessagesResult, storedMessagesResult, partnerApplicationsResult] = await Promise.allSettled([
 
         getAllUsers(),
 
         getProjectsScreenSnapshot(user),
 
-        getDirectMessagesForUser(user.id),
+        getDirectMessagesForUser(messageUserId),
+
+        getMessagesForUser(messageUserId),
 
         user.role === 'volunteer'
 
@@ -638,7 +796,25 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
             };
 
-      const msgs = messagesResult.status === 'fulfilled' ? messagesResult.value : [];
+      // Proposal cards are created and updated by the backend. Firestore is
+      // retained for ordinary chat only so an old cached card cannot hide a
+      // newer proposal revision from the admin thread.
+      const firestoreMessages = firestoreMessagesResult.status === 'fulfilled'
+        ? firestoreMessagesResult.value.filter(message => !message.content?.startsWith(PROPOSAL_PREFIX))
+        : [];
+
+      const storedMessages = storedMessagesResult.status === 'fulfilled' ? storedMessagesResult.value : [];
+
+      const msgs = mergeChatMessageLists(firestoreMessages, storedMessages);
+
+      directMessagesRef.current = msgs;
+
+      setDirectMessages(msgs);
+
+      const currentSelectedUser = selectedUserRef.current;
+      if (currentSelectedUser) {
+        setMessages(getDirectMessagesBetween(msgs, messageUserId, currentSelectedUser.id));
+      }
 
       const directPartnerApplications =
 
@@ -646,7 +822,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
 
 
-      const others = users.filter(u => u.id !== user.id);
+      const others = users.filter(u => u.id !== messageUserId);
 
       const allowedDirectUsers = user.role === 'volunteer' || user.role === 'partner'
 
@@ -927,7 +1103,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       msgs.forEach(m => {
 
-        const otherId = m.senderId === user.id ? m.recipientId : m.senderId;
+        const otherId = m.senderId === messageUserId ? m.recipientId : m.senderId;
 
         if (!allowedDirectUserIds.has(otherId)) return;
 
@@ -943,7 +1119,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
         }
 
-        if (!m.read && m.recipientId === user.id) {
+        if (!m.read && m.recipientId === messageUserId) {
 
           entry.unreadCount++;
 
@@ -971,22 +1147,62 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
     }
 
-  }, [user]);
+  }, [messageUserId, user]);
 
 
 
   // Firestore real-time listener; tears down automatically when conversation changes.
   useEffect(() => {
 
-    if (!user) return;
+    if (!user || !messageUserId) return;
 
     if (selectedUser) {
 
-      return subscribeToDirectMessages(user.id, selectedUser.id, msgs => {
+      let cancelled = false;
+      let refreshingStoredMessages = false;
 
-        setMessages(dedupeProposalReviewCards(msgs));
+      setMessages(getDirectMessagesBetween(directMessagesRef.current, messageUserId, selectedUser.id));
 
-        const unread = msgs.filter(message => !message.read && message.recipientId === user.id);
+      const refreshStoredDirectMessages = async () => {
+        if (refreshingStoredMessages) return;
+        refreshingStoredMessages = true;
+        try {
+          invalidateMessageCache(messageUserId, selectedUser.id);
+          const storedMessages = await getConversation(messageUserId, selectedUser.id);
+          if (cancelled) return;
+
+          const existingChatOnlyMessages = directMessagesRef.current.filter(
+            message => !message.content?.startsWith(PROPOSAL_PREFIX)
+          );
+          const mergedDirectMessages = mergeChatMessageLists(existingChatOnlyMessages, storedMessages);
+          directMessagesRef.current = mergedDirectMessages;
+          setDirectMessages(mergedDirectMessages);
+          setMessages(getDirectMessagesBetween(mergedDirectMessages, messageUserId, selectedUser.id));
+        } catch (error) {
+          if (!cancelled) {
+            console.warn('Failed to load stored direct messages:', error);
+          }
+        } finally {
+          refreshingStoredMessages = false;
+        }
+      };
+
+      void refreshStoredDirectMessages();
+      const backendMessagePoll = setInterval(() => {
+        void refreshStoredDirectMessages();
+      }, DIRECT_BACKEND_MESSAGE_POLL_MS);
+
+      const unsubscribe = subscribeToDirectMessages(messageUserId, selectedUser.id, msgs => {
+
+        if (!cancelled) {
+          const chatOnlyMessages = msgs.filter(message => !message.content?.startsWith(PROPOSAL_PREFIX));
+          const mergedDirectMessages = mergeChatMessageLists(directMessagesRef.current, chatOnlyMessages);
+          directMessagesRef.current = mergedDirectMessages;
+          setDirectMessages(mergedDirectMessages);
+          setMessages(current => mergeChatMessageLists(current as Message[], chatOnlyMessages));
+        }
+
+        const unread = msgs.filter(message => !message.read && message.recipientId === messageUserId);
 
         unread.forEach(message => {
 
@@ -996,9 +1212,17 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       });
 
+      return () => {
+        cancelled = true;
+        clearInterval(backendMessagePoll);
+        unsubscribe();
+      };
+
     }
 
     if (selectedProjectChat) {
+
+      setMessages([]);
 
       return subscribeToGroupMessages(selectedProjectChat.project.id, msgs => {
 
@@ -1012,7 +1236,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
     return undefined;
 
-  }, [selectedProjectChat?.project.id, selectedUser?.id, user]);
+  }, [messageUserId, selectedProjectChat?.project.id, selectedUser?.id, user]);
 
 
 
@@ -1021,6 +1245,12 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     selectedUserRef.current = selectedUser;
 
   }, [selectedUser]);
+
+  useEffect(() => {
+
+    directMessagesRef.current = directMessages;
+
+  }, [directMessages]);
 
 
 
@@ -1220,128 +1450,6 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     }
 
   }, [newProposalModule, newProposalProjectId, newProposalTitle, navigation, user?.role, allUsers]);
-
-
-
-  const handleSendProposalCard = async (overrideForm?: any) => {
-
-    if (!user || (!selectedUser && !selectedProjectChat)) return;
-
-    setIsSending(true);
-
-
-
-    const formData = overrideForm || proposalForm;
-
-    const proposalData = {
-
-      ...formData,
-
-      status: 'Proposed',
-
-      proposedById: user.id,
-
-      proposedByName: user.name,
-
-      timestamp: new Date().toISOString(),
-
-    };
-
-
-
-    const msg = {
-
-      id: `prop-${Date.now()}`,
-
-      senderId: user.id,
-
-      content: `${PROPOSAL_PREFIX}${JSON.stringify(proposalData)}`,
-
-      timestamp: new Date().toISOString(),
-
-    };
-
-
-
-    try {
-
-      if (selectedUser) {
-
-        const fullMsg = { ...msg, recipientId: selectedUser.id, read: false };
-
-        await sendDirectMessage(fullMsg);
-
-      } else if (selectedProjectChat) {
-
-        const fullMsg = { ...msg, projectId: selectedProjectChat.project.id, kind: 'scope-proposal' as any };
-
-        await sendGroupMessage(fullMsg);
-
-      }
-
-    } catch (e) {
-
-      const errorMsg = e instanceof Error ? e.message : 'Failed to send proposal card';
-
-      Alert.alert('Error', `Failed to send proposal card: ${errorMsg}`);
-
-    } finally {
-
-      setIsSending(false);
-
-    }
-
-  };
-
-
-
-  const handleApproveProposal = async (msgId: string, currentData: any) => {
-
-    if (user?.role !== 'admin') return;
-
-
-
-    const updatedData = { ...currentData, status: 'Approved', approvedBy: user.id, approvedAt: new Date().toISOString() };
-
-    const updatedContent = `${PROPOSAL_PREFIX}${JSON.stringify(updatedData)}`;
-
-
-
-    try {
-
-      // In a real app, we'd update the specific message. Here we send an "Approval" message or update local state.
-
-      // For this demo, let's send a final approved card.
-
-      const msg = {
-
-        id: `appr-${Date.now()}`,
-
-        senderId: user.id,
-
-        content: updatedContent,
-
-        timestamp: new Date().toISOString(),
-
-      };
-
-
-
-      if (selectedUser) {
-
-        await sendDirectMessage({ ...msg, recipientId: selectedUser.id, read: false });
-
-      }
-
-      Alert.alert('Approved', 'The proposal has been officially approved.');
-
-    } catch (e) {
-
-      Alert.alert('Error', 'Failed to approve proposal');
-
-    }
-
-  };
 
 
 
@@ -1945,9 +2053,15 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
           if (msg.content?.startsWith(PROPOSAL_PREFIX)) {
             try {
               const msgApp = JSON.parse(msg.content.replace(PROPOSAL_PREFIX, ''));
-              if (msgApp.id === reviewedApplication.id) {
+              if (msgApp.id === reviewedApplication.id || msgApp.applicationId === reviewedApplication.id) {
                 // Update the proposal JSON in the message content
-                const updatedApp = { ...msgApp, status: reviewedApplication.status };
+                const updatedApp = {
+                  ...msgApp,
+                  status: reviewedApplication.status,
+                  reviewedBy: reviewedApplication.reviewedBy,
+                  reviewedAt: reviewedApplication.reviewedAt,
+                  reviewNotes: reviewedApplication.reviewNotes || msgApp.reviewNotes || null,
+                };
                 return { ...msg, content: PROPOSAL_PREFIX + JSON.stringify(updatedApp) };
               }
             } catch (e) {
@@ -1958,6 +2072,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         })
       );
 
+      // Always send the review card to Firestore using the partner's user ID from the
+      // application itself — NOT selectedUser. When admin reviews from the Proposals
+      // sidebar, selectedUser is null and the old code silently skipped the Firestore write,
+      // so the mobile partner never received the card.
       setReviewNotice(
 
         status === 'Approved'
@@ -2038,6 +2156,19 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   const openProposalRevision = (cardData: any) => {
     if (!user) return;
+
+    const applicationId = String(cardData.applicationId || cardData.id || '');
+    const currentApplication = proposalChats.find(
+      item => item.application.id === applicationId
+    )?.application;
+    if (currentApplication && currentApplication.status !== 'Rejected') {
+      Alert.alert(
+        'Proposal finalized',
+        'This proposal has already been approved or is pending review and can no longer be revised.'
+      );
+      setActiveProposalCardData(null);
+      return;
+    }
 
     const requestedProgramModule = String(cardData.requestedProgramModule || cardData.programModule || 'Nutrition');
     const targetProjectId = String(cardData.targetProjectId || cardData.projectId || 'new');
@@ -2307,7 +2438,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                 c.user.name,
 
-                c.lastMessage?.content || 'Start a conversation',
+                getMessagePreviewText(c.lastMessage),
 
                 selectedUser?.id === c.user.id,
 
@@ -3421,48 +3552,6 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
         >
 
-          {selectedUser && (user?.role === 'admin' || user?.role === 'partner') && (() => {
-
-            const related = proposalChats.filter(item =>
-
-              user?.role === 'admin'
-
-                ? item.application.partnerUserId === selectedUser.id
-
-                : selectedUser.role === 'admin' && item.application.partnerUserId === user?.id
-
-            );
-
-            if (!related.length) return null;
-
-            return (
-
-              <View style={styles.relatedProposalsSection}>
-
-                <Text style={styles.relatedProposalsLabel}>Related Proposals</Text>
-
-                {related.slice(0, 3).map(item => (
-
-                  <ProposalCard
-
-                    key={item.application.id}
-
-                    application={item.application}
-
-                    projectTitle={item.projectTitle}
-
-                    compact
-
-                  />
-
-                ))}
-
-              </View>
-
-            );
-
-          })()}
-
           {messages.length === 0 ? (
 
             <View style={styles.emptyChat}>
@@ -3481,7 +3570,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
               return filteredMessages.map((m, i) => {
 
-              const isOwn = m.senderId === user?.id;
+              const isOwn = m.senderId === messageUserId;
 
               const isProposal = m.content.startsWith(PROPOSAL_PREFIX);
 
@@ -3512,14 +3601,26 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                 };
 
                 const isApproved = application.status === 'Approved';
-
-                // Debug logging
-                console.log('[PROPOSAL CARD DEBUG]', {
-                  applicationId: application.id,
-                  applicationStatus: application.status,
-                  proposedTitle: data.proposedTitle,
-                  isApproved
+                const isRejected = application.status === 'Rejected';
+                const revisionNumber = Number(application.revisionNumber || 0);
+                const applicationId = String(application.applicationId || application.id || '');
+                const followsRejection = filteredMessages.slice(0, i).some(previousMessage => {
+                  if (!previousMessage.content?.startsWith(PROPOSAL_PREFIX)) return false;
+                  try {
+                    const previousApplication = JSON.parse(previousMessage.content.replace(PROPOSAL_PREFIX, ''));
+                    return (
+                      String(previousApplication.applicationId || previousApplication.id || '') === applicationId &&
+                      previousApplication.status === 'Rejected'
+                    );
+                  } catch {
+                    return false;
+                  }
                 });
+                const proposalLabel = revisionNumber > 0 || followsRejection
+                  ? `Revised Proposal${revisionNumber > 0 ? ` #${revisionNumber}` : ''}`
+                  : 'Proposal';
+                const statusColor = isApproved ? '#166534' : isRejected ? '#dc2626' : '#d97706';
+                const statusBg = isApproved ? '#dcfce7' : isRejected ? '#fee2e2' : '#fef3c7';
 
                 return (
 
@@ -3541,9 +3642,9 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                       <View style={styles.propCardHeader}>
 
-                        <View style={styles.propCardIconBox}>
+                        <View style={[styles.propCardIconBox, { backgroundColor: statusBg }]}>
 
-                          <MaterialIcons name="assignment" size={28} color="#d97706" />
+                          <MaterialIcons name={isRejected ? "cancel" : "assignment"} size={28} color={statusColor} />
 
                         </View>
 
@@ -3551,17 +3652,19 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                           <Text style={styles.propCardTitle} numberOfLines={2}>{data.proposedTitle}</Text>
 
-                          <Text style={styles.propCardSubtitle} numberOfLines={1}>Proposal ΓÇó {application.status}</Text>
+                          <Text style={[styles.propCardSubtitle, { color: statusColor }]} numberOfLines={1}>{proposalLabel} - {data.status}</Text>
 
                         </View>
 
-                        {isApproved && (
+                        {(isApproved || isRejected) && (
 
-                          <View style={styles.propApprovedBadge}>
+                          <View style={[styles.propApprovedBadge, { backgroundColor: statusBg }]}>
 
-                            <MaterialIcons name="check-circle" size={18} color="#166534" />
+                            <MaterialIcons name={isApproved ? "check-circle" : "cancel"} size={18} color={statusColor} />
 
-                            <Text style={styles.propApprovedText}>Done</Text>
+                            <Text style={[styles.propApprovedText, { color: statusColor }]}>
+                              {isApproved ? 'Done' : 'Rejected'}
+                            </Text>
 
                           </View>
 
@@ -3578,6 +3681,15 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                           {data.proposedDescription || 'No description provided.'}
 
                         </Text>
+
+                        {isRejected && application.reviewNotes ? (
+                          <View style={styles.propRejectionNote}>
+                            <Text style={styles.propRejectionNoteLabel}>Rejection reason</Text>
+                            <Text style={styles.propRejectionNoteText} numberOfLines={2}>
+                              {application.reviewNotes}
+                            </Text>
+                          </View>
+                        ) : null}
 
 
 
@@ -4041,6 +4153,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         // Double-check: use matchedApp status if available (most up-to-date)
         const actualStatus = matchedApp?.status || pdStatus;
         const isActuallyPending = actualStatus === 'Pending';
+        const canReviseProposal = user?.role === 'partner' && actualStatus === 'Rejected';
 
         return (
           <View style={styles.modalOverlay}>
@@ -4195,7 +4308,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                     <Text style={styles.actionBtnText}>Approve Proposal</Text>
                   </TouchableOpacity>
                 </View>
-              ) : user?.role === 'partner' && pdRejected ? (
+              ) : canReviseProposal ? (
                 <TouchableOpacity
                   style={[styles.reviseBtn, { marginTop: 16, borderRadius: 16, paddingVertical: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 }]}
                   onPress={() => {
@@ -6811,6 +6924,44 @@ const styles = StyleSheet.create({
 
   },
 
+  propRejectionNote: {
+
+    borderRadius: 10,
+
+    borderWidth: 1,
+
+    borderColor: '#fecaca',
+
+    backgroundColor: '#fef2f2',
+
+    padding: 10,
+
+    marginBottom: 12,
+
+  },
+
+  propRejectionNoteLabel: {
+
+    fontSize: 11,
+
+    fontWeight: '800',
+
+    color: '#991b1b',
+
+    marginBottom: 4,
+
+  },
+
+  propRejectionNoteText: {
+
+    fontSize: 12,
+
+    color: '#7f1d1d',
+
+    lineHeight: 17,
+
+  },
+
   propCardMetaGrid: {
 
     flexDirection: 'row',
@@ -6934,30 +7085,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
 
     color: '#fff',
-
-  },
-
-  relatedProposalsSection: {
-
-    padding: 16,
-
-    marginBottom: 16,
-
-    borderRadius: 16,
-
-    backgroundColor: '#f8fafc',
-
-  },
-
-  relatedProposalsLabel: {
-
-    fontSize: 13,
-
-    fontWeight: '700',
-
-    color: '#64748b',
-
-    marginBottom: 12,
 
   },
 

@@ -345,10 +345,17 @@ export default function UserManagementScreen() {
     );
   }
 
-  // Summary stats
-  const adminUsers = users.filter(item => item.role === 'admin');
-  const partnerUsers = users.filter(item => item.role === 'partner');
-  const volunteerUsers = users.filter(item => item.role === 'volunteer');
+  const isApprovedOrActiveAccount = (account: User) =>
+    account.role === 'admin' ||
+    account.approvalStatus === 'approved' ||
+    !account.approvalStatus;
+
+  // Summary stats count approved/active accounts only; pending/rejected registrations stay in review flow.
+  const countableUsers = users.filter(isApprovedOrActiveAccount);
+  const adminUsers = countableUsers.filter(item => item.role === 'admin');
+  const partnerUsers = countableUsers.filter(item => item.role === 'partner');
+  const volunteerUsers = countableUsers.filter(item => item.role === 'volunteer');
+  const totalUsers = countableUsers.length;
   const totalAdmins = adminUsers.length;
   const totalPartners = partnerUsers.length;
   const totalVolunteers = volunteerUsers.length;
@@ -356,11 +363,14 @@ export default function UserManagementScreen() {
   // Filtered users list
   const visibleUsers = users.filter(account => {
     const roleMatches = accountFilter === 'all' || account.role === accountFilter;
-            const isPending = account.approvalStatus?.toLowerCase() === 'pending';
+    const normalizedApprovalStatus = account.approvalStatus?.toLowerCase();
+    const isPending = normalizedApprovalStatus === 'pending';
+    const isRejected = normalizedApprovalStatus === 'rejected';
+    const isActive = isApprovedOrActiveAccount(account);
     const statusMatches =
-      statusFilter === 'all' ||
+      (statusFilter === 'all' && !isRejected) ||
       (statusFilter === 'pending' && isPending) ||
-      (statusFilter === 'active' && !isPending);
+      (statusFilter === 'active' && isActive);
 
     const partner = getLinkedPartnerForUser(account);
     const query = accountSearch.trim().toLowerCase();
@@ -434,7 +444,7 @@ export default function UserManagementScreen() {
               <MaterialIcons name="person-outline" size={24} color="#16a34a" />
             </View>
             <View style={styles.summaryContent}>
-              <Text style={styles.summaryNumber}>{users.length}</Text>
+              <Text style={styles.summaryNumber}>{totalUsers}</Text>
               <Text style={styles.summaryTitle}>Total Users</Text>
               <Text style={styles.summarySubtext}>All registered accounts</Text>
             </View>
