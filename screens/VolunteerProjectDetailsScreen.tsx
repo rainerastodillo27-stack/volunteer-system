@@ -17,16 +17,13 @@ import { useAuth } from '../contexts/AuthContext';
 import {
   getProject,
   getVolunteerProjectMatches,
-  getAllVolunteerTimeLogs,
-  startVolunteerTimeLog,
-  endVolunteerTimeLog,
   subscribeToStorageChanges,
   getAllPartners,
   getAllProjects,
   requestVolunteerProjectJoin,
   getVolunteerByUserId,
 } from '../models/storage';
-import { Project, Volunteer, VolunteerProjectMatch, VolunteerTimeLog, Partner } from '../models/types';
+import { Project, Volunteer, VolunteerProjectMatch, Partner } from '../models/types';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage } from '../utils/requestErrors';
 import { getPrimaryProjectImageSource } from '../utils/projectMap';
@@ -45,12 +42,10 @@ export default function VolunteerProjectDetailsScreen({
   const [project, setProject] = useState<Project | null>(null);
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
   const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
-  const [timeLogs, setTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const [partners, setPartners] = useState<Partner[]>([]);
   const [parentProject, setParentProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
-  const [activeTimeLog, setActiveTimeLog] = useState<VolunteerTimeLog | null>(null);
   const [isDesktop, setIsDesktop] = useState(false);
 
   useEffect(() => {
@@ -73,10 +68,9 @@ export default function VolunteerProjectDetailsScreen({
 
       const volunteerId = profile?.id || user.id;
 
-      const [projectData, matches, timeLogsData, partnersList, projectsList] = await Promise.all([
+      const [projectData, matches, partnersList, projectsList] = await Promise.all([
         getProject(projectId),
         getVolunteerProjectMatches(volunteerId).catch(() => []),
-        getAllVolunteerTimeLogs().catch(() => []),
         getAllPartners().catch(() => []),
         getAllProjects().catch(() => []),
       ]);
@@ -91,14 +85,6 @@ export default function VolunteerProjectDetailsScreen({
       } else {
         setParentProject(null);
       }
-
-      const projectTimeLogs = timeLogsData.filter(
-        (log) => log.projectId === projectId && log.volunteerId === volunteerId
-      );
-      setTimeLogs(projectTimeLogs);
-
-      const active = projectTimeLogs.find((log) => !log.timeOut);
-      setActiveTimeLog(active || null);
     } catch (error) {
       console.error('Error loading project details:', error);
     } finally {
@@ -110,49 +96,12 @@ export default function VolunteerProjectDetailsScreen({
     useCallback(() => {
       loadData();
       return subscribeToStorageChanges(
-        ['projects', 'volunteerMatches', 'volunteerTimeLogs'],
+        ['projects', 'volunteerMatches'],
         loadData
       );
     }, [loadData])
   );
 
-  const handleStartTimeLog = async () => {
-    if (!user?.id || !project) return;
-    const volunteerId = volunteerProfile?.id || user.id;
-
-    try {
-      setLoadingAction('startTime');
-      const timeLog = await startVolunteerTimeLog(volunteerId, project.id);
-      setActiveTimeLog(timeLog);
-      setTimeLogs((prev) => [...prev, timeLog]);
-      Alert.alert('Success', 'Time logging started');
-    } catch (error) {
-      Alert.alert('Error', getRequestErrorMessage(error, 'Unable to start time log.'));
-    } finally {
-      setLoadingAction(null);
-    }
-  };
-
-  const handleEndTimeLog = async () => {
-    if (!activeTimeLog || !user?.id || !project) return;
-    const volunteerId = volunteerProfile?.id || user.id;
-
-    try {
-      setLoadingAction('endTime');
-      const result = await endVolunteerTimeLog(volunteerId, project.id);
-      if (result.log) {
-        setTimeLogs((prev) =>
-          prev.map((log) => (log.id === result.log!.id ? result.log! : log))
-        );
-      }
-      setActiveTimeLog(null);
-      Alert.alert('Success', 'Time logging stopped');
-    } catch (error) {
-      Alert.alert('Error', getRequestErrorMessage(error, 'Unable to end time log.'));
-    } finally {
-      setLoadingAction(null);
-    }
-  };
 
   const handleJoinEvent = async () => {
     if (!user?.id || !project) return;
@@ -293,7 +242,7 @@ export default function VolunteerProjectDetailsScreen({
 
             <View style={styles.metaRow}>
               <MaterialIcons name="folder" size={16} color="#64748b" style={{ marginRight: 6 }} />
-              <Text style={styles.metaText}>{parentProject?.title || 'Mingo Meals Program'}</Text>
+              <Text style={styles.metaText}>{parentProject?.title || project.programModule || 'NVC Program'}</Text>
             </View>
 
             <View style={styles.metaRow}>
@@ -380,74 +329,7 @@ export default function VolunteerProjectDetailsScreen({
         <Text style={styles.bodyDescriptionText}>{project.description}</Text>
       </View>
 
-      {/* Time Logging (Legacy Support) */}
-      {isJoined && !isPending && (
-        <View style={styles.detailsCard}>
-          <View style={styles.cardHeaderRow}>
-            <View style={styles.roundIconBadge} {...({} as any)}>
-              <MaterialIcons name="access-time" size={16} color="#166534" />
-            </View>
-            <Text style={styles.cardSectionTitle}>Time Logging</Text>
-          </View>
 
-          {activeTimeLog ? (
-            <View style={styles.timeLogActive} {...({} as any)}>
-              <MaterialIcons name="access-time" size={24} color="#f59e0b" />
-              <View style={styles.timeLogContent}>
-                <Text style={styles.timeLogStatus}>Time logging active</Text>
-                <Text style={styles.timeLogTime}>
-                  Started at {format(new Date(activeTimeLog.timeIn), 'h:mm a')}
-                </Text>
-              </View>
-              <TouchableOpacity
-                style={styles.timeLogButton}
-                onPress={handleEndTimeLog}
-                disabled={loadingAction === 'endTime'}
-              >
-                <Text style={styles.timeLogButtonText}>
-                  {loadingAction === 'endTime' ? 'Stopping...' : 'Stop'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
-            <TouchableOpacity
-              style={styles.timeLogStartButton}
-              onPress={handleStartTimeLog}
-              disabled={loadingAction === 'startTime'}
-            >
-              <MaterialIcons name="play-arrow" size={20} color="#fff" />
-              <Text style={styles.timeLogStartButtonText}>
-                {loadingAction === 'startTime' ? 'Starting...' : 'Start Time Logging'}
-              </Text>
-            </TouchableOpacity>
-          )}
-
-          {timeLogs.length > 0 && (
-            <View style={styles.timeLogsHistory}>
-              <Text style={styles.timeLogsHistoryTitle}>
-                Logged time ({timeLogs.length} {timeLogs.length === 1 ? 'entry' : 'entries'})
-              </Text>
-              {timeLogs.map((log) => (
-                <View key={log.id} {...({} as any)} style={styles.timeLogEntry}>
-                  <Text style={styles.timeLogEntryDate}>
-                    {format(new Date(log.timeIn), 'MMM d, h:mm a')}
-                  </Text>
-                  {log.timeOut && (
-                    <Text style={styles.timeLogEntryDuration}>
-                      Duration:{' '}
-                      {Math.round(
-                        (new Date(log.timeOut).getTime() - new Date(log.timeIn).getTime()) /
-                          (1000 * 60)
-                      )}{' '}
-                      minutes
-                    </Text>
-                  )}
-                </View>
-              ))}
-            </View>
-          )}
-        </View>
-      )}
 
       {/* Requirements Card */}
       <View style={styles.detailsCard}>
@@ -547,10 +429,10 @@ export default function VolunteerProjectDetailsScreen({
           <Text style={styles.rightCardHeaderTitle}>Part of Project</Text>
         </View>
         <Text style={styles.partOfProjectTitle}>
-          {parentProject?.title || 'Mingo Meals Nutrition Program'}
+          {parentProject?.title || project.programModule || 'NVC Program'}
         </Text>
         <Text style={styles.partOfProjectSub}>
-          {parentProject?.location?.address || 'Brgy. Alangilan, Bacolod City'}
+          {parentProject?.location?.address || project.location?.address || 'Philippines'}
         </Text>
         <TouchableOpacity
           style={styles.outlineBtn}

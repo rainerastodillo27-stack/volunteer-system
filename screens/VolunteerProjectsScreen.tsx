@@ -72,11 +72,25 @@ function inferProgramTrackFocus(track: ProgramTrack): Project['category'] | null
 
 function getProjectProgramId(project: Project, programTracks: ProgramTrack[] = []): string {
   if (project.parentProjectId) {
+    const parentIdStr = String(project.parentProjectId).trim();
+    const directTrack = programTracks.find(track => String(track.id).trim() === parentIdStr);
+    if (directTrack) return directTrack.id;
     return project.parentProjectId;
   }
 
-  const projectFocus = project.programModule || project.category;
-  const matchingTrack = programTracks.find(track => inferProgramTrackFocus(track) === projectFocus);
+  const projectFocus = (project.programModule || project.category || '').trim();
+  if (!projectFocus) return '';
+
+  const focusLower = projectFocus.toLowerCase();
+  const matchingTrack = programTracks.find(track => {
+    const trackId = String(track.id || '').trim().toLowerCase();
+    const trackTitle = String(track.title || '').trim().toLowerCase();
+    return (
+      trackId === focusLower ||
+      trackTitle === focusLower ||
+      inferProgramTrackFocus(track)?.toLowerCase() === focusLower
+    );
+  });
   return matchingTrack?.id || projectFocus;
 }
 
@@ -144,9 +158,25 @@ export default function VolunteerProjectsScreen({ navigation }: { navigation: an
 
       try {
         console.log('[VolunteerProjectsScreen] Starting data load for user:', user.id);
-        const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'programTracks', 'volunteerProfile', 'volunteerMatches', 'volunteerJoinRecords']);
+        const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'programs', 'programTracks', 'volunteerProfile', 'volunteerMatches', 'volunteerJoinRecords']);
         const snapshotRecords = snapshot.projects || [];
-        const snapshotPrograms = snapshot.programTracks || [];
+        const rawProgramTracks = snapshot.programTracks || [];
+        const rawPrograms = snapshot.programs || [];
+        const snapshotPrograms: ProgramTrack[] =
+          rawProgramTracks.length > 0
+            ? rawProgramTracks
+            : rawPrograms.map(p => ({
+                id: p.id,
+                title: p.title,
+                description: p.description,
+                icon: p.icon,
+                color: p.color,
+                imageUrl: p.imageUrl,
+                sortOrder: 0,
+                isActive: true,
+                createdAt: p.createdAt,
+                updatedAt: p.updatedAt,
+              }));
         const eventCount = snapshotRecords.filter(project => project.isEvent).length;
         console.log('[VolunteerProjectsScreen] Snapshot received:', {
           recordCount: snapshotRecords.length,
@@ -300,6 +330,23 @@ export default function VolunteerProjectsScreen({ navigation }: { navigation: an
             .sort(sortByDate)
         : [],
     [programs, projectsOnly, selectedProgramId]
+  );
+
+  const directEventsForSelectedProgram = useMemo(
+    () =>
+      selectedProgramId
+        ? records
+            .filter(project => {
+              if (!project.isEvent) return false;
+              const programId = getProjectProgramId(project, programs);
+              return (
+                programId === selectedProgramId ||
+                project.parentProjectId === selectedProgramId
+              );
+            })
+            .sort(sortByDate)
+        : [],
+    [programs, records, selectedProgramId]
   );
 
   const projectsForProgramDetails = useMemo(
@@ -747,7 +794,11 @@ export default function VolunteerProjectsScreen({ navigation }: { navigation: an
         <>
           <View style={styles.sectionHeader}>
             <Text style={styles.screenTitle}>{selectedProgram.title}</Text>
-            <Text style={styles.screenSubtitle}>All available projects to contribute to.</Text>
+            <Text style={styles.screenSubtitle}>
+              {projectsForSelectedProgram.length > 0
+                ? 'All available projects to contribute to.'
+                : 'Available events to join.'}
+            </Text>
           </View>
           {projectsForSelectedProgram.length ? (
             projectsForSelectedProgram.map(project => {
@@ -784,9 +835,11 @@ export default function VolunteerProjectsScreen({ navigation }: { navigation: an
                 </TouchableOpacity>
               );
             })
+          ) : directEventsForSelectedProgram.length ? (
+            directEventsForSelectedProgram.map(renderEventCard)
           ) : (
             <View style={styles.centerContent}>
-              <Text style={styles.loadingText}>No projects available right now.</Text>
+              <Text style={styles.loadingText}>No projects or events available right now.</Text>
             </View>
           )}
         </>

@@ -182,25 +182,34 @@ function inferProgramTrackFocus(track: ProgramTrack): AdvocacyFocus | null {
 }
 
 function getProgramSuiteModuleForProject(project: Project, activeProgramTracks: ProgramTrack[]): string | null {
-  const activeProgramTrackIds = new Set(activeProgramTracks.map(track => String(track.id).trim()));
+  const activeProgramTrackIds = new Map(activeProgramTracks.map(track => [String(track.id).trim().toLowerCase(), String(track.id).trim()]));
   // For child projects (those with parentProjectId), use that as the grouping
   if (project.parentProjectId) {
-    const programId = String(project.parentProjectId).trim();
-    return activeProgramTrackIds.has(programId) ? programId : null;
+    const programIdLower = String(project.parentProjectId).trim().toLowerCase();
+    return activeProgramTrackIds.get(programIdLower) || String(project.parentProjectId).trim();
   }
   // For legacy projects without parentProjectId, check if programModule matches an active program ID
-  const programModule = String(project.programModule || '').trim();
+  const programModule = String(project.programModule || '').trim().toLowerCase();
   if (activeProgramTrackIds.has(programModule)) {
-    return programModule;
+    return activeProgramTrackIds.get(programModule) || null;
   }
   // Also check category as fallback
-  const category = String(project.category || '').trim();
+  const category = String(project.category || '').trim().toLowerCase();
   if (activeProgramTrackIds.has(category)) {
-    return category;
+    return activeProgramTrackIds.get(category) || null;
   }
 
   const projectFocus = (project.programModule || project.category || '') as AdvocacyFocus;
-  const matchingTrack = activeProgramTracks.find(track => inferProgramTrackFocus(track) === projectFocus);
+  const matchingTrack = activeProgramTracks.find(track => {
+    const trackId = String(track.id || '').trim().toLowerCase();
+    const trackTitle = String(track.title || '').trim().toLowerCase();
+    const focusLower = String(projectFocus).trim().toLowerCase();
+    return (
+      trackId === focusLower ||
+      trackTitle === focusLower ||
+      inferProgramTrackFocus(track)?.toLowerCase() === focusLower
+    );
+  });
   if (matchingTrack) {
     return String(matchingTrack.id).trim();
   }
@@ -2218,10 +2227,27 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   // Loads all projects and refreshes the currently selected project reference.
   const loadProjects = async () => {
     try {
-      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'programTracks']);
+      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'programs', 'programTracks']);
       const allProjects = snapshot.projects || [];
+      const rawProgramTracks = snapshot.programTracks || [];
+      const rawPrograms = snapshot.programs || [];
+      const resolvedTracks: ProgramTrack[] =
+        rawProgramTracks.length > 0
+          ? rawProgramTracks
+          : rawPrograms.map(p => ({
+              id: p.id,
+              title: p.title,
+              description: p.description,
+              icon: p.icon,
+              color: p.color,
+              imageUrl: p.imageUrl,
+              sortOrder: 0,
+              isActive: true,
+              createdAt: p.createdAt,
+              updatedAt: p.updatedAt,
+            }));
       setProjects(allProjects);
-      setProgramTracks(snapshot.programTracks || []);
+      setProgramTracks(resolvedTracks);
       setLoadError(null);
       setSelectedProject(currentSelectedProject => {
         if (!currentSelectedProject) {
@@ -11278,7 +11304,17 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                                   {/* Table Rows */}
                                   {sectionProjects.map(project => {
-                                    const matches = allVolunteerMatches.filter(m => m.projectId === project.id && m.status === 'Matched');
+                                    // Collect all project IDs that count: the project itself + any child events
+                                    const childEventIds = projects
+                                      .filter(p => p.isEvent && p.parentProjectId === project.id)
+                                      .map(p => p.id);
+                                    const allRelevantIds = [project.id, ...childEventIds];
+                                    const matches = allVolunteerMatches.filter(
+                                      m => allRelevantIds.includes(m.projectId) && m.status === 'Matched'
+                                    );
+                                    // Deduplicate by volunteerId so the same person isn't counted twice
+                                    const uniqueVolunteerIds = new Set(matches.map(m => m.volunteerId));
+                                    const uniqueMatchCount = uniqueVolunteerIds.size;
                                     const needed = project.volunteersNeeded || 0;
                                     return (
                                       <View key={project.id} style={styles.projectsTableRow}>
@@ -11347,7 +11383,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                                           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                                             <MaterialIcons name="people" size={14} color="#64748b" />
                                             <Text style={styles.projectsTableRowVolunteersText}>
-                                              {matches.length}/{needed}
+                                              {uniqueMatchCount}/{needed}
                                             </Text>
                                           </View>
                                         </View>

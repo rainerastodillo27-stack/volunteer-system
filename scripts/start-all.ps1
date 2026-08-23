@@ -75,7 +75,57 @@ if (-not $healthy) {
   Write-Warning "  Backend did not respond in time - Expo will still start."
 }
 
-# -- 4. Start background browser opener task ------------------------------
+# -- 4. Start ngrok tunnel (optional - skipped if ngrok not installed) -----
+$ngrokUrl = $null
+$ngrokFound = $null -ne (Get-Command ngrok -ErrorAction SilentlyContinue)
+if ($ngrokFound) {
+  Write-Host "  Starting ngrok tunnel on port 8000..."
+
+  # Kill any existing ngrok processes
+  Get-Process -Name ngrok -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  Start-Sleep -Milliseconds 500
+
+  $ngrokProc = Start-Process -FilePath 'ngrok' `
+    -ArgumentList @('http', '8000', '--url=chatroom-vice-frivolous.ngrok-free.dev', '--log=stdout') `
+    -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $pidDir 'ngrok.log')
+
+  Set-Content -Path (Join-Path $pidDir 'ngrok.pid') -Value $ngrokProc.Id
+
+  # Wait up to 8 seconds for ngrok to get a public URL via its local API
+  $ngrokUrl = $null
+  for ($i = 0; $i -lt 16; $i++) {
+    Start-Sleep -Milliseconds 500
+    try {
+      $tunnels = Invoke-RestMethod -Uri 'http://127.0.0.1:4040/api/tunnels' -Method Get -TimeoutSec 2 -ErrorAction Stop
+      $httpsTunnel = $tunnels.tunnels | Where-Object { $_.proto -eq 'https' } | Select-Object -First 1
+      if ($httpsTunnel) {
+        $ngrokUrl = $httpsTunnel.public_url
+        break
+      }
+    } catch {
+      # ngrok API not ready yet
+    }
+  }
+
+  if ($ngrokUrl) {
+    Write-Host ""
+    Write-Host "  ============================================" -ForegroundColor Cyan
+    Write-Host "   NGROK TUNNEL ACTIVE" -ForegroundColor Cyan
+    Write-Host "  ============================================" -ForegroundColor Cyan
+    Write-Host "   Public URL: $ngrokUrl" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "   Copy this URL and paste it into the app:" -ForegroundColor White
+    Write-Host "   System Settings > Custom Backend URL > Save" -ForegroundColor White
+    Write-Host "  ============================================" -ForegroundColor Cyan
+    Write-Host ""
+  } else {
+    Write-Warning "  ngrok started but could not retrieve public URL. Check http://127.0.0.1:4040"
+  }
+} else {
+  Write-Host "  ngrok not found - skipping tunnel (run 'winget install ngrok.ngrok' to enable)" -ForegroundColor DarkGray
+}
+
+# -- 5. Start background browser opener task ------------------------------
 Write-Host "  Starting browser opener helper..."
 $openerCmd = @"
 `$webReady = `$false
@@ -100,7 +150,7 @@ Start-Process -FilePath 'powershell.exe' `
   -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $openerCmd) `
   -WindowStyle Hidden
 
-# -- 5. Start Expo web in foreground --------------------------------------
+# -- 6. Start Expo web in foreground --------------------------------------
 Write-Host "  Starting Expo dev server on port 8081..."
 Write-Host "  Press Ctrl+C to stop the entire system."
 Write-Host ""
@@ -108,3 +158,4 @@ Write-Host ""
 Set-Location $projectRoot
 $env:EXPO_NO_BROWSER = "1"
 npx expo start --web --clear
+

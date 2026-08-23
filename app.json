@@ -5,8 +5,14 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "extra": {
-      "apiBaseUrl": "http://127.0.0.1:8000",
-      "webApiBaseUrl": "http://127.0.0.1:8000"
+      "apiBaseUrl": "https://chatroom-vice-frivolous.ngrok-free.dev",
+      "webApiBaseUrl": "http://129.121.73.76",
+      "mobileGoogleMapsApiKey": "",
+      "androidGoogleMapsApiKey": "",
+      "webGoogleMapsApiKey": "AIzaSyDrZWSM9FJ7pURqvnd2lNqK5y0I084kupE",
+      "eas": {
+        "projectId": "5fe09f19-4371-4c48-af29-d0cebd1dcb94"
+      }
     },
     "assetBundlePatterns": [
       "**/*"

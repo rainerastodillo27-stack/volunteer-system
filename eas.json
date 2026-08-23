@@ -8,11 +8,33 @@
       "distribution": "internal",
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "VOLCRE_API_BASE_URL": "https://chatroom-vice-frivolous.ngrok-free.dev",
+        "EXPO_PUBLIC_API_BASE_URL": "https://chatroom-vice-frivolous.ngrok-free.dev",
+        "EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY": "AIzaSyDrZWSM9FJ7pURqvnd2lNqK5y0I084kupE",
+        "EXPO_PUBLIC_FIREBASE_API_KEY": "AIzaSyDCNwE9IOIDGnnoGwBTIY27KStmMVeZGzA",
+        "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN": "capstone-4c12a.firebaseapp.com",
+        "EXPO_PUBLIC_FIREBASE_PROJECT_ID": "capstone-4c12a",
+        "EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET": "capstone-4c12a.firebasestorage.app",
+        "EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID": "163385365479",
+        "EXPO_PUBLIC_FIREBASE_APP_ID": "1:163385365479:web:e55f97d53d4e4e289b6342"
       }
     },
     "production": {
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "VOLCRE_API_BASE_URL": "https://chatroom-vice-frivolous.ngrok-free.dev",
+        "EXPO_PUBLIC_API_BASE_URL": "https://chatroom-vice-frivolous.ngrok-free.dev",
+        "EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY": "AIzaSyDrZWSM9FJ7pURqvnd2lNqK5y0I084kupE",
+        "EXPO_PUBLIC_FIREBASE_API_KEY": "AIzaSyDCNwE9IOIDGnnoGwBTIY27KStmMVeZGzA",
+        "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN": "capstone-4c12a.firebaseapp.com",
+        "EXPO_PUBLIC_FIREBASE_PROJECT_ID": "capstone-4c12a",
+        "EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET": "capstone-4c12a.firebasestorage.app",
+        "EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID": "163385365479",
+        "EXPO_PUBLIC_FIREBASE_APP_ID": "1:163385365479:web:e55f97d53d4e4e289b6342"
       }
     }
   }

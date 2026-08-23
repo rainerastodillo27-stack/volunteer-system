@@ -13,7 +13,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as AuthSession from 'expo-auth-session';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Circle, Path } from 'react-native-svg';
+import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -26,7 +26,7 @@ import {
   reconcileApprovedVolunteerEventMemberships,
   subscribeToStorageChanges,
   subscribeToMessages,
-  joinProjectEvent,
+  requestVolunteerProjectJoin,
 } from '../models/storage';
 import type { Project, Volunteer, VolunteerTimeLog, AdminPlanningItem, ProgramTrack } from '../models/types';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
@@ -267,6 +267,7 @@ export default function VolunteerDashboardScreen() {
       const [projectSnapshot, timelineSnapshot, messages] = await Promise.all([
         getProjectsScreenSnapshot(user, [
           'projects',
+          'programs',
           'volunteerProfile',
           'timeLogs',
           'programTracks',
@@ -278,7 +279,24 @@ export default function VolunteerDashboardScreen() {
       setProjects(projectSnapshot.projects);
       setVolunteerProfile(projectSnapshot.volunteerProfile);
       setTimeLogs(projectSnapshot.timeLogs);
-      setProgramTracks(projectSnapshot.programTracks || []);
+      const rawProgramTracks = projectSnapshot.programTracks || [];
+      const rawPrograms = projectSnapshot.programs || [];
+      const resolvedTracks: ProgramTrack[] =
+        rawProgramTracks.length > 0
+          ? rawProgramTracks
+          : rawPrograms.map(p => ({
+              id: p.id,
+              title: p.title,
+              description: p.description,
+              icon: p.icon,
+              color: p.color,
+              imageUrl: p.imageUrl,
+              sortOrder: 0,
+              isActive: true,
+              createdAt: p.createdAt,
+              updatedAt: p.updatedAt,
+            }));
+      setProgramTracks(resolvedTracks);
       setPlanningItems(timelineSnapshot.planningItems);
       setUnreadMessages(messages.filter(msg => !msg.read && msg.recipientId === user.id).length);
     } catch (err) {
@@ -288,14 +306,9 @@ export default function VolunteerDashboardScreen() {
     }
   }, [user]);
 
-  const isLoaded = useRef(false);
-
   useFocusEffect(
     React.useCallback(() => {
-      if (!isLoaded.current) {
-        void loadDashboardData(true);
-        isLoaded.current = true;
-      }
+      void loadDashboardData(true);
 
       return subscribeToStorageChanges(
         [
@@ -433,54 +446,21 @@ export default function VolunteerDashboardScreen() {
     return `${months[d.getMonth()]} ${d.getDate()}`;
   };
 
-  // Projects list merging database + mockup fallbacks
+  // Projects list from database
   const displayProjects = useMemo(() => {
-    const realAvailable = projects
-      .filter(p => p.isEvent && isVolunteerOpportunityOpen(p))
-      .slice(0, 3);
-
-    if (realAvailable.length > 0) return realAvailable;
-
-    return [
-      {
-        id: 'mock-p-1',
-        title: 'Mingo Meals packing',
-        category: 'Nutrition',
-        location: { address: 'Bacolod City' },
-        volunteersNeeded: 4,
-        isMock: true,
-      },
-      {
-        id: 'mock-p-2',
-        title: 'After-school tutoring',
-        category: 'Education',
-        location: { address: 'Iloilo chapter' },
-        volunteersNeeded: 2,
-        isMock: true,
-      },
-      {
-        id: 'mock-p-3',
-        title: 'Livelihood skills workshop',
-        category: 'Livelihood',
-        location: { address: 'Negros Occidental' },
-        volunteersNeeded: 6,
-        isMock: true,
-      },
-    ] as any[];
+    return projects
+      .filter(p => p.isEvent)
+      .slice(0, 4);
   }, [projects]);
 
-  const handleJoinProject = async (project: any) => {
-    if (project.isMock) {
-      Alert.alert('Mock Action', 'Join request submitted! (Simulated)');
-      return;
-    }
-    if (!volunteerProfile?.id) {
-      Alert.alert('Error', 'Profile not loaded yet');
+  const handleJoinProject = async (project: Project) => {
+    if (!user?.id) {
+      Alert.alert('Notice', 'Please sign in before joining.');
       return;
     }
     try {
       setLoading(true);
-      await joinProjectEvent(project.id, volunteerProfile.id);
+      await requestVolunteerProjectJoin(project.id, user.id);
       Alert.alert('Success', `Successfully requested to join "${project.title}"!`);
       await loadDashboardData(true);
     } catch (err) {
@@ -508,7 +488,7 @@ export default function VolunteerDashboardScreen() {
       case 'Livelihood':
         return (
           <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
-            <rect x="4" y="10" width="16" height="9" rx="1.5" stroke="#B0432B" strokeWidth={2} />
+            <Rect x="4" y="10" width="16" height="9" rx="1.5" stroke="#B0432B" strokeWidth={2} />
             <Path d="M8 10V7a4 4 0 0 1 8 0v3" stroke="#B0432B" strokeWidth={2} />
           </Svg>
         );
@@ -741,22 +721,36 @@ export default function VolunteerDashboardScreen() {
           <View style={styles.sectionHead}>
             <View>
               <Text style={styles.sectionTitle}>Programs</Text>
-              <Text style={styles.sectionSub}>The three core program areas in the system</Text>
+              <Text style={styles.sectionSub}>Active programs in the system</Text>
             </View>
           </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.programsContainer}>
-            <View style={[styles.programCard, styles.programCardN]}>
-              <Text style={styles.programTitle}>Nutrition</Text>
-              <Text style={styles.programDesc}>Mingo Meals and feeding protocols.</Text>
-            </View>
-            <View style={[styles.programCard, styles.programCardE]}>
-              <Text style={styles.programTitle}>Education</Text>
-              <Text style={styles.programDesc}>Formal and non-formal learning.</Text>
-            </View>
-            <View style={[styles.programCard, styles.programCardL]}>
-              <Text style={styles.programTitle}>Livelihood</Text>
-              <Text style={styles.programDesc}>Community income projects.</Text>
-            </View>
+            {programTracks && programTracks.length > 0 ? (
+              programTracks.map((track, idx) => {
+                const cardStyle = idx % 3 === 0 ? styles.programCardN : idx % 3 === 1 ? styles.programCardE : styles.programCardL;
+                return (
+                  <View key={track.id} style={[styles.programCard, cardStyle]}>
+                    <Text style={styles.programTitle}>{track.title}</Text>
+                    <Text style={styles.programDesc} numberOfLines={2}>{track.description || 'Community program initiative.'}</Text>
+                  </View>
+                );
+              })
+            ) : (
+              <>
+                <View style={[styles.programCard, styles.programCardN]}>
+                  <Text style={styles.programTitle}>Nutrition</Text>
+                  <Text style={styles.programDesc}>Feeding protocols and nutrition support.</Text>
+                </View>
+                <View style={[styles.programCard, styles.programCardE]}>
+                  <Text style={styles.programTitle}>Education</Text>
+                  <Text style={styles.programDesc}>Formal and non-formal learning.</Text>
+                </View>
+                <View style={[styles.programCard, styles.programCardL]}>
+                  <Text style={styles.programTitle}>Livelihood</Text>
+                  <Text style={styles.programDesc}>Community income projects.</Text>
+                </View>
+              </>
+            )}
           </ScrollView>
         </View>
 

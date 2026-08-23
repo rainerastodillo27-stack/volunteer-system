@@ -5,6 +5,7 @@ import threading
 import time
 import secrets
 import smtplib
+import traceback
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime, timezone, timedelta
@@ -93,13 +94,13 @@ class TTLCache:
 
 
 # Cache for projects snapshot.
-# A longer TTL avoids frequent cold rebuilds; cache is explicitly cleared on writes.
-_projects_snapshot_cache = TTLCache(ttl_seconds=300)  # Increased from 2 minutes to 5 minutes
+_projects_snapshot_cache = TTLCache(ttl_seconds=300)
 _projects_snapshot_lock = threading.Lock()
-_storage_collection_cache = TTLCache(ttl_seconds=120)  # Increased from 1 minute to 2 minutes
+_storage_collection_cache = TTLCache(ttl_seconds=120)
 NON_CACHEABLE_COLLECTION_KEYS = {"programTracks", "programs"}
 _DEFAULT_SNAPSHOT_FIELDS = {
     "projects",
+    "programs",
     "programTracks",
     "statusUpdates",
     "volunteerProfile",
@@ -923,7 +924,7 @@ def serialize_project_group_message_row(row: Any) -> dict[str, Any]:
     }
 
 
-SPECIAL_STORAGE_KEYS = {"messages", "projectGroupMessages"}
+SPECIAL_STORAGE_KEYS = {"messages", "projectGroupMessages", "programTracks"}
 
 # Define collection keys that return lists instead of single objects
 # This includes all HOT_STORAGE_TABLES and SPECIAL_STORAGE_KEYS
@@ -943,6 +944,26 @@ def _validate_storage_items(key: str, value: Any) -> list[dict[str, Any]]:
 
 
 def _get_special_storage_collection(connection: Any, key: str) -> list[dict[str, Any]]:
+    if key == "programTracks":
+        programs = get_postgres_hot_storage_collection(connection, "programs") or []
+        tracks: list[dict[str, Any]] = []
+        for p in programs:
+            p_id = str(p.get("id") or "").strip()
+            if p_id and not p.get("parentProjectId") and not p.get("isEvent"):
+                tracks.append({
+                    "id": p_id,
+                    "title": p.get("title", ""),
+                    "description": p.get("description", ""),
+                    "icon": p.get("icon", "folder"),
+                    "color": p.get("color", "#666666"),
+                    "imageUrl": p.get("imageUrl", ""),
+                    "sortOrder": 0,
+                    "isActive": True,
+                    "createdAt": p.get("createdAt"),
+                    "updatedAt": p.get("updatedAt"),
+                })
+        return tracks
+
     ensure_message_storage()
     ensure_project_group_message_storage()
     from psycopg.rows import dict_row
@@ -974,7 +995,7 @@ def _get_special_storage_collection(connection: Any, key: str) -> list[dict[str,
                   response_action,
                   response_to_title,
                   attachments
-                from project_group_messages
+                from public.project_group_messages
                 order by timestamp asc, id asc
                 """
             )

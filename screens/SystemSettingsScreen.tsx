@@ -8,6 +8,7 @@ import {
   StyleSheet,
   Switch,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -17,7 +18,9 @@ import {
   DEFAULT_APP_SETTINGS,
   getApiBaseUrl,
   getAppSettings,
+  getRuntimeBackendUrl,
   saveAppSettings,
+  setRuntimeBackendUrl,
 } from '../models/storage';
 import { AppSettings } from '../models/types';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
@@ -31,12 +34,16 @@ export default function SystemSettingsScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [actionKey, setActionKey] = useState<string | null>(null);
+  const [customUrlInput, setCustomUrlInput] = useState('');
+  const [savingUrl, setSavingUrl] = useState(false);
 
   useEffect(() => {
     const load = async () => {
       try {
         const storedSettings = await getAppSettings();
         setSettings(storedSettings);
+        // Pre-fill the URL input with whatever is currently saved / active.
+        setCustomUrlInput(storedSettings.customBackendUrl || getRuntimeBackendUrl() || '');
       } catch (error) {
         Alert.alert(
           getRequestErrorTitle(error),
@@ -216,8 +223,52 @@ export default function SystemSettingsScreen() {
         <Text style={styles.infoText}>NVC</Text>
         <Text style={styles.infoLabel}>Version</Text>
         <Text style={styles.infoText}>1.0.0</Text>
-        <Text style={styles.infoLabel}>Backend URL</Text>
+        <Text style={styles.infoLabel}>Backend URL (Active)</Text>
         <Text style={styles.infoText}>{getApiBaseUrl()}</Text>
+
+        <Text style={[styles.infoLabel, { marginTop: 16 }]}>Custom Backend URL</Text>
+        <Text style={[styles.settingDescription, { marginBottom: 6 }]}>
+          Paste an ngrok URL (e.g. https://abc123.ngrok-free.app) or a local IP to override the
+          default. Leave blank to use the built-in address.
+        </Text>
+        <TextInput
+          style={styles.urlInput}
+          value={customUrlInput}
+          onChangeText={setCustomUrlInput}
+          placeholder="https://abc123.ngrok-free.app"
+          placeholderTextColor="#94a3b8"
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="url"
+        />
+        <TouchableOpacity
+          style={[styles.secondaryButton, { marginTop: 8 }]}
+          onPress={async () => {
+            setSavingUrl(true);
+            try {
+              const trimmed = customUrlInput.trim().replace(/\/$/, '');
+              setRuntimeBackendUrl(trimmed || null);
+              await saveAppSettings({ customBackendUrl: trimmed });
+              Alert.alert(
+                'Backend URL Updated',
+                trimmed
+                  ? `App will now connect to:\n${trimmed}`
+                  : 'Reverted to the built-in backend address.'
+              );
+            } catch (error) {
+              Alert.alert('Error', getRequestErrorMessage(error, 'Failed to save backend URL.'));
+            } finally {
+              setSavingUrl(false);
+            }
+          }}
+          disabled={savingUrl}
+        >
+          {savingUrl ? (
+            <ActivityIndicator size="small" color="#166534" />
+          ) : (
+            <Text style={styles.secondaryButtonText}>Save Backend URL</Text>
+          )}
+        </TouchableOpacity>
       </View>
 
       <View style={styles.card}>
@@ -403,6 +454,17 @@ const styles = StyleSheet.create({
     color: '#475569',
     fontSize: 14,
     fontWeight: '700',
+  },
+  urlInput: {
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 13,
+    color: '#0f172a',
+    backgroundColor: '#f8fafc',
+    marginTop: 4,
   },
   logoutButton: {
     marginTop: 14,

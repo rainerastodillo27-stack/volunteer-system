@@ -91,14 +91,21 @@ function ensureBackendStarted() {
 }
 
 // Exposes runtime Expo configuration for API URLs and native map keys.
+// Fallback LAN IP for cloud builds where .env is not available.
+// Update this whenever your PC's Wi-Fi IP changes before rebuilding the APK.
+const HARDCODED_LAN_IP = '192.168.0.106';
+
 module.exports = () => {
   loadLocalEnv(__dirname);
   ensureBackendStarted();
 
-  const configuredApiBaseUrl = process.env.VOLCRE_API_BASE_URL || '';
-  const lanApiBaseUrl = configuredApiBaseUrl || `http://${getPreferredLanIp()}:8000`;
+  const configuredApiBaseUrl =
+    process.env.VOLCRE_API_BASE_URL ||
+    process.env.EXPO_PUBLIC_API_BASE_URL ||
+    'https://chatroom-vice-frivolous.ngrok-free.dev';
+  const lanApiBaseUrl = configuredApiBaseUrl;
   const webApiBaseUrl =
-    process.env.VOLCRE_WEB_API_BASE_URL || configuredApiBaseUrl || 'http://127.0.0.1:8000';
+    process.env.VOLCRE_WEB_API_BASE_URL || 'http://127.0.0.1:8000';
   const mobileGoogleMapsApiKey =
     process.env.GOOGLE_MAPS_MOBILE_API_KEY ||
     process.env.GOOGLE_MAPS_ANDROID_API_KEY ||
@@ -113,6 +120,7 @@ module.exports = () => {
     expo: {
       name: 'NVC',
       slug: 'volcre',
+      owner: '09092233654',
       version: '1.0.0',
       orientation: 'portrait',
       assetBundlePatterns: ['**/*'],
@@ -127,6 +135,7 @@ module.exports = () => {
       android: {
         package: 'com.volcre.nvcconnect',
         versionCode: 1,
+        usesCleartextTraffic: true,
         adaptiveIcon: {
           backgroundColor: '#ffffff',
         },
@@ -145,6 +154,9 @@ module.exports = () => {
         mobileGoogleMapsApiKey,
         androidGoogleMapsApiKey: mobileGoogleMapsApiKey,
         webGoogleMapsApiKey,
+        eas: {
+          projectId: '5fe09f19-4371-4c48-af29-d0cebd1dcb94',
+        },
       },
       plugins: ['expo-font', 'expo-web-browser'],
     },

@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Circle, Path } from 'react-native-svg';
+import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
@@ -343,7 +343,7 @@ export default function VolunteerEventsScreen() {
       case 'Livelihood':
         return (
           <Svg width={26} height={26} viewBox="0 0 24 24" fill="none">
-            <rect x="4" y="10" width="16" height="9" rx="1.5" stroke="#E8A33D" strokeWidth={2} />
+            <Rect x="4" y="10" width="16" height="9" rx="1.5" stroke="#E8A33D" strokeWidth={2} />
             <Path d="M8 10V7a4 4 0 0 1 8 0v3" stroke="#E8A33D" strokeWidth={2} />
           </Svg>
         );

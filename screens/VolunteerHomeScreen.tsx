@@ -10,7 +10,7 @@ import {
   Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Circle, Path } from 'react-native-svg';
+import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigation } from '@react-navigation/native';
@@ -154,7 +154,7 @@ export default function VolunteerHomeScreen() {
             <View style={styles.pillar}>
               <View style={[styles.pillarIcon, styles.pillarL]}>
                 <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
-                  <rect
+                  <Rect
                     x="4"
                     y="10"
                     width="16"

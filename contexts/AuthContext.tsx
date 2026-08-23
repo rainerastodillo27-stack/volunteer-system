@@ -57,6 +57,7 @@ const PREFETCH_KEYS_BY_ROLE = {
   volunteer: [
     'projects',
     'events',
+    'programs',
     'volunteers',
     'volunteerMatches',
     'volunteerTimeLogs',
@@ -66,6 +67,7 @@ const PREFETCH_KEYS_BY_ROLE = {
     'projects',
     'events',
     'partners',
+    'programs',
     'partnerProjectApplications',
     'partnerReports',
   ],
@@ -91,13 +93,13 @@ async function prefetchForUser(user: User | null): Promise<void> {
   }
 
   if (platform !== 'web' && user.role !== 'admin') {
-    void getProjectsScreenSnapshot(user, ['projects', 'volunteerProfile']).catch(error => {
+    void getProjectsScreenSnapshot(user, ['projects', 'programs', 'programTracks', 'volunteerProfile']).catch(error => {
       console.debug('[App] Background project snapshot prefetch failed:', error);
     });
   }
   // In ?mode=mobile on web, also prefetch the snapshot for volunteer/partner
   if (platform === 'web' && !getIsWeb() && user.role !== 'admin') {
-    void getProjectsScreenSnapshot(user, ['projects', 'volunteerProfile']).catch(error => {
+    void getProjectsScreenSnapshot(user, ['projects', 'programs', 'programTracks', 'volunteerProfile']).catch(error => {
       console.debug('[App] Background project snapshot prefetch failed:', error);
     });
   }

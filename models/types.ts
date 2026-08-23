@@ -23,6 +23,8 @@ export interface AppSettings {
   approvalConfirmations: boolean;
   showProgramContext: boolean;
   startupScreen: 'Dashboard' | 'Projects' | 'Reports' | 'Messages';
+  // Optional override — paste an ngrok URL or custom IP here instead of rebuilding the APK.
+  customBackendUrl?: string;
 }
 
 // Represents an application account that can sign in to the system.

@@ -70,7 +70,20 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   approvalConfirmations: true,
   showProgramContext: true,
   startupScreen: 'Dashboard',
+  customBackendUrl: '',
 };
+
+// Runtime override for the backend URL — loaded from AsyncStorage at app start.
+// When set (e.g. to an ngrok URL), this takes priority over the baked-in APK URL.
+let _runtimeCustomBackendUrl: string | null = null;
+
+export function setRuntimeBackendUrl(url: string | null): void {
+  _runtimeCustomBackendUrl = url && url.trim() ? url.trim().replace(/\/$/, '') : null;
+}
+
+export function getRuntimeBackendUrl(): string | null {
+  return _runtimeCustomBackendUrl;
+}
 
 const memoryStorageCache = new Map<string, unknown>();
 const sharedStorageCacheTimestamps = new Map<string, number>();
@@ -804,6 +817,20 @@ function getExpoExtraValue(key: string): string | undefined {
   return undefined;
 }
 
+const DEFAULT_PRODUCTION_TUNNEL_URL = 'https://chatroom-vice-frivolous.ngrok-free.dev';
+
+function isPrivateOrLocalHost(hostname: string): boolean {
+  const h = (hostname || '').toLowerCase().trim();
+  return (
+    h === '127.0.0.1' ||
+    h === 'localhost' ||
+    h === '10.0.2.2' ||
+    h.startsWith('192.168.') ||
+    h.startsWith('10.') ||
+    h.startsWith('172.')
+  );
+}
+
 // Resolves the native-device API base URL from Expo config or Metro host info.
 function resolveNativeApiBaseUrl(configuredBaseUrl?: string): string {
   const bundlerHost = getBundlerHost();
@@ -813,17 +840,21 @@ function resolveNativeApiBaseUrl(configuredBaseUrl?: string): string {
 
     try {
       const parsedUrl = new URL(trimmedBaseUrl);
-      if (bundlerHost) {
+      const isLocalHost = isPrivateOrLocalHost(parsedUrl.hostname);
+
+      if (bundlerHost && isLocalHost) {
         parsedUrl.hostname = bundlerHost;
         return parsedUrl.toString().replace(/\/$/, '');
       }
 
-      return resolveConfiguredApiBaseUrl(trimmedBaseUrl);
-    } catch {
-      if (bundlerHost) {
-        return `http://${bundlerHost}:8000`;
+      // On a standalone device without a bundler host, private IPs and loopbacks
+      // cannot be reached over cellular data. Route directly to the public tunnel.
+      if (!bundlerHost && isLocalHost) {
+        return DEFAULT_PRODUCTION_TUNNEL_URL;
       }
 
+      return trimmedBaseUrl;
+    } catch {
       return trimmedBaseUrl;
     }
   }
@@ -832,15 +863,16 @@ function resolveNativeApiBaseUrl(configuredBaseUrl?: string): string {
     return `http://${bundlerHost}:8000`;
   }
 
-  if (getPlatformOS() === 'android') {
-    return 'http://10.0.2.2:8000';
-  }
-
-  return 'http://127.0.0.1:8000';
+  return DEFAULT_PRODUCTION_TUNNEL_URL;
 }
 
 // Returns the effective HTTP base URL used by the frontend storage layer.
 export function getApiBaseUrl(): string {
+  // Check runtime override first (e.g. ngrok URL saved from System Settings).
+  if (_runtimeCustomBackendUrl) {
+    return _runtimeCustomBackendUrl;
+  }
+
   const configuredWebBaseUrl = getExpoExtraValue('webApiBaseUrl');
   if (typeof document !== 'undefined') {
     if (configuredWebBaseUrl && configuredWebBaseUrl.trim().length > 0) {
@@ -896,6 +928,11 @@ async function getApiHealthError(): Promise<string | null> {
   try {
     const response = await fetch(`${getApiBaseUrl()}/health`, {
       signal: controller.signal,
+      headers: {
+        'ngrok-skip-browser-warning': '69420',
+        'User-Agent': 'VolCre-App/1.0',
+        'Accept': 'application/json',
+      },
     });
     const payload = await response.json().catch(() => null) as
       | { detail?: string; message?: string; status?: string }
@@ -1049,6 +1086,12 @@ async function fetchApiResponse(
       const response = await fetch(`${getApiBaseUrl()}${path}`, {
         ...init,
         signal: controller.signal,
+        headers: {
+          'ngrok-skip-browser-warning': '69420',
+          'User-Agent': 'VolCre-App/1.0',
+          'Accept': 'application/json',
+          ...(init?.headers || {}),
+        },
       });
 
       if (!response.ok) {
@@ -1185,6 +1228,17 @@ async function getLocalStorageItem<T>(key: string): Promise<T | null> {
     return null;
   }
 }
+
+// Restore saved backend URL override at earliest module load
+void (async () => {
+  try {
+    const stored = await getLocalStorageItem<Partial<AppSettings>>(STORAGE_KEYS.APP_SETTINGS);
+    if (stored?.customBackendUrl && stored.customBackendUrl.trim()) {
+      setRuntimeBackendUrl(stored.customBackendUrl.trim());
+      console.log(`[Data] Restored custom backend URL from settings: ${stored.customBackendUrl.trim()}`);
+    }
+  } catch {}
+})();
 
 async function setLocalStorageItem<T>(key: string, value: T): Promise<void> {
   memoryStorageCache.set(key, value);
@@ -1914,12 +1968,32 @@ export async function getProjectsScreenSnapshot(
     `/projects/snapshot${query ? `?${query}` : ''}`
   );
 
+  const normalizedPrograms = (payload.programs || []).map(program => normalizeProjectRecord(program));
+  const payloadProgramTracks = Array.isArray(payload.programTracks) ? payload.programTracks : [];
+  const normalizedProgramTracks =
+    payloadProgramTracks.length > 0
+      ? payloadProgramTracks
+      : normalizedPrograms
+          .filter(program => !program.parentProjectId && !program.isEvent)
+          .map(program => ({
+            id: program.id,
+            title: program.title,
+            description: program.description,
+            icon: program.icon,
+            color: program.color,
+            imageUrl: program.imageUrl,
+            sortOrder: 0,
+            isActive: true,
+            createdAt: program.createdAt,
+            updatedAt: program.updatedAt,
+          }));
+
   const result = {
     projects: (payload.projects || []).map(project =>
       project?.isEvent ? normalizeEventRecord(project) : normalizeProjectRecord(project)
     ),
-    programTracks: payload.programTracks || [],
-    programs: (payload.programs || []).map(program => normalizeProjectRecord(program)),
+    programTracks: normalizedProgramTracks,
+    programs: normalizedPrograms,
     volunteerProfile: payload.volunteerProfile || null,
     volunteerMatches: payload.volunteerMatches || [],
     timeLogs: payload.timeLogs || [],
@@ -2244,7 +2318,13 @@ export async function validateDswdAccreditationNo(value: string): Promise<{ vali
   }
 
   try {
-    const response = await fetch(`${getApiBaseUrl()}/validation/dswd-accreditation/${encodeURIComponent(normalizedValue)}`);
+    const response = await fetch(`${getApiBaseUrl()}/validation/dswd-accreditation/${encodeURIComponent(normalizedValue)}`, {
+      headers: {
+        'ngrok-skip-browser-warning': '69420',
+        'User-Agent': 'VolCre-App/1.0',
+        'Accept': 'application/json',
+      },
+    });
     if (!response.ok) {
       return { valid: false, reason: 'Network error' };
     }

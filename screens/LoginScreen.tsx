@@ -62,6 +62,8 @@ import {
   getUserByEmailOrPhone,
   validateDswdAccreditationNo,
   loginWithCredentials,
+  saveAppSettings,
+  setRuntimeBackendUrl,
   subscribeToStorageChanges,
 } from "../models/storage";
 import { showError, showInfo } from "../utils/errorHandler";
@@ -478,6 +480,9 @@ export default function LoginScreen() {
   const [showYearPicker, setShowYearPicker] = useState(false);
   const [showMonthPicker, setShowMonthPicker] = useState(false);
   const [showDayPicker, setShowDayPicker] = useState(false);
+  const [showServerModal, setShowServerModal] = useState(false);
+  const [serverUrlInput, setServerUrlInput] = useState('');
+  const [serverUrlSaving, setServerUrlSaving] = useState(false);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [selectedRegionCode, setSelectedRegionCode] = useState("");
@@ -630,6 +635,11 @@ export default function LoginScreen() {
         setBackendMessage("Checking backend and Supabase connection...");
         const response = await fetch(`${getApiBaseUrl()}/db-health`, {
           signal: controller.signal,
+          headers: {
+            'ngrok-skip-browser-warning': '69420',
+            'User-Agent': 'VolCre-App/1.0',
+            'Accept': 'application/json',
+          },
         });
         const payload = (await response.json().catch(() => null)) as {
           status?: string;
@@ -1205,6 +1215,9 @@ export default function LoginScreen() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "ngrok-skip-browser-warning": "69420",
+          "User-Agent": "VolCre-App/1.0",
+          "Accept": "application/json",
         },
         body: JSON.stringify({ email }),
       });
@@ -1266,6 +1279,9 @@ export default function LoginScreen() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "ngrok-skip-browser-warning": "69420",
+          "User-Agent": "VolCre-App/1.0",
+          "Accept": "application/json",
         },
         body: JSON.stringify({ email, otp }),
       });
@@ -1883,6 +1899,80 @@ export default function LoginScreen() {
                 </TouchableOpacity>
 
                 {renderQuickLoginSection()}
+
+                {/* Server Settings gear button */}
+                <TouchableOpacity
+                  style={styles.serverSettingsButton}
+                  onPress={() => {
+                    setServerUrlInput(getApiBaseUrl());
+                    setShowServerModal(true);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <MaterialIcons name="settings" size={14} color="#94a3b8" />
+                  <Text style={styles.serverSettingsButtonText}>Server Settings</Text>
+                </TouchableOpacity>
+
+                {/* Server URL Modal */}
+                <Modal
+                  visible={showServerModal}
+                  transparent
+                  animationType="fade"
+                  onRequestClose={() => setShowServerModal(false)}
+                >
+                  <View style={styles.serverModalOverlay}>
+                    <View style={styles.serverModalCard}>
+                      <Text style={styles.serverModalTitle}>⚙ Backend Server URL</Text>
+                      <Text style={styles.serverModalDesc}>
+                        Paste your ngrok URL or local IP. Leave blank to use the built-in default.
+                        {"\n"}Example: https://abc123.ngrok-free.app
+                      </Text>
+                      <TextInput
+                        style={styles.serverModalInput}
+                        value={serverUrlInput}
+                        onChangeText={setServerUrlInput}
+                        placeholder="https://abc123.ngrok-free.app"
+                        placeholderTextColor="#94a3b8"
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        keyboardType="url"
+                      />
+                      <View style={styles.serverModalButtons}>
+                        <TouchableOpacity
+                          style={styles.serverModalCancel}
+                          onPress={() => setShowServerModal(false)}
+                        >
+                          <Text style={styles.serverModalCancelText}>Cancel</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.serverModalSave}
+                          disabled={serverUrlSaving}
+                          onPress={async () => {
+                            setServerUrlSaving(true);
+                            try {
+                              const trimmed = serverUrlInput.trim().replace(/\/$/, '');
+                              setRuntimeBackendUrl(trimmed || null);
+                              await saveAppSettings({ customBackendUrl: trimmed });
+                              setShowServerModal(false);
+                              // Trigger a backend status re-check by briefly resetting state
+                              setBackendStatus('checking');
+                              setBackendMessage('Reconnecting...');
+                            } catch {
+                              // best-effort
+                            } finally {
+                              setServerUrlSaving(false);
+                            }
+                          }}
+                        >
+                          {serverUrlSaving
+                            ? <ActivityIndicator size="small" color="#fff" />
+                            : <Text style={styles.serverModalSaveText}>Save & Reconnect</Text>
+                          }
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  </View>
+                </Modal>
               </View>
             ) : !isWeb && selectedMobileRole ? (
               <View style={styles.mobileLoginContainer}>
@@ -5025,5 +5115,90 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 12,
     fontWeight: "700",
+  },
+  serverSettingsButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    paddingVertical: 12,
+    marginTop: 4,
+    opacity: 0.7,
+  },
+  serverSettingsButtonText: {
+    fontSize: 12,
+    color: "#94a3b8",
+    fontWeight: "500",
+  },
+  serverModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+  },
+  serverModalCard: {
+    width: "100%",
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    padding: 20,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  serverModalTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#0f172a",
+    marginBottom: 8,
+  },
+  serverModalDesc: {
+    fontSize: 13,
+    color: "#64748b",
+    lineHeight: 18,
+    marginBottom: 12,
+  },
+  serverModalInput: {
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 13,
+    color: "#0f172a",
+    backgroundColor: "#f8fafc",
+    marginBottom: 14,
+  },
+  serverModalButtons: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  serverModalCancel: {
+    flex: 1,
+    paddingVertical: 11,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    alignItems: "center",
+  },
+  serverModalCancelText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#64748b",
+  },
+  serverModalSave: {
+    flex: 1,
+    paddingVertical: 11,
+    borderRadius: 10,
+    backgroundColor: "#166534",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  serverModalSaveText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#fff",
   },
 });
