@@ -33,6 +33,7 @@ import { useAuth } from '../contexts/AuthContext';
 import InlineLoadError from '../components/InlineLoadError';
 import { getProjectDisplayStatus } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
+import { navigateToAvailableRoute } from '../utils/navigation';
 
 const sectorOptions: PartnerSectorType[] = ['NGO', 'Hospital', 'Institution', 'Private'];
 const advocacyOptions: AdvocacyFocus[] = ['Nutrition', 'Education', 'Livelihood', 'Disaster'];
@@ -51,6 +52,9 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
   const [pendingFilter, setPendingFilter] = useState<'all' | 'registrations' | 'proposals'>('all');
   const [selectedPartner, setSelectedPartner] = useState<Partner | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [reviewTarget, setReviewTarget] = useState<Partner | PartnerProjectApplication | null>(null);
+  const [reviewTargetType, setReviewTargetType] = useState<'partner' | 'proposal' | null>(null);
+  const [reviewMode, setReviewMode] = useState<'revision' | 'rejection' | null>(null);
   const [nameDraft, setNameDraft] = useState('');
   const [descriptionDraft, setDescriptionDraft] = useState('');
   const [sectorTypeDraft, setSectorTypeDraft] = useState<PartnerSectorType>('NGO');
@@ -147,104 +151,104 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
     }
   };
 
-  const upsertPartnerReviewState = (updatedPartner: Partner) => {
-    setAllPartnersList(current =>
-      current.some(partner => partner.id === updatedPartner.id)
-        ? current.map(partner => (partner.id === updatedPartner.id ? updatedPartner : partner))
-        : [updatedPartner, ...current]
-    );
-    setPartners(current => {
-      const withoutReviewed = current.filter(partner => partner.id !== updatedPartner.id);
-      return updatedPartner.status === 'Approved'
-        ? [updatedPartner, ...withoutReviewed]
-        : withoutReviewed;
-    });
-    setSelectedPartner(current =>
-      current?.id === updatedPartner.id ? updatedPartner : current
-    );
-  };
-
-  const upsertProposalReviewState = (updatedApplication: PartnerProjectApplication) => {
-    setApplications(current =>
-      current.some(application => application.id === updatedApplication.id)
-        ? current.map(application =>
-            application.id === updatedApplication.id ? updatedApplication : application
-          )
-        : [updatedApplication, ...current]
-    );
-  };
-
   const handleApprovePartner = async (partner: Partner) => {
     try {
-      const updatedPartner = await reviewPartnerRegistration(partner.id, 'Approved', user?.id || 'admin');
-      upsertPartnerReviewState(updatedPartner);
+      await reviewPartnerRegistration(partner.id, 'Approved', user?.id || 'admin');
       setActionNotice(`Approved "${partner.name}". Organization credentials unlocked.`);
-      void loadPartners();
+      await loadPartners();
+      if (selectedPartner?.id === partner.id) {
+        setSelectedPartner(curr => curr ? { ...curr, status: 'Approved' } : null);
+      }
     } catch (error) {
       Alert.alert('Error', error instanceof Error ? error.message : 'Failed to approve partner.');
     }
   };
 
-  const handleRejectPartner = async (partner: Partner) => {
-    Alert.alert(
-      'Reject Partner Application',
-      `Are you sure you want to reject the registration application for "${partner.name}"?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Reject',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const updatedPartner = await reviewPartnerRegistration(partner.id, 'Rejected', user?.id || 'admin');
-              upsertPartnerReviewState(updatedPartner);
-              setActionNotice(`Rejected application for "${partner.name}".`);
-              void loadPartners();
-            } catch (error) {
-              Alert.alert('Error', error instanceof Error ? error.message : 'Failed to reject partner.');
-            }
-          },
-        },
-      ]
-    );
+  const openPartnerReview = (partner: Partner, mode: 'revision' | 'rejection') => {
+    setReviewTarget(partner);
+    setReviewTargetType('partner');
+    setReviewMode(mode);
+  };
+
+  const openProposalReview = (proposal: PartnerProjectApplication, mode: 'revision' | 'rejection') => {
+    setReviewTarget(proposal);
+    setReviewTargetType('proposal');
+    setReviewMode(mode);
+  };
+
+  const closeReviewModal = () => {
+    setReviewTarget(null);
+    setReviewTargetType(null);
+    setReviewMode(null);
+  };
+
+  const confirmReviewAction = async () => {
+    if (!reviewTarget || !reviewTargetType || !reviewMode) return;
+
+    try {
+      if (reviewTargetType === 'partner') {
+        const partnerTarget = reviewTarget as Partner;
+        const rejectionReason =
+          reviewMode === 'revision'
+            ? 'Returned for revision by administrator.'
+            : 'Partner registration rejected by administrator.';
+        await reviewPartnerRegistration(
+          partnerTarget.id,
+          'Rejected',
+          user?.id || 'admin',
+          rejectionReason
+        );
+        setActionNotice(
+          reviewMode === 'revision'
+            ? `Sent "${partnerTarget.name}" back for revision.`
+            : `Totally rejected "${partnerTarget.name}".`
+        );
+      } else {
+        const proposalTarget = reviewTarget as PartnerProjectApplication;
+        const reviewNotes =
+          reviewMode === 'revision'
+            ? 'Returned for revision by administrator.'
+            : 'Partner project proposal rejected by administrator.';
+        await reviewPartnerProjectApplication(
+          proposalTarget.id,
+          'Rejected',
+          user?.id || 'admin',
+          reviewNotes
+        );
+        const title = proposalTarget.proposalDetails?.proposedTitle || proposalTarget.projectId;
+        setActionNotice(
+          reviewMode === 'revision'
+            ? `Sent proposal "${title}" back for revision.`
+            : `Totally rejected proposal "${title}".`
+        );
+      }
+
+      closeReviewModal();
+      await loadPartners();
+      await loadProjects();
+    } catch (error) {
+      Alert.alert('Error', error instanceof Error ? error.message : 'Failed to perform review action.');
+    }
   };
 
   const handleApproveProposal = async (application: PartnerProjectApplication) => {
     try {
-      const reviewedApplication = await reviewPartnerProjectApplication(application.id, 'Approved', user?.id || 'admin');
-      upsertProposalReviewState(reviewedApplication);
+      const reviewedApp = await reviewPartnerProjectApplication(application.id, 'Approved', user?.id || 'admin');
       const title = application.proposalDetails?.proposedTitle || application.projectId;
       setActionNotice(`Approved proposal "${title}".`);
-      void loadPartners();
-      void loadProjects();
+      await loadPartners();
+      await loadProjects();
+      
+      if (reviewedApp.projectId) {
+        navigateToAvailableRoute(navigation, 'Projects', { projectId: reviewedApp.projectId });
+      }
     } catch (error) {
       Alert.alert('Error', error instanceof Error ? error.message : 'Failed to approve proposal.');
     }
   };
 
   const handleRejectProposal = async (application: PartnerProjectApplication) => {
-    Alert.alert(
-      'Reject Project Proposal',
-      `Are you sure you want to reject this project application?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Reject',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const reviewedApplication = await reviewPartnerProjectApplication(application.id, 'Rejected', user?.id || 'admin');
-              upsertProposalReviewState(reviewedApplication);
-              setActionNotice(`Rejected project proposal.`);
-              void loadPartners();
-              void loadProjects();
-            } catch (error) {
-              Alert.alert('Error', error instanceof Error ? error.message : 'Failed to reject proposal.');
-            }
-          },
-        },
-      ]
-    );
+    openProposalReview(application, 'rejection');
   };
 
   // Loads available projects for display.
@@ -398,16 +402,23 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
                 </Text>
               </View>
               <View style={styles.detailPendingActions}>
-                <TouchableOpacity
-                  style={styles.appRejectButton}
-                  onPress={() => handleRejectPartner(selectedPartner)}
-                >
-                  <MaterialIcons name="close" size={16} color="#dc2626" />
-                  <Text style={styles.appRejectButtonText}>Reject</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.appApproveButton}
-                  onPress={() => handleApprovePartner(selectedPartner)}
+                    <TouchableOpacity
+                      style={styles.appRejectButton}
+                      onPress={() => openPartnerReview(selectedPartner, 'revision')}
+                    >
+                      <MaterialIcons name="replay" size={16} color="#dc2626" />
+                      <Text style={styles.appRejectButtonText}>For Revise</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.appRejectButton, styles.appRejectButtonHard]}
+                      onPress={() => openPartnerReview(selectedPartner, 'rejection')}
+                    >
+                      <MaterialIcons name="block" size={16} color="#b91c1c" />
+                      <Text style={styles.appRejectButtonText}>Totally Reject</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.appApproveButton}
+                      onPress={() => handleApprovePartner(selectedPartner)}
                 >
                   <MaterialIcons name="check" size={16} color="#fff" />
                   <Text style={styles.appApproveButtonText}>Approve Partner</Text>
@@ -696,14 +707,21 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
       {totalPendingCount > 0 && activeTab !== 'pending' && (
         <TouchableOpacity
           style={styles.pendingAlertBanner}
-          onPress={() => setActiveTab('pending')}
+          onPress={() =>
+            navigateToAvailableRoute(
+              navigation,
+              'Messages',
+              { section: 'proposals' },
+              { routeName: 'Messages', params: { section: 'proposals' } }
+            )
+          }
           activeOpacity={0.85}
         >
           <View style={styles.pendingAlertLeft}>
             <MaterialIcons name="notification-important" size={22} color="#b45309" />
             <View>
               <Text style={styles.pendingAlertTitle}>
-                {totalPendingCount} Pending Application{totalPendingCount === 1 ? '' : 's'} Awaiting Review
+                {totalPendingCount} Pending Application{totalPendingCount === 1 ? '' : 's'} in Messages
               </Text>
               <Text style={styles.pendingAlertSubtitle}>
                 {pendingPartners.length > 0 ? `${pendingPartners.length} partner registration(s)` : ''}
@@ -713,7 +731,7 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
             </View>
           </View>
           <View style={styles.pendingAlertButton}>
-            <Text style={styles.pendingAlertButtonText}>Review Now</Text>
+            <Text style={styles.pendingAlertButtonText}>Open Messages</Text>
             <MaterialIcons name="arrow-forward" size={16} color="#ffffff" />
           </View>
         </TouchableOpacity>
@@ -922,7 +940,11 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
               const proposedTitle = proposal.proposalDetails?.proposedTitle || proposal.projectId;
               return (
                 <View key={proposal.id} style={styles.proposalCard}>
-                  <View style={styles.applicationCardHeader}>
+                  <TouchableOpacity
+                    style={styles.applicationCardHeader}
+                    onPress={() => navigation.navigate('Messages', { projectId: proposal.projectId, proposalId: proposal.id })}
+                    activeOpacity={0.7}
+                  >
                     <View style={[styles.applicationAvatar, { backgroundColor: '#e0e7ff' }]}>
                       <MaterialIcons name="description" size={24} color="#4338ca" />
                     </View>
@@ -943,7 +965,7 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
                         </Text>
                       </View>
                     </View>
-                  </View>
+                  </TouchableOpacity>
 
                   <View style={styles.applicationDetailsBox}>
                     <View style={styles.appDetailRow}>
@@ -979,10 +1001,18 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
                   <View style={styles.applicationActionsRow}>
                     <TouchableOpacity
                       style={styles.appRejectButton}
+                      onPress={() => openProposalReview(proposal, 'revision')}
+                    >
+                      <MaterialIcons name="replay" size={16} color="#dc2626" />
+                      <Text style={styles.appRejectButtonText}>For Revise</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[styles.appRejectButton, styles.appRejectButtonHard]}
                       onPress={() => handleRejectProposal(proposal)}
                     >
-                      <MaterialIcons name="close" size={16} color="#dc2626" />
-                      <Text style={styles.appRejectButtonText}>Reject</Text>
+                      <MaterialIcons name="block" size={16} color="#b91c1c" />
+                      <Text style={styles.appRejectButtonText}>Totally Reject</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity
@@ -1083,10 +1113,18 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
 
                       <TouchableOpacity
                         style={styles.appRejectButton}
-                        onPress={() => handleRejectPartner(partner)}
+                        onPress={() => openPartnerReview(partner, 'revision')}
                       >
-                        <MaterialIcons name="close" size={16} color="#dc2626" />
-                        <Text style={styles.appRejectButtonText}>Reject</Text>
+                        <MaterialIcons name="replay" size={16} color="#dc2626" />
+                        <Text style={styles.appRejectButtonText}>For Revise</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[styles.appRejectButton, styles.appRejectButtonHard]}
+                        onPress={() => openPartnerReview(partner, 'rejection')}
+                      >
+                        <MaterialIcons name="block" size={16} color="#b91c1c" />
+                        <Text style={styles.appRejectButtonText}>Totally Reject</Text>
                       </TouchableOpacity>
 
                       <TouchableOpacity
@@ -1162,6 +1200,34 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
           </View>
         </View>
       </ScrollView>
+
+      <Modal visible={Boolean(reviewTarget && reviewTargetType && reviewMode)} transparent animationType="fade" onRequestClose={closeReviewModal}>
+        <View style={styles.reviewModalBackdrop}>
+          <View style={styles.reviewModalCard}>
+            <Text style={styles.reviewModalTitle}>
+              {reviewMode === 'revision' ? 'Send Back For Revise' : 'Totally Reject'}
+            </Text>
+            <Text style={styles.reviewModalBody}>
+              {reviewTargetType === 'partner'
+                ? `This will mark "${(reviewTarget as Partner)?.name || ''}" as rejected.`
+                : `This will mark "${(reviewTarget as PartnerProjectApplication)?.proposalDetails?.proposedTitle || (reviewTarget as PartnerProjectApplication)?.projectId || ''}" as rejected.`}
+            </Text>
+            <View style={styles.reviewModalActions}>
+              <TouchableOpacity style={styles.reviewModalCancel} onPress={closeReviewModal}>
+                <Text style={styles.reviewModalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.reviewModalConfirm, reviewMode === 'revision' && styles.reviewModalConfirmRevision]}
+                onPress={confirmReviewAction}
+              >
+                <Text style={styles.reviewModalConfirmText}>
+                  {reviewMode === 'revision' ? 'Send Back' : 'Reject Now'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -2024,6 +2090,10 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#dc2626',
   },
+  appRejectButtonHard: {
+    borderColor: '#f87171',
+    backgroundColor: '#fff1f2',
+  },
   appApproveButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2043,5 +2113,61 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 24,
+  },
+  reviewModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  reviewModalCard: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    padding: 18,
+  },
+  reviewModalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginBottom: 8,
+  },
+  reviewModalBody: {
+    fontSize: 13,
+    color: '#475569',
+    lineHeight: 19,
+  },
+  reviewModalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 10,
+    marginTop: 18,
+  },
+  reviewModalCancel: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: '#f1f5f9',
+  },
+  reviewModalCancelText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  reviewModalConfirm: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: '#dc2626',
+  },
+  reviewModalConfirmRevision: {
+    backgroundColor: '#b45309',
+  },
+  reviewModalConfirmText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#fff',
   },
 });

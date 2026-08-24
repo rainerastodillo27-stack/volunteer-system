@@ -28,7 +28,7 @@ import {
   subscribeToMessages,
   requestVolunteerProjectJoin,
 } from '../models/storage';
-import type { Project, Volunteer, VolunteerTimeLog, AdminPlanningItem, ProgramTrack } from '../models/types';
+import type { Project, Volunteer, VolunteerTimeLog, AdminPlanningItem, ProgramTrack, VolunteerProjectMatch } from '../models/types';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage } from '../utils/requestErrors';
 import { debounce } from '../utils/navigation';
@@ -99,6 +99,64 @@ function formatGoogleEventTime(event: any): string {
   return formatTime(start);
 }
 
+
+function normalizeWords(text: string): string[] {
+  return (text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(word => word.length > 2);
+}
+
+function unique<T>(items: T[]): T[] {
+  return Array.from(new Set(items));
+}
+
+const CATEGORY_KEYWORDS: Record<string, string[]> = {
+  Nutrition: ['nutrition', 'food', 'feeding', 'meal', 'health', 'diet'],
+  Education: ['education', 'school', 'teaching', 'learning', 'student', 'training'],
+  Livelihood: ['livelihood', 'income', 'business', 'employment', 'skills', 'work'],
+  Disaster: ['disaster', 'relief', 'emergency', 'response', 'rescue', 'recovery'],
+};
+
+function checkEventSkillMatch(
+  project: Project,
+  volunteer: Volunteer | null
+): {
+  hasMatch: boolean;
+  matchedSkills: string[];
+} {
+  if (!volunteer) {
+    return { hasMatch: false, matchedSkills: [] };
+  }
+
+  const volunteerTerms = unique([
+    ...(volunteer.skills || []).flatMap(s => normalizeWords(s)),
+    ...normalizeWords(volunteer.skillsDescription || ''),
+    ...normalizeWords(volunteer.specialSkills || ''),
+  ]);
+
+  if (volunteerTerms.length === 0) {
+    return { hasMatch: false, matchedSkills: [] };
+  }
+
+  const categoryTerms = (project.category && CATEGORY_KEYWORDS[project.category]) || [];
+  const eventTerms = unique([
+    ...normalizeWords(project.title || ''),
+    ...normalizeWords(project.description || ''),
+    ...(project.skillsNeeded || []).flatMap(s => normalizeWords(s)),
+    ...categoryTerms,
+  ]);
+
+  const matched = volunteerTerms.filter(term => eventTerms.includes(term));
+  const matchedSkills = unique(matched).slice(0, 3);
+
+  return {
+    hasMatch: matchedSkills.length > 0,
+    matchedSkills,
+  };
+}
+
 export default function VolunteerDashboardScreen() {
   const { user } = useAuth();
   const navigation = useNavigation<VolunteerNavProp>();
@@ -107,6 +165,7 @@ export default function VolunteerDashboardScreen() {
   const [loading, setLoading] = useState(true);
   const [projects, setProjects] = useState<Project[]>([]);
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
+  const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
   const [timeLogs, setTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const [unreadMessages, setUnreadMessages] = useState(0);
   const [planningItems, setPlanningItems] = useState<AdminPlanningItem[]>([]);
@@ -188,14 +247,20 @@ export default function VolunteerDashboardScreen() {
     }
 
     const volunteerId = volunteerProfile?.id || '';
+    const matchedProjectIds = new Set(
+      volunteerMatches
+        .filter(m => m.status === 'Matched' || m.status === 'Requested')
+        .map(m => m.projectId)
+    );
     const joinedEvents = projects.filter(project => {
       if (!project.isEvent) {
         return false;
       }
 
       return (
-        project.joinedUserIds?.includes(user.id) ||
-        (volunteerId ? project.volunteers?.includes(volunteerId) : false) ||
+        matchedProjectIds.has(project.id) ||
+        (project.joinedUserIds || []).includes(user.id) ||
+        (volunteerId ? (project.volunteers || []).includes(volunteerId) : false) ||
         (volunteerProfile?.pastProjects || []).includes(project.id)
       );
     });
@@ -265,39 +330,71 @@ export default function VolunteerDashboardScreen() {
     try {
       await reconcileApprovedVolunteerEventMemberships();
       const [projectSnapshot, timelineSnapshot, messages] = await Promise.all([
-        getProjectsScreenSnapshot(user, [
-          'projects',
-          'programs',
-          'volunteerProfile',
-          'timeLogs',
-          'programTracks',
-        ]),
+        getProjectsScreenSnapshot(
+          user,
+          [
+            'projects',
+            'events',
+            'programs',
+            'volunteerProfile',
+            'volunteerMatches',
+            'volunteerJoinRecords',
+            'timeLogs',
+            'programTracks',
+          ],
+          force
+        ),
         getDashboardTimelineSnapshot(),
         getMessagesForUser(user.id),
       ]);
 
-      setProjects(projectSnapshot.projects);
+      setProjects(projectSnapshot.projects || []);
       setVolunteerProfile(projectSnapshot.volunteerProfile);
-      setTimeLogs(projectSnapshot.timeLogs);
+      setVolunteerMatches(projectSnapshot.volunteerMatches || []);
+      setTimeLogs(projectSnapshot.timeLogs || []);
+
+      // Gather ONLY real programs from database
       const rawProgramTracks = projectSnapshot.programTracks || [];
       const rawPrograms = projectSnapshot.programs || [];
-      const resolvedTracks: ProgramTrack[] =
-        rawProgramTracks.length > 0
-          ? rawProgramTracks
-          : rawPrograms.map(p => ({
-              id: p.id,
-              title: p.title,
-              description: p.description,
-              icon: p.icon,
-              color: p.color,
-              imageUrl: p.imageUrl,
-              sortOrder: 0,
-              isActive: true,
-              createdAt: p.createdAt,
-              updatedAt: p.updatedAt,
-            }));
+      const rawParentProjects = (projectSnapshot.projects || []).filter(p => !p.isEvent);
+
+      const seenIds = new Set<string>();
+      const combinedPrograms: any[] = [];
+
+      for (const pt of rawProgramTracks) {
+        if (pt.id && !seenIds.has(pt.id)) {
+          seenIds.add(pt.id);
+          combinedPrograms.push(pt);
+        }
+      }
+      for (const pr of rawPrograms) {
+        if (pr.id && !seenIds.has(pr.id) && !seenIds.has(pr.title)) {
+          seenIds.add(pr.id);
+          combinedPrograms.push(pr);
+        }
+      }
+      for (const proj of rawParentProjects) {
+        if (proj.id && !seenIds.has(proj.id) && !seenIds.has(proj.title)) {
+          seenIds.add(proj.id);
+          combinedPrograms.push(proj);
+        }
+      }
+
+      const resolvedTracks: ProgramTrack[] = combinedPrograms.map((p, idx) => ({
+        id: p.id,
+        title: p.title || 'Program',
+        description: p.description || `${p.category || 'NVC'} program initiative.`,
+        icon: p.icon || (idx % 3 === 0 ? 'restaurant' : idx % 3 === 1 ? 'school' : 'work'),
+        color: p.color || (idx % 3 === 0 ? '#b45309' : idx % 3 === 1 ? '#166534' : '#991b1b'),
+        imageUrl: p.imageUrl,
+        sortOrder: idx,
+        isActive: true,
+        createdAt: p.createdAt,
+        updatedAt: p.updatedAt,
+      }));
+
       setProgramTracks(resolvedTracks);
-      setPlanningItems(timelineSnapshot.planningItems);
+      setPlanningItems(timelineSnapshot.planningItems || []);
       setUnreadMessages(messages.filter(msg => !msg.read && msg.recipientId === user.id).length);
     } catch (err) {
       console.error('Failed to load dashboard:', err);
@@ -315,9 +412,12 @@ export default function VolunteerDashboardScreen() {
           'projects',
           'events',
           'programs',
+          'volunteers',
+          'volunteerMatches',
           'volunteerProjectJoins',
           'volunteerTimeLogs',
           'adminPlanningCalendars',
+          'adminPlanningItems',
           'programTracks',
         ],
         debounce(() => {
@@ -336,15 +436,41 @@ export default function VolunteerDashboardScreen() {
 
   // Joined Events calculation
   const joinedEventsCount = useMemo(() => {
-    return projects.filter(
-      project =>
-        project.isEvent &&
-        (
-          (project.joinedUserIds || []).includes(user?.id || '') ||
-          (volunteerProfile ? project.volunteers.includes(volunteerProfile.id) : false)
-        )
-    ).length;
-  }, [projects, user?.id, volunteerProfile]);
+    console.log('[DASHBOARD] Calculating joined events count...');
+    console.log('[DASHBOARD] volunteerMatches:', volunteerMatches);
+    console.log('[DASHBOARD] projects:', projects.length);
+    console.log('[DASHBOARD] volunteerProfile:', volunteerProfile?.id);
+    console.log('[DASHBOARD] user:', user?.id);
+    
+    const matchedProjectIds = new Set(
+      volunteerMatches
+        .filter(m => m.status === 'Matched' || m.status === 'Requested')
+        .map(m => m.projectId)
+    );
+    console.log('[DASHBOARD] matchedProjectIds:', Array.from(matchedProjectIds));
+    
+    const volunteerId = volunteerProfile?.id || '';
+    const userId = user?.id || '';
+
+    const joinedEvents = projects.filter(project => {
+      const isEvt = Boolean(project.isEvent || (project.id && project.id.startsWith('event-')));
+      if (!isEvt) return false;
+
+      const isMatched =
+        matchedProjectIds.has(project.id) ||
+        matchedProjectIds.has(project.id.replace('event-', ''));
+      const isJoinedByUser = Boolean(userId && project.joinedUserIds?.includes(userId));
+      const isJoinedByVol = Boolean(volunteerId && project.volunteers?.includes(volunteerId));
+      const isPastProj = Boolean(volunteerProfile?.pastProjects?.includes(project.id));
+
+      console.log(`[DASHBOARD] Event ${project.title}:`, { isMatched, isJoinedByUser, isJoinedByVol, isPastProj });
+
+      return isMatched || isJoinedByUser || isJoinedByVol || isPastProj;
+    });
+    
+    console.log('[DASHBOARD] Joined events count:', joinedEvents.length);
+    return joinedEvents.length;
+  }, [projects, user?.id, volunteerProfile, volunteerMatches]);
 
   // Calendar setup
   const year = currentDate.getFullYear();
@@ -404,10 +530,10 @@ export default function VolunteerDashboardScreen() {
     setCurrentDate(new Date(year, month + 1, 1));
   };
 
-  // Timeline list merging database + gcal + mockup fallbacks
+  // Timeline list merging database planning items, projects/events, and synced google events (NO HARDCODED MOCK)
   const displayTimeline = useMemo(() => {
-    const realTimeline = planningItems
-      .filter(item => item.startDate)
+    const realPlanning = (planningItems || [])
+      .filter(item => Boolean(item.startDate))
       .map(item => ({
         id: item.id,
         startDate: item.startDate,
@@ -415,28 +541,29 @@ export default function VolunteerDashboardScreen() {
         htmlLink: undefined,
       }));
 
-    const googleTimeline = googleEvents.map(event => ({
+    const realProjectEvents = (projects || [])
+      .filter(p => Boolean(p.startDate))
+      .map(p => ({
+        id: p.id,
+        startDate: p.startDate,
+        title: p.title,
+        htmlLink: undefined,
+      }));
+
+    const googleTimeline = (googleEvents || []).map(event => ({
       id: `google-${event.id}`,
       startDate: event.start?.dateTime || event.start?.date || '',
       title: event.summary || 'Google Calendar Event',
       htmlLink: event.htmlLink,
     }));
 
-    const combined = [...realTimeline, ...googleTimeline]
-      .filter(item => item.startDate)
+    const combined = [...realPlanning, ...realProjectEvents, ...googleTimeline]
+      .filter(item => Boolean(item.startDate))
       .sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime())
       .slice(0, 5);
 
-    if (combined.length > 0) return combined;
-
-    // Mock timeline as fallback
-    return [
-      { id: 't-1', startDate: '2026-07-07', title: 'Feeding program site visit, Iloilo', htmlLink: undefined },
-      { id: 't-2', startDate: '2026-07-15', title: 'Volunteer orientation, new intake', htmlLink: undefined },
-      { id: 't-3', startDate: '2026-07-23', title: 'Livelihood workshop, Bacolod chapter', htmlLink: undefined },
-      { id: 't-4', startDate: '2026-07-29', title: 'Admin timeline review, Q3 planning', htmlLink: undefined },
-    ];
-  }, [planningItems, googleEvents]);
+    return combined;
+  }, [planningItems, projects, googleEvents]);
 
   const formatTimelineDate = (dateStr?: string) => {
     if (!dateStr) return '';
@@ -449,9 +576,28 @@ export default function VolunteerDashboardScreen() {
   // Projects list from database
   const displayProjects = useMemo(() => {
     return projects
-      .filter(p => p.isEvent)
-      .slice(0, 4);
+      .filter(p => Boolean(p.isEvent || (p.id && p.id.startsWith('event-'))))
+      .slice(0, 5);
   }, [projects]);
+
+  const isProjectJoined = (project: Project) => {
+    const matchedProjectIds = new Set(
+      volunteerMatches
+        .filter(m => m.status === 'Matched' || m.status === 'Requested')
+        .map(m => m.projectId)
+    );
+    const volunteerId = volunteerProfile?.id || '';
+    const userId = user?.id || '';
+
+    const isMatched =
+      matchedProjectIds.has(project.id) ||
+      matchedProjectIds.has(project.id.replace('event-', ''));
+    const isJoinedByUser = Boolean(userId && project.joinedUserIds?.includes(userId));
+    const isJoinedByVol = Boolean(volunteerId && project.volunteers?.includes(volunteerId));
+    const isPastProj = Boolean(volunteerProfile?.pastProjects?.includes(project.id));
+
+    return isMatched || isJoinedByUser || isJoinedByVol || isPastProj;
+  };
 
   const handleJoinProject = async (project: Project) => {
     if (!user?.id) {
@@ -657,7 +803,7 @@ export default function VolunteerDashboardScreen() {
 
             <View style={styles.calFoot}>
               <View style={styles.calMetric}>
-                <Text style={styles.calMetricNum}>{planningItems.length || 5}</Text>
+                <Text style={styles.calMetricNum}>{displayTimeline.length}</Text>
                 <Text style={styles.calMetricLabel}>Timeline items</Text>
               </View>
               <View style={styles.calMetric}>
@@ -679,40 +825,48 @@ export default function VolunteerDashboardScreen() {
             </View>
           </View>
           <View style={[styles.calCard, { paddingVertical: 14, paddingHorizontal: 16 }]}>
-            {displayTimeline.map((item, idx) => {
-              const content = (
-                <View style={styles.timelineItem}>
-                  <View style={styles.timelineDotWrap}>
-                    <View style={[styles.timelineDot, item.htmlLink && { backgroundColor: '#10b981' }]} />
-                    {idx < displayTimeline.length - 1 && <View style={styles.timelineLine} />}
+            {displayTimeline.length > 0 ? (
+              displayTimeline.map((item, idx) => {
+                const content = (
+                  <View style={styles.timelineItem}>
+                    <View style={styles.timelineDotWrap}>
+                      <View style={[styles.timelineDot, item.htmlLink && { backgroundColor: '#10b981' }]} />
+                      {idx < displayTimeline.length - 1 && <View style={styles.timelineLine} />}
+                    </View>
+                    <View style={styles.timelineContent}>
+                      <Text style={styles.timelineDate}>{formatTimelineDate(item.startDate)}</Text>
+                      <Text style={[styles.timelineTitle, item.htmlLink && { color: '#047857' }]}>
+                        {item.title} {item.htmlLink && '(Google Cal)'}
+                      </Text>
+                    </View>
                   </View>
-                  <View style={styles.timelineContent}>
-                    <Text style={styles.timelineDate}>{formatTimelineDate(item.startDate)}</Text>
-                    <Text style={[styles.timelineTitle, item.htmlLink && { color: '#047857' }]}>
-                      {item.title} {item.htmlLink && '(Google Cal)'}
-                    </Text>
-                  </View>
-                </View>
-              );
-
-              if (item.htmlLink) {
-                return (
-                  <TouchableOpacity
-                    key={item.id}
-                    onPress={() => {
-                      Linking.openURL(item.htmlLink).catch(err => {
-                        console.error('Failed to open link:', err);
-                      });
-                    }}
-                    activeOpacity={0.8}
-                  >
-                    {content}
-                  </TouchableOpacity>
                 );
-              }
 
-              return <View key={item.id}>{content}</View>;
-            })}
+                if (item.htmlLink) {
+                  return (
+                    <TouchableOpacity
+                      key={item.id}
+                      onPress={() => {
+                        Linking.openURL(item.htmlLink).catch(err => {
+                          console.error('Failed to open link:', err);
+                        });
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      {content}
+                    </TouchableOpacity>
+                  );
+                }
+
+                return <View key={item.id}>{content}</View>;
+              })
+            ) : (
+              <View style={{ paddingVertical: 12, alignItems: 'center' }}>
+                <Text style={{ fontSize: 13, color: '#78716C', fontStyle: 'italic' }}>
+                  No upcoming timeline items scheduled.
+                </Text>
+              </View>
+            )}
           </View>
         </View>
 
@@ -724,34 +878,30 @@ export default function VolunteerDashboardScreen() {
               <Text style={styles.sectionSub}>Active programs in the system</Text>
             </View>
           </View>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.programsContainer}>
-            {programTracks && programTracks.length > 0 ? (
-              programTracks.map((track, idx) => {
+          {programTracks && programTracks.length > 0 ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.programsContainer}>
+              {programTracks.map((track, idx) => {
                 const cardStyle = idx % 3 === 0 ? styles.programCardN : idx % 3 === 1 ? styles.programCardE : styles.programCardL;
                 return (
-                  <View key={track.id} style={[styles.programCard, cardStyle]}>
+                  <TouchableOpacity
+                    key={track.id}
+                    style={[styles.programCard, cardStyle]}
+                    activeOpacity={0.8}
+                    onPress={() => navigation.navigate('Events')}
+                  >
                     <Text style={styles.programTitle}>{track.title}</Text>
                     <Text style={styles.programDesc} numberOfLines={2}>{track.description || 'Community program initiative.'}</Text>
-                  </View>
+                  </TouchableOpacity>
                 );
-              })
-            ) : (
-              <>
-                <View style={[styles.programCard, styles.programCardN]}>
-                  <Text style={styles.programTitle}>Nutrition</Text>
-                  <Text style={styles.programDesc}>Feeding protocols and nutrition support.</Text>
-                </View>
-                <View style={[styles.programCard, styles.programCardE]}>
-                  <Text style={styles.programTitle}>Education</Text>
-                  <Text style={styles.programDesc}>Formal and non-formal learning.</Text>
-                </View>
-                <View style={[styles.programCard, styles.programCardL]}>
-                  <Text style={styles.programTitle}>Livelihood</Text>
-                  <Text style={styles.programDesc}>Community income projects.</Text>
-                </View>
-              </>
-            )}
-          </ScrollView>
+              })}
+            </ScrollView>
+          ) : (
+            <View style={[styles.calCard, { paddingVertical: 14, alignItems: 'center' }]}>
+              <Text style={{ fontSize: 13, color: '#78716C', fontStyle: 'italic' }}>
+                No active programs scheduled.
+              </Text>
+            </View>
+          )}
         </View>
 
         {/* PROJECTS */}
@@ -766,26 +916,49 @@ export default function VolunteerDashboardScreen() {
             </TouchableOpacity>
           </View>
 
-          {displayProjects.map(project => (
-            <View key={project.id} style={styles.projectRow}>
-              <View style={styles.projectIcon}>
-                {getProjectIcon(project.category)}
-              </View>
-              <View style={styles.projectInfo}>
-                <Text style={styles.projectTitleText}>{project.title}</Text>
-                <Text style={styles.projectMeta}>
-                  {project.location?.address || 'Bacolod City'} · {project.volunteersNeeded || 4} volunteers needed
-                </Text>
-              </View>
-              <TouchableOpacity
-                style={styles.projectJoin}
-                onPress={() => handleJoinProject(project)}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.projectJoinText}>Join</Text>
-              </TouchableOpacity>
+          {displayProjects.length > 0 ? (
+            displayProjects.map(project => {
+              const skillMatch = checkEventSkillMatch(project, volunteerProfile);
+              const isJoined = isProjectJoined(project);
+              return (
+                <View key={project.id} style={styles.projectRow}>
+                  <View style={styles.projectIcon}>
+                    {getProjectIcon(project.category)}
+                  </View>
+                  <View style={styles.projectInfo}>
+                    <Text style={styles.projectTitleText}>{project.title}</Text>
+                    {skillMatch.hasMatch && (
+                      <View style={styles.skillMatchBadge}>
+                        <MaterialIcons name="stars" size={14} color="#16a34a" />
+                        <Text style={styles.skillMatchText}>
+                          Skills Match: {skillMatch.matchedSkills.join(', ')}
+                        </Text>
+                      </View>
+                    )}
+                    <Text style={styles.projectMeta}>
+                      {project.location?.address || 'Bacolod City'} · {project.volunteersNeeded || 4} volunteers needed
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={[styles.projectJoin, isJoined && styles.projectJoined]}
+                    onPress={() => !isJoined && handleJoinProject(project)}
+                    disabled={isJoined}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.projectJoinText, isJoined && styles.projectJoinedText]}>
+                      {isJoined ? 'Joined' : 'Join'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            })
+          ) : (
+            <View style={[styles.calCard, { paddingVertical: 14, alignItems: 'center' }]}>
+              <Text style={{ fontSize: 13, color: '#78716C', fontStyle: 'italic' }}>
+                No available events scheduled.
+              </Text>
             </View>
-          ))}
+          )}
         </View>
 
       </ScrollView>
@@ -802,7 +975,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    paddingBottom: 40,
+    paddingBottom: 90,
   },
   loadingWrapper: {
     flex: 1,
@@ -1259,5 +1432,28 @@ const styles = StyleSheet.create({
     fontSize: 11.5,
     fontWeight: '700',
     color: '#1F3A2E',
+  },
+  projectJoined: {
+    backgroundColor: '#3F7A54',
+  },
+  projectJoinedText: {
+    color: '#ffffff',
+  },
+  skillMatchBadge: {
+    marginTop: 4,
+    marginBottom: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#dcfce7',
+    paddingVertical: 2,
+    paddingHorizontal: 6,
+    borderRadius: 6,
+    gap: 4,
+    alignSelf: 'flex-start',
+  },
+  skillMatchText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#166534',
   },
 });

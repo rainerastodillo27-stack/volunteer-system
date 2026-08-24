@@ -1529,6 +1529,18 @@ async function deleteRemoteStorageItem(key: string): Promise<void> {
   });
 }
 
+async function deleteRemoteProjectRecord(projectId: string): Promise<void> {
+  await fetchApiResponse(`/projects/${encodeURIComponent(projectId)}`, {
+    method: 'DELETE',
+  });
+}
+
+async function deleteRemoteEventRecord(eventId: string): Promise<void> {
+  await fetchApiResponse(`/events/${encodeURIComponent(eventId)}`, {
+    method: 'DELETE',
+  });
+}
+
 async function clearRemoteStorage(): Promise<void> {
   await fetchApiResponse('/storage', {
     method: 'DELETE',
@@ -1939,7 +1951,8 @@ export async function getDashboardTimelineSnapshot(): Promise<DashboardTimelineS
 // Loads the combined project, volunteer, and application data for the projects screen.
 export async function getProjectsScreenSnapshot(
   user?: Pick<User, 'id' | 'role'> | null,
-  fields?: string[]
+  fields?: string[],
+  forceRefresh: boolean = false
 ): Promise<ProjectsScreenSnapshot> {
   const params = new URLSearchParams();
   if (user?.id) {
@@ -1954,7 +1967,7 @@ export async function getProjectsScreenSnapshot(
 
   const cacheKey = `snapshot:${params.toString()}`;
   const cached = projectsSnapshotCache.get(cacheKey);
-  if (cached && Date.now() - cached.timestamp < PROJECTS_SNAPSHOT_CACHE_TTL_MS) {
+  if (!forceRefresh && cached && Date.now() - cached.timestamp < PROJECTS_SNAPSHOT_CACHE_TTL_MS) {
     console.log(`[Data] ProjectsSnapshot cache hit (${cacheKey.slice(0, 40)}...)`);
     return cached.data as ProjectsScreenSnapshot;
   }
@@ -2041,8 +2054,11 @@ export async function saveAppSettings(settings: Partial<AppSettings>): Promise<v
 }
 
 export async function getAllProgramTracks(): Promise<ProgramTrack[]> {
-  // Programs are now stored ONLY in the programs table
-  const allPrograms = (await getStorageItemFast<Project[]>(STORAGE_KEYS.PROGRAMS)) || [];
+  // Programs are now stored ONLY in the programs table.
+  // Always fetch fresh from the network so deleted programs are never returned
+  // from a stale in-memory or localStorage cache.
+  invalidateSharedStorageCache([STORAGE_KEYS.PROGRAMS]);
+  const allPrograms = (await getStorageItem<Project[]>(STORAGE_KEYS.PROGRAMS)) || [];
   
   // Convert top-level programs to ProgramTrack format
   const programTracks: ProgramTrack[] = allPrograms
@@ -2127,20 +2143,6 @@ export async function saveProgram(program: ProgramTrack): Promise<void> {
 
 export async function deleteProgram(programId: string): Promise<void> {
   const normalizedProgramId = String(programId || '').trim();
-  const normalizedProgramKey = normalizedProgramId.toLowerCase();
-  const belongsToProgram = (item: Project | undefined | null): boolean => {
-    if (!item) {
-      return false;
-    }
-    return [
-      item.id,
-      item.parentProjectId,
-      (item as any).parent_project_id,
-      (item as any).program_id,
-      item.programModule,
-      item.category,
-    ].some(value => String(value || '').trim().toLowerCase() === normalizedProgramKey);
-  };
 
   try {
     await fetchApiResponse(`/program-tracks/${encodeURIComponent(normalizedProgramId)}`, {
@@ -2152,108 +2154,10 @@ export async function deleteProgram(programId: string): Promise<void> {
       throw error;
     }
   }
-  
-  // Fetch all projects and events to find children of this program
-  const [allPrograms, allProjects, allEvents] = await Promise.all([
-    getStorageItem<Project[]>(STORAGE_KEYS.PROGRAMS),
-    getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS),
-    getStorageItem<Project[]>(STORAGE_KEYS.EVENTS),
-  ]);
 
-  // Identify child project IDs (projects that have this program as parent)
-  const childProjectIds = new Set(
-    (allProjects || [])
-      .filter(belongsToProgram)
-      .map(p => p.id)
-  );
-  const childProjectIdKeys = new Set([...childProjectIds].map(id => String(id || '').trim().toLowerCase()));
-
-  // Identify child event IDs (events that have a child project as parent, or this program as parent)
-  const childEventIds = new Set(
-    (allEvents || [])
-      .filter(e => belongsToProgram(e) || childProjectIdKeys.has(String(e.parentProjectId || '').trim().toLowerCase()))
-      .map(e => e.id)
-  );
-
-  // Collect all IDs to remove (program + child projects + child events)
-  const allRemovalIds = new Set([normalizedProgramId, ...childProjectIds, ...childEventIds]);
-
-  // Load all dependent records
-  const [
-    statusUpdates,
-    partnerApplications,
-    partnerReports,
-    volunteerJoinRecords,
-    volunteerMatches,
-    volunteerTimeLogs,
-    projectGroupMessages,
-    volunteers,
-    adminPlanningCalendars,
-  ] = await Promise.all([
-    getStorageItem<StatusUpdate[]>(STORAGE_KEYS.STATUS_UPDATES),
-    getStorageItem<PartnerProjectApplication[]>(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS),
-    getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS),
-    getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS),
-    getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES),
-    getStorageItem<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS),
-    getStorageItem<ProjectGroupMessage[]>(STORAGE_KEYS.PROJECT_GROUP_MESSAGES),
-    getStorageItem<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS),
-    getStorageItem<AdminPlanningCalendar[]>(STORAGE_KEYS.ADMIN_PLANNING_CALENDARS),
-  ]);
-
-  // Delete program and all child projects/events, plus clean up all dependent records
-  await Promise.all([
-    setStorageItem(
-      STORAGE_KEYS.PROGRAMS,
-      (allPrograms || []).filter(p => String(p.id || '').trim().toLowerCase() !== normalizedProgramKey)
-    ),
-    setStorageItem(
-      STORAGE_KEYS.PROJECTS,
-      (allProjects || []).filter(p => !allRemovalIds.has(p.id))
-    ),
-    setStorageItem(
-      STORAGE_KEYS.EVENTS,
-      (allEvents || []).filter(e => !allRemovalIds.has(e.id))
-    ),
-    setStorageItem(
-      STORAGE_KEYS.STATUS_UPDATES,
-      (statusUpdates || []).filter(u => !allRemovalIds.has(u.projectId))
-    ),
-    setStorageItem(
-      STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
-      (partnerApplications || []).filter(a => !allRemovalIds.has(a.projectId))
-    ),
-    setStorageItem(
-      STORAGE_KEYS.PARTNER_REPORTS,
-      (partnerReports || []).filter(r => !allRemovalIds.has(r.projectId))
-    ),
-    setStorageItem(
-      STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
-      (volunteerJoinRecords || []).filter(j => !allRemovalIds.has(j.projectId))
-    ),
-    setStorageItem(
-      STORAGE_KEYS.VOLUNTEER_MATCHES,
-      (volunteerMatches || []).filter(m => !allRemovalIds.has(m.projectId))
-    ),
-    setStorageItem(
-      STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
-      (volunteerTimeLogs || []).filter(l => !allRemovalIds.has(l.projectId))
-    ),
-    setStorageItem(
-      STORAGE_KEYS.PROJECT_GROUP_MESSAGES,
-      (projectGroupMessages || []).filter(msg => !allRemovalIds.has(msg.projectId))
-    ),
-    setStorageItem(
-      STORAGE_KEYS.VOLUNTEERS,
-      removeProjectIdsFromVolunteerHistory(volunteers, allRemovalIds)
-    ),
-    setStorageItem(
-      STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
-      removeProjectIdsFromPlanningCalendars(adminPlanningCalendars, allRemovalIds)
-    ),
-  ]);
-  
-  // Invalidate all dependent caches
+  // The backend endpoint deletes the canonical program row and cascades linked data.
+  // Avoid rewriting client-side cached collections after the mutation, which can
+  // restore the deleted program when stale cache entries are still warm.
   const changedKeys = [
     STORAGE_KEYS.PROGRAM_TRACKS,
     STORAGE_KEYS.PROGRAMS,
@@ -2270,6 +2174,7 @@ export async function deleteProgram(programId: string): Promise<void> {
     STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
   ];
   invalidateSharedStorageCache(changedKeys);
+  await Promise.all(changedKeys.map(key => deleteLocalStorageItem(key)));
   projectsSnapshotCache.clear();
   notifyStorageChanged(changedKeys);
 }
@@ -3655,6 +3560,30 @@ export async function saveEvent(event: Project): Promise<void> {
 
 // Deletes a project and cleans up dependent records that reference it.
 export async function deleteProject(projectId: string): Promise<void> {
+  const changedKeys = [
+    STORAGE_KEYS.PROJECTS,
+    STORAGE_KEYS.EVENTS,
+    STORAGE_KEYS.STATUS_UPDATES,
+    STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
+    STORAGE_KEYS.PARTNER_REPORTS,
+    STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
+    STORAGE_KEYS.VOLUNTEER_MATCHES,
+    STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
+    STORAGE_KEYS.PROJECT_GROUP_MESSAGES,
+    STORAGE_KEYS.VOLUNTEERS,
+    STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
+  ];
+
+  try {
+    await deleteRemoteProjectRecord(projectId);
+    invalidateSharedStorageCache(changedKeys);
+    projectsSnapshotCache.clear();
+    notifyStorageChanged(changedKeys);
+    return;
+  } catch (error) {
+    console.warn('Direct project delete failed; falling back to storage cleanup:', error);
+  }
+
   const [
     projects,
     programs,
@@ -3741,38 +3670,36 @@ export async function deleteProject(projectId: string): Promise<void> {
       removeProjectIdsFromPlanningCalendars(adminPlanningCalendars, relatedProjectIds)
     ),
   ]);
-  invalidateSharedStorageCache([
-    STORAGE_KEYS.PROJECTS,
-    STORAGE_KEYS.PROGRAMS,
-    STORAGE_KEYS.EVENTS,
-    STORAGE_KEYS.STATUS_UPDATES,
-    STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
-    STORAGE_KEYS.PARTNER_REPORTS,
-    STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
-    STORAGE_KEYS.VOLUNTEER_MATCHES,
-    STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
-    STORAGE_KEYS.PROJECT_GROUP_MESSAGES,
-    STORAGE_KEYS.VOLUNTEERS,
-    STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
-  ]);
-  notifyStorageChanged([
-    STORAGE_KEYS.PROJECTS,
-    STORAGE_KEYS.PROGRAMS,
-    STORAGE_KEYS.EVENTS,
-    STORAGE_KEYS.STATUS_UPDATES,
-    STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
-    STORAGE_KEYS.PARTNER_REPORTS,
-    STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
-    STORAGE_KEYS.VOLUNTEER_MATCHES,
-    STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
-    STORAGE_KEYS.PROJECT_GROUP_MESSAGES,
-    STORAGE_KEYS.VOLUNTEERS,
-    STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
-  ]);
+  invalidateSharedStorageCache([STORAGE_KEYS.PROGRAMS, ...changedKeys]);
+  notifyStorageChanged([STORAGE_KEYS.PROGRAMS, ...changedKeys]);
 }
 
 // Deletes one event and cleans up records that reference it.
 export async function deleteEvent(eventId: string): Promise<void> {
+  const changedKeys = [
+    STORAGE_KEYS.PROJECTS,
+    STORAGE_KEYS.EVENTS,
+    STORAGE_KEYS.STATUS_UPDATES,
+    STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
+    STORAGE_KEYS.PARTNER_REPORTS,
+    STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
+    STORAGE_KEYS.VOLUNTEER_MATCHES,
+    STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
+    STORAGE_KEYS.PROJECT_GROUP_MESSAGES,
+    STORAGE_KEYS.VOLUNTEERS,
+    STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
+  ];
+
+  try {
+    await deleteRemoteEventRecord(eventId);
+    invalidateSharedStorageCache(changedKeys);
+    projectsSnapshotCache.clear();
+    notifyStorageChanged(changedKeys);
+    return;
+  } catch (error) {
+    console.warn('Direct event delete failed; falling back to storage cleanup:', error);
+  }
+
   const [
     projects,
     events,
@@ -3847,32 +3774,8 @@ export async function deleteEvent(eventId: string): Promise<void> {
       removeProjectIdsFromPlanningCalendars(adminPlanningCalendars, relatedEventIds)
     ),
   ]);
-  invalidateSharedStorageCache([
-    STORAGE_KEYS.PROJECTS,
-    STORAGE_KEYS.EVENTS,
-    STORAGE_KEYS.STATUS_UPDATES,
-    STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
-    STORAGE_KEYS.PARTNER_REPORTS,
-    STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
-    STORAGE_KEYS.VOLUNTEER_MATCHES,
-    STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
-    STORAGE_KEYS.PROJECT_GROUP_MESSAGES,
-    STORAGE_KEYS.VOLUNTEERS,
-    STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
-  ]);
-  notifyStorageChanged([
-    STORAGE_KEYS.PROJECTS,
-    STORAGE_KEYS.EVENTS,
-    STORAGE_KEYS.STATUS_UPDATES,
-    STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
-    STORAGE_KEYS.PARTNER_REPORTS,
-    STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
-    STORAGE_KEYS.VOLUNTEER_MATCHES,
-    STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
-    STORAGE_KEYS.PROJECT_GROUP_MESSAGES,
-    STORAGE_KEYS.VOLUNTEERS,
-    STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
-  ]);
+  invalidateSharedStorageCache(changedKeys);
+  notifyStorageChanged(changedKeys);
 }
 
 // Looks up a single project by id.
@@ -5186,7 +5089,8 @@ export async function verifyPartnerRegistration(
 export async function reviewPartnerRegistration(
   partnerId: string,
   status: Partner['status'],
-  reviewedBy: string
+  reviewedBy: string,
+  rejectionReason?: string
 ): Promise<Partner> {
   const partner = await getPartner(partnerId);
   if (!partner) {

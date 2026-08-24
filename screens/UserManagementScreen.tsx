@@ -16,6 +16,8 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { format } from 'date-fns';
 import InlineLoadError from '../components/InlineLoadError';
+import ConfirmDialog from '../components/ConfirmDialog';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import { useAuth } from '../contexts/AuthContext';
 import {
   deleteUser,
@@ -39,6 +41,10 @@ const roleOptions: UserRole[] = ['admin', 'partner', 'volunteer'];
 
 export default function UserManagementScreen() {
   const { user, isAdmin } = useAuth();
+
+  // Confirmation dialog hook
+  const { dialogState, showConfirm, handleConfirm, handleCancel } = useConfirmDialog();
+
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [successNotice, setSuccessNotice] = useState<{ title: string; message: string } | null>(null);
   const [users, setUsers] = useState<User[]>([]);
@@ -268,32 +274,24 @@ export default function UserManagementScreen() {
           title: 'Account Deleted',
           message: `${targetUser.name}'s account has been removed.`,
         });
+        Alert.alert('Account Deleted', `${targetUser.name}'s account has been removed.`);
         void loadUsers();
       } catch (error) {
         Alert.alert(getRequestErrorTitle(error), getRequestErrorMessage(error, 'Failed to delete user account.'));
       }
     };
 
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      if (window.confirm(`Are you sure you want to delete ${targetUser.name}'s account? This action cannot be undone.`)) {
-        await executeDelete();
-      }
-    } else {
-      Alert.alert(
-        'Delete Account',
-        `Are you sure you want to delete ${targetUser.name}'s account? This action cannot be undone.`,
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Delete',
-            style: 'destructive',
-            onPress: () => {
-              void executeDelete();
-            },
-          },
-        ]
-      );
-    }
+    showConfirm({
+      title: 'Delete Account',
+      message: `Are you sure you want to delete ${targetUser.name}'s account? This action cannot be undone.`,
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      icon: 'person-remove',
+      iconColor: '#DC2626',
+      confirmColor: '#DC2626',
+      loadingText: 'Deleting...',
+      onConfirm: executeDelete,
+    });
   };
 
   // CSV Export logic
@@ -345,17 +343,10 @@ export default function UserManagementScreen() {
     );
   }
 
-  const isApprovedOrActiveAccount = (account: User) =>
-    account.role === 'admin' ||
-    account.approvalStatus === 'approved' ||
-    !account.approvalStatus;
-
-  // Summary stats count approved/active accounts only; pending/rejected registrations stay in review flow.
-  const countableUsers = users.filter(isApprovedOrActiveAccount);
-  const adminUsers = countableUsers.filter(item => item.role === 'admin');
-  const partnerUsers = countableUsers.filter(item => item.role === 'partner');
-  const volunteerUsers = countableUsers.filter(item => item.role === 'volunteer');
-  const totalUsers = countableUsers.length;
+  // Summary stats
+  const adminUsers = users.filter(item => item.role === 'admin');
+  const partnerUsers = users.filter(item => item.role === 'partner');
+  const volunteerUsers = users.filter(item => item.role === 'volunteer');
   const totalAdmins = adminUsers.length;
   const totalPartners = partnerUsers.length;
   const totalVolunteers = volunteerUsers.length;
@@ -363,14 +354,11 @@ export default function UserManagementScreen() {
   // Filtered users list
   const visibleUsers = users.filter(account => {
     const roleMatches = accountFilter === 'all' || account.role === accountFilter;
-    const normalizedApprovalStatus = account.approvalStatus?.toLowerCase();
-    const isPending = normalizedApprovalStatus === 'pending';
-    const isRejected = normalizedApprovalStatus === 'rejected';
-    const isActive = isApprovedOrActiveAccount(account);
+            const isPending = account.approvalStatus?.toLowerCase() === 'pending';
     const statusMatches =
-      (statusFilter === 'all' && !isRejected) ||
+      statusFilter === 'all' ||
       (statusFilter === 'pending' && isPending) ||
-      (statusFilter === 'active' && isActive);
+      (statusFilter === 'active' && !isPending);
 
     const partner = getLinkedPartnerForUser(account);
     const query = accountSearch.trim().toLowerCase();
@@ -444,7 +432,7 @@ export default function UserManagementScreen() {
               <MaterialIcons name="person-outline" size={24} color="#16a34a" />
             </View>
             <View style={styles.summaryContent}>
-              <Text style={styles.summaryNumber}>{totalUsers}</Text>
+              <Text style={styles.summaryNumber}>{users.length}</Text>
               <Text style={styles.summaryTitle}>Total Users</Text>
               <Text style={styles.summarySubtext}>All registered accounts</Text>
             </View>
@@ -1055,6 +1043,21 @@ export default function UserManagementScreen() {
           </View>
         )}
       </Modal>
+
+      <ConfirmDialog
+        visible={dialogState.visible}
+        loading={dialogState.loading}
+        title={dialogState.title}
+        message={dialogState.message}
+        confirmText={dialogState.confirmText}
+        loadingText={dialogState.loadingText}
+        cancelText={dialogState.cancelText}
+        confirmColor={dialogState.confirmColor}
+        icon={dialogState.icon as any}
+        iconColor={dialogState.iconColor}
+        onConfirm={handleConfirm}
+        onCancel={handleCancel}
+      />
     </View>
   );
 }

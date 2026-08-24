@@ -23,36 +23,6 @@ function addProjectAndChildEvents(projectIds: Set<string>, project: Project, pro
   }
 }
 
-function addProjectsMatchingApplication(
-  projectIds: Set<string>,
-  application: PartnerProjectApplication,
-  projects: Project[]
-): void {
-  const proposalDetails = application.proposalDetails;
-  const requestedModule = normalizeKey(proposalDetails?.requestedProgramModule);
-  const proposedTitle = normalizeKey(proposalDetails?.proposedTitle);
-  const targetTitle = normalizeKey(proposalDetails?.targetProjectTitle);
-
-  if (!requestedModule && !proposedTitle && !targetTitle) {
-    return;
-  }
-
-  projects.forEach(candidate => {
-    const candidateModule = normalizeKey(
-      candidate.programModule || candidate.program_id || candidate.category
-    );
-    const candidateTitle = normalizeKey(candidate.title);
-    const moduleMatches = requestedModule && candidateModule === requestedModule;
-    const titleMatches =
-      (proposedTitle && candidateTitle === proposedTitle) ||
-      (targetTitle && candidateTitle === targetTitle);
-
-    if (titleMatches || (moduleMatches && String(candidate.id || '').startsWith('project-proposal-'))) {
-      addProjectAndChildEvents(projectIds, candidate, projects);
-    }
-  });
-}
-
 function partnerMatchesApplication(partner: Partner, application: PartnerProjectApplication): boolean {
   const partnerOwnerId = normalizeKey(partner.ownerUserId);
   const applicationUserId = normalizeKey(application.partnerUserId);
@@ -97,27 +67,32 @@ export function getProjectIdsForPartner(
   const projectById = new Map(projects.map(project => [project.id, project]));
   const projectIds = new Set<string>();
 
+  // 1. Projects where partnerId matches this partner
   projects.forEach(project => {
     if (projectMatchesPartner(project, partner)) {
       addProjectAndChildEvents(projectIds, project, projects);
     }
   });
 
+  // 2. Only approved applications belonging to this partner
   applications
     .filter(application => application.status === 'Approved' && partnerMatchesApplication(partner, application))
     .forEach(application => {
       const directProject = projectById.get(application.projectId);
       if (directProject) {
         addProjectAndChildEvents(projectIds, directProject, projects);
+      } else {
+        // Find proposal-created project by matching title or ID pattern
+        const proposedTitle = normalizeKey(application.proposalDetails?.proposedTitle);
+        if (proposedTitle) {
+          const matchByTitle = projects.find(
+            p => normalizeKey(p.title) === proposedTitle
+          );
+          if (matchByTitle) {
+            addProjectAndChildEvents(projectIds, matchByTitle, projects);
+          }
+        }
       }
-
-      const targetProjectId = application.proposalDetails?.targetProjectId;
-      const targetProject = targetProjectId ? projectById.get(targetProjectId) : null;
-      if (targetProject) {
-        addProjectAndChildEvents(projectIds, targetProject, projects);
-      }
-
-      addProjectsMatchingApplication(projectIds, application, projects);
     });
 
   return Array.from(projectIds);
@@ -147,6 +122,7 @@ export function getProjectIdsForPartnerUser(
     getProjectIdsForPartner(partner, projects, applications).forEach(projectId => projectIds.add(projectId));
   });
 
+  // If no owned partner record found, match directly against approved applications by user ID / email
   applications
     .filter(application => {
       if (application.status !== 'Approved') {
@@ -161,17 +137,17 @@ export function getProjectIdsForPartnerUser(
       const project = projects.find(candidate => candidate.id === application.projectId);
       if (project) {
         addProjectAndChildEvents(projectIds, project, projects);
+      } else {
+        const proposedTitle = normalizeKey(application.proposalDetails?.proposedTitle);
+        if (proposedTitle) {
+          const matchByTitle = projects.find(
+            p => normalizeKey(p.title) === proposedTitle
+          );
+          if (matchByTitle) {
+            addProjectAndChildEvents(projectIds, matchByTitle, projects);
+          }
+        }
       }
-
-      const targetProjectId = application.proposalDetails?.targetProjectId;
-      const targetProject = targetProjectId
-        ? projects.find(candidate => candidate.id === targetProjectId)
-        : null;
-      if (targetProject) {
-        addProjectAndChildEvents(projectIds, targetProject, projects);
-      }
-
-      addProjectsMatchingApplication(projectIds, application, projects);
     });
 
   projects.forEach(project => {

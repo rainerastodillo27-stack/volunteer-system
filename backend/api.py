@@ -1112,6 +1112,42 @@ def _filter_project_references(items: list[dict[str, Any]], related_project_ids:
     ]
 
 
+def _delete_rows_by_known_field_values(
+    connection: Any,
+    table_name: str,
+    possible_columns: list[str],
+    values: set[str],
+) -> int:
+    normalized_values = {
+        str(value or "").strip().lower()
+        for value in values
+        if str(value or "").strip()
+    }
+    if not normalized_values:
+        return 0
+
+    deleted_count = 0
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            select column_name
+            from information_schema.columns
+            where table_schema = 'public'
+              and table_name = %s
+              and column_name = any(%s)
+            """,
+            (table_name, possible_columns),
+        )
+        existing_columns = [str(row[0]) for row in cursor.fetchall()]
+        for column_name in existing_columns:
+            cursor.execute(
+                f"delete from {table_name} where lower(trim(coalesce({column_name}::text, ''))) = any(%s)",
+                (list(normalized_values),),
+            )
+            deleted_count += cursor.rowcount or 0
+    return deleted_count
+
+
 def _cascade_delete_project_references(connection: Any, related_project_ids: set[str]) -> list[str]:
     related_ids = {str(project_id or "").strip() for project_id in related_project_ids if str(project_id or "").strip()}
     if not related_ids:
@@ -4630,6 +4666,32 @@ async def delete_program_track(track_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Program track id is required.")
     normalized_track_key = normalized_track_id.lower()
 
+    def delete_rows_by_known_id_columns(
+        connection: Any,
+        table_name: str,
+        possible_columns: list[str],
+    ) -> int:
+        deleted_count = 0
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                select column_name
+                from information_schema.columns
+                where table_schema = 'public'
+                  and table_name = %s
+                  and column_name = any(%s)
+                """,
+                (table_name, possible_columns),
+            )
+            existing_columns = [str(row[0]) for row in cursor.fetchall()]
+            for column_name in existing_columns:
+                cursor.execute(
+                    f"delete from {table_name} where lower(trim(coalesce({column_name}::text, ''))) = %s",
+                    (normalized_track_key,),
+                )
+                deleted_count += cursor.rowcount or 0
+        return deleted_count
+
     def belongs_to_program(item: dict[str, Any]) -> bool:
         values = [
             item.get("id"),
@@ -4652,6 +4714,10 @@ async def delete_program_track(track_id: str) -> dict[str, Any]:
         )
     
     with get_connection() as connection:
+        deleted_catalog_count = (
+            delete_rows_by_known_id_columns(connection, "programs", ["programs_id", "id"])
+            + delete_rows_by_known_id_columns(connection, "program_tracks", ["program_tracks_id", "id"])
+        )
         program_tracks = get_postgres_hot_storage_collection(connection, "programTracks")
         programs = get_postgres_hot_storage_collection(connection, "programs")
         projects = get_postgres_hot_storage_collection(connection, "projects")
@@ -4718,6 +4784,20 @@ async def delete_program_track(track_id: str) -> dict[str, Any]:
             and len(filtered_projects) == len(projects)
             and len(filtered_events) == len(events)
         ):
+            if deleted_catalog_count > 0:
+                connection.commit()
+                changed_keys = ["programTracks", "programs"]
+                _invalidate_collection_cache(changed_keys)
+                _projects_snapshot_cache.clear()
+                _storage_collection_cache.clear()
+                await connection_manager.broadcast_storage_event(changed_keys)
+                return {
+                    "status": "ok",
+                    "deletedTrackId": normalized_track_id,
+                    "deletedProjectCount": 0,
+                    "deletedEventCount": 0,
+                }
+
             _invalidate_collection_cache(changed_keys)
             _projects_snapshot_cache.clear()
             _storage_collection_cache.clear()
@@ -4729,11 +4809,19 @@ async def delete_program_track(track_id: str) -> dict[str, Any]:
                 "alreadyDeleted": True,
             }
 
-        changed_keys = ["programTracks", "programs", "projects", "events"]
-        replace_postgres_hot_storage_collection(connection, "programTracks", filtered_tracks)
-        replace_postgres_hot_storage_collection(connection, "programs", filtered_programs)
-        replace_postgres_hot_storage_collection(connection, "projects", filtered_projects)
-        replace_postgres_hot_storage_collection(connection, "events", filtered_events)
+        changed_keys = []
+        if len(filtered_tracks) != len(program_tracks):
+            replace_postgres_hot_storage_collection(connection, "programTracks", filtered_tracks)
+            changed_keys.append("programTracks")
+        if len(filtered_programs) != len(programs):
+            replace_postgres_hot_storage_collection(connection, "programs", filtered_programs)
+            changed_keys.append("programs")
+        if len(filtered_projects) != len(projects):
+            replace_postgres_hot_storage_collection(connection, "projects", filtered_projects)
+            changed_keys.append("projects")
+        if len(filtered_events) != len(events):
+            replace_postgres_hot_storage_collection(connection, "events", filtered_events)
+            changed_keys.append("events")
 
         if related_project_ids:
             for key in [
@@ -4756,6 +4844,15 @@ async def delete_program_track(track_id: str) -> dict[str, Any]:
             for changed_key in _cascade_delete_project_references(connection, related_project_ids):
                 if changed_key not in changed_keys:
                     changed_keys.append(changed_key)
+
+        final_deleted_catalog_count = (
+            delete_rows_by_known_id_columns(connection, "programs", ["programs_id", "id"])
+            + delete_rows_by_known_id_columns(connection, "program_tracks", ["program_tracks_id", "id"])
+        )
+        if final_deleted_catalog_count > 0:
+            for catalog_key in ["programTracks", "programs"]:
+                if catalog_key not in changed_keys:
+                    changed_keys.append(catalog_key)
 
         connection.commit()
     
@@ -4912,6 +5009,26 @@ async def put_storage_item(key: str, payload: StoragePayload) -> dict[str, str]:
                         )
                         if changed_key not in changed_keys
                     )
+                    if key == "projects":
+                        _delete_rows_by_known_field_values(
+                            connection,
+                            "projects",
+                            ["projects_id", "id"],
+                            removed_project_ids,
+                        )
+                        _delete_rows_by_known_field_values(
+                            connection,
+                            "events",
+                            ["events_id", "id", "parent_project_id"],
+                            removed_project_ids,
+                        )
+                    elif key == "events":
+                        _delete_rows_by_known_field_values(
+                            connection,
+                            "events",
+                            ["events_id", "id"],
+                            removed_project_ids,
+                        )
                 connection.commit()
             except Exception as e:
                 # Log full traceback for debugging storage write failures
@@ -4939,6 +5056,185 @@ async def put_storage_item(key: str, payload: StoragePayload) -> dict[str, str]:
         await connection_manager.broadcast_storage_event([key])
         return {"status": "ok"}
     raise HTTPException(status_code=400, detail=f"Unsupported storage key '{key}'.")
+
+
+@app.delete("/projects/{project_id}")
+async def delete_project_record(project_id: str) -> dict[str, Any]:
+    _require_postgres()
+    normalized_project_id = str(project_id or "").strip()
+    if not normalized_project_id:
+        raise HTTPException(status_code=400, detail="Project id is required.")
+
+    with get_connection() as connection:
+        projects = get_postgres_hot_storage_collection(connection, "projects")
+        events = get_postgres_hot_storage_collection(connection, "events")
+        removed_event_ids = {
+            str(event.get("id") or "").strip()
+            for event in events
+            if str(event.get("id") or "").strip() == normalized_project_id
+            or str(event.get("parentProjectId") or "").strip() == normalized_project_id
+        }
+        related_project_ids = {
+            normalized_project_id,
+            *{event_id for event_id in removed_event_ids if event_id},
+        }
+
+        filtered_projects = [
+            project
+            for project in projects
+            if str(project.get("id") or "").strip() != normalized_project_id
+        ]
+        filtered_events = [
+            event
+            for event in events
+            if str(event.get("id") or "").strip() not in removed_event_ids
+            and str(event.get("parentProjectId") or "").strip() != normalized_project_id
+        ]
+
+        changed_keys: list[str] = []
+        if len(filtered_projects) != len(projects):
+            replace_postgres_hot_storage_collection(connection, "projects", filtered_projects)
+            changed_keys.append("projects")
+        if len(filtered_events) != len(events):
+            replace_postgres_hot_storage_collection(connection, "events", filtered_events)
+            changed_keys.append("events")
+
+        direct_deleted_count = _delete_rows_by_known_field_values(
+            connection,
+            "projects",
+            ["projects_id", "id"],
+            {normalized_project_id},
+        )
+        direct_deleted_count += _delete_rows_by_known_field_values(
+            connection,
+            "events",
+            ["events_id", "id", "parent_project_id"],
+            related_project_ids,
+        )
+        if direct_deleted_count > 0:
+            for changed_key in ["projects", "events"]:
+                if changed_key not in changed_keys:
+                    changed_keys.append(changed_key)
+
+        for changed_key in _cascade_delete_project_references(connection, related_project_ids):
+            if changed_key not in changed_keys:
+                changed_keys.append(changed_key)
+
+        final_deleted_count = _delete_rows_by_known_field_values(
+            connection,
+            "projects",
+            ["projects_id", "id"],
+            {normalized_project_id},
+        )
+        final_deleted_count += _delete_rows_by_known_field_values(
+            connection,
+            "events",
+            ["events_id", "id", "parent_project_id"],
+            related_project_ids,
+        )
+        if final_deleted_count > 0:
+            for changed_key in ["projects", "events"]:
+                if changed_key not in changed_keys:
+                    changed_keys.append(changed_key)
+
+        connection.commit()
+
+    if changed_keys:
+        _invalidate_collection_cache(changed_keys)
+        _projects_snapshot_cache.clear()
+        _storage_collection_cache.clear()
+        await connection_manager.broadcast_storage_event(changed_keys)
+
+    return {
+        "status": "ok",
+        "deletedProjectId": normalized_project_id,
+        "deletedEventCount": len(removed_event_ids),
+        "alreadyDeleted": not changed_keys,
+    }
+
+
+@app.delete("/events/{event_id}")
+async def delete_event_record(event_id: str) -> dict[str, Any]:
+    _require_postgres()
+    normalized_event_id = str(event_id or "").strip()
+    if not normalized_event_id:
+        raise HTTPException(status_code=400, detail="Event id is required.")
+
+    with get_connection() as connection:
+        projects = get_postgres_hot_storage_collection(connection, "projects")
+        events = get_postgres_hot_storage_collection(connection, "events")
+        related_event_ids = {normalized_event_id}
+
+        filtered_projects = [
+            project
+            for project in projects
+            if str(project.get("id") or "").strip() != normalized_event_id
+        ]
+        filtered_events = [
+            event
+            for event in events
+            if str(event.get("id") or "").strip() != normalized_event_id
+        ]
+
+        changed_keys: list[str] = []
+        if len(filtered_projects) != len(projects):
+            replace_postgres_hot_storage_collection(connection, "projects", filtered_projects)
+            changed_keys.append("projects")
+        if len(filtered_events) != len(events):
+            replace_postgres_hot_storage_collection(connection, "events", filtered_events)
+            changed_keys.append("events")
+
+        direct_deleted_count = _delete_rows_by_known_field_values(
+            connection,
+            "events",
+            ["events_id", "id"],
+            related_event_ids,
+        )
+        direct_deleted_count += _delete_rows_by_known_field_values(
+            connection,
+            "projects",
+            ["projects_id", "id"],
+            related_event_ids,
+        )
+        if direct_deleted_count > 0:
+            for changed_key in ["projects", "events"]:
+                if changed_key not in changed_keys:
+                    changed_keys.append(changed_key)
+
+        for changed_key in _cascade_delete_project_references(connection, related_event_ids):
+            if changed_key not in changed_keys:
+                changed_keys.append(changed_key)
+
+        final_deleted_count = _delete_rows_by_known_field_values(
+            connection,
+            "events",
+            ["events_id", "id"],
+            related_event_ids,
+        )
+        final_deleted_count += _delete_rows_by_known_field_values(
+            connection,
+            "projects",
+            ["projects_id", "id"],
+            related_event_ids,
+        )
+        if final_deleted_count > 0:
+            for changed_key in ["projects", "events"]:
+                if changed_key not in changed_keys:
+                    changed_keys.append(changed_key)
+
+        connection.commit()
+
+    if changed_keys:
+        _invalidate_collection_cache(changed_keys)
+        _projects_snapshot_cache.clear()
+        _storage_collection_cache.clear()
+        await connection_manager.broadcast_storage_event(changed_keys)
+
+    return {
+        "status": "ok",
+        "deletedEventId": normalized_event_id,
+        "alreadyDeleted": not changed_keys,
+    }
 
 
 @app.post("/reports")
@@ -5152,7 +5448,11 @@ class GcalSyncNotifyPayload(BaseModel):
 async def notify_gcal_sync(payload: GcalSyncNotifyPayload) -> dict[str, Any]:
     """Sends a confirmation email to the user after a successful Google Calendar sync."""
     subject = "Your NVC Calendar Has Been Synced to Google Calendar"
-    schedule_label = "partner project schedule" if payload.schedule_type == "partner" else "volunteer event schedule"
+    schedule_label = (
+        "partner project schedule" if payload.schedule_type == "partner"
+        else "events and projects schedule" if payload.schedule_type == "admin"
+        else "volunteer event schedule"
+    )
     text_body = (
         f"Hi {payload.user_name},\n\n"
         f"Your NVC {schedule_label} has been successfully synced to your Google Calendar.\n\n"

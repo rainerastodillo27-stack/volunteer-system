@@ -10,8 +10,10 @@ import {
   TextInput,
   Linking,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as AuthSession from 'expo-auth-session';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import Svg, { Circle, Rect, Path, G, Line, Defs, LinearGradient } from 'react-native-svg';
@@ -33,6 +35,13 @@ import { withImpactMapFallbackProjects } from '../utils/impactMapFallbacks';
 import { getProjectIdsForPartner } from '../utils/mapProjectLinks';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage } from '../utils/requestErrors';
+import {
+  GOOGLE_CALENDAR_WEB_URL,
+  assertGoogleCalendarAccountMatchesUser,
+  getGoogleAuthConfig,
+  sendGoogleCalendarSyncEmail,
+  syncProjectsToGoogleCalendar,
+} from '../utils/googleCalendarSync';
 
 // Helper function to get parent or grandparent program name
 function getProjectProgramLabel(project: Project, allProjects: Project[]): string {
@@ -373,6 +382,8 @@ export default function DashboardScreen({ navigation }: any) {
     latestTimeOutProjectId: undefined as string | undefined,
   });
   const [recentUpdates, setRecentUpdates] = useState<any[]>([]);
+  const [hasNewActivity, setHasNewActivity] = useState(false);
+  const previousUpdatesRef = React.useRef<any[]>([]);
   const [projectsData, setProjectsData] = useState<Project[]>([]);
   const [partnersData, setPartnersData] = useState<Partner[]>([]);
   const [partnerApplicationsData, setPartnerApplicationsData] = useState<PartnerProjectApplication[]>([]);
@@ -442,14 +453,87 @@ export default function DashboardScreen({ navigation }: any) {
       setUserStats({ total: users.length });
 
       const projectNamesById = new Map(projects.map(project => [project.id, project.title]));
-      const allUpdates = statusUpdates
-        .map(update => ({
-          ...update,
-          projectName: projectNamesById.get(update.projectId) || 'Unknown Project',
-        }))
-        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+      
+      const allStatusUpdates = (statusUpdates || []).map(u => ({
+        id: u.id,
+        projectId: u.projectId,
+        projectName: projectNamesById.get(u.projectId) || 'Project',
+        description: u.description || 'Status updated',
+        updatedAt: u.updatedAt || new Date().toISOString(),
+        type: 'status',
+      }));
 
-      setRecentUpdates(allUpdates.slice(0, 6));
+      const allReportActivities = (partnerReports || []).map(r => ({
+        id: r.id,
+        projectId: r.projectId,
+        projectName: projectNamesById.get(r.projectId) || r.title || 'Partner Report',
+        description: `Progress report submitted by ${r.partnerName || 'Partner'}`,
+        updatedAt: r.submittedAt || r.createdAt || new Date().toISOString(),
+        type: 'report',
+      }));
+
+      const allApplicationActivities = (partnerProjectApplications || []).map(a => ({
+        id: a.id,
+        projectId: a.projectId,
+        projectName: projectNamesById.get(a.projectId) || (a as any).proposalDetails?.title || 'Partner Proposal',
+        description: `Proposal ${a.status?.toLowerCase() || 'submitted'} by ${a.partnerName || 'Partner'}`,
+        updatedAt: a.createdAt || (a as any).submittedAt || new Date().toISOString(),
+        type: 'proposal',
+      }));
+
+      const allJoinActivities = (volunteerProjectJoins || []).map(j => ({
+        id: j.id,
+        projectId: j.projectId,
+        projectName: projectNamesById.get(j.projectId) || 'Community Event',
+        description: `Volunteer joined event (${j.status || 'Active'})`,
+        updatedAt: j.createdAt || new Date().toISOString(),
+        type: 'join',
+      }));
+
+      const allTimeLogActivities = (volunteerTimeLogs || []).map(l => ({
+        id: l.id,
+        projectId: l.projectId,
+        projectName: projectNamesById.get(l.projectId) || 'Event Service',
+        description: l.timeOut ? `Volunteer logged ${l.hoursLogged ? `${l.hoursLogged} hrs` : 'service'}` : 'Volunteer clocked in for event',
+        updatedAt: l.timeOut || l.timeIn || new Date().toISOString(),
+        type: 'time',
+      }));
+
+      const allProjectActivities = (projects || []).map(p => ({
+        id: `proj-act-${p.id}`,
+        projectId: p.id,
+        projectName: p.title,
+        description: `${p.isEvent ? 'Event' : 'Project'} scheduled (${p.status || 'Active'})`,
+        updatedAt: p.createdAt || p.startDate || new Date().toISOString(),
+        type: 'project',
+      }));
+
+      const combinedActivities = [
+        ...allStatusUpdates,
+        ...allReportActivities,
+        ...allApplicationActivities,
+        ...allJoinActivities,
+        ...allTimeLogActivities,
+        ...allProjectActivities,
+      ].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+
+      const newUpdates = combinedActivities.slice(0, 10);
+      
+      // Check if there are new activities
+      if (previousUpdatesRef.current.length > 0) {
+        const hasNew = newUpdates.some(
+          update => !previousUpdatesRef.current.some(prev => prev.id === update.id)
+        );
+        if (hasNew) {
+          console.log('[DASHBOARD] 🆕 New activity detected!');
+          setHasNewActivity(true);
+          // Auto-clear the indicator after 3 seconds
+          setTimeout(() => setHasNewActivity(false), 3000);
+        }
+      }
+      
+      previousUpdatesRef.current = newUpdates;
+      setRecentUpdates(newUpdates);
 
       // Compute workflow stats from already-loaded data — no extra network calls needed.
       const sortedTimeLogs = [...(volunteerTimeLogs || [])].sort(
@@ -724,95 +808,28 @@ export default function DashboardScreen({ navigation }: any) {
   const calGridCells = useMemo(() => getMonthGridMondayFirst(calendarMonth), [calendarMonth]);
 
   // Google Calendar Integration states
-  const [calendarSettings, setCalendarSettings] = useState({
-    calendarId: 'en.philippines#holiday@group.v.calendar.google.com',
-    apiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY || process.env.GOOGLE_MAPS_WEB_API_KEY || process.env.GOOGLE_MAPS_API_KEY || process.env.VITE_GOOGLE_MAPS_WEB_API_KEY || '',
-  });
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [tempCalendarId, setTempCalendarId] = useState('');
-  const [tempApiKey, setTempApiKey] = useState('');
-
   const [googleEvents, setGoogleEvents] = useState<any[]>([]);
-  const [selectedDayEvents, setSelectedDayEvents] = useState<any[]>([]);
+  const [selectedDaySystemProjects, setSelectedDaySystemProjects] = useState<Project[]>([]);
+  const [selectedDayGoogleEvents, setSelectedDayGoogleEvents] = useState<any[]>([]);
   const [selectedDateKey, setSelectedDateKey] = useState<string | null>(null);
-  const [isLoadingEvents, setIsLoadingEvents] = useState(false);
-  const [calendarError, setCalendarError] = useState<string | null>(null);
+  const [isSyncingCalendar, setIsSyncingCalendar] = useState(false);
+  const [syncStatusBanner, setSyncStatusBanner] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [hoveredKey, setHoveredKey] = useState<string | null>(null);
+  const googleAuthConfig = useMemo(() => getGoogleAuthConfig(user?.email), [user?.email]);
+  const [googleAuthRequest, , promptGoogleAuth] = AuthSession.useAuthRequest(
+    googleAuthConfig.request,
+    googleAuthConfig.discovery
+  );
 
-  // Load calendar settings on mount
+  // Auto-select today on initial load
   useEffect(() => {
-    const loadSettings = async () => {
-      try {
-        const storedId = await AsyncStorage.getItem('gcal_id');
-        const storedKey = await AsyncStorage.getItem('gcal_key');
-        if (storedId || storedKey) {
-          setCalendarSettings({
-            calendarId: storedId || 'en.philippines#holiday@group.v.calendar.google.com',
-          apiKey: storedKey || process.env.EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY || process.env.GOOGLE_MAPS_WEB_API_KEY || process.env.GOOGLE_MAPS_API_KEY || process.env.VITE_GOOGLE_MAPS_WEB_API_KEY || '',
-          });
-        }
-      } catch (err) {
-        console.error('Failed to load Google Calendar settings:', err);
-      }
-    };
-    loadSettings();
-  }, []);
-
-  // Fetch events when month, calendarId, or apiKey change
-  useEffect(() => {
-    let active = true;
-    const fetchGCalEvents = async () => {
-      setIsLoadingEvents(true);
-      setCalendarError(null);
-      
-      const year = calendarMonth.getFullYear();
-      const month = calendarMonth.getMonth();
-      const timeMin = new Date(year, month - 1, 20).toISOString();
-      const timeMax = new Date(year, month + 1, 10).toISOString();
-
-      const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarSettings.calendarId)}/events?key=${calendarSettings.apiKey}&timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime`;
-
-      try {
-        const res = await fetch(url);
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.error?.message || `HTTP ${res.status}`);
-        }
-        const data = await res.json();
-        if (active) {
-          setGoogleEvents(data.items || []);
-        }
-      } catch (err: any) {
-        console.warn('Google Calendar fetch error:', err);
-        if (active) {
-          setCalendarError(err.message || 'Failed to fetch events');
-          setGoogleEvents([]);
-        }
-      } finally {
-        if (active) {
-          setIsLoadingEvents(false);
-        }
-      }
-    };
-
-    fetchGCalEvents();
-    return () => {
-      active = false;
-    };
-  }, [calendarMonth, calendarSettings]);
-
-  // Auto-select today or first day with events on initial fetch
-  useEffect(() => {
-    if (googleEvents.length > 0) {
-      const today = new Date();
-      const todayEvents = getGoogleEventsForDay(today.getDate(), today.getMonth(), today.getFullYear(), googleEvents);
-      const dateKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-      setSelectedDateKey(dateKey);
-      setSelectedDayEvents(todayEvents);
-    } else {
-      setSelectedDateKey(null);
-      setSelectedDayEvents([]);
-    }
-  }, [googleEvents]);
+    const today = new Date();
+    const dateKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const sysEvents = getProjectsForDay(today.getDate(), today.getMonth(), today.getFullYear(), projectsData);
+    setSelectedDateKey(dateKey);
+    setSelectedDaySystemProjects(sysEvents);
+    setSelectedDayGoogleEvents([]);
+  }, [projectsData]);
 
   const selectedDateLabel = useMemo(() => {
     if (!selectedDateKey) return 'Select a day';
@@ -826,26 +843,6 @@ export default function DashboardScreen({ navigation }: any) {
     });
   }, [selectedDateKey]);
 
-  const handleSaveSettings = async () => {
-    try {
-      await AsyncStorage.setItem('gcal_id', tempCalendarId.trim());
-      await AsyncStorage.setItem('gcal_key', tempApiKey.trim());
-      setCalendarSettings({
-        calendarId: tempCalendarId.trim(),
-        apiKey: tempApiKey.trim(),
-      });
-      setIsSettingsOpen(false);
-    } catch (err) {
-      console.error('Failed to save settings:', err);
-    }
-  };
-
-  const handleOpenSettings = () => {
-    setTempCalendarId(calendarSettings.calendarId);
-    setTempApiKey(calendarSettings.apiKey);
-    setIsSettingsOpen(true);
-  };
-
   const handleOpenEventLink = (link?: string) => {
     if (link) {
       Linking.openURL(link).catch(err => {
@@ -853,6 +850,62 @@ export default function DashboardScreen({ navigation }: any) {
       });
     }
   };
+
+  const handleSyncAdminCalendar = React.useCallback(async () => {
+    if (!user?.id) {
+      Alert.alert('Login Required', 'Please sign in before syncing your calendar.');
+      return;
+    }
+
+    const projectsToSync = projectsData.filter(p => p.startDate && !Number.isNaN(new Date(p.startDate).getTime()));
+    if (projectsToSync.length === 0) {
+      Alert.alert(
+        'No Events or Projects to Sync',
+        'There are no scheduled projects or events with valid start dates to sync.'
+      );
+      return;
+    }
+
+    setIsSyncingCalendar(true);
+    setSyncStatusBanner(null);
+    try {
+      if (!googleAuthRequest) {
+        throw new Error('Google sign-in is still initializing. Try again in a moment.');
+      }
+
+      const authResult = await promptGoogleAuth();
+      const accessToken = authResult.type === 'success' ? authResult.authentication?.accessToken : undefined;
+      if (!accessToken) {
+        throw new Error('Google Calendar permission was not granted.');
+      }
+
+      await assertGoogleCalendarAccountMatchesUser(accessToken, user.email);
+
+      const result = await syncProjectsToGoogleCalendar(accessToken, projectsToSync);
+      if (!result.success && result.synced === 0) {
+        throw new Error(result.errors[0] || 'Google Calendar sync failed.');
+      }
+
+      await sendGoogleCalendarSyncEmail({
+        recipientEmail: user.email,
+        userName: user.name || 'Admin',
+        syncedCount: result.synced,
+        role: 'admin',
+        calendarUrl: GOOGLE_CALENDAR_WEB_URL,
+      });
+
+      const successMessage = `${result.synced} event${result.synced === 1 ? '' : 's'} & project${result.synced === 1 ? '' : 's'} synced to Google Calendar and a confirmation email was sent to ${user.email}.`;
+      setSyncStatusBanner({ type: 'success', message: successMessage });
+      Alert.alert('Calendar Synced', successMessage);
+    } catch (err: any) {
+      console.error('Failed to sync calendar:', err);
+      const message = getRequestErrorMessage(err, 'Unable to sync your Google Calendar.');
+      setSyncStatusBanner({ type: 'error', message });
+      Alert.alert('Sync Failed', message);
+    } finally {
+      setIsSyncingCalendar(false);
+    }
+  }, [googleAuthRequest, projectsData, promptGoogleAuth, user]);
 
   const filteredCalendarProjects = useMemo(() => {
     if (calendarFilter === 'All') return projectsData;
@@ -976,98 +1029,60 @@ export default function DashboardScreen({ navigation }: any) {
 
       {/* Calendar Row */}
       <View style={[styles.middleGrid, !isDesktop && styles.stackGrid]}>
-        {isSettingsOpen ? (
-          <View style={styles.calendarCardContainer}>
-            <View style={styles.cardHeaderRow}>
-              <View style={styles.cardTitleRow}>
-                <View style={styles.cardTitleIcon}>
-                  <MaterialIcons name="settings" size={20} color="#16a34a" />
-                </View>
-                <View>
-                  <Text style={styles.cardTitle}>Calendar Settings</Text>
-                  <Text style={styles.cardSubtitleText}>Configure Google Calendar API.</Text>
-                </View>
+        <View style={styles.calendarCardContainer}>
+          <View style={styles.cardHeaderRow}>
+            <View style={styles.cardTitleRow}>
+              <View style={styles.cardTitleIcon}>
+                <MaterialIcons name="event" size={20} color="#16a34a" />
               </View>
-              <TouchableOpacity onPress={() => setIsSettingsOpen(false)} style={styles.calNavArrow}>
-                <MaterialIcons name="close" size={18} color="#475569" />
+              <View>
+                <Text style={styles.cardTitle}>Google Calendar</Text>
+                <Text style={styles.cardSubtitleText}>Synced events and schedule.</Text>
+              </View>
+            </View>
+            <View style={styles.calNavButtons}>
+              <TouchableOpacity
+                style={styles.syncGcalBtn}
+                onPress={handleSyncAdminCalendar}
+                disabled={isSyncingCalendar}
+                activeOpacity={0.8}
+              >
+                {isSyncingCalendar ? (
+                  <ActivityIndicator size="small" color="#ffffff" style={{ marginRight: 6 }} />
+                ) : (
+                  <MaterialIcons name="sync" size={15} color="#ffffff" style={{ marginRight: 5 }} />
+                )}
+                <Text style={styles.syncGcalBtnText}>
+                  {isSyncingCalendar ? 'Syncing...' : 'Sync Calendar'}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity onPress={goToPrevMonth} style={styles.calNavArrow} activeOpacity={0.7}>
+                <MaterialIcons name="chevron-left" size={18} color="#475569" />
+              </TouchableOpacity>
+              <Text style={styles.calMonthYearLabel}>{calMonthLabel}</Text>
+              <TouchableOpacity onPress={goToNextMonth} style={styles.calNavArrow} activeOpacity={0.7}>
+                <MaterialIcons name="chevron-right" size={18} color="#475569" />
               </TouchableOpacity>
             </View>
-
-            <View style={styles.settingsForm}>
-              <Text style={styles.settingsLabel}>Google Calendar ID</Text>
-              <TextInput
-                style={styles.settingsInput}
-                value={tempCalendarId}
-                onChangeText={setTempCalendarId}
-                placeholder="e.g. primary or holiday calendar email"
-                autoCapitalize="none"
-              />
-              
-              <Text style={styles.settingsLabel}>Google API Key (Optional)</Text>
-              <TextInput
-                style={styles.settingsInput}
-                value={tempApiKey}
-                onChangeText={setTempApiKey}
-                placeholder="Defaults to system API Key"
-                autoCapitalize="none"
-                secureTextEntry
-              />
-              
-              <View style={styles.settingsActions}>
-                <TouchableOpacity
-                  style={[styles.settingsButton, styles.settingsButtonCancel]}
-                  onPress={() => setIsSettingsOpen(false)}
-                >
-                  <Text style={styles.settingsButtonTextCancel}>Cancel</Text>
-                </TouchableOpacity>
-                
-                <TouchableOpacity
-                  style={[styles.settingsButton, styles.settingsButtonSave]}
-                  onPress={handleSaveSettings}
-                >
-                  <Text style={styles.settingsButtonTextSave}>Save Configuration</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
           </View>
-        ) : (
-          <View style={styles.calendarCardContainer}>
-            <View style={styles.cardHeaderRow}>
-              <View style={styles.cardTitleRow}>
-                <View style={styles.cardTitleIcon}>
-                  <MaterialIcons name="event" size={20} color="#16a34a" />
-                </View>
-                <View>
-                  <Text style={styles.cardTitle}>Google Calendar</Text>
-                  <Text style={styles.cardSubtitleText}>Synced events and schedule.</Text>
-                </View>
-              </View>
-              <View style={styles.calNavButtons}>
-                {isLoadingEvents && (
-                  <ActivityIndicator size="small" color="#16a34a" style={{ marginRight: 4 }} />
-                )}
-                <TouchableOpacity onPress={handleOpenSettings} style={[styles.calNavArrow, { marginRight: 4 }]} activeOpacity={0.7}>
-                  <MaterialIcons name="settings" size={16} color="#475569" />
-                </TouchableOpacity>
-                <TouchableOpacity onPress={goToPrevMonth} style={styles.calNavArrow} activeOpacity={0.7}>
-                  <MaterialIcons name="chevron-left" size={18} color="#475569" />
-                </TouchableOpacity>
-                <Text style={styles.calMonthYearLabel}>{calMonthLabel}</Text>
-                <TouchableOpacity onPress={goToNextMonth} style={styles.calNavArrow} activeOpacity={0.7}>
-                  <MaterialIcons name="chevron-right" size={18} color="#475569" />
-                </TouchableOpacity>
-              </View>
-            </View>
 
-            {/* Calendar Error/Warning */}
-            {calendarError ? (
-              <View style={styles.calendarErrorBanner}>
-                <MaterialIcons name="warning" size={14} color="#d97706" style={{ marginTop: 1 }} />
-                <Text style={styles.calendarErrorText} numberOfLines={1}>
-                  {calendarError}
-                </Text>
-              </View>
-            ) : null}
+          {/* Sync Result Banner */}
+          {syncStatusBanner ? (
+            <View style={[styles.calendarSyncBanner, syncStatusBanner.type === 'error' && styles.calendarSyncBannerError]}>
+              <MaterialIcons
+                name={syncStatusBanner.type === 'success' ? 'check-circle' : 'error-outline'}
+                size={16}
+                color={syncStatusBanner.type === 'success' ? '#166534' : '#991b1b'}
+              />
+              <Text style={[styles.calendarSyncBannerText, syncStatusBanner.type === 'error' && styles.calendarSyncBannerTextError]}>
+                {syncStatusBanner.message}
+              </Text>
+              <TouchableOpacity onPress={() => setSyncStatusBanner(null)}>
+                <MaterialIcons name="close" size={14} color={syncStatusBanner.type === 'success' ? '#166534' : '#991b1b'} />
+              </TouchableOpacity>
+            </View>
+          ) : null}
 
             {/* Week Header */}
             <View style={styles.calWeekRow}>
@@ -1083,7 +1098,9 @@ export default function DashboardScreen({ navigation }: any) {
               {Array.from({ length: 6 }).map((_, rowIdx) => (
                 <View key={rowIdx} style={styles.calDayRow}>
                   {calGridCells.slice(rowIdx * 7, rowIdx * 7 + 7).map((cell, colIdx) => {
-                    const cellEvents = getGoogleEventsForDay(cell.day, cell.month, cell.year, googleEvents);
+                    const systemEvents = getProjectsForDay(cell.day, cell.month, cell.year, projectsData);
+                    const cellGEvents = getGoogleEventsForDay(cell.day, cell.month, cell.year, googleEvents);
+                    const totalEventsCount = systemEvents.length + cellGEvents.length;
                     const isToday =
                       cell.isCurrentMonth &&
                       cell.day === todayDate.getDate() &&
@@ -1091,7 +1108,7 @@ export default function DashboardScreen({ navigation }: any) {
                       cell.year === todayDate.getFullYear();
                     const dateKey = `${cell.year}-${String(cell.month + 1).padStart(2, '0')}-${String(cell.day).padStart(2, '0')}`;
                     const isSelected = selectedDateKey === dateKey;
-                    const hasEvents = cellEvents.length > 0;
+                    const hasEvents = totalEventsCount > 0;
 
                     return (
                       <TouchableOpacity
@@ -1100,11 +1117,12 @@ export default function DashboardScreen({ navigation }: any) {
                           styles.calDayCell,
                           !cell.isCurrentMonth && styles.calDayCellMuted,
                           isToday && styles.calDayCellToday,
-                          isSelected && { borderColor: '#10b981', borderWidth: 2 },
+                          isSelected && { borderColor: '#16a34a', borderWidth: 2, backgroundColor: '#f0fdf4' },
                         ]}
                         onPress={() => {
                           setSelectedDateKey(dateKey);
-                          setSelectedDayEvents(cellEvents);
+                          setSelectedDaySystemProjects(systemEvents);
+                          setSelectedDayGoogleEvents(cellGEvents);
                         }}
                         activeOpacity={0.85}
                       >
@@ -1113,16 +1131,16 @@ export default function DashboardScreen({ navigation }: any) {
                             styles.calDayNum,
                             !cell.isCurrentMonth && styles.calDayNumMuted,
                             isToday && styles.calDayNumToday,
-                            isSelected && { color: '#10b981', fontWeight: '800' },
+                            isSelected && { color: '#16a34a', fontWeight: '800' },
                           ]}
                         >
                           {cell.day}
                         </Text>
                         {hasEvents ? (
                           <View style={styles.calIndicatorRow}>
-                            <View style={[styles.calIndicatorDot, { backgroundColor: '#10b981' }]} />
-                            {cellEvents.length > 1 && (
-                              <Text style={[styles.calIndicatorCount, { color: '#10b981' }]}>{cellEvents.length}</Text>
+                            <View style={[styles.calIndicatorDot, { backgroundColor: systemEvents.length > 0 ? '#16a34a' : '#0284c7' }]} />
+                            {totalEventsCount > 1 && (
+                              <Text style={[styles.calIndicatorCount, { color: systemEvents.length > 0 ? '#16a34a' : '#0284c7' }]}>{totalEventsCount}</Text>
                             )}
                           </View>
                         ) : null}
@@ -1133,45 +1151,93 @@ export default function DashboardScreen({ navigation }: any) {
               ))}
             </View>
           </View>
-        )}
 
         {/* Selected Day Events Details Card */}
         <View style={styles.gcalDetailsCard}>
           <View style={styles.gcalDetailsTitleRow}>
-            <MaterialIcons name="event-note" size={20} color="#10b981" />
+            <MaterialIcons name="event-note" size={20} color="#16a34a" />
             <Text style={styles.gcalDetailsTitle}>
               Events for {selectedDateLabel}
             </Text>
           </View>
           <ScrollView style={styles.gcalDetailsScroll} showsVerticalScrollIndicator={false}>
-            {selectedDayEvents.length > 0 ? (
-              selectedDayEvents.map((event, idx) => (
-                <View key={event.id || idx} style={styles.gcalEventItem}>
-                  <View style={styles.gcalEventHeader}>
-                    <Text style={styles.gcalEventTitle}>{event.summary || 'No Title'}</Text>
-                    <Text style={styles.gcalEventTimeTag}>{formatGoogleEventTime(event)}</Text>
-                  </View>
-                  {event.description ? (
-                    <Text style={styles.gcalEventDescription}>{event.description}</Text>
-                  ) : null}
-                  {event.location ? (
-                    <View style={styles.gcalEventLocationRow}>
-                      <MaterialIcons name="place" size={12} color="#64748b" />
-                      <Text style={styles.gcalEventLocationText}>{event.location}</Text>
+            {selectedDaySystemProjects.length > 0 || selectedDayGoogleEvents.length > 0 ? (
+              <>
+                {selectedDaySystemProjects.map((project, idx) => {
+                  const partnerName = partnersData.find(p => p.id === project.partnerId)?.name || (project.partnerId ? 'Partner Project' : undefined);
+                  const statusColor = getProjectStatusColor(project);
+                  const displayStatus = getProjectDisplayStatus(project);
+                  const address = project.location?.address;
+                  return (
+                    <View key={project.id || `sys-${idx}`} style={[styles.gcalEventItem, { borderLeftColor: project.isEvent ? '#16a34a' : '#0284c7' }]}>
+                      <View style={styles.gcalEventHeader}>
+                        <Text style={styles.gcalEventTitle}>{project.title || 'Untitled Event'}</Text>
+                        <View style={{ flexDirection: 'row', gap: 4, alignItems: 'center' }}>
+                          <Text style={[styles.gcalEventTimeTag, { backgroundColor: project.isEvent ? '#dcfce7' : '#e0f2fe', color: project.isEvent ? '#16a34a' : '#0284c7' }]}>
+                            {project.isEvent ? 'Event' : 'Project'}
+                          </Text>
+                          <Text style={[styles.gcalEventTimeTag, { backgroundColor: '#f1f5f9', color: statusColor }]}>
+                            {displayStatus}
+                          </Text>
+                        </View>
+                      </View>
+                      <Text style={styles.gcalEventTimeText}>
+                        📅 {formatDateRangeDDMM(project.startDate, project.endDate)}
+                      </Text>
+                      {project.description ? (
+                        <Text style={styles.gcalEventDescription} numberOfLines={2}>{project.description}</Text>
+                      ) : null}
+                      {address ? (
+                        <View style={styles.gcalEventLocationRow}>
+                          <MaterialIcons name="place" size={12} color="#64748b" />
+                          <Text style={styles.gcalEventLocationText} numberOfLines={1}>{address}</Text>
+                        </View>
+                      ) : null}
+                      {partnerName ? (
+                        <View style={styles.gcalEventLocationRow}>
+                          <MaterialIcons name="business" size={12} color="#64748b" />
+                          <Text style={styles.gcalEventLocationText} numberOfLines={1}>{partnerName}</Text>
+                        </View>
+                      ) : null}
+                      <TouchableOpacity
+                        style={[styles.gcalViewButton, { marginTop: 8 }]}
+                        onPress={() => openLifecycle(project.id)}
+                        activeOpacity={0.7}
+                      >
+                        <MaterialIcons name="arrow-forward" size={12} color="#16a34a" />
+                        <Text style={[styles.gcalViewButtonText, { color: '#16a34a' }]}>View Details</Text>
+                      </TouchableOpacity>
                     </View>
-                  ) : null}
-                  {event.htmlLink ? (
-                    <TouchableOpacity
-                      style={styles.gcalViewButton}
-                      onPress={() => handleOpenEventLink(event.htmlLink)}
-                      activeOpacity={0.7}
-                    >
-                      <MaterialIcons name="open-in-new" size={12} color="#475569" />
-                      <Text style={styles.gcalViewButtonText}>View in Google Calendar</Text>
-                    </TouchableOpacity>
-                  ) : null}
-                </View>
-              ))
+                  );
+                })}
+                {selectedDayGoogleEvents.map((event, idx) => (
+                  <View key={event.id || `gcal-${idx}`} style={styles.gcalEventItem}>
+                    <View style={styles.gcalEventHeader}>
+                      <Text style={styles.gcalEventTitle}>{event.summary || 'No Title'}</Text>
+                      <Text style={styles.gcalEventTimeTag}>{formatGoogleEventTime(event)}</Text>
+                    </View>
+                    {event.description ? (
+                      <Text style={styles.gcalEventDescription}>{event.description}</Text>
+                    ) : null}
+                    {event.location ? (
+                      <View style={styles.gcalEventLocationRow}>
+                        <MaterialIcons name="place" size={12} color="#64748b" />
+                        <Text style={styles.gcalEventLocationText}>{event.location}</Text>
+                      </View>
+                    ) : null}
+                    {event.htmlLink ? (
+                      <TouchableOpacity
+                        style={styles.gcalViewButton}
+                        onPress={() => handleOpenEventLink(event.htmlLink)}
+                        activeOpacity={0.7}
+                      >
+                        <MaterialIcons name="open-in-new" size={12} color="#475569" />
+                        <Text style={styles.gcalViewButtonText}>View in Google Calendar</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+                ))}
+              </>
             ) : (
               <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', marginTop: 40 }}>
                 <MaterialIcons name="event-busy" size={32} color="#94a3b8" />
@@ -1188,25 +1254,61 @@ export default function DashboardScreen({ navigation }: any) {
         <View style={styles.row3Card}>
           <View style={styles.row3Header}>
             <Text style={styles.row3Title}>Upcoming Events</Text>
-            <MaterialIcons name="info-outline" size={16} color="#64748b" />
+            <View style={{ position: 'relative' }}>
+              <TouchableOpacity
+                {...({
+                  onMouseEnter: () => setHoveredKey('info-upcoming'),
+                  onMouseLeave: () => setHoveredKey(null),
+                } as any)}
+                activeOpacity={0.7}
+              >
+                <MaterialIcons name="info-outline" size={16} color="#64748b" />
+              </TouchableOpacity>
+              {hoveredKey === 'info-upcoming' && (
+                <View style={styles.cardInfoTooltip}>
+                  <Text style={styles.cardInfoTooltipTitle}>Upcoming Events</Text>
+                  <Text style={styles.cardInfoTooltipText}>Projects and activities scheduled in the coming weeks.</Text>
+                </View>
+              )}
+            </View>
           </View>
           <ScrollView style={styles.row3Scroll} showsVerticalScrollIndicator={false}>
             {upcomingEventGroups.length > 0 ? (
               upcomingEventGroups.flatMap(g => g.projects).slice(0, 4).map((project, idx) => {
                 const partnerName = partnersData.find(p => p.id === project.partnerId)?.name || 'NVC Partner';
+                const isItemHovered = hoveredKey === `event-${project.id}`;
                 return (
-                  <View key={project.id + idx} style={styles.upcomingEventItem}>
+                  <TouchableOpacity
+                    key={project.id + idx}
+                    style={[styles.upcomingEventItem, isItemHovered && styles.upcomingEventItemHovered]}
+                    onPress={() => openLifecycle(project.id)}
+                    {...({
+                      onMouseEnter: () => setHoveredKey(`event-${project.id}`),
+                      onMouseLeave: () => setHoveredKey(null),
+                    } as any)}
+                    activeOpacity={0.8}
+                  >
                     <View style={styles.timelineCol}>
-                      <View style={styles.timelineDot} />
+                      <View style={[styles.timelineDot, isItemHovered && { backgroundColor: '#16a34a', transform: [{ scale: 1.25 }] }]} />
                       {idx < 3 && <View style={styles.timelineLine} />}
                     </View>
                     <View style={styles.upcomingEventContent}>
-                      <Text style={styles.upcomingEventTitle} numberOfLines={1}>{project.title}</Text>
+                      <Text style={[styles.upcomingEventTitle, isItemHovered && { color: '#16a34a' }]} numberOfLines={1}>
+                        {project.title}
+                      </Text>
                       <Text style={styles.upcomingEventMeta} numberOfLines={1}>
                         {formatDateRangeDDMM(project.startDate, project.endDate)} • {partnerName}
                       </Text>
+                      {isItemHovered ? (
+                        <View style={styles.eventHoverDetails}>
+                          {project.location?.address ? (
+                            <Text style={styles.eventHoverDetailText} numberOfLines={1}>📍 {project.location.address}</Text>
+                          ) : null}
+                          <Text style={styles.eventHoverDetailText}>🏷️ Status: {getProjectDisplayStatus(project)} ({project.isEvent ? 'Event' : 'Project'})</Text>
+                        </View>
+                      ) : null}
                     </View>
-                  </View>
+                  </TouchableOpacity>
                 );
               })
             ) : (
@@ -1218,25 +1320,93 @@ export default function DashboardScreen({ navigation }: any) {
         {/* Recent Activity */}
         <View style={styles.row3Card}>
           <View style={styles.row3Header}>
-            <Text style={styles.row3Title}>Recent Activity</Text>
-            <MaterialIcons name="info-outline" size={16} color="#64748b" />
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Text style={styles.row3Title}>Recent Activity</Text>
+              {hasNewActivity && (
+                <View
+                  style={[
+                    styles.newActivityDot,
+                    Platform.OS === 'web' && {
+                      animation: 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                    } as any,
+                  ]}
+                />
+              )}
+            </View>
+            <View style={{ position: 'relative' }}>
+              <TouchableOpacity
+                {...({
+                  onMouseEnter: () => setHoveredKey('info-activity'),
+                  onMouseLeave: () => setHoveredKey(null),
+                } as any)}
+                activeOpacity={0.7}
+              >
+                <MaterialIcons name="info-outline" size={16} color="#64748b" />
+              </TouchableOpacity>
+              {hoveredKey === 'info-activity' && (
+                <View style={styles.cardInfoTooltip}>
+                  <Text style={styles.cardInfoTooltipTitle}>Recent Activity</Text>
+                  <Text style={styles.cardInfoTooltipText}>Live audit trail of project status updates and submissions. Updates automatically via WebSocket.</Text>
+                </View>
+              )}
+            </View>
           </View>
           <ScrollView style={styles.row3Scroll} showsVerticalScrollIndicator={false}>
             {recentUpdates.length > 0 ? (
-              recentUpdates.slice(0, 4).map((update, index) => (
-                <View key={update.id || index} style={styles.activityItem}>
-                  <View style={styles.activityIcon}>
-                    <MaterialIcons name="update" size={16} color="#64748b" />
-                  </View>
-                  <View style={styles.activityCopy}>
-                    <Text style={styles.activityText} numberOfLines={2}>
-                      <Text style={styles.activityProject}>{update.projectName || 'Project'}: </Text>
-                      {update.description || 'Status updated'}
-                    </Text>
-                    <Text style={styles.activityTime}>{formatShortDate(update.updatedAt)}</Text>
-                  </View>
-                </View>
-              ))
+              recentUpdates.slice(0, 5).map((update, index) => {
+                const isActHovered = hoveredKey === `act-${update.id || index}`;
+                const getIconName = (type: string) => {
+                  switch (type) {
+                    case 'report': return 'description';
+                    case 'proposal': return 'business';
+                    case 'join': return 'person-add';
+                    case 'time': return 'timer';
+                    case 'project': return 'event';
+                    default: return 'update';
+                  }
+                };
+                const getIconColor = (type: string) => {
+                  switch (type) {
+                    case 'report': return '#0284c7';
+                    case 'proposal': return '#8b5cf6';
+                    case 'join': return '#16a34a';
+                    case 'time': return '#d97706';
+                    case 'project': return '#16a34a';
+                    default: return '#64748b';
+                  }
+                };
+                return (
+                  <TouchableOpacity
+                    key={update.id || index}
+                    style={[styles.activityItem, isActHovered && styles.activityItemHovered]}
+                    onPress={() => {
+                      if (update.projectId) {
+                        openLifecycle(update.projectId);
+                      }
+                    }}
+                    {...({
+                      onMouseEnter: () => setHoveredKey(`act-${update.id || index}`),
+                      onMouseLeave: () => setHoveredKey(null),
+                    } as any)}
+                    activeOpacity={update.projectId ? 0.7 : 1}
+                  >
+                    <View style={[styles.activityIcon, isActHovered && { backgroundColor: '#f0fdf4' }]}>
+                      <MaterialIcons
+                        name={getIconName(update.type) as any}
+                        size={15}
+                        color={isActHovered ? '#16a34a' : getIconColor(update.type)}
+                      />
+                    </View>
+                    <View style={styles.activityCopy}>
+                      <Text style={styles.activityText} numberOfLines={2}>
+                        <Text style={[styles.activityProject, isActHovered && { color: '#16a34a' }]}>{update.projectName}: </Text>
+                        {update.description}
+                      </Text>
+                      <Text style={styles.activityTime}>{formatShortDate(update.updatedAt)}</Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })
             ) : (
               <Text style={styles.emptyCardText}>No recent activity</Text>
             )}
@@ -1244,10 +1414,34 @@ export default function DashboardScreen({ navigation }: any) {
         </View>
 
         {/* Volunteer Overview (Donut Chart) */}
-        <View style={styles.row3Card}>
+        <TouchableOpacity
+          style={styles.row3Card}
+          onPress={() => navigation.navigate('Volunteers')}
+          {...({
+            onMouseEnter: () => setHoveredKey('volunteers-donut'),
+            onMouseLeave: () => setHoveredKey(null),
+          } as any)}
+          activeOpacity={0.9}
+        >
           <View style={styles.row3Header}>
             <Text style={styles.row3Title}>Volunteer Overview</Text>
-            <MaterialIcons name="info-outline" size={16} color="#64748b" />
+            <View style={{ position: 'relative' }}>
+              <TouchableOpacity
+                {...({
+                  onMouseEnter: () => setHoveredKey('info-volunteers'),
+                  onMouseLeave: () => setHoveredKey(null),
+                } as any)}
+                activeOpacity={0.7}
+              >
+                <MaterialIcons name="info-outline" size={16} color="#64748b" />
+              </TouchableOpacity>
+              {hoveredKey === 'info-volunteers' && (
+                <View style={styles.cardInfoTooltip}>
+                  <Text style={styles.cardInfoTooltipTitle}>Volunteer Workforce</Text>
+                  <Text style={styles.cardInfoTooltipText}>Live volunteer workforce distribution by availability status.</Text>
+                </View>
+              )}
+            </View>
           </View>
           <View style={styles.donutContainer}>
             <View style={styles.donutChartWrapper}>
@@ -1327,7 +1521,17 @@ export default function DashboardScreen({ navigation }: any) {
               </View>
             </View>
           </View>
-        </View>
+          {hoveredKey === 'volunteers-donut' && (
+            <View style={styles.floatingChartTooltip}>
+              <Text style={styles.floatingChartTooltipTitle}>Volunteer Distribution</Text>
+              <Text style={styles.floatingChartTooltipItem}>🟢 Open: {openVolunteersCount} ({totalVolunteers > 0 ? ((openVolunteersCount / totalVolunteers) * 100).toFixed(0) : 0}%)</Text>
+              <Text style={styles.floatingChartTooltipItem}>🟠 Busy: {busyVolunteersCount} ({totalVolunteers > 0 ? ((busyVolunteersCount / totalVolunteers) * 100).toFixed(0) : 0}%)</Text>
+              <Text style={styles.floatingChartTooltipItem}>⚪ Pending: {pendingVolunteersCount} ({totalVolunteers > 0 ? ((pendingVolunteersCount / totalVolunteers) * 100).toFixed(0) : 0}%)</Text>
+              <Text style={[styles.floatingChartTooltipItem, { marginTop: 4, fontWeight: '800', color: '#0f172a' }]}>👥 Total Volunteers: {volunteersData.length}</Text>
+              <Text style={styles.floatingChartTooltipHint}>Click to open Volunteer Management ↗</Text>
+            </View>
+          )}
+        </TouchableOpacity>
       </View>
 
       {/* Row 4: Analytics Overview and News & Announcements */}
@@ -1336,11 +1540,35 @@ export default function DashboardScreen({ navigation }: any) {
         <View style={styles.analyticsCard}>
           <View style={styles.row3Header}>
             <Text style={styles.row3Title}>Analytics Overview</Text>
-            <MaterialIcons name="info-outline" size={16} color="#64748b" />
+            <View style={{ position: 'relative' }}>
+              <TouchableOpacity
+                {...({
+                  onMouseEnter: () => setHoveredKey('info-analytics'),
+                  onMouseLeave: () => setHoveredKey(null),
+                } as any)}
+                activeOpacity={0.7}
+              >
+                <MaterialIcons name="info-outline" size={16} color="#64748b" />
+              </TouchableOpacity>
+              {hoveredKey === 'info-analytics' && (
+                <View style={styles.cardInfoTooltip}>
+                  <Text style={styles.cardInfoTooltipTitle}>Analytics Overview</Text>
+                  <Text style={styles.cardInfoTooltipText}>High-level breakdown of skills, growth trends, partner sectors, and project status.</Text>
+                </View>
+              )}
+            </View>
           </View>
           <View style={styles.analyticsChartsRow}>
             {/* Chart 1: Skills Contributed Donut */}
-            <View style={styles.miniChartItem}>
+            <TouchableOpacity
+              style={[styles.miniChartItem, hoveredKey === 'chart-skills' && styles.miniChartItemHovered]}
+              onPress={() => navigation.navigate('Analytics')}
+              {...({
+                onMouseEnter: () => setHoveredKey('chart-skills'),
+                onMouseLeave: () => setHoveredKey(null),
+              } as any)}
+              activeOpacity={0.8}
+            >
               {(() => {
                 const radius = 22;
                 const strokeWidth = 6;
@@ -1377,20 +1605,62 @@ export default function DashboardScreen({ navigation }: any) {
                 );
               })()}
               <Text style={styles.miniChartLabel}>Skills Contributed</Text>
-            </View>
+              {hoveredKey === 'chart-skills' && (
+                <View style={styles.floatingChartTooltip}>
+                  <Text style={styles.floatingChartTooltipTitle}>Top Contributed Skills</Text>
+                  {top4Skills.length > 0 ? (
+                    top4Skills.map(([skill, count], i) => (
+                      <Text key={skill} style={styles.floatingChartTooltipItem}>
+                        {i + 1}. {skill.charAt(0).toUpperCase() + skill.slice(1)}: {count} ({((count / totalTop4SkillsCount) * 100).toFixed(0)}%)
+                      </Text>
+                    ))
+                  ) : (
+                    <Text style={styles.floatingChartTooltipItem}>No skill data recorded yet</Text>
+                  )}
+                  <Text style={styles.floatingChartTooltipHint}>Click to view full analytics ↗</Text>
+                </View>
+              )}
+            </TouchableOpacity>
 
             {/* Chart 2: Volunteers Growth Line */}
-            <View style={styles.miniChartItem}>
+            <TouchableOpacity
+              style={[styles.miniChartItem, hoveredKey === 'chart-growth' && styles.miniChartItemHovered]}
+              onPress={() => navigation.navigate('Analytics')}
+              {...({
+                onMouseEnter: () => setHoveredKey('chart-growth'),
+                onMouseLeave: () => setHoveredKey(null),
+              } as any)}
+              activeOpacity={0.8}
+            >
               <Svg width={66} height={66} viewBox="0 0 60 60">
                 <Path d={pathD} stroke="#10b981" strokeWidth="2.5" fill="none" />
                 <Path d={areaD} fill="#10b98115" />
                 <Circle cx={linePoints[5].x} cy={linePoints[5].y} r="3" fill="#10b981" />
               </Svg>
               <Text style={styles.miniChartLabel}>Volunteers Growth</Text>
-            </View>
+              {hoveredKey === 'chart-growth' && (
+                <View style={styles.floatingChartTooltip}>
+                  <Text style={styles.floatingChartTooltipTitle}>Volunteer Growth (6 Mos)</Text>
+                  {volunteerGrowthPoints.map(p => (
+                    <Text key={p.label} style={styles.floatingChartTooltipItem}>
+                      • {p.label}: {p.count} volunteers
+                    </Text>
+                  ))}
+                  <Text style={styles.floatingChartTooltipHint}>Click to view full analytics ↗</Text>
+                </View>
+              )}
+            </TouchableOpacity>
 
             {/* Chart 3: Partner Sectors Donut */}
-            <View style={styles.miniChartItem}>
+            <TouchableOpacity
+              style={[styles.miniChartItem, hoveredKey === 'chart-sectors' && styles.miniChartItemHovered]}
+              onPress={() => navigation.navigate('Analytics')}
+              {...({
+                onMouseEnter: () => setHoveredKey('chart-sectors'),
+                onMouseLeave: () => setHoveredKey(null),
+              } as any)}
+              activeOpacity={0.8}
+            >
               {(() => {
                 const radius = 22;
                 const strokeWidth = 6;
@@ -1426,10 +1696,28 @@ export default function DashboardScreen({ navigation }: any) {
                 );
               })()}
               <Text style={styles.miniChartLabel}>Sectors</Text>
-            </View>
+              {hoveredKey === 'chart-sectors' && (
+                <View style={styles.floatingChartTooltip}>
+                  <Text style={styles.floatingChartTooltipTitle}>Partner Sectors Breakdown</Text>
+                  <Text style={styles.floatingChartTooltipItem}>🟣 NGO: {ngoCount} ({((ngoCount / totalPartnersSector) * 100).toFixed(0)}%)</Text>
+                  <Text style={styles.floatingChartTooltipItem}>💖 Hospital: {hospitalCount} ({((hospitalCount / totalPartnersSector) * 100).toFixed(0)}%)</Text>
+                  <Text style={styles.floatingChartTooltipItem}>🔵 Private: {privateCount} ({((privateCount / totalPartnersSector) * 100).toFixed(0)}%)</Text>
+                  <Text style={styles.floatingChartTooltipItem}>⚪ Institution: {institutionCount} ({((institutionCount / totalPartnersSector) * 100).toFixed(0)}%)</Text>
+                  <Text style={styles.floatingChartTooltipHint}>Click to view full analytics ↗</Text>
+                </View>
+              )}
+            </TouchableOpacity>
 
             {/* Chart 4: Project Status Bar Chart */}
-            <View style={styles.miniChartItem}>
+            <TouchableOpacity
+              style={[styles.miniChartItem, hoveredKey === 'chart-status' && styles.miniChartItemHovered]}
+              onPress={() => navigation.navigate('Analytics')}
+              {...({
+                onMouseEnter: () => setHoveredKey('chart-status'),
+                onMouseLeave: () => setHoveredKey(null),
+              } as any)}
+              activeOpacity={0.8}
+            >
               {(() => {
                 const maxVal = Math.max(planningCount, inProgressCount, completedCount, onHoldCount, 1);
                 const h1 = Math.max(8, (planningCount / maxVal) * 40);
@@ -1447,10 +1735,20 @@ export default function DashboardScreen({ navigation }: any) {
                 );
               })()}
               <Text style={styles.miniChartLabel}>Project Status</Text>
-              </View>
-            </View>
+              {hoveredKey === 'chart-status' && (
+                <View style={styles.floatingChartTooltip}>
+                  <Text style={styles.floatingChartTooltipTitle}>Project Status Breakdown</Text>
+                  <Text style={styles.floatingChartTooltipItem}>🔵 Planning: {planningCount}</Text>
+                  <Text style={styles.floatingChartTooltipItem}>🟠 In Progress: {inProgressCount}</Text>
+                  <Text style={styles.floatingChartTooltipItem}>🟢 Completed: {completedCount}</Text>
+                  <Text style={styles.floatingChartTooltipItem}>⚪ On Hold: {onHoldCount}</Text>
+                  <Text style={styles.floatingChartTooltipHint}>Click to view full analytics ↗</Text>
+                </View>
+              )}
+            </TouchableOpacity>
           </View>
         </View>
+      </View>
 
       {/* Footer */}
       <View style={styles.footerContainer}>
@@ -1678,6 +1976,12 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     borderRadius: 4,
   },
+  gcalEventTimeText: {
+    fontSize: 11,
+    color: '#475569',
+    marginTop: 4,
+    fontWeight: '600',
+  },
   gcalEventDescription: {
     fontSize: 11,
     color: '#64748b',
@@ -1712,75 +2016,44 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#475569',
   },
-  calendarErrorBanner: {
+  syncGcalBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#fef3c7',
-    paddingHorizontal: 10,
+    backgroundColor: '#16a34a',
+    paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 6,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: '#fde68a',
+    marginRight: 6,
   },
-  calendarErrorText: {
-    fontSize: 11,
-    color: '#b45309',
-    fontWeight: '600',
-    flex: 1,
-  },
-  settingsForm: {
-    flex: 1,
-    marginTop: 10,
-    gap: 12,
-  },
-  settingsLabel: {
+  syncGcalBtnText: {
+    color: '#ffffff',
     fontSize: 12,
     fontWeight: '700',
-    color: '#475569',
-    marginBottom: 4,
   },
-  settingsInput: {
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 13,
-    color: '#0f172a',
-    backgroundColor: '#f8fafc',
-  },
-  settingsActions: {
+  calendarSyncBanner: {
     flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 10,
-    marginTop: 16,
-  },
-  settingsButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 8,
     alignItems: 'center',
-    justifyContent: 'center',
-  },
-  settingsButtonCancel: {
-    backgroundColor: '#f1f5f9',
+    gap: 8,
+    backgroundColor: '#f0fdf4',
     borderWidth: 1,
-    borderColor: '#cbd5e1',
+    borderColor: '#bbf7d0',
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 10,
   },
-  settingsButtonSave: {
-    backgroundColor: '#16a34a',
+  calendarSyncBannerError: {
+    backgroundColor: '#fef2f2',
+    borderColor: '#fca5a5',
   },
-  settingsButtonTextCancel: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#475569',
+  calendarSyncBannerText: {
+    flex: 1,
+    fontSize: 11,
+    color: '#166534',
+    fontWeight: '600',
   },
-  settingsButtonTextSave: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#ffffff',
+  calendarSyncBannerTextError: {
+    color: '#991b1b',
   },
   calNavButtons: {
     flexDirection: 'row',
@@ -2038,10 +2311,106 @@ const styles = StyleSheet.create({
   miniChartItem: {
     alignItems: 'center',
     gap: 6,
+    position: 'relative',
+    padding: 6,
+    borderRadius: 8,
+    cursor: 'pointer' as any,
+  },
+  miniChartItemHovered: {
+    backgroundColor: '#f8fafc',
   },
   miniChartLabel: {
     fontSize: 10,
     color: '#64748b',
+    fontWeight: '700',
+  },
+  upcomingEventItemHovered: {
+    backgroundColor: '#f0fdf4',
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    marginHorizontal: -6,
+  },
+  eventHoverDetails: {
+    marginTop: 4,
+    gap: 2,
+    backgroundColor: '#ffffff',
+    padding: 6,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+  },
+  eventHoverDetailText: {
+    fontSize: 10,
+    color: '#15803d',
+    fontWeight: '600',
+  },
+  activityItemHovered: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    marginHorizontal: -6,
+  },
+  cardInfoTooltip: {
+    position: 'absolute',
+    top: 24,
+    right: 0,
+    backgroundColor: '#1e293b',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    minWidth: 180,
+    zIndex: 9999,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    elevation: 20,
+  },
+  cardInfoTooltipTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#ffffff',
+    marginBottom: 2,
+  },
+  cardInfoTooltipText: {
+    fontSize: 11,
+    color: '#cbd5e1',
+    lineHeight: 15,
+  },
+  floatingChartTooltip: {
+    position: 'absolute',
+    bottom: 75,
+    backgroundColor: '#0f172a',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    minWidth: 170,
+    zIndex: 9999,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 20,
+  },
+  floatingChartTooltipTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#f8fafc',
+    marginBottom: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: '#334155',
+    paddingBottom: 3,
+  },
+  floatingChartTooltipItem: {
+    fontSize: 10,
+    color: '#cbd5e1',
+    marginVertical: 1,
+    fontWeight: '600',
+  },
+  floatingChartTooltipHint: {
+    fontSize: 9,
+    color: '#4ade80',
+    marginTop: 4,
     fontWeight: '700',
   },
   errorBanner: {
@@ -2085,6 +2454,13 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#94a3b8',
     fontWeight: '600',
+  },
+  newActivityDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#16a34a',
+    marginLeft: 6,
   },
 });
 

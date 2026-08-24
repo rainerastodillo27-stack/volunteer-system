@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useState } from 'react';
 import ModernTheme from '../utils/modernTheme';
 import {
   View,
-  Text,
   StyleSheet,
   TouchableOpacity,
   ScrollView,
@@ -14,6 +13,7 @@ import {
   Image,
   type ImageStyle,
 } from 'react-native';
+import { Text } from '../components/Text';
 import { Picker } from '@react-native-picker/picker';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -232,15 +232,15 @@ export default function ProfileScreen() {
     setSkillsDraft(volunteerProfile?.skills || []);
     setIsBusyDraft(volunteerProfile?.engagementStatus === 'Busy');
     setProfilePhotoDraft(user.profilePhoto || '');
-    setGenderDraft(volunteerProfile?.gender || '');
-    setDateOfBirthDraft(volunteerProfile?.dateOfBirth || '');
-    setCivilStatusDraft(volunteerProfile?.civilStatus || '');
-    setHomeAddressDraft(volunteerProfile?.homeAddress || '');
-    setOccupationDraft(volunteerProfile?.occupation || '');
-    setWorkplaceOrSchoolDraft(volunteerProfile?.workplaceOrSchool || '');
-    setCollegeCourseDraft(volunteerProfile?.collegeCourse || '');
-    setCertificationsOrTrainingsDraft(volunteerProfile?.certificationsOrTrainings || '');
-    setHobbiesAndInterestsDraft(volunteerProfile?.hobbiesAndInterests || '');
+    setGenderDraft(volunteerProfile?.gender || user?.volunteerMembershipSheet?.gender || '');
+    setDateOfBirthDraft(volunteerProfile?.dateOfBirth || user?.volunteerMembershipSheet?.dateOfBirth || '');
+    setCivilStatusDraft(volunteerProfile?.civilStatus || user?.volunteerMembershipSheet?.civilStatus || '');
+    setHomeAddressDraft(volunteerProfile?.homeAddress || user?.volunteerMembershipSheet?.homeAddress || '');
+    setOccupationDraft(volunteerProfile?.occupation || user?.volunteerMembershipSheet?.occupation || '');
+    setWorkplaceOrSchoolDraft(volunteerProfile?.workplaceOrSchool || user?.volunteerMembershipSheet?.workplaceOrSchool || '');
+    setCollegeCourseDraft(volunteerProfile?.collegeCourse || user?.volunteerMembershipSheet?.collegeCourse || '');
+    setCertificationsOrTrainingsDraft(volunteerProfile?.certificationsOrTrainings || user?.volunteerMembershipSheet?.certificationsOrTrainings || '');
+    setHobbiesAndInterestsDraft(volunteerProfile?.hobbiesAndInterests || user?.volunteerMembershipSheet?.hobbiesAndInterests || '');
     setAffiliationsDraft(volunteerProfile?.affiliations || []);
 
     const primaryPartner = partnerProfiles[0] || null;
@@ -700,7 +700,6 @@ export default function ProfileScreen() {
         { label: 'Occupation', value: volunteerProfile.occupation || 'Not provided' },
         { label: 'Workplace or School', value: volunteerProfile.workplaceOrSchool || 'Not provided' },
         { label: 'College Course', value: volunteerProfile.collegeCourse || 'Not provided' },
-        { label: 'Hobbies and Interests', value: volunteerProfile.hobbiesAndInterests || 'Not provided' },
       ]
     : [];
 
@@ -909,7 +908,7 @@ export default function ProfileScreen() {
               </View>
               <View style={styles.regTextWrap}>
                 <Text style={styles.regLabel}>GENDER</Text>
-                <Text style={styles.regValue}>{volunteerProfile.gender || 'Not provided'}</Text>
+                <Text style={styles.regValue}>{volunteerProfile.gender || user?.volunteerMembershipSheet?.gender || 'Not provided'}</Text>
               </View>
             </View>
 
@@ -919,7 +918,7 @@ export default function ProfileScreen() {
               </View>
               <View style={styles.regTextWrap}>
                 <Text style={styles.regLabel}>CIVIL STATUS</Text>
-                <Text style={styles.regValue}>{volunteerProfile.civilStatus || 'Not provided'}</Text>
+                <Text style={styles.regValue}>{volunteerProfile.civilStatus || user?.volunteerMembershipSheet?.civilStatus || 'Not provided'}</Text>
               </View>
             </View>
 
@@ -929,7 +928,7 @@ export default function ProfileScreen() {
               </View>
               <View style={styles.regTextWrap}>
                 <Text style={styles.regLabel}>OCCUPATION</Text>
-                <Text style={styles.regValue}>{volunteerProfile.occupation || 'Not provided'}</Text>
+                <Text style={styles.regValue}>{volunteerProfile.occupation || user?.volunteerMembershipSheet?.occupation || 'Not provided'}</Text>
               </View>
             </View>
 
@@ -939,7 +938,7 @@ export default function ProfileScreen() {
               </View>
               <View style={styles.regTextWrap}>
                 <Text style={styles.regLabel}>COLLEGE COURSE</Text>
-                <Text style={styles.regValue}>{volunteerProfile.collegeCourse || 'Not provided'}</Text>
+                <Text style={styles.regValue}>{volunteerProfile.collegeCourse || user?.volunteerMembershipSheet?.collegeCourse || 'Not provided'}</Text>
               </View>
             </View>
 
@@ -949,18 +948,18 @@ export default function ProfileScreen() {
               </View>
               <View style={styles.regTextWrap}>
                 <Text style={styles.regLabel}>CERTIFICATIONS OR TRAININGS</Text>
-                {volunteerProfile.certificationsOrTrainings ? (
+                {volunteerProfile.certificationsOrTrainings || user?.volunteerMembershipSheet?.certificationsOrTrainings ? (
                   <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
                     <Text style={[styles.regValue, { flex: 1 }]} numberOfLines={1}>
-                      {isImageMediaUri(volunteerProfile.certificationsOrTrainings)
-                        ? getAttachmentLabel(volunteerProfile.certificationsOrTrainings)
-                        : volunteerProfile.certificationsOrTrainings}
+                      {isImageMediaUri(volunteerProfile.certificationsOrTrainings || user?.volunteerMembershipSheet?.certificationsOrTrainings)
+                        ? getAttachmentLabel(volunteerProfile.certificationsOrTrainings || user?.volunteerMembershipSheet?.certificationsOrTrainings || '')
+                        : (volunteerProfile.certificationsOrTrainings || user?.volunteerMembershipSheet?.certificationsOrTrainings)}
                     </Text>
-                    {isImageMediaUri(volunteerProfile.certificationsOrTrainings) ? (
+                    {isImageMediaUri(volunteerProfile.certificationsOrTrainings || user?.volunteerMembershipSheet?.certificationsOrTrainings) ? (
                       <TouchableOpacity
                         onPress={async () => {
                           try {
-                            await openAttachmentUri(volunteerProfile.certificationsOrTrainings || '');
+                            await openAttachmentUri((volunteerProfile.certificationsOrTrainings || user?.volunteerMembershipSheet?.certificationsOrTrainings) || '');
                           } catch (error: any) {
                             Alert.alert(
                               'Unable to Open Certificate',
@@ -1045,36 +1044,6 @@ export default function ProfileScreen() {
               <View style={styles.regTextWrap}>
                 <Text style={styles.regLabel}>COLLEGE COURSE</Text>
                 <Text style={styles.regValue}>{volunteerProfile.collegeCourse || 'Not provided'}</Text>
-              </View>
-            </View>
-
-            <View style={styles.regItem}>
-              <View style={styles.regIconWrap}>
-                <MaterialIcons name="bookmark-border" size={18} color="#166534" />
-              </View>
-              <View style={styles.regTextWrap}>
-                <Text style={styles.regLabel}>SPECIAL SKILLS</Text>
-                <Text style={styles.regValue}>{volunteerProfile.specialSkills || 'Not provided'}</Text>
-              </View>
-            </View>
-
-            <View style={styles.regItem}>
-              <View style={styles.regIconWrap}>
-                <MaterialIcons name="favorite-border" size={18} color="#166534" />
-              </View>
-              <View style={styles.regTextWrap}>
-                <Text style={styles.regLabel}>HOBBIES AND INTERESTS</Text>
-                <Text style={styles.regValue}>{volunteerProfile.hobbiesAndInterests || 'Not provided'}</Text>
-              </View>
-            </View>
-
-            <View style={styles.regItem}>
-              <View style={styles.regIconWrap}>
-                <MaterialIcons name="play-circle-outline" size={18} color="#166534" />
-              </View>
-              <View style={styles.regTextWrap}>
-                <Text style={styles.regLabel}>VIDEO BRIEFING</Text>
-                <Text style={styles.regValue}>{volunteerProfile.videoBriefingUrl || 'Not provided'}</Text>
               </View>
             </View>
           </View>
@@ -1663,15 +1632,6 @@ export default function ProfileScreen() {
                   )
                 ) : null}
 
-                <Text style={styles.fieldLabel}>Hobbies and Interests</Text>
-                <TextInput
-                  style={styles.input}
-                  value={hobbiesAndInterestsDraft}
-                  onChangeText={setHobbiesAndInterestsDraft}
-                  placeholder="Hobbies and Interests"
-                  editable={!saveLoading}
-                />
-
                 <Text style={styles.fieldLabel}>Affiliation (Primary Organization)</Text>
                 <TextInput
                   style={styles.input}
@@ -1709,32 +1669,6 @@ export default function ProfileScreen() {
                   placeholder="Position / Role"
                   editable={!saveLoading}
                 />
-
-                <Text style={styles.fieldLabel}>Skills</Text>
-                <Text style={styles.sectionHint}>Tap to select skills from the list.</Text>
-                
-                <TouchableOpacity
-                  style={styles.dropdownButton}
-                  onPress={() => setShowSkillsModal(true)}
-                  disabled={saveLoading}
-                >
-                  <Text style={styles.dropdownButtonText}>
-                    {skillsDraft.length > 0 
-                      ? `${skillsDraft.length} skill${skillsDraft.length === 1 ? '' : 's'} selected`
-                      : 'Select skills'}
-                  </Text>
-                  <MaterialIcons name="arrow-drop-down" size={24} color="#64748b" />
-                </TouchableOpacity>
-                
-                {skillsDraft.length > 0 && (
-                  <View style={styles.selectedSkillsPreview}>
-                    {skillsDraft.map(skill => (
-                      <View key={skill} style={styles.skillPreviewChip}>
-                        <Text style={styles.skillPreviewText}>{skill}</Text>
-                      </View>
-                    ))}
-                  </View>
-                )}
 
                 <View style={styles.switchRow}>
                   <View style={styles.switchTextBlock}>
@@ -1855,6 +1789,7 @@ const styles = StyleSheet.create({
   },
   headerTitleText: {
     fontSize: 26,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '800',
     color: '#0f172a',
   },
@@ -1878,6 +1813,7 @@ const styles = StyleSheet.create({
   headerEditButtonText: {
     color: '#334155',
     fontSize: 14,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '700',
   },
   heroCard: {
@@ -1916,6 +1852,7 @@ const styles = StyleSheet.create({
   heroAvatarText: {
     color: '#ffffff',
     fontSize: 26,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '800',
   },
   heroCopy: {
@@ -1924,11 +1861,13 @@ const styles = StyleSheet.create({
   },
   heroName: {
     fontSize: 22,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '800',
     color: '#0f172a',
   },
   heroEmail: {
     fontSize: 15,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     color: '#64748b',
     marginTop: 2,
   },
@@ -1943,6 +1882,7 @@ const styles = StyleSheet.create({
   heroBadgeText: {
     color: '#166534',
     fontSize: 10,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '800',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
@@ -1964,6 +1904,7 @@ const styles = StyleSheet.create({
   },
   sectionTitleText: {
     fontSize: 18,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '800',
     color: '#166534',
     marginLeft: 8,
@@ -1995,12 +1936,14 @@ const styles = StyleSheet.create({
   },
   overviewLabel: {
     fontSize: 10,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     color: '#64748b',
     fontWeight: '800',
     letterSpacing: 0.5,
   },
   overviewValue: {
     fontSize: 14,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     color: '#0f172a',
     fontWeight: '700',
     marginTop: 2,
@@ -2036,18 +1979,21 @@ const styles = StyleSheet.create({
   },
   statLabelUpper: {
     fontSize: 10,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     color: '#64748b',
     fontWeight: '800',
     letterSpacing: 0.5,
   },
   statCountText: {
     fontSize: 28,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '800',
     color: '#0f172a',
     marginVertical: 1,
   },
   statLabelLower: {
     fontSize: 12,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     color: '#64748b',
   },
   statDivider: {
@@ -2086,6 +2032,7 @@ const styles = StyleSheet.create({
   },
   statusText: {
     fontSize: 11,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '800',
     color: '#1e293b',
   },
@@ -2117,12 +2064,14 @@ const styles = StyleSheet.create({
   },
   regLabel: {
     fontSize: 10,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     color: '#64748b',
     fontWeight: '800',
     letterSpacing: 0.5,
   },
   regValue: {
     fontSize: 14,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     color: '#334155',
     fontWeight: '700',
     marginTop: 2,
@@ -2153,6 +2102,7 @@ const styles = StyleSheet.create({
   topVolunteerTitle: {
     color: '#fffbeb',
     fontSize: 14,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '800',
     textTransform: 'uppercase',
     letterSpacing: 0.8,
@@ -2160,6 +2110,7 @@ const styles = StyleSheet.create({
   topVolunteerSubtitle: {
     color: '#ecfccb',
     fontSize: 12,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '600',
     marginTop: 2,
   },
@@ -2177,6 +2128,7 @@ const styles = StyleSheet.create({
   },
   detailInfoLabel: {
     fontSize: 10,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     color: '#64748b',
     fontWeight: '700',
     textTransform: 'uppercase',
@@ -2185,12 +2137,14 @@ const styles = StyleSheet.create({
   },
   detailInfoValue: {
     fontSize: 14,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     color: '#0f172a',
     lineHeight: 18,
     fontWeight: '600',
   },
   infoLabel: {
     fontSize: 12,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     color: '#64748b',
     marginTop: 10,
     textTransform: 'uppercase',
@@ -2198,6 +2152,7 @@ const styles = StyleSheet.create({
   },
   infoValue: {
     fontSize: 14,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     color: '#333',
     marginTop: 3,
     marginBottom: 10,
@@ -2219,10 +2174,12 @@ const styles = StyleSheet.create({
   skillChipText: {
     color: '#166534',
     fontSize: 12,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '700',
   },
   subsectionLabel: {
     fontSize: 11,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     color: '#64748b',
     fontWeight: '800',
     textTransform: 'uppercase',
@@ -2244,12 +2201,14 @@ const styles = StyleSheet.create({
   },
   detailCardTitle: {
     fontSize: 14,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '700',
     color: '#0f172a',
   },
   detailCardSubtitle: {
     marginTop: 4,
     fontSize: 12,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     color: '#475569',
     fontWeight: '600',
   },
@@ -2266,12 +2225,14 @@ const styles = StyleSheet.create({
   },
   completedProgramTitle: {
     fontSize: 14,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '700',
     color: '#0f172a',
   },
   completedProgramMeta: {
     marginTop: 4,
     fontSize: 12,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     lineHeight: 16,
     color: '#64748b',
   },
@@ -2286,6 +2247,7 @@ const styles = StyleSheet.create({
   logoutButtonText: {
     color: '#ffffff',
     fontSize: 16,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: 'bold',
   },
   modalContainer: {
@@ -2304,17 +2266,20 @@ const styles = StyleSheet.create({
   },
   modalTitle: {
     fontSize: 18,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '800',
     color: '#0f172a',
   },
   modalCancel: {
     color: '#64748b',
     fontSize: 16,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '600',
   },
   modalSave: {
     color: '#15803d',
     fontSize: 16,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '800',
   },
   modalBody: {
@@ -2323,6 +2288,7 @@ const styles = StyleSheet.create({
   },
   modalLabel: {
     fontSize: 14,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     color: '#475569',
     marginBottom: 16,
     lineHeight: 20,
@@ -2349,6 +2315,7 @@ const styles = StyleSheet.create({
   },
   modalAvatarFallbackText: {
     fontSize: 32,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '700',
     color: '#ffffff',
   },
@@ -2367,6 +2334,7 @@ const styles = StyleSheet.create({
   photoButtonText: {
     color: '#ffffff',
     fontSize: 13,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '700',
   },
   photoButtonSecondary: {
@@ -2378,6 +2346,7 @@ const styles = StyleSheet.create({
   photoButtonSecondaryText: {
     color: '#475569',
     fontSize: 13,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '700',
   },
   attachmentIconButton: {
@@ -2422,11 +2391,13 @@ const styles = StyleSheet.create({
   },
   certificatePreviewLabel: {
     fontSize: 13,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '700',
     color: '#0f172a',
   },
   certificatePreviewLink: {
     fontSize: 13,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '800',
     color: '#15803d',
   },
@@ -2437,11 +2408,13 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 16,
     fontSize: 16,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     color: '#0f172a',
     marginBottom: 16,
   },
   fieldLabel: {
     fontSize: 14,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '800',
     color: '#334155',
     marginBottom: 8,
@@ -2450,6 +2423,7 @@ const styles = StyleSheet.create({
   },
   sectionHeader: {
     fontSize: 16,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '800',
     color: '#166534',
     marginTop: 24,
@@ -2462,6 +2436,7 @@ const styles = StyleSheet.create({
   },
   sectionHint: {
     fontSize: 12,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     color: '#64748b',
     marginBottom: 12,
     lineHeight: 18,
@@ -2486,6 +2461,7 @@ const styles = StyleSheet.create({
   },
   optionChipText: {
     fontSize: 14,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '700',
     color: '#475569',
   },
@@ -2504,6 +2480,7 @@ const styles = StyleSheet.create({
   },
   switchHint: {
     fontSize: 12,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     color: '#64748b',
     lineHeight: 18,
   },
@@ -2520,6 +2497,7 @@ const styles = StyleSheet.create({
   },
   dropdownButtonText: {
     fontSize: 15,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     color: '#334155',
     fontWeight: '600',
   },
@@ -2537,6 +2515,7 @@ const styles = StyleSheet.create({
   },
   skillPreviewText: {
     fontSize: 13,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     color: '#166534',
     fontWeight: '700',
   },
@@ -2551,6 +2530,7 @@ const styles = StyleSheet.create({
   },
   skillOptionText: {
     fontSize: 16,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     color: '#0f172a',
     fontWeight: '600',
   },
@@ -2603,12 +2583,14 @@ const styles = StyleSheet.create({
   },
   partnerGridLabel: {
     fontSize: 10,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     color: '#64748b',
     fontWeight: '800',
     letterSpacing: 0.5,
   },
   partnerGridValue: {
     fontSize: 14,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     color: '#334155',
     fontWeight: '700',
     marginTop: 2,

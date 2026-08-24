@@ -815,13 +815,11 @@ export default function ProjectsScreen({ navigation, route }: any) {
       !partnerProposalDraft.proposedDescription.trim() ||
       !partnerProposalDraft.proposedStartDate.trim() ||
       !partnerProposalDraft.proposedEndDate.trim() ||
-      !partnerProposalDraft.proposedLocation.trim() ||
-      !partnerProposalDraft.communityNeed.trim() ||
-      !partnerProposalDraft.expectedDeliverables.trim()
+      !partnerProposalDraft.proposedLocation.trim()
     ) {
       Alert.alert(
         'Incomplete Proposal',
-        'Fill in the proposal title, description, dates, location, community need, and expected deliverables.'
+        'Fill in the proposal title, description, dates, and location.'
       );
       return;
     }
@@ -3275,41 +3273,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                 editable={loadingProjectId !== activeProposalProject?.id}
               />
 
-              <Text style={styles.proposalFieldLabel}>Skills Needed</Text>
-              <TextInput
-                style={styles.proposalInput}
-                value={partnerProposalDraft?.skillsNeeded || ''}
-                onChangeText={value => handlePartnerProposalDraftChange('skillsNeeded', value)}
-                placeholder="e.g., teaching, medical, construction, cooking (comma-separated)"
-                placeholderTextColor="#94a3b8"
-                editable={loadingProjectId !== activeProposalProject?.id}
-              />
-
-              <Text style={styles.proposalFieldLabel}>Community Need</Text>
-              <TextInput
-                style={[styles.proposalInput, styles.proposalTextArea]}
-                multiline
-                numberOfLines={3}
-                textAlignVertical="top"
-                value={partnerProposalDraft?.communityNeed || ''}
-                onChangeText={value => handlePartnerProposalDraftChange('communityNeed', value)}
-                placeholder="Explain the need or problem this proposal is addressing."
-                placeholderTextColor="#94a3b8"
-                editable={loadingProjectId !== activeProposalProject?.id}
-              />
-
-              <Text style={styles.proposalFieldLabel}>Expected Deliverables</Text>
-              <TextInput
-                style={[styles.proposalInput, styles.proposalTextArea]}
-                multiline
-                numberOfLines={3}
-                textAlignVertical="top"
-                value={partnerProposalDraft?.expectedDeliverables || ''}
-                onChangeText={value => handlePartnerProposalDraftChange('expectedDeliverables', value)}
-                placeholder="List the expected outputs, results, or partner commitments."
-                placeholderTextColor="#94a3b8"
-                editable={loadingProjectId !== activeProposalProject?.id}
-              />
+              <Text style={styles.proposalFieldLabel}>Photo Attachment URL (Optional)</Text>
             </ScrollView>
 
             <TouchableOpacity

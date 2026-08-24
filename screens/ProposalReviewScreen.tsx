@@ -103,11 +103,15 @@ export default function ProposalReviewScreen({ navigation }: any) {
       const projectTitle = reviewedProposal.proposalDetails?.proposedTitle || 
                           getProjectTitle(reviewedProposal.projectId) ||
                           'Untitled Project';
-      
       Alert.alert(
         'Proposal Approved ✅',
         `"${projectTitle}" has been approved.\n\nA new project has been automatically created in the Program Management Suite.`,
-        [{ text: 'OK', onPress: () => loadData() }]
+        [{ text: 'OK', onPress: () => {
+          loadData();
+          if (reviewedProposal.projectId) {
+            navigation.navigate('Projects', { projectId: reviewedProposal.projectId });
+          }
+        }}]
       );
     } catch (error) {
       Alert.alert(
@@ -229,20 +233,6 @@ export default function ProposalReviewScreen({ navigation }: any) {
             <>
               <Text style={styles.cardLabel}>Volunteers Needed:</Text>
               <Text style={styles.cardValue}>{details.proposedVolunteersNeeded}</Text>
-            </>
-          )}
-
-          {details?.communityNeed && (
-            <>
-              <Text style={styles.cardLabel}>Community Need:</Text>
-              <Text style={styles.cardValue}>{details.communityNeed}</Text>
-            </>
-          )}
-
-          {details?.expectedDeliverables && (
-            <>
-              <Text style={styles.cardLabel}>Expected Deliverables:</Text>
-              <Text style={styles.cardValue}>{details.expectedDeliverables}</Text>
             </>
           )}
 

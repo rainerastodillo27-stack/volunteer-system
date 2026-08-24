@@ -32,6 +32,8 @@ import {
   subWeeks,
 } from 'date-fns';
 import InlineLoadError from '../components/InlineLoadError';
+import ConfirmDialog from '../components/ConfirmDialog';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import { useAuth } from '../contexts/AuthContext';
 import {
   deleteAdminPlanningCalendar,
@@ -227,6 +229,7 @@ function formatPlannerItemDateLabel(item: PlannerDisplayItem): string {
 
 export default function AdminPlanningCalendarScreen({ navigation }: any) {
   const { user, isAdmin } = useAuth();
+  const { dialogState, showConfirm, handleConfirm, handleCancel } = useConfirmDialog();
   const { width: viewportWidth } = useWindowDimensions();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -510,28 +513,46 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
     }
   };
 
-  const handleDeletePlannerItem = async () => {
+  const handleDeletePlannerItem = () => {
     if (!itemDraft.id) {
       setShowItemModal(false);
       return;
     }
 
-    const previousPlanningItems = planningItems;
-    setSaving(true);
-    setPlanningItems(currentItems => currentItems.filter(item => item.id !== itemDraft.id));
-    setShowItemModal(false);
-    setSaving(false);
+    const targetItemId = itemDraft.id;
+    const targetItemTitle = itemDraft.title || 'Plan item';
+    const executeDelete = async () => {
+      const previousPlanningItems = planningItems;
+      setSaving(true);
+      setPlanningItems(currentItems => currentItems.filter(item => item.id !== targetItemId));
 
-    try {
-      await deleteAdminPlanningItem(itemDraft.id);
-      void loadPlannerData();
-    } catch (error) {
-      setPlanningItems(previousPlanningItems);
-      Alert.alert(
-        getRequestErrorTitle(error),
-        getRequestErrorMessage(error, 'Unable to delete this plan item.')
-      );
-    }
+      try {
+        await deleteAdminPlanningItem(targetItemId);
+        setShowItemModal(false);
+        Alert.alert('Deleted', `"${targetItemTitle}" was deleted.`);
+        void loadPlannerData();
+      } catch (error) {
+        setPlanningItems(previousPlanningItems);
+        Alert.alert(
+          getRequestErrorTitle(error),
+          getRequestErrorMessage(error, 'Unable to delete this plan item.')
+        );
+      } finally {
+        setSaving(false);
+      }
+    };
+
+    showConfirm({
+      title: 'Delete Plan',
+      message: `Delete "${targetItemTitle}"? This cannot be undone.`,
+      confirmText: 'Delete',
+      loadingText: 'Deleting...',
+      cancelText: 'Cancel',
+      icon: 'delete-outline',
+      iconColor: '#DC2626',
+      confirmColor: '#DC2626',
+      onConfirm: executeDelete,
+    });
   };
 
   const handleSavePlanningCalendar = async () => {
@@ -586,26 +607,28 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
   };
 
   const handleDeletePlanningCalendar = (calendarId: string) => {
-    const previousPlanningCalendars = planningCalendars;
-    const previousSelectedCalendarIds = selectedCalendarIds;
-    const remainingCalendarIds = planningCalendars
-      .filter(calendar => calendar.id !== calendarId)
-      .map(calendar => calendar.id);
+    const targetCalendar = planningCalendars.find(calendar => calendar.id === calendarId);
+    const targetCalendarName = targetCalendar?.name || 'Calendar lane';
+    const executeDelete = async () => {
+      const previousPlanningCalendars = planningCalendars;
+      const previousSelectedCalendarIds = selectedCalendarIds;
+      const remainingCalendarIds = planningCalendars
+        .filter(calendar => calendar.id !== calendarId)
+        .map(calendar => calendar.id);
 
-    setSaving(true);
-    setPlanningCalendars(currentCalendars =>
-      currentCalendars.filter(calendar => calendar.id !== calendarId)
-    );
-    setSelectedCalendarIds(currentSelection => {
-      const nextSelection = currentSelection.filter(id => id !== calendarId);
-      return nextSelection.length > 0 ? nextSelection : remainingCalendarIds;
-    });
-    setShowCalendarModal(false);
-    setSaving(false);
+      setSaving(true);
+      setPlanningCalendars(currentCalendars =>
+        currentCalendars.filter(calendar => calendar.id !== calendarId)
+      );
+      setSelectedCalendarIds(currentSelection => {
+        const nextSelection = currentSelection.filter(id => id !== calendarId);
+        return nextSelection.length > 0 ? nextSelection : remainingCalendarIds;
+      });
 
-    void (async () => {
       try {
         await deleteAdminPlanningCalendar(calendarId);
+        setShowCalendarModal(false);
+        Alert.alert('Deleted', `"${targetCalendarName}" was deleted.`);
         void loadPlannerData();
       } catch (error) {
         setPlanningCalendars(previousPlanningCalendars);
@@ -614,8 +637,22 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
           getRequestErrorTitle(error),
           getRequestErrorMessage(error, 'Unable to delete this calendar.')
         );
+      } finally {
+        setSaving(false);
       }
-    })();
+    };
+
+    showConfirm({
+      title: 'Delete Calendar',
+      message: `Delete "${targetCalendarName}"? This cannot be undone.`,
+      confirmText: 'Delete',
+      loadingText: 'Deleting...',
+      cancelText: 'Cancel',
+      icon: 'delete-outline',
+      iconColor: '#DC2626',
+      confirmColor: '#DC2626',
+      onConfirm: executeDelete,
+    });
   };
 
   const toggleCalendarSelection = (calendarId: string) => {
@@ -1352,6 +1389,20 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
           </View>
         </View>
       </Modal>
+      <ConfirmDialog
+        visible={dialogState.visible}
+        loading={dialogState.loading}
+        title={dialogState.title}
+        message={dialogState.message}
+        confirmText={dialogState.confirmText}
+        loadingText={dialogState.loadingText}
+        cancelText={dialogState.cancelText}
+        confirmColor={dialogState.confirmColor}
+        icon={dialogState.icon as any}
+        iconColor={dialogState.iconColor}
+        onConfirm={handleConfirm}
+        onCancel={handleCancel}
+      />
     </ScrollView>
   );
 }

@@ -58,7 +58,7 @@ export interface SyncResult {
   errors: string[];
 }
 
-export type CalendarSyncRole = 'volunteer' | 'partner';
+export type CalendarSyncRole = 'volunteer' | 'partner' | 'admin';
 
 type CalendarSyncEmailPayload = {
   recipientEmail?: string;

@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ModernTheme from '../utils/modernTheme';
 import {
   ActivityIndicator,
@@ -135,7 +135,7 @@ function getEventStatusLabel(match?: VolunteerProjectMatch, joinedByUser?: boole
   return 'Open to join';
 }
 
-export default function VolunteerProjectsScreen({ navigation }: { navigation: any }) {
+export default function VolunteerProjectsScreen({ navigation, route }: { navigation: any; route?: any }) {
   const { user } = useAuth();
   const [records, setRecords] = useState<Project[]>([]);
   const [programs, setPrograms] = useState<ProgramTrack[]>([]);
@@ -147,6 +147,30 @@ export default function VolunteerProjectsScreen({ navigation }: { navigation: an
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [joinRecords, setJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const hasLoadedOnceRef = useRef(false);
+
+  useEffect(() => {
+    const targetProjectId = route?.params?.projectId;
+    if (!targetProjectId || records.length === 0) return;
+    const target = records.find(p => p.id === targetProjectId);
+    if (target) {
+      if (target.isEvent) {
+        const parentProject = target.parentProjectId
+          ? records.find(p => p.id === target.parentProjectId)
+          : null;
+        const progId = parentProject
+          ? getProjectProgramId(parentProject, programs)
+          : getProjectProgramId(target, programs);
+        if (progId) setSelectedProgramId(progId);
+        if (parentProject) setSelectedProjectId(parentProject.id);
+      } else if (target.parentProjectId) {
+        const progId = getProjectProgramId(target, programs);
+        if (progId) setSelectedProgramId(progId);
+        setSelectedProjectId(target.id);
+      } else {
+        setSelectedProgramId(target.id);
+      }
+    }
+  }, [route?.params?.projectId, records, programs]);
 
   const loadData = useCallback(async () => {
     if (!user) return;

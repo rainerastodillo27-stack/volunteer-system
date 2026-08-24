@@ -46,7 +46,8 @@
     "db:monitor": "node ./scripts/run-python.js -m backend.db_monitor",
     "db:monitor:auto": "node ./scripts/run-python.js -m backend.db_monitor --auto",
     "db:monitor:report": "node ./scripts/run-python.js -m backend.db_monitor",
-    "deploy:bundle": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/create-deployment-bundle.ps1"
+    "deploy:bundle": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/create-deployment-bundle.ps1",
+    "build:apk": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/build-apk.ps1"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",

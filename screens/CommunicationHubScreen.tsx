@@ -33,6 +33,8 @@ import {
 } from 'react-native';
 
 import { MaterialIcons, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
+import ConfirmDialog from '../components/ConfirmDialog';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 
 import { Picker } from '@react-native-picker/picker';
 
@@ -503,6 +505,7 @@ function getSidebarSectionMeta(section: SidebarSection): {
 export default function CommunicationHubScreen({ navigation, route }: any) {
 
   const { user } = useAuth();
+  const { dialogState, showConfirm, handleConfirm, handleCancel } = useConfirmDialog();
 
   // Older browser sessions can contain the pre-migration admin ID. Resolve
   // the current account once so this screen always uses the backend identity
@@ -513,9 +516,22 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   const { width } = useWindowDimensions();
 
-  const isWide = width >= 1024;
+  const isMobileMode = React.useMemo(() => {
+    if (Platform.OS !== 'web') return true;
+    try {
+      if (typeof window !== 'undefined' && window?.location?.search) {
+        const params = new URLSearchParams(window.location.search);
+        return params.get('mode') === 'mobile';
+      }
+    } catch {
+      // ignore
+    }
+    return false;
+  }, []);
 
-  const isTablet = width >= 768;
+  const isWide = !isMobileMode && width >= 1024;
+
+  const isTablet = !isMobileMode && width >= 768;
 
   const isVolunteer = user?.role === 'volunteer';
 
@@ -1742,42 +1758,42 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
 
     const targetProject = selectedProjectChat.project;
-
-    const previousProjectChats = projectChats;
-
-    const previousSelectedProjectChat = selectedProjectChat;
-
-    const previousMessages = messages;
-
-    setConversationMenuAction('delete-gc');
-
     setShowConversationMenu(false);
 
-    setProjectChats(currentChats =>
+    const executeDelete = async () => {
+      const previousProjectChats = projectChats;
 
-      currentChats.filter(chat => chat.project.id !== targetProject.id)
+      const previousSelectedProjectChat = selectedProjectChat;
 
-    );
+      const previousMessages = messages;
 
-    setSelectedProjectChat(null);
+      setConversationMenuAction('delete-gc');
 
-    setMessages([]);
+      setShowConversationMenu(false);
 
-    setView(isWide ? 'detail' : 'sidebar');
+      setProjectChats(currentChats =>
 
-    setReviewNotice({
+        currentChats.filter(chat => chat.project.id !== targetProject.id)
 
-      title: 'GC deleted',
+      );
 
-      message: `The group chat for "${targetProject.title}" has been removed.`,
+      setSelectedProjectChat(null);
 
-      tone: 'warning',
+      setMessages([]);
 
-    });
+      setView(isWide ? 'detail' : 'sidebar');
+
+      setReviewNotice({
+
+        title: 'GC deleted',
+
+        message: `The group chat for "${targetProject.title}" has been removed.`,
+
+        tone: 'warning',
+
+      });
 
 
-
-    void (async () => {
 
       try {
 
@@ -1816,6 +1832,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
 
         await deleteProjectGroupChat(latestProject.id);
+        Alert.alert('Group Chat Deleted', `The group chat for "${targetProject.title}" has been removed.`);
 
         void loadData();
 
@@ -1843,7 +1860,19 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       }
 
-    })();
+    };
+
+    showConfirm({
+      title: 'Delete Group Chat',
+      message: `Delete the group chat for "${targetProject.title}"? This removes the chat messages and disables the group chat.`,
+      confirmText: 'Delete',
+      loadingText: 'Deleting...',
+      cancelText: 'Cancel',
+      icon: 'delete-outline',
+      iconColor: '#DC2626',
+      confirmColor: '#DC2626',
+      onConfirm: executeDelete,
+    });
 
   };
 
@@ -2288,7 +2317,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   const renderSidebar = () => (
 
-    <View style={[styles.sidebar, !isWide && view === 'detail' && styles.hidden]}>
+    <View style={[styles.sidebar, !isWide && { width: '100%', flex: 1, borderRightWidth: 0 }, !isWide && view === 'detail' && styles.hidden]}>
 
       <View style={styles.sidebarHeader}>
 
@@ -4497,6 +4526,21 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         </View>
 
       ) : null}
+
+      <ConfirmDialog
+        visible={dialogState.visible}
+        loading={dialogState.loading}
+        title={dialogState.title}
+        message={dialogState.message}
+        confirmText={dialogState.confirmText}
+        loadingText={dialogState.loadingText}
+        cancelText={dialogState.cancelText}
+        confirmColor={dialogState.confirmColor}
+        icon={dialogState.icon as any}
+        iconColor={dialogState.iconColor}
+        onConfirm={handleConfirm}
+        onCancel={handleCancel}
+      />
 
       <Modal
 

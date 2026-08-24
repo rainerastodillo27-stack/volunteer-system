@@ -805,7 +805,7 @@ export default function AdminAnalyticsScreen() {
 
           <View style={styles.statusList}>
             {(['Planning', 'In Progress', 'On Hold', 'Completed', 'Cancelled'] as const).map(status => {
-              const count = projects.filter(p => p.status === status).length;
+              const count = projects.filter(p => !p.isEvent && p.status === status).length;
               const statusColor = 
                 status === 'Planning' ? ModernTheme.colors.status.planning :
                 status === 'In Progress' ? ModernTheme.colors.status.inProgress :
@@ -835,12 +835,7 @@ export default function AdminAnalyticsScreen() {
             </View>
             <View style={styles.trackingFilters}>
               {(() => {
-                const partnerProjects = projects.filter(p => {
-                  // Check if project has an approved partner application
-                  return partnerApplications.some(
-                    app => app.projectId === p.id && app.status === 'Approved'
-                  );
-                });
+                const partnerProjects = projects.filter(p => !p.isEvent);
                 
                 return (
                   <>
@@ -863,11 +858,7 @@ export default function AdminAnalyticsScreen() {
 
           {(() => {
             // Filter for partner projects only
-            const partnerProjects = projects.filter(p => {
-              return partnerApplications.some(
-                app => app.projectId === p.id && app.status === 'Approved'
-              );
-            }).slice(0, 10);
+            const partnerProjects = projects.filter(p => !p.isEvent).slice(0, 10);
 
             if (partnerProjects.length === 0) {
               return (
@@ -892,8 +883,10 @@ export default function AdminAnalyticsScreen() {
                   const application = partnerApplications.find(
                     app => app.projectId === project.id && app.status === 'Approved'
                   );
-                  const partner = partners.find(p => p.ownerUserId === application?.partnerUserId);
-                  const partnerName = partner?.name || application?.partnerName || 'Unknown Partner';
+                  const partner = partners.find(
+                    p => p.id === project.partnerId || p.ownerUserId === application?.partnerUserId
+                  );
+                  const partnerName = partner?.name || application?.partnerName || 'Internal';
 
                   return (
                     <View key={project.id} style={styles.projectTrackingItem}>
@@ -924,9 +917,9 @@ export default function AdminAnalyticsScreen() {
                     </View>
                   );
                 })}
-                {projects.filter(p => partnerApplications.some(app => app.projectId === p.id && app.status === 'Approved')).length > 10 && (
+                {projects.filter(p => !p.isEvent).length > 10 && (
                   <Text style={styles.trackingFooterHint}>
-                    Showing 10 of {projects.filter(p => partnerApplications.some(app => app.projectId === p.id && app.status === 'Approved')).length} partner projects • View full list in Projects screen
+                    Showing 10 of {projects.filter(p => !p.isEvent).length} projects • View full list in Projects screen
                   </Text>
                 )}
               </View>

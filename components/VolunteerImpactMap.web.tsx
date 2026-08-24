@@ -776,9 +776,9 @@ export default function VolunteerImpactMap({
           <View style={styles.mapLegend}>
             <Text style={styles.legendTitle}>{getMapLegendTitle(selectedMapStyleKey)}</Text>
             {statusLegend.map(status => <TouchableOpacity key={status.label} style={[styles.legendRow, selectedStatus === status.label && styles.legendRowActive]} onPress={() => setSelectedStatus(current => current === status.label ? null : status.label)}>
-              <MaterialIcons name="location-on" size={24} color={status.color} />
+              <MaterialIcons name="location-on" size={16} color={status.color} />
               <Text style={styles.legendLabel}>{status.label}</Text>
-              {selectedStatus === status.label ? <MaterialIcons name="check" size={16} color={status.color} /> : null}
+              {selectedStatus === status.label ? <MaterialIcons name="check" size={14} color={status.color} /> : null}
             </TouchableOpacity>)}
             <View style={styles.legendDivider} />
             <Text style={styles.legendTotalLabel}>
@@ -931,18 +931,18 @@ const styles = StyleSheet.create({
   dashboardTitle: { fontSize: 25 },
   dashboardSubtitle: { fontSize: 17 },
   mapLegend: {
-    position: 'absolute', top: 26, left: 30, width: 196, paddingHorizontal: 22, paddingVertical: 18,
-    borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.97)', shadowColor: '#0f172a',
-    shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 4,
+    position: 'absolute', top: 12, left: 12, width: 136, paddingHorizontal: 12, paddingVertical: 10,
+    borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.97)', shadowColor: '#0f172a',
+    shadowOpacity: 0.08, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 3,
   },
-  legendTitle: { fontSize: 14, fontWeight: '800', color: '#1e293b', marginBottom: 13 },
-  legendRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
-  legendRowActive: { backgroundColor: '#f0f8ef', borderRadius: 8, paddingHorizontal: 4 },
-  legendLabel: { fontSize: 14, color: '#64748b', fontWeight: '600' },
-  legendDivider: { height: 1, backgroundColor: '#e2e8f0', marginHorizontal: -22, marginTop: 5, marginBottom: 16 },
-  legendTotalLabel: { fontSize: 14, fontWeight: '800', color: '#334155' },
-  legendTotal: { color: '#5a8f52', fontSize: 35, fontWeight: '800', marginTop: 6 },
-  legendFootnote: { fontSize: 13, color: '#64748b', fontWeight: '600' },
+  legendTitle: { fontSize: 12, fontWeight: '800', color: '#1e293b', marginBottom: 6 },
+  legendRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
+  legendRowActive: { backgroundColor: '#f0f8ef', borderRadius: 6, paddingHorizontal: 4 },
+  legendLabel: { fontSize: 11, color: '#64748b', fontWeight: '600' },
+  legendDivider: { height: 1, backgroundColor: '#e2e8f0', marginHorizontal: -12, marginTop: 4, marginBottom: 6 },
+  legendTotalLabel: { fontSize: 11, fontWeight: '800', color: '#334155' },
+  legendTotal: { color: '#5a8f52', fontSize: 20, fontWeight: '800', marginTop: 2 },
+  legendFootnote: { fontSize: 10, color: '#64748b', fontWeight: '600', marginTop: 2 },
   headerRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',

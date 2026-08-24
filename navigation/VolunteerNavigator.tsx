@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
 import ScreenBrandHeader from '../components/ScreenBrandHeader';
+import VolunteerHomeScreen from '../screens/VolunteerHomeScreen';
 import VolunteerDashboardScreen from '../screens/VolunteerDashboardScreen';
 import VolunteerEventsScreen from '../screens/VolunteerEventsScreen';
 import VolunteerProjectsScreen from '../screens/VolunteerProjectsScreen';
@@ -17,10 +18,12 @@ import VolunteerProjectDetailsScreen from '../screens/VolunteerProjectDetailsScr
 import { getMessagesForUser, subscribeToMessages, getAllUsers, subscribeToStorageChanges, markMessageAsRead } from '../models/storage';
 
 export type VolunteerTabParamList = {
+  Home: undefined;
   Dashboard: undefined;
+  Programs: { projectId?: string } | undefined;
   Projects: { projectId?: string } | undefined;
   ProjectDetails: { projectId: string };
-  Events: undefined;
+  Events: { projectId?: string } | undefined;
   Tasks: undefined;
   Map: undefined;
   Messages: { projectId?: string } | undefined;
@@ -32,7 +35,9 @@ const Tab = createBottomTabNavigator<VolunteerTabParamList>();
 
 const getIconName = (routeName: keyof VolunteerTabParamList) => {
   switch (routeName) {
+    case 'Home': return 'home';
     case 'Dashboard': return 'dashboard';
+    case 'Programs': return 'business-center';
     case 'Projects': return 'business-center';
     case 'Events': return 'event';
     case 'Tasks': return 'assignment';
@@ -113,10 +118,12 @@ export default function VolunteerNavigator() {
         tabBarStyle: { backgroundColor: '#fff', borderTopColor: '#eee', paddingBottom: Math.max(insets.bottom, 12), height: 56 + Math.max(insets.bottom, 12) },
       })}
     >
+      <Tab.Screen name="Home" component={VolunteerHomeScreen} options={{ title: 'Home', headerShown: false }} />
       <Tab.Screen name="Dashboard" component={VolunteerDashboardScreen} options={{ title: 'Volunteer Dashboard' }} />
-      <Tab.Screen name="Projects" component={VolunteerProjectsScreen} options={{ title: 'Projects' }} />
-      <Tab.Screen name="ProjectDetails" component={VolunteerProjectDetailsScreen} options={{ title: 'Project Details', tabBarButton: () => null }} />
+      <Tab.Screen name="Programs" component={VolunteerProjectsScreen} options={{ title: 'Program Management' }} />
+      <Tab.Screen name="Projects" component={VolunteerProjectsScreen} options={{ title: 'Program Management', tabBarButton: () => null }} />
       <Tab.Screen name="Events" component={VolunteerEventsScreen} options={{ title: 'Events' }} />
+      <Tab.Screen name="ProjectDetails" component={VolunteerProjectDetailsScreen} options={{ title: 'Project Details', tabBarButton: () => null }} />
       <Tab.Screen name="Tasks" component={VolunteerTasksScreen} options={{ title: 'My Tasks' }} />
       <Tab.Screen name="Map" component={MappingScreen} options={{ title: 'Impact Map' }} />
       <Tab.Screen name="Messages" component={CommunicationHubScreen} options={{ title: 'Messages', tabBarBadge: messageUnreadCount > 0 ? messageUnreadCount : undefined }} />

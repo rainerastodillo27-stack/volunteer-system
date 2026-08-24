@@ -106,22 +106,24 @@ export default function MappingScreen({ navigation }: any) {
         snapshot.volunteerJoinRecords.map(record => record.projectId)
       );
 
+
       const visibleProjects =
         user?.role === 'partner'
-          ? mapSourceProjects.filter(
-              project => partnerProjectIds.has(project.id)
-            )
+          ? // Partner: only projects from APPROVED proposals
+            mapSourceProjects.filter(project => partnerProjectIds.has(project.id))
           : user?.role === 'volunteer'
-          ? mapSourceProjects.filter(
+          ? // Volunteer: only EVENTS (isEvent=true) that the volunteer has joined
+            mapSourceProjects.filter(
               project =>
-                joinedVolunteerProjectIds.has(project.id) ||
-                (snapshot.volunteerProfile && (project.volunteers || []).includes(snapshot.volunteerProfile.id)) ||
-                (snapshot.volunteerProfile && (project.internalTasks || []).some(task =>
-                  task.assignedVolunteerId === snapshot.volunteerProfile?.id ||
-                  (task.assignedVolunteerIds || []).includes(snapshot.volunteerProfile?.id || '')
-                ))
+                project.isEvent &&
+                (
+                  joinedVolunteerProjectIds.has(project.id) ||
+                  (snapshot.volunteerProfile && (project.joinedUserIds || []).includes(snapshot.volunteerProfile.userId)) ||
+                  (snapshot.volunteerProfile && (project.volunteers || []).includes(snapshot.volunteerProfile.id))
+                )
             )
           : mapSourceProjects;
+
 
       const visibleProjectIds = new Set(visibleProjects.map(project => project.id));
 

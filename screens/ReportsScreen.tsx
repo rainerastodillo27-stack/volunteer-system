@@ -831,19 +831,6 @@ export default function ReportsScreen({ navigation, route }: any) {
         await reviewPartnerReport(reportId, user.id, 'Reviewed', notes || undefined);
         setShowDetailsModal(false);
         setSelectedReport(null);
-        setReports(prev =>
-          prev.map(report =>
-            report.id === reportId
-              ? {
-                  ...report,
-                  status: 'Approved',
-                  approvalNotes: notes || undefined,
-                  approvedBy: user.id,
-                  approvedAt: new Date().toISOString(),
-                }
-              : report
-          )
-        );
         Alert.alert('Approved', 'The report has been approved and the submitter has been notified.');
         // Reload in background without blocking
         void loadReportsCoalesced();
@@ -893,14 +880,8 @@ export default function ReportsScreen({ navigation, route }: any) {
   );
 
   const volunteerEventProjects = useMemo(() => {
-    if (user?.role !== 'volunteer') {
-      return projects;
-    }
-
-    return projects.filter(
-      project => project.isEvent && volunteerTimedInProjectIds.includes(project.id)
-    );
-  }, [projects, user?.role, volunteerTimedInProjectIds]);
+    return projects;
+  }, [projects]);
 
   const handleOpenUploadModal = useCallback(() => {
     if (user?.role === 'volunteer' && volunteerEventProjects.length === 0) {

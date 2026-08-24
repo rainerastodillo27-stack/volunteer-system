@@ -1122,39 +1122,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
               </View>
             </View>
 
-            {/* Time Log History */}
-            <View style={[styles.applicationSection, { marginBottom: 10 }]}>
-              <Text style={styles.applicationSectionTitle}>
-                Time Log History ({selectedVolunteerTimeLogs.length})
-              </Text>
-              {selectedVolunteerTimeLogs.length === 0 ? (
-                <Text style={styles.applicationAvailableEmpty}>No time in or time out records yet</Text>
-              ) : (
-                selectedVolunteerTimeLogs.map(log => {
-                  const linkedProject = projects.find(project => project.id === log.projectId);
-                  const durationHours = getLogDurationHours(log);
-                  return (
-                    <View key={log.id} style={styles.timeLogCard}>
-                      <View style={styles.timeLogHeader}>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.projectName}>{linkedProject?.title || 'Project'}</Text>
-                          <Text style={styles.projectCategory}>{linkedProject?.category || 'Volunteer activity'}</Text>
-                        </View>
-                        <View style={[styles.timeLogStatusBadge, log.timeOut ? styles.timeLogStatusCompleted : styles.timeLogStatusActive]}>
-                          <Text style={styles.timeLogStatusText}>{log.timeOut ? 'Timed Out' : 'Timed In'}</Text>
-                        </View>
-                      </View>
-                      <Text style={styles.timeLogMeta}>Time In: {formatTimestamp(log.timeIn)}</Text>
-                      <Text style={styles.timeLogMeta}>
-                        {log.timeOut ? `Time Out: ${formatTimestamp(log.timeOut)}` : 'Time Out still pending'}
-                      </Text>
-                      <Text style={styles.timeLogMeta}>Hours Logged: {log.timeOut ? durationHours.toFixed(1) : '--'}</Text>
-                      {log.note ? <Text style={styles.timeLogNote}>Note: {log.note}</Text> : null}
-                    </View>
-                  );
-                })
-              )}
-            </View>
+
           </>
         )}
 

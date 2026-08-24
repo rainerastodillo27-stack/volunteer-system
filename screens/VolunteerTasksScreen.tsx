@@ -1502,17 +1502,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
             </Text>
             <Text style={styles.taskGroupStatLabel}>Attendance</Text>
           </View>
-          <View style={styles.taskGroupStatCard}>
-            <Text
-              style={styles.taskGroupStatValue}
-              numberOfLines={2}
-              adjustsFontSizeToFit
-              minimumFontScale={0.7}
-            >
-              {formatVolunteerTime(totalVolunteerMinutes)}
-            </Text>
-            <Text style={styles.taskGroupStatLabel}>Volunteer Time</Text>
-          </View>
+
           <View style={styles.taskGroupStatCard}>
             <Text
               style={styles.taskGroupStatValue}

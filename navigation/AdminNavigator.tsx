@@ -16,7 +16,6 @@ function getPlatformOS(): string {
   }
 }
 import { useAuth } from '../contexts/AuthContext';
-import AppLogo from '../components/AppLogo';
 import ScreenBrandHeader from '../components/ScreenBrandHeader';
 import {
   getAllPartnerReports,
@@ -32,27 +31,6 @@ import {
   markMessageAsRead,
 } from '../models/storage';
 import { User, PartnerProjectApplication } from '../models/types';
-
-
-export type AdminTabParamList = {
-  Dashboard: undefined;
-  Analytics: undefined;
-  Partners: { partnerId?: string } | undefined;
-  Projects: {
-    projectId?: string;
-    programSuiteView?: 'programs' | 'projects' | 'events';
-    programSuiteNavKey?: number;
-  } | undefined;
-  Volunteers: { volunteerId?: string } | undefined;
-  Map: undefined;
-  Messages: { projectId?: string } | undefined;
-  Reports: { projectId?: string } | undefined;
-  Users: undefined;
-  Profile: undefined;
-};
-
-const Tab = createBottomTabNavigator<AdminTabParamList>();
-
 function lazyScreen<T extends object>(loader: () => { default: React.ComponentType<T> }) {
   return function LazyLoadedScreen(props: T) {
     const Component = loader().default;
@@ -70,10 +48,31 @@ const VolunteerManagementScreen = lazyScreen(() => require('../screens/Volunteer
 const PartnerManagementScreen = lazyScreen(() => require('../screens/PartnerManagementScreen'));
 const AdminReportsScreen = lazyScreen(() => require('../screens/AdminReportsScreen'));
 const ProfileScreen = lazyScreen(() => require('../screens/ProfileScreen'));
+const SystemSettingsScreen = lazyScreen(() => require('../screens/SystemSettingsScreen'));
 
-const SIDEBAR_WIDTH = 260;
+export type AdminTabParamList = {
+  Dashboard: undefined;
+  Analytics: undefined;
+  Partners: { partnerId?: string } | undefined;
+  Projects: {
+    projectId?: string;
+    programSuiteView?: 'programs' | 'projects' | 'events';
+    programSuiteNavKey?: number;
+  } | undefined;
+  Volunteers: { volunteerId?: string } | undefined;
+  Map: undefined;
+  Messages: { projectId?: string } | undefined;
+  Reports: { projectId?: string } | undefined;
+  Users: undefined;
+  Profile: undefined;
+  Settings: undefined;
+};
+
+const Tab = createBottomTabNavigator<AdminTabParamList>();
+
+const SIDEBAR_WIDTH = 246;
 const SIDEBAR_WIDTH_COLLAPSED = 60;
-const CONTENT_GUTTER = 32;
+const CONTENT_GUTTER = 22;
 const CONTENT_GUTTER_COLLAPSED = 80;
 
 const getIconName = (routeName: keyof AdminTabParamList) => {
@@ -88,6 +87,7 @@ const getIconName = (routeName: keyof AdminTabParamList) => {
     case 'Reports': return 'insert-chart';
     case 'Users': return 'manage-accounts';
     case 'Profile': return 'person';
+    case 'Settings': return 'settings';
     default: return 'help-outline';
   }
 };
@@ -97,236 +97,129 @@ type SidebarProps = BottomTabBarProps & {
   onToggle: () => void;
 };
 
+const SIDEBAR_GROUPS = [
+  {
+    title: 'PROJECTS',
+    items: [
+      { label: 'Dashboard', icon: 'dashboard', route: 'Dashboard', params: undefined },
+      { label: 'Programs', icon: 'work', route: 'Projects', params: { programSuiteView: 'programs', programSuiteNavKey: 1 } },
+      { label: 'All Projects', icon: 'folder', route: 'Projects', params: { programSuiteView: 'projects', programSuiteNavKey: 2 } },
+      { label: 'Calendar', icon: 'event', route: 'Projects', params: { programSuiteView: 'events', programSuiteNavKey: 3 } },
+    ]
+  },
+  {
+    title: 'COMMUNITY',
+    items: [
+      { label: 'Volunteers', icon: 'groups', route: 'Volunteers', params: undefined },
+      { label: 'Partners', icon: 'business', route: 'Partners', params: undefined },
+      { label: 'Impact Map', icon: 'map', route: 'Map', params: undefined },
+    ]
+  },
+  {
+    title: 'COMMUNICATION',
+    items: [
+      { label: 'Messages', icon: 'chat-bubble-outline', route: 'Messages', params: undefined },
+    ]
+  },
+  {
+    title: 'REPORTS',
+    items: [
+      { label: 'Analytics', icon: 'analytics', route: 'Analytics', params: undefined },
+      { label: 'Reports', icon: 'insert-chart', route: 'Reports', params: undefined },
+    ]
+  },
+  {
+    title: 'ADMINISTRATION',
+    items: [
+      { label: 'User Management', icon: 'manage-accounts', route: 'Users', params: undefined },
+      { label: 'Profile', icon: 'person', route: 'Profile', params: undefined },
+      { label: 'Settings', icon: 'settings', route: 'Settings', params: undefined },
+    ]
+  }
+] as const;
+
 function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle }: SidebarProps) {
-  const [programMenuOpen, setProgramMenuOpen] = useState(false);
-  const [programBtnTop, setProgramBtnTop] = useState(0);
-  const navigateToProgramSuiteView = React.useCallback(
-    (view: 'programs' | 'projects' | 'events') => {
-      navigation.navigate('Projects', {
-        programSuiteView: view,
-        programSuiteNavKey: Date.now(),
-      });
-      setProgramMenuOpen(false);
-    },
-    [navigation]
-  );
-
-  const systemsRoutes = state.routes.filter(
-    route => !['Partners', 'Volunteers', 'Users', 'Profile'].includes(route.name)
-  );
-  const settingsRoutes = state.routes.filter(
-    route => ['Partners', 'Volunteers', 'Users', 'Profile'].includes(route.name)
-  );
-
-  // Close menu when sidebar expands
-  React.useEffect(() => {
-    if (!collapsed) setProgramMenuOpen(false);
-  }, [collapsed]);
-
-  // Inject/remove a fixed-position DOM popup for the collapsed state on web
-  React.useEffect(() => {
-    if (typeof document === 'undefined') return;
-    const POPUP_ID = 'program-suite-popup';
-    let existing = document.getElementById(POPUP_ID);
-
-    if (!collapsed || !programMenuOpen) {
-      if (existing) existing.remove();
-      return;
+  const renderSidebarItem = (item: typeof SIDEBAR_GROUPS[number]['items'][number]) => {
+    const activeRouteName = state.routes[state.index].name;
+    let focused = activeRouteName === item.route;
+    
+    // Custom check for programSuiteView params on Projects screen
+    if (item.route === 'Projects') {
+      const activeView = (state.routes[state.index].params as any)?.programSuiteView || 'projects';
+      focused = focused && (item.params?.programSuiteView === activeView);
     }
-
-    if (!existing) {
-      existing = document.createElement('div');
-      existing.id = POPUP_ID;
-      document.body.appendChild(existing);
-    }
-
-    const top = programBtnTop > 0 ? programBtnTop : 120;
-    const left = SIDEBAR_WIDTH_COLLAPSED + 8;
-
-    existing.innerHTML = '';
-    existing.style.cssText = `
-      position: fixed;
-      top: ${top}px;
-      left: ${left}px;
-      background: #ffffff;
-      border-radius: 12px;
-      border: 1px solid #bbf7d0;
-      padding: 8px 4px;
-      min-width: 175px;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.15);
-      z-index: 99999;
-      font-family: inherit;
-    `;
-
-    const label = document.createElement('div');
-    label.textContent = 'Program Suite';
-    label.style.cssText = 'font-size:11px;font-weight:700;color:#94a3b8;padding:0 10px 6px;text-transform:uppercase;letter-spacing:0.5px;';
-    existing.appendChild(label);
-
-    const items = [
-      { icon: '💼', text: 'Programs', view: 'programs' },
-      { icon: '📁', text: 'Projects', view: 'projects' },
-      { icon: '📅', text: 'Events',   view: 'events'   },
-    ] as const;
-
-    items.forEach(item => {
-      const btn = document.createElement('button');
-      btn.textContent = `${item.icon}  ${item.text}`;
-      btn.style.cssText = `
-        display: flex;
-        align-items: center;
-        width: 100%;
-        padding: 9px 12px;
-        border: none;
-        background: transparent;
-        border-radius: 8px;
-        font-size: 13px;
-        font-weight: 700;
-        color: #15803d;
-        cursor: pointer;
-        text-align: left;
-        gap: 8px;
-      `;
-      btn.onmouseenter = () => { btn.style.background = '#f0fdf4'; };
-      btn.onmouseleave = () => { btn.style.background = 'transparent'; };
-      btn.onclick = () => {
-        navigateToProgramSuiteView(item.view);
-      };
-      existing!.appendChild(btn);
-    });
-
-    // Click outside to close
-    const handleOutside = (e: MouseEvent) => {
-      if (!existing!.contains(e.target as Node)) {
-        setProgramMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleOutside);
-      existing?.remove();
-    };
-  }, [collapsed, programMenuOpen, programBtnTop, navigation, navigateToProgramSuiteView]);
-
-  // Cleanup on unmount
-  React.useEffect(() => {
-    return () => {
-      if (typeof document !== 'undefined') {
-        document.getElementById('program-suite-popup')?.remove();
-      }
-    };
-  }, []);
-
-  const programBtnRef = React.useRef<React.ElementRef<typeof TouchableOpacity>>(null);
-
-  const renderItem = (routeName: string) => {
-    const route = state.routes.find(r => r.name === routeName);
-    if (!route) return null;
-
-    const focused = state.index === state.routes.indexOf(route);
-    const { options } = descriptors[route.key];
-    const rawLabel = options.tabBarLabel ?? options.title ?? route.name;
-    const label = typeof rawLabel === 'function' ? rawLabel({ focused, color: focused ? '#166534' : '#4d7c0f', position: 'beside-icon', children: '' }) : rawLabel;
-    const badgeValue = typeof options.tabBarBadge === 'number' ? options.tabBarBadge : 0;
-
-    const isProgramRoute = route.name === 'Projects';
+    
+    const routeObj = state.routes.find(r => r.name === item.route);
+    const badgeValue = routeObj ? (descriptors[routeObj.key]?.options?.tabBarBadge as number || 0) : 0;
 
     return (
-      <View key={route.key}>
-        <TouchableOpacity
-          ref={isProgramRoute ? programBtnRef : undefined}
-          onPress={() => {
-            if (isProgramRoute) {
-              // Measure the button's position via DOM getBoundingClientRect
-              if (typeof window !== 'undefined') {
-                const domNode = (programBtnRef.current as any)?._nativeTag
-                  ? undefined
-                  : (programBtnRef.current as unknown as HTMLElement);
-                if (domNode?.getBoundingClientRect) {
-                  const rect = domNode.getBoundingClientRect();
-                  setProgramBtnTop(rect.top);
-                }
-              }
-              setProgramMenuOpen(current => !current);
-              return;
-            }
-            navigation.navigate(route.name);
-          }}
-          style={[styles.sidebarItem, focused && styles.sidebarItemActive, collapsed && styles.sidebarItemCollapsed]}
-        >
-          <View style={styles.sidebarIconWrap}>
-            <MaterialIcons
-              name={getIconName(route.name as keyof AdminTabParamList)}
-              size={20}
-              color={focused ? '#166534' : '#65a30d'}
-              style={collapsed ? undefined : styles.sidebarIcon}
-            />
-            {collapsed && badgeValue > 0 && (
-              <View style={styles.sidebarIconBadge}>
-                <Text style={styles.sidebarIconBadgeText}>{badgeValue > 99 ? '99+' : badgeValue}</Text>
+      <TouchableOpacity
+        key={item.label}
+        onPress={() => {
+          navigation.navigate(item.route, item.params);
+        }}
+        style={[styles.sidebarItem, focused && styles.sidebarItemActive, collapsed && styles.sidebarItemCollapsed]}
+      >
+        <View style={styles.sidebarIconWrap}>
+          <MaterialIcons
+            name={item.icon}
+            size={20}
+            color={focused ? '#16a34a' : '#64748b'}
+            style={collapsed ? undefined : styles.sidebarIcon}
+          />
+          {collapsed && badgeValue > 0 && (
+            <View style={styles.sidebarIconBadge}>
+              <Text style={styles.sidebarIconBadgeText}>{badgeValue > 99 ? '99+' : badgeValue}</Text>
+            </View>
+          )}
+        </View>
+        {!collapsed && (
+          <View style={styles.sidebarLabelRow}>
+            <Text style={[styles.sidebarLabel, focused && styles.sidebarLabelActive]} numberOfLines={1}>
+              {item.label}
+            </Text>
+            {badgeValue > 0 && (
+              <View style={styles.sidebarBadge}>
+                <Text style={styles.sidebarBadgeText}>{badgeValue > 99 ? '99+' : badgeValue}</Text>
               </View>
             )}
           </View>
-          {!collapsed && (
-            <View style={styles.sidebarLabelRow}>
-              <Text style={[styles.sidebarLabel, focused && styles.sidebarLabelActive]} numberOfLines={1}>{label}</Text>
-              {badgeValue > 0 && (
-                <View style={styles.sidebarBadge}>
-                  <Text style={styles.sidebarBadgeText}>{badgeValue > 99 ? '99+' : badgeValue}</Text>
-                </View>
-              )}
-              {isProgramRoute && (
-                <MaterialIcons
-                  name={programMenuOpen ? 'expand-less' : 'expand-more'}
-                  size={18}
-                  color={focused ? '#166534' : '#65a30d'}
-                />
-              )}
-            </View>
-          )}
-        </TouchableOpacity>
-        {/* Inline submenu when sidebar is expanded */}
-        {isProgramRoute && !collapsed && programMenuOpen && (
-          <View style={styles.sidebarSubmenu}>
-            <TouchableOpacity style={styles.sidebarSubmenuItem} onPress={() => navigateToProgramSuiteView('programs')}>
-              <MaterialIcons name="work" size={16} color="#15803d" />
-              <Text style={styles.sidebarSubmenuText}>Programs</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.sidebarSubmenuItem} onPress={() => navigateToProgramSuiteView('projects')}>
-              <MaterialIcons name="folder" size={16} color="#15803d" />
-              <Text style={styles.sidebarSubmenuText}>Projects</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.sidebarSubmenuItem} onPress={() => navigateToProgramSuiteView('events')}>
-              <MaterialIcons name="event" size={16} color="#15803d" />
-              <Text style={styles.sidebarSubmenuText}>Events</Text>
-            </TouchableOpacity>
-          </View>
         )}
-      </View>
+      </TouchableOpacity>
     );
   };
 
   return (
     <View style={[styles.sidebarContainer, collapsed && styles.sidebarContainerCollapsed]}>
-      {!collapsed && (
-        <View style={styles.sidebarBrand}>
-          <View style={styles.sidebarBrandIcon}><AppLogo width={36} /></View>
-          <View style={styles.sidebarBrandCopy}>
-            <Text style={styles.sidebarBrandName}>NVC</Text>
-            <Text style={styles.sidebarBrandTag}>Admin Suite</Text>
-          </View>
-        </View>
-      )}
-      <TouchableOpacity style={styles.toggleButton} onPress={onToggle}>
-        <MaterialIcons name={collapsed ? 'chevron-right' : 'chevron-left'} size={22} color="#15803d" />
+      <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityLabel={collapsed ? 'Show sidebar' : 'Hide sidebar'}
+        onPress={onToggle}
+        style={[styles.toggleButton, collapsed && styles.toggleButtonCollapsed]}
+      >
+        <MaterialIcons name={collapsed ? 'keyboard-arrow-right' : 'keyboard-arrow-left'} size={20} color="#166534" />
       </TouchableOpacity>
-      <ScrollView style={styles.sidebarScrollArea} contentContainerStyle={styles.sidebarScrollContent}>
-        {!collapsed && <Text style={styles.sidebarHeading}>Systems</Text>}
-        {systemsRoutes.map(route => renderItem(route.name))}
-        <View style={[styles.sidebarDivider, collapsed && styles.sidebarDividerCollapsed]} />
-        {!collapsed && <Text style={styles.sidebarHeading}>System Settings</Text>}
-        {settingsRoutes.map(route => renderItem(route.name))}
+      <ScrollView style={styles.sidebarScrollArea} contentContainerStyle={styles.sidebarScrollContent} showsVerticalScrollIndicator={false}>
+        {SIDEBAR_GROUPS.map(group => (
+          <View key={group.title} style={styles.sidebarGroup}>
+            {!collapsed && <Text style={styles.sidebarHeading}>{group.title}</Text>}
+            {group.items.map(item => renderSidebarItem(item))}
+          </View>
+        ))}
       </ScrollView>
+
+      {!collapsed && (
+        <TouchableOpacity style={styles.sidebarHelpCard} activeOpacity={0.85}>
+          <View style={styles.sidebarHelpIcon}>
+            <MaterialIcons name="headset-mic" size={20} color="#16a34a" />
+          </View>
+          <View style={styles.sidebarHelpCopy}>
+            <Text style={styles.sidebarHelpTitle}>Need help?</Text>
+            <Text style={styles.sidebarHelpText}>Contact support</Text>
+          </View>
+          <MaterialIcons name="chevron-right" size={16} color="#64748b" />
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
@@ -343,8 +236,16 @@ function SidebarCapture({ onPropsChange, ...tabBarProps }: BottomTabBarProps & {
   return null;
 }
 
+function getAdminInitials(name?: string): string {
+  if (!name) return 'AA';
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
 export default function AdminNavigator() {
   const { user } = useAuth();
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [pendingUsers, setPendingUsers] = useState<User[]>([]);
   const [unreadMessages, setUnreadMessages] = useState<any[]>([]);
   const [unreadReports, setUnreadReports] = useState<any[]>([]);
@@ -354,7 +255,7 @@ export default function AdminNavigator() {
   const messageUnreadCount = unreadMessages.length;
   const reportNotificationCount = unreadReports.length;
   const pendingUserApprovalCount = pendingUsers.length;
-  const [collapsed, setCollapsed] = useState(true);
+  const [collapsed, setCollapsed] = useState(false);
   const [tabBarProps, setTabBarProps] = useState<BottomTabBarProps | null>(null);
   const [tabBarSignature, setTabBarSignature] = useState('');
   const isMobileModeOnWeb = React.useMemo(() => {
@@ -470,7 +371,7 @@ export default function AdminNavigator() {
     <Tab.Navigator
       tabBar={isWeb ? props => <SidebarCapture {...props} onPropsChange={(p, s) => { setTabBarProps(p); setTabBarSignature(s); }} /> : undefined}
       screenOptions={({ route }) => ({
-        headerShown: true,
+        headerShown: !isWeb,
         header: ({ options, navigation }) => (
           <ScreenBrandHeader
             title={options.title || route.name}
@@ -502,8 +403,7 @@ export default function AdminNavigator() {
         name="Projects"
         component={AdminProjectsScreen}
         options={{
-          title: 'Program Management Suite',
-          tabBarLabel: 'Program Suite',
+          title: 'Projects',
           tabBarBadge: pendingVolunteerRequests.length > 0 ? pendingVolunteerRequests.length : undefined,
         }}
       />
@@ -515,63 +415,206 @@ export default function AdminNavigator() {
       <Tab.Screen name="Analytics" component={AdminAnalyticsScreen} options={{ title: 'Analytics' }} />
       <Tab.Screen name="Users" component={UserManagementScreen} options={{ title: 'User Management', tabBarBadge: pendingUserApprovalCount > 0 ? pendingUserApprovalCount : undefined }} />
       <Tab.Screen name="Profile" component={ProfileScreen} options={{ title: 'Admin Profile' }} />
+      <Tab.Screen name="Settings" component={SystemSettingsScreen} options={{ title: 'System Settings' }} />
     </Tab.Navigator>
   );
 
   if (!isWeb) return navigator;
 
   return (
-    <View style={styles.webLayout}>
-      <View style={[styles.sidebarWrapper, collapsed ? styles.sidebarWrapperCollapsed : styles.sidebarWrapperExpanded]}>
-        {tabBarProps ? (
-          <SidebarTabBar {...tabBarProps} collapsed={collapsed} onToggle={() => setCollapsed(!collapsed)} />
-        ) : (
-          <View style={styles.fallbackSidebar}>
-            <TouchableOpacity onPress={() => setCollapsed(!collapsed)} style={styles.toggleButton}>
+    <View style={styles.webFrame}>
+      <View style={styles.adminTopBar}>
+        <View style={styles.adminTopActions}>
+          <TouchableOpacity style={styles.adminTopIconButton} activeOpacity={0.8}>
+            <MaterialIcons name="search" size={24} color="#475569" />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.adminTopIconButton} activeOpacity={0.8}>
+            <MaterialIcons name="notifications-none" size={24} color="#475569" />
+            {pendingUserApprovalCount + messageUnreadCount + reportNotificationCount > 0 ? (
+              <View style={styles.adminTopBadge}>
+                <Text style={styles.adminTopBadgeText}>{Math.min(pendingUserApprovalCount + messageUnreadCount + reportNotificationCount, 9)}</Text>
+              </View>
+            ) : null}
+          </TouchableOpacity>
+          <View style={styles.adminTopDivider} />
+          
+          <View style={{ position: 'relative', zIndex: 1000 }}>
+            <TouchableOpacity
+              style={styles.adminUserTrigger}
+              onPress={() => setIsUserMenuOpen(prev => !prev)}
+              activeOpacity={0.8}
+            >
+              <View style={styles.adminTopAvatar}>
+                <Text style={styles.adminTopAvatarText}>{getAdminInitials(user?.name)}</Text>
+              </View>
+              <View>
+                <Text style={styles.adminTopUserName}>{user?.name || 'Admin Account'}</Text>
+                <Text style={styles.adminTopUserOrg}>Negrense Volunteers for Change (NVC)</Text>
+              </View>
               <MaterialIcons
-                name={collapsed ? 'chevron-right' : 'chevron-left'}
-                size={24}
-                color="#15803d"
+                name={isUserMenuOpen ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
+                size={22}
+                color="#64748b"
               />
             </TouchableOpacity>
+
+            {isUserMenuOpen ? (
+              <>
+                <TouchableOpacity
+                  style={styles.dropdownBackdrop}
+                  onPress={() => setIsUserMenuOpen(false)}
+                  activeOpacity={1}
+                />
+                <View style={styles.userDropdownCard}>
+                  <TouchableOpacity
+                    style={styles.userDropdownItem}
+                    onPress={() => {
+                      setIsUserMenuOpen(false);
+                      tabBarProps?.navigation?.navigate('Profile');
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <MaterialIcons name="person" size={18} color="#15803d" />
+                    <Text style={styles.userDropdownItemText}>Profile Tab</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.userDropdownItem}
+                    onPress={() => {
+                      setIsUserMenuOpen(false);
+                      tabBarProps?.navigation?.navigate('Settings');
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <MaterialIcons name="settings" size={18} color="#15803d" />
+                    <Text style={styles.userDropdownItemText}>Settings Tab</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : null}
           </View>
-        )}
+        </View>
       </View>
-      <View style={[styles.webContent, { paddingHorizontal: collapsed ? CONTENT_GUTTER_COLLAPSED : CONTENT_GUTTER }]}>
-        {navigator}
+      <View style={styles.webLayout}>
+        <View style={[styles.sidebarWrapper, collapsed ? styles.sidebarWrapperCollapsed : styles.sidebarWrapperExpanded]}>
+          {tabBarProps ? (
+            <SidebarTabBar {...tabBarProps} collapsed={collapsed} onToggle={() => setCollapsed(!collapsed)} />
+          ) : (
+            <View style={styles.fallbackSidebar} />
+          )}
+        </View>
+        <View style={styles.webMainPane}>
+          <View style={[styles.webContent, { paddingHorizontal: collapsed ? CONTENT_GUTTER_COLLAPSED : CONTENT_GUTTER }]}>
+            {navigator}
+          </View>
+        </View>
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  webLayout: { flex: 1, flexDirection: 'row', backgroundColor: '#f5f5f5' },
-  sidebarWrapper: { height: '100%', backgroundColor: '#f0fdf4', borderRightWidth: 2, borderRightColor: '#15803d', overflow: 'hidden' },
+  webFrame: { flex: 1, backgroundColor: '#f6f8fa' },
+  webMainPane: { flex: 1, backgroundColor: '#f6f8fa' },
+  adminTopBar: {
+    height: 102,
+    backgroundColor: '#ffffff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e6ebef',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingRight: 32,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.04,
+    shadowRadius: 14,
+    elevation: 2,
+    zIndex: 1000,
+  },
+  adminTopBrandSlot: { width: SIDEBAR_WIDTH, height: 56, borderRightWidth: 1, borderRightColor: '#dfe5ea', alignItems: 'center', justifyContent: 'center' },
+  adminTopActions: { marginLeft: 'auto' as any, flexDirection: 'row', alignItems: 'center', gap: 18, zIndex: 1000 },
+  adminTopIconButton: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  adminTopBadge: { position: 'absolute', top: 2, right: 2, minWidth: 18, height: 18, borderRadius: 9, backgroundColor: '#157a34', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
+  adminTopBadgeText: { color: '#ffffff', fontSize: 10, fontWeight: '900' },
+  adminTopDivider: { width: 1, height: 48, backgroundColor: '#e5eaf0' },
+  adminTopAvatar: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#e7f3e3', alignItems: 'center', justifyContent: 'center' },
+  adminTopAvatarText: { color: '#0b7a35', fontWeight: '900', fontSize: 14 },
+  adminTopUserName: { fontSize: 14, fontWeight: '900', color: '#101828' },
+  adminTopUserOrg: { marginTop: 3, fontSize: 11, color: '#667085' },
+  adminUserTrigger: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    cursor: 'pointer' as any,
+  },
+  dropdownBackdrop: {
+    position: 'fixed' as any,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 9998,
+  },
+  userDropdownCard: {
+    position: 'absolute',
+    top: 60,
+    right: 0,
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 6,
+    minWidth: 170,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+    elevation: 20,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    zIndex: 9999,
+  },
+  userDropdownItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+  },
+  userDropdownItemText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1e293b',
+  },
+  webLayout: { flex: 1, flexDirection: 'row', backgroundColor: '#f6f8fa' },
+  sidebarWrapper: { height: '100%', backgroundColor: '#ffffff', borderRightWidth: 1, borderRightColor: '#edf1f4', overflow: 'hidden' },
   sidebarWrapperExpanded: { width: SIDEBAR_WIDTH, minWidth: SIDEBAR_WIDTH },
   sidebarWrapperCollapsed: { width: SIDEBAR_WIDTH_COLLAPSED, minWidth: SIDEBAR_WIDTH_COLLAPSED },
-  webContent: { flex: 1, paddingVertical: 20, backgroundColor: '#f5f5f5', overflow: 'auto' as any },
-  sidebarContainer: { position: 'relative', flex: 1, width: SIDEBAR_WIDTH, backgroundColor: '#f0fdf4', paddingTop: 28, paddingHorizontal: 12, borderRightWidth: 1, borderRightColor: '#bbf7d0' },
-  sidebarBrand: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 18, paddingHorizontal: 6 },
-  sidebarBrandIcon: { width: 72, height: 48, borderRadius: 14, backgroundColor: '#ffffff', alignItems: 'center', justifyContent: 'center' },
-  sidebarBrandCopy: { flex: 1 },
-  sidebarBrandName: { fontSize: 22, fontWeight: '800', color: '#166534' },
-  sidebarBrandTag: { marginTop: 2, fontSize: 12, color: '#4d7c0f', fontWeight: '600' },
-  sidebarContainerCollapsed: { width: SIDEBAR_WIDTH_COLLAPSED, paddingHorizontal: 8 },
+  webContent: { flex: 1, paddingVertical: 24, backgroundColor: '#f6f8fa', overflow: 'auto' as any },
+  sidebarContainer: { position: 'relative', flex: 1, width: SIDEBAR_WIDTH, backgroundColor: '#ffffff', paddingTop: 16, borderRightWidth: 0, borderRightColor: '#ffffff' },
+  sidebarHeader: { width: '100%', height: 60, alignItems: 'flex-start', paddingLeft: 18, justifyContent: 'center', marginBottom: 16 },
+  sidebarHeaderCollapsed: { alignItems: 'center', paddingLeft: 0 },
+  sidebarGroup: { marginBottom: 16 },
+  sidebarHeading: { fontSize: 10, fontWeight: '800', color: '#64748b', letterSpacing: 0.8, marginBottom: 8, textTransform: 'uppercase', paddingHorizontal: 18 },
+  sidebarContainerCollapsed: { width: SIDEBAR_WIDTH_COLLAPSED, paddingHorizontal: 4 },
   sidebarScrollArea: { flex: 1 },
   sidebarScrollContent: { paddingBottom: 20 },
   fallbackSidebar: { flex: 1, alignItems: 'center', justifyContent: 'flex-start', paddingTop: 20 },
-  toggleButton: { alignSelf: 'center', padding: 10, marginBottom: 12, borderRadius: 8, backgroundColor: 'rgba(21, 128, 61, 0.1)' },
-  sidebarHeading: { fontSize: 12, fontWeight: '700', color: '#15803d', letterSpacing: 0.5, marginBottom: 12, textTransform: 'uppercase' },
+  toggleButton: { alignSelf: 'flex-end', width: 32, height: 32, marginRight: 12, marginBottom: 10, borderRadius: 10, backgroundColor: '#edf8ee', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#d5edd9' },
+  toggleButtonCollapsed: { alignSelf: 'center', marginRight: 0 },
   sidebarDivider: { height: 1, backgroundColor: '#bbf7d0', marginVertical: 14 },
   sidebarDividerCollapsed: { marginVertical: 10 },
-  sidebarItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 10, borderRadius: 10, marginBottom: 6 },
-  sidebarItemCollapsed: { justifyContent: 'center' },
-  sidebarItemActive: { backgroundColor: '#d9f99d' },
+  sidebarItem: { height: 40, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, borderRadius: 8, marginBottom: 4, marginHorizontal: 12 },
+  sidebarItemCollapsed: { justifyContent: 'center', marginHorizontal: 4 },
+  sidebarItemActive: { backgroundColor: '#f0fdf4' },
   sidebarIconWrap: { position: 'relative' },
   sidebarIcon: { marginRight: 12 },
   sidebarLabelRow: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  sidebarLabel: { fontSize: 14, color: '#4d7c0f', flexShrink: 1, marginRight: 6 },
-  sidebarLabelActive: { color: '#166534', fontWeight: '600' },
+  sidebarLabel: { fontSize: 13, color: '#475569', flexShrink: 1, fontWeight: '600' },
+  sidebarLabelActive: { color: '#16a34a', fontWeight: '700' },
   sidebarBadge: { minWidth: 22, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 999, backgroundColor: '#dc2626', alignItems: 'center', justifyContent: 'center' },
   sidebarBadgeText: { color: '#fff', fontSize: 11, fontWeight: '700' },
   sidebarIconBadge: { position: 'absolute', top: -10, right: -12, minWidth: 18, height: 18, paddingHorizontal: 4, borderRadius: 999, backgroundColor: '#dc2626', borderWidth: 2, borderColor: '#d9f99d', alignItems: 'center', justifyContent: 'center' },
@@ -579,4 +622,10 @@ const styles = StyleSheet.create({
   sidebarSubmenu: { marginLeft: 28, marginBottom: 8, gap: 4 },
   sidebarSubmenuItem: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, paddingHorizontal: 10, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.45)' },
   sidebarSubmenuText: { fontSize: 13, color: '#15803d', fontWeight: '700' },
+  sidebarHelpCard: { marginHorizontal: 12, marginBottom: 24, padding: 12, borderRadius: 10, backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#e2e8f0', flexDirection: 'row', alignItems: 'center', gap: 10 },
+  sidebarHelpIcon: { width: 32, height: 32, borderRadius: 6, backgroundColor: '#f0fdf4', alignItems: 'center', justifyContent: 'center' },
+  sidebarHelpCopy: { flex: 1 },
+  sidebarHelpTitle: { fontSize: 12, fontWeight: '800', color: '#1e293b' },
+  sidebarHelpText: { marginTop: 2, fontSize: 10, color: '#64748b' },
+  sidebarCopyright: { marginHorizontal: 12, marginBottom: 28, fontSize: 12, color: '#75839a' },
 });

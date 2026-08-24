@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
-import { Partner, Project, Volunteer, VolunteerProjectJoinRecord } from '../models/types';
+import { Partner, PartnerProjectApplication, Project, Volunteer, VolunteerProjectJoinRecord } from '../models/types';
 import {
   getAllPartners,
   getAllVolunteers,
@@ -30,7 +30,7 @@ import {
   getProjectMarkerColor,
   getPrimaryProjectImageSource,
 } from '../utils/projectMap';
-import { getPartnerForMappedProject, getProjectIdsForPartnerUser } from '../utils/mapProjectLinks';
+import { getPartnerForMappedProject, getProjectIdsForPartner, getProjectIdsForPartnerUser } from '../utils/mapProjectLinks';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 import { createGoogleMapsMarkerIcon, loadGoogleMaps } from '../utils/webGoogleMaps';
@@ -41,7 +41,7 @@ const MAP_FIT_PADDING_PX = 64;
 const MAP_MAX_FIT_ZOOM = 12;
 const MAP_SINGLE_MARKER_ZOOM = 10;
 
-type MapStylePresetKey = 'admin-overview' | 'volunteer-view' | 'partner-view';
+type MapStylePresetKey = 'admin-overview' | 'projects-view' | 'events-view' | 'volunteer-view' | 'partner-view';
 
 type MapStylePreset = {
   key: MapStylePresetKey;
@@ -77,7 +77,7 @@ const MAP_STYLE_PRESETS: MapStylePreset[] = [
   {
     key: 'admin-overview',
     label: 'Admin overview',
-    description: 'Neutral roadmap for command-center use.',
+    description: 'Neutral roadmap showing all projects and events.',
     mapTypeId: 'roadmap',
     accentColor: '#1d4ed8',
     chipBg: '#eff6ff',
@@ -86,6 +86,32 @@ const MAP_STYLE_PRESETS: MapStylePreset[] = [
     shellBorder: '#bfdbfe',
     errorBg: 'rgba(219, 234, 254, 0.92)',
     errorBorder: '#bfdbfe',
+  },
+  {
+    key: 'projects-view',
+    label: 'Projects',
+    description: 'Show only parent projects across programs.',
+    mapTypeId: 'roadmap',
+    accentColor: '#0284c7',
+    chipBg: '#f0f9ff',
+    chipBorder: '#bae6fd',
+    shellBg: '#e0f2fe',
+    shellBorder: '#bae6fd',
+    errorBg: 'rgba(224, 242, 254, 0.92)',
+    errorBorder: '#bae6fd',
+  },
+  {
+    key: 'events-view',
+    label: 'Events',
+    description: 'Show only scheduled events and field activities.',
+    mapTypeId: 'roadmap',
+    accentColor: '#ea580c',
+    chipBg: '#fff7ed',
+    chipBorder: '#fed7aa',
+    shellBg: '#ffedd5',
+    shellBorder: '#fed7aa',
+    errorBg: 'rgba(255, 237, 213, 0.92)',
+    errorBorder: '#fed7aa',
   },
   {
     key: 'volunteer-view',
@@ -152,11 +178,13 @@ function getGoogleMapsErrorMessage(error: unknown, apiKey: string) {
 }
 
 function getMapLegendTitle(selectedMapStyleKey: MapStylePresetKey) {
-  return selectedMapStyleKey === 'volunteer-view' ? 'Event Status' : 'Project Status';
+  return selectedMapStyleKey === 'volunteer-view' || selectedMapStyleKey === 'events-view'
+    ? 'Event Status'
+    : 'Project Status';
 }
 
 function getMapLegendTotalLabel(selectedMapStyleKey: MapStylePresetKey, count: number) {
-  if (selectedMapStyleKey === 'volunteer-view') {
+  if (selectedMapStyleKey === 'volunteer-view' || selectedMapStyleKey === 'events-view') {
     return `Total ${count === 1 ? 'Event' : 'Events'}`;
   }
 
@@ -164,7 +192,16 @@ function getMapLegendTotalLabel(selectedMapStyleKey: MapStylePresetKey, count: n
 }
 
 function getMapLegendFootnote(selectedMapStyleKey: MapStylePresetKey) {
-  return selectedMapStyleKey === 'volunteer-view' ? 'Volunteer events' : 'Across Philippines';
+  if (selectedMapStyleKey === 'volunteer-view') {
+    return 'Volunteer events';
+  }
+  if (selectedMapStyleKey === 'events-view') {
+    return 'All scheduled events';
+  }
+  if (selectedMapStyleKey === 'projects-view') {
+    return 'All active projects';
+  }
+  return 'Across Philippines';
 }
 
 // Displays the web version of the project map using the Google Maps JavaScript API.
@@ -177,9 +214,12 @@ export default function MappingScreen({ navigation }: any) {
   const [showDetails, setShowDetails] = useState(false);
   const [showMapStyleMenu, setShowMapStyleMenu] = useState(false);
   const [showVolunteerMenu, setShowVolunteerMenu] = useState(false);
+  const [showPartnerMenu, setShowPartnerMenu] = useState(false);
   const [selectedMapStyleKey, setSelectedMapStyleKey] = useState<MapStylePresetKey>('partner-view');
   const [selectedVolunteerId, setSelectedVolunteerId] = useState<string | null>(null);
+  const [selectedPartnerId, setSelectedPartnerId] = useState<string | null>(null);
   const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
+  const [partnerApplications, setPartnerApplications] = useState<PartnerProjectApplication[]>([]);
   const [loading, setLoading] = useState(true);
   const [mapError, setMapError] = useState<string | null>(null);
   const mapElementRef = useRef<HTMLDivElement | null>(null);
@@ -231,6 +271,27 @@ export default function MappingScreen({ navigation }: any) {
     [projects, volunteers, volunteerJoinRecords]
   );
 
+  const partnerMapAccounts: VolunteerMapAccountOption[] = React.useMemo(
+    () =>
+      [...partners]
+        .sort((left, right) => left.name.localeCompare(right.name))
+        .map(partner => {
+          // Only show projects linked to APPROVED proposals for this partner
+          const approvedProjectIds = getProjectIdsForPartner(
+            partner,
+            projects,
+            partnerApplications
+          );
+
+          return {
+            id: partner.id,
+            label: partner.name,
+            projectIds: approvedProjectIds,
+          };
+        }),
+    [projects, partners, partnerApplications]
+  );
+
   const availableVolunteerMapAccounts = React.useMemo(() => {
     const mappedIds = new Set(getMappedProjects(projects).map(project => project.id));
     return volunteerMapAccounts
@@ -241,6 +302,16 @@ export default function MappingScreen({ navigation }: any) {
       .filter(account => account.projectIds.length > 0);
   }, [projects, volunteerMapAccounts]);
 
+  const availablePartnerMapAccounts = React.useMemo(() => {
+    const mappedIds = new Set(getMappedProjects(projects).map(project => project.id));
+    return partnerMapAccounts
+      .map(account => ({
+        ...account,
+        projectIds: Array.from(new Set((account.projectIds || []).filter(id => mappedIds.has(id)))),
+      }))
+      .filter(account => account.projectIds.length > 0);
+  }, [projects, partnerMapAccounts]);
+
   useEffect(() => {
     setSelectedVolunteerId(current =>
       current && availableVolunteerMapAccounts.some(account => account.id === current)
@@ -249,21 +320,51 @@ export default function MappingScreen({ navigation }: any) {
     );
   }, [availableVolunteerMapAccounts]);
 
+  useEffect(() => {
+    setSelectedPartnerId(current =>
+      current && availablePartnerMapAccounts.some(account => account.id === current)
+        ? current
+        : availablePartnerMapAccounts[0]?.id || null
+    );
+  }, [availablePartnerMapAccounts]);
+
   const selectedVolunteerAccount =
     selectedVolunteerId
       ? availableVolunteerMapAccounts.find(account => account.id === selectedVolunteerId) || null
       : availableVolunteerMapAccounts[0] || null;
 
+  const selectedPartnerAccount =
+    selectedPartnerId
+      ? availablePartnerMapAccounts.find(account => account.id === selectedPartnerId) || null
+      : availablePartnerMapAccounts[0] || null;
+
   const displayProjects = React.useMemo(() => {
-    if (selectedMapStyleKey !== 'volunteer-view') {
-      return projects;
+    if (selectedMapStyleKey === 'volunteer-view') {
+      if (!selectedVolunteerAccount) {
+        return [];
+      }
+      const allowedProjectIds = new Set(selectedVolunteerAccount.projectIds);
+      return projects.filter(project => allowedProjectIds.has(project.id));
     }
-    if (!selectedVolunteerAccount) {
-      return [];
+    
+    if (selectedMapStyleKey === 'partner-view') {
+      if (!selectedPartnerAccount) {
+        return [];
+      }
+      const allowedProjectIds = new Set(selectedPartnerAccount.projectIds);
+      return projects.filter(project => allowedProjectIds.has(project.id));
     }
-    const allowedProjectIds = new Set(selectedVolunteerAccount.projectIds);
-    return projects.filter(project => allowedProjectIds.has(project.id));
-  }, [projects, selectedMapStyleKey, selectedVolunteerAccount]);
+
+    if (selectedMapStyleKey === 'projects-view') {
+      return projects.filter(project => !project.isEvent);
+    }
+
+    if (selectedMapStyleKey === 'events-view') {
+      return projects.filter(project => Boolean(project.isEvent));
+    }
+    
+    return projects;
+  }, [projects, selectedMapStyleKey, selectedVolunteerAccount, selectedPartnerAccount]);
 
   const mappedProjects = React.useMemo(() => {
     const result = getMappedProjects(displayProjects);
@@ -648,18 +749,18 @@ export default function MappingScreen({ navigation }: any) {
 
       const visibleProjects =
         user?.role === 'partner'
-          ? mapSourceProjects.filter(
-              project => partnerProjectIds.has(project.id)
-            )
+          ? // Partner: only projects from APPROVED proposals
+            mapSourceProjects.filter(project => partnerProjectIds.has(project.id))
           : user?.role === 'volunteer'
-          ? mapSourceProjects.filter(
+          ? // Volunteer: only EVENTS (isEvent=true) that the volunteer has joined
+            mapSourceProjects.filter(
               project =>
-                joinedVolunteerProjectIds.has(project.id) ||
-                (snapshot.volunteerProfile && (project.volunteers || []).includes(snapshot.volunteerProfile.id)) ||
-                (snapshot.volunteerProfile && (project.internalTasks || []).some(task =>
-                  task.assignedVolunteerId === snapshot.volunteerProfile?.id ||
-                  (task.assignedVolunteerIds || []).includes(snapshot.volunteerProfile?.id || '')
-                ))
+                project.isEvent &&
+                (
+                  joinedVolunteerProjectIds.has(project.id) ||
+                  (snapshot.volunteerProfile && (project.joinedUserIds || []).includes(snapshot.volunteerProfile.userId)) ||
+                  (snapshot.volunteerProfile && (project.volunteers || []).includes(snapshot.volunteerProfile.id))
+                )
             )
           : mapSourceProjects;
 
@@ -674,6 +775,7 @@ export default function MappingScreen({ navigation }: any) {
       })));
       setProjects(visibleProjects);
       setVolunteerJoinRecords(snapshot.volunteerJoinRecords || []);
+      setPartnerApplications(snapshot.partnerApplications || []);
       setPartners(allPartners);
       const allVolunteers = await getAllVolunteers();
       setVolunteers(allVolunteers);
@@ -731,11 +833,38 @@ export default function MappingScreen({ navigation }: any) {
               <Text style={styles.headerSubtitle}>Switch between admin, volunteer, and partner{`\n`}views to inspect mapped project activity.</Text>
             </View>
           </View>
-          <TouchableOpacity style={styles.workspaceButton} onPress={() => setShowMapStyleMenu(true)}>
-            <MaterialIcons name="business" size={28} color="#5A8F52" />
-            <Text style={styles.workspaceButtonText}>Philippine Business for Social Progress</Text>
-            <MaterialIcons name="keyboard-arrow-down" size={24} color="#334155" />
-          </TouchableOpacity>
+          {selectedMapStyleKey === 'partner-view' ? (
+            <TouchableOpacity style={styles.workspaceButton} onPress={() => setShowPartnerMenu(true)}>
+              <MaterialIcons name="business" size={22} color="#5A8F52" />
+              <Text style={styles.workspaceButtonText} numberOfLines={1}>
+                {selectedPartnerAccount?.label || 'Choose partner'}
+              </Text>
+              <MaterialIcons name="keyboard-arrow-down" size={24} color="#334155" />
+            </TouchableOpacity>
+          ) : selectedMapStyleKey === 'volunteer-view' ? (
+            <TouchableOpacity style={styles.workspaceButton} onPress={() => setShowVolunteerMenu(true)}>
+              <MaterialIcons name="person-outline" size={22} color="#166534" />
+              <Text style={[styles.workspaceButtonText, { color: '#166534' }]} numberOfLines={1}>
+                {selectedVolunteerAccount?.label || 'Choose volunteer'}
+              </Text>
+              <MaterialIcons name="keyboard-arrow-down" size={24} color="#166534" />
+            </TouchableOpacity>
+          ) : selectedMapStyleKey === 'projects-view' ? (
+            <View style={[styles.workspaceButton, { opacity: 0.85 }]}>
+              <MaterialIcons name="folder" size={22} color="#0284c7" />
+              <Text style={[styles.workspaceButtonText, { color: '#0284c7' }]}>All Projects</Text>
+            </View>
+          ) : selectedMapStyleKey === 'events-view' ? (
+            <View style={[styles.workspaceButton, { opacity: 0.85 }]}>
+              <MaterialIcons name="event" size={22} color="#ea580c" />
+              <Text style={[styles.workspaceButtonText, { color: '#ea580c' }]}>All Events</Text>
+            </View>
+          ) : (
+            <View style={[styles.workspaceButton, { opacity: 0.85 }]}>
+              <MaterialIcons name="public" size={22} color="#1d4ed8" />
+              <Text style={[styles.workspaceButtonText, { color: '#1d4ed8' }]}>All Projects & Events</Text>
+            </View>
+          )}
           <TouchableOpacity style={styles.viewButton} onPress={() => setShowMapStyleMenu(true)}>
             <MaterialIcons name="tune" size={27} color="#5A8F52" />
             <Text style={styles.viewButtonText}>{selectedMapStyle.label}</Text>
@@ -744,34 +873,7 @@ export default function MappingScreen({ navigation }: any) {
         </View>
       </View>
 
-      {selectedMapStyleKey === 'volunteer-view' && availableVolunteerMapAccounts.length > 0 ? (
-        <View style={styles.volunteerPickerRow}>
-          <TouchableOpacity
-            style={[
-              styles.mapStyleButton,
-              styles.volunteerPickerButton,
-              {
-                backgroundColor: selectedMapStyle.chipBg,
-                borderColor: selectedMapStyle.chipBorder,
-              },
-            ]}
-            onPress={() => setShowVolunteerMenu(true)}
-          >
-            <MaterialIcons name="person-outline" size={18} color={selectedMapStyle.accentColor} />
-            <Text
-              style={[styles.mapStyleButtonText, styles.volunteerPickerText, { color: selectedMapStyle.accentColor }]}
-              numberOfLines={1}
-            >
-              {selectedVolunteerAccount?.label || 'Choose volunteer'}
-            </Text>
-            <MaterialIcons
-              name="keyboard-arrow-down"
-              size={22}
-              color={selectedMapStyle.accentColor}
-            />
-          </TouchableOpacity>
-        </View>
-      ) : null}
+
 
       <View
         style={[
@@ -787,7 +889,7 @@ export default function MappingScreen({ navigation }: any) {
           <Text style={styles.legendTitle}>{getMapLegendTitle(selectedMapStyleKey)}</Text>
           {statusLegend.map(status => (
             <View key={status.label} style={styles.legendRow}>
-              <MaterialIcons name="location-on" size={25} color={status.color} />
+              <MaterialIcons name="location-on" size={16} color={status.color} />
               <Text style={styles.legendText}>{status.label}</Text>
             </View>
           ))}
@@ -962,6 +1064,47 @@ export default function MappingScreen({ navigation }: any) {
                     onPress={() => {
                       setSelectedVolunteerId(account.id);
                       setShowVolunteerMenu(false);
+                    }}
+                  >
+                    <View style={styles.mapStyleMenuItemTextWrap}>
+                      <Text style={styles.mapStyleMenuItemTitle}>{account.label}</Text>
+                      <Text style={styles.mapStyleMenuItemDescription}>
+                        {account.projectIds.length} mapped
+                        {account.projectIds.length === 1 ? ' project' : ' projects'}
+                      </Text>
+                    </View>
+                    {isActive ? <MaterialIcons name="check" size={20} color={selectedMapStyle.accentColor} /> : null}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        transparent
+        visible={showPartnerMenu}
+        onRequestClose={() => setShowPartnerMenu(false)}
+      >
+        <TouchableOpacity
+          style={styles.menuBackdrop}
+          activeOpacity={1}
+          onPress={() => setShowPartnerMenu(false)}
+        >
+          <View style={styles.mapStyleMenu}>
+            <Text style={styles.mapStyleMenuTitle}>Choose partner</Text>
+            <ScrollView style={styles.accountList} showsVerticalScrollIndicator={false}>
+              {availablePartnerMapAccounts.map(account => {
+                const isActive = account.id === selectedPartnerAccount?.id;
+                return (
+                  <TouchableOpacity
+                    key={account.id}
+                    style={[styles.mapStyleMenuItem, isActive && styles.mapStyleMenuItemActive]}
+                    onPress={() => {
+                      setSelectedPartnerId(account.id);
+                      setShowPartnerMenu(false);
                     }}
                   >
                     <View style={styles.mapStyleMenuItemTextWrap}>
@@ -1190,38 +1333,39 @@ const styles = StyleSheet.create({
   },
   mapLegend: {
     position: 'absolute',
-    top: 27,
-    left: 31,
-    width: 196,
-    borderRadius: 15,
-    paddingTop: 20,
+    top: 12,
+    left: 12,
+    width: 136,
+    borderRadius: 12,
+    paddingTop: 10,
+    paddingBottom: 8,
     overflow: 'hidden',
     backgroundColor: 'rgba(255,255,255,0.96)',
     shadowColor: '#334155',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.11,
-    shadowRadius: 12,
-    elevation: 4,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3,
   },
   legendTitle: {
-    marginHorizontal: 23,
-    marginBottom: 14,
+    marginHorizontal: 12,
+    marginBottom: 6,
     color: '#263244',
-    fontSize: 15,
+    fontSize: 12,
     fontWeight: '800',
   },
   legendRow: {
-    height: 38,
-    paddingHorizontal: 20,
+    height: 22,
+    paddingHorizontal: 12,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 6,
   },
-  legendText: { color: '#596579', fontSize: 15, fontWeight: '600' },
-  legendDivider: { height: 1, backgroundColor: '#E1E7ED', marginTop: 10 },
-  legendTotalLabel: { marginHorizontal: 23, marginTop: 18, color: '#39465A', fontSize: 14, fontWeight: '800' },
-  legendTotal: { marginHorizontal: 23, marginTop: 8, color: '#4D894B', fontSize: 36, fontWeight: '800' },
-  legendFootnote: { marginHorizontal: 23, marginBottom: 21, color: '#6B778B', fontSize: 14, fontWeight: '600' },
+  legendText: { color: '#596579', fontSize: 11, fontWeight: '600' },
+  legendDivider: { height: 1, backgroundColor: '#E1E7ED', marginTop: 6 },
+  legendTotalLabel: { marginHorizontal: 12, marginTop: 6, color: '#39465A', fontSize: 11, fontWeight: '800' },
+  legendTotal: { marginHorizontal: 12, marginTop: 2, color: '#4D894B', fontSize: 20, fontWeight: '800' },
+  legendFootnote: { marginHorizontal: 12, marginBottom: 4, marginTop: 2, color: '#6B778B', fontSize: 10, fontWeight: '600' },
   featuredProjectCard: {
     minHeight: 160,
     marginHorizontal: 31,
