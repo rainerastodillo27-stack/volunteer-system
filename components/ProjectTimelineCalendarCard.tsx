@@ -5,6 +5,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { addMonths, format, isSameDay, isSameMonth, subMonths } from 'date-fns';
 import type { AdminPlanningCalendar, AdminPlanningItem, Project } from '../models/types';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
+import { formatProjectLocation } from '../utils/locationFormat';
 
 type TimelineEntry = {
   id: string;
@@ -33,6 +34,8 @@ type ProjectTimelineCalendarCardProps = {
   setStatusFilter?: (status: string | null) => void;
   onAddEvent?: (date: Date) => void;
   onOpenProject?: (projectId: string) => void;
+  onEditProject?: (projectId: string) => void;
+  onDeleteProject?: (projectId: string) => void;
 };
 
 function getMonthGrid(date: Date): Date[] {
@@ -113,6 +116,8 @@ export default function ProjectTimelineCalendarCard({
   setStatusFilter,
   onAddEvent,
   onOpenProject,
+  onEditProject,
+  onDeleteProject,
 }: ProjectTimelineCalendarCardProps) {
   // Main calendar date & selected date state
   const [calendarDate, setCalendarDate] = useState(() => {
@@ -577,12 +582,13 @@ export default function ProjectTimelineCalendarCard({
               <Text style={[styles.tableHeaderCell, { flex: 2 }]}>Location</Text>
               <Text style={[styles.tableHeaderCell, { flex: 1.5, textAlign: 'center' }]}>Attendees</Text>
               <Text style={[styles.tableHeaderCell, { flex: 1, textAlign: 'center' }]}>Status</Text>
-              <Text style={[styles.tableHeaderCell, { flex: 0.5, textAlign: 'center' }]}></Text>
+              <Text style={[styles.tableHeaderCell, { flex: 1.2, textAlign: 'center' }]}>Actions</Text>
             </View>
 
             {selectedDayEvents.length > 0 ? (
               selectedDayEvents.map(entry => {
                 const project = projects.find(p => p.id === entry.projectId);
+                const canUseProjectActions = Boolean(project?.id);
                 const volunteersNeeded = project?.volunteersNeeded || 0;
                 const joinedCount = project?.volunteers?.length || project?.joinedUserIds?.length || 0;
                 const displayStatus = project ? getProjectDisplayStatus(project) : 'Open';
@@ -594,7 +600,7 @@ export default function ProjectTimelineCalendarCard({
                     </Text>
                     <Text style={[styles.tableCell, { flex: 2, fontWeight: '700' }]}>{entry.title}</Text>
                     <Text style={[styles.tableCell, { flex: 2 }]} numberOfLines={1}>
-                      {project?.location?.address || 'TBA'}
+                      {project ? formatProjectLocation(project) : 'TBA'}
                     </Text>
                     <Text style={[styles.tableCell, { flex: 1.5, textAlign: 'center' }]}>
                       {joinedCount} / {volunteersNeeded}
@@ -606,9 +612,41 @@ export default function ProjectTimelineCalendarCard({
                         </Text>
                       </View>
                     </View>
-                    <TouchableOpacity style={{ flex: 0.5, alignItems: 'center' }}>
-                      <MaterialIcons name="more-vert" size={16} color="#64748b" />
-                    </TouchableOpacity>
+                    <View style={{ flex: 1.2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                      <TouchableOpacity 
+                        style={[styles.actionButton, !canUseProjectActions && styles.actionButtonDisabled]}
+                        disabled={!canUseProjectActions}
+                        onPress={() => {
+                          if (project?.id) {
+                            onOpenProject?.(project.id);
+                          }
+                        }}
+                      >
+                        <MaterialIcons name="visibility" size={18} color={canUseProjectActions ? '#166534' : '#94a3b8'} />
+                      </TouchableOpacity>
+                      <TouchableOpacity 
+                        style={[styles.actionButton, !canUseProjectActions && styles.actionButtonDisabled]}
+                        disabled={!canUseProjectActions}
+                        onPress={() => {
+                          if (project?.id) {
+                            onEditProject?.(project.id);
+                          }
+                        }}
+                      >
+                        <MaterialIcons name="edit" size={18} color={canUseProjectActions ? '#2563eb' : '#94a3b8'} />
+                      </TouchableOpacity>
+                      <TouchableOpacity 
+                        style={[styles.actionButton, !canUseProjectActions && styles.actionButtonDisabled]}
+                        disabled={!canUseProjectActions}
+                        onPress={() => {
+                          if (project?.id) {
+                            onDeleteProject?.(project.id);
+                          }
+                        }}
+                      >
+                        <MaterialIcons name="delete-outline" size={18} color={canUseProjectActions ? '#dc2626' : '#94a3b8'} />
+                      </TouchableOpacity>
+                    </View>
                   </View>
                 );
               })
@@ -992,6 +1030,18 @@ const styles = StyleSheet.create({
   statusPillText: {
     fontSize: 10,
     fontWeight: '700',
+  },
+  actionButton: {
+    padding: 6,
+    borderRadius: 6,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionButtonDisabled: {
+    opacity: 0.45,
   },
   emptyTableState: {
     paddingVertical: 24,

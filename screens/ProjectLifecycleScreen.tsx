@@ -182,6 +182,7 @@ import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/project
 import { getAttachmentLabel, getPrimaryReportMediaUri, isImageMediaUri, openAttachmentUri, pickDocumentFromDevice, pickImageFromDevice } from '../utils/media';
 
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
+import { formatProjectLocation } from '../utils/locationFormat';
 
 import {
 
@@ -221,7 +222,7 @@ function getPlatformOS(): string {
 
 
 
-const statuses = ['Planning', 'In Progress', 'On Hold', 'Completed', 'Cancelled'];
+const statuses: Project['status'][] = ['Planning', 'In Progress', 'On Hold', 'Completed', 'Cancelled'];
 
 const lifecycleStatusModes = ['System', 'Manual'] as const;
 
@@ -230,6 +231,21 @@ type LifecycleStatusMode = (typeof lifecycleStatusModes)[number];
 type ProgramSuiteModule = string;
 
 type ProgramSuiteView = 'programs' | 'projects' | 'events';
+
+type ProjectsSortKey = 'recentlyUpdated' | 'projectName' | 'newestSchedule' | 'oldestSchedule';
+
+type EventNotificationSetting = {
+  type: 'Notification' | 'Email';
+  value: string;
+  unit: 'minutes' | 'hours' | 'days';
+};
+
+const PROJECTS_SORT_OPTIONS: Array<{ key: ProjectsSortKey; label: string }> = [
+  { key: 'recentlyUpdated', label: 'Recently Updated' },
+  { key: 'projectName', label: 'Project Name' },
+  { key: 'newestSchedule', label: 'Newest Schedule' },
+  { key: 'oldestSchedule', label: 'Oldest Schedule' },
+];
 
 
 
@@ -1653,6 +1669,70 @@ function formatProjectDateRangeLabel(startDate?: string, endDate?: string): stri
 
 
 
+function getProjectSortTimestamp(value?: string): number {
+
+  const timestamp = new Date(value || '').getTime();
+
+  return Number.isFinite(timestamp) ? timestamp : 0;
+
+}
+
+
+
+function compareProjectsForSort(left: Project, right: Project, sortKey: ProjectsSortKey): number {
+
+  switch (sortKey) {
+
+    case 'projectName':
+
+      return left.title.localeCompare(right.title) || getProjectSortTimestamp(right.updatedAt) - getProjectSortTimestamp(left.updatedAt);
+
+    case 'newestSchedule':
+
+      return getProjectSortTimestamp(right.startDate) - getProjectSortTimestamp(left.startDate) || left.title.localeCompare(right.title);
+
+    case 'oldestSchedule':
+
+      return getProjectSortTimestamp(left.startDate) - getProjectSortTimestamp(right.startDate) || left.title.localeCompare(right.title);
+
+    case 'recentlyUpdated':
+
+    default:
+
+      return getProjectSortTimestamp(right.updatedAt || right.createdAt || right.startDate) -
+
+        getProjectSortTimestamp(left.updatedAt || left.createdAt || left.startDate) ||
+
+        left.title.localeCompare(right.title);
+
+  }
+
+}
+
+
+
+function normalizeExternalUrl(value: string): string {
+
+  const trimmedValue = value.trim();
+
+  if (!trimmedValue) {
+
+    return '';
+
+  }
+
+  if (/^https?:\/\//i.test(trimmedValue)) {
+
+    return trimmedValue;
+
+  }
+
+  return `https://${trimmedValue}`;
+
+}
+
+
+
 function getDateOnlyBoundary(value?: string, endOfDay = false): Date | undefined {
 
   const parsedDate = new Date(value || '');
@@ -1843,11 +1923,13 @@ function getProjectLocationSelection(project: Project | null | undefined): {
 
   cityCode: string;
 
+  barangayCode: string;
+
 } {
 
   if (!project) {
 
-    return { regionCode: '', cityCode: '' };
+    return { regionCode: '', cityCode: '', barangayCode: '' };
 
   }
 
@@ -1862,6 +1944,8 @@ function getProjectLocationSelection(project: Project | null | undefined): {
       regionCode: parsedSelection.regionCode,
 
       cityCode: parsedSelection.cityCode,
+
+      barangayCode: parsedSelection.barangayCode,
 
     };
 
@@ -1884,6 +1968,8 @@ function getProjectLocationSelection(project: Project | null | undefined): {
       regionCode: parsedSelection.regionCode,
 
       cityCode: parsedSelection.cityCode,
+
+      barangayCode: parsedSelection.barangayCode,
 
     };
 
@@ -1914,6 +2000,8 @@ function getProjectLocationSelection(project: Project | null | undefined): {
     regionCode: region.code,
 
     cityCode: city?.code || parsedSelection.cityCode,
+
+    barangayCode: parsedSelection.barangayCode,
 
   };
 
@@ -3837,6 +3925,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   const [projectProgramFilter, setProjectProgramFilter] = useState<string | null>(null);
 
+  const [projectTypeFilter, setProjectTypeFilter] = useState<'Projects' | 'Events' | null>(null);
+
+  const [projectsSortKey, setProjectsSortKey] = useState<ProjectsSortKey>('recentlyUpdated');
+
+  const [activeProjectsFilterMenu, setActiveProjectsFilterMenu] = useState<'program' | 'type' | 'status' | 'sort' | null>(null);
+
   const [projectPlaceVenue, setProjectPlaceVenue] = useState('');
 
   const [currentDate, setCurrentDate] = useState(() => new Date());
@@ -3908,11 +4002,53 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   const [eventGuestsSeeList, setEventGuestsSeeList] = useState(true);
 
-  const [eventNotifications, setEventNotifications] = useState<Array<{ type: string, value: string, unit: string }>>([
+  const [eventNotifications, setEventNotifications] = useState<EventNotificationSetting[]>([
 
     { type: 'Notification', value: '30', unit: 'minutes' }
 
   ]);
+
+  const updateEventNotification = (
+
+    index: number,
+
+    changes: Partial<EventNotificationSetting>
+
+  ) => {
+
+    setEventNotifications(current =>
+
+      current.map((notification, notificationIndex) =>
+
+        notificationIndex === index
+
+          ? { ...notification, ...changes }
+
+          : notification
+
+      )
+
+    );
+
+  };
+
+  const removeEventNotification = (index: number) => {
+
+    setEventNotifications(current => current.filter((_, notificationIndex) => notificationIndex !== index));
+
+  };
+
+  const addEventNotification = () => {
+
+    setEventNotifications(current => [
+
+      ...current,
+
+      { type: 'Notification', value: '30', unit: 'minutes' },
+
+    ]);
+
+  };
 
   const [isSavingEvent, setIsSavingEvent] = useState(false);
 
@@ -5548,17 +5684,29 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     setProjectEditorMode(project.isEvent ? 'event' : 'project');
 
-    const addressTokens = (project.location.address || '').split(',').map(t => t.trim()).filter(Boolean);
+    // For events, use the dedicated locationVenue field if available
 
-    const placeCount = addressTokens.length - (project.isEvent ? 3 : 2);
+    if (project.isEvent && project.locationVenue) {
 
-    if (placeCount > 0) {
-
-      setProjectPlaceVenue(addressTokens.slice(0, placeCount).join(', '));
+      setProjectPlaceVenue(project.locationVenue);
 
     } else {
 
-      setProjectPlaceVenue('');
+      // Fallback: parse venue from address string
+
+      const addressTokens = (project.location.address || '').split(',').map(t => t.trim()).filter(Boolean);
+
+      const placeCount = addressTokens.length - (project.isEvent ? 3 : 2);
+
+      if (placeCount > 0) {
+
+        setProjectPlaceVenue(addressTokens.slice(0, placeCount).join(', '));
+
+      } else {
+
+        setProjectPlaceVenue('');
+
+      }
 
     }
 
@@ -5608,7 +5756,79 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       isEvent: !!project.isEvent,
 
-    });
+      // Load volunteer settings from existing project
+
+      acceptVolunteers: project.acceptVolunteers !== false,
+
+      applicationRequired: project.applicationRequired !== false,
+
+      reviewRequired: project.reviewRequired !== false,
+
+      applicationDeadline: project.applicationDeadline || '',
+
+    } as any);
+
+    if (project.isEvent) {
+
+      // Extract time from ISO datetime string
+
+      const extractTimeIn12HourFormat = (isoString: string): string => {
+
+        try {
+
+          const date = new Date(isoString);
+
+          let hours = date.getHours();
+
+          const minutes = date.getMinutes();
+
+          const ampm = hours >= 12 ? 'PM' : 'AM';
+
+          hours = hours % 12;
+
+          hours = hours ? hours : 12; // the hour '0' should be '12'
+
+          const minutesStr = String(minutes).padStart(2, '0');
+
+          return `${hours}:${minutesStr} ${ampm}`;
+
+        } catch {
+
+          return '12:00 PM';
+
+        }
+
+      };
+
+
+
+      setEventTimeStart(extractTimeIn12HourFormat(project.startDate));
+
+      setEventTimeEnd(extractTimeIn12HourFormat(project.endDate));
+
+      setEventAllDay(false);
+
+      setEventZoomLink(project.googleMeetUrl || (project as any).meetUrl || (project as any).zoomLink || '');
+
+      setEventNotifications(
+
+        Array.isArray(project.notificationSettings) && project.notificationSettings.length > 0
+
+          ? project.notificationSettings.map(notification => ({
+
+              type: notification.type === 'Email' ? 'Email' as 'Email' : 'Notification' as 'Notification',
+
+              value: String(notification.value ?? 30),
+
+              unit: (notification.unit === 'hours' || notification.unit === 'days') ? notification.unit : 'minutes' as 'minutes',
+
+            }))
+
+          : [{ type: 'Notification' as 'Notification', value: '30', unit: 'minutes' as 'minutes' }]
+
+      );
+
+    }
 
     applyProjectLocationSelectionFromAddress(project.location.address);
 
@@ -6917,7 +7137,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         '\n\nVolunteer slots: ' + (event.volunteersNeeded || '0') +
 
-        (eventZoomLink ? '\n\nZoom/Meet: ' + eventZoomLink : '')
+        (event.googleMeetUrl ? '\n\nGoogle Meet: ' + event.googleMeetUrl : '')
 
       )}`,
 
@@ -7067,35 +7287,41 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         : projectCityCode;
 
+    const effectiveProjectBarangayCode =
+
+      projectDraft.isEvent
+
+        ? (projectBarangayCode || parentLocationSelection.barangayCode)
+
+        : projectBarangayCode;
+
+    const missingRequiredFields = [
+
+      !projectDraft.title.trim() ? 'title' : '',
+
+      !projectDraft.description.trim() ? 'description' : '',
+
+      !projectDraft.startDate.trim() ? 'start date' : '',
+
+      !projectDraft.endDate.trim() ? 'end date' : '',
+
+      !effectiveProjectRegionCode ? 'region' : '',
+
+      !effectiveProjectCityCode ? 'city' : '',
+
+      projectDraft.isEvent && !effectiveProjectBarangayCode ? 'barangay' : '',
+
+      !projectPlaceVenue.trim() ? 'place' : '',
+
+    ].filter(Boolean);
 
 
-    if (
 
-      !projectDraft.title.trim() ||
-
-      !projectDraft.description.trim() ||
-
-      !projectDraft.startDate.trim() ||
-
-      !projectDraft.endDate.trim() ||
-
-      !effectiveProjectRegionCode ||
-
-      !effectiveProjectCityCode ||
-
-      !projectPlaceVenue.trim() ||
-
-      (projectDraft.isEvent && !projectBarangayCode)
-
-    ) {
+    if (missingRequiredFields.length > 0) {
 
       failProjectSaveValidation(
 
-        projectDraft.isEvent
-
-          ? 'Fill in all required fields: title, description, start date, end date, region, city, barangay, and place.'
-
-          : 'Fill in all required fields: title, description, start date, end date, region, city, and place.'
+        `Fill in the required field${missingRequiredFields.length === 1 ? '' : 's'}: ${missingRequiredFields.join(', ')}.`
 
       );
 
@@ -7191,7 +7417,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       : getBarangaysByCity(effectiveProjectCityCode);
 
-    const selectedLocationBarangay = effectiveLocationBarangays.find(barangay => barangay.code === projectBarangayCode);
+    const selectedLocationBarangay = effectiveLocationBarangays.find(barangay => barangay.code === effectiveProjectBarangayCode);
 
     const structuredAddress = composePhilippineAddress(
 
@@ -7215,7 +7441,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       Boolean(effectiveProjectCityCode) &&
 
-      (!projectDraft.isEvent || Boolean(projectBarangayCode));
+      (!projectDraft.isEvent || Boolean(effectiveProjectBarangayCode));
 
 
 
@@ -7257,15 +7483,35 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     const inheritedStatusMode: Project['statusMode'] =
 
-      existingProject?.statusMode === 'Manual' ? 'Manual' : 'System';
+      projectDraft.isEvent
+
+        ? 'Manual'
+
+        : existingProject?.statusMode === 'Manual' ? 'Manual' : 'System';
 
     const inheritedManualStatus: Project['manualStatus'] =
 
       inheritedStatusMode === 'Manual'
 
-        ? (existingProject?.manualStatus || existingProject?.status || 'Planning')
+        ? (projectDraft.status || existingProject?.manualStatus || existingProject?.status || 'Planning')
 
         : undefined;
+
+    const sanitizedEventNotifications = eventNotifications
+
+      .map(notification => ({
+
+        type: notification.type === 'Email' ? 'Email' as const : 'Notification' as const,
+
+        value: String(notification.value || '').trim() || '30',
+
+        unit: notification.unit === 'hours' || notification.unit === 'days' ? notification.unit as 'hours' | 'days' : 'minutes' as const,
+
+      }))
+
+      .filter(notification => Number(notification.value) > 0);
+
+    const normalizedGoogleMeetUrl = normalizeExternalUrl(eventZoomLink);
 
 
 
@@ -7324,6 +7570,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       locationCity: selectedLocationCity?.displayName,
 
       locationBarangay: selectedLocationBarangay?.name,
+
+      locationVenue: projectDraft.isEvent ? projectPlaceVenue.trim() : undefined,
+
+      googleMeetUrl: projectDraft.isEvent ? normalizedGoogleMeetUrl || undefined : undefined,
+
+      notificationSettings: projectDraft.isEvent ? sanitizedEventNotifications : undefined,
 
       acceptVolunteers: (projectDraft as any).acceptVolunteers !== false,
 
@@ -13045,69 +13297,61 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-                <View style={{ position: 'relative', width: '100%' }}>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
 
-                  <View style={{ borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, height: 42, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, backgroundColor: '#fff' }}>
+                  {statuses.map(statusOption => {
 
-                    {projectDraft.status === 'In Progress' || projectDraft.status === 'Planning' || !projectDraft.status ? (
+                    const isSelected = projectDraft.status === statusOption;
 
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    const isOpenStatus = statusOption === 'In Progress';
 
-                        <View style={{ backgroundColor: '#f0fdf4', borderWidth: 1, borderColor: '#bbf7d0', borderRadius: 6, paddingVertical: 2, paddingHorizontal: 8 }}>
+                    return (
 
-                          <Text style={{ fontSize: 11, fontWeight: '700', color: '#166534' }}>Open</Text>
+                      <TouchableOpacity
 
-                        </View>
+                        key={statusOption}
 
-                        <Text style={{ fontSize: 13, color: '#1e293b', fontWeight: '600' }}>Spots available</Text>
+                        style={{
 
-                      </View>
+                          flexDirection: 'row',
 
-                    ) : (
+                          alignItems: 'center',
 
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                          gap: 6,
 
-                        <View style={{ backgroundColor: '#fef2f2', borderWidth: 1, borderColor: '#fca5a5', borderRadius: 6, paddingVertical: 2, paddingHorizontal: 8 }}>
+                          borderWidth: 1,
 
-                          <Text style={{ fontSize: 11, fontWeight: '700', color: '#991b1b' }}>{projectDraft.status}</Text>
+                          borderColor: isSelected ? '#166534' : '#cbd5e1',
 
-                        </View>
+                          borderRadius: 8,
 
-                        <Text style={{ fontSize: 13, color: '#64748b', fontWeight: '600' }}>Closed / Not active</Text>
+                          paddingVertical: 8,
 
-                      </View>
+                          paddingHorizontal: 12,
 
-                    )}
+                          backgroundColor: isSelected ? '#f0fdf4' : '#ffffff',
 
-                    <View style={{ flex: 1 }} />
+                        }}
 
-                    <MaterialIcons name="keyboard-arrow-down" size={18} color="#64748b" />
+                        onPress={() => handleProjectDraftChange('status', statusOption)}
 
-                  </View>
+                        activeOpacity={0.85}
 
+                      >
 
+                        {isSelected ? <MaterialIcons name="check" size={14} color="#166534" /> : null}
 
-                  <Picker
+                        <Text style={{ fontSize: 12, fontWeight: '800', color: isSelected ? '#166534' : '#334155' }}>
 
-                    selectedValue={projectDraft.status}
+                          {isOpenStatus ? 'Open - Spots available' : statusOption}
 
-                    onValueChange={value => handleProjectDraftChange('status', value as Project['status'])}
+                        </Text>
 
-                    style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, opacity: 0 }}
+                      </TouchableOpacity>
 
-                  >
+                    );
 
-                    <Picker.Item label="Open - Spots available" value="In Progress" />
-
-                    <Picker.Item label="Planning" value="Planning" />
-
-                    <Picker.Item label="On Hold" value="On Hold" />
-
-                    <Picker.Item label="Completed" value="Completed" />
-
-                    <Picker.Item label="Cancelled" value="Cancelled" />
-
-                  </Picker>
+                  })}
 
                 </View>
 
@@ -13593,9 +13837,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                           onPress={() => {
 
-                            if (eventZoomLink) {
+                            const normalizedUrl = normalizeExternalUrl(eventZoomLink);
 
-                              Linking.openURL(eventZoomLink).catch(err => console.log(err));
+                            if (normalizedUrl) {
+
+                              Linking.openURL(normalizedUrl).catch(err => console.log(err));
 
                             }
 
@@ -13603,13 +13849,93 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                         >
 
-                          <Text style={{ fontSize: 12, fontWeight: '700', color: '#166534' }}>Join GC</Text>
+                          <Text style={{ fontSize: 12, fontWeight: '700', color: '#166534' }}>Join Meet</Text>
 
                           <MaterialIcons name="open-in-new" size={12} color="#166534" />
 
                         </TouchableOpacity>
 
                       </View>
+
+                    </View>
+
+
+
+                    {/* Document Attachment */}
+
+                    <View style={{ gap: 6, marginTop: 12 }}>
+
+                      <Text style={{ fontSize: 13, fontWeight: '700', color: '#334155' }}>Document Attachment (Optional)</Text>
+
+                      <TouchableOpacity
+
+                        onPress={handlePickProjectDocument}
+
+                        style={{ 
+
+                          flexDirection: 'row', 
+
+                          alignItems: 'center', 
+
+                          borderWidth: 1, 
+
+                          borderColor: '#cbd5e1', 
+
+                          borderRadius: 8, 
+
+                          backgroundColor: '#ffffff', 
+
+                          padding: 10, 
+
+                          gap: 8 
+
+                        }}
+
+                      >
+
+                        <MaterialIcons 
+
+                          name={projectDraft.attachmentUrl ? 'attach-file' : 'upload-file'} 
+
+                          size={18} 
+
+                          color="#2563eb" 
+
+                        />
+
+                        <Text style={{ flex: 1, fontSize: 13, color: projectDraft.attachmentUrl ? '#0f172a' : '#94a3b8', fontWeight: '500' }} numberOfLines={1}>
+
+                          {projectDraft.attachmentUrl 
+
+                            ? projectDraft.attachmentUrl.split('/').pop() || 'Attached document'
+
+                            : 'Upload document'}
+
+                        </Text>
+
+                        {projectDraft.attachmentUrl && (
+
+                          <TouchableOpacity 
+
+                            onPress={(e) => {
+
+                              e.stopPropagation();
+
+                              handleRemoveProjectDocument();
+
+                            }}
+
+                            style={{ padding: 4 }}
+
+                          >
+
+                            <MaterialIcons name="close" size={16} color="#64748b" />
+
+                          </TouchableOpacity>
+
+                        )}
+
+                      </TouchableOpacity>
 
                     </View>
 
@@ -13729,11 +14055,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                           onValueChange={(val) => {
 
-                            const updated = [...eventNotifications];
-
-                            updated[index].type = val;
-
-                            setEventNotifications(updated);
+                            updateEventNotification(index, { type: val as EventNotificationSetting['type'] });
 
                           }}
 
@@ -13759,11 +14081,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                         onChangeText={(val) => {
 
-                          const updated = [...eventNotifications];
-
-                          updated[index].value = val;
-
-                          setEventNotifications(updated);
+                          updateEventNotification(index, { value: val.replace(/\D/g, '') });
 
                         }}
 
@@ -13777,11 +14095,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                           onValueChange={(val) => {
 
-                            const updated = [...eventNotifications];
-
-                            updated[index].unit = val;
-
-                            setEventNotifications(updated);
+                            updateEventNotification(index, { unit: val as EventNotificationSetting['unit'] });
 
                           }}
 
@@ -13803,7 +14117,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                         onPress={() => {
 
-                          setEventNotifications(eventNotifications.filter((_, idx) => idx !== index));
+                          removeEventNotification(index);
 
                         }}
 
@@ -13827,7 +14141,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                     onPress={() => {
 
-                      setEventNotifications([...eventNotifications, { type: 'Notification', value: '30', unit: 'minutes' }]);
+                      addEventNotification();
 
                     }}
 
@@ -18090,6 +18404,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       activeSelectedProject.endDate
 
     );
+    const formattedProjectLocation = formatProjectLocation(activeSelectedProject);
 
     const volunteerSlotsFilled = volunteerEntries.length;
 
@@ -18163,7 +18478,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         label: 'Location',
 
-        value: activeSelectedProject.location.address || 'Location not set',
+        value: formattedProjectLocation,
 
       },
 
@@ -20685,7 +21000,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                     <Text style={premiumDetailsStyles.heroMetaText}>
 
-                      {activeSelectedProject.location.address || 'Brgy. Alangilan, Bacolod City'}
+                      {formattedProjectLocation}
 
                     </Text>
 
@@ -21387,7 +21702,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   <Text style={premiumDetailsStyles.summaryValue} numberOfLines={2}>
 
-                    {activeSelectedProject.location.address || 'Brgy. Alangilan, Bacolod City'}
+                    {formattedProjectLocation}
 
                   </Text>
 
@@ -21399,7 +21714,23 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   style={premiumDetailsStyles.summaryRow}
 
-                  onPress={() => openEditProjectModal(activeSelectedProject)}
+                  onPress={() => {
+
+                    if (projectDocumentAttachment?.url) {
+
+                      // Open/download the document
+
+                      openAttachmentUri(projectDocumentAttachment.url);
+
+                    } else {
+
+                      // Open edit modal to upload document
+
+                      openEditProjectModal(activeSelectedProject);
+
+                    }
+
+                  }}
 
                 >
 
@@ -22061,97 +22392,300 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 {/* Filter controls row */}
 
-                <View style={styles.projectsFilterRow}>
+                <View style={[
+
+                  styles.projectsFilterRow,
+
+                  activeProjectsFilterMenu && styles.projectsFilterRowMenuOpen
+
+                ]}>
 
                   {/* Program filter dropdown */}
 
-                  <TouchableOpacity
+                  <View style={[
+                    styles.projectsFilterMenuWrap,
+                    activeProjectsFilterMenu === 'program' && styles.projectsFilterMenuWrapActive
+                  ]}>
 
-                    style={styles.projectsFilterDropdown}
+                    <TouchableOpacity
 
-                    onPress={() => {
+                      style={styles.projectsFilterDropdown}
 
-                      const options = ['All Programs', ...programSections.map(s => s.title)];
+                      onPress={() => setActiveProjectsFilterMenu(current => current === 'program' ? null : 'program')}
 
-                      Alert.alert('Select Program', 'Filter projects by program:',
+                      activeOpacity={0.85}
 
-                        options.map((opt, i) => ({
+                    >
 
-                          text: opt,
+                      <Text style={styles.projectsFilterDropdownText}>
 
-                          onPress: () => {
+                        {projectProgramFilter
 
-                            if (i === 0) setProjectProgramFilter(null);
+                          ? programSections.find(s => s.module === projectProgramFilter)?.title || 'Program'
 
-                            else setProjectProgramFilter(programSections[i - 1].module);
+                          : 'Program'}
 
-                          }
+                      </Text>
 
-                        }))
+                      <MaterialIcons name={activeProjectsFilterMenu === 'program' ? 'arrow-drop-up' : 'arrow-drop-down'} size={16} color="#475569" />
 
-                      );
+                    </TouchableOpacity>
 
-                    }}
+                    {activeProjectsFilterMenu === 'program' ? (
 
-                  >
+                      <View style={styles.projectsFilterMenu}>
 
-                    <Text style={styles.projectsFilterDropdownText}>
+                        {projectProgramFilter ? (
 
-                      {projectProgramFilter
+                          <TouchableOpacity
 
-                        ? programSections.find(s => s.module === projectProgramFilter)?.title || 'All Programs'
+                            style={styles.projectsFilterMenuItem}
 
-                        : 'All Programs'}
+                            onPress={() => {
 
-                    </Text>
+                              setProjectProgramFilter(null);
 
-                    <MaterialIcons name="arrow-drop-down" size={16} color="#475569" />
+                              setActiveProjectsFilterMenu(null);
 
-                  </TouchableOpacity>
+                            }}
+
+                          >
+
+                            <Text style={styles.projectsFilterMenuText}>Clear filter</Text>
+
+                          </TouchableOpacity>
+
+                        ) : null}
+
+                        {programSections.map(section => (
+
+                          <TouchableOpacity
+
+                            key={section.module}
+
+                            style={styles.projectsFilterMenuItem}
+
+                            onPress={() => {
+
+                              setProjectProgramFilter(section.module);
+
+                              setActiveProjectsFilterMenu(null);
+
+                            }}
+
+                          >
+
+                            <Text style={[
+
+                              styles.projectsFilterMenuText,
+
+                              projectProgramFilter === section.module && styles.projectsFilterMenuTextActive
+
+                            ]}>
+
+                              {section.title}
+
+                            </Text>
+
+                          </TouchableOpacity>
+
+                        ))}
+
+                      </View>
+
+                    ) : null}
+
+                  </View>
+
+
+
+                  {/* Project Type filter dropdown */}
+
+                  <View style={[
+                    styles.projectsFilterMenuWrap,
+                    activeProjectsFilterMenu === 'type' && styles.projectsFilterMenuWrapActive
+                  ]}>
+
+                    <TouchableOpacity
+
+                      style={styles.projectsFilterDropdown}
+
+                      onPress={() => setActiveProjectsFilterMenu(current => current === 'type' ? null : 'type')}
+
+                      activeOpacity={0.85}
+
+                    >
+
+                      <Text style={styles.projectsFilterDropdownText}>
+
+                        {projectTypeFilter ? (projectTypeFilter === 'Projects' ? 'Projects Only' : 'Events Only') : 'Project Type'}
+
+                      </Text>
+
+                      <MaterialIcons name={activeProjectsFilterMenu === 'type' ? 'arrow-drop-up' : 'arrow-drop-down'} size={16} color="#475569" />
+
+                    </TouchableOpacity>
+
+                    {activeProjectsFilterMenu === 'type' ? (
+
+                      <View style={styles.projectsFilterMenu}>
+
+                        {projectTypeFilter ? (
+
+                          <TouchableOpacity
+
+                            style={styles.projectsFilterMenuItem}
+
+                            onPress={() => {
+
+                              setProjectTypeFilter(null);
+
+                              setActiveProjectsFilterMenu(null);
+
+                            }}
+
+                          >
+
+                            <Text style={styles.projectsFilterMenuText}>Clear filter</Text>
+
+                          </TouchableOpacity>
+
+                        ) : null}
+
+                        {(['Projects', 'Events'] as const).map(typeOption => (
+
+                          <TouchableOpacity
+
+                            key={typeOption}
+
+                            style={styles.projectsFilterMenuItem}
+
+                            onPress={() => {
+
+                              setProjectTypeFilter(typeOption);
+
+                              setActiveProjectsFilterMenu(null);
+
+                            }}
+
+                          >
+
+                            <Text style={[
+
+                              styles.projectsFilterMenuText,
+
+                              projectTypeFilter === typeOption && styles.projectsFilterMenuTextActive
+
+                            ]}>
+
+                              {typeOption === 'Projects' ? 'Projects Only' : 'Events Only'}
+
+                            </Text>
+
+                          </TouchableOpacity>
+
+                        ))}
+
+                      </View>
+
+                    ) : null}
+
+                  </View>
 
 
 
                   {/* Status filter dropdown */}
 
-                  <TouchableOpacity
+                  <View style={[
+                    styles.projectsFilterMenuWrap,
+                    activeProjectsFilterMenu === 'status' && styles.projectsFilterMenuWrapActive
+                  ]}>
 
-                    style={styles.projectsFilterDropdown}
+                    <TouchableOpacity
 
-                    onPress={() => {
+                      style={styles.projectsFilterDropdown}
 
-                      const options = ['All Status', 'Planning', 'In Progress', 'Completed', 'Cancelled'];
+                      onPress={() => setActiveProjectsFilterMenu(current => current === 'status' ? null : 'status')}
 
-                      Alert.alert('Select Status', 'Filter projects by status:',
+                      activeOpacity={0.85}
 
-                        options.map((opt, i) => ({
+                    >
 
-                          text: opt,
+                      <Text style={styles.projectsFilterDropdownText}>
 
-                          onPress: () => {
+                        {statusFilter ? statusFilter : 'Status'}
 
-                            if (i === 0) setStatusFilter(null);
+                      </Text>
 
-                            else setStatusFilter(opt);
+                      <MaterialIcons name={activeProjectsFilterMenu === 'status' ? 'arrow-drop-up' : 'arrow-drop-down'} size={16} color="#475569" />
 
-                          }
+                    </TouchableOpacity>
 
-                        }))
+                    {activeProjectsFilterMenu === 'status' ? (
 
-                      );
+                      <View style={styles.projectsFilterMenu}>
 
-                    }}
+                        {statusFilter ? (
 
-                  >
+                          <TouchableOpacity
 
-                    <Text style={styles.projectsFilterDropdownText}>
+                            style={styles.projectsFilterMenuItem}
 
-                      {statusFilter ? statusFilter : 'All Status'}
+                            onPress={() => {
 
-                    </Text>
+                              setStatusFilter(null);
 
-                    <MaterialIcons name="arrow-drop-down" size={16} color="#475569" />
+                              setActiveProjectsFilterMenu(null);
 
-                  </TouchableOpacity>
+                            }}
+
+                          >
+
+                            <Text style={styles.projectsFilterMenuText}>Clear filter</Text>
+
+                          </TouchableOpacity>
+
+                        ) : null}
+
+                        {statuses.map(statusOption => (
+
+                          <TouchableOpacity
+
+                            key={statusOption}
+
+                            style={styles.projectsFilterMenuItem}
+
+                            onPress={() => {
+
+                              setStatusFilter(statusOption);
+
+                              setActiveProjectsFilterMenu(null);
+
+                            }}
+
+                          >
+
+                            <Text style={[
+
+                              styles.projectsFilterMenuText,
+
+                              statusFilter === statusOption && styles.projectsFilterMenuTextActive
+
+                            ]}>
+
+                              {statusOption}
+
+                            </Text>
+
+                          </TouchableOpacity>
+
+                        ))}
+
+                      </View>
+
+                    ) : null}
+
+                  </View>
 
 
 
@@ -22181,29 +22715,79 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   {/* Sort by dropdown */}
 
-                  <TouchableOpacity
+                  <View style={[
 
-                    style={styles.projectsSortDropdown}
+                    styles.projectsFilterMenuWrap,
 
-                    onPress={() => {
+                    styles.projectsSortMenuWrap,
 
-                      Alert.alert('Sort Projects', 'Choose sort option:', [
+                    activeProjectsFilterMenu === 'sort' && styles.projectsFilterMenuWrapActive
 
-                        { text: 'Recently Updated', onPress: () => { } },
+                  ]}>
 
-                        { text: 'Project Name', onPress: () => { } },
+                    <TouchableOpacity
 
-                      ]);
+                      style={styles.projectsSortDropdown}
 
-                    }}
+                      onPress={() => setActiveProjectsFilterMenu(current => current === 'sort' ? null : 'sort')}
 
-                  >
+                      activeOpacity={0.85}
 
-                    <Text style={styles.projectsSortDropdownText}>Sort by: Recently Updated</Text>
+                    >
 
-                    <MaterialIcons name="arrow-drop-down" size={16} color="#475569" />
+                      <Text style={styles.projectsSortDropdownText}>
 
-                  </TouchableOpacity>
+                        Sort by: {PROJECTS_SORT_OPTIONS.find(option => option.key === projectsSortKey)?.label || 'Recently Updated'}
+
+                      </Text>
+
+                      <MaterialIcons name={activeProjectsFilterMenu === 'sort' ? 'arrow-drop-up' : 'arrow-drop-down'} size={16} color="#475569" />
+
+                    </TouchableOpacity>
+
+                    {activeProjectsFilterMenu === 'sort' ? (
+
+                      <View style={[styles.projectsFilterMenu, styles.projectsSortMenu]}>
+
+                        {PROJECTS_SORT_OPTIONS.map(option => (
+
+                          <TouchableOpacity
+
+                            key={option.key}
+
+                            style={styles.projectsFilterMenuItem}
+
+                            onPress={() => {
+
+                              setProjectsSortKey(option.key);
+
+                              setActiveProjectsFilterMenu(null);
+
+                            }}
+
+                          >
+
+                            <Text style={[
+
+                              styles.projectsFilterMenuText,
+
+                              projectsSortKey === option.key && styles.projectsFilterMenuTextActive
+
+                            ]}>
+
+                              {option.label}
+
+                            </Text>
+
+                          </TouchableOpacity>
+
+                        ))}
+
+                      </View>
+
+                    ) : null}
+
+                  </View>
 
                 </View>
 
@@ -22223,9 +22807,21 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-                      // Filter projects inside this program section based on search query and status filter
+                      // Filter projects/events inside this program section based on the active controls.
 
-                      let sectionProjects = section.projects;
+                      let sectionProjects = projectTypeFilter === 'Events'
+
+                        ? section.events
+
+                        : projectTypeFilter === 'Projects'
+
+                          ? section.projects
+
+                          : [...section.projects, ...section.events].filter(
+
+                            (project, index, array) => array.findIndex(candidate => candidate.id === project.id) === index
+
+                          );
 
                       if (statusFilter) {
 
@@ -22247,11 +22843,32 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       }
 
+                      const visibleProjectRows = sectionProjects
+                        .filter(project => !project.isEvent)
+                        .sort((left, right) =>
+                          compareProjectsForSort(left, right, projectsSortKey)
+                        );
+
+                      const visibleEventRows = sectionProjects
+                        .filter(project => project.isEvent)
+                        .sort((left, right) =>
+                          compareProjectsForSort(left, right, projectsSortKey)
+                        );
+
+                      sectionProjects = [...visibleProjectRows, ...visibleEventRows].sort((left, right) =>
+
+                        Number(Boolean(left.isEvent)) - Number(Boolean(right.isEvent)) ||
+                        compareProjectsForSort(left, right, projectsSortKey)
+
+                      );
 
 
-                      // Count projects
 
-                      const projectCount = sectionProjects.length;
+                      const projectCount = visibleProjectRows.length;
+
+                      const eventCount = visibleEventRows.length;
+
+                      const itemCount = projectCount + eventCount;
 
 
 
@@ -22299,7 +22916,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                                 <Text style={styles.projectsAccordionCountText}>
 
-                                  {projectCount} Project${projectCount === 1 ? '' : 's'}
+                                  {projectCount} Project{projectCount === 1 ? '' : 's'} / {eventCount} Event{eventCount === 1 ? '' : 's'}
 
                                 </Text>
 
@@ -22327,7 +22944,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                             <View style={styles.projectsAccordionBody}>
 
-                              {projectCount === 0 ? (
+                              {itemCount === 0 ? (
 
                                 <View style={styles.projectsAccordionEmpty}>
 
@@ -22335,7 +22952,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                                   <Text style={styles.projectsAccordionEmptyText}>
 
-                                    No ${section.title} projects yet
+                                    No {section.title} projects or events yet
 
                                   </Text>
 
@@ -22367,15 +22984,35 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                                   {/* Table Rows */}
 
-                                  {sectionProjects.map(project => {
+                                  {sectionProjects.map((project, projectIndex) => {
 
                                     const matches = allVolunteerMatches.filter(m => m.projectId === project.id && m.status === 'Matched');
 
                                     const needed = project.volunteersNeeded || 0;
 
+                                    const showGroupHeader =
+                                      projectIndex === 0 ||
+                                      Boolean(sectionProjects[projectIndex - 1]?.isEvent) !== Boolean(project.isEvent);
+
                                     return (
 
-                                      <View key={project.id} style={styles.projectsTableRow}>
+                                      <React.Fragment key={project.id}>
+
+                                      {showGroupHeader ? (
+
+                                        <View style={styles.projectsTableGroupRow}>
+
+                                          <Text style={styles.projectsTableGroupText}>
+
+                                            {project.isEvent ? `Events (${eventCount})` : `Projects (${projectCount})`}
+
+                                          </Text>
+
+                                        </View>
+
+                                      ) : null}
+
+                                      <View style={styles.projectsTableRow}>
 
                                         {/* Project Name & Desc */}
 
@@ -22487,7 +23124,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                                             <Text style={styles.projectsTableRowLocationText} numberOfLines={1}>
 
-                                              {project.location.address || 'Philippines'}
+                                              {formatProjectLocation(project)}
 
                                             </Text>
 
@@ -22521,7 +23158,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                                         <View style={[styles.projectsTableCell, { flex: 1.2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, position: 'relative', zIndex: activeProjectRowActionId === project.id ? 20 : 1 }]}>
 
-                                          {isAdmin && (
+                                          {isAdmin && !project.isEvent && (
 
                                             <TouchableOpacity
 
@@ -22611,6 +23248,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                                       </View>
 
+                                      </React.Fragment>
+
                                     );
 
                                   })}
@@ -22621,7 +23260,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-                              {/* Add Event button */}
+                              {/* Add Project button */}
 
                               {isAdmin && (
 
@@ -22635,9 +23274,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                                   >
 
-                                    <MaterialIcons name="event" size={16} color="#0284c7" style={{ marginRight: 6 }} />
+                                    <MaterialIcons name="add-circle-outline" size={16} color="#0284c7" style={{ marginRight: 6 }} />
 
-                                    <Text style={[styles.projectsAccordionAddButtonText, { color: '#0284c7' }]}>Add Event</Text>
+                                    <Text style={[styles.projectsAccordionAddButtonText, { color: '#0284c7' }]}>Add Project</Text>
 
                                   </TouchableOpacity>
 
@@ -22692,6 +23331,30 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                     if (proj) {
 
                       handleSelectProject(proj);
+
+                    }
+
+                  }}
+
+                  onEditProject={projectId => {
+
+                    const proj = projects.find(p => p.id === projectId);
+
+                    if (proj) {
+
+                      openEditProjectModal(proj);
+
+                    }
+
+                  }}
+
+                  onDeleteProject={projectId => {
+
+                    const proj = projects.find(p => p.id === projectId);
+
+                    if (proj) {
+
+                      handleDeleteProjectFromCard(proj);
 
                     }
 
@@ -25732,6 +26395,12 @@ const styles = StyleSheet.create({
 
   },
 
+  projectsFilterRowMenuOpen: {
+
+    marginBottom: 300
+
+  },
+
   projectsFilterDropdown: {
 
     flexDirection: 'row',
@@ -25756,6 +26425,20 @@ const styles = StyleSheet.create({
 
   },
 
+  projectsFilterMenuWrap: {
+
+    position: 'relative',
+
+    zIndex: 50
+
+  },
+
+  projectsFilterMenuWrapActive: {
+
+    zIndex: 2000
+
+  },
+
   projectsFilterDropdownText: {
 
     fontSize: 12,
@@ -25765,6 +26448,82 @@ const styles = StyleSheet.create({
     color: '#475569',
 
     flex: 1
+
+  },
+
+  projectsFilterMenu: {
+
+    position: 'absolute',
+
+    top: 42,
+
+    left: 0,
+
+    minWidth: 180,
+
+    maxHeight: 280,
+
+    backgroundColor: '#ffffff',
+
+    borderWidth: 1,
+
+    borderColor: '#dbe3ef',
+
+    borderRadius: 8,
+
+    paddingVertical: 4,
+
+    shadowColor: '#000',
+
+    shadowOpacity: 0.14,
+
+    shadowRadius: 14,
+
+    shadowOffset: { width: 0, height: 8 },
+
+    elevation: 24,
+
+    zIndex: 1000
+
+  },
+
+  projectsSortMenuWrap: {
+
+    marginLeft: 'auto'
+
+  },
+
+  projectsSortMenu: {
+
+    minWidth: 220,
+
+    right: 0,
+
+    left: undefined
+
+  },
+
+  projectsFilterMenuItem: {
+
+    paddingHorizontal: 12,
+
+    paddingVertical: 10
+
+  },
+
+  projectsFilterMenuText: {
+
+    fontSize: 12,
+
+    fontWeight: '700',
+
+    color: '#334155'
+
+  },
+
+  projectsFilterMenuTextActive: {
+
+    color: '#0284c7'
 
   },
 
@@ -26002,6 +26761,32 @@ const styles = StyleSheet.create({
 
   },
 
+  projectsTableGroupRow: {
+
+    backgroundColor: '#f8fafc',
+
+    borderBottomWidth: 1,
+
+    borderBottomColor: '#e2e8f0',
+
+    paddingVertical: 8,
+
+    paddingHorizontal: 12
+
+  },
+
+  projectsTableGroupText: {
+
+    fontSize: 11,
+
+    fontWeight: '900',
+
+    color: '#166534',
+
+    textTransform: 'uppercase'
+
+  },
+
   projectsTableRow: {
 
     flexDirection: 'row',
@@ -26031,33 +26816,31 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   projectsTableActionMenu: {
-    position: 'absolute',
-    top: 30,
-    right: 0,
-    width: 150,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
     backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: '#e2e8f0',
     borderRadius: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
     shadowColor: '#000',
-    shadowOpacity: 0.16,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 20,
-    zIndex: 999,
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
   },
   projectsTableActionMenuItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    justifyContent: 'center',
+    width: 28,
+    height: 28,
+    borderRadius: 6,
   },
   projectsTableActionMenuText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#334155',
+    display: 'none',
   },
 
   projectsStatusDotSmall: {

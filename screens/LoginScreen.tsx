@@ -130,63 +130,8 @@ type SignupPartnerApplicationState = {
 
 type MobileEntryRole = Exclude<UserRole, "admin">;
 type SignupStep = "role" | "details";
-type DemoLoginAccount = {
-  id: string;
-  name: string;
-  identifier: string;
-  password: string;
-  badge: string;
-  mobileRole?: MobileEntryRole;
-};
 
 type RegistrationOtpPhase = "idle" | "sent" | "verified";
-
-const ADMIN_DEMO_ACCOUNT: DemoLoginAccount = {
-  id: "demo-admin",
-  name: "Admin Account",
-  identifier: "admin@nvc.org",
-  password: "admin123",
-  badge: "ADMIN",
-};
-
-const VOLUNTEER_DEMO_ACCOUNT: DemoLoginAccount = {
-  id: "demo-volunteer",
-  name: "Volunteer Account",
-  identifier: "volunteer@example.com",
-  password: "volunteer123",
-  badge: "VOLUNTEER",
-  mobileRole: "volunteer",
-};
-
-const PARTNER_DEMO_ACCOUNTS: DemoLoginAccount[] = [
-  {
-    id: "demo-partner-kabankalan",
-    name: "Kabankalan LGU",
-    identifier: "partner@livelihoods.org",
-    password: "partner123",
-    badge: "PARTNER",
-    mobileRole: "partner",
-  },
-];
-
-function getVisibleDemoAccounts(
-  isWeb: boolean,
-  selectedMobileRole: MobileEntryRole | null,
-): DemoLoginAccount[] {
-  if (isWeb) {
-    return [ADMIN_DEMO_ACCOUNT];
-  }
-
-  if (selectedMobileRole === "volunteer") {
-    return [VOLUNTEER_DEMO_ACCOUNT];
-  }
-
-  if (selectedMobileRole === "partner") {
-    return PARTNER_DEMO_ACCOUNTS;
-  }
-
-  return [VOLUNTEER_DEMO_ACCOUNT, ...PARTNER_DEMO_ACCOUNTS];
-}
 
 // Returns a clean volunteer membership form state for the signup modal.
 function createEmptySignupVolunteerSheet(): SignupVolunteerSheetState {
@@ -494,7 +439,6 @@ export default function LoginScreen() {
   const yearPickerListRef = useRef<ScrollView | null>(null);
   const { login } = useAuth();
   const mountedRef = useRef(true);
-  const visibleDemoAccounts = getVisibleDemoAccounts(isWeb, selectedMobileRole);
 
   useEffect(() => {
     setInitialized(true);
@@ -986,19 +930,6 @@ export default function LoginScreen() {
 
   const handleLogin = async () => {
     await performLogin(identifier, password);
-  };
-
-  const handleQuickLogin = async (account: DemoLoginAccount) => {
-    setIdentifier(account.identifier);
-    setPassword(account.password);
-    if (!isWeb && account.mobileRole) {
-      setSelectedMobileRole(account.mobileRole);
-    }
-    await performLogin(
-      account.identifier,
-      account.password,
-      account.mobileRole ?? null,
-    );
   };
 
   // Clears all signup fields after registration or when the modal is closed.
@@ -1588,12 +1519,6 @@ export default function LoginScreen() {
   const selectedMobileRoleHint = selectedMobileRole
     ? getMobileRoleLoginHint(selectedMobileRole)
     : "";
-  const quickLoginTitle = isWeb
-    ? "Quick Admin Sign In"
-    : selectedMobileRole
-      ? `${selectedMobileRoleLabel} Quick Sign In`
-      : "Quick Demo Sign In";
-
   const renderSignupEmailVerificationControls = () => {
     if (signupRole === "admin") {
       return null;
@@ -1682,36 +1607,6 @@ export default function LoginScreen() {
       </View>
     );
   };
-
-  const renderQuickLoginSection = () => (
-    <View style={styles.demoSection}>
-      <Text style={styles.demoTitle}>{quickLoginTitle}</Text>
-      {visibleDemoAccounts.map((account) => (
-        <TouchableOpacity
-          key={account.id}
-          style={[
-            styles.savedAccountCard,
-            loading && styles.accountCardDisabled,
-          ]}
-          onPress={() => {
-            void handleQuickLogin(account);
-          }}
-          activeOpacity={0.85}
-          disabled={loading}
-        >
-          <View style={styles.savedAccountHeader}>
-            <Text style={styles.savedAccountName}>{account.name}</Text>
-            <Text style={styles.savedAccountRole}>{account.badge}</Text>
-          </View>
-          <Text style={styles.savedAccountCredential}>
-            {account.identifier}
-          </Text>
-          <Text style={styles.savedAccountPassword}>{account.password}</Text>
-          <Text style={styles.savedAccountHint}>Tap to sign in instantly</Text>
-        </TouchableOpacity>
-      ))}
-    </View>
-  );
 
   if (loading && !initialized) {
     return (
@@ -1897,8 +1792,6 @@ export default function LoginScreen() {
                     Sign up as a Volunteer or Partner
                   </Text>
                 </TouchableOpacity>
-
-                {renderQuickLoginSection()}
 
                 {/* Server Settings gear button */}
                 <TouchableOpacity
@@ -2089,8 +1982,6 @@ export default function LoginScreen() {
                   </TouchableOpacity>
                 </View>
 
-                {renderQuickLoginSection()}
-
                 {visibleSavedAccounts.length > 0 && (
                   <View style={styles.demoSection}>
                     <Text style={styles.demoTitle}>
@@ -2190,8 +2081,6 @@ export default function LoginScreen() {
                     </Text>
                   )}
                 </TouchableOpacity>
-
-                {renderQuickLoginSection()}
 
                 {visibleSavedAccounts.length > 0 && (
                   <View style={styles.demoSection}>

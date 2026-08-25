@@ -58,6 +58,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [rejectionReason, setRejectionReason] = useState('');
+  const [expandedSection, setExpandedSection] = useState<'applications' | 'approved' | 'profiles' | 'reports' | null>(null);
 
   useEffect(() => {
     if (navigation) {
@@ -1260,30 +1261,50 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
 
   return (
     <View style={styles.container}>
-      <View style={styles.titleRow}>
-        <Text style={styles.title}>Volunteer Management</Text>
+      <View style={{ paddingHorizontal: 16, paddingVertical: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }} {...({} as any)}>
+        <Text style={{ fontSize: 16, fontWeight: '700', color: '#1e293b' }}>
+          {statusFilter === 'Pending' ? 'Volunteer Applications' : statusFilter === 'Approved' ? 'Approved Volunteers' : 'All Volunteers'} ({sortedVolunteers.length})
+        </Text>
+        {statusFilter !== 'All' && (
+          <TouchableOpacity onPress={() => setStatusFilter('All')} style={{ paddingVertical: 6, paddingHorizontal: 12, backgroundColor: '#f1f5f9', borderRadius: 8 }}>
+            <Text style={{ fontSize: 13, fontWeight: '700', color: '#475569' }}>Clear Filter</Text>
+          </TouchableOpacity>
+        )}
       </View>
-      <Text style={styles.managementSubtitle}>Manage volunteer applications, approvals, and profiles.</Text>
-      <View style={styles.managementStats}>
+      <FlatList
+        data={expandedSection ? [] : sortedVolunteers}
+        keyExtractor={vol => vol.id}
+        ListHeaderComponent={
+          <>
+            <View style={styles.titleRow}>
+              <Text style={styles.title}>Volunteer Management</Text>
+            </View>
+            <Text style={styles.managementSubtitle}>Manage volunteer applications, approvals, and profiles.</Text>
+            <View style={styles.managementStats}>
         {[
-          { icon: 'description', value: pendingApplications, label: 'New Applications', color: '#8b5cf6', filter: 'Pending' },
-          { icon: 'check-circle-outline', value: approvedVolunteers, label: 'Approved Volunteers', color: '#4f874b', filter: 'Approved' },
-          { icon: 'groups', value: volunteers.length, label: 'Total Volunteers', color: '#3b67f3', filter: 'All' },
-          { icon: 'assignment', value: '', label: 'Reports', color: '#e99b34', filter: null },
+          { icon: 'description', value: pendingApplications, label: 'New Applications', color: '#8b5cf6', filter: 'Pending', section: 'applications' as const },
+          { icon: 'check-circle-outline', value: approvedVolunteers, label: 'Approved Volunteers', color: '#475569', filter: 'Approved', section: 'approved' as const },
+          { icon: 'groups', value: volunteers.length, label: 'Total Volunteers', color: '#3b67f3', filter: 'All', section: 'profiles' as const },
+          { icon: 'assignment', value: '', label: 'Reports', color: '#e99b34', filter: null, section: 'reports' as const },
         ].map(item => {
-          const isSelected = item.filter && statusFilter === item.filter;
+          const isSelected = expandedSection === item.section;
           return (
             <TouchableOpacity
               key={item.label}
               style={[
                 styles.managementStat,
-                isSelected ? { borderColor: item.color, borderWidth: 2 } : null
+                isSelected ? { borderColor: '#cbd5e1', borderWidth: 2 } : null
               ]}
-              onPress={
-                item.label === 'Reports'
-                  ? handleDownloadVolunteerHoursReport
-                  : () => setStatusFilter(item.filter as any)
-              }
+              onPress={() => {
+                if (expandedSection === item.section) {
+                  setExpandedSection(null);
+                } else {
+                  setExpandedSection(item.section);
+                  if (item.filter) {
+                    setStatusFilter(item.filter as any);
+                  }
+                }
+              }}
             >
               <View style={[styles.managementStatIcon, { backgroundColor: item.color + '16' }]}>
                 <MaterialIcons name={item.icon as any} size={31} color={item.color} />
@@ -1300,28 +1321,35 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
         <Text style={styles.managementPanelTitle}>Volunteer Management</Text>
         <View style={styles.managementActions}>
           {[
-            { icon: 'assignment', title: 'Volunteer Applications', body: 'Review and manage new volunteer applications.', color: '#8b5cf6', action: 'View Applications', filter: 'Pending' },
-            { icon: 'badge', title: 'Approved Volunteers', body: 'View and manage all approved volunteers.', color: '#4f874b', action: 'View Approved Volunteers', filter: 'Approved' },
-            { icon: 'account-circle', title: 'Volunteer Profiles', body: 'Browse and manage volunteer profiles and information.', color: '#3b67f3', action: 'View Volunteer Profiles', filter: 'All' },
+            { icon: 'assignment', title: 'Volunteer Applications', body: 'Review and manage new volunteer applications.', color: '#8b5cf6', action: 'View Applications', filter: 'Pending', section: 'applications' as const },
+            { icon: 'badge', title: 'Approved Volunteers', body: 'View and manage all approved volunteers.', color: '#475569', action: 'View Approved Volunteers', filter: 'Approved', section: 'approved' as const },
+            { icon: 'account-circle', title: 'Volunteer Profiles', body: 'Browse and manage volunteer profiles and information.', color: '#3b67f3', action: 'View Volunteer Profiles', filter: 'All', section: 'profiles' as const },
           ].map(item => {
-            const isSelected = statusFilter === item.filter;
+            const isSelected = expandedSection === item.section;
             return (
               <TouchableOpacity
                 key={item.title}
                 style={[
                   styles.managementAction,
-                  { borderColor: isSelected ? item.color : item.color + '28', borderWidth: isSelected ? 2 : 1 }
+                  { borderColor: isSelected ? '#cbd5e1' : item.color + '28', borderWidth: isSelected ? 2 : 1 }
                 ]}
-                onPress={() => setStatusFilter(item.filter as any)}
+                onPress={() => {
+                  if (expandedSection === item.section) {
+                    setExpandedSection(null);
+                  } else {
+                    setExpandedSection(item.section);
+                    setStatusFilter(item.filter as any);
+                  }
+                }}
               >
                 <View style={[styles.managementActionIcon, { backgroundColor: item.color + '14' }]}>
                   <MaterialIcons name={item.icon as any} size={54} color={item.color} />
                 </View>
                 <Text style={styles.managementActionTitle}>{item.title}</Text>
                 <Text style={styles.managementActionBody}>{item.body}</Text>
-                <View style={[styles.managementActionButton, { borderColor: item.color, backgroundColor: isSelected ? item.color : 'transparent' }]}>
-                  <Text style={[styles.managementActionButtonText, { color: isSelected ? '#fff' : item.color }]}>
-                    {item.action}
+                <View style={[styles.managementActionButton, { borderColor: item.color, backgroundColor: 'transparent' }]}>
+                  <Text style={[styles.managementActionButtonText, { color: item.color }]}>
+                    {isSelected ? 'Hide Details' : item.action}
                   </Text>
                 </View>
               </TouchableOpacity>
@@ -1329,6 +1357,176 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
           })}
         </View>
       </View>
+      
+      {/* Expanded Details Section - Appears Below Management Cards */}
+      {expandedSection === 'applications' && (
+        <View style={[styles.expandedDetailsCard, { marginHorizontal: 16, marginTop: 20, marginBottom: 20, marginLeft: 16, marginRight: 16 }]}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+            <Text style={{ fontSize: 18, fontWeight: '800', color: '#0f172a', fontFamily: 'Nunito' }}>
+              Volunteer Applications Details
+            </Text>
+            <TouchableOpacity onPress={() => setExpandedSection(null)}>
+              <MaterialIcons name="close" size={24} color="#64748b" />
+            </TouchableOpacity>
+          </View>
+          <Text style={{ fontSize: 14, color: '#64748b', marginBottom: 12, fontFamily: 'Nunito' }}>
+            {pendingApplications} pending application{pendingApplications !== 1 ? 's' : ''} awaiting review
+          </Text>
+          {pendingApplications > 0 ? (
+            <View style={{ gap: 8 }}>
+              {volunteers.filter(v => v.registrationStatus === 'Pending').slice(0, 3).map(vol => (
+                <View key={vol.id} style={{ flexDirection: 'row', alignItems: 'center', padding: 16, backgroundColor: '#fef3c7', borderRadius: 8 }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a', fontFamily: 'Nunito' }}>{vol.name}</Text>
+                    <Text style={{ fontSize: 12, color: '#64748b', fontFamily: 'Nunito' }}>{vol.email}</Text>
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => handleSelectVolunteer(vol)}
+                    style={{ paddingHorizontal: 16, paddingVertical: 8, backgroundColor: '#8b5cf6', borderRadius: 8 }}
+                  >
+                    <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13, fontFamily: 'Nunito' }}>Review</Text>
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          ) : (
+            <View style={{ padding: 24, alignItems: 'center' }}>
+              <MaterialIcons name="check-circle" size={48} color="#86efac" />
+              <Text style={{ marginTop: 12, fontSize: 14, color: '#64748b', fontFamily: 'Nunito' }}>All applications reviewed</Text>
+            </View>
+          )}
+        </View>
+      )}
+      
+      {expandedSection === 'approved' && (
+        <View style={[styles.expandedDetailsCard, { marginHorizontal: 16, marginTop: 20, marginBottom: 20, marginLeft: 16, marginRight: 16 }]}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+            <Text style={{ fontSize: 18, fontWeight: '800', color: '#0f172a', fontFamily: 'Nunito' }}>
+              Approved Volunteers Details
+            </Text>
+            <TouchableOpacity onPress={() => setExpandedSection(null)}>
+              <MaterialIcons name="close" size={24} color="#64748b" />
+            </TouchableOpacity>
+          </View>
+          <Text style={{ fontSize: 14, color: '#64748b', marginBottom: 12, fontFamily: 'Nunito' }}>
+            {approvedVolunteers} approved volunteer{approvedVolunteers !== 1 ? 's' : ''} in the system
+          </Text>
+          {approvedVolunteers > 0 && (
+            <View style={{ gap: 8 }}>
+              {volunteers.filter(v => v.registrationStatus !== 'Pending').slice(0, 3).map(vol => (
+                <View key={vol.id} style={{ flexDirection: 'row', alignItems: 'center', padding: 16, backgroundColor: '#ffffff', borderRadius: 8, borderWidth: 1, borderColor: '#e2e8f0' }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a', fontFamily: 'Nunito' }}>{vol.name}</Text>
+                    <Text style={{ fontSize: 12, color: '#64748b', fontFamily: 'Nunito' }}>
+                      {vol.totalHoursContributed.toFixed(1)} hours contributed
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => handleSelectVolunteer(vol)}
+                    style={{ paddingHorizontal: 16, paddingVertical: 8, backgroundColor: '#475569', borderRadius: 8 }}
+                  >
+                    <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13, fontFamily: 'Nunito' }}>View</Text>
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
+      )}
+      
+      {expandedSection === 'profiles' && (
+        <View style={[styles.expandedDetailsCard, { marginHorizontal: 16, marginTop: 20, marginBottom: 20, marginLeft: 16, marginRight: 16 }]}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+            <Text style={{ fontSize: 18, fontWeight: '800', color: '#0f172a', fontFamily: 'Nunito' }}>
+              All Volunteer Profiles
+            </Text>
+            <TouchableOpacity onPress={() => setExpandedSection(null)}>
+              <MaterialIcons name="close" size={24} color="#64748b" />
+            </TouchableOpacity>
+          </View>
+          <Text style={{ fontSize: 14, color: '#64748b', marginBottom: 12, fontFamily: 'Nunito' }}>
+            Total of {volunteers.length} volunteer{volunteers.length !== 1 ? 's' : ''} registered
+          </Text>
+          <View style={{ flexDirection: 'row', gap: 16, marginTop: 8 }}>
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={() => {
+                setExpandedSection('applications');
+                setStatusFilter('Pending');
+              }}
+              style={{ flex: 1, padding: 16, backgroundColor: '#f1f5f9', borderRadius: 12 }}
+            >
+              <Text style={{ fontSize: 24, fontWeight: '800', color: '#0f172a', fontFamily: 'Nunito' }}>{pendingApplications}</Text>
+              <Text style={{ fontSize: 13, color: '#64748b', fontFamily: 'Nunito' }}>Pending</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={() => {
+                setExpandedSection('approved');
+                setStatusFilter('Approved');
+              }}
+              style={{ flex: 1, padding: 16, backgroundColor: '#f1f5f9', borderRadius: 12 }}
+            >
+              <Text style={{ fontSize: 24, fontWeight: '800', color: '#0f172a', fontFamily: 'Nunito' }}>{approvedVolunteers}</Text>
+              <Text style={{ fontSize: 13, color: '#64748b', fontFamily: 'Nunito' }}>Approved</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+      
+      {expandedSection === 'reports' && (
+        <View style={[styles.expandedDetailsCard, { marginHorizontal: 16, marginTop: 20, marginBottom: 20, marginLeft: 16, marginRight: 16 }]}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+            <Text style={{ fontSize: 18, fontWeight: '800', color: '#0f172a', fontFamily: 'Nunito' }}>
+              Volunteer Reports
+            </Text>
+            <TouchableOpacity onPress={() => setExpandedSection(null)}>
+              <MaterialIcons name="close" size={24} color="#64748b" />
+            </TouchableOpacity>
+          </View>
+          <Text style={{ fontSize: 14, color: '#64748b', marginBottom: 16, fontFamily: 'Nunito' }}>
+            Generate and download volunteer activity reports
+          </Text>
+          <View style={{ gap: 12 }}>
+            <TouchableOpacity
+              style={{ flexDirection: 'row', alignItems: 'center', padding: 16, backgroundColor: '#fff7ed', borderRadius: 12, borderWidth: 1, borderColor: '#fed7aa' }}
+              onPress={handleDownloadVolunteerHoursReport}
+            >
+              <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: '#e99b34', alignItems: 'center', justifyContent: 'center', marginRight: 16 }}>
+                <MaterialIcons name="download" size={24} color="#fff" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 15, fontWeight: '800', color: '#0f172a', fontFamily: 'Nunito' }}>Volunteer Hours Report</Text>
+                <Text style={{ fontSize: 13, color: '#64748b', fontFamily: 'Nunito' }}>CSV export of all volunteer hours and activity</Text>
+              </View>
+              <MaterialIcons name="arrow-forward" size={20} color="#e99b34" />
+            </TouchableOpacity>
+            
+            <View style={{ padding: 16, backgroundColor: '#f1f5f9', borderRadius: 12 }}>
+              <Text style={{ fontSize: 13, fontWeight: '700', color: '#475569', marginBottom: 8, fontFamily: 'Nunito' }}>Report Summary</Text>
+              <View style={{ gap: 6 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                  <Text style={{ fontSize: 13, color: '#64748b', fontFamily: 'Nunito' }}>Total Volunteers:</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#0f172a', fontFamily: 'Nunito' }}>{volunteers.length}</Text>
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                  <Text style={{ fontSize: 13, color: '#64748b', fontFamily: 'Nunito' }}>Total Hours Logged:</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#0f172a', fontFamily: 'Nunito' }}>
+                    {volunteers.reduce((sum, v) => sum + v.totalHoursContributed, 0).toFixed(1)}h
+                  </Text>
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                  <Text style={{ fontSize: 13, color: '#64748b', fontFamily: 'Nunito' }}>Active Time Logs:</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#0f172a', fontFamily: 'Nunito' }}>
+                    {volunteerTimeLogs.filter(log => !log.timeOut).length}
+                  </Text>
+                </View>
+              </View>
+            </View>
+          </View>
+        </View>
+      )}
+      
       {actionNotice ? (
         <View style={styles.noticeBanner}>
           <MaterialIcons name="check-circle" size={18} color="#166534" />
@@ -1348,19 +1546,9 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
           />
         ) : null}
       </View>
-      <View style={{ paddingHorizontal: 16, paddingVertical: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }} {...({} as any)}>
-        <Text style={{ fontSize: 16, fontWeight: '700', color: '#1e293b' }}>
-          {statusFilter === 'Pending' ? 'Volunteer Applications' : statusFilter === 'Approved' ? 'Approved Volunteers' : 'All Volunteers'} ({sortedVolunteers.length})
-        </Text>
-        {statusFilter !== 'All' && (
-          <TouchableOpacity onPress={() => setStatusFilter('All')} style={{ paddingVertical: 6, paddingHorizontal: 12, backgroundColor: '#f1f5f9', borderRadius: 8 }}>
-            <Text style={{ fontSize: 13, fontWeight: '700', color: '#475569' }}>Clear Filter</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-      <FlatList
-        data={sortedVolunteers}
-        keyExtractor={vol => vol.id}
+          </>
+        }
+        ListFooterComponent={<View style={{ height: 40 }} />}
         renderItem={({ item: volunteer }) => (
           <TouchableOpacity
             style={styles.volunteerCard}
@@ -2435,5 +2623,18 @@ const styles = StyleSheet.create({
     color: '#64748b',
     marginTop: 2,
     fontFamily: 'Nunito',
+  },
+  expandedDetailsCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+    overflow: 'hidden',
   },
 });

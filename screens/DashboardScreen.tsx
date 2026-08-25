@@ -91,6 +91,21 @@ function getProjectProgramLabel(project: Project, allProjects: Project[]): strin
   return 'General';
 }
 
+function getVolunteerTimeLogHours(timeIn?: string, timeOut?: string): number | null {
+  if (!timeIn || !timeOut) {
+    return null;
+  }
+
+  const start = new Date(timeIn).getTime();
+  const end = new Date(timeOut).getTime();
+
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    return null;
+  }
+
+  return Math.round(((end - start) / (1000 * 60 * 60)) * 10) / 10;
+}
+
 function formatShortDate(value?: string) {
   if (!value) {
     return 'TBD';
@@ -468,7 +483,7 @@ export default function DashboardScreen({ navigation }: any) {
         projectId: r.projectId,
         projectName: projectNamesById.get(r.projectId) || r.title || 'Partner Report',
         description: `Progress report submitted by ${r.partnerName || 'Partner'}`,
-        updatedAt: r.submittedAt || r.createdAt || new Date().toISOString(),
+        updatedAt: r.createdAt || new Date().toISOString(),
         type: 'report',
       }));
 
@@ -477,7 +492,7 @@ export default function DashboardScreen({ navigation }: any) {
         projectId: a.projectId,
         projectName: projectNamesById.get(a.projectId) || (a as any).proposalDetails?.title || 'Partner Proposal',
         description: `Proposal ${a.status?.toLowerCase() || 'submitted'} by ${a.partnerName || 'Partner'}`,
-        updatedAt: a.createdAt || (a as any).submittedAt || new Date().toISOString(),
+        updatedAt: a.requestedAt || new Date().toISOString(),
         type: 'proposal',
       }));
 
@@ -485,8 +500,8 @@ export default function DashboardScreen({ navigation }: any) {
         id: j.id,
         projectId: j.projectId,
         projectName: projectNamesById.get(j.projectId) || 'Community Event',
-        description: `Volunteer joined event (${j.status || 'Active'})`,
-        updatedAt: j.createdAt || new Date().toISOString(),
+        description: `Volunteer joined event (${j.participationStatus || 'Active'})`,
+        updatedAt: j.joinedAt || new Date().toISOString(),
         type: 'join',
       }));
 
@@ -494,7 +509,9 @@ export default function DashboardScreen({ navigation }: any) {
         id: l.id,
         projectId: l.projectId,
         projectName: projectNamesById.get(l.projectId) || 'Event Service',
-        description: l.timeOut ? `Volunteer logged ${l.hoursLogged ? `${l.hoursLogged} hrs` : 'service'}` : 'Volunteer clocked in for event',
+        description: l.timeOut
+          ? `Volunteer logged ${getVolunteerTimeLogHours(l.timeIn, l.timeOut) ?? 'service'}${getVolunteerTimeLogHours(l.timeIn, l.timeOut) === null ? '' : ' hrs'}`
+          : 'Volunteer clocked in for event',
         updatedAt: l.timeOut || l.timeIn || new Date().toISOString(),
         type: 'time',
       }));

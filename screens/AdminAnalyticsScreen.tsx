@@ -6,9 +6,11 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TouchableOpacity,
   useWindowDimensions,
   View,
 } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import { MaterialIcons } from '@expo/vector-icons';
 import {
   getAllPartnerReports,
@@ -22,6 +24,7 @@ import {
 } from '../models/storage';
 import type { Partner, PartnerProjectApplication, PartnerReport, Project, Volunteer, VolunteerProjectJoinRecord, VolunteerTimeLog } from '../models/types';
 import ModernTheme from '../utils/modernTheme';
+import { navigateToAvailableRoute } from '../utils/navigation';
 
 type MonthPoint = {
   key: string;
@@ -366,6 +369,7 @@ function getCompletedVolunteerHours(log: VolunteerTimeLog): number {
 }
 
 export default function AdminAnalyticsScreen() {
+  const navigation = useNavigation<any>();
   const { width } = useWindowDimensions();
   const [projects, setProjects] = useState<Project[]>([]);
   const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
@@ -889,7 +893,12 @@ export default function AdminAnalyticsScreen() {
                   const partnerName = partner?.name || application?.partnerName || 'Internal';
 
                   return (
-                    <View key={project.id} style={styles.projectTrackingItem}>
+                    <TouchableOpacity
+                      key={project.id}
+                      style={styles.projectTrackingItem}
+                      onPress={() => navigateToAvailableRoute(navigation, 'Projects', { projectId: project.id })}
+                      activeOpacity={0.75}
+                    >
                       <View style={styles.projectTrackingMain}>
                         <View style={[styles.projectStatusIndicator, { backgroundColor: statusColor }]} />
                         <View style={styles.projectTrackingInfo}>
@@ -914,7 +923,7 @@ export default function AdminAnalyticsScreen() {
                           <Text style={[styles.projectStatusText, { color: statusColor }]}>{project.status}</Text>
                         </View>
                       </View>
-                    </View>
+                    </TouchableOpacity>
                   );
                 })}
                 {projects.filter(p => !p.isEvent).length > 10 && (

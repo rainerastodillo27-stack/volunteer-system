@@ -42,6 +42,8 @@ type StatusColumn = {
   reports: SubmittedReport[];
 };
 
+type ReportColumnViewMode = 'events' | 'accounts' | 'reports';
+
 type AccountReportGroup = {
   key: string;
   submitterName: string;
@@ -67,6 +69,8 @@ type ColumnDrilldownState = Partial<
     }
   >
 >;
+
+type ColumnViewModeState = Partial<Record<StatusColumn['key'], ReportColumnViewMode>>;
 
 type ReportTableRow = {
   id: string;
@@ -409,6 +413,7 @@ export default function AdminReportsDashboard({
   const isDesktop = Platform.OS === 'web' || width >= 1100;
   const [selectedEventId, setSelectedEventId] = useState('all');
   const [drilldownState, setDrilldownState] = useState<ColumnDrilldownState>({});
+  const [columnViewMode, setColumnViewMode] = useState<ColumnViewModeState>({});
   const [previewModalState, setPreviewModalState] = useState<{
     visible: boolean;
     format: 'csv' | 'pdf';
@@ -436,29 +441,41 @@ export default function AdminReportsDashboard({
     };
   }, [reports]);
 
+  const eventProjectIds = useMemo(
+    () => new Set(projects.filter(project => project.isEvent).map(project => project.id)),
+    [projects]
+  );
+
   const eventOptions = useMemo(() => {
     const events = projects
+      .filter(project => project.isEvent)
       .map(project => ({
         id: project.id,
-        title: project.title || (project.isEvent ? 'Untitled event' : 'Untitled project'),
+        title: project.title || 'Untitled event',
       }));
     const existingEventIds = new Set(events.map(event => event.id));
 
     reports.forEach(report => {
+      const isKnownEvent = report.projectId ? eventProjectIds.has(report.projectId) : false;
+      const isUnlistedEvent =
+        report.projectKind === 'event' ||
+        (!report.projectKind && (report.reportType === 'field_report' || report.submitterRole === 'volunteer'));
+
       if (
         report.projectId &&
-        !existingEventIds.has(report.projectId)
+        !existingEventIds.has(report.projectId) &&
+        (isKnownEvent || isUnlistedEvent)
       ) {
         events.push({
           id: report.projectId,
-          title: report.projectTitle || (report.projectKind === 'event' ? 'Unlisted event' : 'Unlisted project'),
+          title: report.projectTitle || 'Unlisted event',
         });
         existingEventIds.add(report.projectId);
       }
     });
 
     return events.sort((left, right) => left.title.localeCompare(right.title));
-  }, [projects, reports]);
+  }, [eventProjectIds, projects, reports]);
 
   const eventsById = useMemo(
     () => new Map(eventOptions.map(event => [event.id, event])),
@@ -468,9 +485,21 @@ export default function AdminReportsDashboard({
   const eventReports = useMemo(
     () =>
       reports.filter(report => {
-        return selectedEventId === 'all' || report.projectId === selectedEventId;
+        if (selectedEventId !== 'all') {
+          return report.projectId === selectedEventId;
+        }
+
+        if (report.projectId && eventProjectIds.has(report.projectId)) {
+          return true;
+        }
+
+        if (report.projectKind) {
+          return report.projectKind === 'event';
+        }
+
+        return report.reportType === 'field_report' || report.submitterRole === 'volunteer';
       }),
-    [reports, selectedEventId]
+    [eventProjectIds, reports, selectedEventId]
   );
 
   const selectedEventLabel = useMemo(() => {
@@ -722,6 +751,20 @@ export default function AdminReportsDashboard({
     }));
   };
 
+  const handleSelectColumnViewMode = (
+    columnKey: StatusColumn['key'],
+    mode: ReportColumnViewMode
+  ) => {
+    setColumnViewMode(previous => ({
+      ...previous,
+      [columnKey]: mode,
+    }));
+    setDrilldownState(previous => ({
+      ...previous,
+      [columnKey]: {},
+    }));
+  };
+
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
@@ -780,7 +823,16 @@ export default function AdminReportsDashboard({
           <View style={[styles.board, !isDesktop && styles.boardStacked]}>
             {columns.map(column => {
               const eventGroups = groupReportsByEvent(column.reports, eventsById);
+              const accountGroups = groupReportsByAccount(column.reports);
+              const flatReports = column.reports;
               const columnDrilldown = drilldownState[column.key] || {};
+              const activeColumnMode = columnViewMode[column.key] || 'events';
+              const visibleBlockCount =
+                activeColumnMode === 'reports'
+                  ? flatReports.length
+                  : activeColumnMode === 'accounts'
+                    ? accountGroups.length
+                    : eventGroups.length;
               const selectedEventGroup = eventGroups.find(
                 group => group.key === columnDrilldown.eventKey
               );
@@ -815,14 +867,27 @@ export default function AdminReportsDashboard({
                   <View style={styles.filterRow}>
                     <Text style={styles.filterHeading}>Show reports by</Text>
                     <View style={styles.chipRow}>
-                      {column.chips.map(chip => (
-                        <View
+                      {column.chips.map(chip => {
+                        const chipMode = chip.toLowerCase() as ReportColumnViewMode;
+                        const isActiveChip = activeColumnMode === chipMode;
+                        return (
+                        <TouchableOpacity
                           key={chip}
-                          style={[styles.chip, { backgroundColor: column.card }]}
+                          style={[
+                            styles.chip,
+                            {
+                              backgroundColor: isActiveChip
+                                ? 'rgba(255,255,255,0.36)'
+                                : column.card,
+                            },
+                          ]}
+                          onPress={() => handleSelectColumnViewMode(column.key, chipMode)}
+                          activeOpacity={0.85}
                         >
                           <Text style={styles.chipText}>{chip}</Text>
-                        </View>
-                      ))}
+                        </TouchableOpacity>
+                      );
+                      })}
                     </View>
                   </View>
 
@@ -830,7 +895,7 @@ export default function AdminReportsDashboard({
                     style={styles.cardList}
                     showsVerticalScrollIndicator={false}
                   >
-                    {eventGroups.length === 0 ? (
+                    {visibleBlockCount === 0 ? (
                       <View
                         style={[
                           styles.emptyCard,
@@ -847,6 +912,69 @@ export default function AdminReportsDashboard({
                           New submissions will appear here automatically.
                         </Text>
                       </View>
+                    ) : activeColumnMode === 'accounts' ? (
+                      accountGroups.map(account => (
+                        <TouchableOpacity
+                          key={account.key}
+                          style={[
+                            styles.reportCard,
+                            { backgroundColor: column.card },
+                          ]}
+                          onPress={() => onViewReport(account.latestReport)}
+                          activeOpacity={0.85}
+                        >
+                          <View style={styles.reportTopRow}>
+                            <Text style={styles.reportTitle} numberOfLines={1}>
+                              {account.submitterName}
+                            </Text>
+                            <MaterialIcons name="chevron-right" size={20} color="#fff" />
+                          </View>
+                          <Text style={styles.reportMeta} numberOfLines={1}>
+                            {[
+                              formatRoleLabel(account.submitterRole),
+                              `${account.reports.length} ${
+                                account.reports.length === 1 ? 'report' : 'reports'
+                              }`,
+                            ].join(' - ')}
+                          </Text>
+                          <Text style={styles.reportSubtitle} numberOfLines={1}>
+                            Tap to view latest report
+                          </Text>
+                          <Text style={styles.reportCountText} numberOfLines={1}>
+                            Latest: {account.latestReport.title || 'Untitled report'}
+                          </Text>
+                        </TouchableOpacity>
+                      ))
+                    ) : activeColumnMode === 'reports' ? (
+                      flatReports.map(report => (
+                        <TouchableOpacity
+                          key={report.id}
+                          style={[
+                            styles.reportCard,
+                            { backgroundColor: column.card },
+                          ]}
+                          onPress={() => onViewReport(report)}
+                          activeOpacity={0.85}
+                        >
+                          <View style={styles.reportTopRow}>
+                            <Text style={styles.reportTitle} numberOfLines={1}>
+                              {report.title || 'Untitled report'}
+                            </Text>
+                            <Text style={styles.reportDate}>
+                              {formatShortDate(report.submittedAt)}
+                            </Text>
+                          </View>
+                          <Text style={styles.reportMeta} numberOfLines={1}>
+                            {[formatRoleLabel(report.submitterRole), report.reportType.replace(/_/g, ' ')].join(' - ')}
+                          </Text>
+                          <Text style={styles.reportSubtitle} numberOfLines={1}>
+                            {getLinkedActivityLabel(report)}
+                          </Text>
+                          <Text style={styles.reportCountText} numberOfLines={1}>
+                            Tap to view report details
+                          </Text>
+                        </TouchableOpacity>
+                      ))
                     ) : (
                       <>
                         {selectedEventGroup ? (

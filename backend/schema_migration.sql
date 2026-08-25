@@ -221,6 +221,9 @@ CREATE TABLE public.events (
   location_region text,
   location_city text,
   location_barangay text,
+  location_venue text,
+  google_meet_url text,
+  notification_settings jsonb NOT NULL DEFAULT '[]',
   CONSTRAINT events_pkey PRIMARY KEY (id)
 );
 

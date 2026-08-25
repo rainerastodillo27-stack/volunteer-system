@@ -153,6 +153,9 @@ export interface ProgramTrack {
   title: string;
   description?: string;
   context?: string;
+  location?: Project['location'];
+  locationRegion?: string;
+  locationCity?: string;
   icon?: string;
   color?: string;
   imageUrl?: string;
@@ -195,8 +198,18 @@ export interface Project {
   locationCity?: string;
   locationBarangay?: string; // Only for events
   locationVenue?: string; // Specific venue description (only for events)
+  googleMeetUrl?: string;
+  notificationSettings?: {
+    type: 'Notification' | 'Email';
+    value: string;
+    unit: 'minutes' | 'hours' | 'days';
+  }[];
   volunteersNeeded: number;
   volunteerRequirements?: string[];
+  acceptVolunteers?: boolean;
+  applicationRequired?: boolean;
+  reviewRequired?: boolean;
+  applicationDeadline?: string;
   volunteers: string[]; // Volunteer IDs
   joinedUserIds?: string[];
   skillsNeeded?: string[]; // Skills required for this project/event

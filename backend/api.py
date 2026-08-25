@@ -394,7 +394,66 @@ def _event_starts_in_reminder_window(event: dict[str, Any], now: datetime) -> bo
     return local_start.date() == (local_now.date() + timedelta(days=REMINDER_LEAD_DAYS))
 
 
-def _send_event_reminder_email(volunteer: dict[str, Any], event: dict[str, Any], recipient_email: str) -> None:
+def _notification_lead_delta(setting: dict[str, Any]) -> timedelta | None:
+    try:
+        value = int(str(setting.get("value") or "").strip())
+    except ValueError:
+        return None
+    if value <= 0:
+        return None
+    unit = str(setting.get("unit") or "minutes").strip().lower()
+    if unit == "days":
+        return timedelta(days=value)
+    if unit == "hours":
+        return timedelta(hours=value)
+    return timedelta(minutes=value)
+
+
+def _get_event_email_reminder_settings(event: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_settings = event.get("notificationSettings")
+    if not isinstance(raw_settings, list):
+        raw_settings = []
+    settings = [
+        setting
+        for setting in raw_settings
+        if isinstance(setting, dict)
+        and str(setting.get("type") or "").strip().lower() == "email"
+        and _notification_lead_delta(setting) is not None
+    ]
+    if settings:
+        return settings
+    return [{"type": "Email", "value": str(REMINDER_LEAD_DAYS), "unit": "days"}]
+
+
+def _event_reminder_setting_is_due(event: dict[str, Any], setting: dict[str, Any], now: datetime) -> bool:
+    start_date = _parse_iso_datetime(event.get("startDate"))
+    lead_delta = _notification_lead_delta(setting)
+    if start_date is None or lead_delta is None:
+        return False
+    local_now = now.astimezone(APP_TIMEZONE)
+    local_start = start_date.astimezone(APP_TIMEZONE)
+    send_at = local_start - lead_delta
+    return send_at <= local_now < local_start
+
+
+def _get_reminder_type(setting: dict[str, Any]) -> str:
+    value = str(setting.get("value") or "").strip()
+    unit = str(setting.get("unit") or "minutes").strip().lower()
+    return f"event-email:{value}{unit}"
+
+
+def _get_reminder_label(setting: dict[str, Any]) -> str:
+    value = str(setting.get("value") or "").strip()
+    unit = str(setting.get("unit") or "minutes").strip().lower()
+    return f"{value} {unit}"
+
+
+def _send_event_reminder_email(
+    volunteer: dict[str, Any],
+    event: dict[str, Any],
+    recipient_email: str,
+    reminder_label: str,
+) -> None:
     volunteer_name = str(volunteer.get("name") or "Volunteer").strip() or "Volunteer"
     activity_type = "event" if bool(event.get("isEvent")) else "project"
     event_title = str(event.get("title") or f"your joined {activity_type}").strip()
@@ -402,21 +461,24 @@ def _send_event_reminder_email(volunteer: dict[str, Any], event: dict[str, Any],
     date_label = start_date.astimezone(APP_TIMEZONE).strftime("%B %d, %Y at %I:%M %p") if start_date else "soon"
     location = event.get("location") if isinstance(event.get("location"), dict) else {}
     location_text = str(event.get("locationVenue") or location.get("address") or "").strip()
-    subject = f"Reminder: {event_title} is in {REMINDER_LEAD_DAYS} days"
+    meet_url = str(event.get("googleMeetUrl") or event.get("meetUrl") or event.get("zoomLink") or "").strip()
+    subject = f"Reminder: {event_title} is in {reminder_label}"
     text_body = (
         f"Hi {volunteer_name},\n\n"
         f"This is a reminder that you joined the {activity_type}: {event_title}.\n"
         f"Schedule: {date_label}\n"
         f"{f'Location: {location_text}\n' if location_text else ''}"
+        f"{f'Google Meet: {meet_url}\n' if meet_url else ''}"
         f"\nPlease check NVC Connect for the latest event details."
     )
     html_body = f"""
     <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:28px;background:#f8fafc;border-radius:12px;">
       <h2 style="color:#15803d;margin:0 0 12px;">Event Reminder</h2>
       <p style="color:#334155;">Hi {volunteer_name},</p>
-      <p style="color:#334155;">You joined the {activity_type} <strong>{event_title}</strong>. It is scheduled in {REMINDER_LEAD_DAYS} days.</p>
+      <p style="color:#334155;">You joined the {activity_type} <strong>{event_title}</strong>. It is scheduled in {reminder_label}.</p>
       <p style="color:#0f172a;"><strong>Schedule:</strong> {date_label}</p>
       {f'<p style="color:#0f172a;"><strong>Location:</strong> {location_text}</p>' if location_text else ''}
+      {f'<p style="margin:20px 0;"><a href="{meet_url}" style="display:inline-block;background:#166534;color:#ffffff;text-decoration:none;font-weight:bold;border-radius:8px;padding:12px 18px;">Join Google Meet</a></p>' if meet_url else ''}
       <p style="color:#64748b;font-size:13px;">Please check NVC Connect for the latest event details.</p>
     </div>
     """
@@ -438,7 +500,6 @@ def run_event_reminder_check() -> dict[str, Any]:
             )
             if isinstance(item, dict)
             and str(item.get("status") or "") not in {"Completed", "Cancelled"}
-            and _event_starts_in_reminder_window(item, now)
         ]
         volunteers = get_postgres_hot_storage_collection(connection, "volunteers")
         users = get_postgres_hot_storage_collection(connection, "users")
@@ -478,46 +539,54 @@ def run_event_reminder_check() -> dict[str, Any]:
                     and volunteers_by_user_id[user_id] not in event_volunteers
                 )
 
-                for volunteer in event_volunteers:
-                    volunteer_id = str(volunteer.get("id") or "").strip()
-                    recipient_email = _get_reminder_email_for_volunteer(volunteer, users_by_id)
-                    if not volunteer_id or not recipient_email:
-                        skipped_count += 1
+                for setting in _get_event_email_reminder_settings(event):
+                    if not _event_reminder_setting_is_due(event, setting, now):
+                        skipped_count += len(event_volunteers)
                         continue
 
-                    reminder_id = f"event-3day:{event_id}:{volunteer_id}"
-                    cursor.execute(
-                        "select reminder_id from public.event_email_reminders where reminder_id = %s",
-                        (reminder_id,),
-                    )
-                    if cursor.fetchone():
-                        skipped_count += 1
-                        continue
+                    reminder_type = _get_reminder_type(setting)
+                    reminder_label = _get_reminder_label(setting)
 
-                    try:
-                        _send_event_reminder_email(volunteer, event, recipient_email)
-                    except Exception as error:
-                        print(f"[REMINDER] Failed to send event reminder to {recipient_email}: {error}")
-                        skipped_count += 1
-                        continue
+                    for volunteer in event_volunteers:
+                        volunteer_id = str(volunteer.get("id") or "").strip()
+                        recipient_email = _get_reminder_email_for_volunteer(volunteer, users_by_id)
+                        if not volunteer_id or not recipient_email:
+                            skipped_count += 1
+                            continue
 
-                    cursor.execute(
-                        """
-                        insert into public.event_email_reminders (
-                          reminder_id, event_id, volunteer_id, volunteer_email, reminder_type, sent_at
+                        reminder_id = f"{reminder_type}:{event_id}:{volunteer_id}"
+                        cursor.execute(
+                            "select reminder_id from public.event_email_reminders where reminder_id = %s",
+                            (reminder_id,),
                         )
-                        values (%s, %s, %s, %s, %s, %s)
-                        """,
-                        (
-                            reminder_id,
-                            event_id,
-                            volunteer_id,
-                            recipient_email,
-                            "event-3day",
-                            datetime.now(timezone.utc).isoformat(),
-                        ),
-                    )
-                    sent_count += 1
+                        if cursor.fetchone():
+                            skipped_count += 1
+                            continue
+
+                        try:
+                            _send_event_reminder_email(volunteer, event, recipient_email, reminder_label)
+                        except Exception as error:
+                            print(f"[REMINDER] Failed to send event reminder to {recipient_email}: {error}")
+                            skipped_count += 1
+                            continue
+
+                        cursor.execute(
+                            """
+                            insert into public.event_email_reminders (
+                              reminder_id, event_id, volunteer_id, volunteer_email, reminder_type, sent_at
+                            )
+                            values (%s, %s, %s, %s, %s, %s)
+                            """,
+                            (
+                                reminder_id,
+                                event_id,
+                                volunteer_id,
+                                recipient_email,
+                                reminder_type,
+                                datetime.now(timezone.utc).isoformat(),
+                            ),
+                        )
+                        sent_count += 1
 
         connection.commit()
 

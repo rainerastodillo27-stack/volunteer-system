@@ -179,6 +179,9 @@ export function formatProjectAsGoogleEvent(project: Project): GoogleCalendarEven
     descriptionLines.push(`🛠 Skills Needed: ${project.skillsNeeded.join(', ')}`);
 
   // Map category to a Google Calendar color ID (1–11)
+  if (project.googleMeetUrl)
+    descriptionLines.push(`Google Meet: ${project.googleMeetUrl}`);
+
   const COLOR_MAP: Record<string, string> = {
     Education: '1',   // Lavender/Blue
     Livelihood: '2',  // Sage/Green
