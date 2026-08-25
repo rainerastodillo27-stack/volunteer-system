@@ -817,7 +817,7 @@ function getExpoExtraValue(key: string): string | undefined {
   return undefined;
 }
 
-const DEFAULT_PRODUCTION_TUNNEL_URL = 'https://chatroom-vice-frivolous.ngrok-free.dev';
+const DEFAULT_PRODUCTION_TUNNEL_URL = 'http://129.121.73.76:8000';
 
 function isPrivateOrLocalHost(hostname: string): boolean {
   const h = (hostname || '').toLowerCase().trim();

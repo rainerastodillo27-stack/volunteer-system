@@ -102,10 +102,10 @@ module.exports = () => {
   const configuredApiBaseUrl =
     process.env.VOLCRE_API_BASE_URL ||
     process.env.EXPO_PUBLIC_API_BASE_URL ||
-    'https://chatroom-vice-frivolous.ngrok-free.dev';
+    'http://129.121.73.76:8000';
   const lanApiBaseUrl = configuredApiBaseUrl;
   const webApiBaseUrl =
-    process.env.VOLCRE_WEB_API_BASE_URL || 'http://127.0.0.1:8000';
+    process.env.VOLCRE_WEB_API_BASE_URL || 'http://129.121.73.76:8000';
   const mobileGoogleMapsApiKey =
     process.env.GOOGLE_MAPS_MOBILE_API_KEY ||
     process.env.GOOGLE_MAPS_ANDROID_API_KEY ||
