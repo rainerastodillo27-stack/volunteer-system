@@ -5,8 +5,8 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "extra": {
-      "apiBaseUrl": "http://129.121.73.76:8001",
-      "webApiBaseUrl": "http://129.121.73.76:8001",
+      "apiBaseUrl": "http://129.121.73.76",
+      "webApiBaseUrl": "http://129.121.73.76",
       "mobileGoogleMapsApiKey": "",
       "androidGoogleMapsApiKey": "",
       "webGoogleMapsApiKey": "AIzaSyDrZWSM9FJ7pURqvnd2lNqK5y0I084kupE",

@@ -389,7 +389,11 @@ function getProgramSuiteModuleForProject(project: Project, activeProgramTracks: 
 
     const programId = String(project.parentProjectId).trim();
 
-    return activeProgramTrackIds.has(programId) ? programId : null;
+    if (activeProgramTrackIds.has(programId)) {
+
+      return programId;
+
+    }
 
   }
 
@@ -422,6 +426,12 @@ function getProgramSuiteModuleForProject(project: Project, activeProgramTracks: 
   if (matchingTrack) {
 
     return String(matchingTrack.id).trim();
+
+  }
+
+  if (project.parentProjectId && activeProgramTracks.length === 1) {
+
+    return String(activeProgramTracks[0].id).trim();
 
   }
 
@@ -21024,7 +21034,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 {/* Non-event: Create Event button */}
 
-                {!activeSelectedProject.isEvent && isAdmin && (
+                {!activeSelectedProject.isEvent && isAdmin && !isProjectReadOnly && (
 
                   <TouchableOpacity
 
@@ -21046,7 +21056,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 {/* Edit button */}
 
-                {isAdmin && (
+                {isAdmin && !isProjectReadOnly && (
 
                   <TouchableOpacity
 
@@ -21722,7 +21732,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       openAttachmentUri(projectDocumentAttachment.url);
 
-                    } else {
+                    } else if (!isProjectReadOnly) {
 
                       // Open edit modal to upload document
 
@@ -21752,7 +21762,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       ? projectDocumentAttachment.url.split('/').pop() || 'Attached document'
 
-                      : 'Upload document'}
+                      : isProjectReadOnly ? 'No document attached' : 'Upload document'}
 
                   </Text>
 
@@ -21786,7 +21796,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-                {!activeSelectedProject.isEvent && (
+                {!activeSelectedProject.isEvent && !isProjectReadOnly && (
 
                   <TouchableOpacity
 
@@ -22989,6 +22999,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                                     const matches = allVolunteerMatches.filter(m => m.projectId === project.id && m.status === 'Matched');
 
                                     const needed = project.volunteersNeeded || 0;
+                                    const projectStatus = getProjectDisplayStatus(project);
+                                    const projectEnded = projectStatus === 'Completed' || projectStatus === 'Cancelled';
 
                                     const showGroupHeader =
                                       projectIndex === 0 ||
@@ -23012,7 +23024,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                                       ) : null}
 
-                                      <View style={styles.projectsTableRow}>
+                                      <View style={[styles.projectsTableRow, projectEnded && styles.projectsTableRowEnded]}>
 
                                         {/* Project Name & Desc */}
 
@@ -23052,7 +23064,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                                             <Text style={[styles.projectsTableRowStatusText, { color: getProjectStatusColor(project) }]}>
 
-                                              {getProjectDisplayStatus(project)}
+                                              {projectStatus}
 
                                             </Text>
 
@@ -23158,7 +23170,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                                         <View style={[styles.projectsTableCell, { flex: 1.2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, position: 'relative', zIndex: activeProjectRowActionId === project.id ? 20 : 1 }]}>
 
-                                          {isAdmin && !project.isEvent && (
+                                          {isAdmin && !project.isEvent && !projectEnded && (
 
                                             <TouchableOpacity
 
@@ -23216,7 +23228,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                                                 <Text style={styles.projectsTableActionMenuText}>Open Details</Text>
                                               </TouchableOpacity>
 
-                                              {isAdmin && (
+                                              {isAdmin && !projectEnded && (
                                                 <TouchableOpacity
                                                   style={styles.projectsTableActionMenuItem}
                                                   onPress={() => {
@@ -26801,6 +26813,10 @@ const styles = StyleSheet.create({
 
     alignItems: 'center'
 
+  },
+  projectsTableRowEnded: {
+    opacity: 0.55,
+    backgroundColor: '#f8fafc',
   },
 
   projectsTableCell: {

@@ -102,10 +102,10 @@ module.exports = () => {
   const configuredApiBaseUrl =
     process.env.VOLCRE_API_BASE_URL ||
     process.env.EXPO_PUBLIC_API_BASE_URL ||
-    'http://129.121.73.76:8001';
+    'http://129.121.73.76';
   const lanApiBaseUrl = configuredApiBaseUrl;
   const webApiBaseUrl =
-    process.env.VOLCRE_WEB_API_BASE_URL || 'http://129.121.73.76:8001';
+    process.env.VOLCRE_WEB_API_BASE_URL || 'http://129.121.73.76';
   const mobileGoogleMapsApiKey =
     process.env.GOOGLE_MAPS_MOBILE_API_KEY ||
     process.env.GOOGLE_MAPS_ANDROID_API_KEY ||

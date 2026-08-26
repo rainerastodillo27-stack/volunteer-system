@@ -25,6 +25,7 @@ import {
 } from '../models/storage';
 import { ProgramTrack, Project, VolunteerProjectMatch, VolunteerProjectJoinRecord } from '../models/types';
 import { getRequestErrorMessage, isAbortLikeError } from '../utils/requestErrors';
+import { getProjectDisplayStatus } from '../utils/projectStatus';
 
 const PROGRAM_IMAGE_BY_CATEGORY: Record<Project['category'], ImageSourcePropType> = {
   Nutrition: require('../assets/programs/nutrition.jpg'),
@@ -75,23 +76,28 @@ function getProjectProgramId(project: Project, programTracks: ProgramTrack[] = [
     const parentIdStr = String(project.parentProjectId).trim();
     const directTrack = programTracks.find(track => String(track.id).trim() === parentIdStr);
     if (directTrack) return directTrack.id;
-    return project.parentProjectId;
   }
 
   const projectFocus = (project.programModule || project.category || '').trim();
-  if (!projectFocus) return '';
+  if (projectFocus) {
+    const focusLower = projectFocus.toLowerCase();
+    const matchingTrack = programTracks.find(track => {
+      const trackId = String(track.id || '').trim().toLowerCase();
+      const trackTitle = String(track.title || '').trim().toLowerCase();
+      return (
+        trackId === focusLower ||
+        trackTitle === focusLower ||
+        inferProgramTrackFocus(track)?.toLowerCase() === focusLower
+      );
+    });
+    if (matchingTrack) return matchingTrack.id;
+  }
 
-  const focusLower = projectFocus.toLowerCase();
-  const matchingTrack = programTracks.find(track => {
-    const trackId = String(track.id || '').trim().toLowerCase();
-    const trackTitle = String(track.title || '').trim().toLowerCase();
-    return (
-      trackId === focusLower ||
-      trackTitle === focusLower ||
-      inferProgramTrackFocus(track)?.toLowerCase() === focusLower
-    );
-  });
-  return matchingTrack?.id || projectFocus;
+  if (project.parentProjectId && programTracks.length === 1) {
+    return String(programTracks[0].id || '').trim();
+  }
+
+  return projectFocus;
 }
 
 function getProjectImageSource(project: Project): ImageSourcePropType {
@@ -553,7 +559,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
     const isLoading = loadingProjectId === event.id;
 
     // Check if event is completed or cancelled
-    const eventStatus = event.status || 'Planning';
+    const eventStatus = getProjectDisplayStatus(event);
     const isCompleted = eventStatus === 'Completed';
     const isCancelled = eventStatus === 'Cancelled';
     const isEnded = isCompleted || isCancelled;
@@ -573,7 +579,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
     return (
       <TouchableOpacity
         key={event.id}
-        style={styles.eventCard}
+        style={[styles.eventCard, isEnded && styles.cardEnded]}
         onPress={() => openProjectDetails(event.id)}
         activeOpacity={0.88}
       >
@@ -582,14 +588,14 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
             source={getProjectImageSource(event)}
             style={[styles.cardImage, (isEnded || isFull) && styles.cardImageEnded]}
           />
-          <View style={[styles.floatingBadge, { backgroundColor: isFull && !isJoined ? '#dc2626' : visual.color }]}>
+          <View style={[styles.floatingBadge, { backgroundColor: isEnded ? '#475569' : isFull && !isJoined ? '#dc2626' : visual.color }]}>
             <MaterialIcons
               name={isFull && !isJoined ? 'group-off' : 'event-available'}
               size={15}
               color="#fff"
             />
             <Text style={styles.floatingBadgeText}>
-              {isFull && !isJoined ? 'Event Full' : statusLabel}
+              {isCancelled ? 'Event Cancelled' : isCompleted ? 'Event Ended' : isFull && !isJoined ? 'Event Full' : statusLabel}
             </Text>
           </View>
         </View>
@@ -828,14 +834,16 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
             projectsForSelectedProgram.map(project => {
               const eventCount = records.filter(event => event.isEvent && event.parentProjectId === project.id).length;
               const visual = getProgramVisual(getProjectProgramId(project, programs));
+              const projectStatus = getProjectDisplayStatus(project);
+              const projectEnded = projectStatus === 'Completed' || projectStatus === 'Cancelled';
               return (
                 <TouchableOpacity
                   key={project.id}
-                  style={styles.card}
+                  style={[styles.card, projectEnded && styles.cardEnded]}
                   onPress={() => setSelectedProjectId(project.id)}
                   activeOpacity={0.88}
                 >
-                  <Image source={getProjectImageSource(project)} style={styles.cardImage} />
+                  <Image source={getProjectImageSource(project)} style={[styles.cardImage, projectEnded && styles.cardImageEnded]} />
                   <View style={styles.cardContent}>
                     <View style={styles.cardLabelRow}>
                       <View style={[styles.miniIcon, { backgroundColor: visual.softColor }]}>
@@ -851,8 +859,10 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
                     <Text style={styles.cardDescription} numberOfLines={3}>{project.description}</Text>
                     <View style={styles.projectFooter}>
                       <Text style={styles.metaText}>{eventCount} event{eventCount === 1 ? '' : 's'} inside</Text>
-                      <View style={styles.openButtonLite}>
-                        <Text style={styles.openButtonLiteText}>View events</Text>
+                      <View style={[styles.openButtonLite, projectEnded && styles.openButtonLiteEnded]}>
+                        <Text style={[styles.openButtonLiteText, projectEnded && styles.openButtonLiteTextEnded]}>
+                          {projectStatus === 'Cancelled' ? 'Project Cancelled' : projectEnded ? 'Project Ended' : 'View events'}
+                        </Text>
                       </View>
                     </View>
                   </View>
@@ -1101,6 +1111,7 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
     elevation: 3,
   },
+  cardEnded: { opacity: 0.72 },
   eventCard: {
     backgroundColor: '#fff',
     borderRadius: 22,
@@ -1163,6 +1174,8 @@ const styles = StyleSheet.create({
   },
   openButtonLite: { backgroundColor: '#dcfce7', paddingHorizontal: 11, paddingVertical: 7, borderRadius: 999 },
   openButtonLiteText: { color: '#166534', fontSize: 10, fontWeight: '900' },
+  openButtonLiteEnded: { backgroundColor: '#e5e7eb' },
+  openButtonLiteTextEnded: { color: '#475569' },
   button: {
     padding: 12,
     borderRadius: 14,
