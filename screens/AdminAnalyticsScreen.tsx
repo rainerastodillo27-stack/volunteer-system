@@ -15,6 +15,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import {
   getAllPartnerReports,
   getAllProjects,
+  getAllProgramTracks,
   getAllVolunteers,
   getAllVolunteerProjectJoinRecords,
   getAllVolunteerTimeLogs,
@@ -22,7 +23,7 @@ import {
   getAllPartnerProjectApplications,
   subscribeToStorageChanges,
 } from '../models/storage';
-import type { Partner, PartnerProjectApplication, PartnerReport, Project, Volunteer, VolunteerProjectJoinRecord, VolunteerTimeLog } from '../models/types';
+import type { Partner, PartnerProjectApplication, PartnerReport, ProgramTrack, Project, Volunteer, VolunteerProjectJoinRecord, VolunteerTimeLog } from '../models/types';
 import ModernTheme from '../utils/modernTheme';
 import { navigateToAvailableRoute } from '../utils/navigation';
 
@@ -153,6 +154,40 @@ function getEventVolunteerIds(
   timeLogs
     .filter(log => log.projectId === event.id)
     .forEach(log => ids.add(getVolunteerIdForLog(log, volunteersById)));
+
+  return ids;
+}
+
+function getProjectVolunteerIdsIncludingEvents(
+  project: Project,
+  allProjects: Project[],
+  timeLogs: VolunteerTimeLog[],
+  joinRecords: VolunteerProjectJoinRecord[],
+  volunteers: Volunteer[]
+): Set<string> {
+  const volunteersById = new Map(volunteers.map(volunteer => [volunteer.id, volunteer]));
+  const volunteersByUserId = new Map(
+    volunteers
+      .map(volunteer => [String(volunteer.userId || '').trim(), volunteer] as const)
+      .filter(([userId]) => Boolean(userId))
+  );
+  const relatedProjects = project.isEvent
+    ? [project]
+    : allProjects.filter(candidate =>
+        candidate.id === project.id ||
+        (candidate.isEvent && candidate.parentProjectId === project.id)
+      );
+  const ids = new Set<string>();
+
+  relatedProjects.forEach(relatedProject => {
+    getEventVolunteerIds(
+      relatedProject,
+      timeLogs,
+      joinRecords,
+      volunteersById,
+      volunteersByUserId
+    ).forEach(id => ids.add(id));
+  });
 
   return ids;
 }
@@ -368,10 +403,26 @@ function getCompletedVolunteerHours(log: VolunteerTimeLog): number {
   return (end.getTime() - start.getTime()) / 3_600_000;
 }
 
+function isTopLevelProgramRecord(project: Project, programTracks: ProgramTrack[]): boolean {
+  const projectId = String(project.id || '').trim().toLowerCase();
+  const projectTitle = String(project.title || '').trim().toLowerCase();
+
+  return programTracks.some(track => {
+    const trackId = String(track.id || '').trim().toLowerCase();
+    const trackTitle = String(track.title || '').trim().toLowerCase();
+
+    return Boolean(
+      (trackId && projectId === trackId) ||
+      (trackTitle && projectTitle === trackTitle)
+    );
+  });
+}
+
 export default function AdminAnalyticsScreen() {
   const navigation = useNavigation<any>();
   const { width } = useWindowDimensions();
   const [projects, setProjects] = useState<Project[]>([]);
+  const [programTracks, setProgramTracks] = useState<ProgramTrack[]>([]);
   const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
   const [timeLogs, setTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
@@ -387,8 +438,9 @@ export default function AdminAnalyticsScreen() {
     }
 
     try {
-      const [nextProjects, nextVolunteers, nextTimeLogs, nextJoinRecords, nextReports, nextPartners, nextApplications] = await Promise.all([
+      const [nextProjects, nextProgramTracks, nextVolunteers, nextTimeLogs, nextJoinRecords, nextReports, nextPartners, nextApplications] = await Promise.all([
         getAllProjects(),
+        getAllProgramTracks(),
         getAllVolunteers(),
         getAllVolunteerTimeLogs(),
         getAllVolunteerProjectJoinRecords(),
@@ -397,6 +449,7 @@ export default function AdminAnalyticsScreen() {
         getAllPartnerProjectApplications(),
       ]);
       setProjects(nextProjects);
+      setProgramTracks(nextProgramTracks);
       setVolunteers(nextVolunteers);
       setTimeLogs(nextTimeLogs);
       setVolunteerJoinRecords(nextJoinRecords);
@@ -418,7 +471,7 @@ export default function AdminAnalyticsScreen() {
 
   useEffect(() => {
     return subscribeToStorageChanges(
-      ['projects', 'volunteers', 'volunteerTimeLogs', 'partnerReports', 'volunteerProjectJoins', 'partners', 'partnerProjectApplications'],
+      ['projects', 'programTracks', 'programs', 'volunteers', 'volunteerTimeLogs', 'partnerReports', 'volunteerProjectJoins', 'partners', 'partnerProjectApplications'],
       () => {
         void loadAnalytics();
       }
@@ -440,6 +493,10 @@ export default function AdminAnalyticsScreen() {
   const skillAnalytics = useMemo(
     () => buildSkillSlices(volunteers, projects, timeLogs, volunteerJoinRecords),
     [projects, timeLogs, volunteerJoinRecords, volunteers]
+  );
+  const trackedProjects = useMemo(
+    () => projects.filter(project => !project.isEvent && !isTopLevelProgramRecord(project, programTracks)),
+    [projects, programTracks]
   );
 
   const completedHours = useMemo(
@@ -809,7 +866,7 @@ export default function AdminAnalyticsScreen() {
 
           <View style={styles.statusList}>
             {(['Planning', 'In Progress', 'On Hold', 'Completed', 'Cancelled'] as const).map(status => {
-              const count = projects.filter(p => !p.isEvent && p.status === status).length;
+              const count = trackedProjects.filter(p => p.status === status).length;
               const statusColor = 
                 status === 'Planning' ? ModernTheme.colors.status.planning :
                 status === 'In Progress' ? ModernTheme.colors.status.inProgress :
@@ -839,7 +896,7 @@ export default function AdminAnalyticsScreen() {
             </View>
             <View style={styles.trackingFilters}>
               {(() => {
-                const partnerProjects = projects.filter(p => !p.isEvent);
+                const partnerProjects = trackedProjects;
                 
                 return (
                   <>
@@ -861,8 +918,7 @@ export default function AdminAnalyticsScreen() {
           </View>
 
           {(() => {
-            // Filter for partner projects only
-            const partnerProjects = projects.filter(p => !p.isEvent).slice(0, 10);
+            const partnerProjects = trackedProjects.slice(0, 10);
 
             if (partnerProjects.length === 0) {
               return (
@@ -891,6 +947,13 @@ export default function AdminAnalyticsScreen() {
                     p => p.id === project.partnerId || p.ownerUserId === application?.partnerUserId
                   );
                   const partnerName = partner?.name || application?.partnerName || 'Internal';
+                  const volunteerCount = getProjectVolunteerIdsIncludingEvents(
+                    project,
+                    projects,
+                    timeLogs,
+                    volunteerJoinRecords,
+                    volunteers
+                  ).size;
 
                   return (
                     <TouchableOpacity
@@ -906,7 +969,7 @@ export default function AdminAnalyticsScreen() {
                             {project.title}
                           </Text>
                           <Text style={styles.projectTrackingMeta}>
-                            {project.isEvent ? 'Event' : 'Project'} • {project.programModule || project.category}
+                            Project
                           </Text>
                           <View style={styles.partnerOrgBadge}>
                             <MaterialIcons name="business" size={12} color={ModernTheme.colors.accent[700]} />
@@ -917,7 +980,7 @@ export default function AdminAnalyticsScreen() {
                       <View style={styles.projectTrackingStats}>
                         <View style={styles.projectStatBadge}>
                           <MaterialIcons name="people" size={14} color={ModernTheme.colors.primary[700]} />
-                          <Text style={styles.projectStatText}>{project.volunteers?.length || 0}</Text>
+                          <Text style={styles.projectStatText}>{volunteerCount}</Text>
                         </View>
                         <View style={[styles.projectStatusBadge, { backgroundColor: `${statusColor}15`, borderColor: statusColor }]}>
                           <Text style={[styles.projectStatusText, { color: statusColor }]}>{project.status}</Text>
@@ -926,9 +989,9 @@ export default function AdminAnalyticsScreen() {
                     </TouchableOpacity>
                   );
                 })}
-                {projects.filter(p => !p.isEvent).length > 10 && (
+                {trackedProjects.length > 10 && (
                   <Text style={styles.trackingFooterHint}>
-                    Showing 10 of {projects.filter(p => !p.isEvent).length} projects • View full list in Projects screen
+                    Showing 10 of {trackedProjects.length} projects • View full list in Projects screen
                   </Text>
                 )}
               </View>
@@ -1573,3 +1636,4 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 });
+

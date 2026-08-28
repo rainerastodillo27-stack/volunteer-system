@@ -601,8 +601,8 @@ async function notifyAdminAboutPartnerProjectJoin(
   const targetLabel = project
     ? `"${project.title}"`
     : requestedProgramModule
-    ? `the ${requestedProgramModule} program module`
-    : 'a new program';
+      ? `the ${requestedProgramModule} program module`
+      : 'a new program';
 
   const partnerEmail = partnerUser.email?.trim()
     ? ` (${partnerUser.email.trim()})`
@@ -875,12 +875,16 @@ export function getApiBaseUrl(): string {
 
   const configuredWebBaseUrl = getExpoExtraValue('webApiBaseUrl');
   if (typeof document !== 'undefined') {
+    const protocol = document.location.protocol || 'http:';
+    const host = document.location.hostname || '127.0.0.1';
+    if (isPrivateOrLocalHost(host)) {
+      return `${protocol}//${host}:8000`;
+    }
+
     if (configuredWebBaseUrl && configuredWebBaseUrl.trim().length > 0) {
       return configuredWebBaseUrl.trim().replace(/\/$/, '');
     }
 
-    const protocol = document.location.protocol || 'http:';
-    const host = document.location.hostname || '127.0.0.1';
     return `${protocol}//${host}:8000`;
   }
 
@@ -1237,7 +1241,7 @@ void (async () => {
       setRuntimeBackendUrl(stored.customBackendUrl.trim());
       console.log(`[Data] Restored custom backend URL from settings: ${stored.customBackendUrl.trim()}`);
     }
-  } catch {}
+  } catch { }
 })();
 
 async function setLocalStorageItem<T>(key: string, value: T): Promise<void> {
@@ -1378,7 +1382,7 @@ export async function getStorageItemFast<T>(key: string): Promise<T | null> {
     // OPTIMIZED: Always return cached data immediately if available on Native mobile/tablet
     const cached = await getLocalStorageItem<T>(key);
     const cachedAt = sharedStorageCacheTimestamps.get(key);
-    
+
     // If we have cached data, return it immediately and refresh in background
     if (cached !== null) {
       // Trigger background refresh if cache is stale
@@ -1446,14 +1450,14 @@ async function getLocalStorageItems(keys: string[]): Promise<Record<string, unkn
       getPersistedCacheTimestampKey(key),
     ]);
     const rawPairs = await AsyncStorage.multiGet(multiGetKeys);
-    
+
     for (let i = 0; i < keysToFetch.length; i++) {
       const key = keysToFetch[i];
       const valueRaw = rawPairs[i * 2]?.[1] ?? null;
       const tsRaw = rawPairs[i * 2 + 1]?.[1] ?? null;
       const parsed = valueRaw ? JSON.parse(valueRaw) : null;
       const ts = tsRaw ? Number(tsRaw) : 0;
-      
+
       if (tsRaw && Number.isFinite(ts) && ts > 0) {
         sharedStorageCacheTimestamps.set(key, ts);
       }
@@ -1482,16 +1486,16 @@ export async function getStorageItemsFast(keys: string[]): Promise<Record<string
   const missingKeys: string[] = [];
 
   const localResults = await getLocalStorageItems(keys);
-  
+
   for (const key of keys) {
     const cached = localResults[key];
     const cachedAt = sharedStorageCacheTimestamps.get(key);
     const isFresh = cachedAt !== undefined && Date.now() - cachedAt <= SHARED_STORAGE_CACHE_TTL_MS;
-    
+
     if (cachedAt !== undefined) {
       keysToRefresh.push(key);
     }
-    
+
     if (cached !== null && (isFresh || cachedAt === undefined)) {
       results[key] = cached;
     } else {
@@ -1559,6 +1563,7 @@ function isExpectedRemoteStorageError(error: unknown): boolean {
   return (
     maybeError.name === 'AbortError' ||
     message.includes('network request failed') ||
+    message.includes('failed to fetch') ||
     message.includes('aborted') ||
     message.includes('timed out')
   );
@@ -1592,7 +1597,7 @@ export async function getStorageItem<T>(key: string): Promise<T | null> {
       if (hasStorageChangeSubscribers()) {
         connectSharedStorageSocket();
       }
-      return null;
+      return getLocalStorageItem<T>(key);
     }
 
     console.error(`Error reading shared ${key} from backend:`, error);
@@ -1645,11 +1650,17 @@ export async function getStorageItems(
     }
     return results;
   } catch (error) {
-    if (isAbortLikeError(error)) {
+    if (isExpectedRemoteStorageError(error) || isAbortLikeError(error)) {
       if (hasStorageChangeSubscribers()) {
         connectSharedStorageSocket();
       }
 
+      const fallbackResults = await getLocalStorageItems(sharedKeys);
+      for (const key of sharedKeys) {
+        if (!(key in results)) {
+          results[key] = fallbackResults[key] ?? null;
+        }
+      }
       return results;
     }
 
@@ -1752,7 +1763,7 @@ export async function getPartnerDashboardSnapshot(): Promise<{
   adminPlanningItems: AdminPlanningItem[];
 }> {
   await ensurePartnerOwnershipLinks();
-  
+
   // CORE LOAD: Essential data for partner dashboard (minimizes egress)
   const coreItems = await getStorageItemsFast([
     STORAGE_KEYS.USERS,
@@ -1899,7 +1910,7 @@ export async function getPartnerDashboardSnapshot(): Promise<{
 export async function getDashboardTimelineSnapshot(): Promise<DashboardTimelineSnapshot> {
   try {
     const planningCalendars = await ensureAdminPlanningCalendarsSeeded();
-    
+
     // CORE LOAD: Timeline critical data only
     const coreItems = await getStorageItemsFast([
       STORAGE_KEYS.PROJECTS,
@@ -1907,7 +1918,7 @@ export async function getDashboardTimelineSnapshot(): Promise<DashboardTimelineS
       STORAGE_KEYS.EVENTS,
       STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
     ]);
-    
+
     // LAZY LOAD: Supplemental data in background, non-blocking
     (async () => {
       try {
@@ -1991,19 +2002,19 @@ export async function getProjectsScreenSnapshot(
     payloadProgramTracks.length > 0
       ? payloadProgramTracks
       : normalizedPrograms
-          .filter(program => !program.parentProjectId && !program.isEvent)
-          .map(program => ({
-            id: program.id,
-            title: program.title,
-            description: program.description,
-            icon: program.icon,
-            color: program.color,
-            imageUrl: program.imageUrl,
-            sortOrder: 0,
-            isActive: true,
-            createdAt: program.createdAt,
-            updatedAt: program.updatedAt,
-          }));
+        .filter(program => !program.parentProjectId && !program.isEvent)
+        .map(program => ({
+          id: program.id,
+          title: program.title,
+          description: program.description,
+          icon: program.icon,
+          color: program.color,
+          imageUrl: program.imageUrl,
+          sortOrder: 0,
+          isActive: true,
+          createdAt: program.createdAt,
+          updatedAt: program.updatedAt,
+        }));
 
   const result = {
     projects: (payload.projects || []).map(project =>
@@ -2036,6 +2047,14 @@ export async function setStorageItem<T>(key: string, value: T): Promise<void> {
     setSharedStorageCacheValue(key, value);
     projectsSnapshotCache.clear();
   } catch (error) {
+    if (isExpectedRemoteStorageError(error) || isAbortLikeError(error)) {
+      await setLocalStorageItem(key, value);
+      setSharedStorageCacheValue(key, value);
+      projectsSnapshotCache.clear();
+      queueSharedStorageChangedKeys([key]);
+      return;
+    }
+
     console.error(`Error saving shared ${key} to backend:`, error);
     throw error;
   }
@@ -2063,7 +2082,7 @@ export async function getAllProgramTracks(): Promise<ProgramTrack[]> {
   // from a stale in-memory or localStorage cache.
   invalidateSharedStorageCache([STORAGE_KEYS.PROGRAMS]);
   const allPrograms = (await getStorageItem<Project[]>(STORAGE_KEYS.PROGRAMS)) || [];
-  
+
   // Convert top-level programs to ProgramTrack format
   const programTracks: ProgramTrack[] = allPrograms
     .filter(program => !program.parentProjectId && !program.isEvent)
@@ -2082,7 +2101,7 @@ export async function getAllProgramTracks(): Promise<ProgramTrack[]> {
       createdAt: program.createdAt,
       updatedAt: program.updatedAt,
     }));
-  
+
   return programTracks;
 }
 
@@ -2102,7 +2121,7 @@ export async function saveProgram(program: ProgramTrack): Promise<void> {
           : programFocusText.includes('disaster')
             ? 'Disaster'
             : 'Disaster';
-  
+
   // Convert ProgramTrack to Project record
   const projectRecord: Project = {
     id: programId,
@@ -2145,7 +2164,7 @@ export async function saveProgram(program: ProgramTrack): Promise<void> {
   } else {
     allPrograms.push(projectRecord);
   }
-  
+
   await setStorageItem(STORAGE_KEYS.PROGRAMS, allPrograms);
   // Clear both shared and snapshot caches so mobile app sees changes immediately
   invalidateSharedStorageCache([STORAGE_KEYS.PROGRAM_TRACKS]);
@@ -3404,7 +3423,7 @@ export async function deletePartner(partnerId: string): Promise<void> {
     ),
     setStorageItem(
       STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
-      (applications || []).filter(app => 
+      (applications || []).filter(app =>
         ownerUserId ? app.partnerUserId !== ownerUserId : true
       )
     ),
@@ -3895,19 +3914,19 @@ export async function getAllVolunteers(): Promise<Volunteer[]> {
 // Looks up the volunteer profile linked to a specific user account.
 export async function getVolunteerByUserId(userId: string): Promise<Volunteer | null> {
   console.log('[getVolunteerByUserId] Looking up volunteer for userId:', userId);
-  
+
   try {
     const payload = await requestApiJson<{ volunteer?: Volunteer | null }>(
       `/volunteers/by-user/${encodeURIComponent(userId)}`
     );
-    
+
     console.log('[getVolunteerByUserId] API response:', payload);
-    
+
     if (payload.volunteer) {
       console.log('[getVolunteerByUserId] Found volunteer:', payload.volunteer.id, payload.volunteer.name);
       return normalizeVolunteerRecord(payload.volunteer);
     }
-    
+
     console.log('[getVolunteerByUserId] No volunteer in API response, trying fallback...');
   } catch (error) {
     console.error('[getVolunteerByUserId] API call failed:', error);
@@ -3921,12 +3940,12 @@ export async function getVolunteerByUserId(userId: string): Promise<Volunteer | 
 
   console.log('[getVolunteerByUserId] Found linked user, searching volunteers...');
   const linkedVolunteers = await getLinkedVolunteersForUserAccount(linkedUser);
-  
+
   if (linkedVolunteers[0]) {
     console.log('[getVolunteerByUserId] Found volunteer via fallback:', linkedVolunteers[0].id);
     return normalizeVolunteerRecord(linkedVolunteers[0]);
   }
-  
+
   console.log('[getVolunteerByUserId] No volunteer found via any method');
   return null;
 }
@@ -3983,13 +4002,13 @@ export async function reviewVolunteerRegistration(
           ? 'Volunteer registration rejected by administrator.'
           : undefined,
     });
-    
+
     // Send notification message to volunteer when approved
     if (status === 'Approved') {
       try {
         const adminUser = await getUser(reviewedBy);
         const adminName = adminUser?.name || 'Admin';
-        
+
         await saveMessage({
           id: `msg-approval-${linkedUser.id}-${Date.now()}`,
           senderId: reviewedBy,
@@ -3998,7 +4017,7 @@ export async function reviewVolunteerRegistration(
           timestamp: now,
           read: false,
         });
-        
+
         console.log(`[Notification] Sent approval notification to volunteer ${linkedUser.id}`);
       } catch (error) {
         console.error('[Notification] Failed to send approval notification:', error);
@@ -4130,11 +4149,11 @@ export async function submitVolunteerTimeOutReport(input: {
   const durationHours =
     input.completionLog.timeIn && input.completionLog.timeOut
       ? Math.max(
-          0,
-          (new Date(input.completionLog.timeOut).getTime() -
-            new Date(input.completionLog.timeIn).getTime()) /
-            3_600_000
-        )
+        0,
+        (new Date(input.completionLog.timeOut).getTime() -
+          new Date(input.completionLog.timeIn).getTime()) /
+        3_600_000
+      )
       : 0;
 
   const description = completionReport || 'Volunteer submitted completion proof during time out.';
@@ -4152,12 +4171,12 @@ export async function submitVolunteerTimeOutReport(input: {
     },
     attachments: completionPhoto
       ? [
-          {
-            url: completionPhoto,
-            type: 'image',
-            description: 'Volunteer completion photo',
-          },
-        ]
+        {
+          url: completionPhoto,
+          type: 'image',
+          description: 'Volunteer completion photo',
+        },
+      ]
       : [],
     mediaFile: completionPhoto || undefined,
   });
@@ -5394,7 +5413,18 @@ export async function submitImpactHubReport(input: {
     }
   } catch (error: any) {
     const message = String(error?.message || '');
-    if (!message.includes('404')) {
+    // Fall back to local storage when the backend endpoint is missing (404)
+    // or when a volunteer time-in sync lag causes the server check to fail (400).
+    // The frontend already validated the time-in locally, so we trust it and save
+    // locally so the report is never silently lost due to a transient sync issue.
+    const is404 = message.includes('404');
+    const isTimeInSyncError =
+      message.includes('400') &&
+      (message.toLowerCase().includes('time') ||
+        message.toLowerCase().includes('attendance') ||
+        message.toLowerCase().includes('confirm'));
+    const isNetworkFallback = isExpectedRemoteStorageError(error) || isAbortLikeError(error);
+    if (!is404 && !isTimeInSyncError && !isNetworkFallback) {
       throw error;
     }
   }

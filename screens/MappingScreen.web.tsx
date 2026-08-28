@@ -821,7 +821,11 @@ export default function MappingScreen({ navigation }: any) {
   }
 
   return (
-    <View style={styles.container}>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.pageContent}
+      showsVerticalScrollIndicator
+    >
       <View style={styles.header}>
         <View style={styles.headerTopRow}>
           <View style={styles.mapTitleGroup}>
@@ -1122,7 +1126,7 @@ export default function MappingScreen({ navigation }: any) {
           </View>
         </TouchableOpacity>
       </Modal>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -1130,6 +1134,10 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#FFFFFF',
+  },
+  pageContent: {
+    flexGrow: 1,
+    paddingBottom: 32,
   },
   centerContainer: {
     flex: 1,

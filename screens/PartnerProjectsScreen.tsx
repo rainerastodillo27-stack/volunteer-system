@@ -147,7 +147,7 @@ export default function PartnerProjectsScreen({ route }: any) {
           (sum, event) =>
             sum +
             volunteerTimeLogs.filter(
-              log => log.projectId === event.id && Boolean(log.timeOut)
+              log => log.projectId === event.id && Boolean(log.attendanceCheckedAt)
             ).length,
           0
         );
@@ -436,7 +436,7 @@ export default function PartnerProjectsScreen({ route }: any) {
                       const eventStatus = getProjectDisplayStatus(event);
                       const eventVolunteerCount = countTrackedVolunteers(event);
                       const eventVerifiedAttendanceCount = volunteerTimeLogs.filter(
-                        log => log.projectId === event.id && Boolean(log.timeOut)
+                        log => log.projectId === event.id && Boolean(log.attendanceCheckedAt)
                       ).length;
 
                       return (

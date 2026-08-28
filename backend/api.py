@@ -5306,6 +5306,16 @@ async def delete_event_record(event_id: str) -> dict[str, Any]:
     }
 
 
+@app.options("/reports")
+async def reports_options():
+    """Handle CORS preflight for reports endpoint"""
+    return JSONResponse(content={"status": "ok"}, headers={
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "*",
+    })
+
+
 @app.post("/reports")
 # API endpoint that inserts or updates one submitted report row directly.
 async def submit_report(payload: ReportSubmitPayload) -> dict[str, Any]:

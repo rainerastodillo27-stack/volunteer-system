@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { createBottomTabNavigator, BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { MaterialIcons } from '@expo/vector-icons';
-import { ScrollView, StyleSheet, TouchableOpacity, View, Text } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, TextInput, TouchableOpacity, View, Text } from 'react-native';
 
 // Safe Platform accessor for web environments
 function getPlatformOS(): string {
@@ -29,6 +29,7 @@ import {
   getAllUsers,
   getAllPartnerProjectApplications,
   markMessageAsRead,
+  savePartnerReport,
 } from '../models/storage';
 import { User, PartnerProjectApplication } from '../models/types';
 function lazyScreen<T extends object>(loader: () => { default: React.ComponentType<T> }) {
@@ -95,6 +96,26 @@ const getIconName = (routeName: keyof AdminTabParamList) => {
 type SidebarProps = BottomTabBarProps & {
   collapsed: boolean;
   onToggle: () => void;
+  onNavigateWithBadge: (route: keyof AdminTabParamList) => void;
+};
+
+type AdminSearchItem = {
+  id: string;
+  title: string;
+  subtitle: string;
+  icon: keyof typeof MaterialIcons.glyphMap;
+  route: keyof AdminTabParamList;
+  params?: any;
+};
+
+type AdminNotificationItem = {
+  id: string;
+  title: string;
+  subtitle: string;
+  timestamp?: string;
+  icon: keyof typeof MaterialIcons.glyphMap;
+  route: keyof AdminTabParamList;
+  params?: any;
 };
 
 const SIDEBAR_GROUPS = [
@@ -138,7 +159,7 @@ const SIDEBAR_GROUPS = [
   }
 ] as const;
 
-function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle }: SidebarProps) {
+function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle, onNavigateWithBadge }: SidebarProps) {
   const renderSidebarItem = (item: typeof SIDEBAR_GROUPS[number]['items'][number]) => {
     const activeRouteName = state.routes[state.index].name;
     let focused = activeRouteName === item.route;
@@ -156,7 +177,11 @@ function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle }: 
       <TouchableOpacity
         key={item.label}
         onPress={() => {
-          navigation.navigate(item.route, item.params);
+          onNavigateWithBadge(item.route as keyof AdminTabParamList);
+          navigation.navigate(item.route, {
+            ...(item.params || {}),
+            navTimestamp: Date.now(),
+          });
         }}
         style={[styles.sidebarItem, focused && styles.sidebarItemActive, collapsed && styles.sidebarItemCollapsed]}
       >
@@ -209,7 +234,16 @@ function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle }: 
       </ScrollView>
 
       {!collapsed && (
-        <TouchableOpacity style={styles.sidebarHelpCard} activeOpacity={0.85}>
+        <TouchableOpacity
+          style={styles.sidebarHelpCard}
+          activeOpacity={0.85}
+          onPress={() => {
+            navigation.navigate('Messages', {
+              conversationUserId: 'admin-nvc',
+              navTimestamp: Date.now(),
+            });
+          }}
+        >
           <View style={styles.sidebarHelpIcon}>
             <MaterialIcons name="headset-mic" size={20} color="#16a34a" />
           </View>
@@ -251,10 +285,23 @@ export default function AdminNavigator() {
   const [unreadReports, setUnreadReports] = useState<any[]>([]);
   const [pendingPartnerApplications, setPendingPartnerApplications] = useState<PartnerProjectApplication[]>([]);
   const [pendingVolunteerRequests, setPendingVolunteerRequests] = useState<any[]>([]);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isNotificationPanelOpen, setIsNotificationPanelOpen] = useState(false);
+  const [seenPendingUserIds, setSeenPendingUserIds] = useState<Set<string>>(() => new Set());
+  const [seenReportIds, setSeenReportIds] = useState<Set<string>>(() => new Set());
+  const [seenPartnerApplicationIds, setSeenPartnerApplicationIds] = useState<Set<string>>(() => new Set());
+  const [seenVolunteerRequestIds, setSeenVolunteerRequestIds] = useState<Set<string>>(() => new Set());
 
   const messageUnreadCount = unreadMessages.length;
   const reportNotificationCount = unreadReports.length;
   const pendingUserApprovalCount = pendingUsers.length;
+  const totalNotificationCount =
+    pendingUserApprovalCount +
+    messageUnreadCount +
+    reportNotificationCount +
+    pendingPartnerApplications.length +
+    pendingVolunteerRequests.length;
   const [collapsed, setCollapsed] = useState(false);
   const [tabBarProps, setTabBarProps] = useState<BottomTabBarProps | null>(null);
   const [tabBarSignature, setTabBarSignature] = useState('');
@@ -306,7 +353,9 @@ export default function AdminNavigator() {
         setUnreadMessages(enrichedMsgs);
 
         // Map unread reports and enrich with submitterName, projectTitle
-        const unreadRpts = reports.filter(r => !r.viewedBy?.includes(user.id));
+        const unreadRpts = reports.filter(
+          r => !r.viewedBy?.includes(user.id) && !seenReportIds.has(r.id)
+        );
         const enrichedReports = unreadRpts.map(r => {
           const project = projects.find(p => p.id === r.projectId);
           return {
@@ -318,14 +367,18 @@ export default function AdminNavigator() {
         setUnreadReports(enrichedReports);
 
         // Pending user approvals
-        setPendingUsers(pUsers);
+        setPendingUsers(pUsers.filter(pendingUser => !seenPendingUserIds.has(pendingUser.id)));
 
         // Pending partner applications
-        const pendingApps = apps.filter(a => a.status === 'Pending');
+        const pendingApps = apps.filter(
+          a => a.status === 'Pending' && !seenPartnerApplicationIds.has(a.id)
+        );
         setPendingPartnerApplications(pendingApps);
 
         // Pending volunteer requests
-        const pendingMatches = matches.filter(m => m.status === 'Requested');
+        const pendingMatches = matches.filter(
+          m => m.status === 'Requested' && !seenVolunteerRequestIds.has(m.id)
+        );
         const enrichedMatches = pendingMatches.map(match => {
           const volunteer = volunteers.find(v => v.id === match.volunteerId);
           const project = projects.find(p => p.id === match.projectId);
@@ -358,14 +411,230 @@ export default function AdminNavigator() {
       unsubMessages();
       unsubStorage?.();
     };
-  }, [user?.id]);
+  }, [
+    seenPartnerApplicationIds,
+    seenPendingUserIds,
+    seenReportIds,
+    seenVolunteerRequestIds,
+    user?.id,
+  ]);
 
   const handleNotificationsSeen = React.useCallback(async () => {
     if (!user?.id || unreadMessages.length === 0) return;
     await Promise.all(
       unreadMessages.map((msg) => markMessageAsRead(msg.id).catch(() => undefined))
     );
+    setUnreadMessages([]);
   }, [unreadMessages, user?.id]);
+
+  const markReportsSeen = React.useCallback(async () => {
+    if (!user?.id || unreadReports.length === 0) return;
+    const reportsToMark = unreadReports;
+    setSeenReportIds(current => {
+      const next = new Set(current);
+      reportsToMark.forEach(report => next.add(report.id));
+      return next;
+    });
+    setUnreadReports([]);
+    await Promise.all(
+      reportsToMark.map(report =>
+        savePartnerReport({
+          ...report,
+          viewedBy: Array.from(new Set([...(report.viewedBy || []), user.id])),
+        }).catch(() => undefined)
+      )
+    );
+  }, [unreadReports, user?.id]);
+
+  const markRouteNotificationsSeen = React.useCallback(
+    (route: keyof AdminTabParamList) => {
+      if (route === 'Messages') {
+        void handleNotificationsSeen();
+        return;
+      }
+
+      if (route === 'Reports') {
+        void markReportsSeen();
+        return;
+      }
+
+      if (route === 'Projects') {
+        setSeenVolunteerRequestIds(current => {
+          const next = new Set(current);
+          pendingVolunteerRequests.forEach(request => next.add(request.id));
+          return next;
+        });
+        setSeenPartnerApplicationIds(current => {
+          const next = new Set(current);
+          pendingPartnerApplications.forEach(application => next.add(application.id));
+          return next;
+        });
+        setPendingVolunteerRequests([]);
+        setPendingPartnerApplications([]);
+        return;
+      }
+
+      if (route === 'Users') {
+        setSeenPendingUserIds(current => {
+          const next = new Set(current);
+          pendingUsers.forEach(pendingUser => next.add(pendingUser.id));
+          return next;
+        });
+        setPendingUsers([]);
+      }
+    },
+    [
+      handleNotificationsSeen,
+      markReportsSeen,
+      pendingPartnerApplications,
+      pendingUsers,
+      pendingVolunteerRequests,
+    ]
+  );
+
+  const markAllNotificationsSeen = React.useCallback(() => {
+    void handleNotificationsSeen();
+    void markReportsSeen();
+    markRouteNotificationsSeen('Projects');
+    markRouteNotificationsSeen('Users');
+  }, [handleNotificationsSeen, markReportsSeen, markRouteNotificationsSeen]);
+
+  const navigateFromTopBar = React.useCallback(
+    (route: keyof AdminTabParamList, params?: any) => {
+      markRouteNotificationsSeen(route);
+      setIsSearchOpen(false);
+      setIsNotificationPanelOpen(false);
+      setSearchQuery('');
+      (tabBarProps?.navigation as any)?.navigate(route, params);
+    },
+    [markRouteNotificationsSeen, tabBarProps?.navigation]
+  );
+
+  const notificationItems = React.useMemo<AdminNotificationItem[]>(() => {
+    const formatTimestamp = (value?: string) => {
+      if (!value) return '';
+      const parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString();
+    };
+
+    return [
+      ...pendingUsers.map((pendingUser): AdminNotificationItem => ({
+        id: `user-${pendingUser.id}`,
+        title: pendingUser.name || pendingUser.email || 'Pending account',
+        subtitle: `${pendingUser.role || 'User'} account waiting for approval`,
+        timestamp: formatTimestamp(pendingUser.createdAt),
+        icon: 'person-add',
+        route: 'Users',
+      })),
+      ...unreadMessages.map((message): AdminNotificationItem => ({
+        id: `message-${message.id}`,
+        title: message.senderName || message.senderId || 'New message',
+        subtitle: message.content || 'Unread message',
+        timestamp: formatTimestamp(message.timestamp),
+        icon: 'mail',
+        route: 'Messages',
+        params: { conversationUserId: message.senderId || message.recipientId },
+      })),
+      ...unreadReports.map((report): AdminNotificationItem => ({
+        id: `report-${report.id}`,
+        title: report.title || report.projectTitle || 'New report',
+        subtitle: report.submitterName || report.submittedBy || 'Report submitted',
+        timestamp: formatTimestamp(report.createdAt),
+        icon: 'insert-chart',
+        route: 'Reports',
+        params: { projectId: report.projectId },
+      })),
+      ...pendingPartnerApplications.map((application): AdminNotificationItem => ({
+        id: `partner-application-${application.id}`,
+        title:
+          application.proposalDetails?.proposedTitle ||
+          application.proposalDetails?.targetProjectTitle ||
+          'Partner proposal',
+        subtitle: `${application.partnerName || 'Partner'} is waiting for review`,
+        timestamp: formatTimestamp(application.requestedAt),
+        icon: 'business',
+        route: 'Projects',
+        params: { projectId: application.projectId },
+      })),
+      ...pendingVolunteerRequests.map((request): AdminNotificationItem => ({
+        id: `volunteer-request-${request.id}`,
+        title: request.projectTitle || 'Volunteer request',
+        subtitle: `${request.volunteerName || request.volunteerId || 'Volunteer'} requested to join`,
+        timestamp: formatTimestamp(request.requestedAt || request.matchedAt),
+        icon: 'volunteer-activism',
+        route: 'Projects',
+        params: { projectId: request.projectId },
+      })),
+    ];
+  }, [
+    pendingPartnerApplications,
+    pendingUsers,
+    pendingVolunteerRequests,
+    unreadMessages,
+    unreadReports,
+  ]);
+
+  const searchItems = React.useMemo<AdminSearchItem[]>(() => {
+    const routeItems = SIDEBAR_GROUPS.flatMap(group =>
+      group.items.map(item => ({
+        id: `route-${group.title}-${item.label}`,
+        title: item.label,
+        subtitle: group.title.toLowerCase(),
+        icon: item.icon as keyof typeof MaterialIcons.glyphMap,
+        route: item.route as keyof AdminTabParamList,
+        params: item.params,
+      }))
+    );
+
+    const liveItems: AdminSearchItem[] = [
+      ...pendingUsers.map(pendingUser => ({
+        id: `search-user-${pendingUser.id}`,
+        title: pendingUser.name || pendingUser.email || 'Pending account',
+        subtitle: 'Pending user approval',
+        icon: 'person-add' as const,
+        route: 'Users' as const,
+      })),
+      ...unreadReports.map(report => ({
+        id: `search-report-${report.id}`,
+        title: report.title || report.projectTitle || 'Report',
+        subtitle: `Report from ${report.submitterName || report.submittedBy || 'user'}`,
+        icon: 'insert-chart' as const,
+        route: 'Reports' as const,
+        params: { projectId: report.projectId },
+      })),
+      ...pendingPartnerApplications.map(application => ({
+        id: `search-partner-app-${application.id}`,
+        title:
+          application.proposalDetails?.proposedTitle ||
+          application.proposalDetails?.targetProjectTitle ||
+          'Partner proposal',
+        subtitle: `Pending proposal from ${application.partnerName || 'partner'}`,
+        icon: 'business' as const,
+        route: 'Projects' as const,
+        params: { projectId: application.projectId },
+      })),
+      ...pendingVolunteerRequests.map(request => ({
+        id: `search-volunteer-request-${request.id}`,
+        title: request.projectTitle || 'Volunteer request',
+        subtitle: `${request.volunteerName || request.volunteerId || 'Volunteer'} requested to join`,
+        icon: 'volunteer-activism' as const,
+        route: 'Projects' as const,
+        params: { projectId: request.projectId },
+      })),
+    ];
+
+    const query = searchQuery.trim().toLowerCase();
+    const allItems = [...routeItems, ...liveItems];
+    if (!query) {
+      return allItems.slice(0, 12);
+    }
+
+    return allItems
+      .filter(item =>
+        `${item.title} ${item.subtitle}`.toLowerCase().includes(query)
+      )
+      .slice(0, 20);
+  }, [pendingPartnerApplications, pendingUsers, pendingVolunteerRequests, searchQuery, unreadReports]);
 
   const navigator = (
     <Tab.Navigator
@@ -389,7 +658,7 @@ export default function AdminNavigator() {
             unreadReports={unreadReports}
             pendingPartnerApplications={pendingPartnerApplications}
             pendingVolunteerRequests={pendingVolunteerRequests}
-            onNotificationOpen={handleNotificationsSeen}
+            onNotificationOpen={markAllNotificationsSeen}
           />
         ),
         tabBarIcon: ({ color, size }) => <MaterialIcons name={getIconName(route.name as keyof AdminTabParamList)} size={size} color={color} />,
@@ -404,7 +673,10 @@ export default function AdminNavigator() {
         component={AdminProjectsScreen}
         options={{
           title: 'Projects',
-          tabBarBadge: pendingVolunteerRequests.length > 0 ? pendingVolunteerRequests.length : undefined,
+          tabBarBadge:
+            pendingVolunteerRequests.length + pendingPartnerApplications.length > 0
+              ? pendingVolunteerRequests.length + pendingPartnerApplications.length
+              : undefined,
         }}
       />
       <Tab.Screen name="Partners" component={PartnerManagementScreen} options={{ title: 'Partner Management' }} />
@@ -425,14 +697,29 @@ export default function AdminNavigator() {
     <View style={styles.webFrame}>
       <View style={styles.adminTopBar}>
         <View style={styles.adminTopActions}>
-          <TouchableOpacity style={styles.adminTopIconButton} activeOpacity={0.8}>
+          <TouchableOpacity
+            style={styles.adminTopIconButton}
+            activeOpacity={0.8}
+            onPress={() => setIsSearchOpen(true)}
+          >
             <MaterialIcons name="search" size={24} color="#475569" />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.adminTopIconButton} activeOpacity={0.8}>
-            <MaterialIcons name="notifications-none" size={24} color="#475569" />
-            {pendingUserApprovalCount + messageUnreadCount + reportNotificationCount > 0 ? (
+          <TouchableOpacity
+            style={styles.adminTopIconButton}
+            activeOpacity={0.8}
+            onPress={() => {
+              setIsNotificationPanelOpen(true);
+              markAllNotificationsSeen();
+            }}
+          >
+            <MaterialIcons
+              name={totalNotificationCount > 0 ? 'notifications-active' : 'notifications-none'}
+              size={24}
+              color="#475569"
+            />
+            {totalNotificationCount > 0 ? (
               <View style={styles.adminTopBadge}>
-                <Text style={styles.adminTopBadgeText}>{Math.min(pendingUserApprovalCount + messageUnreadCount + reportNotificationCount, 9)}</Text>
+                <Text style={styles.adminTopBadgeText}>{totalNotificationCount > 9 ? '9+' : totalNotificationCount}</Text>
               </View>
             ) : null}
           </TouchableOpacity>
@@ -495,10 +782,126 @@ export default function AdminNavigator() {
           </View>
         </View>
       </View>
+
+      <Modal
+        transparent
+        animationType="fade"
+        visible={isSearchOpen}
+        onRequestClose={() => setIsSearchOpen(false)}
+      >
+        <Pressable style={styles.topOverlayBackdrop} onPress={() => setIsSearchOpen(false)}>
+          <Pressable style={styles.topPanel} onPress={(event) => event.stopPropagation()}>
+            <View style={styles.topPanelHeader}>
+              <View style={styles.searchInputWrap}>
+                <MaterialIcons name="search" size={20} color="#64748b" />
+                <TextInput
+                  autoFocus
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                  placeholder="Search pages, reports, requests..."
+                  placeholderTextColor="#94a3b8"
+                  style={styles.searchInput}
+                />
+              </View>
+              <TouchableOpacity onPress={() => setIsSearchOpen(false)} hitSlop={8}>
+                <MaterialIcons name="close" size={24} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.topPanelList} keyboardShouldPersistTaps="handled">
+              {searchItems.length ? (
+                searchItems.map(item => (
+                  <TouchableOpacity
+                    key={item.id}
+                    style={styles.topPanelItem}
+                    onPress={() => navigateFromTopBar(item.route, item.params)}
+                    activeOpacity={0.75}
+                  >
+                    <View style={styles.topPanelItemIcon}>
+                      <MaterialIcons name={item.icon} size={18} color="#166534" />
+                    </View>
+                    <View style={styles.topPanelItemCopy}>
+                      <Text style={styles.topPanelItemTitle}>{item.title}</Text>
+                      <Text style={styles.topPanelItemSubtitle}>{item.subtitle}</Text>
+                    </View>
+                    <MaterialIcons name="chevron-right" size={20} color="#cbd5e1" />
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <View style={styles.topPanelEmpty}>
+                  <MaterialIcons name="search-off" size={32} color="#94a3b8" />
+                  <Text style={styles.topPanelEmptyText}>No results found</Text>
+                </View>
+              )}
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        transparent
+        animationType="fade"
+        visible={isNotificationPanelOpen}
+        onRequestClose={() => setIsNotificationPanelOpen(false)}
+      >
+        <Pressable style={styles.topOverlayBackdrop} onPress={() => setIsNotificationPanelOpen(false)}>
+          <Pressable style={styles.topPanel} onPress={(event) => event.stopPropagation()}>
+            <View style={styles.notificationPanelHeader}>
+              <View>
+                <Text style={styles.topPanelTitle}>Notifications</Text>
+                <Text style={styles.topPanelSubtitle}>
+                  {notificationItems.length
+                    ? `${notificationItems.length} item${notificationItems.length === 1 ? '' : 's'} need attention`
+                    : 'No pending notifications'}
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setIsNotificationPanelOpen(false)} hitSlop={8}>
+                <MaterialIcons name="close" size={24} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.topPanelList}>
+              {notificationItems.length ? (
+                notificationItems.map(item => (
+                  <TouchableOpacity
+                    key={item.id}
+                    style={styles.topPanelItem}
+                    onPress={() => navigateFromTopBar(item.route, item.params)}
+                    activeOpacity={0.75}
+                  >
+                    <View style={styles.topPanelItemIcon}>
+                      <MaterialIcons name={item.icon} size={18} color="#166534" />
+                    </View>
+                    <View style={styles.topPanelItemCopy}>
+                      <Text style={styles.topPanelItemTitle}>{item.title}</Text>
+                      <Text style={styles.topPanelItemSubtitle}>{item.subtitle}</Text>
+                      {item.timestamp ? (
+                        <Text style={styles.topPanelTimestamp}>{item.timestamp}</Text>
+                      ) : null}
+                    </View>
+                    <MaterialIcons name="chevron-right" size={20} color="#cbd5e1" />
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <View style={styles.topPanelEmpty}>
+                  <MaterialIcons name="check-circle" size={36} color="#16a34a" />
+                  <Text style={styles.topPanelEmptyText}>All caught up</Text>
+                </View>
+              )}
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
       <View style={styles.webLayout}>
         <View style={[styles.sidebarWrapper, collapsed ? styles.sidebarWrapperCollapsed : styles.sidebarWrapperExpanded]}>
           {tabBarProps ? (
-            <SidebarTabBar {...tabBarProps} collapsed={collapsed} onToggle={() => setCollapsed(!collapsed)} />
+            <SidebarTabBar
+              {...tabBarProps}
+              collapsed={collapsed}
+              onToggle={() => setCollapsed(!collapsed)}
+              onNavigateWithBadge={markRouteNotificationsSeen}
+            />
           ) : (
             <View style={styles.fallbackSidebar} />
           )}
@@ -541,6 +944,125 @@ const styles = StyleSheet.create({
   adminTopAvatarText: { color: '#0b7a35', fontWeight: '900', fontSize: 14 },
   adminTopUserName: { fontSize: 14, fontWeight: '900', color: '#101828' },
   adminTopUserOrg: { marginTop: 3, fontSize: 11, color: '#667085' },
+  topOverlayBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.18)',
+    alignItems: 'flex-end',
+    paddingTop: 86,
+    paddingRight: 32,
+  },
+  topPanel: {
+    width: 430,
+    maxHeight: 520,
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.18,
+    shadowRadius: 24,
+    elevation: 24,
+    overflow: 'hidden',
+  },
+  topPanelHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  notificationPanelHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  topPanelTitle: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: '#0f172a',
+  },
+  topPanelSubtitle: {
+    marginTop: 3,
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748b',
+  },
+  searchInputWrap: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#f8fafc',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0f172a',
+    outlineStyle: 'none' as any,
+  },
+  topPanelList: {
+    maxHeight: 430,
+  },
+  topPanelItem: {
+    minHeight: 68,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  topPanelItemIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+    backgroundColor: '#f0fdf4',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  topPanelItemCopy: {
+    flex: 1,
+  },
+  topPanelItemTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  topPanelItemSubtitle: {
+    marginTop: 3,
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748b',
+  },
+  topPanelTimestamp: {
+    marginTop: 4,
+    fontSize: 11,
+    color: '#94a3b8',
+  },
+  topPanelEmpty: {
+    minHeight: 160,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  topPanelEmptyText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#64748b',
+  },
   adminUserTrigger: {
     flexDirection: 'row',
     alignItems: 'center',

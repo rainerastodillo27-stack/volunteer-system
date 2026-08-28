@@ -529,10 +529,10 @@ export default function ProjectTimelineCalendarCard({
         <View style={styles.leftColumn}>
           
           {/* Calendar Header with navigation and Mode buttons */}
-          <View style={styles.calendarControlBar}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          <View style={[styles.calendarControlBar, isMobile && styles.calendarControlBarMobile]}>
+            <View style={styles.calendarMonthNavRow}>
               <Text style={styles.bigMonthLabel}>{monthLabel}</Text>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+              <View style={styles.calendarNavButtons}>
                 <TouchableOpacity style={styles.navButton} onPress={handlePrevMonth}>
                   <MaterialIcons name="chevron-left" size={20} color="#475569" />
                 </TouchableOpacity>
@@ -543,11 +543,15 @@ export default function ProjectTimelineCalendarCard({
             </View>
 
             {/* View Mode Tabs */}
-            <View style={styles.viewModeTabs}>
+            <View style={[styles.viewModeTabs, isMobile && styles.viewModeTabsMobile]}>
               {(['Month', 'Week', 'Day'] as const).map(mode => (
                 <TouchableOpacity
                   key={mode}
-                  style={[styles.viewModeTabButton, viewMode === mode && styles.viewModeTabButtonActive]}
+                  style={[
+                    styles.viewModeTabButton,
+                    isMobile && styles.viewModeTabButtonMobile,
+                    viewMode === mode && styles.viewModeTabButtonActive,
+                  ]}
                   onPress={() => setViewMode(mode)}
                 >
                   <Text style={[styles.viewModeTabText, viewMode === mode && styles.viewModeTabTextActive]}>
@@ -575,86 +579,94 @@ export default function ProjectTimelineCalendarCard({
           {/* Event List Table at the bottom */}
           <View style={styles.eventTableContainer}>
             <Text style={styles.eventTableTitle}>Event List</Text>
-            
-            <View style={styles.tableHeader}>
-              <Text style={[styles.tableHeaderCell, { flex: 1.5 }]}>Time</Text>
-              <Text style={[styles.tableHeaderCell, { flex: 2 }]}>Event</Text>
-              <Text style={[styles.tableHeaderCell, { flex: 2 }]}>Location</Text>
-              <Text style={[styles.tableHeaderCell, { flex: 1.5, textAlign: 'center' }]}>Attendees</Text>
-              <Text style={[styles.tableHeaderCell, { flex: 1, textAlign: 'center' }]}>Status</Text>
-              <Text style={[styles.tableHeaderCell, { flex: 1.2, textAlign: 'center' }]}>Actions</Text>
-            </View>
 
-            {selectedDayEvents.length > 0 ? (
-              selectedDayEvents.map(entry => {
-                const project = projects.find(p => p.id === entry.projectId);
-                const canUseProjectActions = Boolean(project?.id);
-                const volunteersNeeded = project?.volunteersNeeded || 0;
-                const joinedCount = project?.volunteers?.length || project?.joinedUserIds?.length || 0;
-                const displayStatus = project ? getProjectDisplayStatus(project) : 'Open';
+            <ScrollView
+              horizontal={isMobile}
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={isMobile && styles.eventTableScrollContent}
+            >
+              <View style={isMobile && styles.eventTableMobileWidth}>
+                <View style={styles.tableHeader}>
+                  <Text style={[styles.tableHeaderCell, { flex: 1.5 }]}>Time</Text>
+                  <Text style={[styles.tableHeaderCell, { flex: 2 }]}>Event</Text>
+                  <Text style={[styles.tableHeaderCell, { flex: 2 }]}>Location</Text>
+                  <Text style={[styles.tableHeaderCell, { flex: 1.5, textAlign: 'center' }]}>Attendees</Text>
+                  <Text style={[styles.tableHeaderCell, { flex: 1, textAlign: 'center' }]}>Status</Text>
+                  <Text style={[styles.tableHeaderCell, { flex: 1.2, textAlign: 'center' }]}>Actions</Text>
+                </View>
 
-                return (
-                  <View key={entry.id} style={styles.tableRow}>
-                    <Text style={[styles.tableCell, { flex: 1.5 }]}>
-                      {new Date(entry.startDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - {new Date(entry.endDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </Text>
-                    <Text style={[styles.tableCell, { flex: 2, fontWeight: '700' }]}>{entry.title}</Text>
-                    <Text style={[styles.tableCell, { flex: 2 }]} numberOfLines={1}>
-                      {project ? formatProjectLocation(project) : 'TBA'}
-                    </Text>
-                    <Text style={[styles.tableCell, { flex: 1.5, textAlign: 'center' }]}>
-                      {joinedCount} / {volunteersNeeded}
-                    </Text>
-                    <View style={{ flex: 1, alignItems: 'center' }}>
-                      <View style={[styles.statusPill, { backgroundColor: entry.color + '15' }]}>
-                        <Text style={[styles.statusPillText, { color: entry.color }]}>
-                          {displayStatus}
+                {selectedDayEvents.length > 0 ? (
+                  selectedDayEvents.map(entry => {
+                    const project = projects.find(p => p.id === entry.projectId);
+                    const canUseProjectActions = Boolean(project?.id);
+                    const volunteersNeeded = project?.volunteersNeeded || 0;
+                    const joinedCount = project?.volunteers?.length || project?.joinedUserIds?.length || 0;
+                    const displayStatus = project ? getProjectDisplayStatus(project) : 'Open';
+
+                    return (
+                      <View key={entry.id} style={styles.tableRow}>
+                        <Text style={[styles.tableCell, { flex: 1.5 }]}>
+                          {new Date(entry.startDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - {new Date(entry.endDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </Text>
+                        <Text style={[styles.tableCell, { flex: 2, fontWeight: '700' }]}>{entry.title}</Text>
+                        <Text style={[styles.tableCell, { flex: 2 }]} numberOfLines={1}>
+                          {project ? formatProjectLocation(project) : 'TBA'}
+                        </Text>
+                        <Text style={[styles.tableCell, { flex: 1.5, textAlign: 'center' }]}>
+                          {joinedCount} / {volunteersNeeded}
+                        </Text>
+                        <View style={{ flex: 1, alignItems: 'center' }}>
+                          <View style={[styles.statusPill, { backgroundColor: entry.color + '15' }]}>
+                            <Text style={[styles.statusPillText, { color: entry.color }]}>
+                              {displayStatus}
+                            </Text>
+                          </View>
+                        </View>
+                        <View style={{ flex: 1.2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                          <TouchableOpacity 
+                            style={[styles.actionButton, !canUseProjectActions && styles.actionButtonDisabled]}
+                            disabled={!canUseProjectActions}
+                            onPress={() => {
+                              if (project?.id) {
+                                onOpenProject?.(project.id);
+                              }
+                            }}
+                          >
+                            <MaterialIcons name="visibility" size={18} color={canUseProjectActions ? '#166534' : '#94a3b8'} />
+                          </TouchableOpacity>
+                          <TouchableOpacity 
+                            style={[styles.actionButton, !canUseProjectActions && styles.actionButtonDisabled]}
+                            disabled={!canUseProjectActions}
+                            onPress={() => {
+                              if (project?.id) {
+                                onEditProject?.(project.id);
+                              }
+                            }}
+                          >
+                            <MaterialIcons name="edit" size={18} color={canUseProjectActions ? '#2563eb' : '#94a3b8'} />
+                          </TouchableOpacity>
+                          <TouchableOpacity 
+                            style={[styles.actionButton, !canUseProjectActions && styles.actionButtonDisabled]}
+                            disabled={!canUseProjectActions}
+                            onPress={() => {
+                              if (project?.id) {
+                                onDeleteProject?.(project.id);
+                              }
+                            }}
+                          >
+                            <MaterialIcons name="delete-outline" size={18} color={canUseProjectActions ? '#dc2626' : '#94a3b8'} />
+                          </TouchableOpacity>
+                        </View>
                       </View>
-                    </View>
-                    <View style={{ flex: 1.2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                      <TouchableOpacity 
-                        style={[styles.actionButton, !canUseProjectActions && styles.actionButtonDisabled]}
-                        disabled={!canUseProjectActions}
-                        onPress={() => {
-                          if (project?.id) {
-                            onOpenProject?.(project.id);
-                          }
-                        }}
-                      >
-                        <MaterialIcons name="visibility" size={18} color={canUseProjectActions ? '#166534' : '#94a3b8'} />
-                      </TouchableOpacity>
-                      <TouchableOpacity 
-                        style={[styles.actionButton, !canUseProjectActions && styles.actionButtonDisabled]}
-                        disabled={!canUseProjectActions}
-                        onPress={() => {
-                          if (project?.id) {
-                            onEditProject?.(project.id);
-                          }
-                        }}
-                      >
-                        <MaterialIcons name="edit" size={18} color={canUseProjectActions ? '#2563eb' : '#94a3b8'} />
-                      </TouchableOpacity>
-                      <TouchableOpacity 
-                        style={[styles.actionButton, !canUseProjectActions && styles.actionButtonDisabled]}
-                        disabled={!canUseProjectActions}
-                        onPress={() => {
-                          if (project?.id) {
-                            onDeleteProject?.(project.id);
-                          }
-                        }}
-                      >
-                        <MaterialIcons name="delete-outline" size={18} color={canUseProjectActions ? '#dc2626' : '#94a3b8'} />
-                      </TouchableOpacity>
-                    </View>
+                    );
+                  })
+                ) : (
+                  <View style={styles.emptyTableState}>
+                    <Text style={styles.emptyTableText}>No events scheduled for this day</Text>
                   </View>
-                );
-              })
-            ) : (
-              <View style={styles.emptyTableState}>
-                <Text style={styles.emptyTableText}>No events scheduled for this day</Text>
+                )}
               </View>
-            )}
+            </ScrollView>
           </View>
 
         </View>
@@ -783,7 +795,7 @@ export default function ProjectTimelineCalendarCard({
 const styles = StyleSheet.create({
   card: {
     borderRadius: 16,
-    overflow: 'hidden',
+    overflow: 'visible',
     backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: '#dadce0',
@@ -797,6 +809,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#dadce0',
     backgroundColor: '#ffffff',
+    position: 'relative',
+    zIndex: 20,
+    elevation: 20,
   },
   googleHeaderTitle: {
     fontSize: 16,
@@ -823,7 +838,7 @@ const styles = StyleSheet.create({
   },
   filterDropdownMenu: {
     position: 'absolute',
-    top: 38,
+    top: 42,
     right: 0,
     backgroundColor: '#ffffff',
     borderRadius: 12,
@@ -831,11 +846,12 @@ const styles = StyleSheet.create({
     borderColor: '#e2e8f0',
     paddingVertical: 6,
     width: 160,
+    zIndex: 100,
     shadowColor: '#000000',
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 3,
+    shadowOpacity: 0.14,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 24,
   },
   filterDropdownItem: {
     paddingHorizontal: 14,
@@ -866,6 +882,7 @@ const styles = StyleSheet.create({
   },
   mainLayout: {
     backgroundColor: '#ffffff',
+    zIndex: 0,
   },
   leftColumn: {
     flex: 1,
@@ -877,10 +894,27 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: 20,
   },
+  calendarControlBarMobile: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: 12,
+  },
+  calendarMonthNavRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  calendarNavButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
   bigMonthLabel: {
     fontSize: 20,
     fontWeight: '800',
     color: '#1e293b',
+    flexShrink: 1,
   },
   navButton: {
     padding: 6,
@@ -897,9 +931,18 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     backgroundColor: '#f8fafc',
   },
+  viewModeTabsMobile: {
+    alignSelf: 'stretch',
+    width: '100%',
+  },
   viewModeTabButton: {
     paddingHorizontal: 16,
     paddingVertical: 8,
+  },
+  viewModeTabButtonMobile: {
+    flex: 1,
+    alignItems: 'center',
+    paddingHorizontal: 8,
   },
   viewModeTabButtonActive: {
     backgroundColor: '#f1f5f9',
@@ -990,6 +1033,13 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#e2e8f0',
     paddingTop: 20,
+  },
+  eventTableScrollContent: {
+    flexGrow: 1,
+  },
+  eventTableMobileWidth: {
+    minWidth: 560,
+    flex: 1,
   },
   eventTableTitle: {
     fontSize: 16,

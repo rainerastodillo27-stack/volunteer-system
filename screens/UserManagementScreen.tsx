@@ -1026,18 +1026,6 @@ export default function UserManagementScreen() {
                   <Text style={styles.reviewDetailValue}>{format(new Date(reviewTarget.record.createdAt || Date.now()), 'MMM dd, yyyy HH:mm')}</Text>
                 </View>
 
-                {reviewTarget.record.pillarsOfInterest && reviewTarget.record.pillarsOfInterest.length > 0 && (
-                  <View style={styles.reviewDetailRow}>
-                    <Text style={styles.reviewDetailLabel}>Interests</Text>
-                    <View style={styles.reviewInterestsWrap}>
-                      {reviewTarget.record.pillarsOfInterest.map((p, i) => (
-                        <View key={i} style={styles.reviewInterestChip}>
-                          <Text style={styles.reviewInterestText}>{p}</Text>
-                        </View>
-                      ))}
-                    </View>
-                  </View>
-                )}
               </View>
             </ScrollView>
           </View>

@@ -7,8 +7,10 @@ import {
   TouchableOpacity,
   ScrollView,
   TextInput,
+
   Platform,
   Alert,
+  ActivityIndicator,
   Image,
   Keyboard,
 } from 'react-native';
@@ -67,6 +69,7 @@ export default function ReportUploadModal({
   const [volunteerPraise, setVolunteerPraise] = useState('');
   const [gratitudeNote, setGratitudeNote] = useState('');
   const [selectedReportPhoto, setSelectedReportPhoto] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [metrics, setMetrics] = useState({
     volunteerEventJoins: '',
     verifiedAttendance: '',
@@ -78,11 +81,34 @@ export default function ReportUploadModal({
   });
   const [showProjectPicker, setShowProjectPicker] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [submissionError, setSubmissionError] = useState<string | null>(null);
 
   const isVolunteer = userRole === 'volunteer';
   const isPartner = userRole === 'partner';
   const entityLabel = isVolunteer ? 'Event' : 'Project';
   const entityLabelLower = entityLabel.toLowerCase();
+
+  const availableProjects = useMemo(() => {
+    if (isVolunteer) {
+      return projects.filter(project => Boolean(project.isEvent));
+    }
+    return projects;
+  }, [isVolunteer, projects]);
+
+  const defaultVolunteerProjectId = useMemo(() => {
+    if (!isVolunteer) return projects[0]?.id;
+    const timedInLog = (volunteerTimeLogs || []).find(log => Boolean(log.timeIn));
+    if (timedInLog && projects.some(p => p.id === timedInLog.projectId)) {
+      return timedInLog.projectId;
+    }
+    const joinRecord = (volunteerJoinRecords || []).find(
+      r => !volunteerProfileId || r.volunteerId === volunteerProfileId
+    );
+    if (joinRecord && projects.some(p => p.id === joinRecord.projectId)) {
+      return joinRecord.projectId;
+    }
+    return projects[0]?.id;
+  }, [isVolunteer, projects, volunteerJoinRecords, volunteerProfileId, volunteerTimeLogs]);
 
   const isVolunteerAssignedToTask = useCallback(
     (task: { assignedVolunteerId?: string; assignedVolunteerIds?: string[] }) => {
@@ -211,12 +237,12 @@ export default function ReportUploadModal({
 
     if (isVolunteer) {
       setReportType(volunteerReportType);
-      setSelectedProject(current => current || projects[0]?.id);
+      setSelectedProject(current => current || initialProjectId || defaultVolunteerProjectId);
     }
 
     if (isPartner) {
       setReportType('program_impact');
-      setSelectedProject(current => current || projects[0]?.id);
+      setSelectedProject(current => current || initialProjectId || projects[0]?.id);
     }
 
     if (initialProjectId) {
@@ -226,6 +252,7 @@ export default function ReportUploadModal({
       setDescription(initialDescription);
     }
   }, [
+    defaultVolunteerProjectId,
     initialDescription,
     initialProjectId,
     isPartner,
@@ -304,7 +331,7 @@ export default function ReportUploadModal({
   const validateForm = () => {
     const nextErrors: Record<string, string> = {};
 
-    if (!title.trim() && !isPartner) {
+    if (!title.trim() && !isPartner && !isVolunteer) {
       nextErrors.title = 'Title is required';
     }
 
@@ -336,7 +363,11 @@ export default function ReportUploadModal({
     }
 
     setErrors(nextErrors);
-    return Object.keys(nextErrors).length === 0;
+    const firstError = Object.values(nextErrors)[0];
+    if (firstError) {
+      Alert.alert('Check Report Details', firstError);
+    }
+    return !firstError;
   };
 
   const handleReset = useCallback(() => {
@@ -347,6 +378,8 @@ export default function ReportUploadModal({
     setVolunteerPraise('');
     setGratitudeNote('');
     setSelectedReportPhoto('');
+    setIsSubmitting(false);
+    setSubmissionError(null);
     setMetrics({
       volunteerEventJoins: '',
       verifiedAttendance: '',
@@ -390,6 +423,11 @@ export default function ReportUploadModal({
   }, []);
 
   const handleSubmit = useCallback(async () => {
+    if (isSubmitting) {
+      return;
+    }
+    setSubmissionError(null);
+
     if (!validateForm()) {
       return;
     }
@@ -401,10 +439,10 @@ export default function ReportUploadModal({
       );
 
       if (!hasTimeIn) {
-        Alert.alert(
-          'Time-in Required',
-          'You must time-in to this event before you can submit a report. Please use the time tracking feature first.'
-        );
+        const errorMsg =
+          'You must time-in to this event before you can submit a report. If you timed into a different event, please select it from the Event selector above.';
+        setSubmissionError(errorMsg);
+        Alert.alert('Time-in Required', errorMsg);
         return;
       }
     }
@@ -415,6 +453,7 @@ export default function ReportUploadModal({
 
     if (isPartner) {
       if (!selectedProject || !selectedPartnerProjectSummary) {
+        Alert.alert('Approved Project Required', 'Select an approved project before submitting a report.');
         return;
       }
 
@@ -440,13 +479,21 @@ export default function ReportUploadModal({
       };
 
       Keyboard.dismiss();
-      const submissionSucceeded = await onSubmit(reportData);
-      if (submissionSucceeded === false) {
-        return;
-      }
+      setIsSubmitting(true);
+      try {
+        const submissionSucceeded = await onSubmit(reportData);
+        if (submissionSucceeded === false) {
+          setSubmissionError('Failed to submit report. Please try again.');
+          return;
+        }
 
-      handleReset();
-      onClose();
+        handleReset();
+        onClose();
+      } catch (err: any) {
+        setSubmissionError(err?.message || 'Failed to submit report. Please try again.');
+      } finally {
+        setIsSubmitting(false);
+      }
       return;
     }
 
@@ -506,13 +553,24 @@ export default function ReportUploadModal({
     };
 
     Keyboard.dismiss();
-    const submissionSucceeded = await onSubmit(reportData);
-    if (submissionSucceeded === false) {
-      return;
-    }
+    setIsSubmitting(true);
+    try {
+      const submissionSucceeded = await onSubmit(reportData);
+      if (submissionSucceeded === false) {
+        // The onSubmit handler already showed the error toast, so we just need to keep the form open
+        setSubmissionError('Report submission failed. Please check the details and try again.');
+        return;
+      }
 
-    handleReset();
-    onClose();
+      handleReset();
+      onClose();
+    } catch (err: any) {
+      const errorMessage = err?.message || 'Failed to submit report.';
+      setSubmissionError(errorMessage);
+      Alert.alert('Submission Error', errorMessage);
+    } finally {
+      setIsSubmitting(false);
+    }
 
   }, [
     collaborationFeedback,
@@ -520,6 +578,7 @@ export default function ReportUploadModal({
     gratitudeNote,
     handleReset,
     isPartner,
+    isSubmitting,
     isVolunteer,
     metrics,
     onSubmit,
@@ -741,25 +800,42 @@ export default function ReportUploadModal({
 
       {showProjectPicker ? (
         <View style={styles.projectList}>
-          {projects.map(project => (
-            <TouchableOpacity
-              key={project.id}
-              style={styles.projectOption}
-              onPress={() => {
-                setSelectedProject(project.id);
-                setShowProjectPicker(false);
-              }}
-            >
-              <Text style={styles.projectOptionText}>{project.title}</Text>
-              <Text style={styles.projectOptionCategory}>
-                {project.isEvent ? 'Event' : project.category}
-              </Text>
-            </TouchableOpacity>
-          ))}
+          {availableProjects.map(project => {
+            const hasConfirmedTimeIn = (volunteerTimeLogs || []).some(
+              log => log.projectId === project.id && Boolean(log.timeIn)
+            );
+            return (
+              <TouchableOpacity
+                key={project.id}
+                style={[
+                  styles.projectOption,
+                  selectedProject === project.id && styles.projectOptionSelected,
+                ]}
+                onPress={() => {
+                  setSelectedProject(project.id);
+                  setShowProjectPicker(false);
+                  setSubmissionError(null);
+                }}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.projectOptionText}>{project.title}</Text>
+                  <Text style={styles.projectOptionCategory}>
+                    {hasConfirmedTimeIn ? 'Attendance Confirmed' : project.isEvent ? 'Event' : project.category}
+                  </Text>
+                </View>
+                {hasConfirmedTimeIn ? (
+                  <View style={styles.activeAttendanceBadge}>
+                    <MaterialIcons name="check" size={12} color="#166534" />
+                    <Text style={styles.activeAttendanceText}>Timed In</Text>
+                  </View>
+                ) : null}
+              </TouchableOpacity>
+            );
+          })}
         </View>
       ) : null}
 
-      <Text style={styles.label}>Title *</Text>
+      <Text style={styles.label}>Title</Text>
       <TextInput
         style={[styles.input, errors.title && styles.inputError]}
         placeholder="Event report title"
@@ -795,8 +871,6 @@ export default function ReportUploadModal({
             : 'Select an event to load your assigned task.'}
         </Text>
       </View>
-
-
 
       <Text style={styles.sectionTitle}>Report Photo</Text>
       <Text style={styles.sectionHelper}>
@@ -856,8 +930,6 @@ export default function ReportUploadModal({
           )}
         </View>
       )}
-
-
 
       <Text style={styles.sectionTitle}>Short Admin Summary</Text>
       <Text style={styles.sectionHelper}>
@@ -957,7 +1029,7 @@ export default function ReportUploadModal({
           >
             <Text style={styles.projectOptionText}>No project</Text>
           </TouchableOpacity>
-          {projects.map(project => (
+          {availableProjects.map(project => (
             <TouchableOpacity
               key={project.id}
               style={styles.projectOption}
@@ -1018,13 +1090,34 @@ export default function ReportUploadModal({
               : renderStandardFields()}
           </ScrollView>
 
+          {submissionError ? (
+            <View style={styles.submissionErrorCard}>
+              <MaterialIcons name="error-outline" size={18} color="#b91c1c" />
+              <Text style={styles.submissionErrorText}>{submissionError}</Text>
+            </View>
+          ) : null}
+
           <View style={styles.footer}>
-            <TouchableOpacity onPress={handleClose} style={styles.cancelButton}>
+            <TouchableOpacity
+              onPress={handleClose}
+              style={[styles.cancelButton, isSubmitting && styles.disabledButton]}
+              disabled={isSubmitting}
+            >
               <Text style={styles.cancelButtonText}>Cancel</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={handleSubmit} style={styles.submitButton}>
-              <MaterialIcons name="check-circle" size={18} color="#fff" />
-              <Text style={styles.submitButtonText}>Submit Report</Text>
+            <TouchableOpacity
+              onPress={handleSubmit}
+              style={[styles.submitButton, isSubmitting && styles.submitButtonDisabled]}
+              disabled={isSubmitting}
+            >
+              {isSubmitting ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <MaterialIcons name="check-circle" size={18} color="#fff" />
+              )}
+              <Text style={styles.submitButtonText}>
+                {isSubmitting ? 'Submitting...' : 'Submit Report'}
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1457,6 +1550,9 @@ const styles = StyleSheet.create({
     borderColor: '#cbd5e1',
     alignItems: 'center',
   },
+  disabledButton: {
+    opacity: 0.65,
+  },
   cancelButtonText: {
     fontSize: 14,
     fontWeight: '700',
@@ -1471,6 +1567,10 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 10,
     backgroundColor: '#166534',
+  },
+  submitButtonDisabled: {
+    backgroundColor: '#15803d',
+    opacity: 0.85,
   },
   submitButtonText: {
     fontSize: 14,
@@ -1552,5 +1652,44 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#166534',
+  },
+  projectOptionSelected: {
+    backgroundColor: '#f0fdf4',
+    borderColor: '#86efac',
+  },
+  activeAttendanceBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: '#dcfce7',
+    borderWidth: 1,
+    borderColor: '#86efac',
+  },
+  activeAttendanceText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#166534',
+  },
+  submissionErrorCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    borderRadius: 8,
+    padding: 12,
+    marginHorizontal: 16,
+    marginBottom: 8,
+  },
+  submissionErrorText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    color: '#b91c1c',
   },
 });

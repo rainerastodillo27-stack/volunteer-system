@@ -710,6 +710,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
         return;
       }
 
+      setActionLoadingKey(`attendance-${projectId}`);
       const createdLog = await startVolunteerTimeLog(
         volunteerProfile.id,
         projectId,
@@ -744,6 +745,8 @@ export default function VolunteerTasksScreen({ navigation }: any) {
         getRequestErrorTitle(error, 'Unable to confirm attendance'),
         getRequestErrorMessage(error, 'Please try again.')
       );
+    } finally {
+      setActionLoadingKey(null);
     }
   };
 
@@ -1918,21 +1921,35 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                             style={[
                               styles.attendanceButton,
                               styles.timeInButton,
-                              !attendanceState.canConfirmAttendance && !attendanceState.eventHasNotStarted && styles.attendanceButtonDisabled,
+                              ((!attendanceState.canConfirmAttendance && !attendanceState.eventHasNotStarted) ||
+                                actionLoadingKey === `attendance-${selectedTaskGroup.projectId}`) &&
+                                styles.attendanceButtonDisabled,
                             ]}
                             onPress={() => void handleConfirmAttendanceForProject(selectedTaskGroup.projectId)}
-                            disabled={!attendanceState.canConfirmAttendance && !attendanceState.eventHasNotStarted}
+                            disabled={
+                              (!attendanceState.canConfirmAttendance && !attendanceState.eventHasNotStarted) ||
+                              actionLoadingKey === `attendance-${selectedTaskGroup.projectId}`
+                            }
                           >
-                            <MaterialIcons name={attendanceState.eventHasNotStarted ? "photo-camera" : "verified-user"} size={18} color="#fff" />
-                            <Text style={styles.attendanceButtonText}>
-                              {attendanceState.eventHasNotStarted
-                                ? 'Submit Photo'
-                                : attendanceState.hasConfirmedToday
-                                ? 'Done Today'
-                                : attendanceState.eventHasEnded
-                                ? 'Closed'
-                                : 'Confirm Attendance'}
-                            </Text>
+                            {actionLoadingKey === `attendance-${selectedTaskGroup.projectId}` ? (
+                              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                <ActivityIndicator size="small" color="#fff" />
+                                <Text style={styles.attendanceButtonText}>Confirming Attendance...</Text>
+                              </View>
+                            ) : (
+                              <>
+                                <MaterialIcons name={attendanceState.eventHasNotStarted ? "photo-camera" : "verified-user"} size={18} color="#fff" />
+                                <Text style={styles.attendanceButtonText}>
+                                  {attendanceState.eventHasNotStarted
+                                    ? 'Submit Photo'
+                                    : attendanceState.hasConfirmedToday
+                                    ? 'Done Today'
+                                    : attendanceState.eventHasEnded
+                                    ? 'Closed'
+                                    : 'Confirm Attendance'}
+                                </Text>
+                              </>
+                            )}
                           </TouchableOpacity>
                         </View>
                       </View>

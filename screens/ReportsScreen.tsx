@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import ModernTheme from '../utils/modernTheme';
-import { Alert, Modal, StyleSheet, FlatList, View, Text, ScrollView, TouchableOpacity } from 'react-native';
+import { Alert, Modal, StyleSheet, FlatList, View, Text, ScrollView, TouchableOpacity, Platform, Animated } from 'react-native';
 import { useAuth } from '../contexts/AuthContext';
 import {
   getAllPartnerReports,
@@ -312,8 +313,8 @@ function buildPartnerProjectSummaries(
           (left, right) =>
             new Date(right.submittedAt).getTime() - new Date(left.submittedAt).getTime()
         );
-      const relatedCompletedLogs = volunteerTimeLogs.filter(
-        log => linkedEventIds.has(log.projectId) && Boolean(log.timeOut)
+      const relatedCheckedAttendanceLogs = volunteerTimeLogs.filter(
+        log => linkedEventIds.has(log.projectId) && Boolean(log.attendanceCheckedAt)
       );
       const relatedEventJoinRecords = volunteerJoinRecords.filter(record =>
         linkedEventIds.has(record.projectId)
@@ -359,12 +360,12 @@ function buildPartnerProjectSummaries(
         }
       });
 
-      relatedCompletedLogs.forEach(log => {
+      relatedCheckedAttendanceLogs.forEach(log => {
         const volunteer = volunteerById.get(log.volunteerId);
         const accountKey = volunteer?.userId || `volunteer:${log.volunteerId}`;
         const account = ensureVolunteerAccount(accountKey, volunteer?.name || 'Volunteer');
         account.verifiedAttendance += 1;
-        const latestLogTime = log.timeOut || log.timeIn;
+        const latestLogTime = log.attendanceCheckedAt || log.timeOut || log.timeIn;
         if (
           latestLogTime &&
           (!account.latestActivityAt ||
@@ -404,7 +405,7 @@ function buildPartnerProjectSummaries(
       const metrics: SubmittedReport['metrics'] = {
         activeVolunteers: volunteerAccounts.length,
         volunteerEventJoins: relatedEventJoinRecords.length,
-        verifiedAttendance: relatedCompletedLogs.length,
+        verifiedAttendance: relatedCheckedAttendanceLogs.length,
         beneficiariesServed: volunteerReports.reduce(
           (sum, report) => sum + (report.metrics.beneficiariesServed || 0),
           0
@@ -462,6 +463,14 @@ export default function ReportsScreen({ navigation, route }: any) {
   const reportsLoadInFlightRef = useRef<Promise<void> | null>(null);
   const reportsReloadQueuedRef = useRef(false);
   const hasLoadedReportsRef = useRef(false);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showToast = useCallback((message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast({ message, type });
+    toastTimerRef.current = setTimeout(() => setToast(null), 4500);
+  }, []);
 
   const loadProjects = useCallback(async () => {
     if (user?.role === 'volunteer' && user.id) {
@@ -600,6 +609,14 @@ export default function ReportsScreen({ navigation, route }: any) {
     }, 50);
   }, [loadReportsCoalesced, loadVolunteers]);
 
+  // Reload reports every time this screen is focused so the admin always
+  // sees the latest submissions without needing a manual pull-to-refresh.
+  useFocusEffect(
+    useCallback(() => {
+      void loadReportsCoalesced();
+    }, [loadReportsCoalesced])
+  );
+
   useEffect(() => {
     return subscribeToStorageChanges(
       ['partnerReports', 'projects', 'partnerProjectApplications', 'volunteerTimeLogs', 'volunteerProjectJoins'],
@@ -688,11 +705,11 @@ export default function ReportsScreen({ navigation, route }: any) {
       const targetProjectId =
         reportData.projectId || (user.role === 'volunteer' ? undefined : projects[0]?.id);
       if (!targetProjectId) {
-        Alert.alert(
-          'Validation Error',
+        showToast(
           user.role === 'volunteer'
             ? 'Select an event you already timed in to before submitting a report.'
-            : 'Select a project before submitting a report.'
+            : 'Select a project before submitting a report.',
+          'error'
         );
         return false;
       }
@@ -704,10 +721,7 @@ export default function ReportsScreen({ navigation, route }: any) {
           reportType === 'field_report' &&
           !fieldOfficerProjectIds.includes(targetProjectId)
         ) {
-          Alert.alert(
-            'Field Officer Only',
-            'Field reports are only for the assigned field officer of that event.'
-          );
+          showToast('Field reports are only for the assigned field officer of that event.', 'error');
           return false;
         }
 
@@ -718,9 +732,9 @@ export default function ReportsScreen({ navigation, route }: any) {
         if (user.role === 'partner') {
           const allowedProjectIds = new Set(partnerAcceptedProjects.map(project => project.id));
           if (!allowedProjectIds.has(targetProjectId)) {
-            Alert.alert(
-              'Approved Projects Only',
-              'Partners can only submit reports for projects that they proposed and the admin approved.'
+            showToast(
+              'Partners can only submit reports for projects that they proposed and the admin approved.',
+              'error'
             );
             return false;
           }
@@ -770,11 +784,10 @@ export default function ReportsScreen({ navigation, route }: any) {
         setShowUploadModal(false);
         const successMessage = user.role === 'volunteer'
           ? hadActiveVolunteerLog
-            ? 'Your report was submitted for today\'s confirmed attendance.'
-            : 'Your report was submitted to the event reports.'
-          : 'Your report was submitted to the impact hub.';
-        
-        Alert.alert('Success', successMessage);
+            ? 'Report submitted! Your attendance has been confirmed.'
+            : 'Report submitted successfully to the event reports.'
+          : 'Report submitted to the impact hub.';
+        showToast(successMessage, 'success');
         // Reload reports in background without blocking
         void loadReportsCoalesced();
         return true;
@@ -783,8 +796,8 @@ export default function ReportsScreen({ navigation, route }: any) {
         const detail =
           typeof error?.message === 'string' && error.message.trim()
             ? error.message.trim()
-            : 'Failed to submit report.';
-        Alert.alert('Error', detail);
+            : 'Failed to submit report. Please try again.';
+        showToast(detail, 'error');
         return false;
       }
     },
@@ -831,14 +844,14 @@ export default function ReportsScreen({ navigation, route }: any) {
         await reviewPartnerReport(reportId, user.id, 'Reviewed', notes || undefined);
         setShowDetailsModal(false);
         setSelectedReport(null);
-        Alert.alert('Approved', 'The report has been approved and the submitter has been notified.');
+        showToast('Report approved. The submitter has been notified.', 'success');
         // Reload in background without blocking
         void loadReportsCoalesced();
       } catch (error: any) {
-        Alert.alert('Error', error?.message || 'Failed to approve report.');
+        showToast(error?.message || 'Failed to approve report.', 'error');
       }
     },
-    [loadReportsCoalesced, user?.id]
+    [loadReportsCoalesced, showToast, user?.id]
   );
 
   const handleRejectReport = useCallback(
@@ -850,14 +863,14 @@ export default function ReportsScreen({ navigation, route }: any) {
         setSelectedReport(null);
         // Optimistically remove from display immediately
         setReports(prev => prev.filter(report => report.id !== reportId));
-        Alert.alert('Rejected', 'The report has been rejected and the submitter has been notified.');
+        showToast('Report rejected. The submitter has been notified.', 'info');
         // Reload in background to sync any changes
         void loadReportsCoalesced();
       } catch (error: any) {
-        Alert.alert('Error', error?.message || 'Failed to reject report.');
+        showToast(error?.message || 'Failed to reject report.', 'error');
       }
     },
-    [loadReportsCoalesced, user?.id]
+    [loadReportsCoalesced, showToast, user?.id]
   );
 
   const handleCloseUploadModal = useCallback(() => {
@@ -880,7 +893,7 @@ export default function ReportsScreen({ navigation, route }: any) {
   );
 
   const volunteerEventProjects = useMemo(() => {
-    return projects;
+    return projects.filter(project => Boolean(project.isEvent));
   }, [projects]);
 
   const handleOpenUploadModal = useCallback(() => {
@@ -951,6 +964,23 @@ export default function ReportsScreen({ navigation, route }: any) {
 
   return (
     <>
+      {/* In-app toast banner — replaces Alert.alert which browsers can block */}
+      {toast ? (
+        <View
+          style={[
+            styles.toastBanner,
+            toast.type === 'success' && styles.toastSuccess,
+            toast.type === 'error' && styles.toastError,
+            toast.type === 'info' && styles.toastInfo,
+          ]}
+          pointerEvents="none"
+        >
+          <Text style={styles.toastIcon}>
+            {toast.type === 'success' ? '✅' : toast.type === 'error' ? '❌' : 'ℹ️'}
+          </Text>
+          <Text style={styles.toastText}>{toast.message}</Text>
+        </View>
+      ) : null}
       {dashboard}
       <ReportUploadModal
         visible={showUploadModal}
@@ -1127,5 +1157,48 @@ const styles = StyleSheet.create({
   emptyStateText: {
     fontSize: 14,
     color: '#999',
+  },
+  toastBanner: {
+    position: 'absolute',
+    top: 20,
+    left: '10%',
+    right: '10%',
+    zIndex: 99999,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: '#ffffff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    elevation: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    gap: 10,
+  },
+  toastSuccess: {
+    backgroundColor: '#f0fdf4',
+    borderColor: '#86efac',
+  },
+  toastError: {
+    backgroundColor: '#fef2f2',
+    borderColor: '#fca5a5',
+  },
+  toastInfo: {
+    backgroundColor: '#eff6ff',
+    borderColor: '#93c5fd',
+  },
+  toastIcon: {
+    fontSize: 18,
+  },
+  toastText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+    lineHeight: 18,
   },
 });

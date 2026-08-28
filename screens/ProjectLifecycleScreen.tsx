@@ -123,6 +123,8 @@ import {
 
   getVolunteerProjectJoinRecords,
 
+  saveVolunteerProjectMatch,
+
   reviewPartnerReport,
 
   reviewPartnerProjectApplication,
@@ -156,6 +158,8 @@ import {
   getStorageItem,
 
   setStorageItem,
+
+  setVolunteerAttendanceChecked,
 
 } from '../models/storage';
 
@@ -3592,6 +3596,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   const shouldRestoreListScrollRef = React.useRef(false);
   const lastProgramSuiteNavKeyRef = React.useRef(route?.params?.programSuiteNavKey);
+  const lastRouteNavTimestampRef = React.useRef((route?.params as any)?.navTimestamp);
 
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
 
@@ -3636,6 +3641,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
 
   const [previewImageModalVisible, setPreviewImageModalVisible] = useState(false);
+
+  const [previewAttendanceLog, setPreviewAttendanceLog] = useState<VolunteerTimeLog | null>(null);
+
+  const [attendanceCheckInFlightLogId, setAttendanceCheckInFlightLogId] = useState<string | null>(null);
 
   const [taskBoardModalVisible, setTaskBoardModalVisible] = useState(false);
 
@@ -4161,48 +4170,42 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
   useEffect(() => {
-
-    setProgramSuiteView(getProgramSuiteViewFromRoute(route));
+    const nextView = getProgramSuiteViewFromRoute(route);
+    setProgramSuiteView(nextView);
 
     const routeProgramSuiteNavKey = route?.params?.programSuiteNavKey;
+    const routeNavTimestamp = (route?.params as any)?.navTimestamp;
     const programSuiteNavKeyChanged =
-      routeProgramSuiteNavKey &&
+      Boolean(routeProgramSuiteNavKey) &&
       routeProgramSuiteNavKey !== lastProgramSuiteNavKeyRef.current;
+    const routeNavTimestampChanged =
+      Boolean(routeNavTimestamp) &&
+      routeNavTimestamp !== lastRouteNavTimestampRef.current;
+    const isNavigationTrigger = programSuiteNavKeyChanged || routeNavTimestampChanged;
 
-    if (programSuiteNavKeyChanged) {
+    if (isNavigationTrigger) {
       lastProgramSuiteNavKeyRef.current = routeProgramSuiteNavKey;
-
+      lastRouteNavTimestampRef.current = routeNavTimestamp;
       if (!route?.params?.projectId) {
-
         setSelectedProject(null);
-
         setSelectedProgramWebModule(null);
-
+        setShowVolunteerApplicationsModal(false);
+        setShowAttendanceTasks(false);
+        setShowProjectModal(false);
+        setProjectEditorMode(null);
       }
-
     }
-
-    
 
     if (route?.params?.projectId && projects.length > 0) {
-
       const targetId = route.params.projectId;
-
       const targetProject = projects.find(p => p.id === targetId);
-
       if (targetProject && selectedProject?.id !== targetProject.id) {
-
         setSelectedProject(targetProject);
-
         // Clear the param so it doesn't get stuck if they close the modal
-
         navigation?.setParams?.({ projectId: undefined });
-
       }
-
     }
-
-  }, [route?.name, route?.params?.programSuiteNavKey, route?.params?.programSuiteView, route?.params?.projectId, projects]);
+  }, [route?.name, (route?.params as any)?.navTimestamp, route?.params?.programSuiteNavKey, route?.params?.programSuiteView, route?.params?.projectId, projects]);
 
 
 
@@ -4546,13 +4549,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         await refreshLight();
 
-        // schedule deferred loads without blocking render
+        // schedule deferred loads without blocking render - increased timeout for better UX
 
         setTimeout(() => {
 
           void refreshDeferred();
 
-        }, 50);
+        }, 150);
 
       };
 
@@ -8870,6 +8873,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     ].filter(Boolean));
 
     projects.forEach(candidate => {
+      // Include child events (events where parentProjectId matches this project)
+      if (candidate.isEvent && candidate.parentProjectId === project.id) {
+        relatedProjectIds.add(String(candidate.id || '').trim());
+      }
+
 
       const candidateTitle = String(candidate.title || '').trim().toLowerCase();
 
@@ -8973,6 +8981,51 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   };
 
+  const getProjectVolunteerSummary = (project: Project) => {
+    const relatedProjects = project.isEvent
+      ? [project]
+      : projects.filter(candidate =>
+          candidate.id === project.id ||
+          (candidate.isEvent && candidate.parentProjectId === project.id)
+        );
+    const relatedProjectIds = new Set(
+      relatedProjects
+        .map(candidate => String(candidate.id || '').trim())
+        .filter(Boolean)
+    );
+    const volunteerIds = new Set<string>();
+
+    relatedProjects.forEach(candidate => {
+      (Array.isArray(candidate.volunteers) ? candidate.volunteers : [])
+        .map(id => String(id || '').trim())
+        .filter(Boolean)
+        .forEach(id => volunteerIds.add(id));
+      (((candidate as any).joinedUserIds || []) as string[])
+        .map(id => String(id || '').trim())
+        .filter(Boolean)
+        .forEach(id => volunteerIds.add(id));
+    });
+
+    allVolunteerMatches.forEach(match => {
+      if (match.status === 'Matched' && relatedProjectIds.has(String(match.projectId || '').trim())) {
+        const volunteerId = String(match.volunteerId || '').trim();
+        if (volunteerId) {
+          volunteerIds.add(volunteerId);
+        }
+      }
+    });
+
+    const needed = relatedProjects.reduce(
+      (total, candidate) => total + Math.max(0, Number(candidate.volunteersNeeded || 0)),
+      0
+    );
+
+    return {
+      count: volunteerIds.size,
+      needed,
+    };
+  };
+
 
 
   const getVolunteerProfileForMatch = (volunteerId: string) => {
@@ -9022,6 +9075,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
     projects.forEach(candidate => {
+      // Include child events (events where parentProjectId matches this project)
+      if (candidate.isEvent && candidate.parentProjectId === project.id) {
+        relatedProjectIds.add(String(candidate.id || '').trim());
+      }
+
 
       const candidateTitle = String(candidate.title || '').trim().toLowerCase();
 
@@ -11638,51 +11696,85 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
   const handleReviewApplication = async (matchId: string, status: 'Matched' | 'Rejected') => {
-
     if (!user?.id) return;
-
     try {
-
       setReviewActionLoadingId(`${matchId}-${status}`);
-
-      await reviewVolunteerProjectMatch(matchId, status, user.id);
-
-      Alert.alert('Success', `Application successfully ${status === 'Matched' ? 'approved' : 'rejected'}!`);
-
-      if (activeSelectedProject) {
-
-        const matches = getRelatedVolunteerApplicationMatches(activeSelectedProject);
-
-        setSelectedEventMatches(matches || []);
-
-        
-
-        // Update currently selected match in details view
-
-        const updatedMatch = matches.find(m => m.id === matchId);
-
-        if (updatedMatch) {
-
-          setSelectedMatch(updatedMatch);
-
-        }
-
-        
-
-        await handleRefreshProjectDetails();
-
+      const currentMatch =
+        selectedEventMatches.find(match => match.id === matchId) ||
+        (selectedMatch?.id === matchId ? selectedMatch : null);
+      if (!currentMatch) {
+        throw new Error('Volunteer application was not found. Refresh the event and try again.');
       }
 
+      const reviewTargetMatch =
+        activeSelectedProject?.isEvent &&
+        currentMatch.projectId !== activeSelectedProject.id
+          ? { ...currentMatch, projectId: activeSelectedProject.id }
+          : currentMatch;
+
+      if (reviewTargetMatch.projectId !== currentMatch.projectId) {
+        await saveVolunteerProjectMatch(reviewTargetMatch);
+        setSelectedEventMatches(prev =>
+          prev.map(m => m.id === matchId ? reviewTargetMatch : m)
+        );
+        setSelectedMatch(prev =>
+          prev && prev.id === matchId ? reviewTargetMatch : prev
+        );
+      }
+
+      const updatedMatchRecord = await reviewVolunteerProjectMatch(matchId, status, user.id);
+
+      // 1. Immediately update local selectedEventMatches and selectedMatch state
+      setSelectedEventMatches(prev =>
+        prev.map(m => m.id === matchId ? { ...m, ...updatedMatchRecord, status } : m)
+      );
+      setSelectedMatch(prev =>
+        prev && prev.id === matchId ? { ...prev, ...updatedMatchRecord, status } : prev
+      );
+
+      // 2. Fetch fresh matches from storage to ensure total synchronization
+      const allMatches = await getAllVolunteerProjectMatches();
+      if (activeSelectedProject) {
+        const targetTitle = String(activeSelectedProject.title || '').trim().toLowerCase();
+        const projectIds = new Set<string>([
+          String(activeSelectedProject.id || '').trim(),
+          String(activeSelectedProject.parentProjectId || '').trim(),
+        ].filter(Boolean));
+        projects.forEach(candidate => {
+          const candidateTitle = String(candidate.title || '').trim().toLowerCase();
+          if (candidateTitle && candidateTitle === targetTitle) {
+            projectIds.add(String(candidate.id || '').trim());
+            if (candidate.parentProjectId) {
+              projectIds.add(String(candidate.parentProjectId).trim());
+            }
+          }
+        });
+        const freshMatches = allMatches.filter(m => projectIds.has(String(m.projectId || '').trim()));
+        setSelectedEventMatches(freshMatches);
+        const refetchedMatch = freshMatches.find(m => m.id === matchId);
+        if (refetchedMatch) {
+          setSelectedMatch(refetchedMatch);
+        }
+      }
+
+      // 3. Trigger project & volunteer reloads across the screen
+      void loadAllVolunteerMatches();
+      if (activeSelectedProject) {
+        void loadVolunteerMatchesForProject(activeSelectedProject.id);
+        void loadVolunteerJoinsForProject(activeSelectedProject.id);
+      }
+      void loadVolunteers();
+      void loadProjects();
+      await handleRefreshProjectDetails();
+      setReviewerNotes('');
+
+      Alert.alert('Success', `Application successfully ${status === 'Matched' ? 'approved' : 'declined'}!`);
     } catch (error) {
-
+      console.error('Failed to review application:', error);
       Alert.alert('Error', getRequestErrorMessage(error, `Failed to review application.`));
-
     } finally {
-
       setReviewActionLoadingId(null);
-
     }
-
   };
 
 
@@ -12071,7 +12163,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 {/* Scrollable List Container */}
 
-                <ScrollView contentContainerStyle={{ padding: 24 }} showsVerticalScrollIndicator={false}>
+                <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 24 }} showsVerticalScrollIndicator={true}>
 
                   
 
@@ -12633,7 +12725,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   {selectedMatch ? (
 
-                    <ScrollView contentContainerStyle={{ padding: 24 }} showsVerticalScrollIndicator={false}>
+                    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 24 }} showsVerticalScrollIndicator={true}>
 
                       
 
@@ -12865,142 +12957,114 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-                      {/* Review Section */}
-
-                      {selectedMatch.status === 'Requested' && (
-
+                                         {/* Review Section */}
+                      {selectedMatch.status === 'Requested' ? (
                         <View style={{ marginBottom: 24 }} {...({} as any)}>
-
                           <Text style={{ fontSize: 13, fontWeight: '800', color: '#475569', marginBottom: 12, textTransform: 'uppercase', letterSpacing: 0.5 }}>
-
                             Review
-
                           </Text>
-
                           <Text style={{ fontSize: 12, color: '#64748b', marginBottom: 6 }}>
-
                             Reviewer Notes (optional)
-
                           </Text>
-
                           <TextInput
-
                             placeholder="Add notes about this application..."
-
                             value={reviewerNotes}
-
                             onChangeText={setReviewerNotes}
-
                             multiline={true}
-
+                            numberOfLines={3}
                             style={{
-
-                              height: 80,
-
-                              backgroundColor: '#ffffff',
-
                               borderWidth: 1,
-
                               borderColor: '#cbd5e1',
-
                               borderRadius: 8,
-
                               padding: 10,
-
                               fontSize: 13,
-
+                              color: '#0f172a',
+                              backgroundColor: '#ffffff',
                               textAlignVertical: 'top',
-
+                              minHeight: 64,
                               marginBottom: 16
-
                             }}
-
+                            {...({} as any)}
                           />
-
-                          <View style={{ flexDirection: 'row', gap: 12 }}>
-
+                          <View style={{ flexDirection: 'row', gap: 12 }} {...({} as any)}>
                             <TouchableOpacity
-
                               onPress={() => handleReviewApplication(selectedMatch.id, 'Rejected')}
-
                               style={{
-
                                 flex: 1,
-
                                 paddingVertical: 12,
-
+                                backgroundColor: '#ffffff',
                                 borderWidth: 1,
-
                                 borderColor: '#ef4444',
-
                                 borderRadius: 8,
-
                                 justifyContent: 'center',
-
                                 alignItems: 'center'
-
                               }}
-
                               disabled={reviewActionLoadingId !== null}
-
                             >
-
                               <Text style={{ fontSize: 14, fontWeight: '700', color: '#ef4444' }}>Decline</Text>
-
                             </TouchableOpacity>
-
-
 
                             <TouchableOpacity
-
                               onPress={() => handleReviewApplication(selectedMatch.id, 'Matched')}
-
                               style={{
-
                                 flex: 2,
-
                                 paddingVertical: 12,
-
                                 backgroundColor: '#166534',
-
                                 borderRadius: 8,
-
                                 justifyContent: 'center',
-
                                 alignItems: 'center',
-
                                 flexDirection: 'row',
-
                                 gap: 6
-
                               }}
-
                               disabled={reviewActionLoadingId !== null}
-
                             >
-
                               {reviewActionLoadingId === `${selectedMatch.id}-Matched` ? (
-
                                 <ActivityIndicator size="small" color="#ffffff" />
-
                               ) : (
-
                                 <>
-
                                   <MaterialIcons name="check" size={18} color="#ffffff" />
-
                                   <Text style={{ fontSize: 14, fontWeight: '700', color: '#ffffff' }}>Approve Volunteer</Text>
-
                                 </>
-
                               )}
-
                             </TouchableOpacity>
-
                           </View>
-
                         </View>
-
+                      ) : selectedMatch.status === 'Matched' ? (
+                        <View style={{
+                          backgroundColor: '#f0fdf4',
+                          borderWidth: 1,
+                          borderColor: '#bbf7d0',
+                          borderRadius: 8,
+                          padding: 14,
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          gap: 10,
+                          marginBottom: 24,
+                        }} {...({} as any)}>
+                          <MaterialIcons name="check-circle" size={22} color="#166534" />
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ fontSize: 14, fontWeight: '700', color: '#166534' }}>Application Approved</Text>
+                            <Text style={{ fontSize: 12, color: '#15803d', marginTop: 2 }}>This volunteer has been confirmed and joined to the event.</Text>
+                          </View>
+                        </View>
+                      ) : (
+                        <View style={{
+                          backgroundColor: '#fef2f2',
+                          borderWidth: 1,
+                          borderColor: '#fecaca',
+                          borderRadius: 8,
+                          padding: 14,
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          gap: 10,
+                          marginBottom: 24,
+                        }} {...({} as any)}>
+                          <MaterialIcons name="cancel" size={22} color="#dc2626" />
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ fontSize: 14, fontWeight: '700', color: '#dc2626' }}>Application Declined</Text>
+                            <Text style={{ fontSize: 12, color: '#b91c1c', marginTop: 2 }}>This volunteer application was not accepted.</Text>
+                          </View>
+                        </View>
                       )}
 
 
@@ -18416,9 +18480,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     );
     const formattedProjectLocation = formatProjectLocation(activeSelectedProject);
 
-    const volunteerSlotsFilled = volunteerEntries.length;
+    const activeProjectVolunteerSummary = getProjectVolunteerSummary(activeSelectedProject);
 
-    const volunteerSlotsNeeded = activeSelectedProject.volunteersNeeded;
+    const volunteerSlotsFilled = activeProjectVolunteerSummary.count;
+
+    const volunteerSlotsNeeded = activeProjectVolunteerSummary.needed;
 
     const remainingVolunteerSlots = Math.max(volunteerSlotsNeeded - volunteerSlotsFilled, 0);
 
@@ -18946,6 +19012,23 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     };
 
+    const handleToggleAttendanceCheck = async (log: VolunteerTimeLog, checked: boolean) => {
+      if (!user) return;
+      if (attendanceCheckInFlightLogId === log.id) return;
+      
+      try {
+        setAttendanceCheckInFlightLogId(log.id);
+        const updatedLog = await setVolunteerAttendanceChecked(log.id, checked, user.id);
+        setPreviewAttendanceLog(current => current?.id === log.id ? updatedLog : current);
+        await loadVolunteerTimeLogs();
+        Alert.alert('Success', checked ? 'Attendance verified' : 'Verification removed');
+      } catch (error: any) {
+        Alert.alert('Error', error?.message || 'Failed to update attendance verification');
+      } finally {
+        setAttendanceCheckInFlightLogId(null);
+      }
+    };
+
 
 
     const handleExportAttendanceReport = () => {
@@ -19116,9 +19199,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-      const volunteersCount = volunteerEntries.length;
+      const projectVolunteerSummary = getProjectVolunteerSummary(project);
 
-      const volunteersNeeded = project.volunteersNeeded || 0;
+      const volunteersCount = projectVolunteerSummary.count;
+
+      const volunteersNeeded = projectVolunteerSummary.needed;
 
     const taskRows = Array.isArray(project.internalTasks) ? [...project.internalTasks] : [];
 
@@ -19143,6 +19228,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         return rightAssigned - leftAssigned || left.title.localeCompare(right.title);
 
       });
+
+      const activeTaskAction = taskCards.find(task => task.id === activeActionTaskId) || null;
+      const activeTaskActionAssignedIds = activeTaskAction ? getTaskAssignedVolunteerIds(activeTaskAction) : [];
 
 
 
@@ -19186,11 +19274,23 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       });
 
+      const activeAttendanceVolunteer = assignableVolunteers.find(volunteer => volunteer.id === activeActionTaskId) || null;
+      const activeAttendanceLogs = activeAttendanceVolunteer
+        ? volunteerTimeLogs
+          .filter(log => log.projectId === project.id && log.volunteerId === activeAttendanceVolunteer.id)
+          .sort((a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime())
+        : [];
+      const activeAttendanceLog = activeAttendanceLogs[0] || null;
+
 
 
       return (
 
-        <View style={{ flex: 1, backgroundColor: '#f6f7f3', padding: 24 }}>
+        <ScrollView
+          style={{ flex: 1, backgroundColor: '#f6f7f3' }}
+          contentContainerStyle={{ padding: 24, paddingBottom: 72 }}
+          showsVerticalScrollIndicator={true}
+        >
 
           <TouchableOpacity
 
@@ -19714,7 +19814,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
             overflow: 'hidden',
 
-            flex: 1,
+            maxHeight: 520,
 
             shadowColor: '#0f172a',
 
@@ -19778,7 +19878,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-            <ScrollView style={{ flex: 1 }}>
+            <ScrollView style={{ maxHeight: 470 }} showsVerticalScrollIndicator={true}>
 
               {taskCards.length === 0 ? (
 
@@ -19817,6 +19917,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                       paddingHorizontal: 20,
 
                       gap: 12,
+
+                      zIndex: activeActionTaskId === task.id ? 50 : 1,
 
                     }}>
 
@@ -19908,175 +20010,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-                      <View style={{ width: 60, alignItems: 'center', justifyContent: 'center', position: 'relative' }} {...({} as any)}>
+                      <View style={{ width: 60, alignItems: 'center', justifyContent: 'center' }} {...({} as any)}>
 
                          <TouchableOpacity onPress={() => setActiveActionTaskId(activeActionTaskId === task.id ? null : task.id)} style={{ padding: 4 }}>
 
                             <MaterialIcons name="more-vert" size={20} color="#64748b" />
 
                          </TouchableOpacity>
-
-                         
-
-                         {activeActionTaskId === task.id && (
-
-                           <View style={{
-
-                             position: 'absolute',
-
-                             right: 30,
-
-                             top: 0,
-
-                             backgroundColor: '#fff',
-
-                             borderRadius: 8,
-
-                             shadowColor: '#000',
-
-                             shadowOffset: { width: 0, height: 4 },
-
-                             shadowOpacity: 0.1,
-
-                             shadowRadius: 8,
-
-                             elevation: 4,
-
-                             minWidth: 160,
-
-                             zIndex: 1000,
-
-                             borderWidth: 1,
-
-                             borderColor: '#e2e8f0'
-
-                           }}>
-
-                             <TouchableOpacity
-
-                               onPress={() => {
-
-                                 setActiveActionTaskId(null);
-
-                                 setEditingTaskId(task.id);
-
-                                 setTaskDraft({
-
-                                   title: task.title,
-
-                                   description: task.description,
-
-                                   category: task.category,
-
-                                   volunteersNeeded: String((task as any).volunteersNeeded || assignedVolunteerIds.length || 1),
-
-                                   priority: task.priority,
-
-                                   status: task.status,
-
-                                   assignedVolunteerIds: assignedVolunteerIds,
-
-                                   isFieldOfficer: task.isFieldOfficer || false,
-
-                                   skillsNeeded: task.skillsNeeded || [],
-
-                                 });
-
-                                 setShowTaskModal(true);
-
-                               }}
-
-                               style={{ padding: 12, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' }}
-
-                             >
-
-                               <Text style={{ fontSize: 13, fontWeight: '600', color: '#334155' }}>Edit Task</Text>
-
-                             </TouchableOpacity>
-
-                             <TouchableOpacity
-
-                               onPress={() => {
-
-                                 setActiveActionTaskId(null);
-
-                                 handleDeleteInternalTask(task.id);
-
-                               }}
-
-                               style={{ padding: 12, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' }}
-
-                             >
-
-                               <Text style={{ fontSize: 13, fontWeight: '600', color: '#dc2626' }}>Delete Task</Text>
-
-                             </TouchableOpacity>
-
-                             <TouchableOpacity
-
-                               onPress={() => {
-
-                                 setActiveActionTaskId(null);
-
-                                 if (assignedVolunteerIds.length > 0) {
-
-                                   Alert.alert(
-
-                                     'Remove Volunteers',
-
-                                     'Are you sure you want to unassign all volunteers from this task?',
-
-                                     [
-
-                                       { text: 'Cancel', style: 'cancel' },
-
-                                       { text: 'Remove', style: 'destructive', onPress: async () => {
-
-                                          try {
-
-                                            const updatedTask = { ...task, assignedVolunteerIds: [], assignedVolunteerNames: [] };
-
-                                            const updatedTasks = taskCards.map(t => t.id === task.id ? updatedTask : t);
-
-                                            await saveProjectLikeRecord({ ...activeSelectedProject, internalTasks: updatedTasks });
-
-                                            setProjects(currentProjects =>
-
-                                              currentProjects.map(p =>
-
-                                                p.id === activeSelectedProject.id ? { ...activeSelectedProject, internalTasks: updatedTasks } : p
-
-                                              )
-
-                                            );
-
-                                          } catch (e) {
-
-                                            console.error(e);
-
-                                          }
-
-                                       }}
-
-                                     ]
-
-                                   );
-
-                                 }
-
-                               }}
-
-                               style={{ padding: 12 }}
-
-                             >
-
-                               <Text style={{ fontSize: 13, fontWeight: '600', color: '#dc2626' }}>Remove Assigned Volunteers</Text>
-
-                             </TouchableOpacity>
-
-                           </View>
-
-                         )}
 
                       </View>
 
@@ -20356,11 +20296,17 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       >
 
-                        <Text style={{ fontSize: 12, fontWeight: '700', color: isSelected ? '#fff' : '#64748b' }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
 
-                          {skill} {isSelected ? '├ù' : '+'}
+                          <Text style={{ fontSize: 12, fontWeight: '700', color: isSelected ? '#fff' : '#64748b' }}>
 
-                        </Text>
+                            {skill}
+
+                          </Text>
+
+                          <MaterialIcons name={isSelected ? 'close' : 'add'} size={13} color={isSelected ? '#ffffff' : '#64748b'} />
+
+                        </View>
 
                       </TouchableOpacity>
 
@@ -20372,7 +20318,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                     <TouchableOpacity key={skill} onPress={() => toggleTaskSkill(skill)} style={{ backgroundColor: '#166534', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: '#166534' }}>
 
-                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#fff' }}>{skill} ├ù</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+
+                        <Text style={{ fontSize: 12, fontWeight: '700', color: '#fff' }}>{skill}</Text>
+
+                        <MaterialIcons name="close" size={13} color="#ffffff" />
+
+                      </View>
 
                     </TouchableOpacity>
 
@@ -20460,7 +20412,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       >
 
-                        <Text style={{ fontSize: 12, fontWeight: '700', color: '#166534' }}>{volunteer.name} ├ù</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+
+                          <Text style={{ fontSize: 12, fontWeight: '700', color: '#166534' }}>{volunteer.name}</Text>
+
+                          <MaterialIcons name="close" size={13} color="#166534" />
+
+                        </View>
 
                       </TouchableOpacity>
 
@@ -20514,7 +20472,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
               overflow: 'hidden',
 
-              flex: 1,
+              maxHeight: 560,
 
             }}>
 
@@ -20566,7 +20524,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-              <ScrollView style={{ flex: 1 }}>
+              <ScrollView style={{ maxHeight: 510 }} showsVerticalScrollIndicator={true}>
 
                 {assignableVolunteers.length === 0 ? (
 
@@ -20648,6 +20606,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
+                    const isChecked = activeLog && Boolean(activeLog.attendanceCheckedAt);
+                    const isCheckingAttendance =
+                      activeLog && attendanceCheckInFlightLogId === activeLog.id;
+
                     return (
 
                       <View key={volunteer.id} style={{
@@ -20668,11 +20630,23 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       }}>
 
-                        <View style={{ width: 40 }}>
+                        <TouchableOpacity 
+                          style={{ width: 40 }}
+                          onPress={() => activeLog && handleToggleAttendanceCheck(activeLog, !isChecked)}
+                          disabled={!activeLog || Boolean(isCheckingAttendance)}
+                        >
 
-                          <MaterialIcons name="check-box-outline-blank" size={20} color="#cbd5e1" />
+                          {isCheckingAttendance ? (
+                            <ActivityIndicator size="small" color="#166534" />
+                          ) : (
+                            <MaterialIcons 
+                              name={isChecked ? "check-box" : "check-box-outline-blank"} 
+                              size={20} 
+                              color={isChecked ? "#166534" : "#cbd5e1"} 
+                            />
+                          )}
 
-                        </View>
+                        </TouchableOpacity>
 
                         <View style={{ flex: 2, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
 
@@ -20750,7 +20724,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                         </View>
 
-                        <View style={{ width: 40, alignItems: 'flex-end', position: 'relative' }} {...({} as any)}>
+                        <View style={{ width: 40, alignItems: 'flex-end' }} {...({} as any)}>
 
                           <TouchableOpacity 
 
@@ -20763,90 +20737,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                             <MaterialIcons name="more-vert" size={20} color="#64748b" />
 
                           </TouchableOpacity>
-
-                          {activeActionTaskId === volunteer.id && (
-
-                            <View style={{
-
-                              position: 'absolute',
-
-                              right: 30,
-
-                              top: 0,
-
-                              backgroundColor: '#fff',
-
-                              borderRadius: 8,
-
-                              shadowColor: '#000',
-
-                              shadowOffset: { width: 0, height: 4 },
-
-                              shadowOpacity: 0.1,
-
-                              shadowRadius: 8,
-
-                              elevation: 4,
-
-                              minWidth: 160,
-
-                              zIndex: 1000,
-
-                              borderWidth: 1,
-
-                              borderColor: '#e2e8f0'
-
-                            }}>
-
-                              <TouchableOpacity
-
-                                onPress={() => {
-
-                                  setActiveActionTaskId(null);
-
-                                  if (activeLog?.attendancePhoto) {
-
-                                    setPreviewImageUri(activeLog.attendancePhoto);
-
-                                    setPreviewImageModalVisible(true);
-
-                                  } else {
-
-                                    Alert.alert('No Photo', 'Volunteer has not submitted an attendance photo.');
-
-                                  }
-
-                                }}
-
-                                style={{ padding: 12, borderBottomWidth: 1, borderBottomColor: '#f1f5f9', flexDirection: 'row', alignItems: 'center', gap: 8 }}
-
-                              >
-
-                                <MaterialIcons name="photo-camera" size={16} color={activeLog?.attendancePhoto ? '#166534' : '#94a3b8'} />
-
-                                <Text style={{ fontSize: 13, fontWeight: '600', color: activeLog?.attendancePhoto ? '#334155' : '#94a3b8' }}>View Photo</Text>
-
-                              </TouchableOpacity>
-
-                              <TouchableOpacity
-
-                                onPress={() => {
-
-                                  setActiveActionTaskId(null);
-
-                                }}
-
-                                style={{ padding: 12 }}
-
-                              >
-
-                                <Text style={{ fontSize: 13, fontWeight: '600', color: '#64748b' }}>Close Menu</Text>
-
-                              </TouchableOpacity>
-
-                            </View>
-
-                          )}
 
                         </View>
 
@@ -20866,7 +20756,216 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-          <Modal visible={previewImageModalVisible} transparent animationType="fade" onRequestClose={() => setPreviewImageModalVisible(false)}>
+          <Modal transparent visible={Boolean(eventWorkspaceTab === 'Tasks' && activeTaskAction)} animationType="fade" onRequestClose={() => setActiveActionTaskId(null)}>
+
+            <Pressable style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.18)', justifyContent: 'center', alignItems: 'center', padding: 20 }} onPress={() => setActiveActionTaskId(null)}>
+
+              {activeTaskAction ? (
+
+                <Pressable style={{ width: '100%', maxWidth: 320, backgroundColor: '#ffffff', borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.12, shadowRadius: 18, elevation: 8 }} onPress={(event) => event.stopPropagation()}>
+
+                  <TouchableOpacity
+
+                    onPress={() => {
+
+                      setActiveActionTaskId(null);
+
+                      setEditingTaskId(activeTaskAction.id);
+
+                      setTaskDraft({
+
+                        title: activeTaskAction.title,
+
+                        description: activeTaskAction.description,
+
+                        category: activeTaskAction.category,
+
+                        volunteersNeeded: String((activeTaskAction as any).volunteersNeeded || activeTaskActionAssignedIds.length || 1),
+
+                        priority: activeTaskAction.priority,
+
+                        status: activeTaskAction.status,
+
+                        assignedVolunteerIds: activeTaskActionAssignedIds,
+
+                        isFieldOfficer: activeTaskAction.isFieldOfficer || false,
+
+                        skillsNeeded: activeTaskAction.skillsNeeded || [],
+
+                      });
+
+                      setShowTaskModal(true);
+
+                    }}
+
+                    style={{ padding: 14, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' }}
+
+                  >
+
+                    <Text style={{ fontSize: 14, fontWeight: '700', color: '#334155' }}>Edit Task</Text>
+
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+
+                    onPress={() => {
+
+                      setActiveActionTaskId(null);
+
+                      handleDeleteInternalTask(activeTaskAction.id);
+
+                    }}
+
+                    style={{ padding: 14, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' }}
+
+                  >
+
+                    <Text style={{ fontSize: 14, fontWeight: '700', color: '#dc2626' }}>Delete Task</Text>
+
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+
+                    onPress={() => {
+
+                      setActiveActionTaskId(null);
+
+                      if (activeTaskActionAssignedIds.length > 0) {
+
+                        Alert.alert(
+
+                          'Remove Volunteers',
+
+                          'Are you sure you want to unassign all volunteers from this task?',
+
+                          [
+
+                            { text: 'Cancel', style: 'cancel' },
+
+                            { text: 'Remove', style: 'destructive', onPress: async () => {
+
+                              try {
+
+                                const updatedTask = { ...activeTaskAction, assignedVolunteerIds: [], assignedVolunteerNames: [] };
+
+                                const updatedTasks = taskCards.map(t => t.id === activeTaskAction.id ? updatedTask : t);
+
+                                await saveProjectLikeRecord({ ...activeSelectedProject, internalTasks: updatedTasks });
+
+                                setProjects(currentProjects =>
+
+                                  currentProjects.map(p =>
+
+                                    p.id === activeSelectedProject.id ? { ...activeSelectedProject, internalTasks: updatedTasks } : p
+
+                                  )
+
+                                );
+
+                              } catch (e) {
+
+                                console.error(e);
+
+                              }
+
+                            }}
+
+                          ]
+
+                        );
+
+                      }
+
+                    }}
+
+                    style={{ padding: 14 }}
+
+                  >
+
+                    <Text style={{ fontSize: 14, fontWeight: '700', color: '#dc2626' }}>Remove Assigned Volunteers</Text>
+
+                  </TouchableOpacity>
+
+                </Pressable>
+
+              ) : null}
+
+            </Pressable>
+
+          </Modal>
+
+
+
+          <Modal transparent visible={Boolean(eventWorkspaceTab === 'Attendance' && activeAttendanceVolunteer)} animationType="fade" onRequestClose={() => setActiveActionTaskId(null)}>
+
+            <Pressable style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.18)', justifyContent: 'center', alignItems: 'center', padding: 20 }} onPress={() => setActiveActionTaskId(null)}>
+
+              {activeAttendanceVolunteer ? (
+
+                <Pressable style={{ width: '100%', maxWidth: 260, backgroundColor: '#ffffff', borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.12, shadowRadius: 18, elevation: 8 }} onPress={(event) => event.stopPropagation()}>
+
+                  <TouchableOpacity
+
+                    onPress={() => {
+
+                      setActiveActionTaskId(null);
+
+                      if (activeAttendanceLog?.attendancePhoto) {
+
+                        setPreviewImageUri(activeAttendanceLog.attendancePhoto);
+                        setPreviewAttendanceLog(activeAttendanceLog);
+
+                        setPreviewImageModalVisible(true);
+
+                      } else {
+
+                        Alert.alert('No Photo', 'Volunteer has not submitted an attendance photo.');
+
+                      }
+
+                    }}
+
+                    style={{ padding: 14, borderBottomWidth: 1, borderBottomColor: '#f1f5f9', flexDirection: 'row', alignItems: 'center', gap: 8 }}
+
+                  >
+
+                    <MaterialIcons name="photo-camera" size={16} color={activeAttendanceLog?.attendancePhoto ? '#166534' : '#94a3b8'} />
+
+                    <Text style={{ fontSize: 14, fontWeight: '700', color: activeAttendanceLog?.attendancePhoto ? '#334155' : '#94a3b8' }}>View Photo</Text>
+
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+
+                    onPress={() => setActiveActionTaskId(null)}
+
+                    style={{ padding: 14 }}
+
+                  >
+
+                    <Text style={{ fontSize: 14, fontWeight: '700', color: '#64748b' }}>Close Menu</Text>
+
+                  </TouchableOpacity>
+
+                </Pressable>
+
+              ) : null}
+
+            </Pressable>
+
+          </Modal>
+
+
+
+          <Modal
+            visible={previewImageModalVisible}
+            transparent
+            animationType="fade"
+            onRequestClose={() => {
+              setPreviewImageModalVisible(false);
+              setPreviewAttendanceLog(null);
+            }}
+          >
 
             <View style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.8)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
 
@@ -20876,7 +20975,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   <Text style={{ fontSize: 18, fontWeight: '800', color: '#0f172a' }}>Submitted Photo</Text>
 
-                  <TouchableOpacity onPress={() => setPreviewImageModalVisible(false)}>
+                  <TouchableOpacity
+                    onPress={() => {
+                      setPreviewImageModalVisible(false);
+                      setPreviewAttendanceLog(null);
+                    }}
+                  >
 
                     <MaterialIcons name="close" size={24} color="#64748b" />
 
@@ -20898,13 +21002,61 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 )}
 
+                {previewAttendanceLog ? (
+
+                  <View style={{ marginTop: 14, padding: 12, borderRadius: 10, backgroundColor: previewAttendanceLog.attendanceCheckedAt ? '#f0fdf4' : '#f8fafc', borderWidth: 1, borderColor: previewAttendanceLog.attendanceCheckedAt ? '#86efac' : '#e2e8f0' }}>
+
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+
+                      <MaterialIcons name={previewAttendanceLog.attendanceCheckedAt ? 'verified' : 'fact-check'} size={18} color={previewAttendanceLog.attendanceCheckedAt ? '#166534' : '#64748b'} />
+
+                      <Text style={{ flex: 1, fontSize: 13, fontWeight: '800', color: previewAttendanceLog.attendanceCheckedAt ? '#166534' : '#334155' }}>
+                        {previewAttendanceLog.attendanceCheckedAt ? 'Admin attendance confirmed after photo review' : 'Admin confirmation pending after photo review'}
+                      </Text>
+
+                    </View>
+
+                    {previewAttendanceLog.attendanceCheckedAt ? (
+
+                      <Text style={{ fontSize: 12, color: '#475569', marginBottom: 10 }}>
+                        Verified {format(new Date(previewAttendanceLog.attendanceCheckedAt), 'PPp')}
+                      </Text>
+
+                    ) : null}
+
+                    <TouchableOpacity
+                      onPress={() => void handleToggleAttendanceCheck(previewAttendanceLog, !Boolean(previewAttendanceLog.attendanceCheckedAt))}
+                      disabled={attendanceCheckInFlightLogId === previewAttendanceLog.id}
+                      style={{ minHeight: 42, borderRadius: 8, backgroundColor: previewAttendanceLog.attendanceCheckedAt ? '#f8fafc' : '#166534', borderWidth: 1, borderColor: previewAttendanceLog.attendanceCheckedAt ? '#cbd5e1' : '#166534', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, opacity: attendanceCheckInFlightLogId === previewAttendanceLog.id ? 0.75 : 1 }}
+                    >
+
+                      {attendanceCheckInFlightLogId === previewAttendanceLog.id ? (
+                        <ActivityIndicator size="small" color={previewAttendanceLog.attendanceCheckedAt ? '#475569' : '#ffffff'} />
+                      ) : (
+                        <MaterialIcons name={previewAttendanceLog.attendanceCheckedAt ? 'remove-done' : 'verified'} size={16} color={previewAttendanceLog.attendanceCheckedAt ? '#475569' : '#ffffff'} />
+                      )}
+
+                      <Text style={{ fontSize: 13, fontWeight: '800', color: previewAttendanceLog.attendanceCheckedAt ? '#475569' : '#ffffff' }}>
+                        {attendanceCheckInFlightLogId === previewAttendanceLog.id
+                          ? 'Saving Confirmation...'
+                          : previewAttendanceLog.attendanceCheckedAt
+                          ? 'Remove Admin Confirmation'
+                          : 'Confirm Attendance After Checking Photo'}
+                      </Text>
+
+                    </TouchableOpacity>
+
+                  </View>
+
+                ) : null}
+
               </View>
 
             </View>
 
           </Modal>
 
-        </View>
+        </ScrollView>
 
       );
 
@@ -20966,11 +21118,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
               style={premiumDetailsStyles.heroBackground}
 
+              imageStyle={{ borderRadius: 16 }}
+
               resizeMode="cover"
 
             >
 
-              <View style={premiumDetailsStyles.heroOverlay} />
+              <View style={[premiumDetailsStyles.heroOverlay, { borderRadius: 16 }]} />
 
 
 
@@ -21840,7 +21994,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   style={premiumDetailsStyles.actionBtnOutline}
 
-                  onPress={() => Alert.alert('Invite', 'Volunteers notification invites sent.')}
+                  onPress={() => {
+                    if (navigation) {
+                      navigation.navigate('Volunteers' as any, { projectId: activeSelectedProject.id });
+                    } else {
+                      Alert.alert('Invite Volunteers', 'Navigate to the Volunteers section to manage and invite volunteers for this project.');
+                    }
+                  }}
 
                 >
 
@@ -21856,7 +22016,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   style={premiumDetailsStyles.actionBtnOutline}
 
-                  onPress={() => Alert.alert('Reports', 'Redirecting to program reports review.')}
+                  onPress={() => {
+                    if (navigation) {
+                      navigation.navigate('Reports' as any, { projectId: activeSelectedProject.id });
+                    } else {
+                      Alert.alert('View Reports', 'Navigate to the Reports section to view and review submitted reports for this project.');
+                    }
+                  }}
 
                 >
 
@@ -22996,9 +23162,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                                   {sectionProjects.map((project, projectIndex) => {
 
-                                    const matches = allVolunteerMatches.filter(m => m.projectId === project.id && m.status === 'Matched');
-
-                                    const needed = project.volunteersNeeded || 0;
+                                    const volunteerSummary = getProjectVolunteerSummary(project);
                                     const projectStatus = getProjectDisplayStatus(project);
                                     const projectEnded = projectStatus === 'Completed' || projectStatus === 'Cancelled';
 
@@ -23156,7 +23320,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                                             <Text style={styles.projectsTableRowVolunteersText}>
 
-                                              {matches.length}/{needed}
+                                              {volunteerSummary.count}/{volunteerSummary.needed}
 
                                             </Text>
 
@@ -36017,13 +36181,19 @@ const premiumDetailsStyles = StyleSheet.create({
 
     borderRadius: 16,
 
-    overflow: 'hidden',
+    overflow: 'visible',
 
     marginBottom: 24,
 
     minHeight: 220,
 
     backgroundColor: '#0f172a',
+
+    position: 'relative',
+
+    zIndex: 100,
+
+    elevation: 20,
 
   },
 
@@ -36036,6 +36206,10 @@ const premiumDetailsStyles = StyleSheet.create({
     padding: 24,
 
     justifyContent: 'space-between',
+
+    borderRadius: 16,
+
+    overflow: 'visible',
 
   },
 

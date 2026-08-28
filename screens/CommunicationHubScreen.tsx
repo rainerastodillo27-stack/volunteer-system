@@ -80,6 +80,8 @@ import {
 
   saveEvent,
 
+  saveMessage,
+
   saveProject,
 
   subscribeToStorageChanges,
@@ -99,8 +101,6 @@ import {
   subscribeToGroupMessages,
 
   getDirectMessagesForUser,
-
-  sendDirectMessage,
 
   sendGroupMessage,
 
@@ -312,8 +312,34 @@ function dedupeProposalReviewCards(messagesToDedupe: ChatMessage[]): ChatMessage
 
 function mergeChatMessageLists<T extends ChatMessage>(...messageGroups: T[][]): T[] {
   const byId = new Map<string, T>();
+  const byMessageSignature = new Map<string, T>();
   messageGroups.flat().forEach(message => {
+    const messageWithOptionalTargets = message as ChatMessage & {
+      recipientId?: string;
+      projectId?: string;
+    };
+    const timestampBucket = Math.floor(new Date(message.timestamp).getTime() / 5000);
+    const messageSignature = [
+      message.senderId,
+      messageWithOptionalTargets.recipientId || '',
+      messageWithOptionalTargets.projectId || '',
+      message.content || '',
+      timestampBucket,
+    ].join('|');
+    const existingSimilarMessage = byMessageSignature.get(messageSignature);
+    if (existingSimilarMessage) {
+      const preferCurrentMessage =
+        message.id.startsWith('msg-') && !existingSimilarMessage.id.startsWith('msg-');
+      if (preferCurrentMessage) {
+        byId.delete(existingSimilarMessage.id);
+        byId.set(message.id, message);
+        byMessageSignature.set(messageSignature, message);
+      }
+      return;
+    }
+
     byId.set(message.id, message);
+    byMessageSignature.set(messageSignature, message);
   });
 
   return dedupeProposalReviewCards(Array.from(byId.values())).sort(
@@ -1405,7 +1431,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     if (!conversationUserId || loading) return;
 
 
-    const matchedUser = allUsers.find((candidate) => candidate.id === conversationUserId);
+    const matchedUser =
+      conversationUserId === 'admin-nvc'
+        ? allUsers.find((candidate) => candidate.role === 'admin')
+        : allUsers.find((candidate) => candidate.id === conversationUserId);
     if (matchedUser) {
       setSelectedUser(matchedUser);
       setSelectedProjectChat(null);
@@ -1882,7 +1911,9 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
     const trimmedMessage = messageText.trim();
 
-    if (!user || (!trimmedMessage && pendingAttachments.length === 0) || isSending) return;
+    const senderId = messageUserId || user?.id || '';
+
+    if (!user || !senderId || (!trimmedMessage && pendingAttachments.length === 0) || isSending) return;
 
     setIsSending(true);
 
@@ -1890,7 +1921,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       id: `msg-${Date.now()}`,
 
-      senderId: user.id,
+      senderId,
 
       content: trimmedMessage || 'Attachment',
 
@@ -1906,7 +1937,15 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
         const fullMsg = { ...msg, recipientId: selectedUser.id, read: false };
 
-        await sendDirectMessage(fullMsg);
+        if (selectedUser.id === senderId) {
+          Alert.alert('Conversation Unavailable', 'Select a volunteer, partner, or another admin before sending a message.');
+          return;
+        }
+
+        setMessages(current => mergeChatMessageLists(current as Message[], [fullMsg as Message]));
+        directMessagesRef.current = mergeChatMessageLists(directMessagesRef.current, [fullMsg as Message]);
+
+        await saveMessage(fullMsg as Message);
 
       } else if (selectedProjectChat) {
 

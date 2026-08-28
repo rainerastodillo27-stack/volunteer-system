@@ -22,6 +22,8 @@ import {
 
   TouchableOpacity,
 
+  useWindowDimensions,
+
   View,
 
   type ImageStyle,
@@ -460,6 +462,8 @@ function parseDateValue(value: string): Date | null {
 export default function PartnerDashboardScreen({ navigation, route }: any) {
 
   const { user, logout } = useAuth();
+  const { width: viewportWidth } = useWindowDimensions();
+  const isCompactCalendarHeader = viewportWidth < 420;
 
   const [loading, setLoading] = useState(true);
 
@@ -511,6 +515,7 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
   const [selectedProposalDate, setSelectedProposalDate] = useState(new Date());
   const [calendarSyncing, setCalendarSyncing] = useState(false);
+  const [calendarStatusFilter, setCalendarStatusFilter] = useState<string | null>(null);
   const googleAuthConfig = useMemo(() => getGoogleAuthConfig(user?.email), [user?.email]);
   const [googleAuthRequest, , promptGoogleAuth] = AuthSession.useAuthRequest(
     googleAuthConfig.request,
@@ -1672,11 +1677,16 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
       ) : null}
 
 
-      <View style={{ marginBottom: 4 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, paddingHorizontal: 4 }}>
-          <View>
-            <Text style={{ fontSize: 16, fontWeight: '700', color: '#166534' }}>Partner Project Calendar</Text>
-            <Text style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
+      <View style={styles.partnerCalendarSection}>
+        <View
+          style={[
+            styles.partnerCalendarHeader,
+            isCompactCalendarHeader && styles.partnerCalendarHeaderCompact,
+          ]}
+        >
+          <View style={styles.partnerCalendarHeaderCopy}>
+            <Text style={styles.partnerCalendarTitle}>Partner Project Calendar</Text>
+            <Text style={styles.partnerCalendarSubtitle}>
               {timelineProjectIds?.length
                 ? 'Your approved proposals aligned with admin planning calendar.'
                 : 'Review shared project schedule and admin planning dates.'}
@@ -1685,24 +1695,18 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
           <TouchableOpacity
             onPress={() => void handleSyncPartnerCalendar()}
             disabled={calendarSyncing}
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: 5,
-              backgroundColor: '#f0fdf4',
-              borderWidth: 1,
-              borderColor: '#bbf7d0',
-              borderRadius: 20,
-              paddingVertical: 6,
-              paddingHorizontal: 12,
-            }}
+            style={[
+              styles.partnerCalendarSyncButton,
+              isCompactCalendarHeader && styles.partnerCalendarSyncButtonCompact,
+              calendarSyncing && styles.partnerCalendarSyncButtonDisabled,
+            ]}
           >
             {calendarSyncing ? (
               <ActivityIndicator size={12} color="#16a34a" />
             ) : (
               <MaterialIcons name="sync" size={14} color="#16a34a" />
             )}
-            <Text style={{ fontSize: 12, fontWeight: '600', color: '#16a34a' }}>
+            <Text style={styles.partnerCalendarSyncButtonText}>
               {calendarSyncing ? 'Syncing...' : 'Sync Calendar'}
             </Text>
           </TouchableOpacity>
@@ -1729,6 +1733,8 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
         planningItems={planningItems}
 
         projectFilterIds={timelineProjectIds}
+        statusFilter={calendarStatusFilter}
+        setStatusFilter={setCalendarStatusFilter}
 
         accentColor="#166534"
 
@@ -2594,6 +2600,116 @@ const styles = StyleSheet.create({
     fontSize: 12,
 
     color: '#64748b',
+
+  },
+
+  partnerCalendarSection: {
+
+    marginBottom: 4,
+
+  },
+
+  partnerCalendarHeader: {
+
+    flexDirection: 'row',
+
+    alignItems: 'flex-start',
+
+    justifyContent: 'space-between',
+
+    gap: 10,
+
+    marginBottom: 10,
+
+    paddingHorizontal: 4,
+
+  },
+
+  partnerCalendarHeaderCompact: {
+
+    flexDirection: 'column',
+
+    alignItems: 'stretch',
+
+    gap: 8,
+
+  },
+
+  partnerCalendarHeaderCopy: {
+
+    flex: 1,
+
+    minWidth: 0,
+
+  },
+
+  partnerCalendarTitle: {
+
+    fontSize: 16,
+
+    fontWeight: '700',
+
+    color: '#166534',
+
+  },
+
+  partnerCalendarSubtitle: {
+
+    fontSize: 12,
+
+    color: '#64748b',
+
+    lineHeight: 17,
+
+    marginTop: 2,
+
+  },
+
+  partnerCalendarSyncButton: {
+
+    minHeight: 32,
+
+    flexDirection: 'row',
+
+    alignItems: 'center',
+
+    justifyContent: 'center',
+
+    gap: 5,
+
+    backgroundColor: '#f0fdf4',
+
+    borderWidth: 1,
+
+    borderColor: '#bbf7d0',
+
+    borderRadius: 20,
+
+    paddingVertical: 6,
+
+    paddingHorizontal: 12,
+
+  },
+
+  partnerCalendarSyncButtonCompact: {
+
+    alignSelf: 'flex-end',
+
+  },
+
+  partnerCalendarSyncButtonDisabled: {
+
+    opacity: 0.65,
+
+  },
+
+  partnerCalendarSyncButtonText: {
+
+    fontSize: 12,
+
+    fontWeight: '600',
+
+    color: '#16a34a',
 
   },
 
