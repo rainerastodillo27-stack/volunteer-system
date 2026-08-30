@@ -1,0 +1,233 @@
+import urllib.request
+import urllib.error
+import json
+import time
+
+QASE_TOKEN = "fb15339bb45e67a149919fa0d94795ce65fb839078ae95259d8ee15f7b05872a"
+PROJECT_CODE = "VSTC"
+BASE_URL = "https://api.qase.io/v1"
+
+def qase_request(endpoint, method="GET", data=None):
+    url = f"{BASE_URL}{endpoint}"
+    headers = {
+        "Token": QASE_TOKEN,
+        "Content-Type": "application/json",
+        "User-Agent": "Volcre-Qase-Uploader/1.0"
+    }
+    body = json.dumps(data).encode("utf-8") if data else None
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        err_content = e.read().decode("utf-8")
+        print(f"HTTP Error {e.code} on {endpoint}: {err_content}")
+        raise e
+    except Exception as e:
+        print(f"Request Error on {endpoint}: {e}")
+        raise e
+
+# Mappings for Qase API
+SEV_MAP = {"blocker": 1, "critical": 2, "major": 3, "normal": 4, "minor": 5, "trivial": 6, "high": 2, "medium": 4, "low": 5}
+PRIO_MAP = {"high": 1, "medium": 2, "low": 3}
+TYPE_MAP = {"other": 1, "functional": 2, "smoke": 3, "regression": 4, "security": 5, "usability": 6, "performance": 7, "acceptance": 8, "integration": 2}
+BEH_MAP = {"not_set": 1, "positive": 2, "negative": 3, "destructive": 4}
+AUTO_MAP = {"not_automated": 0, "to_be_automated": 1, "automated": 2, "manual": 0}
+
+suites_data = [
+    ('Authentication & Access Control', [
+        ('TC-001: Admin Valid Web Login', 'Verify admin credentials authenticate on web and load desktop sidebar.', 'Admin account exists; Web browser.', 'critical', 'high', 'functional', 'positive', 'automated', '1. Open Web URL\n2. Enter Admin email and password\n3. Click Log In', 'Navigates to Admin Dashboard with sidebar loaded.', 'Defect Fix: Enforced desktop sidebar web-only guard in StackNavigator.tsx.'),
+        ('TC-002: Admin Mobile Login Restriction', 'Verify Admin accounts cannot log in via mobile view.', 'Admin account exists; Mobile view.', 'critical', 'high', 'security', 'negative', 'automated', '1. Open mobile app\n2. Enter Admin credentials\n3. Tap Log In', 'Rejected with message: Admin portal is accessible on web only.', 'Defect Fix: Added platform detection check in api.py /auth/login and StackNavigator.'),
+        ('TC-003: Volunteer Valid Mobile Login', 'Verify approved volunteer can sign in on mobile app.', 'Approved volunteer account exists.', 'critical', 'high', 'functional', 'positive', 'automated', '1. Open mobile app\n2. Enter Volunteer credentials\n3. Tap Log In', 'Redirects to Volunteer Home/Dashboard with bottom tabs.', 'Defect Fix: Restored volunteer mobile tab navigator upon login.'),
+        ('TC-004: Volunteer Web Login Restriction', 'Verify volunteers cannot log in via desktop web.', 'Volunteer account exists; Web browser.', 'critical', 'high', 'security', 'negative', 'automated', '1. Open web browser\n2. Enter Volunteer credentials\n3. Click Log In', 'Blocked with notification: Volunteer accounts are mobile only.', 'Defect Fix: Blocked non-admin roles on standard web viewport in api.py.'),
+        ('TC-005: Volunteer Registration & Email OTP', 'Verify volunteer registration flow with 6-digit OTP code verification.', 'Unregistered email address.', 'critical', 'high', 'functional', 'positive', 'manual', '1. Click Sign Up as Volunteer\n2. Fill Membership details\n3. Click Send OTP\n4. Enter 6-digit code received via email', 'OTP validates; account created under pending approval status.', 'Defect Fix: Added 10-minute TTL expiry and invalidation on token verification in backend/api.py.'),
+        ('TC-006: Invalid / Expired OTP Submission', 'Verify system rejects invalid or expired OTP codes.', 'Registration in progress.', 'high', 'medium', 'security', 'negative', 'automated', '1. Enter incorrect or expired OTP code\n2. Click Verify', 'API returns 400 Bad Request; prompts user to request new code.', 'Defect Fix: Implemented SHA-256 hash comparison with expiry timestamp in backend/api.py.'),
+        ('TC-007: Duplicate Account Registration Prevention', 'Verify database unique constraint on existing email/phone.', 'Email already registered.', 'high', 'medium', 'functional', 'negative', 'automated', '1. Attempt registration with an existing email address', 'Form displays conflict error: Account already exists.', 'Defect Fix: Added unique index in PostgreSQL schema.'),
+        ('TC-008: Admin User Account Approval', 'Verify admin can approve pending applicant accounts.', 'User account in pending status.', 'critical', 'high', 'functional', 'positive', 'automated', '1. Admin opens User Management -> Pending Approvals\n2. Clicks Approve on pending applicant', 'User status updates to approved; applicant credentials unlocked.', 'Defect Fix: Added /ws/storage WebSocket broadcast to refresh pending badges dynamically.'),
+        ('TC-009: Admin User Account Rejection with Reason', 'Verify admin can reject pending user with mandatory rejection reason.', 'User account in pending status.', 'medium', 'medium', 'functional', 'positive', 'automated', '1. Admin clicks Reject on pending applicant\n2. Enters reason and confirms', 'User status set to rejected; rejection reason recorded.', 'Defect Fix: Required non-empty rejectionReason parameter in review endpoint.'),
+        ('TC-010: Unapproved Account Access Guard', 'Verify unapproved accounts cannot access protected screens.', 'Pending user account.', 'critical', 'high', 'security', 'negative', 'automated', '1. Attempt login with pending account credentials', 'Displays notification: Account pending admin approval.', 'Defect Fix: Enhanced AuthContext guards to block pending/rejected tokens.')
+    ]),
+    ('Partner Organization Onboarding', [
+        ('TC-011: Partner Registration with SEC Number', 'Verify partner registration with organization, stakeholder, and SEC details.', 'Unregistered partner email.', 'high', 'high', 'functional', 'positive', 'automated', '1. Select Sign Up as Partner Organization\n2. Enter Org Name, Stakeholder Name, Sector Type, SEC No\n3. Submit with email OTP', 'Partner record created with status Pending.', 'Defect Fix: Handled optional nullable SEC field mapping in storage layer.'),
+        ('TC-012: Admin Partner Profile Review & Approval', 'Verify admin vetting and approval of partner organization.', 'Partner in pending status.', 'high', 'high', 'functional', 'positive', 'automated', '1. Admin opens Partner Management\n2. Reviews submitted organization profile\n3. Clicks Approve', 'Partner status set to Approved; unlocks partner workspace.', 'Defect Fix: Atomic dual-table update in users and partners PostgreSQL tables.'),
+        ('TC-013: Partner Document Auto-Compression', 'Verify large document/certificate upload compression.', 'Partner profile edit / registration.', 'medium', 'medium', 'performance', 'positive', 'manual', '1. Upload 6MB+ certificate image\n2. Confirm upload', 'Image compressed <200KB and uploaded without timeout.', 'Defect Fix: Client-side canvas compression in utils/media.ts preventing 413 errors.'),
+        ('TC-014: Unverified Partner Proposal Restriction', 'Verify unverified partner cannot submit formal project proposals.', 'Partner in pending status.', 'high', 'medium', 'security', 'negative', 'automated', '1. Unverified partner attempts to propose new project', 'Action blocked with notification: Organization verification required.', 'Defect Fix: Added partner validation check before allowing proposal submission.'),
+        ('TC-015: Partner Stakeholder Contact Verification', 'Verify partner organization contact details validation.', 'Partner registration form.', 'medium', 'medium', 'functional', 'positive', 'manual', '1. Enter contact email, phone, and office address\n2. Submit registration', 'Contact data saved and formatted properly in partner profile.', 'Defect Fix: Standardized contact info schema across relational tables.'),
+        ('TC-016: Partner Advocacy Focus Multi-Select', 'Verify selection of multiple advocacy categories.', 'Partner registration form.', 'medium', 'low', 'functional', 'positive', 'manual', '1. Select Nutrition and Education checkboxes\n2. Submit form', 'Array advocacy_focus stored correctly as Postgres text[].', 'Defect Fix: Handled array serialization in PostgreSQL psycopg driver.'),
+        ('TC-017: Partner Route Authorization Guard', 'Verify partner cannot access admin-only settings routes.', 'Partner session active.', 'critical', 'high', 'security', 'negative', 'automated', '1. Partner requests /admin/dashboard-snapshot endpoint', 'Server returns 403 Forbidden.', 'Defect Fix: Middleware role check enforced on all admin endpoints.'),
+        ('TC-018: Partner Profile Updates & Vetting Badge', 'Verify partner profile reflects verified badge upon approval.', 'Approved partner account.', 'medium', 'medium', 'functional', 'positive', 'manual', '1. Open Partner Profile tab', 'Displays verified organization badge and accredited status.', 'Defect Fix: Verified status icon conditionally rendered in ProfileScreen.tsx.'),
+        ('TC-019: Partner Account Rejection Feedback', 'Verify partner sees review notes if registration is rejected.', 'Rejected partner account.', 'medium', 'medium', 'functional', 'positive', 'manual', '1. Log in with rejected partner account', 'Displays rejection reason notes from admin.', 'Defect Fix: Added rejectionReason alert display in LoginScreen.tsx.'),
+        ('TC-020: Duplicate Organization Name Handling', 'Verify system detects duplicate organization registration.', 'Registered org name.', 'low', 'low', 'functional', 'negative', 'automated', '1. Register with already registered organization name', 'System prompts for organization disambiguation.', 'Defect Fix: Added duplicate organization name warning prompt.')
+    ]),
+    ('Volunteer Profile & Membership', [
+        ('TC-021: Philippine Address Cascade Selection', 'Verify Region -> City -> Barangay dynamic dropdown cascading.', 'Membership sheet form open.', 'medium', 'medium', 'functional', 'positive', 'manual', '1. Select Region VI\n2. Select Bacolod City\n3. Select Barangay Villamonte', 'Dropdowns filter accurately without UI lag or invalid mixtures.', 'Defect Fix: State reset hooks added on Region change in LoginScreen.tsx.'),
+        ('TC-022: Volunteer Valid ID Photo Upload', 'Verify government ID photo upload and attachment to membership record.', 'Volunteer profile editing.', 'medium', 'medium', 'functional', 'positive', 'manual', '1. Choose photo from device library\n2. Save profile', 'Valid ID thumbnail renders on profile and Admin review screen.', 'Defect Fix: Stored optimized base64 payload in valid_id_photo column.'),
+        ('TC-023: Volunteer Custom Skills Tagging', 'Verify custom skills addition and profile tags.', 'Volunteer profile screen.', 'low', 'low', 'functional', 'positive', 'manual', '1. Enter custom skill tag (e.g., First Aid)\n2. Save changes', 'Skill appears in profile tag cloud and matching tool.', 'Defect Fix: Merged TASK_SKILL_OPTIONS and custom skills array.'),
+        ('TC-024: Cumulative Hours Direct Tamper Block', 'Verify volunteer cannot alter total contributed hours manually.', 'Volunteer session active.', 'critical', 'high', 'security', 'negative', 'automated', '1. Send manual PUT request with modified total_hours_contributed', 'Backend rejects modification; hours remain derived from time logs.', 'Defect Fix: Restricted total_hours_contributed updates to verified time logs only.'),
+        ('TC-025: Volunteer Availability Setting', 'Verify volunteer availability days and hours configuration.', 'Volunteer Profile tab.', 'medium', 'medium', 'functional', 'positive', 'manual', '1. Set available days: Monday, Wednesday, Friday\n2. Set hours: 10 hrs/week\n3. Save', 'Availability stored and used for intelligent project matching.', 'Defect Fix: Availability object schema serialized cleanly in database.'),
+        ('TC-026: Volunteer Affiliations Table Entry', 'Verify volunteer can add organizational affiliations.', 'Membership sheet.', 'low', 'low', 'functional', 'positive', 'manual', '1. Add affiliation (Org: Red Cross, Role: Volunteer)\n2. Submit form', 'Affiliations array saved in volunteer record.', 'Defect Fix: JSON array parsing added to storage.ts for affiliations.'),
+        ('TC-027: Volunteer Profile Image Update', 'Verify profile avatar change and real-time reflection.', 'Volunteer Profile tab.', 'medium', 'low', 'functional', 'positive', 'manual', '1. Pick avatar image from phone\n2. Confirm update', 'Avatar updates in header and profile view.', 'Defect Fix: Image URI cached in AuthContext state.'),
+        ('TC-028: Cross-User Profile Edit Prevention', 'Verify volunteer cannot edit another volunteers profile.', 'Volunteer A session.', 'critical', 'high', 'security', 'negative', 'automated', '1. Volunteer A sends update request targeting Volunteer B ID', 'Server returns 403 Forbidden.', 'Defect Fix: User ID ownership validation added in storage endpoints.'),
+        ('TC-029: Minimum Age Date of Birth Validator', 'Verify date of birth validator rejects invalid age.', 'Membership sheet form.', 'medium', 'low', 'functional', 'negative', 'manual', '1. Enter future birth date or birth date < 13 years old', 'Validation warning displayed.', 'Defect Fix: date-fns age calculation check added to form handler.'),
+        ('TC-030: Volunteer Recognition Badges Display', 'Verify volunteer recognition status based on total hours.', 'Volunteer Profile tab.', 'medium', 'low', 'functional', 'positive', 'manual', '1. View volunteer with >50 hours service', 'Displays Bronze/Silver/Gold service recognition badge.', 'Defect Fix: Dynamic badge tier calculation added in ProfileScreen.tsx.')
+    ]),
+    ('Project Lifecycle & Programs', [
+        ('TC-031: Program Track Creation & Customization', 'Verify creation of Program Track with icon, color token, and sector.', 'Admin logged in.', 'high', 'high', 'functional', 'positive', 'automated', '1. Admin creates Program Track\n2. Assigns icon and color\n3. Saves track', 'Track appears in program management suites.', 'Defect Fix: Program track sort_order and isActive fields added to schema.'),
+        ('TC-032: Project Creation with Coordinates and Headcount', 'Verify project creation with Lat/Long coordinates and volunteer quota.', 'Admin logged in.', 'critical', 'high', 'functional', 'positive', 'automated', '1. Fill project form with title, dates, coordinates, and volunteers needed\n2. Submit', 'Project saved to Postgres and visible on map and project feed.', 'Defect Fix: Added fallback coordinate defaults preventing web map crash.'),
+        ('TC-033: Single-Day Event Creation with Google Meet URL', 'Verify creation of single-day event with virtual meeting link.', 'Admin logged in.', 'medium', 'medium', 'functional', 'positive', 'automated', '1. Create Event with meeting link and venue\n2. Save event', 'Event renders with join button and clickable meeting URL.', 'Defect Fix: Added google_meet_url and is_event boolean flag in events table.'),
+        ('TC-034: Project State Transition: Planning to In Progress', 'Verify state transition and status update log entry.', 'Project in Planning stage.', 'high', 'high', 'functional', 'positive', 'automated', '1. Change status to In Progress\n2. Enter transition note: Field operations started', 'Status updates; note appended to project timeline.', 'Defect Fix: status_updates table records author ID and transition notes.'),
+        ('TC-035: Project State Transition: In Progress to Completed', 'Verify completed status archives project from active list.', 'Project in In Progress stage.', 'high', 'high', 'functional', 'positive', 'automated', '1. Change status to Completed', 'Project marked Completed; status update logged.', 'Defect Fix: Status filter excludes Completed projects from active discovery.'),
+        ('TC-036: Project State Transition: On Hold with Reason', 'Verify setting project on hold preserves state and logs reason.', 'Active project.', 'medium', 'medium', 'functional', 'positive', 'automated', '1. Set status to On Hold\n2. Enter reason: Weather disruption', 'Status set to On Hold; reason displayed on project banner.', 'Defect Fix: On Hold badge styling added to Project card components.'),
+        ('TC-037: End Date Before Start Date Validation', 'Verify date validator prevents invalid project duration.', 'Project creation modal.', 'medium', 'low', 'functional', 'negative', 'manual', '1. Set End Date earlier than Start Date\n2. Attempt to save', 'Validation error: End date must be after start date.', 'Defect Fix: date-fns date comparison check before form submit.'),
+        ('TC-038: Partner Project Co-Organization Proposal', 'Verify partner can submit co-organization application.', 'Partner logged in.', 'high', 'high', 'functional', 'positive', 'automated', '1. Partner clicks Join as Partner on a project\n2. Fills proposal scope and deliverables\n3. Submits', 'Application saved with status Pending.', 'Defect Fix: partner_project_applications table handles proposal details JSONB.'),
+        ('TC-039: Admin Approve Partner Application', 'Verify admin approval links partner to project.', 'Pending partner project application.', 'high', 'high', 'functional', 'positive', 'automated', '1. Admin opens Lifecycle Hub -> Partner Requests\n2. Clicks Approve', 'Application marked Approved; partner added to project channel.', 'Defect Fix: api.py review endpoint updates partner status and co-organizer list.'),
+        ('TC-040: Project Deletion RBAC Guard', 'Verify non-admin cannot delete projects.', 'Volunteer/Partner logged in.', 'critical', 'high', 'security', 'negative', 'automated', '1. Send DELETE /projects/{id} request as non-admin', 'Server returns 403 Forbidden; project remains intact.', 'Defect Fix: Enforced admin role check on deleteProject API.')
+    ]),
+    ('Volunteer Tasks & Matching', [
+        ('TC-041: Volunteer Project Self-Join', 'Verify volunteer can self-join an open project.', 'Volunteer logged in; open project exists.', 'critical', 'high', 'functional', 'positive', 'automated', '1. Volunteer taps Join Project', 'Volunteer added to project roster; unlocks group chat and time log.', 'Defect Fix: Updated projects.volunteers array and created volunteer_event_joins record.'),
+        ('TC-042: Volunteer Project Capacity Enforcement', 'Verify project blocks joins once volunteer quota is full.', 'Project with full headcount.', 'high', 'medium', 'functional', 'negative', 'automated', '1. Additional volunteer attempts to join full project', 'Join blocked with error: Volunteer capacity reached.', 'Defect Fix: Added capacity validation in POST /projects/{id}/join.'),
+        ('TC-043: Internal Task Creation & Field Officer Designation', 'Verify admin can assign internal tasks and Field Officer status.', 'Admin logged in.', 'high', 'high', 'functional', 'positive', 'automated', '1. Create task Distribution Lead\n2. Assign Volunteer A\n3. Enable Field Officer toggle', 'Volunteer A receives Field Officer badge and attendance check tool.', 'Defect Fix: isFieldOfficer flag enables attendance check authority.'),
+        ('TC-044: Volunteer Task Progress Updates', 'Verify volunteer can update task status.', 'Task assigned to volunteer.', 'medium', 'medium', 'functional', 'positive', 'manual', '1. Update task from Assigned to In Progress to Completed', 'Task status tag updates across mobile and web views.', 'Defect Fix: Storage change subscription keeps task status synchronized in real time.'),
+        ('TC-045: Intelligent Skills Matching Suggestion', 'Verify matching tool identifies volunteers with matching skills.', 'Project with skills_needed.', 'high', 'medium', 'functional', 'positive', 'automated', '1. Open Matching tab for project needing First Aid\n2. Review suggested volunteers', 'Volunteers with First Aid skill tag listed first.', 'Defect Fix: Skills set intersection algorithm in VolunteerManagementScreen.tsx.'),
+        ('TC-046: Volunteer Leave Project Roster Update', 'Verify volunteer leaving project frees up quota slot.', 'Joined volunteer.', 'medium', 'medium', 'functional', 'positive', 'automated', '1. Volunteer leaves project', 'Volunteer ID removed from volunteers array; quota slot restored.', 'Defect Fix: DELETE /projects/{id}/volunteers/{vol_id} endpoint implemented.'),
+        ('TC-047: Multi-Volunteer Task Headcount Assignment', 'Verify assigning multiple volunteers to a single task.', 'Internal task modal.', 'medium', 'low', 'functional', 'positive', 'manual', '1. Assign 3 volunteers to task\n2. Save task', 'assigned_volunteer_ids contains all 3 volunteer IDs.', 'Defect Fix: Task schema supports both primary and multi-assignee arrays.'),
+        ('TC-048: Unauthorized Task Creation Prevention', 'Verify regular volunteer cannot create project tasks.', 'Regular volunteer logged in.', 'high', 'medium', 'security', 'negative', 'automated', '1. Regular volunteer sends task creation request', 'Server returns 403 Forbidden.', 'Defect Fix: Task creation restricted to Admin and Field Officers.'),
+        ('TC-049: Task Priority Visual Badge Rendering', 'Verify High/Medium/Low priority badges render with correct theme colors.', 'Tasks tab.', 'low', 'low', 'functional', 'positive', 'manual', '1. View tasks list with varying priorities', 'High priority shows red, Medium yellow, Low green.', 'Defect Fix: ModernTheme color token mappings applied to task badges.'),
+        ('TC-050: Real-Time Task Sync Across Mobile and Web', 'Verify real-time sync when task is completed on mobile.', 'Mobile and web active.', 'high', 'high', 'functional', 'positive', 'manual', '1. Complete task on phone\n2. View web dashboard', 'Web dashboard reflects task completion without reload.', 'Defect Fix: WebSocket storage broadcast handler in AdminProjectsScreen.tsx.')
+    ]),
+    ('Attendance & Time Tracking', [
+        ('TC-051: Volunteer Time-In with Photo Selfie', 'Verify volunteer clock-in with attendance photo.', 'Volunteer joined to project; event active.', 'critical', 'high', 'functional', 'positive', 'automated', '1. Volunteer taps Time In\n2. Takes selfie photo and submits', 'Creates record in volunteer_time_logs with timestamp and photo.', 'Defect Fix: Duplicate time-in prevention check in /time-logs/start.'),
+        ('TC-052: Admin Attendance Verification', 'Verify admin can confirm volunteer on-site presence.', 'Active time-in log exists.', 'high', 'high', 'functional', 'positive', 'automated', '1. Admin views on-site attendees\n2. Clicks Confirm Attendance', 'Attendance verified with green check indicator.', 'Defect Fix: attendance_checked_by and attendance_checked_at stamped in SQL.'),
+        ('TC-053: Field Officer Attendance Verification', 'Verify designated Field Officer can confirm peer attendance.', 'Field Officer logged in.', 'high', 'high', 'functional', 'positive', 'automated', '1. Field Officer opens task attendance list\n2. Confirms volunteer attendance', 'Attendance checked with Field Officer ID and name stamped.', 'Defect Fix: Backend verifies isFieldOfficer permissions on attendance-check endpoint.'),
+        ('TC-054: Volunteer Time-Out & Hours Calculation', 'Verify time-out with completion report and automated hours calculation.', 'Active time-in log exists.', 'critical', 'high', 'functional', 'positive', 'automated', '1. Volunteer taps Time Out\n2. Uploads completion photo and summary report', 'Sets time_out; calculates elapsed hours and increments profile total.', 'Defect Fix: Exact floating point hours calculation (seconds / 3600.0).'),
+        ('TC-055: Unauthorized Attendance Check Guard', 'Verify regular volunteer cannot invoke attendance check API.', 'Regular volunteer logged in.', 'critical', 'high', 'security', 'negative', 'automated', '1. Regular volunteer sends POST /attendance-check request', 'Backend rejects request with 403 Forbidden.', 'Defect Fix: Role and field officer validation returns 403 Forbidden.'),
+        ('TC-056: Premature Time-Out Attempt Block', 'Verify system rejects time-out without prior time-in.', 'No active time-in.', 'medium', 'medium', 'functional', 'negative', 'automated', '1. Send time-out request without active time-in', 'Backend rejects: No active time-in session found.', 'Defect Fix: State check in /time-logs/end endpoint.'),
+        ('TC-057: Double Time-In Attempt Block', 'Verify system prevents starting second shift before closing first.', 'Active time-in open.', 'medium', 'medium', 'functional', 'negative', 'automated', '1. Attempt second time-in while shift is open', 'Backend blocks: Active time-in already in progress.', 'Defect Fix: Query for open time logs where time_out is null.'),
+        ('TC-058: Midnight Crossing Shift Calculation', 'Verify shift spanning across midnight calculates hours accurately.', 'Shift across midnight.', 'high', 'medium', 'functional', 'positive', 'automated', '1. Time in at 10:00 PM, Time out at 2:00 AM next day', 'Elapsed hours calculated as exactly 4.0 hours.', 'Defect Fix: ISO timestamp date diff handles day rollover properly.'),
+        ('TC-059: Server-Side Authoritative Timestamping', 'Verify system ignores manipulated device clock on time-in.', 'Manipulated phone clock.', 'high', 'high', 'security', 'positive', 'automated', '1. Change phone system clock by +2 hours\n2. Submit Time In', 'Server records authoritative server UTC timestamp.', 'Defect Fix: Server-side datetime.utcnow() used in api.py.'),
+        ('TC-060: Admin Manual Time Log Audit Correction', 'Verify admin can correct erroneous time log with audit note.', 'Time log entry.', 'medium', 'low', 'functional', 'positive', 'manual', '1. Admin edits time log end time\n2. Enters reason: Technical correction', 'Log updated; audit note recorded.', 'Defect Fix: Admin time adjustment route with audit trail support.')
+    ]),
+    ('Needs Marketplace & Proposals', [
+        ('TC-061: Project Need Post Creation', 'Verify partner/admin can post need item in project channel.', 'Joined project chat open.', 'medium', 'medium', 'functional', 'positive', 'manual', '1. Click Post a Need in chat\n2. Enter title 50 School Kits, priority High\n3. Post', 'Need card pinned in chat with priority badge.', 'Defect Fix: Introduced kind = need-post in project_group_messages.'),
+        ('TC-062: Need Action: Can Help & Delivered', 'Verify community action buttons update need status in real time.', 'Open need card in chat.', 'medium', 'medium', 'functional', 'positive', 'manual', '1. Volunteer taps Can Help\n2. Partner taps Delivered once items arrive', 'Need status transitions: Open -> In Progress -> Fulfilled.', 'Defect Fix: WebSocket broadcast updates need state instantly across clients.'),
+        ('TC-063: Formal Scope Proposal Review & Approval', 'Verify partner scope proposal evaluation and approval.', 'Scope proposal in chat.', 'high', 'high', 'functional', 'positive', 'manual', '1. Partner posts scope proposal\n2. Admin clicks Approve Proposal', 'Scope status updates to Approved; charter updated.', 'Defect Fix: kind = scope-proposal with approvalNotes and approvedBy metadata.'),
+        ('TC-064: Scope Proposal Rejection with Notes', 'Verify admin can reject scope proposal with feedback.', 'Scope proposal pending.', 'medium', 'medium', 'functional', 'positive', 'manual', '1. Admin rejects scope proposal with notes', 'Scope status set to Rejected; notes displayed in chat bubble.', 'Defect Fix: Rejection reason schema and UI rendering in CommunicationHubScreen.tsx.'),
+        ('TC-065: High Priority Need Alert Styling', 'Verify High priority needs display distinctive alert styling.', 'High priority need post.', 'low', 'low', 'functional', 'positive', 'manual', '1. View High priority need card in group chat', 'Renders red border and urgent warning indicator.', 'Defect Fix: Priority color mapping in need post card component.'),
+        ('TC-066: Volunteer Scope Approval Block', 'Verify volunteers cannot approve scope proposals.', 'Volunteer in chat.', 'high', 'medium', 'security', 'negative', 'automated', '1. Volunteer attempts to call scope approval endpoint', 'Server returns 403 Forbidden.', 'Defect Fix: Scope approval restricted strictly to admin role.'),
+        ('TC-067: Need Response: Need More Info Action', 'Verify collaborator can request clarification on a need post.', 'Open need card.', 'low', 'low', 'functional', 'positive', 'manual', '1. Tap Need More Info on need card', 'Response posted in thread with Need More Info tag.', 'Defect Fix: Supported NeedResponseAction enum in models/types.ts.'),
+        ('TC-068: Empty Need Title Form Validation', 'Verify need post cannot be submitted with empty title.', 'Need post modal.', 'low', 'low', 'functional', 'negative', 'manual', '1. Submit need post without title', 'Form highlights required title field; blocks submit.', 'Defect Fix: Client-side validation in CommunicationHubScreen.tsx.'),
+        ('TC-069: Real-Time Need Card State Synchronization', 'Verify need status change syncs across multiple open mobile clients.', 'Two active phones in chat.', 'high', 'high', 'functional', 'positive', 'manual', '1. Update need on Phone A\n2. Observe Phone B', 'Phone B updates need card status instantly via WebSocket.', 'Defect Fix: WebSocket message broadcast loop in backend/api.py.'),
+        ('TC-070: Scope Proposal Multi-Item In/Out Scope Parsing', 'Verify in-scope and out-of-scope bullet points render cleanly.', 'Scope proposal modal.', 'medium', 'low', 'functional', 'positive', 'manual', '1. Enter 3 in-scope and 2 out-of-scope items\n2. Post proposal', 'Renders green included and red excluded check marks in proposal card.', 'Defect Fix: JSON array serialization for included/excluded scope lists.')
+    ]),
+    ('Communication Hub', [
+        ('TC-071: 1-on-1 Direct Messaging & Read Receipts', 'Verify direct peer-to-peer messaging and read receipt stamping.', 'Two active users.', 'high', 'high', 'functional', 'positive', 'automated', '1. Admin sends message to Volunteer\n2. Volunteer opens chat', 'Message delivered instantly; read receipt stamped; unread badge clears.', 'Defect Fix: markMessageAsRead updates read boolean and decrements tab badge.'),
+        ('TC-072: Project Group Chat Real-Time Broadcast', 'Verify group chat messages broadcast to all project members.', 'Multiple users in project.', 'high', 'high', 'functional', 'positive', 'manual', '1. Post message in project group chat', 'Message appears immediately on all participants devices.', 'Defect Fix: /ws/messages/{user_id} and project group messaging WebSocket integration.'),
+        ('TC-073: Chat Image Attachment Upload & Full-Screen View', 'Verify photo attachment in direct messages.', 'Chat thread open.', 'medium', 'medium', 'functional', 'positive', 'manual', '1. Attach image from device\n2. Send and tap image bubble', 'Image uploads and opens in full-screen modal viewer.', 'Defect Fix: Modal image viewer integrated in CommunicationHubScreen.tsx.'),
+        ('TC-074: Empty Message Whitespace Send Prevention', 'Verify send button is disabled for whitespace-only input.', 'Chat input bar.', 'low', 'low', 'functional', 'negative', 'manual', '1. Enter spaces in chat bar\n2. Observe send button', 'Send button remains disabled.', 'Defect Fix: input.trim().length > 0 check on send button disabled prop.'),
+        ('TC-075: Long Message 1000+ Character Text Wrapping', 'Verify long chat message wraps cleanly without clipping.', 'Chat input bar.', 'low', 'low', 'functional', 'positive', 'manual', '1. Paste 1000 character paragraph\n2. Send message', 'Text wraps cleanly in bubble; scroll view functions normally.', 'Defect Fix: Added flexShrink and maxWidth CSS styling on chat bubbles.'),
+        ('TC-076: Private Conversation Interception Guard', 'Verify user cannot fetch private chats of other users.', 'User A logged in.', 'critical', 'high', 'security', 'negative', 'automated', '1. Request /messages/conversation for User B and User C', 'Server filters query strictly to chats where User A is sender or recipient.', 'Defect Fix: SQL query enforces (sender_id = :uid OR recipient_id = :uid).'),
+        ('TC-077: WebSocket Auto-Reconnect on Network Resumption', 'Verify WebSocket recovers automatically when connection drops.', 'Active chat screen.', 'high', 'medium', 'performance', 'positive', 'manual', '1. Toggle airplane mode for 5 seconds\n2. Reconnect network', 'WebSocket re-establishes connection and syncs latest messages.', 'Defect Fix: Exponential backoff reconnect handler in storage.ts.'),
+        ('TC-078: Group Chat Mute / Disabled Setting', 'Verify admin can disable group chat for specific projects.', 'Admin Project settings.', 'low', 'low', 'functional', 'positive', 'manual', '1. Enable groupChatDisabled toggle\n2. Open group chat as volunteer', 'Chat input displays Chat disabled by project coordinator.', 'Defect Fix: groupChatDisabled boolean flag added to Project type.'),
+        ('TC-079: Unread Message Notification Counter Badge', 'Verify notification badge increments on new message and clears on read.', 'Home/Dashboard screen.', 'medium', 'medium', 'functional', 'positive', 'manual', '1. Receive 3 direct messages\n2. Read 1 message', 'Badge displays 2 unread messages.', 'Defect Fix: Dynamic unread counter calculation in ScreenBrandHeader.tsx.'),
+        ('TC-080: Chat History Pagination / Fast Snapshot Load', 'Verify initial chat history loads with zero lag.', 'Chat with 100+ messages.', 'medium', 'medium', 'performance', 'positive', 'automated', '1. Open active conversation', 'Recent messages render in <300ms.', 'Defect Fix: Indexed timestamp column and DESC limit in SQL query.')
+    ]),
+    ('Impact Hub & Analytics', [
+        ('TC-081: Field Impact Report Submission', 'Verify partner/volunteer can submit report with beneficiary count and proof photos.', 'Joined project session.', 'high', 'high', 'functional', 'positive', 'automated', '1. Open Reports -> Upload Report\n2. Enter Beneficiary Count 150 and description\n3. Attach photos and submit', 'Report created with status Submitted.', 'Defect Fix: impact_count >= 1 validation in /reports endpoint.'),
+        ('TC-082: Admin Impact Verification & Gratitude Feedback', 'Verify admin report approval and feedback note.', 'Report in Submitted status.', 'high', 'high', 'functional', 'positive', 'automated', '1. Admin opens Reports screen\n2. Enters praise note and clicks Review Report', 'Report marked Reviewed; metrics reflect on Executive Analytics.', 'Defect Fix: /admin/dashboard-snapshot dynamically aggregates verified impact metrics.'),
+        ('TC-083: Sector Pillar Analytics Filtering', 'Verify analytics charts filter metrics by sector pillar.', 'Admin Analytics screen.', 'medium', 'medium', 'functional', 'positive', 'manual', '1. Select Nutrition pillar filter', 'Charts and totals update to display only Nutrition data.', 'Defect Fix: Dynamic SQL query aggregation by category and date range.'),
+        ('TC-084: Negative Beneficiary Count Validation', 'Verify system rejects negative or zero beneficiary count.', 'Report upload form.', 'medium', 'low', 'functional', 'negative', 'manual', '1. Enter -20 in beneficiary count\n2. Attempt submit', 'Form validation error: Beneficiary count must be greater than 0.', 'Defect Fix: Added min=1 number validation in ReportUploadModal.tsx.'),
+        ('TC-085: Multi-File Media Proof Attachment', 'Verify attaching multiple photos and documents to impact report.', 'Report upload form.', 'medium', 'medium', 'functional', 'positive', 'manual', '1. Attach 2 JPGs and 1 PDF document\n2. Submit report', 'All 3 files saved in reports.attachments JSONB array.', 'Defect Fix: JSON array attachment support in storage backend.'),
+        ('TC-086: Executive Report Export (CSV/JSON)', 'Verify admin can export consolidated reports.', 'Admin Reports screen.', 'medium', 'low', 'functional', 'positive', 'manual', '1. Click Export Reports\n2. Download file', 'Formatted CSV export generated with all verified metrics.', 'Defect Fix: Export serializer utility added to reports module.'),
+        ('TC-087: Volunteer Engagement Report Category', 'Verify volunteer can submit personal engagement field report.', 'Volunteer Reports tab.', 'medium', 'medium', 'functional', 'positive', 'manual', '1. Select volunteer_engagement report type\n2. Submit feedback', 'Report saved under volunteer engagement category.', 'Defect Fix: Supported ImpactHubReportType union types in models/types.ts.'),
+        ('TC-088: Non-Admin Report Approval Prevention', 'Verify non-admin cannot approve impact reports.', 'Volunteer session.', 'high', 'medium', 'security', 'negative', 'automated', '1. Non-admin calls report review endpoint', 'Server returns 403 Forbidden.', 'Defect Fix: Admin role check enforced on report review route.'),
+        ('TC-089: Gratitude Note Display on Submitter Profile', 'Verify admin gratitude note renders on partner/volunteer profile.', 'Approved report submitter.', 'low', 'low', 'functional', 'positive', 'manual', '1. Open profile after admin reviewed report', 'Displays Gratitude Note from NVC Administration.', 'Defect Fix: Enriched report review feedback rendering in ProfileScreen.tsx.'),
+        ('TC-090: Top-Level Admin Dashboard KPI Cards', 'Verify KPI cards display accurate totals for partners, volunteers, and hours.', 'Admin Dashboard.', 'high', 'high', 'functional', 'positive', 'automated', '1. Open Admin Dashboard', 'Total Partners, Volunteers, Projects, and Hours match database counts.', 'Defect Fix: Optimized aggregation query in /admin/dashboard-snapshot.')
+    ]),
+    ('Impact Map & Calendar', [
+        ('TC-091: Map Sector-Colored Pin Rendering', 'Verify interactive map displays project pins with sector colors.', 'Map tab open.', 'medium', 'medium', 'functional', 'positive', 'manual', '1. Open Map screen\n2. Tap project pin', 'Displays pin with sector color; opens callout details sheet.', 'Defect Fix: Bounding box recalculation in MappingScreen.web.tsx.'),
+        ('TC-092: Planning Calendar Google Sync & Reminders', 'Verify master planning calendar scheduling and sync.', 'Admin Calendar screen.', 'low', 'low', 'integration', 'positive', 'automated', '1. Add schedule item linked to project\n2. Trigger /notify/gcal-sync', 'Schedule item saved and synchronized with calendar feeds.', 'Defect Fix: Failover connection pooler in db.py prevents cron timeouts.'),
+        ('TC-093: Map Sector Category Filter Toggle', 'Verify toggling sector checkboxes filters pins dynamically.', 'Map screen.', 'medium', 'medium', 'functional', 'positive', 'manual', '1. Uncheck Livelihood filter', 'Livelihood pins hidden; Nutrition/Education pins remain.', 'Defect Fix: Filter state hook connected to Map marker rendering.'),
+        ('TC-094: Interactive Callout Sheet Navigation', 'Verify tapping callout sheet navigates to Project Details.', 'Map pin callout open.', 'medium', 'low', 'functional', 'positive', 'manual', '1. Tap View Details on pin callout sheet', 'Navigates directly to Project Details screen.', 'Defect Fix: Navigation param forwarding in MappingScreen.tsx.'),
+        ('TC-095: Invalid Coordinates Fallback Graceful Handling', 'Verify map handles invalid/null coordinates without crash.', 'Project with null lat/lng.', 'high', 'medium', 'functional', 'positive', 'automated', '1. Load project with missing coordinates', 'Map skips pin without JavaScript runtime exception.', 'Defect Fix: Coordinate validity check (typeof lat === number) before pin render.'),
+        ('TC-096: 50+ Dense Pin Clustering Performance', 'Verify map handles 50+ pins smoothly without lag.', 'High density pin region.', 'medium', 'low', 'performance', 'positive', 'manual', '1. Zoom into Bacolod City with 50+ markers', 'Map pans and zooms smoothly at 60 FPS.', 'Defect Fix: Enabled marker memoization in React Native Maps component.'),
+        ('TC-097: Multi-Calendar Color Customization', 'Verify admin can create distinct planning calendars with custom colors.', 'Admin Planning Calendar.', 'low', 'low', 'functional', 'positive', 'manual', '1. Create Logistics Calendar with blue color\n2. Add schedule item', 'Schedule items appear with blue color code.', 'Defect Fix: AdminPlanningCalendar type color attribute mapping.'),
+        ('TC-098: Scheduled 24-Hour Reminder Background Job', 'Verify reminder job notifies volunteers 24 hours before event.', 'Event starting tomorrow.', 'medium', 'medium', 'functional', 'positive', 'automated', '1. Trigger POST /admin/reminders/run', 'Identifies upcoming events and queues push notification.', 'Defect Fix: Scheduled task query filtering events within 24h start window.'),
+        ('TC-099: Planning Calendar Creation RBAC Guard', 'Verify non-admin cannot create or delete planning calendars.', 'Volunteer session.', 'high', 'medium', 'security', 'negative', 'automated', '1. Volunteer attempts to delete planning calendar', 'Server returns 403 Forbidden.', 'Defect Fix: Calendar administration endpoints restricted to admin role.'),
+        ('TC-100: Web Google Maps API Key Auto-Initialization', 'Verify web Google Maps loads API key safely without exposing secrets.', 'Web browser Map view.', 'high', 'high', 'functional', 'positive', 'automated', '1. Open Map on Web browser', 'Google Maps script initializes smoothly via webGoogleMaps.ts.', 'Defect Fix: Safe script loading utility in utils/webGoogleMaps.ts.')
+    ])
+]
+
+def upload_all():
+    print(f"Starting upload to Qase project: {PROJECT_CODE}...")
+    
+    # 1. Get or create suites
+    suite_id_map = {}
+    
+    # Fetch existing suites
+    try:
+        suites_res = qase_request(f"/suite/{PROJECT_CODE}?limit=100")
+        if suites_res.get("status"):
+            for s in suites_res["result"]["entities"]:
+                suite_id_map[s["title"]] = s["id"]
+                print(f"Found existing suite: {s['title']} -> ID {s['id']}")
+    except Exception as e:
+        print(f"Note on listing suites: {e}")
+
+    total_created = 0
+
+    for suite_name, cases in suites_data:
+        # Create suite if doesn't exist
+        if suite_name not in suite_id_map:
+            print(f"Creating Suite: '{suite_name}'...")
+            res = qase_request(f"/suite/{PROJECT_CODE}", method="POST", data={"title": suite_name, "description": f"Test suite for {suite_name}"})
+            if res.get("status"):
+                suite_id = res["result"]["id"]
+                suite_id_map[suite_name] = suite_id
+                print(f" -> Created Suite '{suite_name}' with ID {suite_id}")
+            time.sleep(0.3)
+        else:
+            suite_id = suite_id_map[suite_name]
+
+        for title, desc, pre, sev, pri, typ, beh, auto, steps_raw, exp, defect in cases:
+            # Parse steps into Qase v1 step array
+            step_lines = [s.strip() for s in steps_raw.split("\n") if s.strip()]
+            steps_payload = []
+            for idx, line in enumerate(step_lines, 1):
+                steps_payload.append({
+                    "action": line,
+                    "expected_result": exp if idx == len(step_lines) else "Step completed successfully."
+                })
+
+            full_desc = f"{desc}\n\n**[DEFECT RESOLUTION & FIX]**:\n{defect}"
+
+            case_payload = {
+                "title": title,
+                "description": full_desc,
+                "preconditions": pre,
+                "suite_id": suite_id,
+                "severity": SEV_MAP.get(sev, 4),
+                "priority": PRIO_MAP.get(pri, 2),
+                "type": TYPE_MAP.get(typ, 2),
+                "behavior": BEH_MAP.get(beh, 2),
+                "automation": AUTO_MAP.get(auto, 0),
+                "status": 0, # actual
+                "steps": steps_payload
+            }
+
+            try:
+                res = qase_request(f"/case/{PROJECT_CODE}", method="POST", data=case_payload)
+                if res.get("status"):
+                    case_id = res["result"]["id"]
+                    total_created += 1
+                    print(f"[{total_created}/100] Created Case {case_id}: {title}")
+            except Exception as e:
+                print(f"Failed to create case {title}: {e}")
+
+            time.sleep(0.2)
+
+    print(f"\n========================================================")
+    print(f"SUCCESS! Uploaded {total_created} test cases across 10 suites to Qase.io ({PROJECT_CODE})!")
+    print(f"========================================================")
+
+if __name__ == "__main__":
+    upload_all()

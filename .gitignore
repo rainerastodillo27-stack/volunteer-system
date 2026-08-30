@@ -17,3 +17,5 @@ web-build/
 .env.local
 
 .dev-pids/
+playwright-report/
+test-results/

@@ -9,7 +9,8 @@ interface ConfirmDialogProps {
   message: string;
   confirmText?: string;
   loadingText?: string;
-  cancelText?: string;
+  cancelText?: string | null;
+  hideCancel?: boolean;
   confirmColor?: string;
   icon?: keyof typeof MaterialIcons.glyphMap;
   iconColor?: string;
@@ -25,6 +26,7 @@ export default function ConfirmDialog({
   confirmText = 'Delete',
   loadingText = 'Deleting...',
   cancelText = 'Cancel',
+  hideCancel = false,
   confirmColor = '#DC2626',
   icon = 'delete-outline',
   iconColor = '#DC2626',
@@ -32,6 +34,8 @@ export default function ConfirmDialog({
   onCancel,
 }: ConfirmDialogProps) {
   if (!visible) return null;
+
+  const showCancelButton = !hideCancel && cancelText !== '' && cancelText !== null && cancelText !== undefined;
 
   return (
     <Modal
@@ -55,14 +59,16 @@ export default function ConfirmDialog({
 
           {/* Buttons */}
           <View style={styles.buttonContainer}>
-            <TouchableOpacity
-              style={[styles.button, styles.cancelButton, loading && styles.disabledButton]}
-              onPress={onCancel}
-              activeOpacity={0.7}
-              disabled={loading}
-            >
-              <Text style={styles.cancelButtonText}>{cancelText}</Text>
-            </TouchableOpacity>
+            {showCancelButton ? (
+              <TouchableOpacity
+                style={[styles.button, styles.cancelButton, loading && styles.disabledButton]}
+                onPress={onCancel}
+                activeOpacity={0.7}
+                disabled={loading}
+              >
+                <Text style={styles.cancelButtonText}>{cancelText}</Text>
+              </TouchableOpacity>
+            ) : null}
 
             <TouchableOpacity
               style={[styles.button, styles.confirmButton, { backgroundColor: confirmColor }, loading && styles.disabledButton]}
@@ -93,6 +99,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
+    zIndex: 99999,
   },
   dialog: {
     backgroundColor: '#fff',

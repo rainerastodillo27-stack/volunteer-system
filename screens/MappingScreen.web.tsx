@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
-import { Partner, PartnerProjectApplication, Project, Volunteer, VolunteerProjectJoinRecord } from '../models/types';
+import { AdvocacyFocus, Partner, PartnerProjectApplication, Project, ProgramTrack, Volunteer, VolunteerProjectJoinRecord } from '../models/types';
 import {
   getAllPartners,
   getAllVolunteers,
@@ -34,7 +34,7 @@ import { getPartnerForMappedProject, getProjectIdsForPartner, getProjectIdsForPa
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 import { createGoogleMapsMarkerIcon, loadGoogleMaps } from '../utils/webGoogleMaps';
-import { getProjectVolunteerMapEntries } from '../utils/projectVolunteers';
+import { getProjectVolunteerMapEntries, getProjectVolunteersNeeded } from '../utils/projectVolunteers';
 
 const MapHost = 'div' as any;
 const MAP_FIT_PADDING_PX = 64;
@@ -210,16 +210,28 @@ export default function MappingScreen({ navigation }: any) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
   const [partners, setPartners] = useState<Partner[]>([]);
+  const [programTracks, setProgramTracks] = useState<ProgramTrack[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [showDetails, setShowDetails] = useState(false);
   const [showMapStyleMenu, setShowMapStyleMenu] = useState(false);
   const [showVolunteerMenu, setShowVolunteerMenu] = useState(false);
+  const defaultMapStyleKey: MapStylePresetKey =
+    user?.role === 'volunteer'
+      ? 'volunteer-view'
+      : user?.role === 'partner'
+      ? 'partner-view'
+      : 'admin-overview';
+
   const [showPartnerMenu, setShowPartnerMenu] = useState(false);
-  const [selectedMapStyleKey, setSelectedMapStyleKey] = useState<MapStylePresetKey>('partner-view');
+  const [selectedMapStyleKey, setSelectedMapStyleKey] = useState<MapStylePresetKey>(defaultMapStyleKey);
   const [selectedVolunteerId, setSelectedVolunteerId] = useState<string | null>(null);
   const [selectedPartnerId, setSelectedPartnerId] = useState<string | null>(null);
   const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const [partnerApplications, setPartnerApplications] = useState<PartnerProjectApplication[]>([]);
+  // Admin event filters
+  const [filterDate, setFilterDate] = useState<string>('');
+  const [filterProgram, setFilterProgram] = useState<AdvocacyFocus | ''>('');
+  const [locationPromptProject, setLocationPromptProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const [mapError, setMapError] = useState<string | null>(null);
   const mapElementRef = useRef<HTMLDivElement | null>(null);
@@ -339,32 +351,90 @@ export default function MappingScreen({ navigation }: any) {
       : availablePartnerMapAccounts[0] || null;
 
   const displayProjects = React.useMemo(() => {
+    if (user?.role === 'volunteer') {
+      return projects;
+    }
+
+    if (user?.role === 'partner') {
+      return projects;
+    }
+
+    let baseProjects = projects;
+
     if (selectedMapStyleKey === 'volunteer-view') {
       if (!selectedVolunteerAccount) {
         return [];
       }
       const allowedProjectIds = new Set(selectedVolunteerAccount.projectIds);
-      return projects.filter(project => allowedProjectIds.has(project.id));
-    }
-    
-    if (selectedMapStyleKey === 'partner-view') {
+      baseProjects = projects.filter(project => allowedProjectIds.has(project.id));
+    } else if (selectedMapStyleKey === 'partner-view') {
       if (!selectedPartnerAccount) {
         return [];
       }
       const allowedProjectIds = new Set(selectedPartnerAccount.projectIds);
-      return projects.filter(project => allowedProjectIds.has(project.id));
+      baseProjects = projects.filter(project => allowedProjectIds.has(project.id));
+    } else if (selectedMapStyleKey === 'projects-view') {
+      baseProjects = projects.filter(project => !project.isEvent);
+    } else if (selectedMapStyleKey === 'events-view') {
+      baseProjects = projects.filter(project => Boolean(project.isEvent));
     }
 
-    if (selectedMapStyleKey === 'projects-view') {
-      return projects.filter(project => !project.isEvent);
+    // Apply Admin Filters (Date & Program) across admin overview, projects, and events views
+    if (user?.role === 'admin') {
+      if (filterDate) {
+        const selected = new Date(filterDate);
+        selected.setHours(0, 0, 0, 0);
+        baseProjects = baseProjects.filter(project => {
+          if (project.isEvent) {
+            const start = project.startDate ? new Date(project.startDate) : null;
+            const end = project.endDate ? new Date(project.endDate) : null;
+            if (!start) return false;
+            start.setHours(0, 0, 0, 0);
+            if (end) {
+              end.setHours(23, 59, 59, 999);
+              return selected >= start && selected <= end;
+            }
+            return selected.toDateString() === start.toDateString();
+          }
+          // For parent projects, check if ANY child event matches date
+          const childEvents = projects.filter(
+            c => c.isEvent && (c.parentProjectId === project.id || c.parentProjectId === project.title)
+          );
+          if (childEvents.length > 0) {
+            return childEvents.some(child => {
+              const start = child.startDate ? new Date(child.startDate) : null;
+              const end = child.endDate ? new Date(child.endDate) : null;
+              if (!start) return false;
+              start.setHours(0, 0, 0, 0);
+              if (end) {
+                end.setHours(23, 59, 59, 999);
+                return selected >= start && selected <= end;
+              }
+              return selected.toDateString() === start.toDateString();
+            });
+          }
+          const start = project.startDate ? new Date(project.startDate) : null;
+          const end = project.endDate ? new Date(project.endDate) : null;
+          if (!start) return false;
+          start.setHours(0, 0, 0, 0);
+          if (end) {
+            end.setHours(23, 59, 59, 999);
+            return selected >= start && selected <= end;
+          }
+          return selected.toDateString() === start.toDateString();
+        });
+      }
+
+      if (filterProgram) {
+        baseProjects = baseProjects.filter(project => {
+          const prog = project.programModule || project.category;
+          return prog === filterProgram;
+        });
+      }
     }
 
-    if (selectedMapStyleKey === 'events-view') {
-      return projects.filter(project => Boolean(project.isEvent));
-    }
-    
-    return projects;
-  }, [projects, selectedMapStyleKey, selectedVolunteerAccount, selectedPartnerAccount]);
+    return baseProjects;
+  }, [projects, selectedMapStyleKey, selectedVolunteerAccount, selectedPartnerAccount, user?.role, filterDate, filterProgram]);
 
   const mappedProjects = React.useMemo(() => {
     const result = getMappedProjects(displayProjects);
@@ -392,10 +462,10 @@ export default function MappingScreen({ navigation }: any) {
       new Map(
         mappedProjects.map(project => [
           project.id,
-          getProjectVolunteerMapEntries(project, volunteers, volunteerJoinRecords),
+          getProjectVolunteerMapEntries(project, volunteers, volunteerJoinRecords, projects),
         ])
       ),
-    [mappedProjects, volunteers, volunteerJoinRecords]
+    [mappedProjects, volunteers, volunteerJoinRecords, projects]
   );
   const selectedMapStyle =
     MAP_STYLE_PRESETS.find(preset => preset.key === selectedMapStyleKey) || MAP_STYLE_PRESETS[0];
@@ -579,6 +649,26 @@ export default function MappingScreen({ navigation }: any) {
                 more.textContent = `+${projectVolunteerEntries.length - 8} more`;
                 container.appendChild(more);
               }
+              const directionsBtn = document.createElement('button');
+              directionsBtn.type = 'button';
+              directionsBtn.dataset.kind = 'directions';
+              directionsBtn.dataset.id = project.id;
+              directionsBtn.style.display = 'flex';
+              directionsBtn.style.alignItems = 'center';
+              directionsBtn.style.justifyContent = 'center';
+              directionsBtn.style.gap = '6px';
+              directionsBtn.style.marginTop = '10px';
+              directionsBtn.style.width = '100%';
+              directionsBtn.style.padding = '7px 12px';
+              directionsBtn.style.backgroundColor = '#16a34a';
+              directionsBtn.style.color = '#ffffff';
+              directionsBtn.style.border = 'none';
+              directionsBtn.style.borderRadius = '6px';
+              directionsBtn.style.cursor = 'pointer';
+              directionsBtn.style.fontSize = '12px';
+              directionsBtn.style.fontWeight = '700';
+              directionsBtn.textContent = '🧭 Get Directions';
+              container.appendChild(directionsBtn);
             }
 
             container.addEventListener('click', (event) => {
@@ -589,7 +679,9 @@ export default function MappingScreen({ navigation }: any) {
               if (!kind || !id) {
                 return;
               }
-              if (kind === 'volunteer') {
+              if (kind === 'directions') {
+                handleGetDirections(project);
+              } else if (kind === 'volunteer') {
                 navigateToAvailableRoute(navigation, 'Volunteers', { volunteerId: id }, { routeName: 'Map' });
               } else if (kind === 'partner') {
                 navigateToAvailableRoute(navigation, 'Partners', { partnerId: id }, { routeName: 'Map' });
@@ -726,6 +818,8 @@ export default function MappingScreen({ navigation }: any) {
         'partnerProjectApplications',
         'volunteerJoinRecords',
         'volunteerProfile',
+        'volunteerMatches',
+        'programTracks',
       ]);
       const allPartners = await getAllPartners();
       const mapSourceProjects = withImpactMapFallbackProjects(
@@ -743,23 +837,32 @@ export default function MappingScreen({ navigation }: any) {
             )
           : []
       );
-      const joinedVolunteerProjectIds = new Set(
-        snapshot.volunteerJoinRecords.map(record => record.projectId)
-      );
+      const joinedVolunteerProjectIds = new Set([
+        ...snapshot.volunteerJoinRecords.map(record => record.projectId),
+        ...(snapshot.volunteerMatches || [])
+          .filter(match => match.status === 'Matched' || match.status === 'Requested')
+          .map(match => match.projectId),
+      ]);
 
       const visibleProjects =
         user?.role === 'partner'
           ? // Partner: only projects from APPROVED proposals
             mapSourceProjects.filter(project => partnerProjectIds.has(project.id))
           : user?.role === 'volunteer'
-          ? // Volunteer: only EVENTS (isEvent=true) that the volunteer has joined
+          ? // Volunteer: only EVENTS (isEvent=true) that the volunteer has joined or requested/matched
             mapSourceProjects.filter(
               project =>
                 project.isEvent &&
                 (
                   joinedVolunteerProjectIds.has(project.id) ||
                   (snapshot.volunteerProfile && (project.joinedUserIds || []).includes(snapshot.volunteerProfile.userId)) ||
-                  (snapshot.volunteerProfile && (project.volunteers || []).includes(snapshot.volunteerProfile.id))
+                  (snapshot.volunteerProfile && (project.volunteers || []).includes(snapshot.volunteerProfile.id)) ||
+                  (user?.id && (project.joinedUserIds || []).includes(user.id)) ||
+                  (project.internalTasks || []).some(task =>
+                    snapshot.volunteerProfile &&
+                    (task.assignedVolunteerId === snapshot.volunteerProfile.id ||
+                      (task.assignedVolunteerIds || []).includes(snapshot.volunteerProfile.id))
+                  )
                 )
             )
           : mapSourceProjects;
@@ -777,6 +880,7 @@ export default function MappingScreen({ navigation }: any) {
       setVolunteerJoinRecords(snapshot.volunteerJoinRecords || []);
       setPartnerApplications(snapshot.partnerApplications || []);
       setPartners(allPartners);
+      setProgramTracks((snapshot.programTracks || []).filter(t => t.isActive !== false));
       const allVolunteers = await getAllVolunteers();
       setVolunteers(allVolunteers);
       setLoading(false);
@@ -790,6 +894,38 @@ export default function MappingScreen({ navigation }: any) {
         getRequestErrorMessage(error, 'Failed to load projects from Postgres.')
       );
       setLoading(false);
+    }
+  };
+
+  // Handles opening directions with geolocation permission prompt or text list fallback
+  const handleGetDirections = (targetProject: Project | null) => {
+    if (!targetProject) return;
+
+    if (!targetProject?.location?.latitude || !targetProject?.location?.longitude) {
+      setLocationPromptProject(targetProject);
+      return;
+    }
+
+    const destLat = targetProject.location.latitude;
+    const destLng = targetProject.location.longitude;
+
+    if (typeof navigator !== 'undefined' && navigator?.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        position => {
+          const userLat = position.coords.latitude;
+          const userLng = position.coords.longitude;
+          const url = `https://www.google.com/maps/dir/?api=1&origin=${userLat},${userLng}&destination=${destLat},${destLng}&travelmode=driving`;
+          window.open(url, '_blank');
+        },
+        error => {
+          console.warn('[MAP] Geolocation access denied or unavailable:', error);
+          // Show location details text list modal with direct destination navigation
+          setLocationPromptProject(targetProject);
+        },
+        { enableHighAccuracy: true, timeout: 8000 }
+      );
+    } else {
+      setLocationPromptProject(targetProject);
     }
   };
 
@@ -875,6 +1011,109 @@ export default function MappingScreen({ navigation }: any) {
             <MaterialIcons name="keyboard-arrow-down" size={24} color="#334155" />
           </TouchableOpacity>
         </View>
+
+        {/* Admin filters – date and program (active for Admin) */}
+        {user?.role === 'admin' ? (
+          <View style={styles.adminFiltersRow}>
+            <View style={styles.adminFilterItem}>
+              <MaterialIcons name="calendar-today" size={15} color="#ea580c" style={{ marginRight: 5 }} />
+              <Text style={styles.adminFilterLabel}>Date</Text>
+              <input
+                type="date"
+                value={filterDate}
+                onChange={(e: any) => setFilterDate(e.target.value)}
+                style={{
+                  border: '1px solid #fed7aa',
+                  borderRadius: '6px',
+                  padding: '4px 8px',
+                  outline: 'none',
+                  background: '#ffffff',
+                  fontSize: 13,
+                  color: '#1e293b',
+                  fontFamily: 'inherit',
+                  cursor: 'pointer',
+                  minWidth: 130,
+                }}
+              />
+              {filterDate ? (
+                <TouchableOpacity onPress={() => setFilterDate('')} style={styles.filterClearBtn}>
+                  <MaterialIcons name="close" size={14} color="#64748b" />
+                </TouchableOpacity>
+              ) : null}
+            </View>
+
+            <View style={styles.adminFilterDivider} />
+
+            <View style={styles.adminFilterItem}>
+              <MaterialIcons name="category" size={15} color="#ea580c" style={{ marginRight: 5 }} />
+              <Text style={styles.adminFilterLabel}>Program</Text>
+              <View style={styles.programChipsRow}>
+                <TouchableOpacity
+                  style={[
+                    styles.programChip,
+                    !filterProgram && styles.programChipActive,
+                  ]}
+                  onPress={() => setFilterProgram('')}
+                >
+                  <Text style={[
+                    styles.programChipText,
+                    !filterProgram && styles.programChipTextActive,
+                  ]}>All</Text>
+                </TouchableOpacity>
+                {programTracks.length > 0
+                  ? programTracks.map(track => {
+                      // Infer the AdvocacyFocus from the track title/id
+                      const text = `${track.id || ''} ${track.title || ''}`.toLowerCase();
+                      let prog: AdvocacyFocus = 'Disaster';
+                      if (text.includes('nutrition')) prog = 'Nutrition';
+                      else if (text.includes('education')) prog = 'Education';
+                      else if (text.includes('livelihood')) prog = 'Livelihood';
+                      return (
+                        <TouchableOpacity
+                          key={track.id}
+                          style={[
+                            styles.programChip,
+                            filterProgram === prog && styles.programChipActive,
+                          ]}
+                          onPress={() => setFilterProgram(current => current === prog ? '' : prog)}
+                        >
+                          <Text style={[
+                            styles.programChipText,
+                            filterProgram === prog && styles.programChipTextActive,
+                          ]}>{track.title}</Text>
+                        </TouchableOpacity>
+                      );
+                    })
+                  : (['Education', 'Nutrition', 'Livelihood', 'Disaster'] as AdvocacyFocus[]).map(prog => (
+                    <TouchableOpacity
+                      key={prog}
+                      style={[
+                        styles.programChip,
+                        filterProgram === prog && styles.programChipActive,
+                      ]}
+                      onPress={() => setFilterProgram(current => current === prog ? '' : prog)}
+                    >
+                      <Text style={[
+                        styles.programChipText,
+                        filterProgram === prog && styles.programChipTextActive,
+                      ]}>{prog}</Text>
+                    </TouchableOpacity>
+                  ))
+                }
+              </View>
+            </View>
+
+            {(filterDate || filterProgram) ? (
+              <TouchableOpacity
+                style={styles.clearAllFiltersBtn}
+                onPress={() => { setFilterDate(''); setFilterProgram(''); }}
+              >
+                <MaterialIcons name="filter-alt-off" size={15} color="#ef4444" />
+                <Text style={styles.clearAllFiltersText}>Clear filters</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        ) : null}
       </View>
 
 
@@ -928,8 +1167,18 @@ export default function MappingScreen({ navigation }: any) {
               <View style={styles.metaItem}><MaterialIcons name="calendar-today" size={20} color="#5B6470" /><Text style={styles.metaText}>{new Date(featuredProject.startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</Text></View>
             </View>
           </View>
-          <View style={styles.volunteerSummary}><MaterialIcons name="groups-2" size={40} color="#5B6470" /><View><Text style={styles.volunteerNumber}>{(markerVolunteerEntriesByProjectId.get(featuredProject.id) || []).length} / {featuredProject.volunteersNeeded || 0}</Text><Text style={styles.volunteerLabel}>Volunteers</Text></View></View>
+          <View style={styles.volunteerSummary}><MaterialIcons name="groups-2" size={40} color="#5B6470" /><View><Text style={styles.volunteerNumber}>{(markerVolunteerEntriesByProjectId.get(featuredProject.id) || []).length} / {getProjectVolunteersNeeded(featuredProject, projects)}</Text><Text style={styles.volunteerLabel}>Volunteers</Text></View></View>
           <View style={styles.cardDivider} />
+          <TouchableOpacity
+            style={styles.featuredDirectionsBtn}
+            onPress={(e) => {
+              e.stopPropagation?.();
+              handleGetDirections(featuredProject);
+            }}
+          >
+            <MaterialIcons name="directions" size={20} color="#16a34a" />
+            <Text style={styles.featuredDirectionsText}>Directions</Text>
+          </TouchableOpacity>
           <View style={styles.detailsButton}><Text style={styles.detailsButtonText}>View Details</Text><MaterialIcons name="arrow-forward" size={24} color="#4C8249" /></View>
         </TouchableOpacity>
       ) : null}
@@ -994,14 +1243,154 @@ export default function MappingScreen({ navigation }: any) {
                   </View>
                 </View>
 
-                <TouchableOpacity
-                  style={styles.viewDetailsButton}
-                  onPress={handleOpenProjectDetails}
-                >
-                  <Text style={styles.viewDetailsButtonText}>
-                    {user?.role === 'admin' ? 'Open Program Management Suite' : 'View Full Details'}
-                  </Text>
-                </TouchableOpacity>
+                <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
+                  <TouchableOpacity
+                    style={styles.modalDirectionsButton}
+                    onPress={() => handleGetDirections(selectedProject)}
+                  >
+                    <MaterialIcons name="directions" size={18} color="#ffffff" />
+                    <Text style={styles.modalDirectionsButtonText}>Get Directions</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.viewDetailsButton, { flex: 1, marginTop: 0 }]}
+                    onPress={handleOpenProjectDetails}
+                  >
+                    <Text style={styles.viewDetailsButtonText}>
+                      {user?.role === 'admin' ? 'Open Management Suite' : 'View Full Details'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Location Details & Directions Text List Fallback Modal */}
+      <Modal
+        animationType="fade"
+        transparent
+        visible={Boolean(locationPromptProject)}
+        onRequestClose={() => setLocationPromptProject(null)}
+      >
+        <View style={styles.centeredView}>
+          <View style={[styles.modalView, { maxWidth: 520 }]}>
+            <TouchableOpacity style={styles.closeButton} onPress={() => setLocationPromptProject(null)}>
+              <MaterialIcons name="close" size={26} color="#333" />
+            </TouchableOpacity>
+
+            {locationPromptProject && (
+              <ScrollView style={styles.modalContent}>
+                <View style={styles.locationModalHeader}>
+                  <View style={styles.locationModalIconShell}>
+                    <MaterialIcons name="place" size={32} color="#16a34a" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.locationModalTitle}>Location & Directions</Text>
+                    <Text style={styles.locationModalSubtitle}>
+                      Location details and direct navigation link for this event.
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.locationCard}>
+                  <View style={styles.locationRow}>
+                    <MaterialIcons name="event" size={18} color="#0f766e" />
+                    <View style={styles.locationTextGroup}>
+                      <Text style={styles.locationFieldLabel}>Event / Project</Text>
+                      <Text style={styles.locationFieldValue}>{locationPromptProject.title}</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.locationDivider} />
+
+                  <View style={styles.locationRow}>
+                    <MaterialIcons name="location-on" size={18} color="#dc2626" />
+                    <View style={styles.locationTextGroup}>
+                      <Text style={styles.locationFieldLabel}>Address / Barangay</Text>
+                      <Text style={styles.locationFieldValue}>
+                        {locationPromptProject.location?.address || 'Negros Island Region, Philippines'}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.locationDivider} />
+
+                  <View style={styles.locationRow}>
+                    <MaterialIcons name="my-location" size={18} color="#2563eb" />
+                    <View style={styles.locationTextGroup}>
+                      <Text style={styles.locationFieldLabel}>GPS Coordinates</Text>
+                      <Text style={styles.locationFieldValue}>
+                        {locationPromptProject.location?.latitude && locationPromptProject.location?.longitude
+                          ? `${locationPromptProject.location.latitude.toFixed(5)}, ${locationPromptProject.location.longitude.toFixed(5)}`
+                          : 'Coordinates to be updated'}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.locationDivider} />
+
+                  <View style={styles.locationRow}>
+                    <MaterialIcons name="calendar-today" size={18} color="#ea580c" />
+                    <View style={styles.locationTextGroup}>
+                      <Text style={styles.locationFieldLabel}>Schedule</Text>
+                      <Text style={styles.locationFieldValue}>
+                        {locationPromptProject.startDate
+                          ? new Date(locationPromptProject.startDate).toLocaleDateString('en-US', {
+                              month: 'short',
+                              day: 'numeric',
+                              year: 'numeric',
+                            })
+                          : 'Date TBD'}
+                        {locationPromptProject.endDate
+                          ? ` - ${new Date(locationPromptProject.endDate).toLocaleDateString('en-US', {
+                              month: 'short',
+                              day: 'numeric',
+                              year: 'numeric',
+                            })}`
+                          : ''}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.locationDivider} />
+
+                  <View style={styles.locationRow}>
+                    <MaterialIcons name="category" size={18} color="#7c3aed" />
+                    <View style={styles.locationTextGroup}>
+                      <Text style={styles.locationFieldLabel}>Program Focus</Text>
+                      <Text style={styles.locationFieldValue}>
+                        {locationPromptProject.programModule || locationPromptProject.category || 'General Advocacy'}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+
+                <View style={{ flexDirection: 'row', gap: 10, marginTop: 18 }}>
+                  <TouchableOpacity
+                    style={styles.openInMapsButton}
+                    onPress={() => {
+                      const lat = locationPromptProject.location?.latitude;
+                      const lng = locationPromptProject.location?.longitude;
+                      const query = (lat && lng)
+                        ? `${lat},${lng}`
+                        : encodeURIComponent(locationPromptProject.location?.address || locationPromptProject.title);
+                      const url = `https://www.google.com/maps/dir/?api=1&destination=${query}&travelmode=driving`;
+                      window.open(url, '_blank');
+                    }}
+                  >
+                    <MaterialIcons name="open-in-new" size={18} color="#ffffff" />
+                    <Text style={styles.openInMapsButtonText}>Open in Google Maps</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.closeLocationModalBtn}
+                    onPress={() => setLocationPromptProject(null)}
+                  >
+                    <Text style={styles.closeLocationModalBtnText}>Close</Text>
+                  </TouchableOpacity>
+                </View>
               </ScrollView>
             )}
           </View>
@@ -1567,5 +1956,214 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
     color: '#64748b',
+  },
+  // Admin event filter bar
+  adminFiltersRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginTop: 14,
+    paddingHorizontal: 4,
+    paddingVertical: 10,
+    backgroundColor: '#fff7ed',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#fed7aa',
+  },
+  adminFilterItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  adminFilterLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#7c3aed',
+    marginRight: 4,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  adminFilterDivider: {
+    width: 1,
+    height: 24,
+    backgroundColor: '#fed7aa',
+    marginHorizontal: 4,
+  },
+  filterClearBtn: {
+    padding: 2,
+    borderRadius: 6,
+    backgroundColor: '#f1f5f9',
+    marginLeft: 2,
+  },
+  programChipsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  programChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 20,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  programChipActive: {
+    backgroundColor: '#ea580c',
+    borderColor: '#ea580c',
+  },
+  programChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#475569',
+  },
+  programChipTextActive: {
+    color: '#ffffff',
+  },
+  clearAllFiltersBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    marginLeft: 'auto',
+  },
+  clearAllFiltersText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#ef4444',
+  },
+  // Featured directions button
+  featuredDirectionsBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 11,
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1.5,
+    borderColor: '#86efac',
+  },
+  featuredDirectionsText: {
+    color: '#16a34a',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  // Modal directions button
+  modalDirectionsButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#16a34a',
+    paddingVertical: 14,
+    borderRadius: 12,
+    shadowColor: '#16a34a',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+  },
+  modalDirectionsButtonText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  // Location Fallback Modal Styles
+  locationModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    marginBottom: 16,
+  },
+  locationModalIconShell: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#f0fdf4',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+  },
+  locationModalTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  locationModalSubtitle: {
+    fontSize: 12,
+    color: '#64748b',
+    marginTop: 2,
+  },
+  locationCard: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 14,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  locationRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  locationTextGroup: {
+    flex: 1,
+  },
+  locationFieldLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  locationFieldValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1e293b',
+    marginTop: 2,
+  },
+  locationDivider: {
+    height: 1,
+    backgroundColor: '#e2e8f0',
+    marginVertical: 12,
+  },
+  openInMapsButton: {
+    flex: 1.5,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#2563eb',
+    paddingVertical: 12,
+    borderRadius: 10,
+  },
+  openInMapsButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  closeLocationModalBtn: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f1f5f9',
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  closeLocationModalBtnText: {
+    color: '#475569',
+    fontSize: 14,
+    fontWeight: '700',
   },
 });

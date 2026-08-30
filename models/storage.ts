@@ -1551,6 +1551,39 @@ async function clearRemoteStorage(): Promise<void> {
   });
 }
 
+async function sendAccountApprovalEmailNotification(
+  account: Pick<User, 'email' | 'name' | 'role'>,
+  approvedBy: string
+): Promise<void> {
+  const email = account.email?.trim().toLowerCase();
+  if (!email || !isValidEmailAddress(email)) {
+    return;
+  }
+
+  let approvedByName = 'the admin team';
+  if (approvedBy) {
+    try {
+      const adminUser = await getUser(approvedBy);
+      approvedByName = adminUser?.name || approvedByName;
+    } catch {
+      approvedByName = 'the admin team';
+    }
+  }
+
+  await requestApiJson('/auth/approval-email', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      email,
+      name: account.name || '',
+      role: account.role || '',
+      approvedByName,
+    }),
+  });
+}
+
 // Filters expected network and backend errors from real application exceptions.
 function isExpectedRemoteStorageError(error: unknown): boolean {
   if (!error || typeof error !== 'object') {
@@ -1582,6 +1615,12 @@ export async function getStorageItem<T>(key: string): Promise<T | null> {
   }
 
   try {
+    if (getPlatformOS() === 'web') {
+      const remoteValue = await fetchRemoteStorageItem<T>(key);
+      setSharedStorageCacheValue(key, remoteValue);
+      return remoteValue;
+    }
+
     const cachedValue = getFreshSharedStorageCacheValue<T>(key);
     if (cachedValue.hit) {
       return cachedValue.value;
@@ -1627,6 +1666,16 @@ export async function getStorageItems(
   }
 
   try {
+    if (getPlatformOS() === 'web') {
+      const remoteResults = await fetchRemoteStorageItems(sharedKeys);
+      for (const key of sharedKeys) {
+        const value = remoteResults[key] ?? null;
+        setSharedStorageCacheValue(key, value);
+        results[key] = value;
+      }
+      return results;
+    }
+
     const missingSharedKeys: string[] = [];
 
     for (const key of sharedKeys) {
@@ -2693,6 +2742,23 @@ export async function getAllEvents(): Promise<Project[]> {
   );
 }
 
+function getRegistrationPasswordValidationMessage(password: string): string | null {
+  const trimmedPassword = password.trim();
+  if (trimmedPassword.length < 8) {
+    return 'Password must be at least 8 characters long.';
+  }
+  if (!/[A-Z]/.test(trimmedPassword)) {
+    return 'Password must include at least one uppercase letter.';
+  }
+  if (!/[a-z]/.test(trimmedPassword)) {
+    return 'Password must include at least one lowercase letter.';
+  }
+  if (!/\d/.test(trimmedPassword)) {
+    return 'Password must include at least one number.';
+  }
+  return null;
+}
+
 // Creates a new sign-in account and optional volunteer profile records.
 export async function createUserAccount(input: {
   name: string;
@@ -2704,8 +2770,9 @@ export async function createUserAccount(input: {
   pillarsOfInterest: NVCSector[];
   partnerRegistration?: {
     organizationName: string;
+    stakeholderName?: string;
     sectorType: PartnerSectorType;
-    dswdAccreditationNo: string;
+    dswdAccreditationNo?: string;
     secRegistrationNo?: string;
     advocacyFocus: AdvocacyFocus[];
   };
@@ -2741,6 +2808,14 @@ export async function createUserAccount(input: {
     throw new Error('Name is required.');
   }
 
+  if (input.role === 'partner' || input.role === 'volunteer') {
+    const passwordValidationMessage =
+      getRegistrationPasswordValidationMessage(normalizedPassword);
+    if (passwordValidationMessage) {
+      throw new Error(passwordValidationMessage);
+    }
+  }
+
   if (normalizedEmail && !isValidEmailAddress(normalizedEmail)) {
     throw new Error('Please enter a valid email address.');
   }
@@ -2757,7 +2832,6 @@ export async function createUserAccount(input: {
     input.role === 'partner' &&
     (!input.partnerRegistration ||
       !input.partnerRegistration.organizationName.trim() ||
-      !isValidDswdAccreditationNo(input.partnerRegistration.dswdAccreditationNo) ||
       input.partnerRegistration.advocacyFocus.length === 0)
   ) {
     throw new Error('Complete the organization application details before submitting.');
@@ -2848,7 +2922,7 @@ export async function createUserAccount(input: {
         description: `${input.partnerRegistration.advocacyFocus.join(', ')} partnership application`,
         category: getCategoryFromAdvocacyFocus(input.partnerRegistration.advocacyFocus),
         sectorType: input.partnerRegistration.sectorType,
-        dswdAccreditationNo: input.partnerRegistration.dswdAccreditationNo.trim().toUpperCase(),
+        dswdAccreditationNo: input.partnerRegistration.dswdAccreditationNo?.trim().toUpperCase() || '',
         secRegistrationNo: input.partnerRegistration.secRegistrationNo?.trim().toUpperCase() || '',
         advocacyFocus: input.partnerRegistration.advocacyFocus,
         contactEmail: createdUser.email,
@@ -3250,6 +3324,12 @@ export async function approveUser(userId: string, adminId: string): Promise<User
     );
   }
 
+  try {
+    await sendAccountApprovalEmailNotification(updatedUser, adminId);
+  } catch (error) {
+    console.error('[ApprovalEmail] Failed to send account approval email:', error);
+  }
+
   return updatedUser;
 }
 
@@ -3282,6 +3362,7 @@ export async function rejectUser(
         saveVolunteer({
           ...volunteer,
           registrationStatus: 'Rejected',
+          rejectionReason,
           reviewedBy: adminId,
           reviewedAt,
           credentialsUnlockedAt: undefined,
@@ -3305,7 +3386,53 @@ export async function rejectUser(
     );
   }
 
+  if (updatedUser.email) {
+    void sendRejectionEmail(
+      updatedUser.email,
+      updatedUser.name,
+      rejectionReason,
+      updatedUser.role || 'volunteer'
+    );
+  }
+
   return updatedUser;
+}
+
+// Sends an email to an applicant with the rejection reason.
+export async function sendRejectionEmail(
+  recipientEmail: string,
+  recipientName: string,
+  rejectionReason: string,
+  role: string = 'volunteer'
+): Promise<{ success: boolean; message: string }> {
+  const normalizedEmail = (recipientEmail || '').trim();
+  if (!normalizedEmail) {
+    return { success: false, message: 'No recipient email provided.' };
+  }
+
+  try {
+    const response = await fetch(`${getApiBaseUrl()}/auth/send-rejection-email`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        recipientEmail: normalizedEmail,
+        recipientName: (recipientName || 'Volunteer').trim(),
+        rejectionReason: (rejectionReason || 'Application did not meet requirements.').trim(),
+        role,
+      }),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      return { success: true, message: data.message || 'Rejection email sent successfully.' };
+    } else {
+      console.warn('[EMAIL] Rejection email endpoint returned non-OK:', response.status);
+      return { success: false, message: `Server returned ${response.status}` };
+    }
+  } catch (error) {
+    console.warn('[EMAIL] Failed to send rejection email:', error);
+    return { success: false, message: error instanceof Error ? error.message : 'Network error' };
+  }
 }
 
 // Partner Storage
@@ -4023,6 +4150,21 @@ export async function reviewVolunteerRegistration(
         console.error('[Notification] Failed to send approval notification:', error);
         // Don't fail the approval if notification fails
       }
+    }
+  }
+
+  if (status === 'Approved') {
+    try {
+      await sendAccountApprovalEmailNotification(
+        linkedUser || {
+          email: updatedVolunteer.email,
+          name: updatedVolunteer.name,
+          role: 'volunteer',
+        },
+        reviewedBy
+      );
+    } catch (error) {
+      console.error('[ApprovalEmail] Failed to send volunteer approval email:', error);
     }
   }
 
@@ -5154,6 +5296,21 @@ export async function reviewPartnerRegistration(
           ? 'Partner registration rejected by administrator.'
           : undefined,
     });
+  }
+
+  if (status === 'Approved') {
+    try {
+      await sendAccountApprovalEmailNotification(
+        linkedUser || {
+          email: updatedPartner.contactEmail,
+          name: updatedPartner.name,
+          role: 'partner',
+        },
+        reviewedBy
+      );
+    } catch (error) {
+      console.error('[ApprovalEmail] Failed to send partner approval email:', error);
+    }
   }
 
   return updatedPartner;

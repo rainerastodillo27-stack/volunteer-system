@@ -279,6 +279,7 @@ export interface Volunteer {
   videoBriefingUrl?: string;
   affiliations?: VolunteerAffiliation[];
   registrationStatus?: 'Pending' | 'Approved' | 'Rejected';
+  rejectionReason?: string;
   reviewedBy?: string;
   reviewedAt?: string;
   credentialsUnlockedAt?: string;

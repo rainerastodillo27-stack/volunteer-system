@@ -131,7 +131,33 @@ type SignupPartnerApplicationState = {
 type MobileEntryRole = Exclude<UserRole, "admin">;
 type SignupStep = "role" | "details";
 
-type RegistrationOtpPhase = "idle" | "sent" | "verified";
+type RegistrationOtpPhase = "idle" | "sent" | "expired" | "verified";
+
+function getPasswordValidationMessage(password: string): string | null {
+  const trimmedPassword = password.trim();
+  if (trimmedPassword.length < 8) {
+    return "Password must be at least 8 characters long.";
+  }
+  if (!/[A-Z]/.test(trimmedPassword)) {
+    return "Password must include at least one uppercase letter.";
+  }
+  if (!/[a-z]/.test(trimmedPassword)) {
+    return "Password must include at least one lowercase letter.";
+  }
+  if (!/\d/.test(trimmedPassword)) {
+    return "Password must include at least one number.";
+  }
+  return null;
+}
+
+function isDuplicateEmailErrorMessage(message: string): boolean {
+  const normalizedMessage = message.toLowerCase();
+  return (
+    normalizedMessage.includes("email already exists") ||
+    normalizedMessage.includes("account with this email already exists") ||
+    normalizedMessage.includes("already registered")
+  );
+}
 
 // Returns a clean volunteer membership form state for the signup modal.
 function createEmptySignupVolunteerSheet(): SignupVolunteerSheetState {
@@ -392,6 +418,7 @@ export default function LoginScreen() {
   const [signupOtpCode, setSignupOtpCode] = useState("");
   const [signupOtpPhase, setSignupOtpPhase] =
     useState<RegistrationOtpPhase>("idle");
+  const [otpSecondsLeft, setOtpSecondsLeft] = useState<number>(0);
   const [signupOtpLoading, setSignupOtpLoading] = useState(false);
   const [signupOtpAction, setSignupOtpAction] =
     useState<"send" | "verify" | null>(null);
@@ -411,6 +438,8 @@ export default function LoginScreen() {
   );
   const [customVolunteerSkill, setCustomVolunteerSkill] = useState("");
   const [showSkillsDropdown, setShowSkillsDropdown] = useState(false);
+  const [emailExistsError, setEmailExistsError] = useState<string | null>(null);
+  const emailCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [signupAcceptedCommitment, setSignupAcceptedCommitment] =
     useState(false);
   const [backendStatus, setBackendStatus] = useState<
@@ -545,6 +574,24 @@ export default function LoginScreen() {
       unsubscribe();
     };
   }, [backendStatus]);
+
+  useEffect(() => {
+    if (signupOtpPhase !== "sent") {
+      return undefined;
+    }
+
+    if (otpSecondsLeft <= 0) {
+      setSignupOtpPhase("expired");
+      setOtpSecondsLeft(0);
+      return undefined;
+    }
+
+    const otpTimer = setTimeout(() => {
+      setOtpSecondsLeft((secondsLeft) => Math.max(0, secondsLeft - 1));
+    }, 1000);
+
+    return () => clearTimeout(otpTimer);
+  }, [otpSecondsLeft, signupOtpPhase]);
 
   useEffect(() => {
     let cancelled = false;
@@ -939,6 +986,7 @@ export default function LoginScreen() {
     setSignupEmailForOtp("");
     setSignupOtpCode("");
     setSignupOtpPhase("idle");
+    setOtpSecondsLeft(0);
     setSignupOtpLoading(false);
     setSignupOtpAction(null);
     setSignupAccountPhone("");
@@ -1001,6 +1049,7 @@ export default function LoginScreen() {
   const updateSignupEmail = (value: string) => {
     setSignupEmail(value);
     setSignupValidationError(null);
+    setEmailExistsError(null);
     const normalizedEmail = normalizeEmailInput(value);
     if (
       signupOtpPhase !== "idle" &&
@@ -1008,6 +1057,37 @@ export default function LoginScreen() {
     ) {
       setSignupOtpCode("");
       setSignupOtpPhase("idle");
+      setOtpSecondsLeft(0);
+    }
+    // Debounce email duplicate check
+    if (emailCheckTimerRef.current) {
+      clearTimeout(emailCheckTimerRef.current);
+    }
+    if (normalizedEmail && normalizedEmail.includes("@")) {
+      emailCheckTimerRef.current = setTimeout(async () => {
+        try {
+          const response = await fetch(
+            `${getApiBaseUrl()}/auth/check-email?email=${encodeURIComponent(normalizedEmail)}`,
+            {
+              headers: {
+                "ngrok-skip-browser-warning": "69420",
+                "User-Agent": "VolCre-App/1.0",
+                "Accept": "application/json",
+              },
+            }
+          );
+          if (response.ok) {
+            const data = (await response.json()) as { exists?: boolean; message?: string };
+            if (data.exists) {
+              setEmailExistsError(data.message || "An account with this email already exists.");
+            } else {
+              setEmailExistsError(null);
+            }
+          }
+        } catch {
+          // Ignore network errors for this check
+        }
+      }, 700);
     }
   };
 
@@ -1142,6 +1222,44 @@ export default function LoginScreen() {
     try {
       setSignupOtpLoading(true);
       setSignupOtpAction("send");
+      const existingUsers = await getAllUsers();
+      const emailAlreadyRegistered = existingUsers.some(
+        (user) => normalizeEmailInput(user.email || "") === email,
+      );
+      if (emailAlreadyRegistered) {
+        setEmailExistsError("An account with this email already exists.");
+        throw new Error("An account with this email already exists.");
+      }
+
+      // Check backend email availability
+      try {
+        const checkRes = await fetch(
+          `${getApiBaseUrl()}/auth/check-email?email=${encodeURIComponent(email)}`,
+          {
+            headers: {
+              "ngrok-skip-browser-warning": "69420",
+              "User-Agent": "VolCre-App/1.0",
+              "Accept": "application/json",
+            },
+          },
+        );
+        if (checkRes.ok) {
+          const checkData = (await checkRes.json()) as {
+            exists?: boolean;
+            message?: string;
+          };
+          if (checkData.exists) {
+            const msg = checkData.message || "An account with this email already exists.";
+            setEmailExistsError(msg);
+            throw new Error(msg);
+          }
+        }
+      } catch (checkErr: any) {
+        if (isDuplicateEmailErrorMessage(checkErr?.message || "")) {
+          throw checkErr;
+        }
+      }
+
       const response = await fetch(`${getApiBaseUrl()}/auth/registration-otp/send`, {
         method: "POST",
         headers: {
@@ -1155,22 +1273,42 @@ export default function LoginScreen() {
       const payload = (await response.json().catch(() => ({}))) as {
         detail?: string;
         message?: string;
+        dev_otp?: string;
+        expires_in?: number;
       };
 
       if (!response.ok) {
+        if (isDuplicateEmailErrorMessage(payload.detail || "")) {
+          setEmailExistsError(payload.detail || "An account with this email already exists.");
+        }
         throw new Error(payload.detail || "Unable to send verification code.");
       }
 
       setSignupEmailForOtp(email);
-      setSignupOtpCode("");
+      setSignupOtpCode(payload.dev_otp || "");
+      setOtpSecondsLeft(payload.expires_in || 300);
       setSignupOtpPhase("sent");
-      Alert.alert("Verification Code Sent", payload.message || "Check your email inbox for the 6-digit code.");
+      Alert.alert(
+        "Verification Code Sent",
+        payload.dev_otp
+          ? `Your verification code is: ${payload.dev_otp}\n\nValid for 5 minutes.`
+          : payload.message || "Check your email inbox for the 6-digit code (valid for 5 minutes)."
+      );
     } catch (error) {
       const errMsg = getRequestErrorMessage(error, "Unable to send verification code.", {
         backendUrl: getApiBaseUrl(),
       });
+      if (isDuplicateEmailErrorMessage(errMsg)) {
+        setEmailExistsError(errMsg);
+        setSignupOtpPhase("idle");
+        setOtpSecondsLeft(0);
+        setSignupOtpCode("");
+      }
       setSignupValidationError(errMsg);
-      Alert.alert("Verification Error", errMsg);
+      Alert.alert(
+        isDuplicateEmailErrorMessage(errMsg) ? "Email Already Registered" : "Verification Error",
+        errMsg,
+      );
     } finally {
       setSignupOtpLoading(false);
       setSignupOtpAction(null);
@@ -1193,6 +1331,15 @@ export default function LoginScreen() {
       const errorMsg = "Request a new verification code for this email address.";
       setSignupValidationError(errorMsg);
       Alert.alert("Validation Error", errorMsg);
+      return;
+    }
+
+    if (signupOtpPhase === "expired" || otpSecondsLeft <= 0) {
+      const errorMsg = "Your verification code has expired. Please request a new code.";
+      setSignupOtpPhase("expired");
+      setOtpSecondsLeft(0);
+      setSignupValidationError(errorMsg);
+      Alert.alert("Code Expired", errorMsg);
       return;
     }
 
@@ -1226,11 +1373,16 @@ export default function LoginScreen() {
       }
 
       setSignupOtpPhase("verified");
+      setOtpSecondsLeft(0);
       Alert.alert("Email Verified", payload.message || "Your email address has been verified.");
     } catch (error) {
       const errMsg = getRequestErrorMessage(error, "Unable to verify email code.", {
         backendUrl: getApiBaseUrl(),
       });
+      if (errMsg.toLowerCase().includes("verification code has expired")) {
+        setSignupOtpPhase("expired");
+        setOtpSecondsLeft(0);
+      }
       setSignupValidationError(errMsg);
       Alert.alert("Verification Error", errMsg);
     } finally {
@@ -1261,6 +1413,16 @@ export default function LoginScreen() {
       const errorMsg = "Password must be at least 6 characters.";
       setSignupValidationError(errorMsg);
       Alert.alert("Validation Error", errorMsg);
+      return;
+    }
+
+    const passwordValidationMessage =
+      signupRole === "partner" || signupRole === "volunteer"
+        ? getPasswordValidationMessage(signupPassword)
+        : null;
+    if (passwordValidationMessage) {
+      setSignupValidationError(passwordValidationMessage);
+      Alert.alert("Weak Password", passwordValidationMessage);
       return;
     }
 
@@ -1312,21 +1474,6 @@ export default function LoginScreen() {
         setSignupValidationError(errorMsg);
         Alert.alert("Validation Error", errorMsg);
         return;
-      }
-
-      if (signupPartnerApplication.dswdAccreditationNo.trim()) {
-        const dswdValidation = await validateDswdAccreditationNo(
-          signupPartnerApplication.dswdAccreditationNo,
-        );
-        if (!dswdValidation.valid) {
-          const reason =
-            dswdValidation.reason === "Invalid format"
-              ? "Use a valid DSWD accreditation format with at least 6 letters, numbers, dashes, or slashes."
-              : dswdValidation.reason || "The DSWD accreditation number could not be verified.";
-          setSignupValidationError(reason);
-          Alert.alert("Validation Error", reason);
-          return;
-        }
       }
 
       if (signupPartnerApplication.advocacyFocus.length === 0) {
@@ -1382,19 +1529,20 @@ export default function LoginScreen() {
               (focus): focus is NVCSector => focus !== "Disaster",
             )
             : signupPillars,
-        partnerRegistration:
-          signupRole === "partner"
-            ? {
-              organizationName:
-                signupPartnerApplication.organizationName.trim(),
-              sectorType: signupPartnerApplication.sectorType,
-              dswdAccreditationNo:
-                signupPartnerApplication.dswdAccreditationNo.trim(),
-              secRegistrationNo:
-                signupPartnerApplication.secRegistrationNo.trim(),
-              advocacyFocus: signupPartnerApplication.advocacyFocus,
-            }
-            : undefined,
+            partnerRegistration:
+              signupRole === "partner"
+                ? {
+                  organizationName:
+                    signupPartnerApplication.organizationName.trim(),
+                  stakeholderName: signupName.trim(),
+                  sectorType: signupPartnerApplication.sectorType,
+                  dswdAccreditationNo:
+                    signupPartnerApplication.dswdAccreditationNo?.trim() || "",
+                  secRegistrationNo:
+                    signupPartnerApplication.secRegistrationNo?.trim() || "",
+                  advocacyFocus: signupPartnerApplication.advocacyFocus,
+                }
+                : undefined,
         volunteerMembershipSheet:
           signupRole === "volunteer"
             ? {
@@ -1471,9 +1619,12 @@ export default function LoginScreen() {
       const errMsg = getRequestErrorMessage(error, "Failed to create account.", {
         backendUrl: getApiBaseUrl(),
       });
+      const errorTitle = isDuplicateEmailErrorMessage(errMsg)
+        ? "Email Already Registered"
+        : getRequestErrorTitle(error, "Sign Up Error");
       setSignupValidationError(errMsg);
       Alert.alert(
-        getRequestErrorTitle(error, "Sign Up Error"),
+        errorTitle,
         errMsg,
       );
     } finally {
@@ -1519,6 +1670,10 @@ export default function LoginScreen() {
   const selectedMobileRoleHint = selectedMobileRole
     ? getMobileRoleLoginHint(selectedMobileRole)
     : "";
+  const signupPasswordValidationMessage =
+    signupRole === "partner" || signupRole === "volunteer"
+      ? getPasswordValidationMessage(signupPassword)
+      : null;
   const renderSignupEmailVerificationControls = () => {
     if (signupRole === "admin") {
       return null;
@@ -1528,64 +1683,102 @@ export default function LoginScreen() {
     const isVerified =
       signupOtpPhase === "verified" &&
       normalizedEmail === normalizeEmailInput(signupEmailForOtp);
+    const isExpired = signupOtpPhase === "expired";
     const canRequestCode =
       Boolean(normalizedEmail) &&
       normalizedEmail.includes("@") &&
+      !emailExistsError &&
       !signupLoading &&
       !signupOtpLoading;
     const canVerifyCode =
       signupOtpPhase === "sent" &&
+      otpSecondsLeft > 0 &&
       /^\d{6}$/.test(signupOtpCode.trim()) &&
       !signupLoading &&
       !signupOtpLoading;
+
+    const formatTimeLeft = (seconds: number) => {
+      const m = Math.floor(seconds / 60);
+      const s = seconds % 60;
+      return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+    };
 
     return (
       <View style={styles.emailVerificationCard}>
         <View style={styles.emailVerificationHeader}>
           <MaterialIcons
-            name={isVerified ? "verified" : "mark-email-unread"}
+            name={isVerified ? "verified" : isExpired ? "error-outline" : emailExistsError ? "error" : "mark-email-unread"}
             size={18}
-            color={isVerified ? "#166534" : "#475569"}
+            color={isVerified ? "#166534" : (isExpired || emailExistsError) ? "#dc2626" : "#475569"}
           />
-          <Text style={styles.emailVerificationTitle}>
-            {isVerified ? "Email Verified" : "Email Verification Required"}
+          <Text style={[styles.emailVerificationTitle, (isExpired || emailExistsError) && { color: "#dc2626" }]}>
+            {isVerified ? "Email Verified" : isExpired ? "Verification Code Expired" : emailExistsError ? "Email Already Registered" : "Email Verification Required"}
           </Text>
         </View>
         <Text style={styles.emailVerificationText}>
           {isVerified
             ? `Verified ${signupEmailForOtp}.`
-            : "Send a 6-digit code to this email and verify it before submitting."}
+            : emailExistsError
+              ? emailExistsError
+              : isExpired
+                ? "Your 6-digit code has expired. Please tap 'Resend Verification Code' to get a new code."
+                : "Send a 6-digit code to this email and verify it before submitting (valid for 5 minutes)."}
         </Text>
         {!isVerified ? (
           <>
-            <View style={styles.emailVerificationActions}>
-              <TextInput
-                style={[styles.input, styles.otpInput]}
-                placeholder="6-digit code"
-                placeholderTextColor="#999"
-                keyboardType="number-pad"
-                maxLength={6}
-                value={signupOtpCode}
-                onChangeText={(value) =>
-                  setSignupOtpCode(value.replace(/\D/g, "").slice(0, 6))
-                }
-                editable={!signupLoading && !signupOtpLoading && signupOtpPhase === "sent"}
-              />
-              <TouchableOpacity
-                style={[
-                  styles.otpActionButton,
-                  (!canVerifyCode || signupOtpLoading) && styles.buttonDisabled,
-                ]}
-                onPress={verifySignupEmailCode}
-                disabled={!canVerifyCode || signupOtpLoading}
-              >
-                {signupOtpLoading && signupOtpAction === "verify" ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Text style={styles.otpActionButtonText}>Verify</Text>
-                )}
-              </TouchableOpacity>
-            </View>
+            {!emailExistsError ? (
+              <View style={styles.emailVerificationActions}>
+                <TextInput
+                  style={[styles.input, styles.otpInput, isExpired && { borderColor: "#fca5a5" }]}
+                  placeholder="6-digit code"
+                  placeholderTextColor="#999"
+                  keyboardType="number-pad"
+                  maxLength={6}
+                  value={signupOtpCode}
+                  onChangeText={(value) =>
+                    setSignupOtpCode(value.replace(/\D/g, "").slice(0, 6))
+                  }
+                  editable={!signupLoading && !signupOtpLoading && signupOtpPhase === "sent"}
+                />
+                <TouchableOpacity
+                  style={[
+                    styles.otpActionButton,
+                    (!canVerifyCode || signupOtpLoading) && styles.buttonDisabled,
+                  ]}
+                  onPress={verifySignupEmailCode}
+                  disabled={!canVerifyCode || signupOtpLoading}
+                >
+                  {signupOtpLoading && signupOtpAction === "verify" ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.otpActionButtonText}>Verify</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            ) : null}
+
+            {signupOtpPhase === "sent" && otpSecondsLeft > 0 ? (
+              <Text style={styles.otpTimerText}>
+                ⏱️ Code expires in {formatTimeLeft(otpSecondsLeft)}
+              </Text>
+            ) : null}
+
+            {isExpired ? (
+              <View style={styles.otpExpiredContainer}>
+                <Text style={styles.otpExpiredText}>
+                  ⚠️ Code expired. Request a new code below.
+                </Text>
+              </View>
+            ) : null}
+
+            {emailExistsError ? (
+              <View style={styles.otpExpiredContainer}>
+                <Text style={styles.otpExpiredText}>
+                  ⚠️ {emailExistsError}
+                </Text>
+              </View>
+            ) : null}
+
             <TouchableOpacity
               style={[
                 styles.otpSendButton,
@@ -1598,7 +1791,11 @@ export default function LoginScreen() {
                 <ActivityIndicator color="#166534" />
               ) : (
                 <Text style={styles.otpSendButtonText}>
-                  {signupOtpPhase === "sent" ? "Resend Verification Code" : "Send Verification Code"}
+                  {signupOtpPhase === "sent"
+                    ? "Resend Verification Code"
+                    : isExpired
+                      ? "Request New Verification Code"
+                      : "Send Verification Code"}
                 </Text>
               )}
             </TouchableOpacity>
@@ -2254,7 +2451,7 @@ export default function LoginScreen() {
                         ? "Create another administrator account for the web management portal."
                         : signupRole === "volunteer"
                           ? "Register with email or phone, choose a profile type, and complete the volunteer membership information sheet."
-                          : "Submit your organization application with DSWD details. Partner login is unlocked after admin approval."}
+                          : "Submit your organization application. Partner login is unlocked after admin approval."}
                   </Text>
 
                   {signupStep === "role" ? (
@@ -2387,21 +2584,6 @@ export default function LoginScreen() {
 
                           <TextInput
                             style={styles.input}
-                            placeholder="DSWD Accreditation No. (Optional)"
-                            placeholderTextColor="#999"
-                            value={signupPartnerApplication.dswdAccreditationNo}
-                            onChangeText={(value) =>
-                              updateSignupPartnerApplication(
-                                "dswdAccreditationNo",
-                                value.trim().toUpperCase(),
-                              )
-                            }
-                            editable={!signupLoading}
-                            autoCapitalize="characters"
-                          />
-
-                          <TextInput
-                            style={styles.input}
                             placeholder="SEC Registration No. (Optional)"
                             placeholderTextColor="#999"
                             value={signupPartnerApplication.secRegistrationNo}
@@ -2482,7 +2664,12 @@ export default function LoginScreen() {
                             editable={!signupLoading}
                           />
                           <TextInput
-                            style={styles.input}
+                            style={[
+                              styles.input,
+                              signupPasswordValidationMessage && signupPassword.trim()
+                                ? styles.inputError
+                                : null,
+                            ]}
                             placeholder="Password"
                             placeholderTextColor="#999"
                             secureTextEntry
@@ -2490,6 +2677,11 @@ export default function LoginScreen() {
                             onChangeText={setSignupPassword}
                             editable={!signupLoading}
                           />
+                          {signupPasswordValidationMessage && signupPassword.trim() ? (
+                            <Text style={styles.fieldValidationText}>
+                              {signupPasswordValidationMessage}
+                            </Text>
+                          ) : null}
                         </>
                       ) : (
                         <>
@@ -2527,7 +2719,12 @@ export default function LoginScreen() {
                             editable={!signupLoading}
                           />
                           <TextInput
-                            style={styles.input}
+                            style={[
+                              styles.input,
+                              signupPasswordValidationMessage && signupPassword.trim()
+                                ? styles.inputError
+                                : null,
+                            ]}
                             placeholder="Password"
                             placeholderTextColor="#999"
                             secureTextEntry
@@ -2536,6 +2733,11 @@ export default function LoginScreen() {
                             editable={!signupLoading}
                             autoCapitalize="none"
                           />
+                          {signupPasswordValidationMessage && signupPassword.trim() ? (
+                            <Text style={styles.fieldValidationText}>
+                              {signupPasswordValidationMessage}
+                            </Text>
+                          ) : null}
 
                           <Text style={styles.modalSectionLabel}>Volunteer Profile</Text>
                            <Text style={styles.modalSectionSubLabel}>Profile Type</Text>
@@ -2785,32 +2987,87 @@ export default function LoginScreen() {
                           <Text style={styles.modalSectionSubLabel}>
                             Select Skills (Select all that apply)
                           </Text>
-                          <View style={styles.skillsGrid}>
-                            {availableSkills.map((skill) => {
-                              const isSelected =
-                                signupVolunteerSheet.skills.includes(skill);
-                              return (
-                                <TouchableOpacity
-                                  key={skill}
-                                  style={[
-                                    styles.skillChip,
-                                    isSelected && styles.skillChipActive,
-                                  ]}
-                                  onPress={() => handleToggleVolunteerSkill(skill)}
-                                  disabled={signupLoading}
-                                >
-                                  <Text
-                                    style={[
-                                      styles.skillChipText,
-                                      isSelected && styles.skillChipTextActive,
-                                    ]}
-                                  >
-                                    {skill}
-                                  </Text>
-                                </TouchableOpacity>
-                              );
-                            })}
+                          <View style={styles.dropdownWrap}>
+                            <TouchableOpacity
+                              style={[
+                                styles.dropdownTrigger,
+                                signupLoading && styles.dropdownTriggerDisabled,
+                              ]}
+                              onPress={() => !signupLoading && setShowSkillsDropdown((v) => !v)}
+                              disabled={signupLoading}
+                              activeOpacity={0.75}
+                            >
+                              <Text
+                                style={[
+                                  styles.dropdownTriggerText,
+                                  signupVolunteerSheet.skills.length === 0 && styles.dropdownPlaceholder,
+                                ]}
+                                numberOfLines={1}
+                              >
+                                {signupVolunteerSheet.skills.length === 0
+                                  ? "Tap to select skills..."
+                                  : `${signupVolunteerSheet.skills.length} skill${signupVolunteerSheet.skills.length > 1 ? "s" : ""} selected`}
+                              </Text>
+                              <MaterialIcons
+                                name={showSkillsDropdown ? "keyboard-arrow-up" : "keyboard-arrow-down"}
+                                size={20}
+                                color="#64748b"
+                              />
+                            </TouchableOpacity>
+                            {showSkillsDropdown ? (
+                              <ScrollView
+                                style={styles.dropdownMenu}
+                                nestedScrollEnabled
+                                keyboardShouldPersistTaps="handled"
+                              >
+                                {availableSkills.map((skill) => {
+                                  const isSelected = signupVolunteerSheet.skills.includes(skill);
+                                  return (
+                                    <TouchableOpacity
+                                      key={skill}
+                                      style={[
+                                        styles.dropdownOption,
+                                        isSelected && styles.dropdownOptionSelected,
+                                      ]}
+                                      onPress={() => handleToggleVolunteerSkill(skill)}
+                                    >
+                                      <MaterialIcons
+                                        name={isSelected ? "check-box" : "check-box-outline-blank"}
+                                        size={20}
+                                        color={isSelected ? "#166534" : "#94a3b8"}
+                                      />
+                                      <Text
+                                        style={[
+                                          styles.dropdownOptionText,
+                                          isSelected && styles.dropdownOptionTextSelected,
+                                        ]}
+                                      >
+                                        {skill}
+                                      </Text>
+                                    </TouchableOpacity>
+                                  );
+                                })}
+                              </ScrollView>
+                            ) : null}
                           </View>
+
+                          {signupVolunteerSheet.skills.length > 0 ? (
+                            <View style={styles.selectedSkillsTagsRow}>
+                              {signupVolunteerSheet.skills.map((skill) => (
+                                <View key={skill} style={styles.selectedSkillTag}>
+                                  <Text style={styles.selectedSkillTagText}>{skill}</Text>
+                                  <TouchableOpacity
+                                    style={styles.selectedSkillTagRemove}
+                                    onPress={() => handleToggleVolunteerSkill(skill)}
+                                    disabled={signupLoading}
+                                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                                  >
+                                    <MaterialIcons name="close" size={14} color="#166534" />
+                                  </TouchableOpacity>
+                                </View>
+                              ))}
+                            </View>
+                          ) : null}
 
                           <Text style={styles.modalSectionLabel}>
                             Credentials & Certificates (Optional)
@@ -3964,6 +4221,18 @@ const styles = StyleSheet.create({
     fontSize: 16,
     minHeight: 54,
   },
+  inputError: {
+    borderColor: "#dc2626",
+    backgroundColor: "#fef2f2",
+  },
+  fieldValidationText: {
+    marginTop: -8,
+    marginBottom: 15,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "700",
+    color: "#b91c1c",
+  },
   emailVerificationCard: {
     borderWidth: 1,
     borderColor: "#bbf7d0",
@@ -4954,6 +5223,33 @@ const styles = StyleSheet.create({
     color: "#166534",
     fontWeight: "700",
   },
+  selectedSkillsTagsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    marginBottom: 12,
+  },
+  selectedSkillTag: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#dcfce7",
+    borderWidth: 1,
+    borderColor: "#86efac",
+    borderRadius: 16,
+    paddingVertical: 5,
+    paddingLeft: 10,
+    paddingRight: 6,
+    gap: 4,
+  },
+  selectedSkillTagText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#166534",
+  },
+  selectedSkillTagRemove: {
+    padding: 2,
+    borderRadius: 10,
+  },
   skillChip: {
     paddingVertical: 8,
     paddingHorizontal: 12,
@@ -5089,5 +5385,29 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "700",
     color: "#fff",
+  },
+  otpTimerText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#059669",
+    marginTop: 6,
+    marginBottom: 2,
+    textAlign: "center",
+  },
+  otpExpiredContainer: {
+    backgroundColor: "#fef2f2",
+    borderWidth: 1,
+    borderColor: "#fecaca",
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    marginTop: 6,
+    marginBottom: 4,
+  },
+  otpExpiredText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#dc2626",
+    textAlign: "center",
   },
 });

@@ -32,7 +32,8 @@ function getTaskAssignedVolunteerNames(project: Project): string[] {
 export function getProjectVolunteerMapEntries(
   project: Project,
   volunteers: Volunteer[] = [],
-  joinRecords: VolunteerProjectJoinRecord[] = []
+  joinRecords: VolunteerProjectJoinRecord[] = [],
+  allProjects: Project[] = []
 ): ProjectVolunteerMapEntry[] {
   const volunteerById = new Map(volunteers.map(volunteer => [volunteer.id, volunteer]));
   const volunteerByUserId = new Map(
@@ -73,15 +74,27 @@ export function getProjectVolunteerMapEntries(
     });
   };
 
-  (project.volunteers || []).forEach(volunteerId => addFallback(volunteerId, volunteerId));
-  (project.joinedUserIds || []).forEach(userId => addFallback(userId, userId));
+  const targetProjects: Project[] = [project];
+  if (!project.isEvent && allProjects.length > 0) {
+    const childEvents = allProjects.filter(
+      p => p.isEvent && (normalizeText(p.parentProjectId) === normalizeText(project.id) || normalizeText(p.parentProjectId) === normalizeText(project.title))
+    );
+    targetProjects.push(...childEvents);
+  }
 
-  const assignedIds = getTaskAssignedVolunteerIds(project).filter(Boolean);
-  const assignedNames = getTaskAssignedVolunteerNames(project).filter(Boolean);
-  assignedIds.forEach((volunteerId, index) => addFallback(volunteerId, assignedNames[index] || volunteerId));
+  const targetProjectIds = new Set(targetProjects.map(p => normalizeText(p.id)));
+
+  targetProjects.forEach(targetProj => {
+    (targetProj.volunteers || []).forEach(volunteerId => addFallback(volunteerId, volunteerId));
+    (targetProj.joinedUserIds || []).forEach(userId => addFallback(userId, userId));
+
+    const assignedIds = getTaskAssignedVolunteerIds(targetProj).filter(Boolean);
+    const assignedNames = getTaskAssignedVolunteerNames(targetProj).filter(Boolean);
+    assignedIds.forEach((volunteerId, index) => addFallback(volunteerId, assignedNames[index] || volunteerId));
+  });
 
   joinRecords
-    .filter(record => record.projectId === project.id)
+    .filter(record => targetProjectIds.has(normalizeText(record.projectId)))
     .forEach(record => {
       const volunteer = volunteerById.get(record.volunteerId) || volunteerByUserId.get(record.volunteerUserId);
       if (volunteer) {
@@ -103,7 +116,114 @@ export function getProjectVolunteerMapEntries(
 export function getProjectVolunteerMapCount(
   project: Project,
   volunteers: Volunteer[] = [],
+  joinRecords: VolunteerProjectJoinRecord[] = [],
+  allProjects: Project[] = []
+): number {
+  return getProjectVolunteerMapEntries(project, volunteers, joinRecords, allProjects).length;
+}
+
+export function getProjectVolunteersNeeded(
+  project: Project,
+  projects: Project[] = []
+): number {
+  if (project.isEvent) {
+    return Math.max(0, Number(project.volunteersNeeded || 0));
+  }
+  const childEvents = projects.filter(
+    candidate =>
+      candidate.isEvent &&
+      (normalizeText(candidate.parentProjectId) === normalizeText(project.id) ||
+       normalizeText(candidate.parentProjectId) === normalizeText(project.title))
+  );
+  if (childEvents.length === 0) {
+    return Math.max(0, Number(project.volunteersNeeded || 0));
+  }
+  return childEvents.reduce(
+    (total, child) => total + Math.max(0, Number(child.volunteersNeeded || 0)),
+    Math.max(0, Number(project.volunteersNeeded || 0))
+  );
+}
+
+export function getActiveProjectJoinCount(
+  project: Project,
   joinRecords: VolunteerProjectJoinRecord[] = []
 ): number {
-  return getProjectVolunteerMapEntries(project, volunteers, joinRecords).length;
+  const projectId = normalizeText(project.id);
+  if (!projectId) {
+    return 0;
+  }
+
+  const activeVolunteerKeys = new Set<string>();
+  joinRecords
+    .filter(record => normalizeText(record.projectId) === projectId)
+    .filter(record => (record.participationStatus || 'Active') === 'Active')
+    .forEach(record => {
+      const key =
+        normalizeText(record.volunteerUserId) ||
+        normalizeText(record.volunteerId) ||
+        normalizeText(record.id);
+      if (key) {
+        activeVolunteerKeys.add(key);
+      }
+    });
+
+  return activeVolunteerKeys.size;
+}
+
+export function getActiveProjectGroupJoinCount(
+  project: Project,
+  projects: Project[] = [],
+  joinRecords: VolunteerProjectJoinRecord[] = []
+): number {
+  const projectId = normalizeText(project.id);
+  if (!projectId) {
+    return 0;
+  }
+
+  const relatedProjects = project.isEvent
+    ? [project]
+    : [
+        project,
+        ...projects.filter(
+          candidate =>
+            candidate.isEvent &&
+            (normalizeText(candidate.parentProjectId) === projectId ||
+             normalizeText(candidate.parentProjectId) === normalizeText(project.title))
+        ),
+      ];
+
+  const relatedProjectIds = new Set<string>(
+    relatedProjects.map(candidate => normalizeText(candidate.id))
+  );
+
+  // Count unique volunteers (deduplicate across parent + child events)
+  const uniqueVolunteerKeys = new Set<string>();
+
+  // 1. From joinRecords
+  joinRecords
+    .filter(record => relatedProjectIds.has(normalizeText(record.projectId)))
+    .filter(record => (record.participationStatus || 'Active') === 'Active')
+    .forEach(record => {
+      const key =
+        normalizeText(record.volunteerUserId) ||
+        normalizeText(record.volunteerId) ||
+        normalizeText(record.id);
+      if (key) {
+        uniqueVolunteerKeys.add(key);
+      }
+    });
+
+  // 2. Fallback: also check direct volunteer / user IDs attached on projects / events
+  relatedProjects.forEach(p => {
+    (p.volunteers || []).forEach(vId => {
+      const k = normalizeText(vId);
+      if (k) uniqueVolunteerKeys.add(k);
+    });
+    (p.joinedUserIds || []).forEach(uId => {
+      const k = normalizeText(uId);
+      if (k) uniqueVolunteerKeys.add(k);
+    });
+  });
+
+  return uniqueVolunteerKeys.size;
 }

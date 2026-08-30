@@ -32,7 +32,7 @@ import {
   subscribeToStorageChanges,
 } from '../models/storage';
 import { PartnerProjectApplication, PartnerProjectProposalDetails, PartnerReport, Project, Volunteer, VolunteerProjectJoinRecord, VolunteerProjectMatch, VolunteerTimeLog } from '../models/types';
-import { isImageMediaUri, pickImageFromDevice, pickDocumentFromDevice } from '../utils/media';
+import { isImageMediaUri, pickImageFromDevice, pickDocumentFromDevice, pickAttendancePhotoFromDevice } from '../utils/media';
 import { navigateToAvailableRoute } from '../utils/navigation';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
@@ -890,7 +890,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
     }
 
     try {
-      const attendancePhoto = await pickImageFromDevice();
+      const attendancePhoto = await pickAttendancePhotoFromDevice();
       if (!attendancePhoto) {
         return;
       }

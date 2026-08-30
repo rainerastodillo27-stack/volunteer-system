@@ -11,6 +11,7 @@ import {
   TextInput,
   FlatList,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
@@ -27,6 +28,7 @@ import {
   approveUser,
   rejectUser,
   getUser,
+  sendRejectionEmail,
 } from '../models/storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../contexts/AuthContext';
@@ -58,6 +60,8 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [rejectionReason, setRejectionReason] = useState('');
+  const [rejectionError, setRejectionError] = useState<string | null>(null);
+  const [isRejecting, setIsRejecting] = useState(false);
   const [expandedSection, setExpandedSection] = useState<'applications' | 'approved' | 'profiles' | 'reports' | null>(null);
 
   useEffect(() => {
@@ -237,6 +241,8 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   const closeRejectModal = () => {
     setShowRejectModal(false);
     setRejectionReason('');
+    setRejectionError(null);
+    setIsRejecting(false);
   };
 
   const handleApproveVolunteer = async () => {
@@ -282,14 +288,24 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
       return;
     }
     if (!selectedVolunteer) return;
+
+    const trimmedReason = rejectionReason.trim();
+    if (!trimmedReason) {
+      setRejectionError('Please provide a reason before rejecting the application.');
+      return;
+    }
+
     const adminId = user?.id || '';
     const previousVolunteers = volunteers;
     const previousSelected = selectedVolunteer;
-    const reason = rejectionReason.trim() || 'Application did not meet requirements.';
+    setIsRejecting(true);
+    setRejectionError(null);
+
     try {
       const updated = {
         ...selectedVolunteer,
         registrationStatus: 'Rejected' as const,
+        rejectionReason: trimmedReason,
         reviewedBy: adminId,
         reviewedAt: new Date().toISOString(),
       };
@@ -298,9 +314,22 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
       );
       setSelectedVolunteer(updated);
       closeRejectModal();
-      setActionNotice('Volunteer application rejected.');
+
+      const volunteerEmail = (selectedVolunteer.email || selectedUser?.email || '').trim();
+      let emailNotice = '';
+      if (volunteerEmail) {
+        try {
+          await sendRejectionEmail(volunteerEmail, selectedVolunteer.name, trimmedReason, 'volunteer');
+          emailNotice = ` and notification email sent to ${volunteerEmail}`;
+        } catch (emailErr) {
+          console.warn('[REJECTION-EMAIL] Failed to send rejection email:', emailErr);
+        }
+      }
+
+      setActionNotice(`Application for ${selectedVolunteer.name} rejected${emailNotice}.`);
+
       if (selectedVolunteer.userId) {
-        await rejectUser(selectedVolunteer.userId, reason, adminId);
+        await rejectUser(selectedVolunteer.userId, trimmedReason, adminId);
       } else {
         await saveVolunteer(updated);
       }
@@ -312,6 +341,8 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
         getRequestErrorTitle(error),
         getRequestErrorMessage(error, 'Failed to reject volunteer application.')
       );
+    } finally {
+      setIsRejecting(false);
     }
   };
 
@@ -861,9 +892,15 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                     {selectedVolunteer.phone ? (
                       <Text style={styles.applicationPhone}>{selectedVolunteer.phone}</Text>
                     ) : null}
-                    <View style={[styles.registrationBadge, styles.registrationBadgeApproved]}>
-                      <Text style={styles.registrationBadgeText}>{selectedVolunteer.engagementStatus || 'Approved'}</Text>
-                    </View>
+                    {selectedVolunteer.registrationStatus === 'Rejected' ? (
+                      <View style={[styles.registrationBadge, { backgroundColor: '#fee2e2' }]}>
+                        <Text style={[styles.registrationBadgeText, { color: '#dc2626' }]}>Rejected</Text>
+                      </View>
+                    ) : (
+                      <View style={[styles.registrationBadge, styles.registrationBadgeApproved]}>
+                        <Text style={styles.registrationBadgeText}>{selectedVolunteer.engagementStatus || 'Approved'}</Text>
+                      </View>
+                    )}
                   </View>
                 </View>
 
@@ -895,7 +932,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                 <View style={styles.applicationCardMetaItem}>
                   <MaterialIcons name="calendar-month" size={16} color="#64748b" />
                   <View style={{ marginLeft: 8 }}>
-                    <Text style={styles.applicationInfoLabel}>Member Since</Text>
+                    <Text style={styles.applicationInfoLabel}>Registered</Text>
                     <Text style={styles.applicationInfoValue}>
                       {format(new Date(selectedUser?.createdAt || selectedVolunteer.createdAt), 'PPpp')}
                     </Text>
@@ -903,6 +940,26 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                 </View>
               </View>
             </View>
+
+            {selectedVolunteer.registrationStatus === 'Rejected' && (
+              <View style={{ backgroundColor: '#fef2f2', borderWidth: 1, borderColor: '#fecaca', borderRadius: 12, padding: 16, marginHorizontal: 16, marginBottom: 16, flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
+                <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: '#fee2e2', alignItems: 'center', justifyContent: 'center', marginTop: 2 }}>
+                  <MaterialIcons name="cancel" size={18} color="#dc2626" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 15, fontWeight: '800', color: '#991b1b' }}>Application Rejected</Text>
+                  <Text style={{ fontSize: 13, color: '#b91c1c', marginTop: 4, lineHeight: 18 }}>
+                    <Text style={{ fontWeight: '700' }}>Reason: </Text>
+                    {selectedVolunteer.rejectionReason || selectedUser?.rejectionReason || 'Application did not meet requirements.'}
+                  </Text>
+                  {selectedVolunteer.reviewedAt && (
+                    <Text style={{ fontSize: 11, color: '#7f1d1d', marginTop: 6 }}>
+                      Reviewed on: {format(new Date(selectedVolunteer.reviewedAt), 'PPpp')}
+                    </Text>
+                  )}
+                </View>
+              </View>
+            )}
 
             {/* Grid */}
             <View style={styles.applicationGrid}>
@@ -1205,43 +1262,154 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
 
         <Modal
           visible={showRejectModal}
-          animationType="slide"
-          onRequestClose={closeRejectModal}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={isRejecting ? undefined : closeRejectModal}
         >
-          <View style={styles.modalContainer}>
-            <View style={styles.modalHeader}>
-              <TouchableOpacity onPress={closeRejectModal}>
-                <MaterialIcons name="close" size={24} color="#333" />
-              </TouchableOpacity>
-              <Text style={styles.modalTitle}>Reject Application</Text>
-              <View style={{ width: 24 }} />
-            </View>
-            <ScrollView style={styles.modalContent}>
-              <Text style={styles.label}>Reason for rejection (optional)</Text>
-              <TextInput
-                style={[styles.input, { minHeight: 120, textAlignVertical: 'top' }]}
-                placeholder="Explain why the application is being rejected..."
-                placeholderTextColor="#999"
-                multiline={true}
-                numberOfLines={5}
-                value={rejectionReason}
-                onChangeText={setRejectionReason}
-              />
-              <View style={{ flexDirection: 'row', gap: 12 }}>
-                <TouchableOpacity
-                  style={[styles.submitButton, { flex: 1, backgroundColor: '#94a3b8' }]}
-                  onPress={closeRejectModal}
-                >
-                  <Text style={styles.submitButtonText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.submitButton, { flex: 1, backgroundColor: '#dc2626' }]}
-                  onPress={() => void handleRejectVolunteer()}
-                >
-                  <Text style={styles.submitButtonText}>Confirm Reject</Text>
+          <View style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.45)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+            <View style={{ width: '100%', maxWidth: 520, backgroundColor: '#ffffff', borderRadius: 16, borderWidth: 1, borderColor: '#e2e8f0', padding: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.15, shadowRadius: 20, elevation: 10 }}>
+              {/* Header */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: '#fee2e2', alignItems: 'center', justifyContent: 'center' }}>
+                    <MaterialIcons name="cancel" size={22} color="#dc2626" />
+                  </View>
+                  <View>
+                    <Text style={{ fontSize: 18, fontWeight: '800', color: '#0f172a' }}>Reject Volunteer Application</Text>
+                    <Text style={{ fontSize: 12, color: '#64748b' }}>Provide a reason explaining why the application is rejected.</Text>
+                  </View>
+                </View>
+                <TouchableOpacity onPress={closeRejectModal} disabled={isRejecting} style={{ padding: 4 }}>
+                  <MaterialIcons name="close" size={22} color="#64748b" />
                 </TouchableOpacity>
               </View>
-            </ScrollView>
+
+              {/* Applicant Preview */}
+              {selectedVolunteer && (
+                <View style={{ backgroundColor: '#f8fafc', padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={{ fontSize: 14, fontWeight: '700', color: '#475569' }}>{selectedVolunteer.name.charAt(0)}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a' }}>{selectedVolunteer.name}</Text>
+                    <Text style={{ fontSize: 12, color: '#64748b' }}>{selectedVolunteer.email || selectedVolunteer.phone || 'Volunteer Applicant'}</Text>
+                  </View>
+                  <View style={{ backgroundColor: '#fef3c7', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 }}>
+                    <Text style={{ fontSize: 11, fontWeight: '700', color: '#d97706' }}>Pending Review</Text>
+                  </View>
+                </View>
+              )}
+
+              {/* Quick Reason Suggestions */}
+              <Text style={{ fontSize: 12, fontWeight: '700', color: '#475569', marginBottom: 6 }}>
+                Common Reasons (tap to apply):
+              </Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
+                {[
+                  'Incomplete application details / missing requirements',
+                  'Location outside active service coverage area',
+                  'Does not meet eligibility or age criteria',
+                  'Schedule and availability mismatch',
+                  'Duplicate application submission',
+                ].map(reasonOption => (
+                  <TouchableOpacity
+                    key={reasonOption}
+                    onPress={() => {
+                      setRejectionReason(reasonOption);
+                      setRejectionError(null);
+                    }}
+                    style={{
+                      backgroundColor: rejectionReason === reasonOption ? '#fee2e2' : '#f1f5f9',
+                      borderWidth: 1,
+                      borderColor: rejectionReason === reasonOption ? '#f87171' : '#e2e8f0',
+                      paddingHorizontal: 10,
+                      paddingVertical: 6,
+                      borderRadius: 8,
+                    }}
+                  >
+                    <Text style={{ fontSize: 11, fontWeight: '600', color: rejectionReason === reasonOption ? '#b91c1c' : '#475569' }}>
+                      {reasonOption}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              {/* Rejection Reason Input */}
+              <View style={{ marginBottom: 6 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#0f172a' }}>
+                    Reason for rejection <Text style={{ color: '#dc2626' }}>*</Text>
+                  </Text>
+                  <Text style={{ fontSize: 11, color: '#94a3b8' }}>Required</Text>
+                </View>
+                <TextInput
+                  style={{
+                    backgroundColor: '#ffffff',
+                    borderWidth: 1,
+                    borderColor: rejectionError ? '#ef4444' : '#cbd5e1',
+                    borderRadius: 10,
+                    padding: 12,
+                    minHeight: 90,
+                    textAlignVertical: 'top',
+                    fontSize: 13,
+                    color: '#0f172a',
+                  }}
+                  placeholder="Type or edit the specific reason for rejecting this volunteer application..."
+                  placeholderTextColor="#94a3b8"
+                  multiline={true}
+                  numberOfLines={4}
+                  value={rejectionReason}
+                  onChangeText={text => {
+                    setRejectionReason(text);
+                    if (text.trim()) setRejectionError(null);
+                  }}
+                />
+              </View>
+
+              {rejectionError ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4, marginBottom: 10 }}>
+                  <MaterialIcons name="error-outline" size={15} color="#dc2626" />
+                  <Text style={{ fontSize: 12, color: '#dc2626', fontWeight: '600' }}>{rejectionError}</Text>
+                </View>
+              ) : (
+                <View style={{ height: 10 }} />
+              )}
+
+              {/* Buttons */}
+              <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 8 }}>
+                <TouchableOpacity
+                  style={{ paddingHorizontal: 16, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: '#cbd5e1' }}
+                  onPress={closeRejectModal}
+                  disabled={isRejecting}
+                >
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#475569' }}>Cancel</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={{
+                    paddingHorizontal: 18,
+                    paddingVertical: 10,
+                    borderRadius: 8,
+                    backgroundColor: '#dc2626',
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 6,
+                    opacity: isRejecting ? 0.75 : 1,
+                  }}
+                  onPress={() => void handleRejectVolunteer()}
+                  disabled={isRejecting}
+                >
+                  {isRejecting ? (
+                    <ActivityIndicator size="small" color="#ffffff" />
+                  ) : (
+                    <MaterialIcons name="cancel" size={16} color="#ffffff" />
+                  )}
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#ffffff' }}>
+                    {isRejecting ? 'Rejecting...' : 'Confirm Rejection'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
           </View>
         </Modal>
       </ScrollView>

@@ -14,6 +14,28 @@ function getPlatformOS(): string {
 }
 
 const IMAGE_FILE_PATTERN = /\.(png|jpe?g|gif|webp|bmp|heic|heif)(\?.*)?$/i;
+
+// Allowed MIME types and extensions for attendance photo uploads.
+const ALLOWED_ATTENDANCE_MIME_TYPES = new Set([
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+  'image/bmp',
+  'image/heic',
+  'image/heif',
+]);
+
+const ALLOWED_ATTENDANCE_EXTENSIONS = /\.(png|jpe?g|gif|webp|bmp|heic|heif)$/i;
+
+// Returns a human-friendly error when the picked file is not a supported image type.
+function buildUnsupportedFileError(fileNameOrMime: string): Error {
+  return new Error(
+    `Unsupported file type: "${fileNameOrMime}". ` +
+    'Only image files are accepted for attendance photos (JPEG, PNG, GIF, WebP, BMP, HEIC/HEIF).'
+  );
+}
 const DATA_URI_PATTERN = /^data:([^;,]+)(;base64)?,/i;
 
 // Returns true when the provided string can be rendered as an image preview.
@@ -159,6 +181,96 @@ export async function pickImageFromDevice(): Promise<string | null> {
     return asset.uri;
   } catch (error) {
     console.error('Error picking image:', error);
+    return null;
+  }
+}
+
+// Strict variant used for attendance photos: validates that the picked file is
+// a supported image type and throws a user-friendly error if it is not.
+export async function pickAttendancePhotoFromDevice(): Promise<string | null> {
+  if (Platform.OS === 'web') {
+    return new Promise((resolve, reject) => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      // Hint the OS file picker toward images, but we still validate the result.
+      input.accept = 'image/jpeg,image/jpg,image/png,image/gif,image/webp,image/bmp,image/heic,image/heif';
+      input.onchange = (e: any) => {
+        const file: File | undefined = e.target.files?.[0];
+        if (!file) {
+          resolve(null);
+          return;
+        }
+
+        // Validate MIME type (primary check)
+        const mimeType = (file.type || '').toLowerCase();
+        const hasAllowedMime = ALLOWED_ATTENDANCE_MIME_TYPES.has(mimeType);
+
+        // Validate extension as fallback (some browsers report empty MIME type)
+        const hasAllowedExtension = ALLOWED_ATTENDANCE_EXTENSIONS.test(file.name);
+
+        if (!hasAllowedMime && !hasAllowedExtension) {
+          reject(buildUnsupportedFileError(file.type || file.name || 'unknown'));
+          return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = (event: any) => {
+          const dataUri: string = event.target.result;
+
+          // Final safety check: the data URI prefix must be an image MIME type.
+          if (!dataUri.startsWith('data:image/')) {
+            reject(buildUnsupportedFileError(file.name));
+            return;
+          }
+
+          resolve(dataUri);
+        };
+        reader.onerror = () => {
+          reject(new Error('Failed to read the selected file. Please try again.'));
+        };
+        reader.readAsDataURL(file);
+      };
+
+      // If the user closes the picker without selecting anything.
+      input.oncancel = () => resolve(null);
+      input.click();
+    });
+  }
+
+  // Native path
+  try {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      base64: true,
+      quality: 0.4,
+    });
+
+    if (result.canceled || !result.assets || result.assets.length === 0) {
+      return null;
+    }
+
+    const asset = result.assets[0];
+    const mimeType = (asset.mimeType || '').toLowerCase();
+
+    // On native, ImagePicker.MediaTypeOptions.Images should already filter,
+    // but we double-check the reported MIME type.
+    if (mimeType && !ALLOWED_ATTENDANCE_MIME_TYPES.has(mimeType)) {
+      throw buildUnsupportedFileError(mimeType);
+    }
+
+    if (asset.base64) {
+      const imageDataUri = `data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}`;
+      const optimizedImage = await compressImage(imageDataUri);
+      return optimizedImage || imageDataUri;
+    }
+
+    return asset.uri;
+  } catch (error) {
+    // Re-throw unsupported-file errors so callers can display the message.
+    if (error instanceof Error && error.message.startsWith('Unsupported file type')) {
+      throw error;
+    }
+    console.error('Error picking attendance photo:', error);
     return null;
   }
 }

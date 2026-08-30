@@ -83,7 +83,7 @@ import {
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { navigateToAvailableRoute } from '../utils/navigation';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
-import { isImageMediaUri, pickImageFromDevice } from '../utils/media';
+import { isImageMediaUri, pickImageFromDevice, pickAttendancePhotoFromDevice } from '../utils/media';
 
 type AssignedTask = ProjectInternalTask & {
   projectId: string;
@@ -705,7 +705,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
     }
 
     try {
-      const attendancePhoto = await pickImageFromDevice();
+      const attendancePhoto = await pickAttendancePhotoFromDevice();
       if (!attendancePhoto) {
         return;
       }

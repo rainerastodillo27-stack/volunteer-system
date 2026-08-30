@@ -10,6 +10,7 @@ import {
   Platform,
   Image,
   ScrollView,
+  Linking,
   type ImageStyle,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -51,6 +52,7 @@ export default function MappingScreen({ navigation }: any) {
   const [partnerReports, setPartnerReports] = useState<PartnerReport[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [showDetails, setShowDetails] = useState(false);
+  const [locationPromptProject, setLocationPromptProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const mapRef = React.useRef<MapView | null>(null);
   const mappedProjects = React.useMemo(() => getMappedProjects(projects), [projects]);
@@ -85,6 +87,7 @@ export default function MappingScreen({ navigation }: any) {
         'partnerProjectApplications',
         'volunteerJoinRecords',
         'volunteerProfile',
+        'volunteerMatches',
       ]);
       const allPartners = await getAllPartners();
       const mapSourceProjects = withImpactMapFallbackProjects(
@@ -102,9 +105,12 @@ export default function MappingScreen({ navigation }: any) {
             )
           : []
       );
-      const joinedVolunteerProjectIds = new Set(
-        snapshot.volunteerJoinRecords.map(record => record.projectId)
-      );
+      const joinedVolunteerProjectIds = new Set([
+        ...snapshot.volunteerJoinRecords.map(record => record.projectId),
+        ...(snapshot.volunteerMatches || [])
+          .filter(match => match.status === 'Matched' || match.status === 'Requested')
+          .map(match => match.projectId),
+      ]);
 
 
       const visibleProjects =
@@ -112,14 +118,20 @@ export default function MappingScreen({ navigation }: any) {
           ? // Partner: only projects from APPROVED proposals
             mapSourceProjects.filter(project => partnerProjectIds.has(project.id))
           : user?.role === 'volunteer'
-          ? // Volunteer: only EVENTS (isEvent=true) that the volunteer has joined
+          ? // Volunteer: only EVENTS (isEvent=true) that the volunteer has joined or requested/matched
             mapSourceProjects.filter(
               project =>
                 project.isEvent &&
                 (
                   joinedVolunteerProjectIds.has(project.id) ||
                   (snapshot.volunteerProfile && (project.joinedUserIds || []).includes(snapshot.volunteerProfile.userId)) ||
-                  (snapshot.volunteerProfile && (project.volunteers || []).includes(snapshot.volunteerProfile.id))
+                  (snapshot.volunteerProfile && (project.volunteers || []).includes(snapshot.volunteerProfile.id)) ||
+                  (user?.id && (project.joinedUserIds || []).includes(user.id)) ||
+                  (project.internalTasks || []).some(task =>
+                    snapshot.volunteerProfile &&
+                    (task.assignedVolunteerId === snapshot.volunteerProfile.id ||
+                      (task.assignedVolunteerIds || []).includes(snapshot.volunteerProfile.id))
+                  )
                 )
             )
           : mapSourceProjects;
@@ -560,11 +572,123 @@ export default function MappingScreen({ navigation }: any) {
                   );
                 })()}
 
-                <TouchableOpacity style={styles.viewDetailsButton} onPress={handleOpenProjectDetails}>
-                  <Text style={styles.viewDetailsButtonText}>
-                    {user?.role === 'admin' ? 'Open Program Management Suite' : 'View Full Details'}
-                  </Text>
-                </TouchableOpacity>
+                <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
+                  <TouchableOpacity
+                    style={styles.modalDirectionsButton}
+                    onPress={() => {
+                      if (!selectedProject?.location?.latitude || !selectedProject?.location?.longitude) {
+                        setLocationPromptProject(selectedProject);
+                        return;
+                      }
+                      const destLat = selectedProject.location.latitude;
+                      const destLng = selectedProject.location.longitude;
+                      const url = `https://www.google.com/maps/dir/?api=1&destination=${destLat},${destLng}&travelmode=driving`;
+                      Linking.openURL(url).catch(() => setLocationPromptProject(selectedProject));
+                    }}
+                  >
+                    <MaterialIcons name="directions" size={18} color="#ffffff" />
+                    <Text style={styles.modalDirectionsButtonText}>Get Directions</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity style={[styles.viewDetailsButton, { flex: 1, marginTop: 0 }]} onPress={handleOpenProjectDetails}>
+                    <Text style={styles.viewDetailsButtonText}>
+                      {user?.role === 'admin' ? 'Open Management Suite' : 'View Full Details'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Location Details & Directions Text List Fallback Modal */}
+      <Modal
+        animationType="fade"
+        transparent
+        visible={Boolean(locationPromptProject)}
+        onRequestClose={() => setLocationPromptProject(null)}
+      >
+        <View style={styles.centeredView}>
+          <View style={[styles.modalView, { maxWidth: 500 }]}>
+            <TouchableOpacity style={styles.closeButton} onPress={() => setLocationPromptProject(null)}>
+              <MaterialIcons name="close" size={26} color="#333" />
+            </TouchableOpacity>
+
+            {locationPromptProject && (
+              <ScrollView style={styles.modalContent}>
+                <View style={styles.locationModalHeader}>
+                  <View style={styles.locationModalIconShell}>
+                    <MaterialIcons name="place" size={30} color="#16a34a" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.locationModalTitle}>Location Details</Text>
+                    <Text style={styles.locationModalSubtitle}>
+                      Complete destination details and navigation links.
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.locationCard}>
+                  <View style={styles.locationRow}>
+                    <MaterialIcons name="event" size={18} color="#0f766e" />
+                    <View style={styles.locationTextGroup}>
+                      <Text style={styles.locationFieldLabel}>Event / Project</Text>
+                      <Text style={styles.locationFieldValue}>{locationPromptProject.title}</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.locationDivider} />
+
+                  <View style={styles.locationRow}>
+                    <MaterialIcons name="location-on" size={18} color="#dc2626" />
+                    <View style={styles.locationTextGroup}>
+                      <Text style={styles.locationFieldLabel}>Address / Barangay</Text>
+                      <Text style={styles.locationFieldValue}>
+                        {locationPromptProject.location?.address || 'Negros Island Region, Philippines'}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.locationDivider} />
+
+                  <View style={styles.locationRow}>
+                    <MaterialIcons name="my-location" size={18} color="#2563eb" />
+                    <View style={styles.locationTextGroup}>
+                      <Text style={styles.locationFieldLabel}>GPS Coordinates</Text>
+                      <Text style={styles.locationFieldValue}>
+                        {locationPromptProject.location?.latitude && locationPromptProject.location?.longitude
+                          ? `${locationPromptProject.location.latitude.toFixed(5)}, ${locationPromptProject.location.longitude.toFixed(5)}`
+                          : 'Coordinates to be updated'}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+
+                <View style={{ flexDirection: 'row', gap: 10, marginTop: 18 }}>
+                  <TouchableOpacity
+                    style={styles.openInMapsButton}
+                    onPress={() => {
+                      const lat = locationPromptProject.location?.latitude;
+                      const lng = locationPromptProject.location?.longitude;
+                      const query = (lat && lng)
+                        ? `${lat},${lng}`
+                        : encodeURIComponent(locationPromptProject.location?.address || locationPromptProject.title);
+                      const url = `https://www.google.com/maps/dir/?api=1&destination=${query}&travelmode=driving`;
+                      Linking.openURL(url).catch(() => {});
+                    }}
+                  >
+                    <MaterialIcons name="open-in-new" size={18} color="#ffffff" />
+                    <Text style={styles.openInMapsButtonText}>Open in Google Maps</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.closeLocationModalBtn}
+                    onPress={() => setLocationPromptProject(null)}
+                  >
+                    <Text style={styles.closeLocationModalBtnText}>Close</Text>
+                  </TouchableOpacity>
+                </View>
               </ScrollView>
             )}
           </View>
@@ -990,5 +1114,109 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  modalDirectionsButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#16a34a',
+    paddingVertical: 14,
+    borderRadius: 8,
+  },
+  modalDirectionsButtonText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  locationModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    marginBottom: 16,
+  },
+  locationModalIconShell: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#f0fdf4',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+  },
+  locationModalTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  locationModalSubtitle: {
+    fontSize: 12,
+    color: '#64748b',
+    marginTop: 2,
+  },
+  locationCard: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 14,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  locationRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  locationTextGroup: {
+    flex: 1,
+  },
+  locationFieldLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  locationFieldValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1e293b',
+    marginTop: 2,
+  },
+  locationDivider: {
+    height: 1,
+    backgroundColor: '#e2e8f0',
+    marginVertical: 10,
+  },
+  openInMapsButton: {
+    flex: 1.5,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#2563eb',
+    paddingVertical: 12,
+    borderRadius: 10,
+  },
+  openInMapsButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  closeLocationModalBtn: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f1f5f9',
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  closeLocationModalBtnText: {
+    color: '#475569',
+    fontSize: 14,
+    fontWeight: '700',
   },
 });

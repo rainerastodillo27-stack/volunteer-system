@@ -29,6 +29,7 @@ import {
 } from '../models/storage';
 import { Project, Volunteer, VolunteerProjectMatch, VolunteerProjectJoinRecord, AdminPlanningCalendar, AdminPlanningItem } from '../models/types';
 import { getRequestErrorMessage } from '../utils/requestErrors';
+import { getActiveProjectJoinCount } from '../utils/projectVolunteers';
 import { format } from 'date-fns';
 
 type SortOption = 'date' | 'priority' | 'title';
@@ -292,16 +293,26 @@ export default function VolunteerEventsScreen() {
     return 'Low';
   };
 
+  const getCurrentUserJoinRecord = (event: Project) => {
+    const userId = user?.id || '';
+    const volunteerId = volunteerProfile?.id || '';
+    return joinRecords.find(record =>
+      record.projectId === event.id &&
+      (record.volunteerUserId === userId || record.volunteerId === volunteerId)
+    );
+  };
+
   const getEventStatus = (event: Project) => {
-    const isJoined = (event.joinedUserIds || []).includes(user?.id || '') ||
-      (volunteerProfile && event.volunteers ? event.volunteers.includes(volunteerProfile.id) : false);
+    const currentJoinRecord = getCurrentUserJoinRecord(event);
+    const isJoined = currentJoinRecord && (currentJoinRecord.participationStatus || 'Active') === 'Active';
+    const isCompleted = currentJoinRecord && currentJoinRecord.participationStatus === 'Completed';
 
     const match = volunteerMatches.find(m => m.projectId === event.id);
     
     if (match?.status === 'Requested') return { label: 'Pending', color: '#C97F1F', joinable: false };
     if (match?.status === 'Rejected') return { label: 'Apply Again', color: '#B0432B', joinable: true };
+    if (isCompleted || match?.status === 'Completed') return { label: 'Completed', color: '#5B564C', joinable: false };
     if (match?.status === 'Matched' || isJoined) return { label: 'Joined', color: '#3F7A54', joinable: false };
-    if (match?.status === 'Completed') return { label: 'Completed', color: '#5B564C', joinable: false };
     
     return { label: 'Open', color: '#3F7A54', joinable: true };
   };
@@ -408,14 +419,14 @@ export default function VolunteerEventsScreen() {
   const displayEvents = useMemo(() => {
     if (activeTab === 'applications') {
       return filteredEvents.filter(e => {
-        const isJoined = (e.joinedUserIds || []).includes(user?.id || '') ||
-          (volunteerProfile && e.volunteers ? e.volunteers.includes(volunteerProfile.id) : false);
+        const currentJoinRecord = getCurrentUserJoinRecord(e);
+        const isJoined = currentJoinRecord && (currentJoinRecord.participationStatus || 'Active') === 'Active';
         const match = volunteerMatches.find(m => m.projectId === e.id);
         return isJoined || match?.status === 'Requested' || match?.status === 'Matched' || match?.status === 'Rejected';
       });
     }
     return filteredEvents;
-  }, [filteredEvents, activeTab, volunteerMatches, volunteerProfile, user]);
+  }, [filteredEvents, activeTab, volunteerMatches, volunteerProfile, user, joinRecords]);
 
   const applicationCount = useMemo(() => {
     return volunteerMatches.filter(m => m.status === 'Requested' || m.status === 'Matched').length;
@@ -441,7 +452,7 @@ export default function VolunteerEventsScreen() {
 
   const renderEventItem = ({ item }: { item: Project }) => {
     const status = getEventStatus(item);
-    const joinedCount = item.volunteers?.length || 0;
+    const joinedCount = getActiveProjectJoinCount(item, joinRecords);
     const totalSlots = item.volunteersNeeded || 20;
 
     let imageUrl = item.imageUrl;

@@ -58,6 +58,7 @@ import InlineLoadError from '../components/InlineLoadError';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import { TASK_SKILL_OPTIONS } from '../utils/skills';
+import { getActiveProjectGroupJoinCount } from '../utils/projectVolunteers';
 
 import {
 
@@ -3653,6 +3654,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [attendanceSearchQuery, setAttendanceSearchQuery] = useState('');
 
   const [attendanceFilter, setAttendanceFilter] = useState<'All' | 'Present' | 'Absent' | 'Late'>('All');
+  const [isSavingTask, setIsSavingTask] = useState(false);
+  const [isDeletingTaskId, setIsDeletingTaskId] = useState<string | null>(null);
+  const [removeVolunteerPickerTaskId, setRemoveVolunteerPickerTaskId] = useState<string | null>(null);
+  const [isRemovingVolunteerId, setIsRemovingVolunteerId] = useState<string | null>(null);
 
   const [programTracks, setProgramTracks] = useState<ProgramTrack[]>([]);
 
@@ -4619,13 +4624,19 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     try {
 
-      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'programTracks']);
+      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'programTracks', 'volunteerJoinRecords']);
 
       const allProjects = snapshot.projects || [];
 
       setProjects(allProjects);
 
       setProgramTracks(snapshot.programTracks || []);
+
+      if (Array.isArray(snapshot.volunteerJoinRecords)) {
+
+        setVolunteerJoinRecords(snapshot.volunteerJoinRecords);
+
+      }
 
       setLoadError(null);
 
@@ -4889,7 +4900,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       const records = await getVolunteerProjectJoinRecords(projectId);
 
-      setVolunteerJoinRecords(records);
+      setVolunteerJoinRecords(current => {
+
+        const otherRecords = current.filter(r => r.projectId !== projectId);
+
+        return [...otherRecords, ...records];
+
+      });
 
     } catch (error) {
 
@@ -5248,15 +5265,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         await loadProgramTracks();
 
         // Show success message
-        if (Platform.OS === 'web' && typeof window !== 'undefined') {
-
-          window.alert(`Γ£à Program Deleted\n\n"${trackTitle}" has been removed from the dashboard.`);
-
-        } else {
-
-          Alert.alert('Γ£à Program Deleted', `"${trackTitle}" has been removed from the dashboard.`);
-
-        }
+        showTaskSaveNotice(`Program "${trackTitle}" was deleted successfully.`, 1500);
 
       } catch (error) {
 
@@ -5265,15 +5274,16 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         const errorMsg = getRequestErrorMessage(error, 'Failed to delete program.');
 
-        if (Platform.OS === 'web' && typeof window !== 'undefined') {
-
-          window.alert(`Error\n\n${errorMsg}`);
-
-        } else {
-
-          Alert.alert('Error', errorMsg);
-
-        }
+        showConfirm({
+          title: 'Error',
+          message: errorMsg,
+          confirmText: 'OK',
+          cancelText: '',
+          confirmColor: '#166534',
+          icon: 'error-outline',
+          iconColor: '#DC2626',
+          onConfirm: () => {},
+        });
 
       } finally {
 
@@ -6110,15 +6120,16 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         const errorMsg = getRequestErrorMessage(error, 'Failed to delete event.');
 
-        if (Platform.OS === 'web' && typeof window !== 'undefined') {
-
-          window.alert(`${getRequestErrorTitle(error)}\n\n${errorMsg}`);
-
-        } else {
-
-          Alert.alert(getRequestErrorTitle(error), errorMsg);
-
-        }
+        showConfirm({
+          title: getRequestErrorTitle(error),
+          message: errorMsg,
+          confirmText: 'OK',
+          cancelText: '',
+          confirmColor: '#166534',
+          icon: 'error-outline',
+          iconColor: '#DC2626',
+          onConfirm: () => {},
+        });
 
       } finally {
 
@@ -7196,7 +7207,16 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       setProjectSaveError(message);
 
-      Alert.alert('Update Blocked', message);
+      showConfirm({
+        title: 'Validation Error',
+        message: message,
+        confirmText: 'OK',
+        cancelText: '',
+        confirmColor: '#166534',
+        icon: 'error-outline',
+        iconColor: '#DC2626',
+        onConfirm: () => {},
+      });
 
     };
 
@@ -7934,15 +7954,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-        if (Platform.OS === 'web' && typeof window !== 'undefined') {
-
-          window.alert(`Deleted\n\n${projectToDelete.isEvent ? 'Event removed.' : 'Project removed.'}`);
-
-        } else {
-
-          Alert.alert('Deleted', projectToDelete.isEvent ? 'Event removed.' : 'Project removed.');
-
-        }
+        showTaskSaveNotice(`${projectToDelete.isEvent ? 'Event' : 'Project'} "${projectToDelete.title}" removed successfully.`, 1500);
 
       } catch (error) {
 
@@ -7952,15 +7964,16 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         const errorMsg = getRequestErrorMessage(error, `Failed to delete ${selectedRecordType.toLowerCase()}.`);
 
-        if (Platform.OS === 'web' && typeof window !== 'undefined') {
-
-          window.alert(`${getRequestErrorTitle(error)}\n\n${errorMsg}`);
-
-        } else {
-
-          Alert.alert(getRequestErrorTitle(error), errorMsg);
-
-        }
+        showConfirm({
+          title: getRequestErrorTitle(error),
+          message: errorMsg,
+          confirmText: 'OK',
+          cancelText: '',
+          confirmColor: '#166534',
+          icon: 'error-outline',
+          iconColor: '#DC2626',
+          onConfirm: () => {},
+        });
 
       }
 
@@ -8988,40 +9001,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           candidate.id === project.id ||
           (candidate.isEvent && candidate.parentProjectId === project.id)
         );
-    const relatedProjectIds = new Set(
-      relatedProjects
-        .map(candidate => String(candidate.id || '').trim())
-        .filter(Boolean)
-    );
-    const volunteerIds = new Set<string>();
-
-    relatedProjects.forEach(candidate => {
-      (Array.isArray(candidate.volunteers) ? candidate.volunteers : [])
-        .map(id => String(id || '').trim())
-        .filter(Boolean)
-        .forEach(id => volunteerIds.add(id));
-      (((candidate as any).joinedUserIds || []) as string[])
-        .map(id => String(id || '').trim())
-        .filter(Boolean)
-        .forEach(id => volunteerIds.add(id));
-    });
-
-    allVolunteerMatches.forEach(match => {
-      if (match.status === 'Matched' && relatedProjectIds.has(String(match.projectId || '').trim())) {
-        const volunteerId = String(match.volunteerId || '').trim();
-        if (volunteerId) {
-          volunteerIds.add(volunteerId);
-        }
-      }
-    });
-
     const needed = relatedProjects.reduce(
       (total, candidate) => total + Math.max(0, Number(candidate.volunteersNeeded || 0)),
       0
     );
 
     return {
-      count: volunteerIds.size,
+      count: getActiveProjectGroupJoinCount(project, projects, volunteerJoinRecords),
       needed,
     };
   };
@@ -9173,7 +9159,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-  const handleSaveInternalTask = async () => {
+  const _executeSaveInternalTask = async () => {
 
     if (!isAdmin) {
 
@@ -9272,64 +9258,20 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
     const previousTask = editingTaskId
-
       ? (Array.isArray(currentSelectedProject.internalTasks) ? currentSelectedProject.internalTasks : []).find(task => task.id === editingTaskId) || null
-
       : null;
 
-    const previousAssignedVolunteerIds = previousTask ? getTaskAssignedVolunteerIds(previousTask) : [];
+    const previousAssignedIds = previousTask ? getTaskAssignedVolunteerIds(previousTask) : [];
+    const newlyAssignedIds = normalizedAssignedVolunteerIds.filter(id => !previousAssignedIds.includes(id));
+    const unassignedIds = previousAssignedIds.filter(id => !normalizedAssignedVolunteerIds.includes(id));
 
-    const addedVolunteerIds = normalizedAssignedVolunteerIds.filter(
-
-      volunteerId => !previousAssignedVolunteerIds.includes(volunteerId)
-
-    );
-
-    const removedVolunteerIds = previousAssignedVolunteerIds.filter(
-
-      volunteerId => !normalizedAssignedVolunteerIds.includes(volunteerId)
-
-    );
-
-    const notificationAssignedVolunteers = addedVolunteerIds
-
-      .map(volunteerId => volunteers.find(volunteer => volunteer.id === volunteerId) || null)
-
+    const notificationAssignedVolunteers = newlyAssignedIds
+      .map(volunteerId => volunteers.find(volunteer => volunteer.id === volunteerId || volunteer.userId === volunteerId) || null)
       .filter((volunteer): volunteer is Volunteer => volunteer !== null);
 
-    const notificationPreviousVolunteers = removedVolunteerIds
-
-      .map(volunteerId => volunteers.find(volunteer => volunteer.id === volunteerId) || null)
-
+    const notificationPreviousVolunteers = unassignedIds
+      .map(volunteerId => volunteers.find(volunteer => volunteer.id === volunteerId || volunteer.userId === volunteerId) || null)
       .filter((volunteer): volunteer is Volunteer => volunteer !== null);
-
-    const shouldNotifyAssignedVolunteer =
-
-      notificationAssignedVolunteers.length > 0 ||
-
-      Boolean(
-
-        previousTask &&
-
-        (
-
-          previousTask.title !== taskDraft.title.trim() ||
-
-          previousTask.description !== taskDraft.description.trim() ||
-
-          previousTask.category !== taskCategory ||
-
-          previousTask.priority !== taskDraft.priority ||
-
-          previousTask.status !== taskStatus ||
-
-          previousTask.isFieldOfficer !== taskDraft.isFieldOfficer ||
-
-          (previousTask.skillsNeeded || []).join('|') !== normalizedSkills.join('|')
-
-        )
-
-      );
 
 
 
@@ -9403,6 +9345,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       const notificationTasks: Promise<void>[] = [];
 
+
+
       for (const previousVolunteer of notificationPreviousVolunteers) {
 
         if (previousTask) {
@@ -9423,6 +9367,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       }
 
+
+
       for (const assignedVolunteer of notificationAssignedVolunteers) {
 
         notificationTasks.push(notifyVolunteerAboutTaskUpdate({
@@ -9441,11 +9387,15 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       }
 
+
+
       if (notificationTasks.length > 0) {
 
         await Promise.all(notificationTasks);
 
       }
+
+
 
       await loadProjects();
 
@@ -9467,9 +9417,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         editingTaskId
 
-          ? 'Event task update complete. Assignment changes were saved and volunteer notifications were sent when needed.'
+          ? 'Event task update complete. Assignment changes were saved and volunteer notifications were sent.'
 
-          : 'Event task added. Assignment changes were saved and volunteer notifications were sent when needed.'
+          : 'Event task added. Assignment changes were saved and volunteer notifications were sent.'
 
       );
 
@@ -9485,15 +9435,200 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       );
 
+    } finally {
+
+      setIsSavingTask(false);
+    }
+  };
+
+  const handleSaveInternalTask = async () => {
+    if (!isAdmin) {
+      Alert.alert('Access Restricted', 'Only admin accounts can manage internal project tasks.');
+      return;
     }
 
+    const currentSelectedProject = getCurrentSelectedProject();
+    if (!currentSelectedProject) {
+      return;
+    }
+
+    if (!taskDraft.title.trim() || !taskDraft.description.trim()) {
+      Alert.alert('Validation Error', 'Add a task title and description.');
+      return;
+    }
+
+    const normalizedSkills = Array.from(
+      new Set(taskDraft.skillsNeeded.map(skill => skill.trim()).filter(Boolean))
+    );
+
+    if (normalizedSkills.length === 0) {
+      Alert.alert('Validation Error', 'Select at least one skill for this task.');
+      return;
+    }
+
+    const isEdit = Boolean(editingTaskId);
+    showConfirm({
+      title: isEdit ? 'Update Task' : 'Save Task',
+      message: isEdit
+        ? `Are you sure you want to save changes to "${taskDraft.title.trim()}"?`
+        : `Are you sure you want to create and assign the task "${taskDraft.title.trim()}"?`,
+      confirmText: isEdit ? 'Update Task' : 'Save Task',
+      loadingText: 'Saving Task...',
+      cancelText: 'Cancel',
+      confirmColor: '#166534',
+      icon: 'assignment' as any,
+      iconColor: '#166534',
+      onConfirm: async () => {
+        setIsSavingTask(true);
+        await _executeSaveInternalTask();
+      },
+    });
+  };
+
+  const handleRemoveSpecificVolunteerFromTask = (task: ProjectInternalTask, volunteerId: string, volunteerName?: string) => {
+    const currentSelectedProject = getCurrentSelectedProject() || selectedProject;
+    if (!currentSelectedProject) return;
+
+    showConfirm({
+      title: 'Remove Volunteer Assignment',
+      message: `Are you sure you want to unassign ${volunteerName || 'this volunteer'} from the task "${task.title}"?`,
+      confirmText: 'Remove',
+      loadingText: 'Removing...',
+      cancelText: 'Cancel',
+      confirmColor: '#dc2626',
+      icon: 'person-remove' as any,
+      iconColor: '#dc2626',
+      onConfirm: async () => {
+        setIsRemovingVolunteerId(volunteerId);
+        try {
+          const existingIds = getTaskAssignedVolunteerIds(task);
+          const nextIds = existingIds.filter(id => id !== volunteerId);
+          const assignable = getAssignableVolunteerOptions(currentSelectedProject);
+          const nextVolunteers = assignable.filter(v => nextIds.includes(v.id));
+
+          const updatedTask: ProjectInternalTask = {
+            ...task,
+            assignedVolunteerId: nextIds[0] || undefined,
+            assignedVolunteerName: nextVolunteers[0]?.name || undefined,
+            assignedVolunteerIds: nextIds.length > 0 ? nextIds : undefined,
+            assignedVolunteerNames: nextVolunteers.length > 0 ? nextVolunteers.map(v => v.name) : undefined,
+            status: nextIds.length > 0 ? 'Assigned' : 'Unassigned',
+          };
+
+          const taskCards = Array.isArray(currentSelectedProject.internalTasks) ? currentSelectedProject.internalTasks : [];
+          const updatedTasks = taskCards.map(t => t.id === task.id ? updatedTask : t);
+
+          await saveProjectLikeRecord({ ...currentSelectedProject, internalTasks: updatedTasks });
+          clearStorageCache(['projects', 'events']);
+          setProjects(currentProjects =>
+            currentProjects.map(p =>
+              p.id === currentSelectedProject.id ? { ...currentSelectedProject, internalTasks: updatedTasks } : p
+            )
+          );
+          setSelectedProject({ ...currentSelectedProject, internalTasks: updatedTasks });
+
+          const targetVol = volunteers.find(v => v.id === volunteerId || v.userId === volunteerId);
+          if (targetVol) {
+            try {
+              await notifyVolunteerAboutTaskUnassignment({
+                event: currentSelectedProject,
+                task,
+                volunteer: targetVol,
+                actorUserId: user?.id,
+              });
+            } catch (err) {
+              console.warn('[TASK] Failed to notify volunteer about unassignment:', err);
+            }
+          }
+
+          if (nextIds.length === 0) {
+            setRemoveVolunteerPickerTaskId(null);
+          }
+        } catch (error) {
+          Alert.alert(
+            getRequestErrorTitle(error),
+            getRequestErrorMessage(error, 'Failed to unassign volunteer from task.')
+          );
+        } finally {
+          setIsRemovingVolunteerId(null);
+        }
+      },
+    });
+  };
+
+  const handleRemoveAllVolunteersFromTask = (task: ProjectInternalTask) => {
+    const currentSelectedProject = getCurrentSelectedProject() || selectedProject;
+    if (!currentSelectedProject) return;
+    const existingIds = getTaskAssignedVolunteerIds(task);
+    if (existingIds.length === 0) return;
+
+    showConfirm({
+      title: 'Remove All Assigned Volunteers',
+      message: `Are you sure you want to unassign all ${existingIds.length} volunteer(s) from "${task.title}"?`,
+      confirmText: 'Remove All',
+      loadingText: 'Removing...',
+      cancelText: 'Cancel',
+      confirmColor: '#dc2626',
+      icon: 'person-remove' as any,
+      iconColor: '#dc2626',
+      onConfirm: async () => {
+        setIsRemovingVolunteerId('ALL');
+        try {
+          const updatedTask: ProjectInternalTask = {
+            ...task,
+            assignedVolunteerId: undefined,
+            assignedVolunteerName: undefined,
+            assignedVolunteerIds: undefined,
+            assignedVolunteerNames: undefined,
+            status: 'Unassigned',
+          };
+
+          const taskCards = Array.isArray(currentSelectedProject.internalTasks) ? currentSelectedProject.internalTasks : [];
+          const updatedTasks = taskCards.map(t => t.id === task.id ? updatedTask : t);
+
+          await saveProjectLikeRecord({ ...currentSelectedProject, internalTasks: updatedTasks });
+          clearStorageCache(['projects', 'events']);
+          setProjects(currentProjects =>
+            currentProjects.map(p =>
+              p.id === currentSelectedProject.id ? { ...currentSelectedProject, internalTasks: updatedTasks } : p
+            )
+          );
+          setSelectedProject({ ...currentSelectedProject, internalTasks: updatedTasks });
+
+          for (const vid of existingIds) {
+            const targetVol = volunteers.find(v => v.id === vid || v.userId === vid);
+            if (targetVol) {
+              try {
+                await notifyVolunteerAboutTaskUnassignment({
+                  event: currentSelectedProject,
+                  task,
+                  volunteer: targetVol,
+                  actorUserId: user?.id,
+                });
+              } catch (err) {
+                console.warn('[TASK] Failed to notify volunteer about unassignment:', err);
+              }
+            }
+          }
+
+          setRemoveVolunteerPickerTaskId(null);
+        } catch (error) {
+          Alert.alert(
+            getRequestErrorTitle(error),
+            getRequestErrorMessage(error, 'Failed to unassign all volunteers from task.')
+          );
+        } finally {
+          setIsRemovingVolunteerId(null);
+        }
+      },
+    });
   };
 
 
 
   const handleDeleteInternalTask = (taskId: string) => {
 
-    const currentSelectedProject = getCurrentSelectedProject();
+    const currentSelectedProject = getCurrentSelectedProject() || selectedProject;
 
     if (!isAdmin || !currentSelectedProject) {
 
@@ -9505,11 +9640,17 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     const executeDelete = async () => {
 
+      setIsDeletingTaskId(taskId);
+
+      const current = getCurrentSelectedProject() || selectedProject;
+
+      if (!current) return;
+
       const updatedProject: Project = {
 
-        ...currentSelectedProject,
+        ...current,
 
-        internalTasks: (Array.isArray(currentSelectedProject.internalTasks) ? currentSelectedProject.internalTasks : []).filter(task => task.id !== taskId),
+        internalTasks: (Array.isArray(current.internalTasks) ? current.internalTasks : []).filter(task => task.id !== taskId),
 
         updatedAt: new Date().toISOString(),
 
@@ -9541,35 +9682,33 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         }
 
-
-
-        if (Platform.OS === 'web') {
-
-          window.alert('Task deleted successfully');
-
-        } else {
-
-          Alert.alert('Deleted', 'Internal task removed.');
-
-        }
+        showTaskSaveNotice('Internal task removed successfully.', 1500);
 
       } catch (error) {
 
-        if (Platform.OS === 'web') {
+        showConfirm({
 
-          window.alert(getRequestErrorMessage(error, 'Failed to delete the internal task.'));
+          title: getRequestErrorTitle(error),
 
-        } else {
+          message: getRequestErrorMessage(error, 'Failed to delete the internal task.'),
 
-          Alert.alert(
+          confirmText: 'OK',
 
-            getRequestErrorTitle(error),
+          cancelText: '',
 
-            getRequestErrorMessage(error, 'Failed to delete the internal task.')
+          confirmColor: '#166534',
 
-          );
+          icon: 'error-outline',
 
-        }
+          iconColor: '#DC2626',
+
+          onConfirm: () => {},
+
+        });
+
+      } finally {
+
+        setIsDeletingTaskId(null);
 
       }
 
@@ -9578,15 +9717,25 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
     showConfirm({
+
       title: 'Delete Task',
-      message: 'Remove this internal task from the project?',
+
+      message: 'Are you sure you want to delete this task? This action cannot be undone.',
+
       confirmText: 'Delete',
+
       cancelText: 'Cancel',
+
       icon: 'delete-outline',
+
       iconColor: '#DC2626',
+
       confirmColor: '#DC2626',
+
       loadingText: 'Deleting...',
+
       onConfirm: executeDelete,
+
     });
 
   };
@@ -13279,10 +13428,32 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       };
 
+      // Per-field error helpers — only activate after a save attempt (when projectSaveError is set)
+      const hasAttemptedSave = !!projectSaveError;
+      const resolvedParentId = projectDraft.parentProjectId?.trim() ||
+        (!selectedProject?.isEvent ? selectedProject?.id ?? '' : '');
+      const fieldErrors: Record<string, string> = hasAttemptedSave ? {
+        title: !projectDraft.title.trim() ? 'Event title is required.' : '',
+        description: !projectDraft.description.trim() ? 'Description is required.' : '',
+        startDate: !projectDraft.startDate.trim() ? 'Start date is required.' : '',
+        endDate: !projectDraft.endDate.trim() ? 'End date is required.' : '',
+        parentProject: !resolvedParentId ? 'Parent project is required.' : '',
+        location: !projectPlaceVenue.trim() ? 'Location / venue is required.' : '',
+        barangay: !projectBarangayCode ? 'Barangay is required.' : '',
+      } : {};
 
+      const errBorder = (field: string): object =>
+        fieldErrors[field] ? { borderColor: '#ef4444', borderWidth: 1.5 } : {};
+
+      const FieldError = ({ field }: { field: string }) =>
+        fieldErrors[field] ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 }}>
+            <MaterialIcons name="error-outline" size={12} color="#ef4444" />
+            <Text style={{ fontSize: 11, color: '#ef4444', fontWeight: '700' }}>{fieldErrors[field]}</Text>
+          </View>
+        ) : null;
 
       return (
-
         <ScrollView style={{ flex: 1, backgroundColor: '#f8fafc' }} contentContainerStyle={{ padding: 24 }} showsVerticalScrollIndicator={true}>
 
           {/* Header Row */}
@@ -13348,6 +13519,17 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             </View>
 
           </View>
+
+
+
+          {/* Validation Error Banner */}
+
+          {projectSaveError ? (
+            <View style={{ backgroundColor: '#fef2f2', borderWidth: 1, borderColor: '#fca5a5', borderRadius: 10, padding: 14, marginBottom: 4, flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
+              <MaterialIcons name="error-outline" size={18} color="#b91c1c" />
+              <Text style={{ color: '#b91c1c', fontSize: 13, fontWeight: '700', flex: 1 }}>{projectSaveError}</Text>
+            </View>
+          ) : null}
 
 
 
@@ -13447,7 +13629,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                     <Text style={{ fontSize: 13, fontWeight: '700', color: '#334155', marginBottom: 6 }}>Parent Project <Text style={{ color: '#ef4444' }}>*</Text></Text>
 
-                    <View style={styles.formPickerContainer}>
+                    <View style={[styles.formPickerContainer, errBorder('parentProject')]}>
 
                       <Picker
 
@@ -13538,6 +13720,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                       </Picker>
 
                     </View>
+                    <FieldError field="parentProject" />
 
                   </View>
 
@@ -13549,7 +13732,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                     <TextInput
 
-                      style={[styles.formInput, { height: 38 }]}
+                      style={[styles.formInput, { height: 38 }, errBorder('title')]}
 
                       placeholder="Add title"
 
@@ -13560,6 +13743,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                       onChangeText={value => handleProjectDraftChange('title', value)}
 
                     />
+                    <FieldError field="title" />
 
                   </View>
 
@@ -13585,7 +13769,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       <TouchableOpacity
 
-                        style={{ flex: 1.2, height: 42, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 8, backgroundColor: '#fff' }}
+                        style={{ flex: 1.2, height: 42, borderWidth: fieldErrors.startDate ? 1.5 : 1, borderColor: fieldErrors.startDate ? '#ef4444' : '#cbd5e1', borderRadius: 8, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 8, backgroundColor: '#fff' }}
 
                         onPress={() => {
 
@@ -13640,6 +13824,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                       )}
 
                     </View>
+                    <FieldError field="startDate" />
 
                   </View>
 
@@ -13659,7 +13844,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       <TouchableOpacity
 
-                        style={{ flex: 1.2, height: 42, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 8, backgroundColor: '#fff' }}
+                        style={{ flex: 1.2, height: 42, borderWidth: fieldErrors.endDate ? 1.5 : 1, borderColor: fieldErrors.endDate ? '#ef4444' : '#cbd5e1', borderRadius: 8, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 8, backgroundColor: '#fff' }}
 
                         onPress={() => {
 
@@ -13714,6 +13899,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                       )}
 
                     </View>
+                    <FieldError field="endDate" />
 
                   </View>
 
@@ -13811,7 +13997,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       <TextInput
 
-                        style={styles.formInput}
+                        style={[styles.formInput, errBorder('location')]}
 
                         placeholder="Enter location"
 
@@ -13822,6 +14008,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                         onChangeText={setProjectPlaceVenue}
 
                       />
+                      <FieldError field="location" />
 
                     </View>
 
@@ -13833,7 +14020,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       <Text style={{ fontSize: 13, fontWeight: '700', color: '#334155' }}>Barangay <Text style={{ color: '#ef4444' }}>*</Text></Text>
 
-                      <View style={[styles.formPickerContainer, { marginBottom: 0 }]}>
+                      <View style={[styles.formPickerContainer, { marginBottom: 0 }, errBorder('barangay')]}>
 
                         <Picker
 
@@ -13858,6 +14045,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                         </Picker>
 
                       </View>
+                      <FieldError field="barangay" />
 
                     </View>
 
@@ -19286,19 +19474,25 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       return (
 
-        <ScrollView
-          style={{ flex: 1, backgroundColor: '#f6f7f3' }}
-          contentContainerStyle={{ padding: 24, paddingBottom: 72 }}
-          showsVerticalScrollIndicator={true}
-        >
+        <View style={{ flex: 1 }}>
 
-          <TouchableOpacity
+          <ScrollView
 
-            onPress={() => setShowAttendanceTasks(false)}
+            style={{ flex: 1, backgroundColor: '#f6f7f3' }}
 
-            style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 20 }}
+            contentContainerStyle={{ padding: 24, paddingBottom: 72 }}
+
+            showsVerticalScrollIndicator={true}
 
           >
+
+            <TouchableOpacity
+
+              onPress={() => setShowAttendanceTasks(false)}
+
+              style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 20 }}
+
+            >
 
             <MaterialIcons name="arrow-back" size={18} color="#166534" />
 
@@ -19896,9 +20090,41 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   const assignedVolunteerIds = getTaskAssignedVolunteerIds(task);
 
-                  const statusColor = assignedVolunteerIds.length >= (Number((task as any).volunteersNeeded) || Math.max(1, task.skillsNeeded.length || 1)) ? '#166534' : assignedVolunteerIds.length > 0 ? '#d97706' : '#dc2626';
+                  const needed = Number((task as any).volunteersNeeded) || Math.max(1, task.skillsNeeded.length || 1);
 
-                  
+                  const assignedCount = assignedVolunteerIds.length;
+
+                  const isFullyAssigned = assignedCount >= needed;
+
+                  const hasNoVolunteers = assignedCount === 0;
+
+                  const statusColor = isFullyAssigned ? '#166534' : assignedCount > 0 ? '#d97706' : '#dc2626';
+
+
+
+                  const taskHasRequiredSkills = task.skillsNeeded && task.skillsNeeded.length > 0;
+
+                  const matchingAssignableVolunteers = taskHasRequiredSkills
+
+                    ? assignableVolunteers.filter(volEntry => {
+
+                        const fullVol = volunteers.find(v => v.id === volEntry.id || v.userId === volEntry.id);
+
+                        return (fullVol?.skills || []).some(skill =>
+
+                          task.skillsNeeded.some(neededSkill => neededSkill.trim().toLowerCase() === String(skill || '').trim().toLowerCase())
+
+                        );
+
+                      })
+
+                    : assignableVolunteers;
+
+                  const noMatchingVolunteersExist = taskHasRequiredSkills && assignableVolunteers.length > 0 && matchingAssignableVolunteers.length === 0;
+
+                  const isCurrentlyDeleting = isDeletingTaskId === task.id;
+
+
 
                   return (
 
@@ -19918,17 +20144,59 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       gap: 12,
 
+                      opacity: isCurrentlyDeleting ? 0.5 : 1,
+
                       zIndex: activeActionTaskId === task.id ? 50 : 1,
 
                     }}>
 
                       <View style={{ flex: 2.2, flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
 
-                        <MaterialIcons name="drag-indicator" size={20} color="#cbd5e1" style={{ marginTop: 2 }} />
+                        {isCurrentlyDeleting ? (
+
+                          <ActivityIndicator size="small" color="#dc2626" style={{ marginTop: 2 }} />
+
+                        ) : (
+
+                          <MaterialIcons name="drag-indicator" size={20} color="#cbd5e1" style={{ marginTop: 2 }} />
+
+                        )}
 
                         <View style={{ flex: 1 }}>
 
-                          <Text style={{ fontSize: 15, fontWeight: '800', color: '#0f172a' }}>{task.title}</Text>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+
+                            <Text style={{ fontSize: 15, fontWeight: '800', color: '#0f172a' }}>{task.title}</Text>
+
+                            {hasNoVolunteers ? (
+
+                              <View style={{ backgroundColor: '#fef2f2', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, borderWidth: 1, borderColor: '#fecaca' }}>
+
+                                <Text style={{ fontSize: 10, fontWeight: '700', color: '#dc2626' }}>Requires Assignment</Text>
+
+                              </View>
+
+                            ) : !isFullyAssigned ? (
+
+                              <View style={{ backgroundColor: '#fffbeb', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, borderWidth: 1, borderColor: '#fde68a' }}>
+
+                                <Text style={{ fontSize: 10, fontWeight: '700', color: '#b45309' }}>Needs {needed - assignedCount} more</Text>
+
+                              </View>
+
+                            ) : null}
+
+                            {noMatchingVolunteersExist && hasNoVolunteers ? (
+
+                              <View style={{ backgroundColor: '#fff7ed', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, borderWidth: 1, borderColor: '#ffedd5' }}>
+
+                                <Text style={{ fontSize: 10, fontWeight: '700', color: '#c2410c' }}>No skill match</Text>
+
+                              </View>
+
+                            ) : null}
+
+                          </View>
 
                           <Text style={{ fontSize: 12, color: '#64748b', marginTop: 4, lineHeight: 18 }}>
 
@@ -19966,7 +20234,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                         <Text style={{ fontSize: 14, fontWeight: '800', color: '#0f172a' }}>
 
-                          {(task as any).volunteersNeeded || Math.max(1, task.skillsNeeded.length || 1)}
+                          {needed}
 
                         </Text>
 
@@ -19978,7 +20246,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                          <Text style={{ fontSize: 14, fontWeight: '800', color: statusColor, marginBottom: 4 }}>
 
-                            {assignedVolunteerIds.length} / {(task as any).volunteersNeeded || Math.max(1, task.skillsNeeded.length || 1)}
+                            {assignedVolunteerIds.length} / {needed}
 
                          </Text>
 
@@ -20074,147 +20342,113 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   
 
-                  {unassignedVolunteers.slice(0, 5).map(uv => {
+                  {unassignedVolunteers.length === 0 ? (
 
-                    const fullVolunteer = volunteers.find(v => v.id === uv.id);
+                    <Text style={{ fontSize: 13, color: '#64748b' }}>All joined volunteers are currently assigned to tasks.</Text>
 
-                    const preferredSkills = fullVolunteer?.skills?.join(', ') || fullVolunteer?.skillsDescription || 'None specified';
+                  ) : (
 
-                    const selectedAssignTask = unassignedTaskSelections[uv.id] || '';
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
 
-                    
+                      {unassignedVolunteers.map(uv => {
 
-                    return (
+                        const hasMatchingTask = taskCards.some(t => {
 
-                      <View key={uv.id} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16, gap: 12 }}>
+                          const needed = Number((t as any).volunteersNeeded) || Math.max(1, t.skillsNeeded.length || 1);
 
-                        <MaterialIcons name="check-box-outline-blank" size={20} color="#cbd5e1" />
+                          const assigned = getTaskAssignedVolunteerIds(t).length;
 
-                        <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' }}>
+                          return assigned < needed;
 
-                          <MaterialIcons name="person" size={20} color="#64748b" />
+                        });
 
-                        </View>
 
-                        <View style={{ flex: 1 }}>
 
-                          <Text style={{ fontSize: 14, fontWeight: '800', color: '#0f172a' }}>{uv.name}</Text>
+                        return (
 
-                          <Text style={{ fontSize: 12, color: '#166534' }}>Preferred skills: <Text style={{ fontWeight: '600' }}>{preferredSkills}</Text></Text>
+                          <View key={uv.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#ffffff', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: '#cbd5e1' }}>
 
-                        </View>
+                            <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' }}>
 
-                        
+                              <MaterialIcons name="person" size={12} color="#475569" />
 
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                            </View>
 
-                          <Text style={{ fontSize: 13, fontWeight: '700', color: '#0f172a' }}>Assign to</Text>
+                            <Text style={{ fontSize: 13, fontWeight: '700', color: '#0f172a' }}>{uv.name}</Text>
 
-                          <View style={{ width: 160, borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 8, backgroundColor: '#fff' }}>
+                            {hasMatchingTask && (
 
-                            <Picker
+                              <TouchableOpacity
 
-                              selectedValue={selectedAssignTask}
+                                onPress={async () => {
 
-                              onValueChange={(val) => setUnassignedTaskSelections(prev => ({ ...prev, [uv.id]: String(val) }))}
+                                  const targetTask = taskCards.find(t => {
 
-                              style={{ height: 36, fontSize: 12, borderWidth: 0, outline: 'none', backgroundColor: 'transparent' } as any}
+                                    const needed = Number((t as any).volunteersNeeded) || Math.max(1, t.skillsNeeded.length || 1);
 
-                            >
+                                    return getTaskAssignedVolunteerIds(t).length < needed;
 
-                              <Picker.Item label="Select task" value="" />
+                                  });
 
-                              {taskCards.map(t => (
+                                  if (!targetTask) return;
 
-                                <Picker.Item key={t.id} label={t.title} value={t.id} />
-
-                              ))}
-
-                            </Picker>
-
-                          </View>
-
-                          <TouchableOpacity 
-
-                            onPress={async () => {
-
-                              if (selectedAssignTask) {
-
-                                try {
-
-                                  const taskToUpdate = taskCards.find(t => t.id === selectedAssignTask);
-
-                                  if (!taskToUpdate) return;
-
-                                  const existingIds = getTaskAssignedVolunteerIds(taskToUpdate);
-
-                                  const existingNames = getTaskAssignedVolunteerNames(taskToUpdate);
+                                  const existingIds = getTaskAssignedVolunteerIds(targetTask);
 
                                   const updatedTask = {
 
-                                    ...taskToUpdate,
+                                    ...targetTask,
 
                                     assignedVolunteerIds: [...existingIds, uv.id],
 
-                                    assignedVolunteerNames: [...existingNames, uv.name]
+                                    status: 'Assigned' as const,
 
                                   };
 
-                                  const updatedTasks = taskCards.map(t => t.id === selectedAssignTask ? updatedTask : t);
+                                  const updatedTasks = taskCards.map(t => t.id === targetTask.id ? updatedTask : t);
 
-                                  const updatedProject = { ...activeSelectedProject, internalTasks: updatedTasks };
+                                  await saveProjectLikeRecord({ ...activeSelectedProject, internalTasks: updatedTasks });
 
-                                  await saveProjectLikeRecord(updatedProject);
+                                  setProjects(current => current.map(p => p.id === activeSelectedProject.id ? { ...activeSelectedProject, internalTasks: updatedTasks } : p));
 
-                                  setProjects(currentProjects =>
+                                  const uvVolunteer = volunteers.find(v => v.id === uv.id || v.userId === uv.id);
 
-                                    currentProjects.map(p =>
+                                  if (uvVolunteer) {
 
-                                      p.id === activeSelectedProject.id ? updatedProject : p
+                                    void notifyVolunteerAboutTaskUpdate({
 
-                                    )
+                                      event: activeSelectedProject,
 
-                                  );
+                                      task: updatedTask,
 
-                                  setUnassignedTaskSelections(prev => { const next = {...prev}; delete next[uv.id]; return next; });
+                                      volunteer: uvVolunteer,
 
-                                } catch (e) {
+                                      actorUserId: user?.id,
 
-                                  console.error(e);
+                                      action: 'assigned',
 
-                                }
+                                    });
 
-                              }
+                                  }
 
-                            }}
+                                }}
 
-                            style={{ paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: '#166534', backgroundColor: selectedAssignTask ? '#f0fdf4' : '#fff', opacity: selectedAssignTask ? 1 : 0.5 }}
+                                style={{ backgroundColor: '#f0fdf4', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, borderWidth: 1, borderColor: '#bbf7d0', marginLeft: 4 }}
 
-                            disabled={!selectedAssignTask}
+                              >
 
-                          >
+                                <Text style={{ fontSize: 11, fontWeight: '700', color: '#166534' }}>Quick Assign</Text>
 
-                            <Text style={{ fontSize: 13, fontWeight: '700', color: '#166534' }}>Assign</Text>
+                              </TouchableOpacity>
 
-                          </TouchableOpacity>
+                            )}
 
-                        </View>
+                          </View>
 
-                      </View>
+                        );
 
-                    );
+                      })}
 
-                  })}
-
-                  
-
-                  {unassignedVolunteers.length > 5 && (
-
-                    <TouchableOpacity style={{ alignSelf: 'center', marginTop: 12, backgroundColor: '#f1f5f9', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8 }}>
-
-                      <Text style={{ fontSize: 13, fontWeight: '700', color: '#475569' }}>View all volunteers</Text>
-
-                    </TouchableOpacity>
+                    </View>
 
                   )}
 
@@ -20356,6 +20590,84 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
+                {/* No matching volunteer warnings */}
+
+                {(() => {
+
+                  const hasRequiredSkills = taskDraft.skillsNeeded && taskDraft.skillsNeeded.length > 0;
+
+                  const matchingVolunteers = hasRequiredSkills
+
+                    ? assignableVolunteers.filter(volEntry => {
+
+                        const fullVol = volunteers.find(v => v.id === volEntry.id || v.userId === volEntry.id);
+
+                        return (fullVol?.skills || []).some(skill =>
+
+                          taskDraft.skillsNeeded.some(needed => needed.trim().toLowerCase() === String(skill || '').trim().toLowerCase())
+
+                        );
+
+                      })
+
+                    : assignableVolunteers;
+
+                  const hasNoMatchingVolunteer = hasRequiredSkills && assignableVolunteers.length > 0 && matchingVolunteers.length === 0;
+
+                  const hasNoJoinedVolunteers = assignableVolunteers.length === 0;
+
+
+
+                  if (hasNoJoinedVolunteers) {
+
+                    return (
+
+                      <View style={{ backgroundColor: '#fffbeb', borderWidth: 1, borderColor: '#fde68a', borderRadius: 8, padding: 10, marginBottom: 12, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+
+                        <MaterialIcons name="warning" size={18} color="#d97706" />
+
+                        <Text style={{ fontSize: 12, color: '#92400e', flex: 1, fontWeight: '600' }}>
+
+                          No volunteers have joined this event yet. Joined volunteers can be assigned once they sign up.
+
+                        </Text>
+
+                      </View>
+
+                    );
+
+                  }
+
+
+
+                  if (hasNoMatchingVolunteer) {
+
+                    return (
+
+                      <View style={{ backgroundColor: '#fffbeb', borderWidth: 1, borderColor: '#fde68a', borderRadius: 8, padding: 10, marginBottom: 12, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+
+                        <MaterialIcons name="warning" size={18} color="#d97706" />
+
+                        <Text style={{ fontSize: 12, color: '#92400e', flex: 1, fontWeight: '600' }}>
+
+                          Warning: No suitable match exists. None of the joined volunteers currently match the selected skills ({taskDraft.skillsNeeded.join(', ')}). You may adjust required skills or assign available volunteers manually.
+
+                        </Text>
+
+                      </View>
+
+                    );
+
+                  }
+
+
+
+                  return null;
+
+                })()}
+
+
+
                 <Text style={{ fontSize: 12, fontWeight: '700', color: '#475569', marginBottom: 6 }}>No. of volunteers</Text>
 
                 <TextInput value={taskDraft.volunteersNeeded} onChangeText={text => setTaskDraft(current => ({ ...current, volunteersNeeded: text }))} keyboardType="numeric" style={{ borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 10, padding: 12, marginBottom: 12 }} />
@@ -20384,11 +20696,33 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   <Picker.Item label="Select volunteer" value="" />
 
-                  {assignableVolunteers.map(volunteer => (
+                  {assignableVolunteers.map(volunteer => {
 
-                    <Picker.Item key={volunteer.id} label={volunteer.name} value={volunteer.id} />
+                    const hasRequiredSkills = taskDraft.skillsNeeded && taskDraft.skillsNeeded.length > 0;
 
-                  ))}
+                    const fullVol = volunteers.find(v => v.id === volunteer.id || v.userId === volunteer.id);
+
+                    const isMatch = hasRequiredSkills && (fullVol?.skills || []).some(skill =>
+
+                      taskDraft.skillsNeeded.some(needed => needed.trim().toLowerCase() === String(skill || '').trim().toLowerCase())
+
+                    );
+
+                    return (
+
+                      <Picker.Item
+
+                        key={volunteer.id}
+
+                        label={hasRequiredSkills ? `${volunteer.name}${isMatch ? ' ★ (Skill Match)' : ''}` : volunteer.name}
+
+                        value={volunteer.id}
+
+                      />
+
+                    );
+
+                  })}
 
                 </Picker>
 
@@ -20432,15 +20766,53 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10 }}>
 
-                  <TouchableOpacity onPress={closeTaskModal} style={{ paddingHorizontal: 16, paddingVertical: 12, borderRadius: 10, borderWidth: 1, borderColor: '#cbd5e1' }}>
+                  <TouchableOpacity
+
+                    onPress={closeTaskModal}
+
+                    disabled={isSavingTask}
+
+                    style={{ paddingHorizontal: 16, paddingVertical: 12, borderRadius: 10, borderWidth: 1, borderColor: '#cbd5e1' }}
+
+                  >
 
                     <Text style={{ fontWeight: '800', color: '#475569' }}>Cancel</Text>
 
                   </TouchableOpacity>
 
-                  <TouchableOpacity onPress={() => void handleSaveInternalTask()} style={{ paddingHorizontal: 16, paddingVertical: 12, borderRadius: 10, backgroundColor: '#166534' }}>
 
-                    <Text style={{ fontWeight: '800', color: '#fff' }}>Save Task</Text>
+
+                  <TouchableOpacity
+
+                    onPress={() => void handleSaveInternalTask()}
+
+                    disabled={isSavingTask}
+
+                    style={{
+
+                      paddingHorizontal: 16,
+
+                      paddingVertical: 12,
+
+                      borderRadius: 10,
+
+                      backgroundColor: '#166534',
+
+                      flexDirection: 'row',
+
+                      alignItems: 'center',
+
+                      gap: 8,
+
+                      opacity: isSavingTask ? 0.7 : 1,
+
+                    }}
+
+                  >
+
+                    {isSavingTask && <ActivityIndicator size="small" color="#ffffff" />}
+
+                    <Text style={{ fontWeight: '800', color: '#fff' }}>{isSavingTask ? 'Saving Task...' : 'Save Task'}</Text>
 
                   </TouchableOpacity>
 
@@ -20825,74 +21197,168 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                   </TouchableOpacity>
 
                   <TouchableOpacity
-
                     onPress={() => {
-
+                      const taskId = activeTaskAction.id;
                       setActiveActionTaskId(null);
-
-                      if (activeTaskActionAssignedIds.length > 0) {
-
-                        Alert.alert(
-
-                          'Remove Volunteers',
-
-                          'Are you sure you want to unassign all volunteers from this task?',
-
-                          [
-
-                            { text: 'Cancel', style: 'cancel' },
-
-                            { text: 'Remove', style: 'destructive', onPress: async () => {
-
-                              try {
-
-                                const updatedTask = { ...activeTaskAction, assignedVolunteerIds: [], assignedVolunteerNames: [] };
-
-                                const updatedTasks = taskCards.map(t => t.id === activeTaskAction.id ? updatedTask : t);
-
-                                await saveProjectLikeRecord({ ...activeSelectedProject, internalTasks: updatedTasks });
-
-                                setProjects(currentProjects =>
-
-                                  currentProjects.map(p =>
-
-                                    p.id === activeSelectedProject.id ? { ...activeSelectedProject, internalTasks: updatedTasks } : p
-
-                                  )
-
-                                );
-
-                              } catch (e) {
-
-                                console.error(e);
-
-                              }
-
-                            }}
-
-                          ]
-
-                        );
-
+                      if (activeTaskActionAssignedIds.length === 0) {
+                        Alert.alert('No Volunteers Assigned', 'This task currently has no assigned volunteers.');
+                        return;
                       }
-
+                      setRemoveVolunteerPickerTaskId(taskId);
                     }}
-
                     style={{ padding: 14 }}
-
                   >
-
                     <Text style={{ fontSize: 14, fontWeight: '700', color: '#dc2626' }}>Remove Assigned Volunteers</Text>
-
                   </TouchableOpacity>
-
                 </Pressable>
-
               ) : null}
-
             </Pressable>
-
           </Modal>
+
+          {/* Modal to pick which assigned volunteer to remove */}
+          {(() => {
+            const removePickerTask = taskCards.find(t => t.id === removeVolunteerPickerTaskId) || null;
+            const removePickerAssignedIds = removePickerTask ? getTaskAssignedVolunteerIds(removePickerTask) : [];
+
+            return (
+              <Modal
+                transparent
+                visible={Boolean(removeVolunteerPickerTaskId && removePickerTask)}
+                animationType="fade"
+                onRequestClose={() => setRemoveVolunteerPickerTaskId(null)}
+              >
+                <Pressable
+                  style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.45)', justifyContent: 'center', alignItems: 'center', padding: 20 }}
+                  onPress={() => setRemoveVolunteerPickerTaskId(null)}
+                >
+                  <Pressable
+                    style={{ width: '100%', maxWidth: 480, backgroundColor: '#ffffff', borderRadius: 16, borderWidth: 1, borderColor: '#e2e8f0', padding: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.15, shadowRadius: 20, elevation: 10 }}
+                    onPress={e => e.stopPropagation()}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                        <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: '#fee2e2', alignItems: 'center', justifyContent: 'center' }}>
+                          <MaterialIcons name="person-remove" size={20} color="#dc2626" />
+                        </View>
+                        <View>
+                          <Text style={{ fontSize: 17, fontWeight: '800', color: '#0f172a' }}>Remove Assigned Volunteer</Text>
+                          <Text style={{ fontSize: 12, color: '#64748b' }}>Task: {removePickerTask?.title}</Text>
+                        </View>
+                      </View>
+                      <TouchableOpacity onPress={() => setRemoveVolunteerPickerTaskId(null)} style={{ padding: 4 }}>
+                        <MaterialIcons name="close" size={20} color="#64748b" />
+                      </TouchableOpacity>
+                    </View>
+
+                    <Text style={{ fontSize: 13, color: '#475569', marginBottom: 14 }}>
+                      Select which assigned volunteer you want to remove from this task:
+                    </Text>
+
+                    {removePickerAssignedIds.length === 0 ? (
+                      <View style={{ padding: 20, alignItems: 'center', backgroundColor: '#f8fafc', borderRadius: 10, marginBottom: 14 }}>
+                        <Text style={{ fontSize: 13, color: '#64748b' }}>No volunteers currently assigned to this task.</Text>
+                      </View>
+                    ) : (
+                      <ScrollView style={{ maxHeight: 260, marginBottom: 14 }}>
+                        {removePickerAssignedIds.map(vid => {
+                          const volEntry = assignableVolunteers.find(v => v.id === vid) || { id: vid, name: 'Volunteer' };
+                          const fullVol = volunteers.find(v => v.id === vid || v.userId === vid);
+                          const isThisRemoving = isRemovingVolunteerId === vid;
+
+                          return (
+                            <View
+                              key={vid}
+                              style={{
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                padding: 12,
+                                backgroundColor: '#f8fafc',
+                                borderRadius: 10,
+                                borderWidth: 1,
+                                borderColor: '#e2e8f0',
+                                marginBottom: 8,
+                              }}
+                            >
+                              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                                <View style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' }}>
+                                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#475569' }}>
+                                    {volEntry.name.charAt(0).toUpperCase()}
+                                  </Text>
+                                </View>
+                                <View style={{ flex: 1 }}>
+                                  <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a' }}>{volEntry.name}</Text>
+                                  {fullVol?.email ? <Text style={{ fontSize: 12, color: '#64748b' }}>{fullVol.email}</Text> : null}
+                                </View>
+                              </View>
+
+                              <TouchableOpacity
+                                onPress={() => removePickerTask && handleRemoveSpecificVolunteerFromTask(removePickerTask, vid, volEntry.name)}
+                                disabled={Boolean(isRemovingVolunteerId)}
+                                style={{
+                                  flexDirection: 'row',
+                                  alignItems: 'center',
+                                  gap: 6,
+                                  backgroundColor: '#fef2f2',
+                                  paddingHorizontal: 12,
+                                  paddingVertical: 8,
+                                  borderRadius: 8,
+                                  borderWidth: 1,
+                                  borderColor: '#fecaca',
+                                  opacity: isThisRemoving ? 0.7 : 1,
+                                }}
+                              >
+                                {isThisRemoving ? (
+                                  <ActivityIndicator size="small" color="#dc2626" />
+                                ) : (
+                                  <MaterialIcons name="person-remove" size={16} color="#dc2626" />
+                                )}
+                                <Text style={{ fontSize: 12, fontWeight: '700', color: '#dc2626' }}>
+                                  {isThisRemoving ? 'Removing...' : 'Remove'}
+                                </Text>
+                              </TouchableOpacity>
+                            </View>
+                          );
+                        })}
+                      </ScrollView>
+                    )}
+
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+                      {removePickerAssignedIds.length > 1 ? (
+                        <TouchableOpacity
+                          onPress={() => removePickerTask && handleRemoveAllVolunteersFromTask(removePickerTask)}
+                          disabled={Boolean(isRemovingVolunteerId)}
+                          style={{
+                            paddingHorizontal: 14,
+                            paddingVertical: 10,
+                            borderRadius: 8,
+                            backgroundColor: '#fee2e2',
+                            borderWidth: 1,
+                            borderColor: '#fca5a5',
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            gap: 6,
+                          }}
+                        >
+                          <MaterialIcons name="group-remove" size={16} color="#dc2626" />
+                          <Text style={{ fontSize: 12, fontWeight: '700', color: '#dc2626' }}>
+                            Remove All ({removePickerAssignedIds.length})
+                          </Text>
+                        </TouchableOpacity>
+                      ) : <View />}
+
+                      <TouchableOpacity
+                        onPress={() => setRemoveVolunteerPickerTaskId(null)}
+                        style={{ paddingHorizontal: 16, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: '#cbd5e1' }}
+                      >
+                        <Text style={{ fontSize: 13, fontWeight: '700', color: '#475569' }}>Close</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </Pressable>
+                </Pressable>
+              </Modal>
+            );
+          })()}
 
 
 
@@ -21058,7 +21524,22 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         </ScrollView>
 
-      );
+        <ConfirmDialog
+          visible={dialogState.visible}
+          loading={dialogState.loading}
+          title={dialogState.title}
+          message={dialogState.message}
+          confirmText={dialogState.confirmText}
+          loadingText={dialogState.loadingText}
+          cancelText={dialogState.cancelText}
+          confirmColor={dialogState.confirmColor}
+          icon={dialogState.icon as any}
+          iconColor={dialogState.iconColor}
+          onConfirm={handleConfirm}
+          onCancel={handleCancel}
+        />
+      </View>
+    );
 
     };
 

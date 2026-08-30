@@ -159,6 +159,14 @@ class UserApprovalPayload(BaseModel):
     rejectionReason: str | None = None
 
 
+# Request payload for sending application rejection notification emails.
+class RejectionEmailPayload(BaseModel):
+    recipientEmail: str
+    recipientName: str = "Volunteer"
+    rejectionReason: str
+    role: str = "volunteer"
+
+
 # Request payload for direct project joins.
 class ProjectJoinPayload(BaseModel):
     userId: str
@@ -357,6 +365,74 @@ def _send_email_message(
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(sender_email, app_password)
         server.sendmail(sender_email, recipient, msg.as_string())
+
+
+def _send_rejection_email(
+    recipient_email: str,
+    recipient_name: str,
+    rejection_reason: str,
+    role: str = "volunteer",
+) -> None:
+    name = str(recipient_name or "Volunteer").strip() or "Volunteer"
+    reason = str(rejection_reason or "Application did not meet current requirements.").strip()
+    role_label = "partner organization" if role == "partner" else "volunteer"
+    subject = f"Update regarding your Negrense Volunteers for Change {role_label} application"
+
+    text_body = (
+        f"Dear {name},\n\n"
+        f"Thank you for your interest in joining Negrense Volunteers for Change (NVC).\n\n"
+        f"We have reviewed your {role_label} application. At this time, we are unable to approve your application for the following reason:\n\n"
+        f"\"{reason}\"\n\n"
+        f"If you have any questions or would like to submit updated information for reconsideration, please feel free to reach out to us.\n\n"
+        f"Thank you for your understanding and dedication to community service.\n\n"
+        f"Warm regards,\n"
+        f"Negrense Volunteers for Change Foundation\n"
+    )
+
+    html_body = f"""
+    <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+      <div style="background-color: #166534; padding: 24px; text-align: center;">
+        <h1 style="color: #ffffff; margin: 0; font-size: 20px; font-weight: 800; letter-spacing: 0.5px;">Negrense Volunteers for Change</h1>
+        <p style="color: #bbf7d0; margin: 4px 0 0 0; font-size: 13px;">Application Status Update</p>
+      </div>
+
+      <div style="padding: 28px 24px;">
+        <p style="color: #334155; font-size: 15px; margin-top: 0;">Dear <strong>{name}</strong>,</p>
+
+        <p style="color: #334155; font-size: 14px; line-height: 1.6;">
+          Thank you for taking the time to apply to <strong>Negrense Volunteers for Change (NVC)</strong>. We deeply appreciate your desire to contribute your time and skills to our mission.
+        </p>
+
+        <p style="color: #334155; font-size: 14px; line-height: 1.6;">
+          After careful review of your {role_label} application, we regret to inform you that we are unable to accept your application at this time.
+        </p>
+
+        <div style="background-color: #fef2f2; border-left: 4px solid #dc2626; border-radius: 6px; padding: 16px; margin: 20px 0;">
+          <p style="color: #991b1b; font-size: 13px; font-weight: 700; margin: 0 0 6px 0; text-transform: uppercase; letter-spacing: 0.5px;">Reason for Decision</p>
+          <p style="color: #b91c1c; font-size: 14px; margin: 0; line-height: 1.5; font-style: italic;">
+            "{reason}"
+          </p>
+        </div>
+
+        <p style="color: #334155; font-size: 14px; line-height: 1.6;">
+          If you believe there has been a misunderstanding or if you wish to provide additional information, you are welcome to contact our administration team.
+        </p>
+
+        <p style="color: #64748b; font-size: 13px; margin-top: 24px; border-top: 1px solid #f1f5f9; padding-top: 16px;">
+          Warm regards,<br/>
+          <strong style="color: #0f172a;">Negrense Volunteers for Change Foundation</strong>
+        </p>
+      </div>
+
+      <div style="background-color: #f8fafc; padding: 16px; text-align: center; border-top: 1px solid #e2e8f0;">
+        <p style="color: #94a3b8; font-size: 11px; margin: 0;">
+          This is an automated notification from NVC Connect.
+        </p>
+      </div>
+    </div>
+    """
+
+    _send_email_message(recipient_email, subject, text_body, html_body)
 
 
 def _ensure_reminder_tables(connection: Any) -> None:
@@ -1218,81 +1294,59 @@ def _delete_rows_by_known_field_values(
 
 
 def _cascade_delete_project_references(connection: Any, related_project_ids: set[str]) -> list[str]:
-    related_ids = {str(project_id or "").strip() for project_id in related_project_ids if str(project_id or "").strip()}
+    related_ids = [str(pid or "").strip() for pid in related_project_ids if str(pid or "").strip()]
     if not related_ids:
         return []
 
     changed_keys: list[str] = []
 
-    events = get_postgres_hot_storage_collection(connection, "events")
-    event_ids_to_delete = {
-        str(event.get("id") or "").strip()
-        for event in events
-        if str(event.get("id") or "").strip() in related_ids
-        or str(event.get("parentProjectId") or "").strip() in related_ids
-    }
-    if event_ids_to_delete:
-        related_ids.update(event_ids_to_delete)
-        filtered_events = [
-            event
-            for event in events
-            if str(event.get("id") or "").strip() not in event_ids_to_delete
-        ]
-        if len(filtered_events) != len(events):
-            replace_postgres_hot_storage_collection(connection, "events", filtered_events)
-            changed_keys.append("events")
+    with connection.cursor() as cursor:
+        try:
+            cursor.execute(
+                """
+                select coalesce(events_id, '') from events
+                where lower(trim(coalesce(parent_project_id, ''))) = any(%s)
+                   or lower(trim(coalesce(events_id, ''))) = any(%s)
+                """,
+                ([pid.lower() for pid in related_ids], [pid.lower() for pid in related_ids]),
+            )
+            child_ids = [str(r[0]) for r in cursor.fetchall() if r[0]]
+        except Exception:
+            try:
+                connection.rollback()
+            except Exception:
+                pass
+            child_ids = []
 
-    for key in PROJECT_REFERENCE_STORAGE_KEYS:
-        items = get_postgres_hot_storage_collection(connection, key)
-        filtered_items = _filter_project_references(items, related_ids)
-        if len(filtered_items) != len(items):
-            replace_postgres_hot_storage_collection(connection, key, filtered_items)
-            changed_keys.append(key)
+        all_ids_to_purge = list(dict.fromkeys([*related_ids, *child_ids]))
+        lower_ids = [pid.lower() for pid in all_ids_to_purge]
 
-    group_messages = _get_special_storage_collection(connection, "projectGroupMessages")
-    filtered_group_messages = _filter_project_references(group_messages, related_ids)
-    if len(filtered_group_messages) != len(group_messages):
-        _replace_special_storage_collection(connection, "projectGroupMessages", filtered_group_messages)
-        changed_keys.append("projectGroupMessages")
+        for table, col, key in [
+            ("events", "events_id", "events"),
+            ("events", "parent_project_id", "events"),
+            ("projects", "projects_id", "projects"),
+            ("volunteer_time_logs", "project_id", "volunteerTimeLogs"),
+            ("volunteer_matches", "project_id", "volunteerMatches"),
+            ("volunteer_event_joins", "project_id", "volunteerProjectJoins"),
+            ("partner_project_applications", "project_id", "partnerProjectApplications"),
+            ("status_updates", "project_id", "statusUpdates"),
+            ("reports", "project_id", "partnerReports"),
+            ("project_group_messages", "project_id", "projectGroupMessages"),
+        ]:
+            try:
+                cursor.execute(
+                    f"delete from {table} where lower(trim(coalesce({col}::text, ''))) = any(%s)",
+                    (lower_ids,),
+                )
+                if cursor.rowcount:
+                    changed_keys.append(key)
+            except Exception:
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
 
-    volunteers = get_postgres_hot_storage_collection(connection, "volunteers")
-    filtered_volunteers: list[dict[str, Any]] = []
-    volunteers_changed = False
-    related_id_keys = {project_id.lower() for project_id in related_ids}
-    for volunteer in volunteers:
-        past_projects = [
-            project_id
-            for project_id in (volunteer.get("pastProjects") or [])
-            if str(project_id or "").strip().lower() not in related_id_keys
-        ]
-        if len(past_projects) != len(volunteer.get("pastProjects") or []):
-            volunteers_changed = True
-            filtered_volunteers.append({**volunteer, "pastProjects": past_projects})
-        else:
-            filtered_volunteers.append(volunteer)
-    if volunteers_changed:
-        replace_postgres_hot_storage_collection(connection, "volunteers", filtered_volunteers)
-        changed_keys.append("volunteers")
-
-    calendars = get_postgres_hot_storage_collection(connection, "adminPlanningCalendars")
-    filtered_calendars: list[dict[str, Any]] = []
-    calendars_changed = False
-    for calendar in calendars:
-        planning_items = [
-            item
-            for item in (calendar.get("planningItems") or [])
-            if str(item.get("linkedProjectId") or "").strip().lower() not in related_id_keys
-        ]
-        if len(planning_items) != len(calendar.get("planningItems") or []):
-            calendars_changed = True
-            filtered_calendars.append({**calendar, "planningItems": planning_items})
-        else:
-            filtered_calendars.append(calendar)
-    if calendars_changed:
-        replace_postgres_hot_storage_collection(connection, "adminPlanningCalendars", filtered_calendars)
-        changed_keys.append("adminPlanningCalendars")
-
-    return changed_keys
+    return list(dict.fromkeys(changed_keys))
 
 
 def _remove_volunteer_assignments_from_project(
@@ -2247,6 +2301,96 @@ def _reconcile_event_volunteer_arrays(connection: Any) -> None:
         print(f"[WARN] Event volunteer array reconciliation skipped: {type(error).__name__}: {error}")
 
 
+def _reconcile_tasks_against_existing_volunteers(connection: Any) -> None:
+    """Cleans up deleted/orphan volunteer IDs from internalTasks across events and projects."""
+    try:
+        volunteers = get_postgres_hot_storage_collection(connection, "volunteers") or []
+        users = get_postgres_hot_storage_collection(connection, "users") or []
+
+        valid_vol_ids = {str(v.get("id") or "").strip() for v in volunteers if str(v.get("id") or "").strip()}
+        valid_user_ids = {str(v.get("userId") or "").strip() for v in volunteers if str(v.get("userId") or "").strip()}
+        valid_user_ids.update({str(u.get("id") or "").strip() for u in users if str(u.get("id") or "").strip()})
+
+        vol_name_map = {
+            str(v.get("id") or "").strip(): str(v.get("name") or "").strip()
+            for v in volunteers
+            if str(v.get("id") or "").strip()
+        }
+        for v in volunteers:
+            uid = str(v.get("userId") or "").strip()
+            if uid and uid not in vol_name_map:
+                vol_name_map[uid] = str(v.get("name") or "").strip()
+
+        changed_keys: list[str] = []
+        for storage_key in ("events", "projects"):
+            items = get_postgres_hot_storage_collection(connection, storage_key) or []
+            updated = False
+            for item in items:
+                tasks = item.get("internalTasks") or []
+                if not tasks or not isinstance(tasks, list):
+                    continue
+
+                tasks_changed = False
+                cleaned_tasks = []
+                for task in tasks:
+                    if not isinstance(task, dict):
+                        cleaned_tasks.append(task)
+                        continue
+
+                    task_copy = dict(task)
+                    raw_assigned_ids = list(task_copy.get("assignedVolunteerIds") or [])
+                    single_assigned_id = str(task_copy.get("assignedVolunteerId") or "").strip()
+
+                    all_ids = []
+                    if single_assigned_id:
+                        all_ids.append(single_assigned_id)
+                    for aid in raw_assigned_ids:
+                        aid_str = str(aid or "").strip()
+                        if aid_str and aid_str not in all_ids:
+                            all_ids.append(aid_str)
+
+                    # Filter to only existing valid volunteer/user IDs
+                    valid_assigned_ids = [
+                        aid for aid in all_ids
+                        if aid in valid_vol_ids or aid in valid_user_ids
+                    ]
+
+                    # Filter assignedVolunteerNames
+                    valid_assigned_names = [
+                        vol_name_map.get(aid) or aid
+                        for aid in valid_assigned_ids
+                    ]
+
+                    if len(valid_assigned_ids) != len(all_ids) or set(raw_assigned_ids) != set(valid_assigned_ids):
+                        task_copy["assignedVolunteerIds"] = valid_assigned_ids
+                        task_copy["assignedVolunteerNames"] = valid_assigned_names
+                        task_copy["assignedVolunteerId"] = valid_assigned_ids[0] if valid_assigned_ids else None
+                        task_copy["assignedVolunteerName"] = valid_assigned_names[0] if valid_assigned_names else None
+                        if not valid_assigned_ids:
+                            task_copy["status"] = "Planned"
+                        tasks_changed = True
+
+                    cleaned_tasks.append(task_copy)
+
+                if tasks_changed:
+                    _postgres_upsert_hot_item(
+                        connection,
+                        storage_key,
+                        {**item, "internalTasks": cleaned_tasks},
+                    )
+                    updated = True
+
+            if updated:
+                changed_keys.append(storage_key)
+
+        if changed_keys:
+            connection.commit()
+            _invalidate_collection_cache(changed_keys)
+            print(f"[OK] Reconciled tasks against existing volunteers for: {changed_keys}")
+    except Exception as error:
+        print(f"[WARN] Task volunteer reconciliation skipped: {type(error).__name__}: {error}")
+
+
 def _ensure_core_programs_exist() -> None:
     """Core programs initialization disabled - programs are now created manually by admins."""
     pass
@@ -2290,6 +2434,7 @@ def startup() -> None:
         try:
             with get_connection() as connection:
                 _reconcile_event_volunteer_arrays(connection)
+                _reconcile_tasks_against_existing_volunteers(connection)
         except Exception as error:
             print(f"[WARN] Event volunteer reconciliation skipped: {error}")
 
@@ -2840,11 +2985,88 @@ def _send_registration_otp_email(recipient_email: str, otp: str) -> None:
     _send_email_message(recipient_email, "Your NVC Connect Registration Code", text_body, html_body)
 
 
+def _is_email_already_registered(email: str, connection: Any | None = None) -> bool:
+    """Checks if email belongs to any registered user (demo accounts + database + hot storage)."""
+    normalized = str(email or "").strip().lower()
+    if not normalized or "@" not in normalized:
+        return False
+    # Check demo accounts first
+    if _get_demo_account(normalized) is not None:
+        return True
+
+    def _check_db(conn: Any) -> bool:
+        for table, col in [("users", "email"), ("volunteers", "email")]:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"select 1 from {table} where lower(trim(coalesce({col}, ''))) = %s limit 1",
+                        (normalized,),
+                    )
+                    if cur.fetchone() is not None:
+                        return True
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "select 1 from partners where lower(trim(coalesce(contact_email, ''))) = %s limit 1",
+                    (normalized,),
+                )
+                if cur.fetchone() is not None:
+                    return True
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        # Fallback: scan hot storage collections
+        for key, email_field in [("users", "email"), ("volunteers", "email"), ("partners", "contactEmail")]:
+            try:
+                for item in get_postgres_hot_storage_collection(conn, key):
+                    if str(item.get(email_field) or item.get("email") or "").strip().lower() == normalized:
+                        return True
+            except Exception:
+                pass
+        return False
+
+    if connection is not None:
+        return _check_db(connection)
+    try:
+        with get_connection() as conn:
+            return _check_db(conn)
+    except Exception:
+        return False
+
+
+@app.get("/auth/check-email")
+def auth_check_email(email: str = "") -> dict[str, Any]:
+    """Returns whether the given email is already registered."""
+    normalized = str(email or "").strip().lower()
+    if not normalized or "@" not in normalized:
+        return {"exists": False, "email": normalized}
+    exists = _is_email_already_registered(normalized)
+    return {
+        "exists": exists,
+        "email": normalized,
+        "message": "An account with this email already exists." if exists else "Email is available.",
+    }
+
+
 @app.post("/auth/registration-otp/send")
 def auth_registration_otp_send(payload: RegistrationOtpSendPayload) -> dict[str, Any]:
     email = str(payload.email or "").strip().lower()
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="A valid email address is required.")
+
+    # Block if email is already registered
+    if _is_email_already_registered(email):
+        raise HTTPException(
+            status_code=409,
+            detail="An account with this email already exists.",
+        )
 
     _purge_expired_registration_otps()
 
@@ -2970,6 +3192,22 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
     return {"user": user, "message": "Login successful"}
 
 
+@app.post("/auth/send-rejection-email")
+# API endpoint for sending an application rejection explanation email.
+def send_rejection_email_endpoint(payload: RejectionEmailPayload) -> dict[str, Any]:
+    try:
+        _send_rejection_email(
+            recipient_email=payload.recipientEmail,
+            recipient_name=payload.recipientName,
+            rejection_reason=payload.rejectionReason,
+            role=payload.role,
+        )
+        return {"success": True, "message": "Rejection email sent successfully."}
+    except Exception as e:
+        print(f"[REJECTION-EMAIL-ERROR] Failed to send rejection email: {e}")
+        return {"success": False, "message": f"Email sending failed: {str(e)}"}
+
+
 @app.post("/auth/users/{user_id}/approve")
 # API endpoint for admin to approve a pending user account and linked records.
 async def approve_user(user_id: str, payload: UserApprovalPayload, admin_id: str) -> dict[str, Any]:
@@ -3084,6 +3322,19 @@ async def approve_user(user_id: str, payload: UserApprovalPayload, admin_id: str
 
             return {"user": user, "message": "User account and linked records approved successfully."}
         elif payload.status == "rejected":
+            user_email = str(user.get("email") or "").strip()
+            user_name = str(user.get("name") or "Volunteer").strip()
+            rejection_reason = payload.rejectionReason or "Application did not meet requirements."
+            if user_email:
+                try:
+                    _send_rejection_email(
+                        recipient_email=user_email,
+                        recipient_name=user_name,
+                        rejection_reason=rejection_reason,
+                        role=str(user.get("role") or "volunteer"),
+                    )
+                except Exception as email_err:
+                    print(f"[REJECTION-EMAIL-ERROR] Error sending rejection email in approve_user: {email_err}")
             changed_keys = _delete_user_account_records(connection, user_id)
             connection.commit()
             _invalidate_collection_cache(changed_keys)
@@ -3091,7 +3342,7 @@ async def approve_user(user_id: str, payload: UserApprovalPayload, admin_id: str
             await connection_manager.broadcast_storage_event(changed_keys)
             return {
                 "deletedUserId": user_id,
-                "message": payload.rejectionReason or "User account rejected and deleted.",
+                "message": payload.rejectionReason or "User account rejected and email sent.",
             }
         else:
             raise HTTPException(status_code=400, detail="Invalid approval status. Use 'approved' or 'rejected'.")
@@ -5135,76 +5386,21 @@ async def delete_project_record(project_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Project id is required.")
 
     with get_connection() as connection:
-        projects = get_postgres_hot_storage_collection(connection, "projects")
-        events = get_postgres_hot_storage_collection(connection, "events")
-        removed_event_ids = {
-            str(event.get("id") or "").strip()
-            for event in events
-            if str(event.get("id") or "").strip() == normalized_project_id
-            or str(event.get("parentProjectId") or "").strip() == normalized_project_id
-        }
-        related_project_ids = {
-            normalized_project_id,
-            *{event_id for event_id in removed_event_ids if event_id},
-        }
-
-        filtered_projects = [
-            project
-            for project in projects
-            if str(project.get("id") or "").strip() != normalized_project_id
-        ]
-        filtered_events = [
-            event
-            for event in events
-            if str(event.get("id") or "").strip() not in removed_event_ids
-            and str(event.get("parentProjectId") or "").strip() != normalized_project_id
-        ]
-
-        changed_keys: list[str] = []
-        if len(filtered_projects) != len(projects):
-            replace_postgres_hot_storage_collection(connection, "projects", filtered_projects)
-            changed_keys.append("projects")
-        if len(filtered_events) != len(events):
-            replace_postgres_hot_storage_collection(connection, "events", filtered_events)
-            changed_keys.append("events")
-
-        direct_deleted_count = _delete_rows_by_known_field_values(
-            connection,
-            "projects",
-            ["projects_id", "id"],
-            {normalized_project_id},
-        )
-        direct_deleted_count += _delete_rows_by_known_field_values(
-            connection,
-            "events",
-            ["events_id", "id", "parent_project_id"],
-            related_project_ids,
-        )
-        if direct_deleted_count > 0:
-            for changed_key in ["projects", "events"]:
-                if changed_key not in changed_keys:
-                    changed_keys.append(changed_key)
-
-        for changed_key in _cascade_delete_project_references(connection, related_project_ids):
-            if changed_key not in changed_keys:
-                changed_keys.append(changed_key)
-
-        final_deleted_count = _delete_rows_by_known_field_values(
-            connection,
-            "projects",
-            ["projects_id", "id"],
-            {normalized_project_id},
-        )
-        final_deleted_count += _delete_rows_by_known_field_values(
-            connection,
-            "events",
-            ["events_id", "id", "parent_project_id"],
-            related_project_ids,
-        )
-        if final_deleted_count > 0:
-            for changed_key in ["projects", "events"]:
-                if changed_key not in changed_keys:
-                    changed_keys.append(changed_key)
+        changed_keys = _cascade_delete_project_references(connection, {normalized_project_id})
+        with connection.cursor() as cursor:
+            try:
+                cursor.execute(
+                    "delete from projects where lower(trim(coalesce(projects_id, ''))) = %s",
+                    (normalized_project_id.lower(),),
+                )
+                if cursor.rowcount:
+                    if "projects" not in changed_keys:
+                        changed_keys.append("projects")
+            except Exception:
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
 
         connection.commit()
 
@@ -5217,7 +5413,6 @@ async def delete_project_record(project_id: str) -> dict[str, Any]:
     return {
         "status": "ok",
         "deletedProjectId": normalized_project_id,
-        "deletedEventCount": len(removed_event_ids),
         "alreadyDeleted": not changed_keys,
     }
 
@@ -5230,66 +5425,35 @@ async def delete_event_record(event_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Event id is required.")
 
     with get_connection() as connection:
-        projects = get_postgres_hot_storage_collection(connection, "projects")
-        events = get_postgres_hot_storage_collection(connection, "events")
-        related_event_ids = {normalized_event_id}
+        changed_keys = _cascade_delete_project_references(connection, {normalized_event_id})
+        with connection.cursor() as cursor:
+            try:
+                cursor.execute(
+                    "delete from events where lower(trim(coalesce(events_id, ''))) = %s",
+                    (normalized_event_id.lower(),),
+                )
+                if cursor.rowcount:
+                    if "events" not in changed_keys:
+                        changed_keys.append("events")
+            except Exception:
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
 
-        filtered_projects = [
-            project
-            for project in projects
-            if str(project.get("id") or "").strip() != normalized_event_id
-        ]
-        filtered_events = [
-            event
-            for event in events
-            if str(event.get("id") or "").strip() != normalized_event_id
-        ]
-
-        changed_keys: list[str] = []
-        if len(filtered_projects) != len(projects):
-            replace_postgres_hot_storage_collection(connection, "projects", filtered_projects)
-            changed_keys.append("projects")
-        if len(filtered_events) != len(events):
-            replace_postgres_hot_storage_collection(connection, "events", filtered_events)
-            changed_keys.append("events")
-
-        direct_deleted_count = _delete_rows_by_known_field_values(
-            connection,
-            "events",
-            ["events_id", "id"],
-            related_event_ids,
-        )
-        direct_deleted_count += _delete_rows_by_known_field_values(
-            connection,
-            "projects",
-            ["projects_id", "id"],
-            related_event_ids,
-        )
-        if direct_deleted_count > 0:
-            for changed_key in ["projects", "events"]:
-                if changed_key not in changed_keys:
-                    changed_keys.append(changed_key)
-
-        for changed_key in _cascade_delete_project_references(connection, related_event_ids):
-            if changed_key not in changed_keys:
-                changed_keys.append(changed_key)
-
-        final_deleted_count = _delete_rows_by_known_field_values(
-            connection,
-            "events",
-            ["events_id", "id"],
-            related_event_ids,
-        )
-        final_deleted_count += _delete_rows_by_known_field_values(
-            connection,
-            "projects",
-            ["projects_id", "id"],
-            related_event_ids,
-        )
-        if final_deleted_count > 0:
-            for changed_key in ["projects", "events"]:
-                if changed_key not in changed_keys:
-                    changed_keys.append(changed_key)
+            try:
+                cursor.execute(
+                    "delete from projects where lower(trim(coalesce(projects_id, ''))) = %s and is_event = true",
+                    (normalized_event_id.lower(),),
+                )
+                if cursor.rowcount:
+                    if "projects" not in changed_keys:
+                        changed_keys.append("projects")
+            except Exception:
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
 
         connection.commit()
 

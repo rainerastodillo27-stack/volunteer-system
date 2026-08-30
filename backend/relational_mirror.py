@@ -1107,7 +1107,6 @@ _NON_STANDARD_PK_TABLES: dict[str, str] = {
     "reports": "reports_id",
     "messages": "messages_id",
     "project_group_messages": "project_group_messages_id",
-    "program_tracks": "program_tracks_id",
     "admin_planning_calendars": "admin_planning_calendars_id",
     "admin_planning_items": "admin_planning_items_id",
     "status_updates": "status_updates_id",
