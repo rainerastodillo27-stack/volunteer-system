@@ -301,12 +301,19 @@ function getTaskAssignedVolunteerNames(task: ProjectInternalTask): string[] {
   );
 }
 
-function isVolunteerAssignedToTask(task: ProjectInternalTask, volunteerId?: string | null): boolean {
-  if (!volunteerId) {
-    return false;
+function isVolunteerAssignedToTask(
+  task: ProjectInternalTask,
+  volunteerId?: string | null,
+  userId?: string | null
+): boolean {
+  const assignedIds = getTaskAssignedVolunteerIds(task);
+  if (volunteerId && assignedIds.includes(volunteerId)) {
+    return true;
   }
-
-  return getTaskAssignedVolunteerIds(task).includes(volunteerId);
+  if (userId && assignedIds.includes(userId)) {
+    return true;
+  }
+  return false;
 }
 
 function getTrackedTaskStatus(
@@ -442,12 +449,8 @@ function collectAssignedTasks(
   const assignedTasks: AssignedTask[] = [];
 
   projects.forEach(project => {
-    if (!project.internalTasks || !Array.isArray(project.internalTasks)) {
-      return;
-    }
-
-    project.internalTasks.forEach(task => {
-      if (isVolunteerAssignedToTask(task, volunteerProfile.id)) {
+    (project.internalTasks || []).forEach(task => {
+      if (isVolunteerAssignedToTask(task, volunteerProfile.id, volunteerProfile.userId)) {
         const trackedStatus = getTrackedTaskStatus(
           task,
           project,
@@ -545,7 +548,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
             projects
               .filter(project =>
                 (project.internalTasks || []).some(
-                  task => isVolunteerAssignedToTask(task, currentVolunteerProfile.id)
+                  task => isVolunteerAssignedToTask(task, currentVolunteerProfile.id, currentVolunteerProfile.userId)
                 )
               )
               .map(project => project.id)

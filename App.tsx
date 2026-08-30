@@ -5,6 +5,8 @@ import { Platform, View, ActivityIndicator } from "react-native";
 import { AuthProvider } from "./contexts/AuthContext";
 import StackNavigator from "./navigation/StackNavigator";
 import ErrorBoundary from './components/ErrorBoundary';
+import InAppNotificationBanner from './components/InAppNotificationBanner';
+import { navigationRef } from './navigation/navigationRef';
 import { useNunitoFont } from './utils/fonts';
 import { useEffect } from 'react';
 import * as SplashScreen from 'expo-splash-screen';
@@ -134,8 +136,9 @@ export default function App() {
     <SafeAreaProvider>
       <AuthProvider>
         <ErrorBoundary>
-          <NavigationContainer>
+          <NavigationContainer ref={navigationRef}>
             <StackNavigator />
+            <InAppNotificationBanner />
           </NavigationContainer>
         </ErrorBoundary>
       </AuthProvider>

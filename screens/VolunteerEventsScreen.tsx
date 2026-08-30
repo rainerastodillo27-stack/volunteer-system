@@ -26,6 +26,7 @@ import {
   getAllAdminPlanningItems,
   saveEvent,
   requestVolunteerProjectJoin,
+  getAllVolunteers,
 } from '../models/storage';
 import { Project, Volunteer, VolunteerProjectMatch, VolunteerProjectJoinRecord, AdminPlanningCalendar, AdminPlanningItem } from '../models/types';
 import { getRequestErrorMessage } from '../utils/requestErrors';
@@ -184,6 +185,7 @@ export default function VolunteerEventsScreen() {
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
   const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
   const [joinRecords, setJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
+  const [allVolunteersList, setAllVolunteersList] = useState<Volunteer[]>([]);
   const [planningItems, setPlanningItems] = useState<AdminPlanningItem[]>([]);
   const [planningCalendars, setPlanningCalendars] = useState<AdminPlanningCalendar[]>([]);
   const [googleEvents, setGoogleEvents] = useState<any[]>([]);
@@ -202,7 +204,7 @@ export default function VolunteerEventsScreen() {
   const loadData = useCallback(async () => {
     if (!user) return;
     try {
-      const [snapshot, calendars, items] = await Promise.all([
+      const [snapshot, calendars, items, volunteersList] = await Promise.all([
         getProjectsScreenSnapshot(user, [
           'projects',
           'volunteerProfile',
@@ -211,11 +213,13 @@ export default function VolunteerEventsScreen() {
         ]),
         getAllAdminPlanningCalendars(),
         getAllAdminPlanningItems(),
+        getAllVolunteers().catch(() => []),
       ]);
       setRecords(snapshot.projects || []);
       setVolunteerProfile(snapshot.volunteerProfile);
       setVolunteerMatches(snapshot.volunteerMatches || []);
       setJoinRecords(snapshot.volunteerJoinRecords || []);
+      setAllVolunteersList(volunteersList || []);
       setPlanningCalendars(calendars || []);
       setPlanningItems(items || []);
 
@@ -266,6 +270,12 @@ export default function VolunteerEventsScreen() {
       Alert.alert('Error', 'User profile not authenticated');
       return;
     }
+    const joinedCount = getActiveProjectJoinCount(event, joinRecords, volunteerMatches, allVolunteersList);
+    const totalSlots = Number(event.volunteersNeeded || 0);
+    if (totalSlots > 0 && joinedCount >= totalSlots) {
+      Alert.alert('Event Full', 'This event has reached its maximum volunteer capacity and is already full.');
+      return;
+    }
     try {
       setLoadingEventId(event.id);
       if (event.id.startsWith('planner-item-') || event.id.startsWith('gcal-')) {
@@ -310,9 +320,17 @@ export default function VolunteerEventsScreen() {
     const match = volunteerMatches.find(m => m.projectId === event.id);
     
     if (match?.status === 'Requested') return { label: 'Pending', color: '#C97F1F', joinable: false };
-    if (match?.status === 'Rejected') return { label: 'Apply Again', color: '#B0432B', joinable: true };
     if (isCompleted || match?.status === 'Completed') return { label: 'Completed', color: '#5B564C', joinable: false };
     if (match?.status === 'Matched' || isJoined) return { label: 'Joined', color: '#3F7A54', joinable: false };
+
+    // Check if event is full
+    const joinedCount = getActiveProjectJoinCount(event, joinRecords, volunteerMatches, allVolunteersList);
+    const totalSlots = Number(event.volunteersNeeded || 0);
+    if (totalSlots > 0 && joinedCount >= totalSlots) {
+      return { label: 'Full', color: '#B0432B', joinable: false };
+    }
+    
+    if (match?.status === 'Rejected') return { label: 'Apply Again', color: '#B0432B', joinable: true };
     
     return { label: 'Open', color: '#3F7A54', joinable: true };
   };
@@ -452,8 +470,9 @@ export default function VolunteerEventsScreen() {
 
   const renderEventItem = ({ item }: { item: Project }) => {
     const status = getEventStatus(item);
-    const joinedCount = getActiveProjectJoinCount(item, joinRecords);
-    const totalSlots = item.volunteersNeeded || 20;
+    const joinedCount = getActiveProjectJoinCount(item, joinRecords, volunteerMatches, allVolunteersList);
+    const totalSlots = Number(item.volunteersNeeded || 0);
+    const displayTotalSlots = totalSlots > 0 ? totalSlots : (item.volunteersNeeded || 20);
 
     let imageUrl = item.imageUrl;
     if (!imageUrl && item.parentProjectId) {
@@ -507,12 +526,40 @@ export default function VolunteerEventsScreen() {
 
           {/* Status & Slots row */}
           <View style={styles.slotsRow}>
-            <View style={[styles.statusBadge, { backgroundColor: status.label === 'Open' ? '#e6f4ea' : status.label === 'Pending' ? '#fef7e0' : '#f1f3f4' }]}>
-              <Text style={[styles.statusBadgeText, { color: status.label === 'Open' ? '#137333' : status.label === 'Pending' ? '#b06000' : '#3c4043' }]}>
+            <View
+              style={[
+                styles.statusBadge,
+                {
+                  backgroundColor:
+                    status.label === 'Open'
+                      ? '#e6f4ea'
+                      : status.label === 'Pending'
+                      ? '#fef7e0'
+                      : status.label === 'Full'
+                      ? '#fde8e8'
+                      : '#f1f3f4',
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.statusBadgeText,
+                  {
+                    color:
+                      status.label === 'Open'
+                        ? '#137333'
+                        : status.label === 'Pending'
+                        ? '#b06000'
+                        : status.label === 'Full'
+                        ? '#c53030'
+                        : '#3c4043',
+                  },
+                ]}
+              >
                 {status.label}
               </Text>
             </View>
-            <Text style={styles.slotsText}>{joinedCount}/{totalSlots} slots</Text>
+            <Text style={styles.slotsText}>{joinedCount}/{displayTotalSlots} slots</Text>
           </View>
 
           {/* Volunteer Requirements row */}
@@ -550,12 +597,20 @@ export default function VolunteerEventsScreen() {
               {loadingEventId === item.id ? (
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
-                <Text style={styles.joinBtnText}>Join Event</Text>
+                <Text style={styles.joinBtnText}>
+                  {status.label === 'Apply Again' ? 'Apply Again' : 'Join Event'}
+                </Text>
               )}
             </TouchableOpacity>
           ) : (
             <View style={[styles.joinBtn, { backgroundColor: '#f1f3f4', borderWidth: 0 }]}>
-              <Text style={[styles.joinBtnText, { color: '#70757a' }]}>{status.label === 'Joined' ? 'Joined' : status.label}</Text>
+              <Text style={[styles.joinBtnText, { color: '#70757a' }]}>
+                {status.label === 'Joined'
+                  ? 'Joined'
+                  : status.label === 'Full'
+                  ? 'Event Full'
+                  : status.label}
+              </Text>
             </View>
           )}
         </View>

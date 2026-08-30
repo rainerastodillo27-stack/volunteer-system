@@ -29,6 +29,7 @@ import {
   rejectUser,
   getUser,
   sendRejectionEmail,
+  getApiBaseUrl,
 } from '../models/storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../contexts/AuthContext';
@@ -62,6 +63,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   const [rejectionReason, setRejectionReason] = useState('');
   const [rejectionError, setRejectionError] = useState<string | null>(null);
   const [isRejecting, setIsRejecting] = useState(false);
+  const [isApproving, setIsApproving] = useState(false);
   const [expandedSection, setExpandedSection] = useState<'applications' | 'approved' | 'profiles' | 'reports' | null>(null);
 
   useEffect(() => {
@@ -250,10 +252,11 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
       Alert.alert('Access Restricted', 'Only admin accounts can approve volunteers.');
       return;
     }
-    if (!selectedVolunteer) return;
+    if (!selectedVolunteer || isApproving || isRejecting) return;
     const adminId = user?.id || '';
     const previousVolunteers = volunteers;
     const previousSelected = selectedVolunteer;
+    setIsApproving(true);
     try {
       const updated = {
         ...selectedVolunteer,
@@ -279,6 +282,8 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
         getRequestErrorTitle(error),
         getRequestErrorMessage(error, 'Failed to approve volunteer application.')
       );
+    } finally {
+      setIsApproving(false);
     }
   };
 
@@ -297,46 +302,63 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
 
     const adminId = user?.id || '';
     const previousVolunteers = volunteers;
-    const previousSelected = selectedVolunteer;
     setIsRejecting(true);
     setRejectionError(null);
 
     try {
-      const updated = {
-        ...selectedVolunteer,
-        registrationStatus: 'Rejected' as const,
-        rejectionReason: trimmedReason,
-        reviewedBy: adminId,
-        reviewedAt: new Date().toISOString(),
-      };
-      setVolunteers(current =>
-        current.map(v => (v.id === updated.id ? updated : v))
-      );
-      setSelectedVolunteer(updated);
-      closeRejectModal();
+      // Modal stays open — spinner is shown inside the modal while we process
 
+      // Send rejection email first (non-blocking on failure)
       const volunteerEmail = (selectedVolunteer.email || selectedUser?.email || '').trim();
       let emailNotice = '';
       if (volunteerEmail) {
         try {
           await sendRejectionEmail(volunteerEmail, selectedVolunteer.name, trimmedReason, 'volunteer');
-          emailNotice = ` and notification email sent to ${volunteerEmail}`;
+          emailNotice = ` Notification email sent to ${volunteerEmail}.`;
         } catch (emailErr) {
           console.warn('[REJECTION-EMAIL] Failed to send rejection email:', emailErr);
         }
       }
 
-      setActionNotice(`Application for ${selectedVolunteer.name} rejected${emailNotice}.`);
-
+      // Call backend approve endpoint with status=rejected to fully delete the user and all linked records
       if (selectedVolunteer.userId) {
-        await rejectUser(selectedVolunteer.userId, trimmedReason, adminId);
+        const response = await fetch(
+          `${getApiBaseUrl()}/auth/users/${selectedVolunteer.userId}/approve?admin_id=${encodeURIComponent(adminId)}`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'ngrok-skip-browser-warning': '69420',
+              'User-Agent': 'VolCre-App/1.0',
+              'Accept': 'application/json',
+            },
+            body: JSON.stringify({ status: 'rejected', rejectionReason: trimmedReason }),
+          }
+        );
+        if (!response.ok) {
+          const errText = await response.text().catch(() => '');
+          throw new Error(`Rejection failed: ${response.status} ${errText}`);
+        }
       } else {
-        await saveVolunteer(updated);
+        // No linked user account — just mark the volunteer record as rejected
+        await saveVolunteer({
+          ...selectedVolunteer,
+          registrationStatus: 'Rejected' as const,
+          rejectionReason: trimmedReason,
+          reviewedBy: adminId,
+          reviewedAt: new Date().toISOString(),
+        });
       }
+
+      // Close modal, remove from local state, and show success notice
+      closeRejectModal();
+      setVolunteers(current => current.filter(v => v.id !== selectedVolunteer.id));
+      setSelectedVolunteer(null);
+      setActionNotice(`Application for ${selectedVolunteer.name} has been rejected and removed from the system.${emailNotice}`);
+
       void loadVolunteers();
     } catch (error) {
       setVolunteers(previousVolunteers);
-      setSelectedVolunteer(previousSelected);
       Alert.alert(
         getRequestErrorTitle(error),
         getRequestErrorMessage(error, 'Failed to reject volunteer application.')
@@ -643,7 +665,12 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
 
                 <View style={styles.applicationActionRow}>
                   <TouchableOpacity
-                    style={[styles.reviewActionButton, styles.reviewApproveButton]}
+                    style={[
+                      styles.reviewActionButton,
+                      styles.reviewApproveButton,
+                      (isApproving || isRejecting) && { opacity: 0.75 },
+                    ]}
+                    disabled={isApproving || isRejecting}
                     onPress={() => {
                       if (Platform.OS === 'web') {
                         const ok = window.confirm('Approve this volunteer application?');
@@ -661,11 +688,22 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                       }
                     }}
                   >
-                    <MaterialIcons name="check-circle" size={18} color="#fff" />
-                    <Text style={styles.reviewActionButtonText}>Approve</Text>
+                    {isApproving ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <MaterialIcons name="check-circle" size={18} color="#fff" />
+                    )}
+                    <Text style={styles.reviewActionButtonText}>
+                      {isApproving ? 'Approving...' : 'Approve'}
+                    </Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={[styles.reviewActionButton, styles.reviewRejectButton]}
+                    style={[
+                      styles.reviewActionButton,
+                      styles.reviewRejectButton,
+                      (isApproving || isRejecting) && { opacity: 0.75 },
+                    ]}
+                    disabled={isApproving || isRejecting}
                     onPress={() => setShowRejectModal(true)}
                   >
                     <MaterialIcons name="cancel" size={18} color="#fff" />
@@ -1267,7 +1305,18 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
           onRequestClose={isRejecting ? undefined : closeRejectModal}
         >
           <View style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.45)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
-            <View style={{ width: '100%', maxWidth: 520, backgroundColor: '#ffffff', borderRadius: 16, borderWidth: 1, borderColor: '#e2e8f0', padding: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.15, shadowRadius: 20, elevation: 10 }}>
+            <View style={{ width: '100%', maxWidth: 520, backgroundColor: '#ffffff', borderRadius: 16, borderWidth: 1, borderColor: '#e2e8f0', padding: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.15, shadowRadius: 20, elevation: 10, overflow: 'hidden' }}>
+
+              {/* Loading overlay — shown while rejection is processing */}
+              {isRejecting && (
+                <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(255,255,255,0.92)', zIndex: 10, borderRadius: 16, alignItems: 'center', justifyContent: 'center', gap: 14 }}>
+                  <ActivityIndicator size="large" color="#dc2626" />
+                  <View style={{ alignItems: 'center', gap: 4 }}>
+                    <Text style={{ fontSize: 15, fontWeight: '700', color: '#0f172a' }}>Rejecting Application…</Text>
+                    <Text style={{ fontSize: 12, color: '#64748b' }}>Removing record and sending notification email</Text>
+                  </View>
+                </View>
+              )}
               {/* Header */}
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>

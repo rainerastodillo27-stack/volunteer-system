@@ -22,11 +22,14 @@ import {
   getAllProjects,
   requestVolunteerProjectJoin,
   getVolunteerByUserId,
+  getAllVolunteerProjectJoinRecords,
+  getAllVolunteers,
 } from '../models/storage';
-import { Project, Volunteer, VolunteerProjectMatch, Partner } from '../models/types';
+import { Project, Volunteer, VolunteerProjectMatch, Partner, VolunteerProjectJoinRecord } from '../models/types';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage } from '../utils/requestErrors';
 import { getPrimaryProjectImageSource } from '../utils/projectMap';
+import { getActiveProjectJoinCount } from '../utils/projectVolunteers';
 import { openAddGoogleCalendarEvent } from '../utils/calendarSync';
 
 export default function VolunteerProjectDetailsScreen({
@@ -42,6 +45,8 @@ export default function VolunteerProjectDetailsScreen({
   const [project, setProject] = useState<Project | null>(null);
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
   const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
+  const [joinRecords, setJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
+  const [allVolunteers, setAllVolunteers] = useState<Volunteer[]>([]);
   const [partners, setPartners] = useState<Partner[]>([]);
   const [parentProject, setParentProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
@@ -68,16 +73,20 @@ export default function VolunteerProjectDetailsScreen({
 
       const volunteerId = profile?.id || user.id;
 
-      const [projectData, matches, partnersList, projectsList] = await Promise.all([
+      const [projectData, matches, partnersList, projectsList, allJoins, volunteersList] = await Promise.all([
         getProject(projectId),
         getVolunteerProjectMatches(volunteerId).catch(() => []),
         getAllPartners().catch(() => []),
         getAllProjects().catch(() => []),
+        getAllVolunteerProjectJoinRecords().catch(() => []),
+        getAllVolunteers().catch(() => []),
       ]);
 
       setProject(projectData);
       setVolunteerMatches(matches);
       setPartners(partnersList);
+      setJoinRecords(allJoins);
+      setAllVolunteers(volunteersList);
 
       if (projectData?.parentProjectId) {
         const parent = projectsList.find((p) => p.id === projectData.parentProjectId);
@@ -105,6 +114,12 @@ export default function VolunteerProjectDetailsScreen({
 
   const handleJoinEvent = async () => {
     if (!user?.id || !project) return;
+    const currentJoinedCount = getActiveProjectJoinCount(project, joinRecords, volunteerMatches, allVolunteers);
+    const capacity = Number(project.volunteersNeeded || 0);
+    if (capacity > 0 && currentJoinedCount >= capacity) {
+      Alert.alert('Event Full', 'This event has reached its maximum volunteer capacity and is already full.');
+      return;
+    }
     try {
       setLoadingAction('join');
       const match = await requestVolunteerProjectJoin(project.id, user.id);
@@ -151,8 +166,10 @@ export default function VolunteerProjectDetailsScreen({
 
   const partnerInfo = partners.find((p) => p.id === project.partnerId) || null;
 
-  const joinedCount = project.volunteers?.length || 0;
-  const totalSlots = project.volunteersNeeded || 30;
+  const joinedCount = getActiveProjectJoinCount(project, joinRecords, volunteerMatches, allVolunteers);
+  const totalSlots = Number(project.volunteersNeeded || 0);
+  const displayTotalSlots = totalSlots > 0 ? totalSlots : (project.volunteersNeeded || 30);
+  const isFull = !isJoined && totalSlots > 0 && joinedCount >= totalSlots;
 
   const formatEventDate = (start: string, end: string) => {
     if (!start) return 'TBD';
@@ -188,6 +205,14 @@ export default function VolunteerProjectDetailsScreen({
         <View style={[styles.joinBtn, styles.joinBtnJoined, styleProps]}>
           <MaterialIcons name="check" size={18} color="#137333" style={{ marginRight: 6 }} />
           <Text style={[styles.joinBtnText, { color: '#137333' }]}>Approved</Text>
+        </View>
+      );
+    }
+    if (isFull) {
+      return (
+        <View style={[styles.joinBtn, { backgroundColor: '#f1f3f4', borderWidth: 0 }, styleProps]}>
+          <MaterialIcons name="block" size={18} color="#70757a" style={{ marginRight: 6 }} />
+          <Text style={[styles.joinBtnText, { color: '#70757a' }]}>Event Full</Text>
         </View>
       );
     }
@@ -234,9 +259,9 @@ export default function VolunteerProjectDetailsScreen({
           <View style={[styles.heroDetails, !isDesktop && { minWidth: '100%' }]}>
             <Text style={styles.heroTitle}>{project.title}</Text>
 
-            <View style={[styles.statusBadge, { backgroundColor: isJoined ? '#e6f4ea' : isPending ? '#fef7e0' : '#e6f4ea' }]}>
-              <Text style={[styles.statusBadgeText, { color: isJoined ? '#137333' : isPending ? '#b06000' : '#137333' }]}>
-                {isJoined ? 'Approved' : isPending ? 'Pending' : 'Open'}
+            <View style={[styles.statusBadge, { backgroundColor: isJoined ? '#e6f4ea' : isPending ? '#fef7e0' : isFull ? '#fde8e8' : '#e6f4ea' }]}>
+              <Text style={[styles.statusBadgeText, { color: isJoined ? '#137333' : isPending ? '#b06000' : isFull ? '#c53030' : '#137333' }]}>
+                {isJoined ? 'Approved' : isPending ? 'Pending' : isFull ? 'Event Full' : 'Open'}
               </Text>
             </View>
 

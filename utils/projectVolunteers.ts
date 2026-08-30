@@ -1,4 +1,4 @@
-import { Project, Volunteer, VolunteerProjectJoinRecord } from '../models/types';
+import { Project, Volunteer, VolunteerProjectJoinRecord, VolunteerProjectMatch } from '../models/types';
 
 export type ProjectVolunteerMapEntry = {
   id: string;
@@ -146,24 +146,75 @@ export function getProjectVolunteersNeeded(
 
 export function getActiveProjectJoinCount(
   project: Project,
-  joinRecords: VolunteerProjectJoinRecord[] = []
+  joinRecords: VolunteerProjectJoinRecord[] = [],
+  volunteerMatches: VolunteerProjectMatch[] = [],
+  volunteers: Volunteer[] = []
 ): number {
   const projectId = normalizeText(project.id);
   if (!projectId) {
     return 0;
   }
 
+  // Alias map to resolve both volunteerId and volunteerUserId to a single canonical ID
+  const idToCanonical = new Map<string, string>();
+
+  (volunteers || []).forEach(v => {
+    const canonical = normalizeText(v.userId) || normalizeText(v.id);
+    if (canonical) {
+      if (v.id) idToCanonical.set(normalizeText(v.id), canonical);
+      if (v.userId) idToCanonical.set(normalizeText(v.userId), canonical);
+    }
+  });
+
+  (joinRecords || []).forEach(record => {
+    const uId = normalizeText(record.volunteerUserId);
+    const vId = normalizeText(record.volunteerId);
+    if (uId && vId) {
+      const canonical = idToCanonical.get(uId) || idToCanonical.get(vId) || uId;
+      idToCanonical.set(uId, canonical);
+      idToCanonical.set(vId, canonical);
+    }
+  });
+
   const activeVolunteerKeys = new Set<string>();
-  joinRecords
+
+  // 1. From joinRecords with Active status
+  (joinRecords || [])
     .filter(record => normalizeText(record.projectId) === projectId)
     .filter(record => (record.participationStatus || 'Active') === 'Active')
     .forEach(record => {
-      const key =
+      const raw =
         normalizeText(record.volunteerUserId) ||
         normalizeText(record.volunteerId) ||
         normalizeText(record.id);
-      if (key) {
-        activeVolunteerKeys.add(key);
+      if (raw) {
+        activeVolunteerKeys.add(idToCanonical.get(raw) || raw);
+      }
+    });
+
+  // 2. From project.volunteers array
+  (project.volunteers || []).forEach(volunteerId => {
+    const raw = normalizeText(volunteerId);
+    if (raw) {
+      activeVolunteerKeys.add(idToCanonical.get(raw) || raw);
+    }
+  });
+
+  // 3. From project.joinedUserIds array
+  (project.joinedUserIds || []).forEach(userId => {
+    const raw = normalizeText(userId);
+    if (raw) {
+      activeVolunteerKeys.add(idToCanonical.get(raw) || raw);
+    }
+  });
+
+  // 4. From volunteerMatches with 'Matched' status
+  (volunteerMatches || [])
+    .filter(match => normalizeText(match.projectId) === projectId && match.status === 'Matched')
+    .forEach(match => {
+      const raw = normalizeText(match.volunteerId);
+      if (raw) {
+        activeVolunteerKeys.add(idToCanonical.get(raw) || raw);
       }
     });
 
@@ -173,7 +224,8 @@ export function getActiveProjectJoinCount(
 export function getActiveProjectGroupJoinCount(
   project: Project,
   projects: Project[] = [],
-  joinRecords: VolunteerProjectJoinRecord[] = []
+  joinRecords: VolunteerProjectJoinRecord[] = [],
+  volunteers: Volunteer[] = []
 ): number {
   const projectId = normalizeText(project.id);
   if (!projectId) {
@@ -196,34 +248,56 @@ export function getActiveProjectGroupJoinCount(
     relatedProjects.map(candidate => normalizeText(candidate.id))
   );
 
+  // Alias map for canonicalization
+  const idToCanonical = new Map<string, string>();
+
+  (volunteers || []).forEach(v => {
+    const canonical = normalizeText(v.userId) || normalizeText(v.id);
+    if (canonical) {
+      if (v.id) idToCanonical.set(normalizeText(v.id), canonical);
+      if (v.userId) idToCanonical.set(normalizeText(v.userId), canonical);
+    }
+  });
+
+  (joinRecords || []).forEach(record => {
+    const uId = normalizeText(record.volunteerUserId);
+    const vId = normalizeText(record.volunteerId);
+    if (uId && vId) {
+      const canonical = idToCanonical.get(uId) || idToCanonical.get(vId) || uId;
+      idToCanonical.set(uId, canonical);
+      idToCanonical.set(vId, canonical);
+    }
+  });
+
   // Count unique volunteers (deduplicate across parent + child events)
   const uniqueVolunteerKeys = new Set<string>();
 
   // 1. From joinRecords
-  joinRecords
+  (joinRecords || [])
     .filter(record => relatedProjectIds.has(normalizeText(record.projectId)))
     .filter(record => (record.participationStatus || 'Active') === 'Active')
     .forEach(record => {
-      const key =
+      const raw =
         normalizeText(record.volunteerUserId) ||
         normalizeText(record.volunteerId) ||
         normalizeText(record.id);
-      if (key) {
-        uniqueVolunteerKeys.add(key);
+      if (raw) {
+        uniqueVolunteerKeys.add(idToCanonical.get(raw) || raw);
       }
     });
 
   // 2. Fallback: also check direct volunteer / user IDs attached on projects / events
   relatedProjects.forEach(p => {
     (p.volunteers || []).forEach(vId => {
-      const k = normalizeText(vId);
-      if (k) uniqueVolunteerKeys.add(k);
+      const raw = normalizeText(vId);
+      if (raw) uniqueVolunteerKeys.add(idToCanonical.get(raw) || raw);
     });
     (p.joinedUserIds || []).forEach(uId => {
-      const k = normalizeText(uId);
-      if (k) uniqueVolunteerKeys.add(k);
+      const raw = normalizeText(uId);
+      if (raw) uniqueVolunteerKeys.add(idToCanonical.get(raw) || raw);
     });
   });
 
   return uniqueVolunteerKeys.size;
 }
+

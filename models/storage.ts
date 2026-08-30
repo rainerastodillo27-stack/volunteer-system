@@ -4697,6 +4697,36 @@ export async function requestVolunteerProjectJoin(
     throw new Error('You have already completed this program.');
   }
 
+  const volunteersNeeded = Number(project.volunteersNeeded || 0);
+  if (volunteersNeeded > 0) {
+    const [joinRecords, allMatches] = await Promise.all([
+      getVolunteerProjectJoinRecords(projectId),
+      getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES),
+    ]);
+    const activeVolunteerKeys = new Set<string>();
+    (joinRecords || [])
+      .filter(record => (record.participationStatus || 'Active') === 'Active')
+      .forEach(record => {
+        const key = record.volunteerUserId || record.volunteerId || record.id;
+        if (key) activeVolunteerKeys.add(key);
+      });
+    (project.volunteers || []).forEach(vId => {
+      if (vId) activeVolunteerKeys.add(vId);
+    });
+    (project.joinedUserIds || []).forEach(uId => {
+      if (uId) activeVolunteerKeys.add(uId);
+    });
+    (allMatches || [])
+      .filter(m => m.projectId === projectId && m.status === 'Matched')
+      .forEach(m => {
+        if (m.volunteerId) activeVolunteerKeys.add(m.volunteerId);
+      });
+
+    if (activeVolunteerKeys.size >= volunteersNeeded) {
+      throw new Error('This event has reached its maximum volunteer capacity and is already full.');
+    }
+  }
+
   const requestedMatch: VolunteerProjectMatch = {
     id: existingMatch?.id || `match-${Date.now()}`,
     volunteerId: volunteer.id,
@@ -5481,18 +5511,30 @@ async function validateVolunteerReportEligibility(input: {
     return;
   }
 
-  const volunteer = await getVolunteerByUserIdWithFallback(input.submitterUserId);
+  const volunteers = (await getStorageItemFast<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS)) || [];
+  const volunteer = volunteers.find(v => v.userId === input.submitterUserId || v.id === input.submitterUserId);
   if (!volunteer) {
-    throw new Error('Volunteer profile not found. You must complete your volunteer profile first.');
+    // Fallback if not found in fast storage
+    const fetched = await getVolunteerByUserIdWithFallback(input.submitterUserId);
+    if (!fetched) {
+      throw new Error('Volunteer profile not found. You must complete your volunteer profile first.');
+    }
   }
 
-  const timeLogs = await getVolunteerTimeLogsWithFallback(volunteer.id);
+  const volunteerId = volunteer?.id || input.submitterUserId;
+  const timeLogs = (await getStorageItemFast<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS)) || [];
   const hasTimedIn = timeLogs.some(
-    log => log.projectId === input.projectId && Boolean(log.timeIn?.trim())
+    log => log.projectId === input.projectId && (log.volunteerId === volunteerId || log.volunteerId === input.submitterUserId) && Boolean(log.timeIn?.trim())
   );
 
   if (!hasTimedIn) {
-    throw new Error('You must time in to this event before submitting a report.');
+    const fetchedLogs = await getVolunteerTimeLogsWithFallback(volunteerId);
+    const hasFetchedTimeIn = fetchedLogs.some(
+      log => log.projectId === input.projectId && Boolean(log.timeIn?.trim())
+    );
+    if (!hasFetchedTimeIn) {
+      throw new Error('You must time in to this event before submitting a report.');
+    }
   }
 }
 
@@ -5556,35 +5598,6 @@ export async function submitImpactHubReport(input: {
     createdAt: new Date().toISOString(),
     status: 'Submitted',
   };
-
-  try {
-    const payload = await requestApiJson<{ report?: PartnerReport }>('/reports', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(report),
-    });
-    if (payload.report) {
-      return payload.report;
-    }
-  } catch (error: any) {
-    const message = String(error?.message || '');
-    // Fall back to local storage when the backend endpoint is missing (404)
-    // or when a volunteer time-in sync lag causes the server check to fail (400).
-    // The frontend already validated the time-in locally, so we trust it and save
-    // locally so the report is never silently lost due to a transient sync issue.
-    const is404 = message.includes('404');
-    const isTimeInSyncError =
-      message.includes('400') &&
-      (message.toLowerCase().includes('time') ||
-        message.toLowerCase().includes('attendance') ||
-        message.toLowerCase().includes('confirm'));
-    const isNetworkFallback = isExpectedRemoteStorageError(error) || isAbortLikeError(error);
-    if (!is404 && !isTimeInSyncError && !isNetworkFallback) {
-      throw error;
-    }
-  }
 
   await savePartnerReport(report);
   return report;
