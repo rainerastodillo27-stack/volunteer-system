@@ -680,16 +680,16 @@ async function notifyVolunteerAboutProjectMatchDecision(
 export async function notifyVolunteerAboutTaskUnassignment(params: {
   event: Pick<Project, 'id' | 'title'>;
   task: Pick<ProjectInternalTask, 'id' | 'title'>;
-  volunteer: Pick<Volunteer, 'userId' | 'name'>;
+  volunteer: Pick<Volunteer, 'userId' | 'name'> | { id?: string; userId?: string; name?: string };
   actorUserId?: string;
 }): Promise<void> {
-  const recipientId = params.volunteer.userId;
+  const recipientId = params.volunteer.userId || (params.volunteer as any).id;
   if (!recipientId) {
     return;
   }
 
   const adminUser = await getPrimaryAdminUser();
-  const senderId = params.actorUserId || adminUser?.id;
+  const senderId = params.actorUserId || adminUser?.id || 'admin-system';
   if (!senderId || senderId === recipientId) {
     return;
   }
@@ -704,17 +704,17 @@ export async function notifyVolunteerAboutTaskUnassignment(params: {
 export async function notifyVolunteerAboutTaskUpdate(params: {
   event: Pick<Project, 'id' | 'title'>;
   task: Pick<ProjectInternalTask, 'id' | 'title' | 'status'>;
-  volunteer: Pick<Volunteer, 'userId' | 'name'>;
+  volunteer: Pick<Volunteer, 'userId' | 'name'> | { id?: string; userId?: string; name?: string };
   actorUserId?: string;
   action: 'assigned' | 'updated';
 }): Promise<void> {
-  const recipientId = params.volunteer.userId;
+  const recipientId = params.volunteer.userId || (params.volunteer as any).id;
   if (!recipientId) {
     return;
   }
 
   const adminUser = await getPrimaryAdminUser();
-  const senderId = params.actorUserId || adminUser?.id;
+  const senderId = params.actorUserId || adminUser?.id || 'admin-system';
   if (!senderId || senderId === recipientId) {
     return;
   }

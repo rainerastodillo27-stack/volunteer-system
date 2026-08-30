@@ -712,6 +712,8 @@ type ProjectVolunteerEntry = {
 
   id: string;
 
+  userId?: string;
+
   name: string;
 
   email: string;
@@ -8957,6 +8959,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         return {
 
           id: volunteer?.id || volunteerId,
+
+          userId: volunteer?.userId || undefined,
 
           name: resolvedJoinRecord?.volunteerName || volunteer?.name || 'Volunteer',
 
@@ -20306,7 +20310,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
             const allAssignedIds = new Set(taskCards.flatMap(t => getTaskAssignedVolunteerIds(t, volunteers)));
 
-            const unassignedVolunteers = assignableVolunteers.filter(v => !allAssignedIds.has(v.id));
+            // Check both v.id and v.userId so dual-ID volunteers (vol-... / user-...) are correctly detected as assigned
+            const unassignedVolunteers = assignableVolunteers.filter(v =>
+              !allAssignedIds.has(v.id) && !allAssignedIds.has(v.userId ?? '')
+            );
 
             
 

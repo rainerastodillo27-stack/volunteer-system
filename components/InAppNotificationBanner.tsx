@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../contexts/AuthContext';
 import {
   getMessagesForUser,
+  getVolunteerByUserId,
   markMessageAsRead,
   subscribeToMessages,
   subscribeToStorageChanges,
@@ -35,6 +36,7 @@ export default function InAppNotificationBanner() {
   const { user } = useAuth();
   const insets = useSafeAreaInsets();
 
+  const [volunteerProfileId, setVolunteerProfileId] = useState<string | null>(null);
   const [activeNotification, setActiveNotification] = useState<ActiveBannerNotification | null>(null);
   const seenMessageIdsRef = useRef<Set<string>>(new Set());
   const initialLoadDoneRef = useRef(false);
@@ -42,6 +44,21 @@ export default function InAppNotificationBanner() {
 
   const translateY = useRef(new Animated.Value(-140)).current;
   const opacity = useRef(new Animated.Value(0)).current;
+
+  // Resolve volunteer profile ID for the logged in user
+  useEffect(() => {
+    if (!user?.id) {
+      setVolunteerProfileId(null);
+      return;
+    }
+    getVolunteerByUserId(user.id)
+      .then(vol => {
+        if (vol?.id) {
+          setVolunteerProfileId(vol.id);
+        }
+      })
+      .catch(() => {});
+  }, [user?.id]);
 
   const dismissBanner = useCallback(() => {
     if (hideTimerRef.current) {
@@ -110,14 +127,18 @@ export default function InAppNotificationBanner() {
   const handleIncomingMessage = useCallback(
     (message: Message) => {
       if (!user?.id) return;
-      if (message.recipientId !== user.id) return;
+      const isForCurrentUser =
+        message.recipientId === user.id ||
+        (volunteerProfileId && message.recipientId === volunteerProfileId);
+
+      if (!isForCurrentUser) return;
       if (seenMessageIdsRef.current.has(message.id)) return;
 
       seenMessageIdsRef.current.add(message.id);
 
-      // Only display banner if the message is fresh (within last 2 minutes or unread)
+      // Only display banner if the message is fresh (within last 3 minutes or unread)
       const messageAgeMs = Date.now() - new Date(message.timestamp).getTime();
-      if (messageAgeMs > 2 * 60 * 1000 && message.read) {
+      if (messageAgeMs > 3 * 60 * 1000 && message.read) {
         return;
       }
 
@@ -174,15 +195,20 @@ export default function InAppNotificationBanner() {
         timestamp: message.timestamp,
       });
     },
-    [showNotificationBanner, user?.id]
+    [showNotificationBanner, user?.id, volunteerProfileId]
   );
 
   const checkRecentMessages = useCallback(async () => {
     if (!user?.id) return;
     try {
-      const messages = await getMessagesForUser(user.id);
+      const [userMessages, volMessages] = await Promise.all([
+        getMessagesForUser(user.id).catch(() => []),
+        volunteerProfileId ? getMessagesForUser(volunteerProfileId).catch(() => []) : Promise.resolve([]),
+      ]);
+      const messages = [...userMessages, ...volMessages];
+
       if (!initialLoadDoneRef.current) {
-        // Record all existing message IDs initially so old ones don't trigger banners
+        // Record all existing message IDs initially so old historical ones don't trigger banners on boot
         messages.forEach(m => seenMessageIdsRef.current.add(m.id));
         initialLoadDoneRef.current = true;
         return;
@@ -197,7 +223,7 @@ export default function InAppNotificationBanner() {
     } catch (err) {
       console.warn('[InAppNotificationBanner] Error checking messages:', err);
     }
-  }, [handleIncomingMessage, user?.id]);
+  }, [handleIncomingMessage, user?.id, volunteerProfileId]);
 
   useEffect(() => {
     if (!user?.id) {
@@ -221,14 +247,32 @@ export default function InAppNotificationBanner() {
       void checkRecentMessages();
     });
 
-    // 3. Periodic polling fallback every 4 seconds
+    // 3. Web cross-tab synchronization listener
+    let windowStorageListener: ((e: StorageEvent) => void) | null = null;
+    if (typeof window !== 'undefined' && window.addEventListener) {
+      windowStorageListener = (e: StorageEvent) => {
+        if (
+          e.key === 'volcre:messages:updatedAt' ||
+          e.key === 'messages' ||
+          (e.key && e.key.includes('messages'))
+        ) {
+          void checkRecentMessages();
+        }
+      };
+      window.addEventListener('storage', windowStorageListener);
+    }
+
+    // 4. Periodic polling fallback every 3 seconds
     const interval = setInterval(() => {
       void checkRecentMessages();
-    }, 4000);
+    }, 3000);
 
     return () => {
       unsubscribeWs();
       unsubscribeStorage();
+      if (windowStorageListener && typeof window !== 'undefined' && window.removeEventListener) {
+        window.removeEventListener('storage', windowStorageListener);
+      }
       clearInterval(interval);
       if (hideTimerRef.current) {
         clearTimeout(hideTimerRef.current);

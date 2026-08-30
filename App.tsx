@@ -136,10 +136,12 @@ export default function App() {
     <SafeAreaProvider>
       <AuthProvider>
         <ErrorBoundary>
-          <NavigationContainer ref={navigationRef}>
-            <StackNavigator />
+          <View style={{ flex: 1 }}>
+            <NavigationContainer ref={navigationRef}>
+              <StackNavigator />
+            </NavigationContainer>
             <InAppNotificationBanner />
-          </NavigationContainer>
+          </View>
         </ErrorBoundary>
       </AuthProvider>
     </SafeAreaProvider>
