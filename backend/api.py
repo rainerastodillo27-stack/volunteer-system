@@ -954,6 +954,12 @@ def ensure_message_storage() -> None:
                 "create index if not exists messages_recipient_id_idx on public.messages (recipient_id)"
             )
             cursor.execute(
+                "create index if not exists messages_pair_idx on public.messages (sender_id, recipient_id, timestamp asc)"
+            )
+            cursor.execute(
+                "create index if not exists messages_pair_rev_idx on public.messages (recipient_id, sender_id, timestamp asc)"
+            )
+            cursor.execute(
                 "create index if not exists messages_timestamp_idx on public.messages (timestamp desc)"
             )
             cursor.execute(
@@ -1038,18 +1044,58 @@ def _parse_message_attachments(value: Any) -> list[Any]:
     return []
 
 
+def _sanitize_proposal_content_payload(content: Any) -> str:
+    raw_content = str(content or "")
+    if not raw_content.startswith(_PROPOSAL_CARD_PREFIX):
+        return raw_content
+    try:
+        data = json.loads(raw_content[len(_PROPOSAL_CARD_PREFIX):])
+        if not isinstance(data, dict):
+            return raw_content
+        
+        modified = False
+        if "attachments" in data and isinstance(data["attachments"], list):
+            sanitized_att = []
+            for att in data["attachments"]:
+                if isinstance(att, dict) and isinstance(att.get("url"), str) and att["url"].startswith("data:"):
+                    sanitized_att.append({**att, "url": "[IMAGE_ATTACHMENT]"})
+                    modified = True
+                else:
+                    sanitized_att.append(att)
+            data["attachments"] = sanitized_att
+
+        details = data.get("proposalDetails")
+        if isinstance(details, dict) and "attachments" in details and isinstance(details["attachments"], list):
+            sanitized_att = []
+            for att in details["attachments"]:
+                if isinstance(att, dict) and isinstance(att.get("url"), str) and att["url"].startswith("data:"):
+                    sanitized_att.append({**att, "url": "[IMAGE_ATTACHMENT]"})
+                    modified = True
+                else:
+                    sanitized_att.append(att)
+            details["attachments"] = sanitized_att
+            data["proposalDetails"] = details
+
+        if modified:
+            return f"{_PROPOSAL_CARD_PREFIX}{json.dumps(data)}"
+        return raw_content
+    except Exception:
+        return raw_content
+
+
 def serialize_message_row(row: Any) -> dict[str, Any]:
     if row is None:
         raise HTTPException(status_code=404, detail="Message not found.")
 
     attachments = _parse_message_attachments(row["attachments"])
+    content = _sanitize_proposal_content_payload(row["content"])
 
     return {
         "id": row.get("messages_id") or row.get("id"),
         "senderId": row["sender_id"],
         "recipientId": row["recipient_id"],
         "projectId": row["project_id"],
-        "content": row["content"],
+        "content": content,
         "timestamp": row["timestamp"].isoformat() if hasattr(row["timestamp"], "isoformat") else row["timestamp"],
         "read": bool(row["read"]),
         "attachments": attachments,
@@ -1125,7 +1171,7 @@ def _get_special_storage_collection(connection: Any, key: str) -> list[dict[str,
                 })
         return tracks
 
-    ensure_message_storage()
+    ensure_message_storage_once()
     ensure_project_group_message_storage()
     from psycopg.rows import dict_row
 
@@ -1167,7 +1213,7 @@ def _get_special_storage_collection(connection: Any, key: str) -> list[dict[str,
 
 def _replace_special_storage_collection(connection: Any, key: str, value: Any) -> None:
     items = _validate_storage_items(key, value)
-    ensure_message_storage()
+    ensure_message_storage_once()
     ensure_project_group_message_storage()
 
     with connection.cursor() as cursor:
@@ -1177,7 +1223,7 @@ def _replace_special_storage_collection(connection: Any, key: str, value: Any) -
                 cursor.execute(
                     """
                     INSERT INTO public.messages (
-                      id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                      messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                     )
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     """,
@@ -1236,7 +1282,7 @@ def _replace_special_storage_collection(connection: Any, key: str, value: Any) -
 
 
 def _clear_special_storage_collection(connection: Any, key: str) -> None:
-    ensure_message_storage()
+    ensure_message_storage_once()
     ensure_project_group_message_storage()
     with connection.cursor() as cursor:
         if key == "messages":
@@ -3527,7 +3573,7 @@ async def approve_user(user_id: str, payload: UserApprovalPayload, admin_id: str
                 cursor.execute(
                     """
                     insert into public.messages (
-                      id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                      messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                     )
                     values (%s, %s, %s, %s, %s, %s, %s, %s)
                     """,
@@ -4228,7 +4274,7 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
                             cursor.execute(
                                 """
                                 INSERT INTO public.messages (
-                                  id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                                  messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                                 )
                                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                                 """,
@@ -4322,7 +4368,7 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
                 cursor.execute(
                     """
                     INSERT INTO public.messages (
-                      id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                      messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                     )
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     """,
@@ -4382,7 +4428,7 @@ async def review_partner_project_application(
     broadcast_keys = ["partnerProjectApplications"]
     generated_project: dict[str, Any] | None = None
     review_message_data: dict[str, Any] | None = None
-    ensure_message_storage()
+    ensure_message_storage_once()
     with get_connection() as connection:
         application = _postgres_get_hot_item_by_id(connection, "partnerProjectApplications", application_id)
         if application is None:
@@ -4484,6 +4530,10 @@ async def review_partner_project_application(
                     for attachment in (proposal_details.get("attachments") or [])
                 ),
                 "parentProjectId": parent_project_id or None,
+                # Keep the explicit program link in sync with the parent link so
+                # list, analytics, and program-detail views classify the project
+                # consistently even when they do not traverse parentProjectId.
+                "program_id": parent_project_id or None,
                 "programModule": requested_program_module,
                 "statusMode": "System",
                 "manualStatus": None,
@@ -4556,17 +4606,17 @@ async def review_partner_project_application(
                 cursor.execute(
                     """
                     insert into public.messages (
-                      id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                      messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                     )
                     values (%s, %s, %s, %s, %s, %s, %s, %s)
-                    on conflict (id) do nothing
+                    on conflict (messages_id) do nothing
                     """,
                     (
                         message_id,
                         message_sender_id,
                         message_recipient_id,
                         None,
-                        f"___PROPOSAL_CARD___:{json.dumps(returned_card)}",
+                        _sanitize_proposal_content_payload(f"___PROPOSAL_CARD___:{json.dumps(returned_card)}"),
                         reviewed_at,
                         False,
                         "[]",
@@ -4908,63 +4958,58 @@ def get_unread_messages(user_id: str, limit: int = 100) -> dict[str, list[dict[s
 
 @app.get("/messages/conversation")
 # API endpoint that returns the direct-message history between two users.
-def get_conversation(user1: str, user2: str, limit: int = 200) -> dict[str, list[dict[str, Any]]]:
+def get_conversation(user1: str, user2: str, limit: int = 500) -> dict[str, list[dict[str, Any]]]:
     import time
     request_start = time.time()
-    ensure_message_storage()
+    ensure_message_storage_once()
     from psycopg.rows import dict_row
 
     with get_connection() as connection:
         _assert_direct_message_access(connection, user1, user2)
         canonical_admin_id = _resolve_admin_message_user_id(connection)
+        
+        partner_user_id = ""
+        if user1 == canonical_admin_id:
+            partner_user_id = user2
+        elif user2 == canonical_admin_id:
+            partner_user_id = user1
+
+        limit_val = max(1, min(limit, 10000))
         query_start = time.time()
         with connection.cursor(row_factory=dict_row) as cursor:
-            # Limit must be an integer literal, not parameterized
-            limit = max(1, min(limit, 10000))  # Clamp to reasonable range
-            cursor.execute(
-                f"""
-                select messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
-                from public.messages
-                where (sender_id = %s and recipient_id = %s)
-                   or (sender_id = %s and recipient_id = %s)
-                order by timestamp asc, messages_id asc
-                limit {limit}
-                """,
-                (user1, user2, user2, user1),
-            )
-            rows = cursor.fetchall()
-
-            # Older review cards could have been written with an admin ID that
-            # no longer exists in users. Surface those cards in the current
-            # admin conversation and normalize their sender for the client.
-            partner_user_id = ""
-            if user1 == canonical_admin_id:
-                partner_user_id = user2
-            elif user2 == canonical_admin_id:
-                partner_user_id = user1
-
             if partner_user_id:
                 cursor.execute(
-                    f"""
-                    select messages.messages_id, messages.sender_id, messages.recipient_id,
-                           messages.project_id, messages.content, messages.timestamp,
-                           messages.read, messages.attachments
-                    from public.messages as messages
-                    left join users as sender on sender.users_id = messages.sender_id
-                    where messages.recipient_id = %s
-                      and messages.content like '___PROPOSAL_CARD___:%%'
-                      and sender.users_id is null
-                    order by messages.timestamp asc, messages.messages_id asc
-                    limit {limit}
+                    """
+                    select messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                    from public.messages
+                    where (sender_id = %s and recipient_id = %s)
+                       or (sender_id = %s and recipient_id = %s)
+                       or (recipient_id = %s and content like '___PROPOSAL_CARD___:%%')
+                       or (sender_id = %s and content like '___PROPOSAL_CARD___:%%')
+                    order by timestamp asc, messages_id asc
+                    limit %s
                     """,
-                    (partner_user_id,),
+                    (user1, user2, user2, user1, partner_user_id, partner_user_id, limit_val),
                 )
-                legacy_rows = cursor.fetchall()
-                for legacy_row in legacy_rows:
-                    legacy_row["sender_id"] = canonical_admin_id
-                rows.extend(legacy_rows)
-                rows.sort(key=lambda row: (row["timestamp"], row["messages_id"]))
-                rows = rows[:limit]
+            else:
+                cursor.execute(
+                    """
+                    select messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                    from public.messages
+                    where (sender_id = %s and recipient_id = %s)
+                       or (sender_id = %s and recipient_id = %s)
+                    order by timestamp asc, messages_id asc
+                    limit %s
+                    """,
+                    (user1, user2, user2, user1, limit_val),
+                )
+            rows = cursor.fetchall()
+            if canonical_admin_id and partner_user_id:
+                for row in rows:
+                    if row["recipient_id"] == partner_user_id and row["sender_id"] != partner_user_id:
+                        row["sender_id"] = canonical_admin_id
+                    elif row["sender_id"] == partner_user_id and row["recipient_id"] != partner_user_id:
+                        row["recipient_id"] = canonical_admin_id
         query_time = time.time() - query_start
         total_time = time.time() - request_start
         if total_time > 2.0:
@@ -5010,7 +5055,7 @@ def get_project_group_messages(project_id: str, user_id: str, limit: int = 200) 
 @app.post("/messages")
 # API endpoint that creates a direct message.
 async def create_message(payload: MessagePayload) -> dict[str, Any]:
-    ensure_message_storage()
+    ensure_message_storage_once()
     attachments = payload.attachments or []
     from psycopg.rows import dict_row
 
@@ -5019,7 +5064,7 @@ async def create_message(payload: MessagePayload) -> dict[str, Any]:
         with connection.cursor(row_factory=dict_row) as cursor:
             # Check if message already exists
             cursor.execute(
-                "SELECT id as messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments FROM public.messages WHERE id = %s",
+                "SELECT messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments FROM public.messages WHERE messages_id = %s",
                 (payload.id,),
             )
             row = cursor.fetchone()
@@ -5029,10 +5074,10 @@ async def create_message(payload: MessagePayload) -> dict[str, Any]:
                 cursor.execute(
                     """
                     INSERT INTO public.messages (
-                      id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                      messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                     )
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    RETURNING id as messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                    RETURNING messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                     """,
                     (
                         payload.id,
@@ -5197,7 +5242,7 @@ async def delete_project_group_messages(project_id: str) -> dict[str, Any]:
 @app.patch("/messages/{message_id}/read")
 # API endpoint that marks one direct message as read.
 async def mark_message_read(message_id: str) -> dict[str, Any]:
-    ensure_message_storage()
+    ensure_message_storage_once()
     from psycopg.rows import dict_row
 
     with get_connection() as connection:
@@ -5206,8 +5251,8 @@ async def mark_message_read(message_id: str) -> dict[str, Any]:
                 """
                 update public.messages
                 set read = true
-                where id = %s
-                returning id as messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                where messages_id = %s
+                returning messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                 """,
                 (message_id,),
             )

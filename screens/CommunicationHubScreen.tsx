@@ -256,40 +256,52 @@ type ProposalChatItem = {
 
 type ChatMessage = Message | ProjectGroupMessage;
 
-function getProposalReviewCardKey(message: ChatMessage): string | null {
-  if (!message.content?.startsWith(PROPOSAL_PREFIX)) {
+const parsedProposalCardCache = new Map<string, any>();
+
+function parseProposalCardContent(content?: string): any | null {
+  if (!content || !content.startsWith(PROPOSAL_PREFIX)) {
     return null;
   }
-
+  const cached = parsedProposalCardCache.get(content);
+  if (cached !== undefined) {
+    return cached;
+  }
   try {
-    const data = JSON.parse(message.content.replace(PROPOSAL_PREFIX, ''));
-    const applicationId = String(data.applicationId || data.id || data.application?.id || '').trim();
-    const revisionNumber = Number(data.revisionNumber || data.application?.revisionNumber || 0);
-    const status = String(data.status || '').trim();
-    const messageId = message.id || '';
-    
-    if (!applicationId) {
-      return null;
-    }
-
-    // Create unique keys for each card type to preserve conversation history:
-    // - Submission cards (from partner): msg-proposal-{timestamp}
-    // - Review cards (from admin): review-card-{status}-{appId}-{timestamp}
-    // This ensures we keep both the original submission AND the admin's review response
-    
-    const isReviewCard = messageId.startsWith('review-card-');
-    const cardType = isReviewCard ? 'review' : 'submission';
-    
-    // Key format: "applicationId:revisionNumber:cardType:status"
-    // This creates separate cards for:
-    // 1. Partner submits (rev 0, submission, Pending)
-    // 2. Admin rejects (rev 0, review, Rejected)
-    // 3. Partner resubmits (rev 1, submission, Pending)
-    // 4. Admin approves (rev 1, review, Approved)
-    return [applicationId, revisionNumber, cardType, status].join(':');
-  } catch (_) {
+    const raw = content.slice(PROPOSAL_PREFIX.length);
+    const parsed = JSON.parse(raw);
+    parsedProposalCardCache.set(content, parsed);
+    return parsed;
+  } catch {
+    parsedProposalCardCache.set(content, null);
     return null;
   }
+}
+
+function getProposalReviewCardKey(message: ChatMessage): string | null {
+  const data = parseProposalCardContent(message.content);
+  if (!data) {
+    return null;
+  }
+
+  const applicationId = String(data.applicationId || data.id || data.application?.id || '').trim();
+  const revisionNumber = Number(data.revisionNumber || data.application?.revisionNumber || 0);
+  const status = String(data.status || '').trim();
+  const messageId = message.id || '';
+  
+  if (!applicationId) {
+    return null;
+  }
+
+  // Create unique keys for each card type to preserve conversation history:
+  // - Submission cards (from partner): msg-proposal-{timestamp}
+  // - Review cards (from admin): review-card-{status}-{appId}-{timestamp}
+  // This ensures we keep both the original submission AND the admin's review response
+  
+  const isReviewCard = messageId.startsWith('review-card-');
+  const cardType = isReviewCard ? 'review' : 'submission';
+  
+  // Key format: "applicationId:revisionNumber:cardType:status"
+  return [applicationId, revisionNumber, cardType, status].join(':');
 }
 
 function dedupeProposalReviewCards(messagesToDedupe: ChatMessage[]): ChatMessage[] {
@@ -380,19 +392,19 @@ function getMessagePreviewText(message?: Message): string {
     return message.content;
   }
 
-  try {
-    const application = JSON.parse(message.content.replace(PROPOSAL_PREFIX, ''));
-    const proposalDetails = application.proposalDetails || {};
-    const title =
-      proposalDetails.proposedTitle ||
-      application.proposedTitle ||
-      proposalDetails.targetProjectTitle ||
-      'Project proposal';
-    const status = application.status || 'Pending';
-    return `${title} - Proposal ${status}`;
-  } catch {
+  const application = parseProposalCardContent(message.content);
+  if (!application) {
     return 'Project proposal';
   }
+
+  const proposalDetails = application.proposalDetails || {};
+  const title =
+    proposalDetails.proposedTitle ||
+    application.proposedTitle ||
+    proposalDetails.targetProjectTitle ||
+    'Project proposal';
+  const status = application.status || 'Pending';
+  return `${title} - Proposal ${status}`;
 }
 
 function upsertChatMessage(current: ChatMessage[], incoming: ChatMessage): ChatMessage[] {
@@ -658,6 +670,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   const [activeProposalCardData, setActiveProposalCardData] = useState<any>(null);
 
+  const [isReviewing, setIsReviewing] = useState(false);
+
   const [rejectionNotes, setRejectionNotes] = useState('');
 
   const [showRejectionModal, setShowRejectionModal] = useState(false);
@@ -682,6 +696,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   const selectedProjectChatRef = useRef<ProjectChatItem | null>(null);
 
   const directMessagesRef = useRef<Message[]>([]);
+
+  const allUsersRef = useRef<User[]>([]);
 
 
 
@@ -774,18 +790,36 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       setDirectMessages(mergedMessages);
 
       setConversations(current => current
-        .map(conversation => {
-          if (conversation.user.id !== otherUserId) return conversation;
+        .reduce<ConversationItem[]>((nextConversations, conversation) => {
+          if (conversation.user.id !== otherUserId) {
+            nextConversations.push(conversation);
+            return nextConversations;
+          }
+
           const isNewUnreadMessage =
             conversation.lastMessage?.id !== incomingMessage.id &&
             incomingMessage.recipientId === messageUserId &&
             !incomingMessage.read;
-          return {
+          nextConversations.push({
             ...conversation,
             lastMessage: incomingMessage,
             unreadCount: conversation.unreadCount + (isNewUnreadMessage ? 1 : 0),
-          };
-        })
+          });
+          return nextConversations;
+        }, [])
+        .concat(current.some(conversation => conversation.user.id === otherUserId)
+          ? []
+          : (() => {
+              const otherUser = allUsersRef.current.find(candidate => candidate.id === otherUserId);
+              if (!otherUser) return [];
+              return [{
+                user: otherUser,
+                lastMessage: incomingMessage,
+                unreadCount:
+                  incomingMessage.recipientId === messageUserId && !incomingMessage.read ? 1 : 0,
+              }];
+            })()
+        )
         .sort((left, right) =>
           new Date(right.lastMessage?.timestamp || 0).getTime() -
           new Date(left.lastMessage?.timestamp || 0).getTime()
@@ -1199,7 +1233,6 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         new Date(b.lastMessage?.timestamp || 0).getTime() - new Date(a.lastMessage?.timestamp || 0).getTime()
 
       ));
-
       setLoading(false);
 
     } catch (e) {
@@ -1215,61 +1248,109 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
 
   // Firestore real-time listener; tears down automatically when conversation changes.
+
   useEffect(() => {
 
-    if (!user || !messageUserId) return;
+    if (!user || !messageUserId) return undefined;
+
+
 
     if (selectedUser) {
 
       let cancelled = false;
+
       let refreshingStoredMessages = false;
 
-      setMessages(getDirectMessagesBetween(directMessagesRef.current, messageUserId, selectedUser.id));
 
-      const refreshStoredDirectMessages = async () => {
+
+      // 1. Immediately display any messages we already have in memory / directMessagesRef:
+
+      const initialUserMessages = getDirectMessagesBetween(directMessagesRef.current, messageUserId, selectedUser.id);
+
+      setMessages(initialUserMessages);
+
+
+
+      const refreshStoredDirectMessages = async (force = false) => {
+
         if (refreshingStoredMessages) return;
+
         refreshingStoredMessages = true;
+
         try {
-          invalidateMessageCache(messageUserId, selectedUser.id);
-          const storedMessages = await getConversation(messageUserId, selectedUser.id);
-          
-          const proposalCards = storedMessages.filter(m => m.content?.startsWith(PROPOSAL_PREFIX));
-          if (proposalCards.length > 0) {
-            console.log(`📬 Received ${proposalCards.length} proposal card(s) from backend for conversation ${messageUserId} ↔ ${selectedUser.id}`);
+
+          if (force) {
+
+            invalidateMessageCache(messageUserId, selectedUser.id);
+
           }
+
+          const storedMessages = await getConversation(messageUserId, selectedUser.id);
+
           
+
+          const proposalCards = storedMessages.filter(m => m.content?.startsWith(PROPOSAL_PREFIX));
+
+          if (proposalCards.length > 0) {
+
+            console.log(`📬 Received ${proposalCards.length} proposal card(s) from backend for conversation ${messageUserId} ↔ ${selectedUser.id}`);
+
+          }
+
+          
+
           if (cancelled) return;
 
-          const existingChatOnlyMessages = directMessagesRef.current.filter(
-            message => !message.content?.startsWith(PROPOSAL_PREFIX)
-          );
-          const mergedDirectMessages = mergeChatMessageLists(existingChatOnlyMessages, storedMessages);
+          const mergedDirectMessages = mergeChatMessageLists(directMessagesRef.current, storedMessages);
           directMessagesRef.current = mergedDirectMessages;
           setDirectMessages(mergedDirectMessages);
           setMessages(getDirectMessagesBetween(mergedDirectMessages, messageUserId, selectedUser.id));
+
         } catch (error) {
+
           if (!cancelled) {
+
             console.warn('Failed to load stored direct messages:', error);
+
           }
+
         } finally {
+
           refreshingStoredMessages = false;
+
         }
+
       };
 
-      void refreshStoredDirectMessages();
+
+
+      void refreshStoredDirectMessages(false);
+
       const backendMessagePoll = setInterval(() => {
-        void refreshStoredDirectMessages();
+
+        void refreshStoredDirectMessages(false);
+
       }, DIRECT_BACKEND_MESSAGE_POLL_MS);
+
+
 
       const unsubscribe = subscribeToDirectMessages(messageUserId, selectedUser.id, msgs => {
 
         if (!cancelled) {
+
           const chatOnlyMessages = msgs.filter(message => !message.content?.startsWith(PROPOSAL_PREFIX));
+
           const mergedDirectMessages = mergeChatMessageLists(directMessagesRef.current, chatOnlyMessages);
+
           directMessagesRef.current = mergedDirectMessages;
+
           setDirectMessages(mergedDirectMessages);
-          setMessages(current => mergeChatMessageLists(current as Message[], chatOnlyMessages));
+
+          setMessages(getDirectMessagesBetween(mergedDirectMessages, messageUserId, selectedUser.id));
+
         }
+
+
 
         const unread = msgs.filter(message => !message.read && message.recipientId === messageUserId);
 
@@ -1281,13 +1362,21 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       });
 
+
+
       return () => {
+
         cancelled = true;
+
         clearInterval(backendMessagePoll);
+
         unsubscribe();
+
       };
 
     }
+
+
 
     if (selectedProjectChat) {
 
@@ -1300,6 +1389,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       });
 
     }
+
+
 
     setMessages([]);
 
@@ -1315,11 +1406,19 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   }, [selectedUser]);
 
+
+
   useEffect(() => {
 
     directMessagesRef.current = directMessages;
 
   }, [directMessages]);
+
+  useEffect(() => {
+
+    allUsersRef.current = allUsers;
+
+  }, [allUsers]);
 
 
 
@@ -1340,7 +1439,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     void loadData();
 
     // Background refreshes skip the heavy message fetches — Firestore subscriptions handle message freshness
-    return subscribeToStorageChanges(['users', 'projects', 'partnerProjectApplications', 'messages', 'projectGroupMessages'], () => loadData(true));
+    return subscribeToStorageChanges(
+      ['users', 'projects', 'partnerProjectApplications', 'messages', 'projectGroupMessages'],
+      event => loadData(!event.keys.includes('messages'))
+    );
 
   }, [loadData]));
 
@@ -2177,6 +2279,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       return;
     }
 
+    setIsReviewing(true);
+
     const previousProposalChats = proposalChats;
 
     const previousSelectedProposalApplication = selectedProposalApplication;
@@ -2284,6 +2388,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       setView(isWide ? 'detail' : 'sidebar');
 
       Alert.alert('Error', 'Failed to complete review.');
+
+    } finally {
+
+      setIsReviewing(false);
 
     }
 
@@ -3531,16 +3639,25 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                 <View style={styles.adminActionRow}>
 
-                  <TouchableOpacity style={[styles.actionBtn, styles.approveBtn]} onPress={() => handleReview(app, 'Approved')}>
-
-                    <Text style={styles.actionBtnText}>Approve Proposal</Text>
-
+                  <TouchableOpacity
+                    style={[styles.actionBtn, styles.approveBtn, isReviewing && { opacity: 0.7 }]}
+                    onPress={() => handleReview(app, 'Approved')}
+                    disabled={isReviewing}
+                  >
+                    {isReviewing ? (
+                      <ActivityIndicator size="small" color="#fff" style={{ marginRight: 6 }} />
+                    ) : null}
+                    <Text style={styles.actionBtnText}>
+                      {isReviewing ? 'Approving...' : 'Approve Proposal'}
+                    </Text>
                   </TouchableOpacity>
 
-                  <TouchableOpacity style={[styles.actionBtn, styles.rejectBtn]} onPress={() => handleRejectWithNotes(app)}>
-
+                  <TouchableOpacity
+                    style={[styles.actionBtn, styles.rejectBtn, isReviewing && { opacity: 0.5 }]}
+                    onPress={() => handleRejectWithNotes(app)}
+                    disabled={isReviewing}
+                  >
                     <Text style={[styles.actionBtnText, { color: '#ef4444' }]}>Reject</Text>
-
                   </TouchableOpacity>
 
                 </View>
@@ -3849,14 +3966,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
               if (isProposal) {
 
-                let application: any = {};
-
-                try {
-
-                  application = JSON.parse(m.content.replace(PROPOSAL_PREFIX, ''));
-
-                } catch (e) { return null; }
-
+                const application = parseProposalCardContent(m.content);
+                if (!application) return null;
                 
                 // Handle both nested (proposalDetails) and flat (legacy) formats
                 const proposalDetails = application.proposalDetails || {};
@@ -3881,16 +3992,12 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                 const isSubmissionCard = m.id.startsWith('msg-proposal-');
                 
                 const followsRejection = filteredMessages.slice(0, i).some(previousMessage => {
-                  if (!previousMessage.content?.startsWith(PROPOSAL_PREFIX)) return false;
-                  try {
-                    const previousApplication = JSON.parse(previousMessage.content.replace(PROPOSAL_PREFIX, ''));
-                    return (
-                      String(previousApplication.applicationId || previousApplication.id || '') === applicationId &&
-                      previousApplication.status === 'Rejected'
-                    );
-                  } catch {
-                    return false;
-                  }
+                  const previousApplication = parseProposalCardContent(previousMessage.content);
+                  if (!previousApplication) return false;
+                  return (
+                    String(previousApplication.applicationId || previousApplication.id || '') === applicationId &&
+                    previousApplication.status === 'Rejected'
+                  );
                 });
                 const proposalLabel = revisionNumber > 0 || followsRejection
                   ? `Revised Proposal${revisionNumber > 0 ? ` #${revisionNumber}` : ''}`
@@ -4415,18 +4522,39 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         const matchedApp = proposalChats.find(
           item => item.application.id === pd.applicationId || item.application.id === pd.id
         )?.application || null;
-        
+
         // Check if there's a newer revision of this proposal
-        const currentRevision = pd.revisionNumber || matchedApp?.revisionNumber || 0;
+        const cardRevision = Number(pd.revisionNumber ?? 0);
+        const liveRevision = Number(matchedApp?.revisionNumber ?? 0);
         const applicationId = pd.applicationId || pd.id || matchedApp?.id;
         const hasNewerRevision = proposalChats.some(item => {
           const app = item.application;
           const appId = app.id;
           const appProjectId = app.projectId;
           const matchesApp = appId === applicationId || appProjectId === (pd.projectId || matchedApp?.projectId);
-          const appRevision = app.revisionNumber || 0;
-          return matchesApp && appRevision > currentRevision;
+          const appRevision = Number(app.revisionNumber ?? 0);
+          return matchesApp && appRevision > cardRevision;
         });
+
+        // Check if there is a later card in the chat history for this application
+        const cardMessage = messages.find(m => m.id === pd.messageId);
+        const cardMessageIndex = cardMessage ? messages.indexOf(cardMessage) : -1;
+        const hasLaterCardInChat = cardMessageIndex >= 0 && messages.slice(cardMessageIndex + 1).some(laterMsg => {
+          if (!laterMsg.content?.startsWith(PROPOSAL_PREFIX)) return false;
+          const laterData = parseProposalCardContent(laterMsg.content);
+          if (!laterData) return false;
+          const laterAppId = laterData.applicationId || laterData.id;
+          return laterAppId === applicationId;
+        });
+
+        // This card is "stale" if its revision is behind the live app's current revision,
+        // or if there is a later proposal card in the chat history.
+        const isCardRevisionStale = liveRevision > cardRevision || hasLaterCardInChat;
+
+        // A review card (admin's response) should NEVER show Approve/Reject —
+        // only submission cards (partner-sent) from the current revision should.
+        const cardMessageId: string = pd.messageId || '';
+        const isReviewResponseCard = cardMessageId.startsWith('review-card-');
         
         // Handle both nested and flat formats
         const extractedData = {
@@ -4442,17 +4570,31 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
           programModule: proposalDetails.requestedProgramModule || pd.programModule || pd.requestedProgramModule,
         };
         
-        const pdStatus: string = pd.status || matchedApp?.status || 'Pending';
+        const cardStatus = String(pd.status || 'Pending');
+        const pdStatus: string = cardStatus;
         const pdApproved = pdStatus === 'Approved';
         const pdRejected = pdStatus === 'Rejected';
         const pdPending = pdStatus === 'Pending';
         const pdStatusColor = pdApproved ? '#166534' : pdRejected ? '#dc2626' : '#d97706';
         const pdStatusBg = pdApproved ? '#dcfce7' : pdRejected ? '#fee2e2' : '#fef9c3';
         
-        // Double-check: use matchedApp status if available (most up-to-date)
-        const actualStatus = matchedApp?.status || pdStatus;
-        const isActuallyPending = actualStatus === 'Pending' && !hasNewerRevision; // Not pending if superseded by revision
-        const canReviseProposal = user?.role === 'partner' && actualStatus === 'Rejected' && !hasNewerRevision;
+        const isCardItselfPending = cardStatus === 'Pending';
+        const isLivePending = (matchedApp?.status || 'Pending') === 'Pending';
+        const isCardAlreadyReviewed = cardStatus === 'Rejected' || cardStatus === 'Approved';
+
+        // Only show Approve/Reject if:
+        // 1. This specific card itself is currently Pending
+        // 2. The live application in backend is currently Pending
+        // 3. This card has not been superseded by a newer revision or later card in chat
+        // 4. This card is NOT an admin review response
+        const isActuallyPending =
+          isCardItselfPending &&
+          isLivePending &&
+          !isCardAlreadyReviewed &&
+          !hasNewerRevision &&
+          !isCardRevisionStale &&
+          !isReviewResponseCard;
+        const canReviseProposal = user?.role === 'partner' && (cardStatus === 'Rejected' || matchedApp?.status === 'Rejected') && !hasNewerRevision && !hasLaterCardInChat;
 
         return (
           <View style={styles.modalOverlay}>
@@ -4585,7 +4727,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                 ) : null}
 
                 {/* Superseded warning */}
-                {hasNewerRevision ? (
+                {(hasNewerRevision || hasLaterCardInChat || isCardRevisionStale) ? (
                   <View style={{ marginBottom: 12, padding: 10, backgroundColor: '#fffbeb', borderRadius: 8, borderWidth: 1, borderColor: '#fcd34d' }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
                       <MaterialIcons name="info" size={16} color="#d97706" />
@@ -4602,22 +4744,32 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
               {user?.role === 'admin' && isActuallyPending && matchedApp ? (
                 <View style={{ flexDirection: 'row', gap: 10, marginTop: 14 }}>
                   <TouchableOpacity
-                    style={[styles.actionBtn, { flex: 1, backgroundColor: '#f3f4f6' }]}
+                    style={[styles.actionBtn, { flex: 1, backgroundColor: '#f3f4f6' }, isReviewing && { opacity: 0.5 }]}
                     onPress={() => {
                       setActiveProposalCardData(null);
                       handleRejectWithNotes(matchedApp);
                     }}
+                    disabled={isReviewing}
                   >
                     <Text style={[styles.actionBtnText, { color: '#dc2626' }]}>Reject</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={[styles.actionBtn, styles.approveBtn, { flex: 2 }]}
-                    onPress={() => {
-                      setActiveProposalCardData(null);
-                      void handleReview(matchedApp, 'Approved');
+                    style={[styles.actionBtn, styles.approveBtn, { flex: 2 }, isReviewing && { opacity: 0.7 }]}
+                    onPress={async () => {
+                      try {
+                        await handleReview(matchedApp, 'Approved');
+                      } finally {
+                        setActiveProposalCardData(null);
+                      }
                     }}
+                    disabled={isReviewing}
                   >
-                    <Text style={styles.actionBtnText}>Approve Proposal</Text>
+                    {isReviewing ? (
+                      <ActivityIndicator size="small" color="#fff" style={{ marginRight: 6 }} />
+                    ) : null}
+                    <Text style={styles.actionBtnText}>
+                      {isReviewing ? 'Approving...' : 'Approve Proposal'}
+                    </Text>
                   </TouchableOpacity>
                 </View>
               ) : canReviseProposal ? (
