@@ -4,7 +4,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ScreenBrandHeader from '../components/ScreenBrandHeader';
 import { useAuth } from '../contexts/AuthContext';
-import { getMessagesForUser, subscribeToMessages, getAllUsers, subscribeToStorageChanges, markMessageAsRead } from '../models/storage';
+import { getUnreadMessagesForUser, subscribeToMessages, getAllUsers, subscribeToStorageChanges, markMessageAsRead } from '../models/storage';
 
 export type PartnerTabParamList = {
   Dashboard: { openProposalModule?: string } | undefined;
@@ -69,11 +69,10 @@ export default function PartnerNavigator() {
     const loadUnreadCount = async () => {
       try {
         const [messages, usersList] = await Promise.all([
-          getMessagesForUser(user.id).catch(() => []),
+          getUnreadMessagesForUser(user.id).catch(() => []),
           getAllUsers().catch(() => []),
         ]);
-        const unread = messages.filter(message => !message.read && message.recipientId === user.id);
-        const enriched = unread.map(msg => {
+        const enriched = messages.map(msg => {
           const sender = usersList.find(u => u.id === msg.senderId);
           return {
             ...msg,

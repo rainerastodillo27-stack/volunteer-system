@@ -261,37 +261,26 @@ function getProposalReviewCardKey(message: ChatMessage): string | null {
 
   try {
     const data = JSON.parse(message.content.replace(PROPOSAL_PREFIX, ''));
-    const applicationId = String(data.applicationId || data.id || data.application?.id || '').trim();
-    const revisionNumber = Number(data.revisionNumber || data.application?.revisionNumber || 0);
     const status = String(data.status || '').trim();
-    const messageId = message.id || '';
-    
-    if (!applicationId) {
+    const applicationId = String(data.applicationId || data.id || data.application?.id || '').trim();
+    const stateTimestamp = String(
+      data.reviewedAt || data.resubmittedAt || data.requestedAt || data.timestamp || ''
+    ).trim();
+    if (!applicationId || !status || !stateTimestamp) {
       return null;
     }
 
-    // Create unique keys for each card type to preserve conversation history:
-    // - Submission cards (from partner): msg-proposal-{timestamp}
-    // - Review cards (from admin): review-card-{status}-{appId}-{timestamp}
-    // This ensures we keep both the original submission AND the admin's review response
-    
-    const isReviewCard = messageId.startsWith('review-card-');
-    const cardType = isReviewCard ? 'review' : 'submission';
-    
-    // Key format: "applicationId:revisionNumber:cardType:status"
-    // This creates separate cards for:
-    // 1. Partner submits (rev 0, submission, Pending)
-    // 2. Admin rejects (rev 0, review, Rejected)
-    // 3. Partner resubmits (rev 1, submission, Pending)
-    // 4. Admin approves (rev 1, review, Approved)
-    return [applicationId, revisionNumber, cardType, status].join(':');
+    // A revision is a new message in the audit history. Only cards for the
+    // same submission/review event are duplicates of one another.
+    const cardKind = message.id.startsWith('review-card-') ? 'review-result' : 'submission';
+    return [applicationId, status, stateTimestamp, cardKind].join(':');
   } catch (_) {
     return null;
   }
 }
 
 function dedupeProposalReviewCards(messagesToDedupe: ChatMessage[]): ChatMessage[] {
-  const cardsByKey = new Map<string, ChatMessage>();
+  const newestCardByState = new Map<string, ChatMessage>();
 
   const isBackendProposalCard = (message: ChatMessage) =>
     message.id.startsWith('msg-proposal-') || message.id.startsWith('review-card-');
@@ -300,18 +289,14 @@ function dedupeProposalReviewCards(messagesToDedupe: ChatMessage[]): ChatMessage
     const proposalCardKey = getProposalReviewCardKey(message);
     if (!proposalCardKey) return;
 
-    const existingMessage = cardsByKey.get(proposalCardKey);
-    
-    // Keep only one card per unique key (applicationId + revision + status)
-    // Prefer backend messages over local temporary ones
+    const existingMessage = newestCardByState.get(proposalCardKey);
     const shouldReplace =
       !existingMessage ||
       (isBackendProposalCard(message) && !isBackendProposalCard(existingMessage)) ||
       (isBackendProposalCard(message) === isBackendProposalCard(existingMessage) &&
         new Date(message.timestamp).getTime() >= new Date(existingMessage.timestamp).getTime());
-    
     if (shouldReplace) {
-      cardsByKey.set(proposalCardKey, message);
+      newestCardByState.set(proposalCardKey, message);
     }
   });
 
@@ -321,7 +306,7 @@ function dedupeProposalReviewCards(messagesToDedupe: ChatMessage[]): ChatMessage
       return true;
     }
 
-    return cardsByKey.get(reviewCardKey)?.id === message.id;
+    return newestCardByState.get(reviewCardKey)?.id === message.id;
   });
 }
 
@@ -808,21 +793,22 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
 
 
-  const loadData = useCallback(async (skipMessages = false) => {
+  const loadData = useCallback(async () => {
 
     if (!user || !messageUserId) return;
 
     try {
+      invalidateMessageCache(messageUserId);
+
       const [usersResult, snapshotResult, firestoreMessagesResult, storedMessagesResult, partnerApplicationsResult] = await Promise.allSettled([
 
         getAllUsers(),
 
         getProjectsScreenSnapshot(user),
 
-        // Skip message fetches on background refreshes — Firestore/WebSocket subscriptions keep them live
-        skipMessages ? Promise.resolve([] as Message[]) : getDirectMessagesForUser(messageUserId),
+        getDirectMessagesForUser(messageUserId),
 
-        skipMessages ? Promise.resolve([] as Message[]) : getMessagesForUser(messageUserId),
+        getMessagesForUser(messageUserId),
 
         user.role === 'volunteer'
 
@@ -857,24 +843,21 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       // Proposal cards are created and updated by the backend. Firestore is
       // retained for ordinary chat only so an old cached card cannot hide a
       // newer proposal revision from the admin thread.
-      let msgs = directMessagesRef.current;
-      if (!skipMessages) {
-        const firestoreMessages = firestoreMessagesResult.status === 'fulfilled'
-          ? firestoreMessagesResult.value.filter(message => !message.content?.startsWith(PROPOSAL_PREFIX))
-          : [];
+      const firestoreMessages = firestoreMessagesResult.status === 'fulfilled'
+        ? firestoreMessagesResult.value.filter(message => !message.content?.startsWith(PROPOSAL_PREFIX))
+        : [];
 
-        const storedMessages = storedMessagesResult.status === 'fulfilled' ? storedMessagesResult.value : [];
+      const storedMessages = storedMessagesResult.status === 'fulfilled' ? storedMessagesResult.value : [];
 
-        msgs = mergeChatMessageLists(firestoreMessages, storedMessages);
+      const msgs = mergeChatMessageLists(firestoreMessages, storedMessages);
 
-        directMessagesRef.current = msgs;
+      directMessagesRef.current = msgs;
 
-        setDirectMessages(msgs);
+      setDirectMessages(msgs);
 
-        const currentSelectedUser = selectedUserRef.current;
-        if (currentSelectedUser) {
-          setMessages(getDirectMessagesBetween(msgs, messageUserId, currentSelectedUser.id));
-        }
+      const currentSelectedUser = selectedUserRef.current;
+      if (currentSelectedUser) {
+        setMessages(getDirectMessagesBetween(msgs, messageUserId, currentSelectedUser.id));
       }
 
       const directPartnerApplications =
@@ -1230,12 +1213,6 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         try {
           invalidateMessageCache(messageUserId, selectedUser.id);
           const storedMessages = await getConversation(messageUserId, selectedUser.id);
-          
-          const proposalCards = storedMessages.filter(m => m.content?.startsWith(PROPOSAL_PREFIX));
-          if (proposalCards.length > 0) {
-            console.log(`📬 Received ${proposalCards.length} proposal card(s) from backend for conversation ${messageUserId} ↔ ${selectedUser.id}`);
-          }
-          
           if (cancelled) return;
 
           const existingChatOnlyMessages = directMessagesRef.current.filter(
@@ -1337,8 +1314,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
     void loadData();
 
-    // Background refreshes skip the heavy message fetches — Firestore subscriptions handle message freshness
-    return subscribeToStorageChanges(['users', 'projects', 'partnerProjectApplications', 'messages', 'projectGroupMessages'], () => loadData(true));
+    return subscribeToStorageChanges(['users', 'projects', 'partnerProjectApplications', 'messages', 'projectGroupMessages'], loadData);
 
   }, [loadData]));
 
@@ -1356,10 +1332,9 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
     const pollTimer = setInterval(() => {
 
-      // Skip message fetches on the proposal poll — only need fresh proposal data
-      void loadData(true);
+      void loadData();
 
-    }, 5000);
+    }, 1000);
 
 
 
@@ -2070,14 +2045,11 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       });
 
-      console.log('✅ Proposal submitted successfully, refreshing messages...');
-
       closeProposalComposer();
 
       Alert.alert('Success', 'Your proposal has been submitted for review.');
 
-      // Force a full data reload without skipping messages to ensure new card appears
-      await loadData(false);
+      void loadData();
 
     } catch (e) {
 
@@ -2187,10 +2159,35 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         )
       );
       
-      // DO NOT update existing message cards - each card represents a point in time
-      // The backend creates a new review card, and we'll receive it via WebSocket
-      // This preserves the conversation history: Original → Rejection → Revised → Approval
+      // Update messages that contain this proposal to reflect new status
+      setMessages(current =>
+        current.map(msg => {
+          if (msg.content?.startsWith(PROPOSAL_PREFIX)) {
+            try {
+              const msgApp = JSON.parse(msg.content.replace(PROPOSAL_PREFIX, ''));
+              if (msgApp.id === reviewedApplication.id || msgApp.applicationId === reviewedApplication.id) {
+                // Update the proposal JSON in the message content
+                const updatedApp = {
+                  ...msgApp,
+                  status: reviewedApplication.status,
+                  reviewedBy: reviewedApplication.reviewedBy,
+                  reviewedAt: reviewedApplication.reviewedAt,
+                  reviewNotes: reviewedApplication.reviewNotes || msgApp.reviewNotes || null,
+                };
+                return { ...msg, content: PROPOSAL_PREFIX + JSON.stringify(updatedApp) };
+              }
+            } catch (e) {
+              // Invalid JSON, skip
+            }
+          }
+          return msg;
+        })
+      );
 
+      // Always send the review card to Firestore using the partner's user ID from the
+      // application itself — NOT selectedUser. When admin reviews from the Proposals
+      // sidebar, selectedUser is null and the old code silently skipped the Firestore write,
+      // so the mobile partner never received the card.
       setReviewNotice(
 
         status === 'Approved'
@@ -3808,9 +3805,9 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
             (() => {
 
-              // Deduplicate proposal cards with same status/timestamp (prevents duplicates)
+              // Don't deduplicate proposal cards - show all cards as message history
               // Each status change (Pending → Rejected → Approved) is a separate card
-              const filteredMessages = dedupeProposalReviewCards(messages);
+              const filteredMessages = messages;
 
               return filteredMessages.map((m, i) => {
 
@@ -3848,11 +3845,6 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                 const isRejected = application.status === 'Rejected';
                 const revisionNumber = Number(application.revisionNumber || 0);
                 const applicationId = String(application.applicationId || application.id || '');
-                
-                // Determine if this is a review card (from admin) or submission card (from partner)
-                const isReviewCard = m.id.startsWith('review-card-');
-                const isSubmissionCard = m.id.startsWith('msg-proposal-');
-                
                 const followsRejection = filteredMessages.slice(0, i).some(previousMessage => {
                   if (!previousMessage.content?.startsWith(PROPOSAL_PREFIX)) return false;
                   try {
@@ -3868,49 +3860,21 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                 const proposalLabel = revisionNumber > 0 || followsRejection
                   ? `Revised Proposal${revisionNumber > 0 ? ` #${revisionNumber}` : ''}`
                   : 'Proposal';
-                
-                // For submission cards: show "Your proposal has been submitted"
-                // For review cards: show "Your proposal has been approved/rejected"
-                let statusColor = isApproved ? '#166534' : isRejected ? '#dc2626' : '#d97706';
-                let statusBg = isApproved ? '#dcfce7' : isRejected ? '#fee2e2' : '#fef3c7';
-                let statusDisplay = 'DRAFT';
-                let statusIcon: any = 'edit-note';
-                let summaryLead = '';
-                
+                const statusColor = isApproved ? '#166534' : isRejected ? '#dc2626' : '#d97706';
+                const statusBg = isApproved ? '#dcfce7' : isRejected ? '#fee2e2' : '#fef3c7';
+                const statusDisplay = isApproved ? 'APPROVED' : isRejected ? 'REJECTED' : 'DRAFT';
+                const statusIcon = isApproved ? 'check-circle' : isRejected ? 'cancel' : 'edit-note';
                 const moduleLabel =
                   String(proposalDetails.requestedProgramModule || application.programModule || '').trim() ||
                   data.proposedTitle;
-                
-                if (isReviewCard) {
-                  // This is admin's response card
-                  statusDisplay = isApproved ? 'APPROVED' : 'REJECTED';
-                  statusIcon = isApproved ? 'check-circle' : 'cancel';
-                  summaryLead = isApproved
-                    ? `Your proposal for "${moduleLabel}" has been reviewed and has been approved`
-                    : `Your proposal for "${moduleLabel}" has been reviewed and needs changes`;
-                } else if (isSubmissionCard) {
-                  // This is partner's submission card
-                  statusDisplay = 'SUBMITTED';
-                  statusIcon = 'send';
-                  statusColor = '#2563eb';
-                  statusBg = '#dbeafe';
-                  summaryLead = revisionNumber > 0
-                    ? `Your revised proposal for "${moduleLabel}" has been submitted for review`
-                    : `Your proposal for "${moduleLabel}" has been submitted for review`;
-                } else {
-                  // Legacy card without proper ID prefix
-                  statusDisplay = isApproved ? 'APPROVED' : isRejected ? 'REJECTED' : 'DRAFT';
-                  statusIcon = isApproved ? 'check-circle' : isRejected ? 'cancel' : 'edit-note';
-                  summaryLead = isApproved
-                    ? `Your proposal for "${moduleLabel}" has been submitted and has been approved`
-                    : isRejected
-                      ? `Your proposal for "${moduleLabel}" has been reviewed and needs changes`
-                      : `Your proposal for "${moduleLabel}" has been saved as a draft`;
-                }
-                
                 const dateRange = data.proposedEndDate && data.proposedEndDate !== 'TBD'
                   ? `${formatProposalDate(data.proposedStartDate)} - ${formatProposalDate(data.proposedEndDate)}`
                   : formatProposalDate(data.proposedStartDate);
+                const summaryLead = isApproved
+                  ? `Your proposal for "${moduleLabel}" has been submitted and has been approved`
+                  : isRejected
+                    ? `Your proposal for "${moduleLabel}" has been reviewed and needs changes`
+                    : `Your proposal for "${moduleLabel}" has been saved as a draft`;
 
                 return (
 
@@ -3930,41 +3894,60 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                     >
 
-                      {/* Status Badge Header */}
-                      <View style={[styles.propStatusHeader, { backgroundColor: statusBg }]}>
-                        <View style={styles.propStatusIconCircle}>
-                          <MaterialIcons name={statusIcon} size={20} color={statusColor} />
+                      <View style={styles.propCardHeader}>
+
+                        <View style={[styles.propCardIconBox, { backgroundColor: statusBg }]}>
+
+                          <MaterialIcons name={statusIcon} size={22} color={statusColor} />
+
                         </View>
-                        <Text style={[styles.propStatusText, { color: statusColor }]}>
-                          {statusDisplay}
-                        </Text>
+
+                        <View style={{ flex: 1, minWidth: 0 }}>
+
+                          <View style={[styles.propApprovedBadge, { backgroundColor: statusBg }]}>
+
+                            <Text style={[styles.propApprovedText, { color: statusColor }]}>
+                              {statusDisplay}
+                            </Text>
+
+                          </View>
+
+                          <Text style={styles.propCardTitle} numberOfLines={2}>{summaryLead}</Text>
+
+                        </View>
+
                       </View>
 
-                      {/* Status Message */}
-                      <Text style={styles.propStatusMessage} numberOfLines={2}>
-                        {summaryLead}
-                      </Text>
 
-                      {/* Project Details */}
+
                       <View style={styles.propCardBody}>
+
                         <View style={styles.propProjectSummary}>
-                          <Text style={styles.propProjectTitle} numberOfLines={1}>
-                            {data.proposedTitle}
-                          </Text>
-                          
+
+                          <Text style={styles.propProjectTitle} numberOfLines={1}>{data.proposedTitle}</Text>
+
                           <Text style={styles.propCardDesc} numberOfLines={2}>
+
                             {data.proposedDescription || 'No description provided.'}
+
                           </Text>
 
-                          <View style={styles.propMetaRow}>
-                            <MaterialIcons name="event" size={16} color="#64748b" />
-                            <Text style={styles.propMetaText} numberOfLines={1}>{dateRange}</Text>
+                          <View style={styles.propCardMetaItem}>
+
+                            <MaterialIcons name="event" size={14} color="#3F7A54" />
+
+                            <Text style={styles.propCardMetaText} numberOfLines={1}>{dateRange}</Text>
+
                           </View>
 
-                          <View style={styles.propMetaRow}>
-                            <MaterialIcons name="location-on" size={16} color="#64748b" />
-                            <Text style={styles.propMetaText} numberOfLines={1}>{data.proposedLocation || 'TBD'}</Text>
+                          <View style={styles.propCardMetaItem}>
+
+                            <MaterialIcons name="location-on" size={14} color="#3F7A54" />
+
+                            <Text style={styles.propCardMetaText} numberOfLines={1}>{data.proposedLocation || 'TBD'}</Text>
+
                           </View>
+
                         </View>
 
                         {isRejected && application.reviewNotes ? (
@@ -3975,21 +3958,27 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                             </Text>
                           </View>
                         ) : null}
+
                       </View>
 
-                      {/* CTA Button */}
                       <View style={styles.propCardCta}>
-                        <MaterialIcons name={isApproved ? "work" : "visibility"} size={18} color="#ffffff" />
+
+                        <MaterialIcons name={isApproved ? "work" : "visibility"} size={16} color="#ffffff" />
+
                         <Text style={styles.propCardCtaText}>
                           {isApproved ? 'View my Projects' : 'View proposal details'}
                         </Text>
-                        <MaterialIcons name="arrow-forward" size={18} color="#ffffff" />
+
+                        <MaterialIcons name="arrow-forward" size={16} color="#ffffff" />
+
                       </View>
 
                     </TouchableOpacity>
 
                     <Text style={styles.messageTime}>
+
                       {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+
                     </Text>
 
                   </View>
@@ -7037,10 +7026,18 @@ const styles = StyleSheet.create({
   // ΓöÇΓöÇ Proposal Card Styles ΓöÇΓöÇ
 
   proposalMsgCard: {
+
     backgroundColor: '#fff',
+
     borderRadius: 12,
+
     width: '100%',
-    minHeight: 240,
+
+    height: 200,
+
+    minHeight: 200,
+
+    maxHeight: 200,
 
     borderWidth: 1,
 
@@ -7170,17 +7167,23 @@ const styles = StyleSheet.create({
 
   propCardBody: {
 
-    padding: 16,
+    padding: 12,
 
     flex: 1,
 
   },
 
   propCardDesc: {
+
     fontSize: 13,
+
     color: '#475569',
+
     lineHeight: 19,
-    marginBottom: 14,
+
+    marginBottom: 12,
+
+    height: 38,
 
   },
 
@@ -7458,91 +7461,6 @@ const styles = StyleSheet.create({
 
     fontStyle: 'italic',
 
-  },
-  propStatusHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderTopLeftRadius: 12,
-    borderTopRightRadius: 12,
-  },
-
-  propStatusIconCircle: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  propStatusText: {
-    fontSize: 13,
-    fontWeight: '800',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-
-  propStatusMessage: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#475569',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    lineHeight: 19,
-  },
-
-  propProjectSummary: {
-    flex: 1,
-  },
-
-  propProjectTitle: {
-    fontSize: 17,
-    fontWeight: '800',
-    color: '#0f172a',
-    marginBottom: 6,
-    letterSpacing: 0.3,
-  },
-
-  propMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 6,
-  },
-
-  propMetaText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#475569',
-    flex: 1,
-  },
-
-  propCardCta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: '#3f6f54',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    marginHorizontal: 16,
-    marginBottom: 16,
-    marginTop: 4,
-    borderRadius: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.08,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-
-  propCardCtaText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#ffffff',
   },
 
   // ── Validation Error Styles ───────────────────────────────────────────────

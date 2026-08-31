@@ -18,16 +18,10 @@ function getPlatformOS(): string {
 import { useAuth } from '../contexts/AuthContext';
 import ScreenBrandHeader from '../components/ScreenBrandHeader';
 import {
-  getAllPartnerReports,
-  getMessagesForUser,
-  getPendingUserApprovals,
+  getDashboardSnapshot,
+  getUnreadMessagesForUser,
   subscribeToMessages,
   subscribeToStorageChanges,
-  getAllVolunteerProjectMatches,
-  getAllVolunteers,
-  getAllProjects,
-  getAllUsers,
-  getAllPartnerProjectApplications,
   markMessageAsRead,
   savePartnerReport,
 } from '../models/storage';
@@ -323,27 +317,23 @@ export default function AdminNavigator() {
       try {
         const [
           allMsgs,
-          reports,
-          pUsers,
-          apps,
-          matches,
+        ] = await Promise.all([
+          getUnreadMessagesForUser(user.id).catch(() => []),
+        ]);
+        const {
+          partnerReports: reports,
+          users: usersList,
+          partnerProjectApplications: apps,
+          volunteerMatches: matches,
           volunteers,
           projects,
-          usersList,
-        ] = await Promise.all([
-          getMessagesForUser(user.id).catch(() => []),
-          getAllPartnerReports().catch(() => []),
-          getPendingUserApprovals().catch(() => []),
-          getAllPartnerProjectApplications().catch(() => []),
-          getAllVolunteerProjectMatches().catch(() => []),
-          getAllVolunteers().catch(() => []),
-          getAllProjects().catch(() => []),
-          getAllUsers().catch(() => []),
-        ]);
+        } = await getDashboardSnapshot();
+        const pUsers = usersList.filter(
+          pendingUser => pendingUser.role !== 'admin' && pendingUser.approvalStatus === 'pending'
+        );
 
         // Map unread messages and enrich with senderName
-        const unreadMsgs = allMsgs.filter(m => !m.read && m.recipientId === user.id);
-        const enrichedMsgs = unreadMsgs.map(msg => {
+        const enrichedMsgs = allMsgs.map(msg => {
           const sender = usersList.find(u => u.id === msg.senderId);
           return {
             ...msg,

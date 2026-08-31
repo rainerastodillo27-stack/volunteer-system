@@ -214,9 +214,9 @@ function getMapLegendTotalLabel(selectedMapStyleKey: MapStylePresetKey, count: n
   return `Total ${count === 1 ? 'Project' : 'Projects'}`;
 }
 
-function getMapLegendFootnote(selectedMapStyleKey: MapStylePresetKey, selectedStatus: string | null) {
-  if (selectedStatus) {
-    return 'Clear filter';
+function getMapLegendFootnote(selectedMapStyleKey: MapStylePresetKey, selectedStatus: string | null, selectedLocation: string | null) {
+  if (selectedStatus || selectedLocation) {
+    return 'Clear filters';
   }
 
   return selectedMapStyleKey === 'volunteer-view' ? 'Volunteer events' : 'Across Philippines';
@@ -253,7 +253,9 @@ export default function VolunteerImpactMap({
   const [mapError, setMapError] = useState<string | null>(null);
   const [showMapStyleMenu, setShowMapStyleMenu] = useState(false);
   const [showAccountMenu, setShowAccountMenu] = useState(false);
+  const [showLocationMenu, setShowLocationMenu] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState<string | null>(null);
+  const [selectedLocation, setSelectedLocation] = useState<string | null>(null);
   const [selectedMapStyleKey, setSelectedMapStyleKey] =
     useState<MapStylePresetKey>(initialMapStyleKey);
   const [selectedVolunteerId, setSelectedVolunteerId] = useState<string | null>(
@@ -317,12 +319,64 @@ export default function VolunteerImpactMap({
       : hasPartnerScope
       ? selectedAccountOption?.mappedProjects || []
       : mappedProjects;
-  const displayProjects = selectedStatus
-    ? scopedProjects.filter(project => {
+  
+  // Build available locations from projects with data
+  const availableLocations = useMemo(() => {
+    const locationMap = new Map<string, { count: number; label: string }>();
+    
+    scopedProjects.forEach(project => {
+      const region = project.locationRegion || project.location.region;
+      const city = project.locationCity || project.location.city;
+      
+      if (region && city) {
+        const locationKey = `${region}|${city}`;
+        const locationLabel = `${city}, ${region}`;
+        const existing = locationMap.get(locationKey);
+        
+        if (existing) {
+          existing.count++;
+        } else {
+          locationMap.set(locationKey, { count: 1, label: locationLabel });
+        }
+      }
+    });
+    
+    return Array.from(locationMap.entries())
+      .map(([key, data]) => ({
+        key,
+        label: data.label,
+        count: data.count,
+      }))
+      .sort((a, b) => b.count - a.count); // Sort by project count descending
+  }, [scopedProjects]);
+  
+  const displayProjects = useMemo(() => {
+    let filtered = scopedProjects;
+    
+    // Filter by status
+    if (selectedStatus) {
+      filtered = filtered.filter(project => {
         const status = getProjectDisplayStatus(project);
         return selectedStatus === 'Planned' ? status === 'Planning' : status === selectedStatus;
-      })
-    : scopedProjects;
+      });
+    }
+    
+    // Filter by location
+    if (selectedLocation) {
+      filtered = filtered.filter(project => {
+        const region = project.locationRegion || project.location.region;
+        const city = project.locationCity || project.location.city;
+        
+        if (region && city) {
+          const locationKey = `${region}|${city}`;
+          return locationKey === selectedLocation;
+        }
+        return false;
+      });
+    }
+    
+    return filtered;
+  }, [scopedProjects, selectedStatus, selectedLocation]);
 
   useEffect(() => {
     setSelectedProject(displayProjects[0] || null);
@@ -714,6 +768,56 @@ export default function VolunteerImpactMap({
         </View>
 
         <View style={[styles.headerActions, dashboardVariant && styles.dashboardHeaderActions]}>
+          {!dashboardVariant && availableLocations.length > 0 ? (
+            <TouchableOpacity
+              style={[
+                styles.mapStyleButton,
+                styles.locationPickerButton,
+                {
+                  backgroundColor: selectedLocation ? selectedMapStyle.accentColor : selectedMapStyle.chipBg,
+                  borderColor: selectedLocation ? selectedMapStyle.accentColor : selectedMapStyle.chipBorder,
+                },
+              ]}
+              onPress={() => setShowLocationMenu(true)}
+            >
+              <MaterialIcons 
+                name="location-city" 
+                size={18} 
+                color={selectedLocation ? '#ffffff' : selectedMapStyle.accentColor} 
+              />
+              <Text
+                style={[
+                  styles.mapStyleButtonText, 
+                  styles.locationPickerText, 
+                  { color: selectedLocation ? '#ffffff' : selectedMapStyle.accentColor }
+                ]}
+                numberOfLines={1}
+              >
+                {selectedLocation 
+                  ? availableLocations.find(loc => loc.key === selectedLocation)?.label || 'All Locations'
+                  : 'All Locations'
+                }
+              </Text>
+              {selectedLocation ? (
+                <TouchableOpacity 
+                  onPress={(e) => {
+                    e.stopPropagation();
+                    setSelectedLocation(null);
+                  }}
+                  style={{ padding: 2 }}
+                >
+                  <MaterialIcons name="close" size={18} color="#ffffff" />
+                </TouchableOpacity>
+              ) : (
+                <MaterialIcons
+                  name="keyboard-arrow-down"
+                  size={22}
+                  color={selectedMapStyle.accentColor}
+                />
+              )}
+            </TouchableOpacity>
+          ) : null}
+          
           {!dashboardVariant && showAccountPicker ? (
             <TouchableOpacity
               style={[
@@ -785,9 +889,12 @@ export default function VolunteerImpactMap({
               {getMapLegendTotalLabel(selectedMapStyleKey, displayProjects.length)}
             </Text>
             <Text style={styles.legendTotal}>{displayProjects.length}</Text>
-            <TouchableOpacity onPress={() => setSelectedStatus(null)}>
+            <TouchableOpacity onPress={() => {
+              setSelectedStatus(null);
+              setSelectedLocation(null);
+            }}>
               <Text style={styles.legendFootnote}>
-                {getMapLegendFootnote(selectedMapStyleKey, selectedStatus)}
+                {getMapLegendFootnote(selectedMapStyleKey, selectedStatus, selectedLocation)}
               </Text>
             </TouchableOpacity>
           </View>
@@ -901,6 +1008,71 @@ export default function VolunteerImpactMap({
           </View>
         </TouchableOpacity>
       </Modal>
+
+      <Modal
+        animationType="fade"
+        transparent
+        visible={showLocationMenu}
+        onRequestClose={() => setShowLocationMenu(false)}
+      >
+        <TouchableOpacity
+          style={styles.menuBackdrop}
+          activeOpacity={1}
+          onPress={() => setShowLocationMenu(false)}
+        >
+          <View style={styles.mapStyleMenu}>
+            <Text style={styles.mapStyleMenuTitle}>Filter by Location</Text>
+            <Text style={styles.locationMenuSubtitle}>
+              Select a location with available projects
+            </Text>
+            <ScrollView style={styles.accountList} showsVerticalScrollIndicator={false}>
+              {/* All Locations option */}
+              <TouchableOpacity
+                style={[
+                  styles.mapStyleMenuItem, 
+                  !selectedLocation && styles.mapStyleMenuItemActive
+                ]}
+                onPress={() => {
+                  setSelectedLocation(null);
+                  setShowLocationMenu(false);
+                }}
+              >
+                <View style={styles.mapStyleMenuItemTextWrap}>
+                  <Text style={styles.mapStyleMenuItemTitle}>All Locations</Text>
+                  <Text style={styles.mapStyleMenuItemDescription}>
+                    {scopedProjects.length} {scopedProjects.length === 1 ? 'project' : 'projects'}
+                  </Text>
+                </View>
+                {!selectedLocation ? <MaterialIcons name="check" size={20} color="#2563eb" /> : null}
+              </TouchableOpacity>
+
+              {/* Individual location options */}
+              {availableLocations.map(location => {
+                const isActive = location.key === selectedLocation;
+
+                return (
+                  <TouchableOpacity
+                    key={location.key}
+                    style={[styles.mapStyleMenuItem, isActive && styles.mapStyleMenuItemActive]}
+                    onPress={() => {
+                      setSelectedLocation(location.key);
+                      setShowLocationMenu(false);
+                    }}
+                  >
+                    <View style={styles.mapStyleMenuItemTextWrap}>
+                      <Text style={styles.mapStyleMenuItemTitle}>{location.label}</Text>
+                      <Text style={styles.mapStyleMenuItemDescription}>
+                        {location.count} {location.count === 1 ? 'project' : 'projects'}
+                      </Text>
+                    </View>
+                    {isActive ? <MaterialIcons name="check" size={20} color="#2563eb" /> : null}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
@@ -986,6 +1158,12 @@ const styles = StyleSheet.create({
   },
   accountPickerButton: {
     maxWidth: 220,
+  },
+  locationPickerButton: {
+    maxWidth: 200,
+  },
+  locationPickerText: {
+    flexShrink: 1,
   },
   accountPickerText: {
     flexShrink: 1,
@@ -1096,6 +1274,12 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#0f172a',
     marginBottom: 10,
+  },
+  locationMenuSubtitle: {
+    fontSize: 12,
+    color: '#64748b',
+    marginBottom: 10,
+    lineHeight: 17,
   },
   accountList: {
     maxHeight: 320,

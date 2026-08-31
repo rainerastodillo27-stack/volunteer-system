@@ -35,6 +35,7 @@ import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/project
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 import { createGoogleMapsMarkerIcon, loadGoogleMaps } from '../utils/webGoogleMaps';
 import { getProjectVolunteerMapEntries, getProjectVolunteersNeeded } from '../utils/projectVolunteers';
+import { PHRegions, getCitiesByRegion, getBarangaysByCity } from '../utils/philippineAddressData';
 
 const MapHost = 'div' as any;
 const MAP_FIT_PADDING_PX = 64;
@@ -231,6 +232,32 @@ export default function MappingScreen({ navigation }: any) {
   // Admin event filters
   const [filterDate, setFilterDate] = useState<string>('');
   const [filterProgram, setFilterProgram] = useState<AdvocacyFocus | ''>('');
+  // Location filter state
+  const [filterRegion, setFilterRegion] = useState<string>('');
+  const [filterCity, setFilterCity] = useState<string>('');
+  const [filterBarangay, setFilterBarangay] = useState<string>('');
+  
+  // Computed location filter options
+  const filterLocationCities = React.useMemo(() => 
+    filterRegion ? getCitiesByRegion(filterRegion) : [],
+    [filterRegion]
+  );
+
+  const filterLocationBarangays = React.useMemo(() =>
+    filterCity ? getBarangaysByCity(filterCity) : [],
+    [filterCity]
+  );
+
+  // Reset dependent location filters when parent changes
+  useEffect(() => {
+    setFilterCity('');
+    setFilterBarangay('');
+  }, [filterRegion]);
+
+  useEffect(() => {
+    setFilterBarangay('');
+  }, [filterCity]);
+
   const [locationPromptProject, setLocationPromptProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const [mapError, setMapError] = useState<string | null>(null);
@@ -431,10 +458,46 @@ export default function MappingScreen({ navigation }: any) {
           return prog === filterProgram;
         });
       }
+
+      // Apply location filters
+      if (filterRegion || filterCity || filterBarangay) {
+        baseProjects = baseProjects.filter(project => {
+          const address = (project.location?.address || '').toLowerCase();
+          const region = (project.location?.region || project.locationRegion || '').toLowerCase();
+          const city = (project.location?.city || project.locationCity || '').toLowerCase();
+          const barangay = (project.location?.barangay || project.locationBarangay || '').toLowerCase();
+
+          let matchesRegion = true;
+          let matchesCity = true;
+          let matchesBarangay = true;
+
+          if (filterRegion) {
+            const selectedRegion = PHRegions.find(r => r.code === filterRegion);
+            const regionName = (selectedRegion?.name || '').toLowerCase();
+            matchesRegion = region.includes(regionName) || address.includes(regionName);
+          }
+
+          if (filterCity) {
+            const allCities = getCitiesByRegion(filterRegion);
+            const selectedCity = allCities.find(c => c.code === filterCity);
+            const cityName = (selectedCity?.displayName || '').toLowerCase();
+            matchesCity = city.includes(cityName) || address.includes(cityName);
+          }
+
+          if (filterBarangay) {
+            const allBarangays = getBarangaysByCity(filterCity);
+            const selectedBarangay = allBarangays.find(b => b.code === filterBarangay);
+            const barangayName = (selectedBarangay?.name || '').toLowerCase();
+            matchesBarangay = barangay.includes(barangayName) || address.includes(barangayName);
+          }
+
+          return matchesRegion && matchesCity && matchesBarangay;
+        });
+      }
     }
 
     return baseProjects;
-  }, [projects, selectedMapStyleKey, selectedVolunteerAccount, selectedPartnerAccount, user?.role, filterDate, filterProgram]);
+  }, [projects, selectedMapStyleKey, selectedVolunteerAccount, selectedPartnerAccount, user?.role, filterDate, filterProgram, filterRegion, filterCity, filterBarangay]);
 
   const mappedProjects = React.useMemo(() => {
     const result = getMappedProjects(displayProjects);
@@ -467,6 +530,46 @@ export default function MappingScreen({ navigation }: any) {
       ),
     [mappedProjects, volunteers, volunteerJoinRecords, projects]
   );
+
+  // Calculate impact statistics based on filtered projects
+  const impactStats = React.useMemo(() => {
+    const totalProjects = displayProjects.length;
+    const totalEvents = displayProjects.filter(p => p.isEvent).length;
+    const completedProjects = displayProjects.filter(p => p.status === 'Completed').length;
+    const inProgressProjects = displayProjects.filter(p => p.status === 'In Progress').length;
+    
+    // Count unique volunteers engaged
+    const uniqueVolunteerIds = new Set<string>();
+    displayProjects.forEach(project => {
+      (project.volunteers || []).forEach(vid => uniqueVolunteerIds.add(vid));
+      (project.joinedUserIds || []).forEach(uid => uniqueVolunteerIds.add(uid));
+      (project.internalTasks || []).forEach(task => {
+        if (task.assignedVolunteerId) uniqueVolunteerIds.add(task.assignedVolunteerId);
+        (task.assignedVolunteerIds || []).forEach(vid => uniqueVolunteerIds.add(vid));
+      });
+    });
+    
+    // Count beneficiaries reached
+    const totalBeneficiaries = displayProjects.reduce((sum, project) => {
+      return sum + (project.beneficiariesReached || 0);
+    }, 0);
+
+    // Calculate volunteer hours
+    const totalVolunteerHours = displayProjects.reduce((sum, project) => {
+      return sum + (project.volunteerHours || 0);
+    }, 0);
+
+    return {
+      totalProjects,
+      totalEvents,
+      completedProjects,
+      inProgressProjects,
+      volunteersEngaged: uniqueVolunteerIds.size,
+      beneficiariesReached: totalBeneficiaries,
+      volunteerHours: totalVolunteerHours,
+    };
+  }, [displayProjects]);
+
   const selectedMapStyle =
     MAP_STYLE_PRESETS.find(preset => preset.key === selectedMapStyleKey) || MAP_STYLE_PRESETS[0];
   const featuredProject = mappedProjects[0] || null;
@@ -1014,6 +1117,7 @@ export default function MappingScreen({ navigation }: any) {
 
         {/* Admin filters – date and program (active for Admin) */}
         {user?.role === 'admin' ? (
+          <>
           <View style={styles.adminFiltersRow}>
             <View style={styles.adminFilterItem}>
               <MaterialIcons name="calendar-today" size={15} color="#ea580c" style={{ marginRight: 5 }} />
@@ -1113,6 +1217,175 @@ export default function MappingScreen({ navigation }: any) {
               </TouchableOpacity>
             ) : null}
           </View>
+
+          {/* Location Filter Row */}
+          <View style={styles.locationFiltersRow}>
+            <MaterialIcons name="place" size={16} color="#16a34a" style={{ marginRight: 8 }} />
+            <Text style={styles.locationFilterLabel}>Filter by Location:</Text>
+            
+            <View style={styles.locationDropdownGroup}>
+              <select
+                value={filterRegion}
+                onChange={(e: any) => setFilterRegion(e.target.value)}
+                style={{
+                  border: '1px solid #d1d5db',
+                  borderRadius: '6px',
+                  padding: '6px 10px',
+                  outline: 'none',
+                  background: '#ffffff',
+                  fontSize: 13,
+                  color: '#1e293b',
+                  fontFamily: 'inherit',
+                  cursor: 'pointer',
+                  minWidth: 150,
+                }}
+              >
+                <option value="">All Regions</option>
+                {PHRegions.map(region => (
+                  <option key={region.code} value={region.code}>{region.name}</option>
+                ))}
+              </select>
+
+              {filterRegion && filterLocationCities.length > 0 ? (
+                <select
+                  value={filterCity}
+                  onChange={(e: any) => setFilterCity(e.target.value)}
+                  style={{
+                    border: '1px solid #d1d5db',
+                    borderRadius: '6px',
+                    padding: '6px 10px',
+                    outline: 'none',
+                    background: '#ffffff',
+                    fontSize: 13,
+                    color: '#1e293b',
+                    fontFamily: 'inherit',
+                    cursor: 'pointer',
+                    minWidth: 150,
+                  }}
+                >
+                  <option value="">All Cities</option>
+                  {filterLocationCities.map(city => (
+                    <option key={city.code} value={city.code}>{city.displayName}</option>
+                  ))}
+                </select>
+              ) : null}
+
+              {filterCity && filterLocationBarangays.length > 0 ? (
+                <select
+                  value={filterBarangay}
+                  onChange={(e: any) => setFilterBarangay(e.target.value)}
+                  style={{
+                    border: '1px solid #d1d5db',
+                    borderRadius: '6px',
+                    padding: '6px 10px',
+                    outline: 'none',
+                    background: '#ffffff',
+                    fontSize: 13,
+                    color: '#1e293b',
+                    fontFamily: 'inherit',
+                    cursor: 'pointer',
+                    minWidth: 150,
+                  }}
+                >
+                  <option value="">All Barangays</option>
+                  {filterLocationBarangays.map(barangay => (
+                    <option key={barangay.code} value={barangay.code}>{barangay.name}</option>
+                  ))}
+                </select>
+              ) : null}
+            </View>
+
+            {(filterRegion || filterCity || filterBarangay) ? (
+              <TouchableOpacity
+                style={styles.clearLocationBtn}
+                onPress={() => { 
+                  setFilterRegion('');
+                  setFilterCity('');
+                  setFilterBarangay('');
+                }}
+              >
+                <MaterialIcons name="close" size={14} color="#64748b" />
+              </TouchableOpacity>
+            ) : null}
+          </View>
+
+          {/* Clear All Filters */}
+          {(filterDate || filterProgram || filterRegion || filterCity || filterBarangay) ? (
+            <TouchableOpacity
+              style={styles.clearAllFiltersMainBtn}
+              onPress={() => { 
+                setFilterDate('');
+                setFilterProgram('');
+                setFilterRegion('');
+                setFilterCity('');
+                setFilterBarangay('');
+              }}
+            >
+              <MaterialIcons name="filter-alt-off" size={16} color="#ef4444" />
+              <Text style={styles.clearAllFiltersMainText}>Clear all filters</Text>
+            </TouchableOpacity>
+          ) : null}
+
+          {/* Impact Statistics Section */}
+          <View style={styles.impactStatsContainer}>
+            <View style={styles.impactStatsHeader}>
+              <MaterialIcons name="analytics" size={20} color="#16a34a" />
+              <Text style={styles.impactStatsTitle}>Impact Statistics</Text>
+              {(filterRegion || filterCity || filterBarangay) ? (
+                <View style={styles.locationBadge}>
+                  <MaterialIcons name="place" size={14} color="#16a34a" />
+                  <Text style={styles.locationBadgeText}>
+                    {filterBarangay 
+                      ? filterLocationBarangays.find(b => b.code === filterBarangay)?.name 
+                      : filterCity 
+                      ? filterLocationCities.find(c => c.code === filterCity)?.displayName
+                      : PHRegions.find(r => r.code === filterRegion)?.name}
+                  </Text>
+                </View>
+              ) : (
+                <Text style={styles.impactStatsSubtitle}>Nationwide</Text>
+              )}
+            </View>
+            
+            <View style={styles.impactStatsGrid}>
+              <View style={styles.impactStatCard}>
+                <MaterialIcons name="folder" size={28} color="#0284c7" />
+                <Text style={styles.impactStatValue}>{impactStats.totalProjects}</Text>
+                <Text style={styles.impactStatLabel}>Total Projects</Text>
+              </View>
+
+              <View style={styles.impactStatCard}>
+                <MaterialIcons name="event" size={28} color="#ea580c" />
+                <Text style={styles.impactStatValue}>{impactStats.totalEvents}</Text>
+                <Text style={styles.impactStatLabel}>Active Events</Text>
+              </View>
+
+              <View style={styles.impactStatCard}>
+                <MaterialIcons name="check-circle" size={28} color="#16a34a" />
+                <Text style={styles.impactStatValue}>{impactStats.completedProjects}</Text>
+                <Text style={styles.impactStatLabel}>Completed</Text>
+              </View>
+
+              <View style={styles.impactStatCard}>
+                <MaterialIcons name="people" size={28} color="#7c3aed" />
+                <Text style={styles.impactStatValue}>{impactStats.volunteersEngaged}</Text>
+                <Text style={styles.impactStatLabel}>Volunteers Engaged</Text>
+              </View>
+
+              <View style={styles.impactStatCard}>
+                <MaterialIcons name="favorite" size={28} color="#dc2626" />
+                <Text style={styles.impactStatValue}>{impactStats.beneficiariesReached.toLocaleString()}</Text>
+                <Text style={styles.impactStatLabel}>Beneficiaries Reached</Text>
+              </View>
+
+              <View style={styles.impactStatCard}>
+                <MaterialIcons name="schedule" size={28} color="#ca8a04" />
+                <Text style={styles.impactStatValue}>{impactStats.volunteerHours.toLocaleString()}</Text>
+                <Text style={styles.impactStatLabel}>Volunteer Hours</Text>
+              </View>
+            </View>
+          </View>
+          </>
         ) : null}
       </View>
 
@@ -2038,6 +2311,139 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     color: '#ef4444',
+  },
+  // Location filter styles
+  locationFiltersRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginTop: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#f0fdf4',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+  },
+  locationFilterLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#15803d',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  locationDropdownGroup: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    flex: 1,
+  },
+  clearLocationBtn: {
+    padding: 4,
+    borderRadius: 6,
+    backgroundColor: '#ffffff',
+    marginLeft: 4,
+  },
+  clearAllFiltersMainBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: '#fef2f2',
+    borderWidth: 1.5,
+    borderColor: '#fecaca',
+    marginTop: 10,
+    alignSelf: 'flex-start',
+  },
+  clearAllFiltersMainText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#ef4444',
+  },
+  // Impact Statistics styles
+  impactStatsContainer: {
+    marginTop: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 18,
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#334155',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 1,
+  },
+  impactStatsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 16,
+  },
+  impactStatsTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0f172a',
+    flex: 1,
+  },
+  impactStatsSubtitle: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748b',
+    backgroundColor: '#f1f5f9',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  locationBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#f0fdf4',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+  },
+  locationBadgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#15803d',
+  },
+  impactStatsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  impactStatCard: {
+    flex: 1,
+    minWidth: 140,
+    alignItems: 'center',
+    paddingVertical: 16,
+    paddingHorizontal: 12,
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  impactStatValue: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#0f172a',
+    marginTop: 8,
+  },
+  impactStatLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#64748b',
+    marginTop: 4,
+    textAlign: 'center',
   },
   // Featured directions button
   featuredDirectionsBtn: {

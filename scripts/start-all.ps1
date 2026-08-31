@@ -134,16 +134,9 @@ for (`$i = 0; `$i -lt 60; `$i++) {
     `$resp = Invoke-WebRequest -Uri 'http://localhost:8081' -Method Get -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
     if (`$resp.StatusCode -eq 200) {
       `$webReady = `$true
-      `$chromeCmd = Get-Command chrome -ErrorAction SilentlyContinue
-      if (`$null -ne `$chromeCmd) {
-        Start-Process 'chrome' -ArgumentList 'http://localhost:8081'
-        Start-Sleep -Milliseconds 800
-        Start-Process 'chrome' -ArgumentList 'http://localhost:8081?mode=mobile'
-      } else {
-        Start-Process 'http://localhost:8081'
-        Start-Sleep -Milliseconds 800
-        Start-Process 'http://localhost:8081?mode=mobile'
-      }
+      Start-Process 'http://localhost:8081'
+      Start-Sleep -Milliseconds 800
+      Start-Process 'http://localhost:8081?mode=mobile'
       break
     }
   } catch {

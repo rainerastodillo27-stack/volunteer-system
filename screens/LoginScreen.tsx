@@ -97,9 +97,9 @@ import {
   type PHCityMunicipality,
 } from "../utils/philippineAddressData";
 
-const BACKEND_HEALTH_TIMEOUT_MS = 30000;
-const BACKEND_HEALTH_RETRY_MS = 6000;
-const BACKEND_HEALTH_MAX_SLOW_RETRIES = 5;
+const BACKEND_HEALTH_TIMEOUT_MS = 8000; // Reduced from 30s to 8s
+const BACKEND_HEALTH_RETRY_MS = 3000; // Reduced from 6s to 3s
+const BACKEND_HEALTH_MAX_SLOW_RETRIES = 2; // Reduced from 5 to 2
 
 type SignupVolunteerSheetState = {
   gender: string;
@@ -1518,7 +1518,7 @@ export default function LoginScreen() {
 
     try {
       setSignupLoading(true);
-      
+
       // Allow visual loading modal to be clearly seen
       await new Promise((resolve) => setTimeout(resolve, 1400));
 
@@ -1535,20 +1535,20 @@ export default function LoginScreen() {
               (focus): focus is NVCSector => focus !== "Disaster",
             )
             : signupPillars,
-            partnerRegistration:
-              signupRole === "partner"
-                ? {
-                  organizationName:
-                    signupPartnerApplication.organizationName.trim(),
-                  stakeholderName: signupName.trim(),
-                  sectorType: signupPartnerApplication.sectorType,
-                  dswdAccreditationNo:
-                    signupPartnerApplication.dswdAccreditationNo?.trim() || "",
-                  secRegistrationNo:
-                    signupPartnerApplication.secRegistrationNo?.trim() || "",
-                  advocacyFocus: signupPartnerApplication.advocacyFocus,
-                }
-                : undefined,
+        partnerRegistration:
+          signupRole === "partner"
+            ? {
+              organizationName:
+                signupPartnerApplication.organizationName.trim(),
+              stakeholderName: signupName.trim(),
+              sectorType: signupPartnerApplication.sectorType,
+              dswdAccreditationNo:
+                signupPartnerApplication.dswdAccreditationNo?.trim() || "",
+              secRegistrationNo:
+                signupPartnerApplication.secRegistrationNo?.trim() || "",
+              advocacyFocus: signupPartnerApplication.advocacyFocus,
+            }
+            : undefined,
         volunteerMembershipSheet:
           signupRole === "volunteer"
             ? {
@@ -1590,7 +1590,7 @@ export default function LoginScreen() {
         handleSelectMobileRole(signupRole, { preserveCredentials: true });
       }
 
-      
+
       const successTitle =
         signupRole === "admin"
           ? "Admin Account Created"
@@ -2761,7 +2761,7 @@ export default function LoginScreen() {
                           ) : null}
 
                           <Text style={styles.modalSectionLabel}>Volunteer Profile</Text>
-                           <Text style={styles.modalSectionSubLabel}>Profile Type</Text>
+                          <Text style={styles.modalSectionSubLabel}>Profile Type</Text>
                           <View style={styles.roleSelector}>
                             {["Student", "Adult", "Corporate"].map((type) => (
                               <TouchableOpacity
@@ -3479,7 +3479,7 @@ export default function LoginScreen() {
                         style={[
                           styles.yearPickerItem,
                           selectedDate.getMonth() === index &&
-                            styles.yearPickerItemSelected,
+                          styles.yearPickerItemSelected,
                         ]}
                         onPress={() => {
                           const nextDate = new Date(selectedDate);
@@ -3493,7 +3493,7 @@ export default function LoginScreen() {
                           style={[
                             styles.yearPickerItemText,
                             selectedDate.getMonth() === index &&
-                              styles.yearPickerItemTextSelected,
+                            styles.yearPickerItemTextSelected,
                           ]}
                         >
                           {monthName}

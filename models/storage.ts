@@ -89,8 +89,8 @@ const memoryStorageCache = new Map<string, unknown>();
 const sharedStorageCacheTimestamps = new Map<string, number>();
 // Shared reads should fail fast enough to keep the UI responsive when the
 // backend is slow or unavailable.
-const REMOTE_STORAGE_TIMEOUT_MS = 30000; // Increased for unstable connections
-const API_HEALTH_TIMEOUT_MS = 10000; // Increased for health checks
+const REMOTE_STORAGE_TIMEOUT_MS = 15000;
+const API_HEALTH_TIMEOUT_MS = 5000;
 
 // Detect mobile at runtime (not module load time) to avoid errors
 function getRequestTimeoutMs(): number {
@@ -98,7 +98,7 @@ function getRequestTimeoutMs(): number {
     if (typeof navigator !== 'undefined' && typeof navigator.userAgent === 'string') {
       const ua = navigator.userAgent.toLowerCase();
       if (/android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/.test(ua)) {
-        return 45000; // Even longer timeout for mobile on unstable networks
+        return 20000;
       }
     }
   } catch {
@@ -106,13 +106,13 @@ function getRequestTimeoutMs(): number {
   }
   return REMOTE_STORAGE_TIMEOUT_MS;
 }
-const API_READY_RETRY_MS = 800; // Reduced from 1s
+const API_READY_RETRY_MS = 400;
 const API_READY_MAX_ATTEMPTS = 2;
-const API_READY_CACHE_MS = 10000; // Increased from 5s to 10s
-const API_REQUEST_MAX_ATTEMPTS = 5; // Increased from 3 to 5 for unstable connections
-const API_REQUEST_RETRY_BASE_MS = 800; // Reduced from 1s
-const API_REQUEST_RETRY_MAX_MS = 5000; // Reduced from 8s
-const SHARED_STORAGE_CACHE_TTL_MS = 600000; // Increased from 5m to 10m
+const API_READY_CACHE_MS = 15000;
+const API_REQUEST_MAX_ATTEMPTS = 3;
+const API_REQUEST_RETRY_BASE_MS = 300;
+const API_REQUEST_RETRY_MAX_MS = 2000;
+const SHARED_STORAGE_CACHE_TTL_MS = 600000;
 const PROJECTS_SNAPSHOT_CACHE_TTL_MS = 120000; // Increased from 1m to 2m
 const MESSAGES_CACHE_TTL_MS = 3000; // 3s — Firestore handles real-time; short TTL prevents stale proposal cards
 const CONVERSATION_CACHE_TTL_MS = 3000; // 3s — same reason
@@ -917,8 +917,7 @@ function invalidateApiReady(): void {
 }
 
 function getApiRetryDelayMs(attempt: number): number {
-  // Fixed 6-second delay for unstable internet connections
-  return 6000;
+  return Math.min(300 * Math.pow(1.5, attempt), 2000);
 }
 
 function isRetryableApiStatus(status: number): boolean {
@@ -1374,12 +1373,7 @@ function triggerBackgroundStorageRefresh(keys: string[]): void {
 // Returns cached data immediately (if available) and refreshes in the background.
 export async function getStorageItemFast<T>(key: string): Promise<T | null> {
   try {
-    // On web, always fetch fresh data from backend to ensure consistent state
-    if (getPlatformOS() === 'web') {
-      return getStorageItem<T>(key);
-    }
-
-    // OPTIMIZED: Always return cached data immediately if available on Native mobile/tablet
+    // OPTIMIZED: Return cached data immediately on both Web and Mobile
     const cached = await getLocalStorageItem<T>(key);
     const cachedAt = sharedStorageCacheTimestamps.get(key);
 
@@ -1472,15 +1466,6 @@ async function getLocalStorageItems(keys: string[]): Promise<Record<string, unkn
 
 // Returns cached data for all keys immediately (when available) and refreshes in background.
 export async function getStorageItemsFast(keys: string[]): Promise<Record<string, unknown | null>> {
-  // On Web, bypass local persistent cache to always get fresh data from server
-  if (getPlatformOS() === 'web') {
-    try {
-      return await getStorageItems(keys);
-    } catch {
-      return {};
-    }
-  }
-
   const results: Record<string, unknown | null> = {};
   const keysToRefresh: string[] = [];
   const missingKeys: string[] = [];
@@ -4412,11 +4397,18 @@ export async function getMessagesForUser(userId: string): Promise<Message[]> {
     return cached.data;
   }
   const payload = await requestApiJson<{ messages?: Message[] }>(
-    `/messages?user_id=${encodeURIComponent(userId)}&limit=10000`
+    `/messages?user_id=${encodeURIComponent(userId)}&limit=500`
   );
   const messages = payload.messages || [];
   messagesForUserCache.set(userId, { data: messages, timestamp: Date.now() });
   return messages;
+}
+
+export async function getUnreadMessagesForUser(userId: string): Promise<Message[]> {
+  const payload = await requestApiJson<{ messages?: Message[] }>(
+    `/messages/unread?user_id=${encodeURIComponent(userId)}&limit=100`
+  );
+  return payload.messages || [];
 }
 
 // Returns the direct-message history between two users.

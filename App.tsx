@@ -1,22 +1,24 @@
 import "./platformInit";
+import React, { useEffect } from 'react';
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { NavigationContainer } from "@react-navigation/native";
 import { Platform, View, ActivityIndicator } from "react-native";
 import { AuthProvider } from "./contexts/AuthContext";
+import { GlobalDataProvider, useGlobalData } from "./contexts/GlobalDataContext";
 import StackNavigator from "./navigation/StackNavigator";
 import ErrorBoundary from './components/ErrorBoundary';
 import InAppNotificationBanner from './components/InAppNotificationBanner';
+import SplashScreen from './components/SplashScreen';
 import { navigationRef } from './navigation/navigationRef';
 import { useNunitoFont } from './utils/fonts';
-import { useEffect } from 'react';
-import * as SplashScreen from 'expo-splash-screen';
+import * as ExpSplashScreen from 'expo-splash-screen';
 import * as WebBrowser from 'expo-web-browser';
 
 // Must be called at the root level so Google OAuth redirects are caught globally
 WebBrowser.maybeCompleteAuthSession();
 
 // Keep the splash screen visible while fonts load
-SplashScreen.preventAutoHideAsync().catch(() => {});
+ExpSplashScreen.preventAutoHideAsync().catch(() => {});
 
 // Detect ?mode=mobile on web at module level so it stays stable across renders.
 const isMobileModeOnWeb = (() => {
@@ -113,13 +115,50 @@ if (typeof document !== "undefined") {
   }
 }
 
+// Inner component that uses global data to show splash screen
+function AppContent() {
+  const { isLoading, loadingProgress, isInitialized } = useGlobalData();
+  const [forceShowApp, setForceShowApp] = React.useState(false);
+
+  // Fallback: force show app after 10 seconds if still loading
+  React.useEffect(() => {
+    const timeout = setTimeout(() => {
+      if (isLoading || !isInitialized) {
+        console.warn('⚠️ Forcing app display after 10s timeout');
+        setForceShowApp(true);
+      }
+    }, 10000);
+
+    return () => clearTimeout(timeout);
+  }, [isLoading, isInitialized]);
+
+  // Show splash screen during initial data load (unless forced)
+  if ((isLoading || !isInitialized) && !forceShowApp) {
+    return (
+      <SplashScreen 
+        progress={loadingProgress}
+        message={loadingProgress < 33 ? 'Loading projects...' : loadingProgress < 66 ? 'Loading volunteers...' : 'Almost ready...'}
+      />
+    );
+  }
+
+  return (
+    <View style={{ flex: 1 }}>
+      <NavigationContainer ref={navigationRef}>
+        <StackNavigator />
+      </NavigationContainer>
+      <InAppNotificationBanner />
+    </View>
+  );
+}
+
 // Bootstraps the root providers and navigation tree for the mobile and web app.
 export default function App() {
   const fontsLoaded = useNunitoFont();
 
   useEffect(() => {
     if (fontsLoaded) {
-      SplashScreen.hideAsync().catch(() => {});
+      ExpSplashScreen.hideAsync().catch(() => {});
     }
   }, [fontsLoaded]);
 
@@ -135,16 +174,14 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <AuthProvider>
-        <ErrorBoundary>
-          <View style={{ flex: 1 }}>
-            <NavigationContainer ref={navigationRef}>
-              <StackNavigator />
-            </NavigationContainer>
-            <InAppNotificationBanner />
-          </View>
-        </ErrorBoundary>
+        <GlobalDataProvider>
+          <ErrorBoundary>
+            <AppContent />
+          </ErrorBoundary>
+        </GlobalDataProvider>
       </AuthProvider>
     </SafeAreaProvider>
   );
 }
+
 

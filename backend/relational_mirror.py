@@ -2033,34 +2033,7 @@ def _backfill_skills_from_existing_relational_data(connection: Any) -> None:
 
 
 def ensure_default_program_tracks(connection: Any) -> None:
-    with connection.cursor() as cursor:
-        cursor.execute("select exists (select 1 from program_tracks)")
-        has_program_tracks = bool(cursor.fetchone()[0])
-        if has_program_tracks:
-            return
-
-        cursor.execute(
-            """
-            insert into program_tracks (
-              id,
-              title,
-              description,
-              icon,
-              color,
-              image_url,
-              sort_order,
-              is_active,
-              created_at,
-              updated_at
-            )
-            values
-              ('Nutrition', 'Nutrition', 'Food security and health programs for children and families.', 'restaurant', '#dc2626', '', 10, true, now()::text, now()::text),
-              ('Education', 'Education', 'Learning, literacy, and skill development for students.', 'school', '#2563eb', '', 20, true, now()::text, now()::text),
-              ('Livelihood', 'Livelihood', 'Economic empowerment and vocational training programs.', 'work', '#7c3aed', '', 30, true, now()::text, now()::text),
-              ('Disaster', 'Disaster', 'Preparedness, relief, and recovery programs for affected communities.', 'warning', '#f97316', '', 40, true, now()::text, now()::text)
-            on conflict (id) do nothing
-            """
-        )
+    return
 
 
 def migrate_admin_planning_items_into_calendars(connection: Any) -> None:

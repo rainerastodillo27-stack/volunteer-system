@@ -9,6 +9,8 @@ import {
   TouchableOpacity,
   useWindowDimensions,
   View,
+  Modal,
+  Alert,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -418,6 +420,361 @@ function isTopLevelProgramRecord(project: Project, programTracks: ProgramTrack[]
   });
 }
 
+type PartnerSectorData = {
+  quarter: string;
+  NGO: number;
+  Hospital: number;
+  Institution: number;
+  Private: number;
+};
+
+function buildPartnerSectorsByQuarter(partners: Partner[]): PartnerSectorData[] {
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentQuarter = Math.floor(now.getMonth() / 3) + 1;
+  
+  // Generate last 4 quarters including current
+  const quarters: Array<{label: string; year: number; quarter: number}> = [];
+  for (let i = 3; i >= 0; i--) {
+    let q = currentQuarter - i;
+    let y = currentYear;
+    if (q <= 0) {
+      q += 4;
+      y -= 1;
+    }
+    quarters.push({ label: `Q${q} ${y}`, year: y, quarter: q });
+  }
+  
+  return quarters.map(({ label, year, quarter }) => {
+    const quarterStart = new Date(year, (quarter - 1) * 3, 1);
+    const quarterEnd = new Date(year, quarter * 3, 0, 23, 59, 59);
+    
+    const counts = { NGO: 0, Hospital: 0, Institution: 0, Private: 0 };
+    
+    partners.forEach(partner => {
+      const createdAt = safeDate(partner.createdAt);
+      if (!createdAt || createdAt < quarterStart || createdAt > quarterEnd) return;
+      
+      const sector = partner.sectorType || 'Private';
+      if (sector === 'NGO') counts.NGO++;
+      else if (sector === 'Hospital') counts.Hospital++;
+      else if (sector === 'Institution') counts.Institution++;
+      else counts.Private++;
+    });
+    
+    return {
+      quarter: label,
+      NGO: counts.NGO,
+      Hospital: counts.Hospital,
+      Institution: counts.Institution,
+      Private: counts.Private,
+    };
+  });
+}
+
+// Generate HTML report for PDF export
+function generatePDFReportHTML(
+  sections: string[],
+  data: {
+    volunteers: Volunteer[];
+    projects: Project[];
+    partners: Partner[];
+    reports: PartnerReport[];
+    timeLogs: VolunteerTimeLog[];
+    joinRecords: VolunteerProjectJoinRecord[];
+    applications: PartnerProjectApplication[];
+  },
+  analytics: {
+    partnerFilter: string | 'all';
+    programFilter: string | 'all';
+    metrics: any;
+    volunteerGrowthData: any[];
+    skillAnalytics: any;
+    quarterlyPartnerData: any[];
+  }
+): string {
+  const reportDate = new Date().toLocaleString();
+  const filterInfo = `Partner: ${analytics.partnerFilter === 'all' ? 'All Partners' : data.partners.find(p => p.id === analytics.partnerFilter)?.name || 'Unknown'}, Program: ${analytics.programFilter === 'all' ? 'All Programs' : analytics.programFilter}`;
+
+  let html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>NVC Analytics Report</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 40px; background: #f8f9fa; color: #333; }
+    .container { max-width: 1200px; margin: 0 auto; background: white; padding: 40px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+    .header { text-align: center; margin-bottom: 40px; border-bottom: 3px solid #16a34a; padding-bottom: 20px; }
+    .header h1 { color: #16a34a; font-size: 32px; margin-bottom: 8px; }
+    .header .subtitle { color: #666; font-size: 14px; }
+    .meta { background: #f0fdf4; padding: 16px; border-radius: 8px; margin-bottom: 32px; }
+    .meta p { margin: 4px 0; font-size: 14px; }
+    .section { margin-bottom: 40px; page-break-inside: avoid; }
+    .section h2 { color: #16a34a; font-size: 24px; margin-bottom: 16px; border-bottom: 2px solid #dcfce7; padding-bottom: 8px; }
+    .section h3 { color: #333; font-size: 18px; margin: 16px 0 8px; }
+    .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin: 20px 0; }
+    .metric-card { background: #f0fdf4; padding: 20px; border-radius: 8px; border-left: 4px solid #16a34a; }
+    .metric-card .label { color: #666; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .metric-card .value { color: #16a34a; font-size: 28px; font-weight: bold; margin-top: 8px; }
+    table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+    table th { background: #16a34a; color: white; padding: 12px; text-align: left; font-size: 14px; }
+    table td { padding: 12px; border-bottom: 1px solid #e5e7eb; font-size: 14px; }
+    table tr:nth-child(even) { background: #f9fafb; }
+    .list-item { padding: 12px; background: #f9fafb; margin: 8px 0; border-radius: 6px; border-left: 3px solid #16a34a; }
+    .footer { text-align: center; margin-top: 40px; padding-top: 20px; border-top: 2px solid #e5e7eb; color: #666; font-size: 12px; }
+    @media print {
+      body { padding: 0; background: white; }
+      .container { box-shadow: none; }
+      .section { page-break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>📊 Nasugbu Volunteer Center Analytics Report</h1>
+      <p class="subtitle">Comprehensive Program Performance & Impact Analysis</p>
+    </div>
+    
+    <div class="meta">
+      <p><strong>Generated:</strong> ${reportDate}</p>
+      <p><strong>Filters:</strong> ${filterInfo}</p>
+      <p><strong>Sections Included:</strong> ${sections.join(', ')}</p>
+    </div>
+`;
+
+  // Section 1: Volunteers
+  if (sections.includes('volunteers')) {
+    const totalVolunteers = data.volunteers.length;
+    const activeVolunteers = data.volunteers.filter(v => v.accountStatus === 'active').length;
+    
+    html += `
+    <div class="section">
+      <h2>1. Total Volunteers Growth</h2>
+      <div class="metric-grid">
+        <div class="metric-card">
+          <div class="label">Total Registered</div>
+          <div class="value">${totalVolunteers}</div>
+        </div>
+        <div class="metric-card">
+          <div class="label">Active Volunteers</div>
+          <div class="value">${activeVolunteers}</div>
+        </div>
+        <div class="metric-card">
+          <div class="label">Completion Rate</div>
+          <div class="value">${analytics.metrics?.completionPercentage || 0}%</div>
+        </div>
+      </div>
+      
+      <h3>12-Month Growth Trend</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Month</th>
+            <th>Cumulative Volunteers</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${analytics.volunteerGrowthData.slice(-12).map(point => `
+            <tr>
+              <td>${point.label}</td>
+              <td>${point.value}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+`;
+  }
+
+  // Section 2: Events
+  if (sections.includes('events')) {
+    const events = data.projects.filter(p => p.isEvent);
+    
+    html += `
+    <div class="section">
+      <h2>2. Volunteers Per Event</h2>
+      <p style="margin-bottom: 16px; color: #666;">Total Events: <strong>${events.length}</strong></p>
+      
+      ${events.length > 0 ? `
+        <table>
+          <thead>
+            <tr>
+              <th>Event Title</th>
+              <th>Date</th>
+              <th>Volunteer Count</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${events.map(event => {
+              const volunteerCount = (event.volunteers || []).length;
+              return `
+                <tr>
+                  <td>${event.title || 'Untitled Event'}</td>
+                  <td>${event.startDate ? new Date(event.startDate).toLocaleDateString() : 'TBD'}</td>
+                  <td>${volunteerCount}</td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      ` : '<p>No events found.</p>'}
+    </div>
+`;
+  }
+
+  // Section 3: Skills
+  if (sections.includes('skills')) {
+    const topSkills = analytics.skillAnalytics?.slices?.slice(0, 10) || [];
+    
+    html += `
+    <div class="section">
+      <h2>3. Skills Contributed</h2>
+      <p style="margin-bottom: 16px; color: #666;">Total Unique Skills: <strong>${analytics.skillAnalytics?.slices?.length || 0}</strong></p>
+      
+      <h3>Top 10 Skills</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Skill</th>
+            <th>Volunteer Count</th>
+            <th>Percentage</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${topSkills.map(skill => `
+            <tr>
+              <td>${skill.label}</td>
+              <td>${skill.count}</td>
+              <td>${skill.percentage}%</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+`;
+  }
+
+  // Section 4: Partners
+  if (sections.includes('partners')) {
+    html += `
+    <div class="section">
+      <h2>4. Partner Sectors by Quarter</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Quarter</th>
+            <th>NGO</th>
+            <th>Hospital</th>
+            <th>Institution</th>
+            <th>Private</th>
+            <th>Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${analytics.quarterlyPartnerData.map(q => {
+            const total = q.NGO + q.Hospital + q.Institution + q.Private;
+            return `
+              <tr>
+                <td>${q.label}</td>
+                <td>${q.NGO}</td>
+                <td>${q.Hospital}</td>
+                <td>${q.Institution}</td>
+                <td>${q.Private}</td>
+                <td><strong>${total}</strong></td>
+              </tr>
+            `;
+          }).join('')}
+        </tbody>
+      </table>
+      
+      <h3>All Partners</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Organization</th>
+            <th>Sector</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${data.partners.map(partner => `
+            <tr>
+              <td>${partner.name}</td>
+              <td>${partner.sector || 'N/A'}</td>
+              <td>${partner.status || 'N/A'}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+`;
+  }
+
+  // Section 5: Projects
+  if (sections.includes('projects')) {
+    const statusCounts = {
+      Planning: data.projects.filter(p => p.status === 'Planning').length,
+      'In Progress': data.projects.filter(p => p.status === 'In Progress').length,
+      'On Hold': data.projects.filter(p => p.status === 'On Hold').length,
+      Completed: data.projects.filter(p => p.status === 'Completed').length,
+      Cancelled: data.projects.filter(p => p.status === 'Cancelled').length,
+    };
+    
+    html += `
+    <div class="section">
+      <h2>5. Project Status Overview</h2>
+      <div class="metric-grid">
+        <div class="metric-card">
+          <div class="label">Total Projects</div>
+          <div class="value">${data.projects.length}</div>
+        </div>
+        <div class="metric-card">
+          <div class="label">Completed Hours</div>
+          <div class="value">${analytics.metrics?.completedHours || 0}</div>
+        </div>
+        <div class="metric-card">
+          <div class="label">Total Beneficiaries</div>
+          <div class="value">${analytics.metrics?.totalBeneficiaries || 0}</div>
+        </div>
+      </div>
+      
+      <h3>Status Breakdown</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Status</th>
+            <th>Count</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${Object.entries(statusCounts).map(([status, count]) => `
+            <tr>
+              <td>${status}</td>
+              <td>${count}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+`;
+  }
+
+  html += `
+    <div class="footer">
+      <p>Generated by Nasugbu Volunteer Center Analytics System</p>
+      <p>© ${new Date().getFullYear()} NVC. All rights reserved.</p>
+    </div>
+  </div>
+</body>
+</html>
+`;
+
+  return html;
+}
+
 export default function AdminAnalyticsScreen() {
   const navigation = useNavigation<any>();
   const { width } = useWindowDimensions();
@@ -431,6 +788,12 @@ export default function AdminAnalyticsScreen() {
   const [partnerApplications, setPartnerApplications] = useState<PartnerProjectApplication[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [selectedPartnerId, setSelectedPartnerId] = useState<string | 'all'>('all');
+  const [showPartnerDropdown, setShowPartnerDropdown] = useState(false);
+  const [selectedProgramId, setSelectedProgramId] = useState<string | 'all'>('all');
+  const [showProgramDropdown, setShowProgramDropdown] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [selectedReportSections, setSelectedReportSections] = useState<string[]>(['full']);
 
   const loadAnalytics = useCallback(async (showLoader = false) => {
     if (showLoader) {
@@ -484,26 +847,100 @@ export default function AdminAnalyticsScreen() {
     setRefreshing(false);
   }, [loadAnalytics]);
 
-  const monthPoints = useMemo(() => buildMonthPoints(volunteers), [volunteers]);
+  // Filter data by selected partner and program
+  const filteredProjects = useMemo(() => {
+    let result = projects;
+    
+    // Filter by partner
+    if (selectedPartnerId !== 'all') {
+      result = result.filter(p => p.partnerId === selectedPartnerId);
+    }
+    
+    // Filter by program
+    if (selectedProgramId !== 'all') {
+      result = result.filter(p => p.program_id === selectedProgramId);
+    }
+    
+    return result;
+  }, [projects, selectedPartnerId, selectedProgramId]);
+
+  const filteredReports = useMemo(() => {
+    if (selectedPartnerId === 'all' && selectedProgramId === 'all') return reports;
+    const partnerProjectIds = new Set(filteredProjects.map(p => p.id));
+    return reports.filter(r => partnerProjectIds.has(r.projectId));
+  }, [reports, filteredProjects, selectedPartnerId, selectedProgramId]);
+
+  const filteredTimeLogs = useMemo(() => {
+    if (selectedPartnerId === 'all' && selectedProgramId === 'all') return timeLogs;
+    const partnerProjectIds = new Set(filteredProjects.map(p => p.id));
+    return timeLogs.filter(log => partnerProjectIds.has(log.projectId));
+  }, [timeLogs, filteredProjects, selectedPartnerId, selectedProgramId]);
+
+  const filteredJoinRecords = useMemo(() => {
+    if (selectedPartnerId === 'all' && selectedProgramId === 'all') return volunteerJoinRecords;
+    const partnerProjectIds = new Set(filteredProjects.map(p => p.id));
+    return volunteerJoinRecords.filter(record => partnerProjectIds.has(record.projectId));
+  }, [volunteerJoinRecords, filteredProjects, selectedPartnerId, selectedProgramId]);
+
+  const filteredVolunteers = useMemo(() => {
+    if (selectedPartnerId === 'all' && selectedProgramId === 'all') return volunteers;
+    // Get volunteers who participated in filtered projects
+    const volunteerIds = new Set<string>();
+    filteredTimeLogs.forEach(log => volunteerIds.add(log.volunteerId));
+    filteredJoinRecords.forEach(record => {
+      if (record.volunteerId) volunteerIds.add(record.volunteerId);
+    });
+    filteredProjects.forEach(project => {
+      (project.volunteers || []).forEach(id => volunteerIds.add(id));
+    });
+    return volunteers.filter(v => volunteerIds.has(v.id));
+  }, [volunteers, filteredTimeLogs, filteredJoinRecords, filteredProjects, selectedPartnerId, selectedProgramId]);
+
+  const monthPoints = useMemo(() => buildMonthPoints(filteredVolunteers), [filteredVolunteers]);
   const weeks = useMemo(() => buildWeekBuckets(), []);
   const heatmapRows = useMemo(
-    () => buildHeatmapRows(projects, timeLogs, volunteerJoinRecords, volunteers, weeks),
-    [projects, timeLogs, volunteerJoinRecords, volunteers, weeks]
+    () => buildHeatmapRows(filteredProjects, filteredTimeLogs, filteredJoinRecords, filteredVolunteers, weeks),
+    [filteredProjects, filteredTimeLogs, filteredJoinRecords, filteredVolunteers, weeks]
   );
   const skillAnalytics = useMemo(
-    () => buildSkillSlices(volunteers, projects, timeLogs, volunteerJoinRecords),
-    [projects, timeLogs, volunteerJoinRecords, volunteers]
+    () => buildSkillSlices(filteredVolunteers, filteredProjects, filteredTimeLogs, filteredJoinRecords),
+    [filteredProjects, filteredTimeLogs, filteredJoinRecords, filteredVolunteers]
   );
   const trackedProjects = useMemo(
-    () => projects.filter(project => !project.isEvent && !isTopLevelProgramRecord(project, programTracks)),
-    [projects, programTracks]
+    () => filteredProjects.filter(project => !project.isEvent && !isTopLevelProgramRecord(project, programTracks)),
+    [filteredProjects, programTracks]
   );
 
+  const partnerSectorsByQuarter = useMemo(() => buildPartnerSectorsByQuarter(partners), [partners]);
+
   const completedHours = useMemo(
-    () => Math.round(timeLogs.reduce((sum, log) => sum + getCompletedVolunteerHours(log), 0)),
-    [timeLogs]
+    () => Math.round(filteredTimeLogs.reduce((sum, log) => sum + getCompletedVolunteerHours(log), 0)),
+    [filteredTimeLogs]
   );
-  const currentTotal = volunteers.length;
+  
+  // Calculate project metrics
+  const projectMetrics = useMemo(() => {
+    const totalProjects = trackedProjects.length;
+    const completedProjects = trackedProjects.filter(p => p.status === 'Completed').length;
+    const completionPercentage = totalProjects > 0 ? Math.round((completedProjects / totalProjects) * 100) : 0;
+    
+    // Calculate total beneficiaries from completed projects
+    const totalBeneficiaries = trackedProjects.reduce((sum, project) => {
+      // Get beneficiaries from project data (you may need to adjust field names)
+      const beneficiaries = Number(project.expectedBeneficiaries || 0);
+      return sum + beneficiaries;
+    }, 0);
+    
+    return {
+      totalProjects,
+      completedProjects,
+      completionPercentage,
+      totalBeneficiaries,
+      completedHours,
+    };
+  }, [trackedProjects, completedHours]);
+  
+  const currentTotal = filteredVolunteers.length;
   const previousTotal = monthPoints[monthPoints.length - 2]?.value || 0;
   const monthlyDelta = currentTotal - previousTotal;
   const maxVolunteerValue = Math.max(4, ...monthPoints.map(point => point.value));
@@ -531,6 +968,140 @@ export default function AdminAnalyticsScreen() {
     columnIndex: number;
   } | null>(null);
   const hoverClearTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const selectedPartnerName = useMemo(() => {
+    if (selectedPartnerId === 'all') return 'All Partners';
+    return partners.find(p => p.id === selectedPartnerId)?.name || 'Unknown Partner';
+  }, [selectedPartnerId, partners]);
+
+  const selectedProgramName = useMemo(() => {
+    if (selectedProgramId === 'all') return 'All Programs';
+    return programTracks.find(p => p.id === selectedProgramId)?.title || 'Unknown Program';
+  }, [selectedProgramId, programTracks]);
+
+  // CSV Export Function
+  const exportToCSV = () => {
+    try {
+      const timestamp = new Date().toISOString().split('T')[0];
+      const filterInfo = `${selectedPartnerName} - ${selectedProgramName}`;
+
+      // Prepare CSV data for different sections
+      let csvContent = 'data:text/csv;charset=utf-8,';
+
+      // Header
+      csvContent += `Nasugbu Volunteer Center Analytics Report\n`;
+      csvContent += `Generated: ${new Date().toLocaleString()}\n`;
+      csvContent += `Filters: ${filterInfo}\n\n`;
+
+      // 1. Project Metrics Summary
+      csvContent += `PROJECT METRICS SUMMARY\n`;
+      csvContent += `Metric,Value\n`;
+      csvContent += `Total Projects,${projectMetrics.totalProjects}\n`;
+      csvContent += `Completed Projects,${projectMetrics.completedProjects}\n`;
+      csvContent += `Completion Percentage,${projectMetrics.completionPercentage}%\n`;
+      csvContent += `Total Beneficiaries,${projectMetrics.totalBeneficiaries}\n`;
+      csvContent += `Completed Hours,${projectMetrics.completedHours}\n`;
+      csvContent += `Active Volunteers,${filteredVolunteers.filter(v => v.accountStatus === 'active').length}\n\n`;
+
+      // 2. Volunteer Growth (Last 12 Months)
+      csvContent += `VOLUNTEER GROWTH - LAST 12 MONTHS\n`;
+      csvContent += `Month,Cumulative Volunteers\n`;
+      monthPoints.slice(-12).forEach(point => {
+        csvContent += `${point.label},${point.value}\n`;
+      });
+      csvContent += `\n`;
+
+      // 3. Skills Distribution (Top 20)
+      csvContent += `TOP 20 SKILLS CONTRIBUTED\n`;
+      csvContent += `Skill,Volunteer Count,Percentage\n`;
+      skillAnalytics.slices.slice(0, 20).forEach(skill => {
+        csvContent += `"${skill.label}",${skill.count},${skill.percentage}%\n`;
+      });
+      csvContent += `\n`;
+
+      // 4. Events Summary
+      const events = filteredProjects.filter(p => p.isEvent);
+      csvContent += `EVENTS SUMMARY\n`;
+      csvContent += `Event Title,Start Date,End Date,Volunteer Count,Status\n`;
+      events.forEach(event => {
+        const title = (event.title || 'Untitled Event').replace(/"/g, '""');
+        const startDate = event.startDate ? new Date(event.startDate).toLocaleDateString() : 'TBD';
+        const endDate = event.endDate ? new Date(event.endDate).toLocaleDateString() : 'TBD';
+        const volunteerCount = (event.volunteers || []).length;
+        csvContent += `"${title}",${startDate},${endDate},${volunteerCount},${event.status}\n`;
+      });
+      csvContent += `\n`;
+
+      // 5. Partner Sectors by Quarter
+      csvContent += `PARTNER SECTORS BY QUARTER\n`;
+      csvContent += `Quarter,NGO,Hospital,Institution,Private,Total\n`;
+      quarterlyPartnerData.forEach(q => {
+        const total = q.NGO + q.Hospital + q.Institution + q.Private;
+        csvContent += `${q.label},${q.NGO},${q.Hospital},${q.Institution},${q.Private},${total}\n`;
+      });
+      csvContent += `\n`;
+
+      // 6. All Projects
+      csvContent += `ALL PROJECTS\n`;
+      csvContent += `Title,Status,Start Date,End Date,Hours Logged,Volunteers,Is Event\n`;
+      filteredProjects.forEach(project => {
+        const title = (project.title || 'Untitled').replace(/"/g, '""');
+        const startDate = project.startDate ? new Date(project.startDate).toLocaleDateString() : 'N/A';
+        const endDate = project.endDate ? new Date(project.endDate).toLocaleDateString() : 'N/A';
+        const hoursLogged = filteredTimeLogs.filter(log => log.projectId === project.id)
+          .reduce((sum, log) => sum + (log.hoursLogged || 0), 0);
+        const volunteerCount = (project.volunteers || []).length;
+        const isEvent = project.isEvent ? 'Yes' : 'No';
+        csvContent += `"${title}",${project.status},${startDate},${endDate},${hoursLogged},${volunteerCount},${isEvent}\n`;
+      });
+      csvContent += `\n`;
+
+      // 7. All Volunteers
+      csvContent += `ALL VOLUNTEERS\n`;
+      csvContent += `Name,Email,Phone,Status,Skills,Joined Date\n`;
+      filteredVolunteers.forEach(volunteer => {
+        const name = `${volunteer.firstName || ''} ${volunteer.lastName || ''}`.trim().replace(/"/g, '""');
+        const email = (volunteer.email || 'N/A').replace(/"/g, '""');
+        const phone = volunteer.phoneNumber || 'N/A';
+        const status = volunteer.accountStatus || 'N/A';
+        const skills = (volunteer.skills || []).join('; ').replace(/"/g, '""');
+        const joinedDate = volunteer.createdAt ? new Date(volunteer.createdAt).toLocaleDateString() : 'N/A';
+        csvContent += `"${name}","${email}",${phone},${status},"${skills}",${joinedDate}\n`;
+      });
+      csvContent += `\n`;
+
+      // 8. All Partners
+      csvContent += `ALL PARTNERS\n`;
+      csvContent += `Organization Name,Sector,Contact Name,Email,Phone,Status\n`;
+      filteredPartners.forEach(partner => {
+        const orgName = (partner.name || 'N/A').replace(/"/g, '""');
+        const sector = partner.sector || 'N/A';
+        const contactName = (partner.contactName || 'N/A').replace(/"/g, '""');
+        const email = (partner.contactEmail || 'N/A').replace(/"/g, '""');
+        const phone = partner.contactPhone || 'N/A';
+        const status = partner.status || 'N/A';
+        csvContent += `"${orgName}",${sector},"${contactName}","${email}",${phone},${status}\n`;
+      });
+
+      // Create download
+      if (Platform.OS === 'web') {
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement('a');
+        link.setAttribute('href', encodedUri);
+        link.setAttribute('download', `NVC_Analytics_Export_${timestamp}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        
+        Alert.alert('Success', 'CSV file downloaded successfully!');
+      } else {
+        Alert.alert('Export Complete', 'CSV export is currently optimized for web. Please use the web version for downloads.');
+      }
+    } catch (error) {
+      console.error('CSV export error:', error);
+      Alert.alert('Error', 'Failed to export CSV. Please try again.');
+    }
+  };
 
   const cancelHoverClear = useCallback(() => {
     if (hoverClearTimeoutRef.current) {
@@ -578,6 +1149,243 @@ export default function AdminAnalyticsScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
       >
+        {/* Filter Selectors */}
+        <View style={styles.filtersContainer}>
+          {/* Partner Selector */}
+          <View style={styles.filterCard}>
+            <Text style={styles.selectorLabel}>Filter by Partner</Text>
+            <TouchableOpacity
+              style={styles.partnerDropdownButton}
+              onPress={() => {
+                setShowPartnerDropdown(!showPartnerDropdown);
+                setShowProgramDropdown(false);
+              }}
+              activeOpacity={0.7}
+            >
+              <MaterialIcons name="business" size={20} color={ModernTheme.colors.primary[700]} />
+              <Text style={styles.partnerDropdownText}>{selectedPartnerName}</Text>
+              <MaterialIcons 
+                name={showPartnerDropdown ? "arrow-drop-up" : "arrow-drop-down"} 
+                size={24} 
+                color={ModernTheme.colors.text.secondary} 
+              />
+            </TouchableOpacity>
+            
+            {showPartnerDropdown && (
+              <View style={styles.partnerDropdownMenu}>
+                <TouchableOpacity
+                  style={[
+                    styles.partnerDropdownItem,
+                    selectedPartnerId === 'all' && styles.partnerDropdownItemActive
+                  ]}
+                  onPress={() => {
+                    setSelectedPartnerId('all');
+                    setShowPartnerDropdown(false);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <MaterialIcons 
+                    name="dashboard" 
+                    size={18} 
+                    color={selectedPartnerId === 'all' ? ModernTheme.colors.primary[700] : ModernTheme.colors.text.secondary} 
+                  />
+                  <Text style={[
+                    styles.partnerDropdownItemText,
+                    selectedPartnerId === 'all' && styles.partnerDropdownItemTextActive
+                  ]}>All Partners</Text>
+                  {selectedPartnerId === 'all' && (
+                    <MaterialIcons name="check" size={18} color={ModernTheme.colors.primary[700]} />
+                  )}
+                </TouchableOpacity>
+                
+                {partners.map(partner => (
+                  <TouchableOpacity
+                    key={partner.id}
+                    style={[
+                      styles.partnerDropdownItem,
+                      selectedPartnerId === partner.id && styles.partnerDropdownItemActive
+                    ]}
+                    onPress={() => {
+                      setSelectedPartnerId(partner.id);
+                      setShowPartnerDropdown(false);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <MaterialIcons 
+                      name="business" 
+                      size={18} 
+                      color={selectedPartnerId === partner.id ? ModernTheme.colors.primary[700] : ModernTheme.colors.text.secondary} 
+                    />
+                    <Text style={[
+                      styles.partnerDropdownItemText,
+                      selectedPartnerId === partner.id && styles.partnerDropdownItemTextActive
+                    ]} numberOfLines={1}>{partner.name}</Text>
+                    {selectedPartnerId === partner.id && (
+                      <MaterialIcons name="check" size={18} color={ModernTheme.colors.primary[700]} />
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+
+          {/* Program Selector */}
+          <View style={styles.filterCard}>
+            <Text style={styles.selectorLabel}>Filter by Program</Text>
+            <TouchableOpacity
+              style={styles.partnerDropdownButton}
+              onPress={() => {
+                setShowProgramDropdown(!showProgramDropdown);
+                setShowPartnerDropdown(false);
+              }}
+              activeOpacity={0.7}
+            >
+              <MaterialIcons name="category" size={20} color={ModernTheme.colors.primary[700]} />
+              <Text style={styles.partnerDropdownText}>{selectedProgramName}</Text>
+              <MaterialIcons 
+                name={showProgramDropdown ? "arrow-drop-up" : "arrow-drop-down"} 
+                size={24} 
+                color={ModernTheme.colors.text.secondary} 
+              />
+            </TouchableOpacity>
+            
+            {showProgramDropdown && (
+              <View style={styles.partnerDropdownMenu}>
+                <TouchableOpacity
+                  style={[
+                    styles.partnerDropdownItem,
+                    selectedProgramId === 'all' && styles.partnerDropdownItemActive
+                  ]}
+                  onPress={() => {
+                    setSelectedProgramId('all');
+                    setShowProgramDropdown(false);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <MaterialIcons 
+                    name="dashboard" 
+                    size={18} 
+                    color={selectedProgramId === 'all' ? ModernTheme.colors.primary[700] : ModernTheme.colors.text.secondary} 
+                  />
+                  <Text style={[
+                    styles.partnerDropdownItemText,
+                    selectedProgramId === 'all' && styles.partnerDropdownItemTextActive
+                  ]}>All Programs</Text>
+                  {selectedProgramId === 'all' && (
+                    <MaterialIcons name="check" size={18} color={ModernTheme.colors.primary[700]} />
+                  )}
+                </TouchableOpacity>
+                
+                {programTracks.map(program => (
+                  <TouchableOpacity
+                    key={program.id}
+                    style={[
+                      styles.partnerDropdownItem,
+                      selectedProgramId === program.id && styles.partnerDropdownItemActive
+                    ]}
+                    onPress={() => {
+                      setSelectedProgramId(program.id);
+                      setShowProgramDropdown(false);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <MaterialIcons 
+                      name="category" 
+                      size={18} 
+                      color={selectedProgramId === program.id ? ModernTheme.colors.primary[700] : ModernTheme.colors.text.secondary} 
+                    />
+                    <Text style={[
+                      styles.partnerDropdownItemText,
+                      selectedProgramId === program.id && styles.partnerDropdownItemTextActive
+                    ]} numberOfLines={1}>{program.title}</Text>
+                    {selectedProgramId === program.id && (
+                      <MaterialIcons name="check" size={18} color={ModernTheme.colors.primary[700]} />
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+        </View>
+
+        {/* Project Metrics Overview */}
+        <View style={styles.metricsOverviewCard}>
+          <View style={styles.cardHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.cardTitle}>PROJECT METRICS OVERVIEW</Text>
+              <Text style={styles.cardSubtitle}>Key performance indicators across filtered projects</Text>
+            </View>
+            <View style={styles.exportButtonsContainer}>
+              <TouchableOpacity
+                style={styles.exportCSVButton}
+                onPress={() => exportToCSV()}
+                activeOpacity={0.8}
+              >
+                <MaterialIcons name="table-chart" size={20} color="#16a34a" />
+                <Text style={styles.exportCSVButtonText}>Export CSV</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.generateReportButton}
+                onPress={() => setShowReportModal(true)}
+                activeOpacity={0.8}
+              >
+                <MaterialIcons name="picture-as-pdf" size={20} color="#fff" />
+                <Text style={styles.generateReportButtonText}>Generate PDF</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+          
+          <View style={styles.metricsGrid}>
+            {/* Project Completion */}
+            <View style={styles.metricBox}>
+              <View style={styles.metricIconCircle}>
+                <MaterialIcons name="check-circle" size={28} color={ModernTheme.colors.primary[600]} />
+              </View>
+              <Text style={styles.metricValue}>{projectMetrics.completionPercentage}%</Text>
+              <Text style={styles.metricLabel}>Project Completion</Text>
+              <Text style={styles.metricSubtext}>
+                {projectMetrics.completedProjects} of {projectMetrics.totalProjects} completed
+              </Text>
+            </View>
+
+            {/* Volunteer Hours */}
+            <View style={styles.metricBox}>
+              <View style={[styles.metricIconCircle, { backgroundColor: ModernTheme.colors.accent[50] }]}>
+                <MaterialIcons name="schedule" size={28} color={ModernTheme.colors.accent[600]} />
+              </View>
+              <Text style={styles.metricValue}>{projectMetrics.completedHours.toLocaleString()}</Text>
+              <Text style={styles.metricLabel}>Volunteer Hours</Text>
+              <Text style={styles.metricSubtext}>
+                Total hours contributed
+              </Text>
+            </View>
+
+            {/* Beneficiaries Reached */}
+            <View style={styles.metricBox}>
+              <View style={[styles.metricIconCircle, { backgroundColor: ModernTheme.colors.status.completed + '20' }]}>
+                <MaterialIcons name="people-outline" size={28} color={ModernTheme.colors.status.completed} />
+              </View>
+              <Text style={styles.metricValue}>{projectMetrics.totalBeneficiaries.toLocaleString()}</Text>
+              <Text style={styles.metricLabel}>Beneficiaries Reached</Text>
+              <Text style={styles.metricSubtext}>
+                Across all projects
+              </Text>
+            </View>
+
+            {/* Active Volunteers */}
+            <View style={styles.metricBox}>
+              <View style={[styles.metricIconCircle, { backgroundColor: ModernTheme.colors.primary[100] }]}>
+                <MaterialIcons name="groups" size={28} color={ModernTheme.colors.primary[700]} />
+              </View>
+              <Text style={styles.metricValue}>{currentTotal}</Text>
+              <Text style={styles.metricLabel}>Active Volunteers</Text>
+              <Text style={styles.metricSubtext}>
+                Total registered
+              </Text>
+            </View>
+          </View>
+        </View>
+
         <View style={styles.chartCard}>
           <View style={styles.cardHeader}>
             <View>
@@ -949,10 +1757,10 @@ export default function AdminAnalyticsScreen() {
                   const partnerName = partner?.name || application?.partnerName || 'Internal';
                   const volunteerCount = getProjectVolunteerIdsIncludingEvents(
                     project,
-                    projects,
-                    timeLogs,
-                    volunteerJoinRecords,
-                    volunteers
+                    filteredProjects,
+                    filteredTimeLogs,
+                    filteredJoinRecords,
+                    filteredVolunteers
                   ).size;
 
                   return (
@@ -999,12 +1807,255 @@ export default function AdminAnalyticsScreen() {
           })()}
         </View>
 
+        {/* PARTNER SECTORS BY QUARTER */}
+        <View style={styles.sectorsByQuarterCard}>
+          <View style={styles.cardHeader}>
+            <View>
+              <Text style={styles.cardTitle}>PARTNER SECTORS BY QUARTER</Text>
+              <Text style={styles.cardSubtitle}>New partner organizations grouped by creation quarter</Text>
+            </View>
+          </View>
+
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <View style={styles.sectorTable}>
+              {/* Table Header */}
+              <View style={styles.sectorTableRow}>
+                <View style={[styles.sectorTableCell, styles.sectorTableHeaderCell, styles.sectorTableFirstColumn]}>
+                  <Text style={styles.sectorTableHeaderText}>Quarter</Text>
+                </View>
+                <View style={[styles.sectorTableCell, styles.sectorTableHeaderCell]}>
+                  <Text style={styles.sectorTableHeaderText}>NGO</Text>
+                </View>
+                <View style={[styles.sectorTableCell, styles.sectorTableHeaderCell]}>
+                  <Text style={styles.sectorTableHeaderText}>Hospital</Text>
+                </View>
+                <View style={[styles.sectorTableCell, styles.sectorTableHeaderCell]}>
+                  <Text style={styles.sectorTableHeaderText}>Institution</Text>
+                </View>
+                <View style={[styles.sectorTableCell, styles.sectorTableHeaderCell]}>
+                  <Text style={styles.sectorTableHeaderText}>Private</Text>
+                </View>
+              </View>
+
+              {/* Table Rows */}
+              {partnerSectorsByQuarter.map((row, index) => (
+                <View key={row.quarter} style={[styles.sectorTableRow, index % 2 === 1 && styles.sectorTableRowAlt]}>
+                  <View style={[styles.sectorTableCell, styles.sectorTableFirstColumn]}>
+                    <Text style={styles.sectorTableQuarterText}>{row.quarter}</Text>
+                  </View>
+                  <View style={styles.sectorTableCell}>
+                    <Text style={styles.sectorTableValueText}>{row.NGO}</Text>
+                  </View>
+                  <View style={styles.sectorTableCell}>
+                    <Text style={styles.sectorTableValueText}>{row.Hospital}</Text>
+                  </View>
+                  <View style={styles.sectorTableCell}>
+                    <Text style={styles.sectorTableValueText}>{row.Institution}</Text>
+                  </View>
+                  <View style={styles.sectorTableCell}>
+                    <Text style={styles.sectorTableValueText}>{row.Private}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          </ScrollView>
+        </View>
+
         <View style={styles.footerStats}>
-          <Text style={styles.footerStat}>Event reports: {reports.length}</Text>
+          <Text style={styles.footerStat}>Event reports: {filteredReports.length}</Text>
           <Text style={styles.footerStat}>Completed volunteer hours: {completedHours}</Text>
-          <Text style={styles.footerStat}>Tracked events: {projects.filter(project => project.isEvent).length}</Text>
+          <Text style={styles.footerStat}>Tracked events: {filteredProjects.filter(project => project.isEvent).length}</Text>
         </View>
       </ScrollView>
+
+      {/* Generate Report Modal */}
+      <Modal
+        visible={showReportModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowReportModal(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowReportModal(false)}
+        >
+          <TouchableOpacity
+            style={styles.reportModalContent}
+            activeOpacity={1}
+            onPress={(e) => e.stopPropagation()}
+          >
+            <View style={styles.reportModalHeader}>
+              <MaterialIcons name="picture-as-pdf" size={32} color={ModernTheme.colors.primary[700]} />
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={styles.reportModalTitle}>Generate Analytics PDF Report</Text>
+                <Text style={styles.reportModalSubtitle}>Select the sections to include in your generated report</Text>
+              </View>
+              <TouchableOpacity onPress={() => setShowReportModal(false)}>
+                <MaterialIcons name="close" size={24} color={ModernTheme.colors.text.secondary} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.reportOptions}>
+              {/* Full Executive Report */}
+              <TouchableOpacity
+                style={[styles.reportOption, selectedReportSections.includes('full') && styles.reportOptionSelected]}
+                onPress={() => setSelectedReportSections(['full'])}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.reportOptionRadio, selectedReportSections.includes('full') && styles.reportOptionRadioSelected]}>
+                  {selectedReportSections.includes('full') && (
+                    <View style={styles.reportOptionRadioInner} />
+                  )}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.reportOptionTitle}>Full Executive Analytics Report</Text>
+                  <Text style={styles.reportOptionDesc}>All sections including volunteer report, event participation, skills directory, partner sectors, and statistical breakdowns</Text>
+                </View>
+              </TouchableOpacity>
+
+              {/* Custom Selection */}
+              <TouchableOpacity
+                style={[styles.reportOption, selectedReportSections.length > 1 || (selectedReportSections.length === 1 && selectedReportSections[0] !== 'full') ? styles.reportOptionSelected : null]}
+                onPress={() => setSelectedReportSections([])}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.reportOptionRadio, selectedReportSections.length > 1 || (selectedReportSections.length === 1 && selectedReportSections[0] !== 'full') ? styles.reportOptionRadioSelected : null]}>
+                  {(selectedReportSections.length > 1 || (selectedReportSections.length === 1 && selectedReportSections[0] !== 'full')) && (
+                    <View style={styles.reportOptionRadioInner} />
+                  )}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.reportOptionTitle}>Custom Selection</Text>
+                  <Text style={styles.reportOptionDesc}>Choose specific sections below</Text>
+                </View>
+              </TouchableOpacity>
+
+              {/* Individual Sections */}
+              {['volunteers', 'events', 'skills', 'partners', 'projects'].map((section) => {
+                const isDisabled = selectedReportSections.includes('full');
+                const isSelected = selectedReportSections.includes(section);
+                const sectionTitles = {
+                  volunteers: '1. Total Volunteers Growth',
+                  events: '2. Volunteers Per Event',
+                  skills: '3. Skills Contributed',
+                  partners: '4. Partner Sectors by Quarter',
+                  projects: '5. Project Status Overview'
+                };
+                const sectionDescs = {
+                  volunteers: '12-month cumulative growth curve with completed metrics of registered volunteers and onboard',
+                  events: 'All breakout events and full volunteer names for each event',
+                  skills: 'Skill distribution metrics and complete volunteer-to-skill directory',
+                  partners: 'Quarterly breakdown of NGO, Hospital, Institution, Private partners and full organization directory',
+                  projects: 'Filtered project breakdown across Planning, In Progress, On Hold, Completed, and Cancelled'
+                };
+
+                return (
+                  <TouchableOpacity
+                    key={section}
+                    style={[styles.reportOptionIndent, isSelected && !isDisabled && styles.reportOptionSelected, isDisabled && styles.reportOptionDisabled]}
+                    onPress={() => {
+                      if (isDisabled) return;
+                      setSelectedReportSections(prev => {
+                        if (prev.includes(section)) {
+                          return prev.filter(s => s !== section);
+                        } else {
+                          return [...prev.filter(s => s !== 'full'), section];
+                        }
+                      });
+                    }}
+                    activeOpacity={isDisabled ? 1 : 0.7}
+                    disabled={isDisabled}
+                  >
+                    <View style={[styles.reportOptionCheckbox, isSelected && !isDisabled && styles.reportOptionCheckboxSelected]}>
+                      {isSelected && !isDisabled && (
+                        <MaterialIcons name="check" size={16} color="#fff" />
+                      )}
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.reportOptionTitle, isDisabled && styles.reportOptionTextDisabled]}>{sectionTitles[section as keyof typeof sectionTitles]}</Text>
+                      <Text style={[styles.reportOptionDesc, isDisabled && styles.reportOptionTextDisabled]}>{sectionDescs[section as keyof typeof sectionDescs]}</Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+
+            <View style={styles.reportModalFooter}>
+              <TouchableOpacity
+                style={styles.reportCancelButton}
+                onPress={() => setShowReportModal(false)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.reportCancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.reportGenerateButton}
+                onPress={async () => {
+                  try {
+                    const sections = selectedReportSections.includes('full') 
+                      ? ['volunteers', 'events', 'skills', 'partners', 'projects']
+                      : selectedReportSections.filter(s => s !== 'full');
+                    
+                    if (sections.length === 0) {
+                      Alert.alert('No Sections Selected', 'Please select at least one section to include in the report.');
+                      return;
+                    }
+
+                    setShowReportModal(false);
+
+                    // Generate PDF content as HTML
+                    const htmlContent = generatePDFReportHTML(
+                      sections,
+                      {
+                        volunteers: filteredVolunteers,
+                        projects: filteredProjects,
+                        partners: filteredPartners,
+                        reports: filteredReports,
+                        timeLogs: filteredTimeLogs,
+                        joinRecords: filteredJoinRecords,
+                        applications: filteredApplications,
+                      },
+                      {
+                        partnerFilter: selectedPartnerId,
+                        programFilter: selectedProgramId,
+                        metrics: projectMetrics,
+                        volunteerGrowthData,
+                        skillAnalytics,
+                        quarterlyPartnerData,
+                      }
+                    );
+
+                    // Create downloadable file
+                    if (Platform.OS === 'web') {
+                      const blob = new Blob([htmlContent], { type: 'text/html' });
+                      const url = URL.createObjectURL(blob);
+                      const link = document.createElement('a');
+                      link.href = url;
+                      link.download = `Analytics_Report_${new Date().toISOString().split('T')[0]}.html`;
+                      document.body.appendChild(link);
+                      link.click();
+                      document.body.removeChild(link);
+                      URL.revokeObjectURL(url);
+                      
+                      Alert.alert('Success', 'Analytics report downloaded successfully! Open the HTML file in your browser to print as PDF.');
+                    } else {
+                      Alert.alert('Download Complete', 'Report generation is currently optimized for web. Please use the web version for downloads.');
+                    }
+                  } catch (error) {
+                    console.error('PDF generation error:', error);
+                    Alert.alert('Error', 'Failed to generate report. Please try again.');
+                  }
+                }}
+                activeOpacity={0.8}
+              >
+                <MaterialIcons name="download" size={20} color="#fff" />
+                <Text style={styles.reportGenerateButtonText}>Download PDF Report</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
@@ -1023,6 +2074,196 @@ const styles = StyleSheet.create({
   scrollContent: {
     padding: ModernTheme.spacing[5],
     gap: ModernTheme.spacing[4],
+  },
+  // Filter Selectors styles
+  filtersContainer: {
+    flexDirection: 'row',
+    gap: ModernTheme.spacing[3],
+    flexWrap: 'wrap',
+  },
+  filterCard: {
+    flex: 1,
+    minWidth: 280,
+    borderRadius: ModernTheme.borderRadius.lg,
+    backgroundColor: ModernTheme.colors.background.card,
+    borderWidth: 0,
+    borderColor: 'transparent',
+    padding: ModernTheme.spacing[4],
+    ...ModernTheme.shadows.base,
+    position: 'relative',
+    zIndex: 1000,
+  },
+  // Partner Selector styles (reused for program)
+  partnerSelectorCard: {
+    borderRadius: ModernTheme.borderRadius.lg,
+    backgroundColor: ModernTheme.colors.background.card,
+    borderWidth: 0,
+    borderColor: 'transparent',
+    padding: ModernTheme.spacing[4],
+    ...ModernTheme.shadows.base,
+    position: 'relative',
+    zIndex: 1000,
+  },
+  selectorLabel: {
+    fontSize: ModernTheme.typography.fontSize.sm,
+    fontWeight: ModernTheme.typography.fontWeight.semibold,
+    color: ModernTheme.colors.text.secondary,
+    marginBottom: ModernTheme.spacing[2],
+  },
+  partnerDropdownButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: ModernTheme.spacing[2],
+    paddingHorizontal: ModernTheme.spacing[3],
+    paddingVertical: ModernTheme.spacing[2.5],
+    backgroundColor: ModernTheme.colors.background.tertiary,
+    borderRadius: ModernTheme.borderRadius.md,
+    borderWidth: 1.5,
+    borderColor: ModernTheme.colors.primary[200],
+    ...ModernTheme.shadows.sm,
+  },
+  partnerDropdownText: {
+    flex: 1,
+    fontSize: ModernTheme.typography.fontSize.md,
+    fontWeight: ModernTheme.typography.fontWeight.semibold,
+    color: ModernTheme.colors.text.primary,
+  },
+  partnerDropdownMenu: {
+    marginTop: ModernTheme.spacing[2],
+    borderRadius: ModernTheme.borderRadius.md,
+    backgroundColor: ModernTheme.colors.background.card,
+    borderWidth: 1.5,
+    borderColor: ModernTheme.colors.neutral[200],
+    ...ModernTheme.shadows.lg,
+    maxHeight: 300,
+    overflow: 'scroll',
+  },
+  partnerDropdownItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: ModernTheme.spacing[2],
+    paddingHorizontal: ModernTheme.spacing[3],
+    paddingVertical: ModernTheme.spacing[2.5],
+    borderBottomWidth: 1,
+    borderBottomColor: ModernTheme.colors.neutral[100],
+  },
+  partnerDropdownItemActive: {
+    backgroundColor: ModernTheme.colors.primary[50],
+  },
+  partnerDropdownItemText: {
+    flex: 1,
+    fontSize: ModernTheme.typography.fontSize.md,
+    fontWeight: ModernTheme.typography.fontWeight.medium,
+    color: ModernTheme.colors.text.secondary,
+  },
+  partnerDropdownItemTextActive: {
+    color: ModernTheme.colors.primary[700],
+    fontWeight: ModernTheme.typography.fontWeight.semibold,
+  },
+  // Partner Sectors by Quarter styles
+  sectorsByQuarterCard: {
+    borderRadius: ModernTheme.borderRadius.lg,
+    backgroundColor: ModernTheme.colors.background.card,
+    borderWidth: 0,
+    borderColor: 'transparent',
+    padding: ModernTheme.spacing[5],
+    ...ModernTheme.shadows.base,
+  },
+  sectorTable: {
+    minWidth: 600,
+    marginTop: ModernTheme.spacing[3],
+  },
+  sectorTableRow: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: ModernTheme.colors.neutral[200],
+  },
+  sectorTableRowAlt: {
+    backgroundColor: ModernTheme.colors.background.tertiary,
+  },
+  sectorTableCell: {
+    flex: 1,
+    paddingVertical: ModernTheme.spacing[3],
+    paddingHorizontal: ModernTheme.spacing[4],
+    justifyContent: 'center',
+    alignItems: 'center',
+    minWidth: 120,
+  },
+  sectorTableFirstColumn: {
+    alignItems: 'flex-start',
+    minWidth: 100,
+  },
+  sectorTableHeaderCell: {
+    backgroundColor: ModernTheme.colors.primary[700],
+    borderBottomWidth: 0,
+  },
+  sectorTableHeaderText: {
+    fontSize: ModernTheme.typography.fontSize.sm,
+    fontWeight: ModernTheme.typography.fontWeight.bold,
+    color: ModernTheme.colors.text.inverse,
+    textTransform: 'uppercase',
+    letterSpacing: ModernTheme.typography.letterSpacing.wide,
+  },
+  sectorTableQuarterText: {
+    fontSize: ModernTheme.typography.fontSize.md,
+    fontWeight: ModernTheme.typography.fontWeight.bold,
+    color: ModernTheme.colors.text.primary,
+  },
+  sectorTableValueText: {
+    fontSize: ModernTheme.typography.fontSize.md,
+    fontWeight: ModernTheme.typography.fontWeight.semibold,
+    color: ModernTheme.colors.text.secondary,
+  },
+  // Project Metrics Overview styles
+  metricsOverviewCard: {
+    borderRadius: ModernTheme.borderRadius.lg,
+    backgroundColor: ModernTheme.colors.background.card,
+    borderWidth: 0,
+    borderColor: 'transparent',
+    padding: ModernTheme.spacing[5],
+    ...ModernTheme.shadows.base,
+  },
+  metricsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: ModernTheme.spacing[3],
+    marginTop: ModernTheme.spacing[4],
+  },
+  metricBox: {
+    flex: 1,
+    minWidth: 200,
+    padding: ModernTheme.spacing[4],
+    backgroundColor: ModernTheme.colors.background.tertiary,
+    borderRadius: ModernTheme.borderRadius.md,
+    alignItems: 'center',
+    ...ModernTheme.shadows.xs,
+  },
+  metricIconCircle: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: ModernTheme.colors.primary[50],
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: ModernTheme.spacing[3],
+  },
+  metricValue: {
+    fontSize: 32,
+    fontWeight: ModernTheme.typography.fontWeight.bold,
+    color: ModernTheme.colors.text.primary,
+    marginBottom: ModernTheme.spacing[1],
+  },
+  metricLabel: {
+    fontSize: ModernTheme.typography.fontSize.sm,
+    fontWeight: ModernTheme.typography.fontWeight.semibold,
+    color: ModernTheme.colors.text.secondary,
+    textAlign: 'center',
+    marginBottom: ModernTheme.spacing[1],
+  },
+  metricSubtext: {
+    fontSize: ModernTheme.typography.fontSize.xs,
+    color: ModernTheme.colors.text.tertiary,
+    textAlign: 'center',
   },
   chartCard: {
     borderRadius: ModernTheme.borderRadius.lg,
@@ -1634,6 +2875,196 @@ const styles = StyleSheet.create({
     color: ModernTheme.colors.text.secondary,
     fontWeight: ModernTheme.typography.fontWeight.medium,
     textAlign: 'center',
+  },
+  // Generate Report Button styles
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: ModernTheme.spacing[4],
+  },
+  exportButtonsContainer: {
+    flexDirection: 'row',
+    gap: ModernTheme.spacing[2],
+  },
+  exportCSVButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderWidth: 2,
+    borderColor: ModernTheme.colors.primary[700],
+    paddingHorizontal: ModernTheme.spacing[4],
+    paddingVertical: ModernTheme.spacing[2.5],
+    borderRadius: ModernTheme.borderRadius.md,
+    gap: ModernTheme.spacing[2],
+  },
+  exportCSVButtonText: {
+    color: ModernTheme.colors.primary[700],
+    fontSize: ModernTheme.typography.fontSize.sm,
+    fontWeight: ModernTheme.typography.fontWeight.bold,
+  },
+  generateReportButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: ModernTheme.colors.primary[700],
+    paddingHorizontal: ModernTheme.spacing[4],
+    paddingVertical: ModernTheme.spacing[2.5],
+    borderRadius: ModernTheme.borderRadius.md,
+    gap: ModernTheme.spacing[2],
+    ...ModernTheme.shadows.md,
+  },
+  generateReportButtonText: {
+    color: '#fff',
+    fontSize: ModernTheme.typography.fontSize.sm,
+    fontWeight: ModernTheme.typography.fontWeight.bold,
+  },
+  // Report Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: ModernTheme.spacing[4],
+  },
+  reportModalContent: {
+    backgroundColor: ModernTheme.colors.background.card,
+    borderRadius: ModernTheme.borderRadius.xl,
+    width: '100%',
+    maxWidth: 600,
+    maxHeight: '90%',
+    ...ModernTheme.shadows.xl,
+  },
+  reportModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    padding: ModernTheme.spacing[5],
+    borderBottomWidth: 1,
+    borderBottomColor: ModernTheme.colors.border,
+  },
+  reportModalTitle: {
+    fontSize: ModernTheme.typography.fontSize.xl,
+    fontWeight: ModernTheme.typography.fontWeight.extrabold,
+    color: ModernTheme.colors.text.primary,
+    marginBottom: ModernTheme.spacing[1],
+  },
+  reportModalSubtitle: {
+    fontSize: ModernTheme.typography.fontSize.sm,
+    color: ModernTheme.colors.text.secondary,
+  },
+  reportOptions: {
+    padding: ModernTheme.spacing[5],
+    maxHeight: 450,
+  },
+  reportOption: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    padding: ModernTheme.spacing[4],
+    borderRadius: ModernTheme.borderRadius.lg,
+    backgroundColor: ModernTheme.colors.background.tertiary,
+    marginBottom: ModernTheme.spacing[3],
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  reportOptionSelected: {
+    backgroundColor: ModernTheme.colors.primary[50],
+    borderColor: ModernTheme.colors.primary[700],
+  },
+  reportOptionDisabled: {
+    opacity: 0.4,
+  },
+  reportOptionRadio: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    borderColor: ModernTheme.colors.border,
+    marginRight: ModernTheme.spacing[3],
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  reportOptionRadioSelected: {
+    borderColor: ModernTheme.colors.primary[700],
+  },
+  reportOptionRadioInner: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: ModernTheme.colors.primary[700],
+  },
+  reportOptionCheckbox: {
+    width: 20,
+    height: 20,
+    borderRadius: ModernTheme.borderRadius.sm,
+    borderWidth: 2,
+    borderColor: ModernTheme.colors.border,
+    marginRight: ModernTheme.spacing[3],
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  reportOptionCheckboxSelected: {
+    backgroundColor: ModernTheme.colors.primary[700],
+    borderColor: ModernTheme.colors.primary[700],
+  },
+  reportOptionIndent: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    padding: ModernTheme.spacing[4],
+    paddingLeft: ModernTheme.spacing[6],
+    borderRadius: ModernTheme.borderRadius.lg,
+    backgroundColor: ModernTheme.colors.background.tertiary,
+    marginBottom: ModernTheme.spacing[2],
+    marginLeft: ModernTheme.spacing[4],
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  reportOptionTitle: {
+    fontSize: ModernTheme.typography.fontSize.base,
+    fontWeight: ModernTheme.typography.fontWeight.bold,
+    color: ModernTheme.colors.text.primary,
+    marginBottom: ModernTheme.spacing[1],
+  },
+  reportOptionDesc: {
+    fontSize: ModernTheme.typography.fontSize.sm,
+    color: ModernTheme.colors.text.secondary,
+    lineHeight: 20,
+  },
+  reportOptionTextDisabled: {
+    opacity: 0.6,
+  },
+  reportModalFooter: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: ModernTheme.spacing[3],
+    padding: ModernTheme.spacing[5],
+    borderTopWidth: 1,
+    borderTopColor: ModernTheme.colors.border,
+  },
+  reportCancelButton: {
+    paddingHorizontal: ModernTheme.spacing[5],
+    paddingVertical: ModernTheme.spacing[3],
+    borderRadius: ModernTheme.borderRadius.md,
+    backgroundColor: ModernTheme.colors.background.tertiary,
+  },
+  reportCancelButtonText: {
+    color: ModernTheme.colors.text.primary,
+    fontSize: ModernTheme.typography.fontSize.base,
+    fontWeight: ModernTheme.typography.fontWeight.semibold,
+  },
+  reportGenerateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: ModernTheme.spacing[2],
+    paddingHorizontal: ModernTheme.spacing[5],
+    paddingVertical: ModernTheme.spacing[3],
+    borderRadius: ModernTheme.borderRadius.md,
+    backgroundColor: ModernTheme.colors.primary[700],
+    ...ModernTheme.shadows.md,
+  },
+  reportGenerateButtonText: {
+    color: '#fff',
+    fontSize: ModernTheme.typography.fontSize.base,
+    fontWeight: ModernTheme.typography.fontWeight.bold,
   },
 });
 

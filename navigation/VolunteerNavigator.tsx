@@ -15,7 +15,7 @@ import CommunicationHubScreen from '../screens/CommunicationHubScreen';
 import VolunteerReportsScreen from '../screens/VolunteerReportsScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import VolunteerProjectDetailsScreen from '../screens/VolunteerProjectDetailsScreen';
-import { getMessagesForUser, subscribeToMessages, getAllUsers, subscribeToStorageChanges, markMessageAsRead } from '../models/storage';
+import { getUnreadMessagesForUser, subscribeToMessages, getAllUsers, subscribeToStorageChanges, markMessageAsRead } from '../models/storage';
 
 export type VolunteerTabParamList = {
   Home: undefined;
@@ -60,11 +60,10 @@ export default function VolunteerNavigator() {
     const loadUnreadCount = async () => {
       try {
         const [messages, usersList] = await Promise.all([
-          getMessagesForUser(user.id).catch(() => []),
+          getUnreadMessagesForUser(user.id).catch(() => []),
           getAllUsers().catch(() => []),
         ]);
-        const unread = messages.filter(m => !m.read && m.recipientId === user.id);
-        const enriched = unread.map(msg => {
+        const enriched = messages.map(msg => {
           const sender = usersList.find(u => u.id === msg.senderId);
           return {
             ...msg,

@@ -39,10 +39,13 @@ from .db import (
 from .field_rules import normalize_comparable_phone
 from .image_compression import compress_base64_image, get_image_size_kb
 from .relational_mirror import (
+    TABLE_SPECS,
     ensure_volunteer_time_logs_table_shape,
     get_relational_item_by_id,
     get_relational_items_by_field,
     upsert_relational_item,
+    _primary_key_column,
+    _row_to_item,
 )
 import traceback
 
@@ -97,6 +100,8 @@ class TTLCache:
 _projects_snapshot_cache = TTLCache(ttl_seconds=300)
 _projects_snapshot_lock = threading.Lock()
 _storage_collection_cache = TTLCache(ttl_seconds=120)
+_message_storage_ready = False
+_message_storage_lock = threading.Lock()
 NON_CACHEABLE_COLLECTION_KEYS = {"programTracks", "programs"}
 _DEFAULT_SNAPSHOT_FIELDS = {
     "projects",
@@ -957,6 +962,17 @@ def ensure_message_storage() -> None:
         connection.commit()
 
 
+def ensure_message_storage_once() -> None:
+    global _message_storage_ready
+    if _message_storage_ready:
+        return
+    with _message_storage_lock:
+        if _message_storage_ready:
+            return
+        ensure_message_storage()
+        _message_storage_ready = True
+
+
 # Ensures the project group message table exists before group chat APIs are used.
 def ensure_project_group_message_storage() -> None:
     with get_connection() as connection:
@@ -1117,9 +1133,9 @@ def _get_special_storage_collection(connection: Any, key: str) -> list[dict[str,
         if key == "messages":
             cursor.execute(
                 """
-                SELECT id as messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                SELECT messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                 FROM public.messages
-                ORDER BY timestamp ASC, id ASC
+                ORDER BY timestamp ASC, messages_id ASC
                 """
             )
             return [serialize_message_row(row) for row in cursor.fetchall()]
@@ -1128,7 +1144,7 @@ def _get_special_storage_collection(connection: Any, key: str) -> list[dict[str,
             cursor.execute(
                 """
                 select
-                  id as project_group_messages_id,
+                  project_group_messages_id,
                   project_id,
                   sender_id,
                   content,
@@ -1141,7 +1157,7 @@ def _get_special_storage_collection(connection: Any, key: str) -> list[dict[str,
                   response_to_title,
                   attachments
                 from public.project_group_messages
-                order by timestamp asc, id asc
+                order by timestamp asc, project_group_messages_id asc
                 """
             )
             return [serialize_project_group_message_row(row) for row in cursor.fetchall()]
@@ -1622,6 +1638,211 @@ def _get_cached_collection(connection: Any, key: str) -> Any:
     return value
 
 
+def _json_text_field_expression(column_name: str, field_name: str) -> str:
+    return f"({column_name}::jsonb ->> '{field_name}')"
+
+
+def _safe_json_object(**values: Any) -> dict[str, Any]:
+    return {key: value for key, value in values.items() if value not in (None, "")}
+
+
+def _get_partner_application_parent_repair_records(connection: Any) -> list[dict[str, Any]]:
+    from psycopg.rows import dict_row
+
+    pk_column = _primary_key_column("partnerProjectApplications")
+    try:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                f"""
+                select
+                  {pk_column} as id,
+                  project_id,
+                  status,
+                  {_json_text_field_expression("proposal_details", "targetProjectId")} as target_project_id,
+                  {_json_text_field_expression("proposal_details", "targetProgramId")} as target_program_id,
+                  {_json_text_field_expression("proposal_details", "programId")} as program_id,
+                  {_json_text_field_expression("proposal_details", "requestedProgramModule")} as requested_program_module
+                from partner_project_applications
+                where status = 'Approved'
+                order by id asc
+                """
+            )
+            rows = cursor.fetchall()
+    except Exception as error:
+        print(f"[WARN] Parent repair application summary failed: {type(error).__name__}: {error}")
+        try:
+            connection.rollback()
+        except Exception:
+            pass
+        return get_postgres_hot_storage_collection(connection, "partnerProjectApplications")
+
+    return [
+        {
+            "id": row["id"],
+            "projectId": row["project_id"],
+            "status": row["status"],
+            "proposalDetails": _safe_json_object(
+                targetProjectId=row["target_project_id"],
+                targetProgramId=row["target_program_id"],
+                programId=row["program_id"],
+                requestedProgramModule=row["requested_program_module"],
+            ),
+        }
+        for row in rows
+    ]
+
+
+def _get_admin_dashboard_collection(connection: Any, key: str) -> Any:
+    from psycopg.rows import dict_row
+
+    if key in {"projects", "events", "programs"}:
+        return _get_media_light_collection(connection, key)
+
+    if key == "volunteerTimeLogs":
+        pk_column = _primary_key_column(key)
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                f"""
+                select {pk_column} as id, volunteer_id, project_id, time_in, time_out, note,
+                       attendance_confirmed_at, attendance_checked_at,
+                       attendance_checked_by, attendance_checked_by_name
+                from volunteer_time_logs
+                order by {pk_column} asc
+                """
+            )
+            return [
+                {
+                    "id": row["id"],
+                    "volunteerId": row["volunteer_id"],
+                    "projectId": row["project_id"],
+                    "timeIn": row["time_in"],
+                    "timeOut": row["time_out"],
+                    "note": row["note"],
+                    "attendanceConfirmedAt": row["attendance_confirmed_at"],
+                    "attendanceCheckedAt": row["attendance_checked_at"],
+                    "attendanceCheckedBy": row["attendance_checked_by"],
+                    "attendanceCheckedByName": row["attendance_checked_by_name"],
+                }
+                for row in cursor.fetchall()
+            ]
+
+    if key == "partnerReports":
+        pk_column = _primary_key_column(key)
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                f"""
+                select {pk_column} as id, project_id, partner_id, partner_user_id, partner_name,
+                       submitter_user_id, submitter_name, submitter_role, title,
+                       report_type, description, impact_count, created_at, status,
+                       reviewed_at, reviewed_by, source_report_ids
+                from reports
+                order by {pk_column} asc
+                """
+            )
+            return [
+                {
+                    "id": row["id"],
+                    "projectId": row["project_id"],
+                    "partnerId": row["partner_id"],
+                    "partnerUserId": row["partner_user_id"],
+                    "partnerName": row["partner_name"],
+                    "submitterUserId": row["submitter_user_id"],
+                    "submitterName": row["submitter_name"],
+                    "submitterRole": row["submitter_role"],
+                    "title": row["title"],
+                    "reportType": row["report_type"],
+                    "description": row["description"],
+                    "impactCount": row["impact_count"],
+                    "createdAt": row["created_at"],
+                    "status": row["status"],
+                    "reviewedAt": row["reviewed_at"],
+                    "reviewedBy": row["reviewed_by"],
+                    "sourceReportIds": row["source_report_ids"] or [],
+                }
+                for row in cursor.fetchall()
+            ]
+
+    if key == "partnerProjectApplications":
+        pk_column = _primary_key_column(key)
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                f"""
+                select
+                  {pk_column} as id,
+                  project_id,
+                  partner_user_id,
+                  partner_name,
+                  partner_email,
+                  status,
+                  requested_at,
+                  reviewed_at,
+                  reviewed_by,
+                  {_json_text_field_expression("proposal_details", "proposedTitle")} as proposed_title,
+                  {_json_text_field_expression("proposal_details", "targetProjectTitle")} as target_project_title,
+                  {_json_text_field_expression("proposal_details", "targetProjectId")} as target_project_id,
+                  {_json_text_field_expression("proposal_details", "targetProgramId")} as target_program_id,
+                  {_json_text_field_expression("proposal_details", "programId")} as program_id,
+                  {_json_text_field_expression("proposal_details", "requestedProgramModule")} as requested_program_module,
+                  {_json_text_field_expression("proposal_details", "proposedLocation")} as proposed_location,
+                  {_json_text_field_expression("proposal_details", "proposedStartDate")} as proposed_start_date,
+                  {_json_text_field_expression("proposal_details", "proposedEndDate")} as proposed_end_date
+                from partner_project_applications
+                order by {pk_column} asc
+                """
+            )
+            return [
+                {
+                    "id": row["id"],
+                    "projectId": row["project_id"],
+                    "partnerUserId": row["partner_user_id"],
+                    "partnerName": row["partner_name"],
+                    "partnerEmail": row["partner_email"],
+                    "status": row["status"],
+                    "requestedAt": row["requested_at"],
+                    "reviewedAt": row["reviewed_at"],
+                    "reviewedBy": row["reviewed_by"],
+                    "proposalDetails": _safe_json_object(
+                        proposedTitle=row["proposed_title"],
+                        targetProjectTitle=row["target_project_title"],
+                        targetProjectId=row["target_project_id"],
+                        targetProgramId=row["target_program_id"],
+                        programId=row["program_id"],
+                        requestedProgramModule=row["requested_program_module"],
+                        proposedLocation=row["proposed_location"],
+                        proposedStartDate=row["proposed_start_date"],
+                        proposedEndDate=row["proposed_end_date"],
+                    ),
+                }
+                for row in cursor.fetchall()
+            ]
+
+    return _get_cached_collection(connection, key)
+
+
+def _get_media_light_collection(connection: Any, key: str) -> list[dict[str, Any]]:
+    from psycopg.rows import dict_row
+
+    spec = TABLE_SPECS[key]
+    column_names = [column_name for column_name, _ in spec["columns"]]
+    select_columns = [
+        "null::text as image_url" if column_name == "image_url" else column_name
+        for column_name in column_names
+    ]
+    pk_column = _primary_key_column(key)
+
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            f"""
+            select {', '.join(select_columns)}
+            from {spec["table"]}
+            order by {pk_column} asc
+            """
+        )
+        rows = cursor.fetchall()
+
+    return [_row_to_item(key, row) for row in rows]
+
+
 # Fetches a single hot-storage row by item id.
 def _postgres_get_hot_item_by_id(connection: Any, key: str, item_id: str) -> dict[str, Any] | None:
     try:
@@ -2082,13 +2303,13 @@ def _build_projects_snapshot(
     # CORE LOAD: Only fetch the collections requested by the screen.
     if include_projects or include_join_records:
         try:
-            raw_projects = _get_cached_collection(connection, "projects")
+            raw_projects = _get_media_light_collection(connection, "projects")
         except Exception as e:
             print(f"[ERROR] Failed to fetch projects: {type(e).__name__}: {e}", flush=True)
             raw_projects = []
         
         try:
-            raw_events = _get_cached_collection(connection, "events")
+            raw_events = _get_media_light_collection(connection, "events")
         except Exception as e:
             print(f"[ERROR] Failed to fetch events: {type(e).__name__}: {e}", flush=True)
             raw_events = []
@@ -2103,7 +2324,7 @@ def _build_projects_snapshot(
     # Fetch programs table if needed for projects, program rows, or programTrack compatibility.
     if include_projects or include_programs or include_program_tracks:
         try:
-            raw_programs_table = _get_cached_collection(connection, "programs") or []
+            raw_programs_table = _get_media_light_collection(connection, "programs") or []
         except Exception as e:
             print(f"[ERROR] Failed to fetch programs: {type(e).__name__}: {e}", flush=True)
             raw_programs_table = []
@@ -2147,10 +2368,7 @@ def _build_projects_snapshot(
         # Include programs from the programs table (top-level programs, not events, not sub-projects)
         programs_from_programs_table = [p for p in raw_programs_table if not bool(p.get("isEvent")) and not p.get("parentProjectId")]
         projects = [*programs_from_projects_table, *programs_from_programs_table, *raw_events]
-        partner_applications_for_parent_repair = get_postgres_hot_storage_collection(
-            connection,
-            "partnerProjectApplications",
-        )
+        partner_applications_for_parent_repair = _get_partner_application_parent_repair_records(connection)
         projects = _attach_proposal_parent_project_ids(projects, partner_applications_for_parent_repair)
 
     _trace(f"[TRACE] _build_projects_snapshot: processed projects after {_time.perf_counter() - t1:.3f}s")
@@ -2503,12 +2721,22 @@ def startup() -> None:
                     },
                 )
                 print("[OK] Warmed projects snapshot cache.")
+
+                # Pre-warm admin dashboard collections in memory
+                items: dict[str, Any] = {}
+                for key in _ADMIN_DASHBOARD_KEYS:
+                    try:
+                        items[key] = _get_admin_dashboard_collection(connection, key)
+                    except Exception:
+                        items[key] = []
+                _admin_dashboard_cache.set(_ADMIN_DASHBOARD_CACHE_KEY, {"items": items})
+                print("[OK] Warmed admin dashboard snapshot cache.")
         except Exception as error:
-            print(f"[WARN] Projects snapshot cache warmup skipped: {error}")
+            print(f"[WARN] Cache warmup skipped: {error}")
 
     # Run warmup in a background thread to avoid blocking server startup
     threading.Thread(target=_warm_projects_snapshot_cache, daemon=True).start()
-    print("[INFO] Cache warming enabled - warming projects snapshot in the background")
+    print("[INFO] Cache warming enabled - warming snapshots in the background")
 
 
 
@@ -2708,10 +2936,10 @@ def _reconcile_partner_proposal_submission_cards(
     with connection.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """
-            select id as messages_id, sender_id, recipient_id, content, timestamp
+            select messages_id, sender_id, recipient_id, content, timestamp
             from public.messages
             where content like '___PROPOSAL_CARD___:%%'
-            order by timestamp asc, id asc
+            order by timestamp asc, messages_id asc
             """
         )
         rows = cursor.fetchall()
@@ -3884,6 +4112,14 @@ def get_partner_applications_by_user(partner_user_id: str) -> dict[str, Any]:
 # API endpoint that creates a partner program proposal for admin review.
 async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload) -> dict[str, Any]:
     _require_postgres()
+    print(f"\n{'='*60}")
+    print(f"📥 PROPOSAL REQUEST RECEIVED")
+    print(f"  Partner User ID: {payload.partnerUserId}")
+    print(f"  Partner Name: {payload.partnerName}")
+    print(f"  Project ID: {payload.projectId}")
+    print(f"  Program Module: {payload.programModule}")
+    print(f"{'='*60}\n")
+    
     requested_program_module = str(payload.programModule or "").strip()
     requested_project_id = str(payload.projectId or "").strip()
     proposal_project_id = (
@@ -3979,9 +4215,15 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
                     proposal_content = f'___PROPOSAL_CARD___:{json.dumps(refreshed_application)}'
                     proposal_timestamp = datetime.now(timezone.utc).isoformat()
                     
+                    print(f"🔄 Creating resubmission message card:")
+                    print(f"  - Message ID: {proposal_message_id}")
+                    print(f"  - Partner ID: {payload.partnerUserId}")
+                    print(f"  - Revision Number: {refreshed_application.get('revisionNumber')}")
+                    
                     from .db import get_connection as db_get_connection
                     with db_get_connection() as msg_connection:
                         admin_id = _resolve_admin_message_user_id(msg_connection)
+                        print(f"  - Admin ID: {admin_id}")
                         with msg_connection.cursor() as cursor:
                             cursor.execute(
                                 """
@@ -4016,8 +4258,12 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
                         "attachments": [],
                     }
                     asyncio.create_task(connection_manager.broadcast_message_event(message_data))
+                    print(f"✅ Resubmission message card created and broadcast successfully")
                 except Exception as e:
-                    print(f"Error creating proposal resubmission message: {e}")
+                    print(f"❌ Error creating proposal resubmission message: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    # Don't fail the entire request if message creation fails, but log it clearly
                     pass
                 
                 return {"application": refreshed_application}
@@ -4063,9 +4309,15 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
         proposal_content = f'___PROPOSAL_CARD___:{json.dumps(application)}'
         proposal_timestamp = datetime.now(timezone.utc).isoformat()
         
+        print(f"📨 Creating initial proposal submission message card:")
+        print(f"  - Message ID: {proposal_message_id}")
+        print(f"  - Partner ID: {payload.partnerUserId}")
+        print(f"  - Application ID: {application.get('id')}")
+        
         from .db import get_connection as db_get_connection
         with db_get_connection() as msg_connection:
             admin_id = _resolve_admin_message_user_id(msg_connection)
+            print(f"  - Admin ID: {admin_id}")
             with msg_connection.cursor() as cursor:
                 cursor.execute(
                     """
@@ -4100,8 +4352,11 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
             "attachments": [],
         }
         asyncio.create_task(connection_manager.broadcast_message_event(message_data))
+        print(f"✅ Initial proposal message card created and broadcast successfully")
     except Exception as e:
-        print(f"Error creating proposal message: {e}")
+        print(f"❌ Error creating proposal message: {e}")
+        import traceback
+        traceback.print_exc()
         # Don't fail the entire request if message creation fails
         pass
     
@@ -4274,7 +4529,8 @@ async def review_partner_project_application(
             broadcast_keys.append("messages")
             message_sender_id = _resolve_admin_message_user_id(connection, reviewed_by)
             message_recipient_id = str(updated_application.get("partnerUserId") or "")
-            message_id = f"review-card-{int(datetime.now(timezone.utc).timestamp() * 1000)}-{next_status.lower()}"
+            # Create unique message IDs that include the application ID to ensure they don't conflict
+            message_id = f"review-card-{next_status.lower()}-{updated_application.get('id')}-{int(datetime.now(timezone.utc).timestamp() * 1000)}"
             proposal_details = updated_application.get("proposalDetails")
             if not isinstance(proposal_details, dict):
                 proposal_details = {}
@@ -4285,10 +4541,12 @@ async def review_partner_project_application(
                 "proposedByName": updated_application.get("partnerName"),
                 "partnerEmail": updated_application.get("partnerEmail"),
                 "applicationId": updated_application.get("id"),
+                "id": updated_application.get("id"),  # Keep application ID for tracking
                 "projectId": updated_application.get("projectId"),
                 "reviewedBy": reviewed_by,
                 "reviewedAt": reviewed_at,
                 "reviewNotes": review_notes or None,
+                "revisionNumber": updated_application.get("revisionNumber") or 0,
                 "timestamp": reviewed_at,
             }
             if next_status == "Approved" and generated_project is not None:
@@ -4324,9 +4582,8 @@ async def review_partner_project_application(
                 "read": False,
                 "attachments": [],
             }
-            # Keep the partner's submitted card as a historical snapshot of
-            # its final review state, alongside this separate admin result card.
-            _reconcile_partner_proposal_submission_cards(connection, application_id)
+            # DO NOT reconcile submission cards - keep them separate for conversation history
+            # _reconcile_partner_proposal_submission_cards(connection, application_id)
 
         connection.commit()
         _invalidate_collection_cache(broadcast_keys)
@@ -4543,7 +4800,7 @@ async def remove_volunteer_from_project(project_id: str, volunteer_id: str) -> d
 def get_messages(user_id: str, limit: int = 500) -> dict[str, list[dict[str, Any]]]:
     import time
     request_start = time.time()
-    ensure_message_storage()
+    ensure_message_storage_once()
     from psycopg.rows import dict_row
 
     with get_connection() as connection:
@@ -4554,10 +4811,10 @@ def get_messages(user_id: str, limit: int = 500) -> dict[str, list[dict[str, Any
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 """
-                select id as messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                select messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                 from public.messages
                 where sender_id = %s or recipient_id = %s
-                order by timestamp desc, id desc
+                order by timestamp desc, messages_id desc
                 limit %s
                 """,
                 (user_id, user_id, limit),
@@ -4620,6 +4877,35 @@ def get_messages(user_id: str, limit: int = 500) -> dict[str, list[dict[str, Any
     return {"messages": [serialize_message_row(row) for row in rows]}
 
 
+@app.get("/messages/unread")
+def get_unread_messages(user_id: str, limit: int = 100) -> dict[str, list[dict[str, Any]]]:
+    ensure_message_storage_once()
+    from psycopg.rows import dict_row
+
+    with get_connection() as connection:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                select messages_id,
+                       sender_id,
+                       recipient_id,
+                       project_id,
+                       left(content, 1000) as content,
+                       timestamp,
+                       read,
+                       '[]'::text as attachments
+                from public.messages
+                where recipient_id = %s and read = false
+                order by timestamp desc, messages_id desc
+                limit %s
+                """,
+                (user_id, limit),
+            )
+            rows = cursor.fetchall()
+
+    return {"messages": [serialize_message_row(row) for row in rows]}
+
+
 @app.get("/messages/conversation")
 # API endpoint that returns the direct-message history between two users.
 def get_conversation(user1: str, user2: str, limit: int = 200) -> dict[str, list[dict[str, Any]]]:
@@ -4637,11 +4923,11 @@ def get_conversation(user1: str, user2: str, limit: int = 200) -> dict[str, list
             limit = max(1, min(limit, 10000))  # Clamp to reasonable range
             cursor.execute(
                 f"""
-                select id as messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                select messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
                 from public.messages
                 where (sender_id = %s and recipient_id = %s)
                    or (sender_id = %s and recipient_id = %s)
-                order by timestamp asc, id asc
+                order by timestamp asc, messages_id asc
                 limit {limit}
                 """,
                 (user1, user2, user2, user1),
@@ -4660,7 +4946,7 @@ def get_conversation(user1: str, user2: str, limit: int = 200) -> dict[str, list
             if partner_user_id:
                 cursor.execute(
                     f"""
-                    select messages.id as messages_id, messages.sender_id, messages.recipient_id,
+                    select messages.messages_id, messages.sender_id, messages.recipient_id,
                            messages.project_id, messages.content, messages.timestamp,
                            messages.read, messages.attachments
                     from public.messages as messages
@@ -4668,7 +4954,7 @@ def get_conversation(user1: str, user2: str, limit: int = 200) -> dict[str, list
                     where messages.recipient_id = %s
                       and messages.content like '___PROPOSAL_CARD___:%%'
                       and sender.users_id is null
-                    order by messages.timestamp asc, messages.id asc
+                    order by messages.timestamp asc, messages.messages_id asc
                     limit {limit}
                     """,
                     (partner_user_id,),
@@ -4712,7 +4998,7 @@ def get_project_group_messages(project_id: str, user_id: str, limit: int = 200) 
                   attachments
                 from project_group_messages
                 where project_id = %s
-                order by timestamp asc, id asc
+                order by timestamp asc, project_group_messages_id asc
                 limit %s
                 """,
                 (project_id, limit),
@@ -5280,7 +5566,7 @@ def get_admin_dashboard_snapshot() -> dict[str, Any]:
         with get_connection() as connection:
             for key in _ADMIN_DASHBOARD_KEYS:
                 try:
-                    items[key] = _get_cached_collection(connection, key)
+                    items[key] = _get_admin_dashboard_collection(connection, key)
                 except Exception as e:
                     print(f"[WARN] admin dashboard: failed to fetch '{key}': {type(e).__name__}: {e}")
                     items[key] = []

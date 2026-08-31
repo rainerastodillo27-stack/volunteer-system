@@ -17,7 +17,7 @@ except ImportError:  # pragma: no cover - optional for connection pooling
     ConnectionPool = None
 
 
-POSTGRES_PROBE_CACHE_TTL_SECONDS = 10
+POSTGRES_PROBE_CACHE_TTL_SECONDS = 60
 _POSTGRES_PROBE_CACHE: dict[str, Any] = {
     "checked_at": 0.0,
     "available": False,
@@ -29,19 +29,19 @@ _POSTGRES_CONNECTION_POOL: Any = None
 
 
 def _get_pool_min_size() -> int:
-    raw_value = os.getenv("DB_POOL_MIN_SIZE", "0").strip()
-    try:
-        return max(0, int(raw_value))
-    except ValueError:
-        return 0
-
-
-def _get_pool_max_size() -> int:
-    raw_value = os.getenv("DB_POOL_MAX_SIZE", "5").strip()
+    raw_value = os.getenv("DB_POOL_MIN_SIZE", "2").strip()
     try:
         return max(1, int(raw_value))
     except ValueError:
-        return 5
+        return 2
+
+
+def _get_pool_max_size() -> int:
+    raw_value = os.getenv("DB_POOL_MAX_SIZE", "10").strip()
+    try:
+        return max(1, int(raw_value))
+    except ValueError:
+        return 10
 
 
 """Shared Postgres connection helpers for the backend API and seed scripts."""
@@ -262,7 +262,7 @@ def get_postgres_status(force_refresh: bool = False) -> tuple[bool, str | None]:
         return bool(_POSTGRES_PROBE_CACHE["available"]), _POSTGRES_PROBE_CACHE["error"]
 
     try:
-        with get_postgres_connection() as connection:
+        with get_connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("select 1")
                 cursor.fetchone()
