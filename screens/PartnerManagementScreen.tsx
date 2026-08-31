@@ -9,6 +9,7 @@ import {
   Alert,
   Modal,
   TextInput,
+  ActivityIndicator,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
@@ -96,6 +97,7 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
   const [addressDraft, setAddressDraft] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [sectorFilter, setSectorFilter] = useState<PartnerSectorType | 'All'>('All');
+  const [approvingPartnerId, setApprovingPartnerId] = useState<string | null>(null);
 
   useEffect(() => {
     if (navigation) {
@@ -183,6 +185,8 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
   };
 
   const handleApprovePartner = async (partner: Partner) => {
+    if (approvingPartnerId) return;
+    setApprovingPartnerId(partner.id);
     try {
       await reviewPartnerRegistration(partner.id, 'Approved', user?.id || 'admin');
       setActionNotice(`Approved "${partner.name}". Organization credentials unlocked.`);
@@ -192,6 +196,8 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
       }
     } catch (error) {
       Alert.alert('Error', error instanceof Error ? error.message : 'Failed to approve partner.');
+    } finally {
+      setApprovingPartnerId(null);
     }
   };
 
@@ -532,26 +538,33 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
                 </Text>
               </View>
               <View style={styles.detailPendingActions}>
-                    <TouchableOpacity
-                      style={styles.appRejectButton}
-                      onPress={() => openPartnerReview(selectedPartner, 'revision')}
-                    >
-                      <MaterialIcons name="replay" size={16} color="#dc2626" />
-                      <Text style={styles.appRejectButtonText}>For Revise</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.appRejectButton, styles.appRejectButtonHard]}
-                      onPress={() => openPartnerReview(selectedPartner, 'rejection')}
-                    >
-                      <MaterialIcons name="block" size={16} color="#b91c1c" />
-                      <Text style={styles.appRejectButtonText}>Totally Reject</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.appApproveButton}
-                      onPress={() => handleApprovePartner(selectedPartner)}
+                <TouchableOpacity
+                  style={styles.appRejectButton}
+                  onPress={() => openPartnerReview(selectedPartner, 'revision')}
+                  disabled={!!approvingPartnerId}
                 >
-                  <MaterialIcons name="check" size={16} color="#fff" />
-                  <Text style={styles.appApproveButtonText}>Approve Partner</Text>
+                  <MaterialIcons name="replay" size={16} color="#dc2626" />
+                  <Text style={styles.appRejectButtonText}>For Revise</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.appRejectButton, styles.appRejectButtonHard]}
+                  onPress={() => openPartnerReview(selectedPartner, 'rejection')}
+                  disabled={!!approvingPartnerId}
+                >
+                  <MaterialIcons name="block" size={16} color="#b91c1c" />
+                  <Text style={styles.appRejectButtonText}>Totally Reject</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.appApproveButton, approvingPartnerId === selectedPartner.id && { opacity: 0.7 }]}
+                  onPress={() => handleApprovePartner(selectedPartner)}
+                  disabled={!!approvingPartnerId}
+                >
+                  {approvingPartnerId === selectedPartner.id
+                    ? <ActivityIndicator size="small" color="#fff" style={{ marginRight: 6 }} />
+                    : <MaterialIcons name="check" size={16} color="#fff" />}
+                  <Text style={styles.appApproveButtonText}>
+                    {approvingPartnerId === selectedPartner.id ? 'Approving...' : 'Approve Partner'}
+                  </Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -1333,11 +1346,16 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
                       </TouchableOpacity>
 
                       <TouchableOpacity
-                        style={styles.appApproveButton}
+                        style={[styles.appApproveButton, approvingPartnerId === partner.id && { opacity: 0.7 }]}
                         onPress={() => handleApprovePartner(partner)}
+                        disabled={!!approvingPartnerId}
                       >
-                        <MaterialIcons name="check" size={16} color="#fff" />
-                        <Text style={styles.appApproveButtonText}>Approve Partner</Text>
+                        {approvingPartnerId === partner.id
+                          ? <ActivityIndicator size="small" color="#fff" style={{ marginRight: 6 }} />
+                          : <MaterialIcons name="check" size={16} color="#fff" />}
+                        <Text style={styles.appApproveButtonText}>
+                          {approvingPartnerId === partner.id ? 'Approving...' : 'Approve Partner'}
+                        </Text>
                       </TouchableOpacity>
                     </View>
                   </View>

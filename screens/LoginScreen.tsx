@@ -1260,6 +1260,8 @@ export default function LoginScreen() {
         }
       }
 
+      const sendAbort = new AbortController();
+      const sendTimeout = setTimeout(() => sendAbort.abort(), 15000);
       const response = await fetch(`${getApiBaseUrl()}/auth/registration-otp/send`, {
         method: "POST",
         headers: {
@@ -1269,7 +1271,8 @@ export default function LoginScreen() {
           "Accept": "application/json",
         },
         body: JSON.stringify({ email }),
-      });
+        signal: sendAbort.signal,
+      }).finally(() => clearTimeout(sendTimeout));
       const payload = (await response.json().catch(() => ({}))) as {
         detail?: string;
         message?: string;
@@ -1353,6 +1356,8 @@ export default function LoginScreen() {
     try {
       setSignupOtpLoading(true);
       setSignupOtpAction("verify");
+      const verifyAbort = new AbortController();
+      const verifyTimeout = setTimeout(() => verifyAbort.abort(), 15000);
       const response = await fetch(`${getApiBaseUrl()}/auth/registration-otp/verify`, {
         method: "POST",
         headers: {
@@ -1362,7 +1367,8 @@ export default function LoginScreen() {
           "Accept": "application/json",
         },
         body: JSON.stringify({ email, otp }),
-      });
+        signal: verifyAbort.signal,
+      }).finally(() => clearTimeout(verifyTimeout));
       const payload = (await response.json().catch(() => ({}))) as {
         detail?: string;
         message?: string;
@@ -1726,79 +1732,83 @@ export default function LoginScreen() {
         </Text>
         {!isVerified ? (
           <>
-            {!emailExistsError ? (
-              <View style={styles.emailVerificationActions}>
-                <TextInput
-                  style={[styles.input, styles.otpInput, isExpired && { borderColor: "#fca5a5" }]}
-                  placeholder="6-digit code"
-                  placeholderTextColor="#999"
-                  keyboardType="number-pad"
-                  maxLength={6}
-                  value={signupOtpCode}
-                  onChangeText={(value) =>
-                    setSignupOtpCode(value.replace(/\D/g, "").slice(0, 6))
-                  }
-                  editable={!signupLoading && !signupOtpLoading && signupOtpPhase === "sent"}
-                />
-                <TouchableOpacity
-                  style={[
-                    styles.otpActionButton,
-                    (!canVerifyCode || signupOtpLoading) && styles.buttonDisabled,
-                  ]}
-                  onPress={verifySignupEmailCode}
-                  disabled={!canVerifyCode || signupOtpLoading}
-                >
-                  {signupOtpLoading && signupOtpAction === "verify" ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <Text style={styles.otpActionButtonText}>Verify</Text>
-                  )}
-                </TouchableOpacity>
+            {emailExistsError ? (
+              <View style={styles.otpExpiredContainer}>
+                <Text style={styles.otpExpiredText}>⚠️ {emailExistsError}</Text>
               </View>
             ) : null}
 
-            {signupOtpPhase === "sent" && otpSecondsLeft > 0 ? (
-              <Text style={styles.otpTimerText}>
-                ⏱️ Code expires in {formatTimeLeft(otpSecondsLeft)}
-              </Text>
+            {/* Step 1 — Send button (always visible until verified) */}
+            {!emailExistsError ? (
+              <TouchableOpacity
+                style={[
+                  styles.otpSendButton,
+                  (!canRequestCode || signupOtpLoading) && styles.otpSendButtonDisabled,
+                ]}
+                onPress={requestSignupEmailVerificationCode}
+                disabled={!canRequestCode || signupOtpLoading}
+              >
+                {signupOtpLoading && signupOtpAction === "send" ? (
+                  <ActivityIndicator color="#166534" />
+                ) : (
+                  <Text style={styles.otpSendButtonText}>
+                    {signupOtpPhase === "sent"
+                      ? "Resend Verification Code"
+                      : isExpired
+                        ? "Request New Verification Code"
+                        : "Send Verification Code"}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            ) : null}
+
+            {/* Step 2 — Code input + Verify (only shown after code is sent) */}
+            {signupOtpPhase === "sent" && !emailExistsError ? (
+              <>
+                {otpSecondsLeft > 0 ? (
+                  <Text style={styles.otpTimerText}>
+                    ⏱️ Code expires in {formatTimeLeft(otpSecondsLeft)}
+                  </Text>
+                ) : null}
+                <View style={[styles.emailVerificationActions, { marginTop: 10 }]}>
+                  <TextInput
+                    style={[styles.input, styles.otpInput]}
+                    placeholder="6-digit code"
+                    placeholderTextColor="#999"
+                    keyboardType="number-pad"
+                    maxLength={6}
+                    value={signupOtpCode}
+                    onChangeText={(value) =>
+                      setSignupOtpCode(value.replace(/\D/g, "").slice(0, 6))
+                    }
+                    editable={!signupOtpLoading}
+                    autoFocus
+                  />
+                  <TouchableOpacity
+                    style={[
+                      styles.otpActionButton,
+                      (!canVerifyCode || signupOtpLoading) && styles.buttonDisabled,
+                    ]}
+                    onPress={verifySignupEmailCode}
+                    disabled={!canVerifyCode || signupOtpLoading}
+                  >
+                    {signupOtpLoading && signupOtpAction === "verify" ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <Text style={styles.otpActionButtonText}>Verify</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </>
             ) : null}
 
             {isExpired ? (
               <View style={styles.otpExpiredContainer}>
                 <Text style={styles.otpExpiredText}>
-                  ⚠️ Code expired. Request a new code below.
+                  ⚠️ Code expired. Tap above to request a new code.
                 </Text>
               </View>
             ) : null}
-
-            {emailExistsError ? (
-              <View style={styles.otpExpiredContainer}>
-                <Text style={styles.otpExpiredText}>
-                  ⚠️ {emailExistsError}
-                </Text>
-              </View>
-            ) : null}
-
-            <TouchableOpacity
-              style={[
-                styles.otpSendButton,
-                (!canRequestCode || signupOtpLoading) && styles.otpSendButtonDisabled,
-              ]}
-              onPress={requestSignupEmailVerificationCode}
-              disabled={!canRequestCode || signupOtpLoading}
-            >
-              {signupOtpLoading && signupOtpAction === "send" ? (
-                <ActivityIndicator color="#166534" />
-              ) : (
-                <Text style={styles.otpSendButtonText}>
-                  {signupOtpPhase === "sent"
-                    ? "Resend Verification Code"
-                    : isExpired
-                      ? "Request New Verification Code"
-                      : "Send Verification Code"}
-                </Text>
-              )}
-            </TouchableOpacity>
           </>
         ) : null}
       </View>
@@ -2589,6 +2599,17 @@ export default function LoginScreen() {
                             value={signupPartnerApplication.secRegistrationNo}
                             onChangeText={(value) =>
                               updateSignupPartnerApplication("secRegistrationNo", value)
+                            }
+                            editable={!signupLoading}
+                          />
+
+                          <TextInput
+                            style={styles.input}
+                            placeholder="DSWD Accreditation No. (Optional)"
+                            placeholderTextColor="#999"
+                            value={signupPartnerApplication.dswdAccreditationNo}
+                            onChangeText={(value) =>
+                              updateSignupPartnerApplication("dswdAccreditationNo", value)
                             }
                             editable={!signupLoading}
                           />

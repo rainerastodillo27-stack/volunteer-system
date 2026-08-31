@@ -590,6 +590,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
   }, []);
   const [proposalProjectId, setProposalProjectId] = useState<string | null>(null);
   const [partnerProposalDraft, setPartnerProposalDraft] = useState<PartnerProposalDraft | null>(null);
+  const [partnerProposalErrors, setPartnerProposalErrors] = useState<Record<string, string>>({});
   const [imagePreview, setImagePreview] = useState<{
     title: string;
     source: ImageSourcePropType;
@@ -764,11 +765,18 @@ export default function ProjectsScreen({ navigation, route }: any) {
     }
     setProposalProjectId(null);
     setPartnerProposalDraft(null);
+    setPartnerProposalErrors({});
   }, [loadingProjectId, proposalProjectId]);
 
   const handlePartnerProposalDraftChange = useCallback(
     <K extends keyof PartnerProposalDraft>(key: K, value: PartnerProposalDraft[K]) => {
       setPartnerProposalDraft(current => (current ? { ...current, [key]: value } : current));
+      setPartnerProposalErrors(current => {
+        if (!current[key]) return current;
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
     },
     []
   );
@@ -810,19 +818,40 @@ export default function ProjectsScreen({ navigation, route }: any) {
       return;
     }
 
-    if (
-      !partnerProposalDraft.proposedTitle.trim() ||
-      !partnerProposalDraft.proposedDescription.trim() ||
-      !partnerProposalDraft.proposedStartDate.trim() ||
-      !partnerProposalDraft.proposedEndDate.trim() ||
-      !partnerProposalDraft.proposedLocation.trim()
+    const errors: Record<string, string> = {};
+
+    if (!partnerProposalDraft.proposedTitle.trim()) {
+      errors.proposedTitle = 'Please enter the proposal title.';
+    }
+
+    if (!partnerProposalDraft.proposedDescription.trim()) {
+      errors.proposedDescription = 'Please enter the proposal description.';
+    }
+
+    if (!partnerProposalDraft.proposedStartDate.trim()) {
+      errors.proposedStartDate = 'Please enter a start date (YYYY-MM-DD).';
+    }
+
+    if (!partnerProposalDraft.proposedEndDate.trim()) {
+      errors.proposedEndDate = 'Please enter an end date (YYYY-MM-DD).';
+    } else if (
+      partnerProposalDraft.proposedStartDate.trim() &&
+      partnerProposalDraft.proposedEndDate.trim() < partnerProposalDraft.proposedStartDate.trim()
     ) {
-      Alert.alert(
-        'Incomplete Proposal',
-        'Fill in the proposal title, description, dates, and location.'
-      );
+      errors.proposedEndDate = 'End date cannot be earlier than start date.';
+    }
+
+    if (!partnerProposalDraft.proposedLocation.trim()) {
+      errors.proposedLocation = 'Please enter the project location.';
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setPartnerProposalErrors(errors);
+      Alert.alert('Missing Information', Object.values(errors)[0]);
       return;
     }
+
+    setPartnerProposalErrors({});
 
     try {
       setLoadingProjectId(activeProposalProject.id);
@@ -3215,19 +3244,44 @@ export default function ProjectsScreen({ navigation, route }: any) {
                 </View>
               ) : null}
 
-              <Text style={styles.proposalFieldLabel}>Proposal Title</Text>
+              {Object.keys(partnerProposalErrors).length > 0 ? (
+                <View style={styles.proposalValidationBanner}>
+                  <MaterialIcons name="error-outline" size={18} color="#b91c1c" />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.proposalValidationBannerTitle}>Missing Required Information</Text>
+                    <Text style={styles.proposalValidationBannerText}>
+                      {Object.values(partnerProposalErrors)[0]}
+                    </Text>
+                  </View>
+                </View>
+              ) : null}
+
+              <Text style={styles.proposalFieldLabel}>
+                Proposal Title <Text style={{ color: '#dc2626', fontWeight: '700' }}>*</Text>
+              </Text>
               <TextInput
-                style={styles.proposalInput}
+                style={[styles.proposalInput, partnerProposalErrors.proposedTitle && styles.proposalInputError]}
                 value={partnerProposalDraft?.proposedTitle || ''}
                 onChangeText={value => handlePartnerProposalDraftChange('proposedTitle', value)}
                 placeholder="Enter the title the admin should review"
                 placeholderTextColor="#94a3b8"
                 editable={loadingProjectId !== activeProposalProject?.id}
               />
+              {partnerProposalErrors.proposedTitle ? (
+                <Text style={styles.proposalFieldErrorText}>
+                  {partnerProposalErrors.proposedTitle}
+                </Text>
+              ) : null}
 
-              <Text style={styles.proposalFieldLabel}>Proposal Description</Text>
+              <Text style={styles.proposalFieldLabel}>
+                Proposal Description <Text style={{ color: '#dc2626', fontWeight: '700' }}>*</Text>
+              </Text>
               <TextInput
-                style={[styles.proposalInput, styles.proposalTextArea]}
+                style={[
+                  styles.proposalInput,
+                  styles.proposalTextArea,
+                  partnerProposalErrors.proposedDescription && styles.proposalInputError,
+                ]}
                 multiline
                 numberOfLines={4}
                 textAlignVertical="top"
@@ -3237,41 +3291,67 @@ export default function ProjectsScreen({ navigation, route }: any) {
                 placeholderTextColor="#94a3b8"
                 editable={loadingProjectId !== activeProposalProject?.id}
               />
+              {partnerProposalErrors.proposedDescription ? (
+                <Text style={styles.proposalFieldErrorText}>
+                  {partnerProposalErrors.proposedDescription}
+                </Text>
+              ) : null}
 
               <View style={styles.proposalFieldRow}>
                 <View style={styles.proposalFieldHalf}>
-                  <Text style={styles.proposalFieldLabel}>Start Date</Text>
+                  <Text style={styles.proposalFieldLabel}>
+                    Start Date <Text style={{ color: '#dc2626', fontWeight: '700' }}>*</Text>
+                  </Text>
                   <TextInput
-                    style={styles.proposalInput}
+                    style={[styles.proposalInput, partnerProposalErrors.proposedStartDate && styles.proposalInputError]}
                     value={partnerProposalDraft?.proposedStartDate || ''}
                     onChangeText={value => handlePartnerProposalDraftChange('proposedStartDate', value)}
                     placeholder="YYYY-MM-DD"
                     placeholderTextColor="#94a3b8"
                     editable={loadingProjectId !== activeProposalProject?.id}
                   />
+                  {partnerProposalErrors.proposedStartDate ? (
+                    <Text style={styles.proposalFieldErrorText}>
+                      {partnerProposalErrors.proposedStartDate}
+                    </Text>
+                  ) : null}
                 </View>
                 <View style={styles.proposalFieldHalf}>
-                  <Text style={styles.proposalFieldLabel}>End Date</Text>
+                  <Text style={styles.proposalFieldLabel}>
+                    End Date <Text style={{ color: '#dc2626', fontWeight: '700' }}>*</Text>
+                  </Text>
                   <TextInput
-                    style={styles.proposalInput}
+                    style={[styles.proposalInput, partnerProposalErrors.proposedEndDate && styles.proposalInputError]}
                     value={partnerProposalDraft?.proposedEndDate || ''}
                     onChangeText={value => handlePartnerProposalDraftChange('proposedEndDate', value)}
                     placeholder="YYYY-MM-DD"
                     placeholderTextColor="#94a3b8"
                     editable={loadingProjectId !== activeProposalProject?.id}
                   />
+                  {partnerProposalErrors.proposedEndDate ? (
+                    <Text style={styles.proposalFieldErrorText}>
+                      {partnerProposalErrors.proposedEndDate}
+                    </Text>
+                  ) : null}
                 </View>
               </View>
 
-              <Text style={styles.proposalFieldLabel}>Proposed Location</Text>
+              <Text style={styles.proposalFieldLabel}>
+                Proposed Location <Text style={{ color: '#dc2626', fontWeight: '700' }}>*</Text>
+              </Text>
               <TextInput
-                style={styles.proposalInput}
+                style={[styles.proposalInput, partnerProposalErrors.proposedLocation && styles.proposalInputError]}
                 value={partnerProposalDraft?.proposedLocation || ''}
                 onChangeText={value => handlePartnerProposalDraftChange('proposedLocation', value)}
                 placeholder="City, municipality, or venue"
                 placeholderTextColor="#94a3b8"
                 editable={loadingProjectId !== activeProposalProject?.id}
               />
+              {partnerProposalErrors.proposedLocation ? (
+                <Text style={styles.proposalFieldErrorText}>
+                  {partnerProposalErrors.proposedLocation}
+                </Text>
+              ) : null}
 
               <Text style={styles.proposalFieldLabel}>Photo Attachment URL (Optional)</Text>
             </ScrollView>
@@ -5450,4 +5530,39 @@ const styles = StyleSheet.create({
   },
   statusFilterButtonTextActive: {
     color: '#fff',
-  },});
+  },
+  proposalValidationBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: '#fef2f2',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1.5,
+    borderColor: '#fca5a5',
+    marginBottom: 10,
+  },
+  proposalValidationBannerTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#991b1b',
+    marginBottom: 2,
+  },
+  proposalValidationBannerText: {
+    fontSize: 12,
+    color: '#b91c1c',
+    lineHeight: 16,
+  },
+  proposalInputError: {
+    borderColor: '#ef4444',
+    borderWidth: 1.5,
+    backgroundColor: '#fff5f5',
+  },
+  proposalFieldErrorText: {
+    fontSize: 12,
+    color: '#dc2626',
+    fontWeight: '600',
+    marginTop: -4,
+    marginBottom: 8,
+  },
+});

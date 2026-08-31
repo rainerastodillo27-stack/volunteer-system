@@ -30,6 +30,7 @@ import {
 
 } from 'react-native';
 import * as AuthSession from 'expo-auth-session';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { MaterialIcons } from '@expo/vector-icons';
 import { Ionicons } from '@expo/vector-icons';
@@ -485,6 +486,16 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
   const [showProposalModal, setShowProposalModal] = useState(false);
 
+  const [proposalPreviewMode, setProposalPreviewMode] = useState(false);
+
+  const [proposalPreviewApplication, setProposalPreviewApplication] = useState<PartnerProjectApplication | null>(null);
+
+  const [isDraftSaving, setIsDraftSaving] = useState(false);
+
+  const [hasDraft, setHasDraft] = useState(false);
+
+  const [proposalValidationErrors, setProposalValidationErrors] = useState<Record<string, string>>({});
+
   const [activeProposalModule, setActiveProposalModule] = useState<AdvocacyFocus | null>(null);
 
   const [activeProposalProgramId, setActiveProposalProgramId] = useState<string | null>(null);
@@ -916,40 +927,76 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
 
 
-  const openProposalForm = (module: AdvocacyFocus, programId?: string) => {
+  const getDraftKey = (userId: string, module: string) =>
+    `draft_proposal_${userId}_${module}`;
 
-    console.log('[PROPOSAL FORM] Opening form for module:', module, 'program:', programId);
-
-    setActiveProposalModule(module);
-
-    setActiveProposalProgramId(programId || null);
-
-    setProposalForm(createEmptyProposalForm(module));
-
-    setSelectedProposalSkillOption('');
-
-    setCustomProposalSkill('');
-
-    setSelectedRegionCode('');
-
-    setSelectedCityCode('');
-
-    setFilteredCities([]);
-
-    setShowProposalDatePicker(false);
-
-    setProposalDatePickerMode('startDate');
-
-    setSelectedProposalDate(new Date());
-
-    console.log('[PROPOSAL FORM] About to set showProposalModal to true');
-
-    setShowProposalModal(true);
-
-    console.log('[PROPOSAL FORM] setShowProposalModal called');
-
+  const saveProposalDraft = async () => {
+    if (!user || !proposalForm.requestedProgramModule) return;
+    setIsDraftSaving(true);
+    try {
+      const key = getDraftKey(user.id, proposalForm.requestedProgramModule);
+      await AsyncStorage.setItem(key, JSON.stringify(proposalForm));
+      setHasDraft(true);
+    } catch (e) {
+      // silent
+    } finally {
+      setIsDraftSaving(false);
+    }
   };
 
+  const clearProposalDraft = async (module: string) => {
+    if (!user) return;
+    try {
+      await AsyncStorage.removeItem(getDraftKey(user.id, module));
+      setHasDraft(false);
+    } catch (e) {
+      // silent
+    }
+  };
+
+  const openProposalForm = async (module: AdvocacyFocus, programId?: string) => {
+    setActiveProposalModule(module);
+    setActiveProposalProgramId(programId || null);
+    setProposalPreviewMode(false);
+    setProposalPreviewApplication(null);
+
+    // Try to load saved draft
+    let loaded = false;
+    if (user) {
+      try {
+        const raw = await AsyncStorage.getItem(getDraftKey(user.id, module));
+        if (raw) {
+          const draft = JSON.parse(raw) as ProposalFormState;
+          setProposalForm({ ...draft, requestedProgramModule: module });
+          setHasDraft(true);
+          loaded = true;
+        }
+      } catch (e) {
+        // fall through
+      }
+    }
+    if (!loaded) {
+      setProposalForm(createEmptyProposalForm(module));
+      setHasDraft(false);
+    }
+
+    setSelectedProposalSkillOption('');
+    setCustomProposalSkill('');
+    setSelectedRegionCode('');
+    setSelectedCityCode('');
+    setFilteredCities([]);
+    setShowProposalDatePicker(false);
+    setProposalDatePickerMode('startDate');
+    setSelectedProposalDate(new Date());
+    setProposalValidationErrors({});
+    setShowProposalModal(true);
+  };
+
+  const openProposalPreview = (application: PartnerProjectApplication) => {
+    setProposalPreviewApplication(application);
+    setProposalPreviewMode(true);
+    setShowProposalModal(true);
+  };
 
 
   useEffect(() => {
@@ -994,6 +1041,8 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
     setProposalDatePickerMode('startDate');
 
+    setProposalValidationErrors({});
+
   };
 
 
@@ -1007,6 +1056,14 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
       ...updates,
 
     }));
+
+    setProposalValidationErrors(current => {
+      const next = { ...current };
+      Object.keys(updates).forEach(key => {
+        delete next[key];
+      });
+      return next;
+    });
 
   };
 
@@ -1364,54 +1421,41 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
 
     // Comprehensive validation for all required proposal details
+    const errors: Record<string, string> = {};
 
     if (!proposalDetails.proposedTitle || !proposalDetails.proposedTitle.trim()) {
-
-      Alert.alert('Missing Information', 'Please enter the proposal title.');
-
-      return;
-
+      errors.proposedTitle = 'Please enter the proposal title.';
     }
-
-
 
     if (!proposalDetails.proposedDescription || !proposalDetails.proposedDescription.trim()) {
-
-      Alert.alert('Missing Information', 'Please enter the proposal description.');
-
-      return;
-
+      errors.proposedDescription = 'Please enter the proposal description.';
     }
-
-
 
     if (!proposalDetails.proposedStartDate || !proposalDetails.proposedStartDate.trim()) {
-
-      Alert.alert('Missing Information', 'Please enter the start date (YYYY-MM-DD format).');
-
-      return;
-
+      errors.proposedStartDate = 'Please select a start date.';
     }
-
-
 
     if (!proposalDetails.proposedEndDate || !proposalDetails.proposedEndDate.trim()) {
-
-      Alert.alert('Missing Information', 'Please enter the end date (YYYY-MM-DD format).');
-
-      return;
-
+      errors.proposedEndDate = 'Please select an end date.';
+    } else if (
+      proposalDetails.proposedStartDate &&
+      proposalDetails.proposedEndDate.trim() < proposalDetails.proposedStartDate.trim()
+    ) {
+      errors.proposedEndDate = 'End date cannot be earlier than start date.';
     }
-
-
 
     if (!proposalDetails.proposedLocation || !proposalDetails.proposedLocation.trim()) {
-
-      Alert.alert('Missing Information', 'Please enter the project location.');
-
-      return;
-
+      errors.proposedLocation = 'Please select a region and city/municipality for the project location.';
     }
+
+    if (Object.keys(errors).length > 0) {
+      setProposalValidationErrors(errors);
+      const firstError = Object.values(errors)[0];
+      Alert.alert('Missing Information', firstError);
+      return;
+    }
+
+    setProposalValidationErrors({});
 
 
 
@@ -1435,6 +1479,8 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
       setShowProposalModal(false);
 
       setProposalForm(createEmptyProposalForm(selectedModule));
+
+      void clearProposalDraft(selectedModule);
 
       Alert.alert('Proposal Sent', 'Your project proposal has been sent to the admin for review.');
 
@@ -2044,6 +2090,19 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
               ) : null}
 
+              {/* View Proposal button for submitted/approved proposals */}
+              {application && (
+                <TouchableOpacity
+                  style={[styles.viewProposalButton, { borderColor: programCard.accent }]}
+                  onPress={() => openProposalPreview(application)}
+                >
+                  <MaterialIcons name="description" size={15} color={programCard.accent} />
+                  <Text style={[styles.viewProposalButtonText, { color: programCard.accent }]}>
+                    View Submitted Proposal
+                  </Text>
+                </TouchableOpacity>
+              )}
+
               <TouchableOpacity
 
                 style={[
@@ -2093,6 +2152,130 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
             <ScrollView contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
 
+              {proposalPreviewMode && proposalPreviewApplication ? (
+                /* ── READ-ONLY PREVIEW ── */
+                <View style={styles.proposalPreviewCard}>
+                  <View style={styles.proposalPreviewHeader}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.proposalPreviewTitle}>
+                        {proposalPreviewApplication.proposalDetails?.proposedTitle || 'Submitted Proposal'}
+                      </Text>
+                      <Text style={styles.proposalPreviewModule}>
+                        {proposalPreviewApplication.proposalDetails?.requestedProgramModule} Program
+                      </Text>
+                    </View>
+                    <TouchableOpacity onPress={closeProposalForm} style={styles.modalCloseButton}>
+                      <MaterialIcons name="close" size={20} color="#475569" />
+                    </TouchableOpacity>
+                  </View>
+
+                  {/* Status badge */}
+                  <View style={[
+                    styles.proposalStatusBadge,
+                    proposalPreviewApplication.status === 'Approved' && styles.proposalStatusApproved,
+                    proposalPreviewApplication.status === 'Rejected' && styles.proposalStatusRejected,
+                    proposalPreviewApplication.status === 'Pending' && styles.proposalStatusPending,
+                  ]}>
+                    <MaterialIcons
+                      name={
+                        proposalPreviewApplication.status === 'Approved' ? 'check-circle' :
+                        proposalPreviewApplication.status === 'Rejected' ? 'cancel' : 'schedule'
+                      }
+                      size={14}
+                      color={
+                        proposalPreviewApplication.status === 'Approved' ? '#166534' :
+                        proposalPreviewApplication.status === 'Rejected' ? '#991b1b' : '#92400e'
+                      }
+                    />
+                    <Text style={[
+                      styles.proposalStatusBadgeText,
+                      proposalPreviewApplication.status === 'Approved' && { color: '#166534' },
+                      proposalPreviewApplication.status === 'Rejected' && { color: '#991b1b' },
+                      proposalPreviewApplication.status === 'Pending' && { color: '#92400e' },
+                    ]}>
+                      {proposalPreviewApplication.status === 'Approved' ? 'Approved by Admin' :
+                       proposalPreviewApplication.status === 'Rejected' ? 'Proposal Rejected' :
+                       'Pending Admin Review'}
+                    </Text>
+                  </View>
+
+                  {proposalPreviewApplication.reviewNotes ? (
+                    <View style={styles.proposalReviewNotesBox}>
+                      <Text style={styles.proposalReviewNotesLabel}>Admin Notes</Text>
+                      <Text style={styles.proposalReviewNotesText}>{proposalPreviewApplication.reviewNotes}</Text>
+                    </View>
+                  ) : null}
+
+                  <View style={styles.proposalPreviewSection}>
+                    <Text style={styles.proposalPreviewLabel}>Description</Text>
+                    <Text style={styles.proposalPreviewValue}>
+                      {proposalPreviewApplication.proposalDetails?.proposedDescription || '—'}
+                    </Text>
+                  </View>
+
+                  <View style={styles.proposalPreviewRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.proposalPreviewLabel}>Start Date</Text>
+                      <Text style={styles.proposalPreviewValue}>
+                        {proposalPreviewApplication.proposalDetails?.proposedStartDate || '—'}
+                      </Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.proposalPreviewLabel}>End Date</Text>
+                      <Text style={styles.proposalPreviewValue}>
+                        {proposalPreviewApplication.proposalDetails?.proposedEndDate || '—'}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.proposalPreviewSection}>
+                    <Text style={styles.proposalPreviewLabel}>Location</Text>
+                    <Text style={styles.proposalPreviewValue}>
+                      {proposalPreviewApplication.proposalDetails?.proposedLocation || '—'}
+                    </Text>
+                  </View>
+
+                  {proposalPreviewApplication.proposalDetails?.communityNeed ? (
+                    <View style={styles.proposalPreviewSection}>
+                      <Text style={styles.proposalPreviewLabel}>Community Need</Text>
+                      <Text style={styles.proposalPreviewValue}>
+                        {proposalPreviewApplication.proposalDetails.communityNeed}
+                      </Text>
+                    </View>
+                  ) : null}
+
+                  {proposalPreviewApplication.proposalDetails?.expectedDeliverables ? (
+                    <View style={styles.proposalPreviewSection}>
+                      <Text style={styles.proposalPreviewLabel}>Expected Deliverables</Text>
+                      <Text style={styles.proposalPreviewValue}>
+                        {proposalPreviewApplication.proposalDetails.expectedDeliverables}
+                      </Text>
+                    </View>
+                  ) : null}
+
+                  {(proposalPreviewApplication.proposalDetails?.skillsNeeded?.length ?? 0) > 0 ? (
+                    <View style={styles.proposalPreviewSection}>
+                      <Text style={styles.proposalPreviewLabel}>Skills Needed</Text>
+                      <View style={styles.proposalSkillTagsRow}>
+                        {proposalPreviewApplication.proposalDetails!.skillsNeeded!.map(skill => (
+                          <View key={skill} style={styles.proposalSkillTag}>
+                            <Text style={styles.proposalSkillTagText}>{skill}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+                  ) : null}
+
+                  <View style={styles.proposalPreviewSection}>
+                    <Text style={styles.proposalPreviewLabel}>Submitted</Text>
+                    <Text style={styles.proposalPreviewValue}>
+                      {new Date(proposalPreviewApplication.requestedAt).toLocaleDateString('en-PH', {
+                        year: 'numeric', month: 'long', day: 'numeric'
+                      })}
+                    </Text>
+                  </View>
+                </View>
+              ) : (
               <View style={styles.proposalCard}>
 
                 <View style={styles.proposalHeader}>
@@ -2115,13 +2298,27 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
                 </View>
 
+                {Object.keys(proposalValidationErrors).length > 0 ? (
+                  <View style={styles.formValidationBanner}>
+                    <MaterialIcons name="error-outline" size={18} color="#b91c1c" />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.formValidationBannerTitle}>Missing Required Information</Text>
+                      <Text style={styles.formValidationBannerText}>
+                        {Object.values(proposalValidationErrors)[0]}
+                      </Text>
+                    </View>
+                  </View>
+                ) : null}
+
                 <View style={styles.formGroup}>
 
-                  <Text style={styles.formLabel}>Project Title</Text>
+                  <Text style={styles.formLabel}>
+                    Project Title <Text style={styles.requiredAsterisk}>*</Text>
+                  </Text>
 
                   <TextInput
 
-                    style={styles.formInput}
+                    style={[styles.formInput, proposalValidationErrors.proposedTitle ? styles.inputError : null]}
 
                     placeholder="e.g. Community Nutrition Drive 2024"
 
@@ -2133,15 +2330,28 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
                   />
 
+                  {proposalValidationErrors.proposedTitle ? (
+                    <View style={styles.fieldErrorRow}>
+                      <MaterialIcons name="error" size={13} color="#dc2626" />
+                      <Text style={styles.fieldErrorText}>{proposalValidationErrors.proposedTitle}</Text>
+                    </View>
+                  ) : null}
+
                 </View>
 
                 <View style={styles.formGroup}>
 
-                  <Text style={styles.formLabel}>Detailed Description</Text>
+                  <Text style={styles.formLabel}>
+                    Detailed Description <Text style={styles.requiredAsterisk}>*</Text>
+                  </Text>
 
                   <TextInput
 
-                    style={[styles.formInput, { height: 120, textAlignVertical: 'top' }]}
+                    style={[
+                      styles.formInput,
+                      { height: 120, textAlignVertical: 'top' },
+                      proposalValidationErrors.proposedDescription ? styles.inputError : null,
+                    ]}
 
                     multiline
 
@@ -2155,23 +2365,39 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
                   />
 
+                  {proposalValidationErrors.proposedDescription ? (
+                    <View style={styles.fieldErrorRow}>
+                      <MaterialIcons name="error" size={13} color="#dc2626" />
+                      <Text style={styles.fieldErrorText}>{proposalValidationErrors.proposedDescription}</Text>
+                    </View>
+                  ) : null}
+
                 </View>
 
                 <View style={styles.formRow}>
 
                   <View style={[styles.formGroup, { flex: 1 }]}>
 
-                    <Text style={styles.formLabel}>Start Date</Text>
+                    <Text style={styles.formLabel}>
+                      Start Date <Text style={styles.requiredAsterisk}>*</Text>
+                    </Text>
 
                     <TouchableOpacity
 
-                      style={styles.pickerTrigger}
+                      style={[
+                        styles.pickerTrigger,
+                        proposalValidationErrors.proposedStartDate ? styles.pickerTriggerError : null,
+                      ]}
 
                       onPress={() => openProposalDatePicker('startDate')}
 
                     >
 
-                      <MaterialIcons name="calendar-today" size={18} color="#166534" />
+                      <MaterialIcons
+                        name="calendar-today"
+                        size={18}
+                        color={proposalValidationErrors.proposedStartDate ? '#dc2626' : '#166534'}
+                      />
 
                       <Text style={[styles.pickerTriggerText, !proposalForm.proposedStartDate && styles.pickerPlaceholder]}>
 
@@ -2180,6 +2406,13 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
                       </Text>
 
                     </TouchableOpacity>
+
+                    {proposalValidationErrors.proposedStartDate ? (
+                      <View style={styles.fieldErrorRow}>
+                        <MaterialIcons name="error" size={13} color="#dc2626" />
+                        <Text style={styles.fieldErrorText}>{proposalValidationErrors.proposedStartDate}</Text>
+                      </View>
+                    ) : null}
 
                     {showProposalDatePicker && proposalDatePickerMode === 'startDate' ? (
 
@@ -2221,17 +2454,26 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
                   <View style={[styles.formGroup, { flex: 1 }]}>
 
-                    <Text style={styles.formLabel}>End Date</Text>
+                    <Text style={styles.formLabel}>
+                      End Date <Text style={styles.requiredAsterisk}>*</Text>
+                    </Text>
 
                     <TouchableOpacity
 
-                      style={styles.pickerTrigger}
+                      style={[
+                        styles.pickerTrigger,
+                        proposalValidationErrors.proposedEndDate ? styles.pickerTriggerError : null,
+                      ]}
 
                       onPress={() => openProposalDatePicker('endDate')}
 
                     >
 
-                      <MaterialIcons name="calendar-today" size={18} color="#166534" />
+                      <MaterialIcons
+                        name="calendar-today"
+                        size={18}
+                        color={proposalValidationErrors.proposedEndDate ? '#dc2626' : '#166534'}
+                      />
 
                       <Text style={[styles.pickerTriggerText, !proposalForm.proposedEndDate && styles.pickerPlaceholder]}>
 
@@ -2240,6 +2482,13 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
                       </Text>
 
                     </TouchableOpacity>
+
+                    {proposalValidationErrors.proposedEndDate ? (
+                      <View style={styles.fieldErrorRow}>
+                        <MaterialIcons name="error" size={13} color="#dc2626" />
+                        <Text style={styles.fieldErrorText}>{proposalValidationErrors.proposedEndDate}</Text>
+                      </View>
+                    ) : null}
 
                     {showProposalDatePicker && proposalDatePickerMode === 'endDate' ? (
 
@@ -2283,9 +2532,14 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
                 <View style={styles.formGroup}>
 
-                  <Text style={styles.formLabel}>Target Location</Text>
+                  <Text style={styles.formLabel}>
+                    Target Location <Text style={styles.requiredAsterisk}>*</Text>
+                  </Text>
 
-                  <View style={styles.addressFormContainer}>
+                  <View style={[
+                    styles.addressFormContainer,
+                    proposalValidationErrors.proposedLocation ? styles.addressFormContainerError : null,
+                  ]}>
 
                     <View style={styles.pickerWrap}>
 
@@ -2350,6 +2604,13 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
                     </View>
 
                   </View>
+
+                  {proposalValidationErrors.proposedLocation ? (
+                    <View style={styles.fieldErrorRow}>
+                      <MaterialIcons name="error" size={13} color="#dc2626" />
+                      <Text style={styles.fieldErrorText}>{proposalValidationErrors.proposedLocation}</Text>
+                    </View>
+                  ) : null}
 
                 </View>
 
@@ -2431,15 +2692,47 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
                 </View>
 
-                <TouchableOpacity style={styles.submitBtn} onPress={handleSubmitProgramProposal}>
+                {/* Draft banner */}
+                {hasDraft && !proposalPreviewMode && (
+                  <View style={styles.draftBanner}>
+                    <MaterialIcons name="save" size={14} color="#92400e" />
+                    <Text style={styles.draftBannerText}>Draft saved</Text>
+                  </View>
+                )}
 
-                  <Text style={styles.submitBtnText}>Submit Proposal for Review</Text>
+                <View style={styles.proposalActionRow}>
+                  <TouchableOpacity
+                    style={styles.saveDraftBtn}
+                    onPress={saveProposalDraft}
+                    disabled={isDraftSaving}
+                  >
+                    {isDraftSaving
+                      ? <ActivityIndicator size="small" color="#166534" />
+                      : <MaterialIcons name="save" size={16} color="#166534" />}
+                    <Text style={styles.saveDraftBtnText}>
+                      {isDraftSaving ? 'Saving...' : 'Save Draft'}
+                    </Text>
+                  </TouchableOpacity>
 
-                  <MaterialIcons name="send" size={20} color="#fff" />
-
-                </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.submitBtn, Boolean(actionProjectId) && { opacity: 0.7 }]}
+                    onPress={handleSubmitProgramProposal}
+                    disabled={Boolean(actionProjectId)}
+                  >
+                    {Boolean(actionProjectId) ? (
+                      <ActivityIndicator size="small" color="#fff" style={{ marginRight: 6 }} />
+                    ) : null}
+                    <Text style={styles.submitBtnText}>
+                      {Boolean(actionProjectId) ? 'Submitting...' : 'Submit for Review'}
+                    </Text>
+                    {!Boolean(actionProjectId) ? (
+                      <MaterialIcons name="send" size={18} color="#fff" />
+                    ) : null}
+                  </TouchableOpacity>
+                </View>
 
               </View>
+              )}
 
             </ScrollView>
 
@@ -4111,5 +4404,268 @@ const styles = StyleSheet.create({
 
   },
 
+  // ── Draft & Preview styles ──────────────────────────────────────────────────
+
+  draftBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#fef9c3',
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#fde68a',
+  },
+
+  draftBannerText: {
+    fontSize: 12,
+    color: '#92400e',
+    fontWeight: '600',
+  },
+
+  proposalActionRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 6,
+  },
+
+  saveDraftBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderWidth: 1.5,
+    borderColor: '#166534',
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: '#f0fdf4',
+  },
+
+  saveDraftBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#166534',
+  },
+
+  viewProposalButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderWidth: 1.5,
+    borderRadius: 12,
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    marginBottom: 8,
+    backgroundColor: '#f8fafc',
+  },
+
+  viewProposalButtonText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+
+  // ── Preview Card ─────────────────────────────────────────────────────────────
+
+  proposalPreviewCard: {
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    padding: 20,
+    gap: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+
+  proposalPreviewHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+
+  proposalPreviewTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#0f172a',
+    marginBottom: 2,
+  },
+
+  proposalPreviewModule: {
+    fontSize: 13,
+    color: '#64748b',
+    fontWeight: '500',
+  },
+
+  proposalStatusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    backgroundColor: '#f1f5f9',
+    alignSelf: 'flex-start',
+  },
+
+  proposalStatusApproved: {
+    backgroundColor: '#dcfce7',
+  },
+
+  proposalStatusRejected: {
+    backgroundColor: '#fee2e2',
+  },
+
+  proposalStatusPending: {
+    backgroundColor: '#fef3c7',
+  },
+
+  proposalStatusBadgeText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#475569',
+  },
+
+  proposalReviewNotesBox: {
+    backgroundColor: '#fef2f2',
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    gap: 4,
+  },
+
+  proposalReviewNotesLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#991b1b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+
+  proposalReviewNotesText: {
+    fontSize: 13,
+    color: '#7f1d1d',
+    lineHeight: 18,
+  },
+
+  proposalPreviewSection: {
+    gap: 4,
+  },
+
+  proposalPreviewRow: {
+    flexDirection: 'row',
+    gap: 16,
+  },
+
+  proposalPreviewLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#94a3b8',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+
+  proposalPreviewValue: {
+    fontSize: 14,
+    color: '#1e293b',
+    fontWeight: '500',
+    lineHeight: 20,
+  },
+
+  proposalSkillTagsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 4,
+  },
+
+  proposalSkillTag: {
+    backgroundColor: '#eff6ff',
+    borderRadius: 20,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+  },
+
+  proposalSkillTagText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#1e40af',
+  },
+
+  // ── Validation Error Styles ───────────────────────────────────────────────
+
+  requiredAsterisk: {
+    color: '#dc2626',
+    fontWeight: '700',
+  },
+
+  formValidationBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: '#fef2f2',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1.5,
+    borderColor: '#fca5a5',
+    marginBottom: 6,
+  },
+
+  formValidationBannerTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#991b1b',
+    marginBottom: 2,
+  },
+
+  formValidationBannerText: {
+    fontSize: 12,
+    color: '#b91c1c',
+    lineHeight: 16,
+  },
+
+  inputError: {
+    borderColor: '#ef4444',
+    borderWidth: 1.5,
+    backgroundColor: '#fff5f5',
+  },
+
+  pickerTriggerError: {
+    borderColor: '#ef4444',
+    borderWidth: 1.5,
+    backgroundColor: '#fff5f5',
+  },
+
+  addressFormContainerError: {
+    borderColor: '#ef4444',
+    borderWidth: 1.5,
+    borderRadius: 12,
+    backgroundColor: '#fff5f5',
+    padding: 4,
+  },
+
+  fieldErrorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 5,
+  },
+
+  fieldErrorText: {
+    fontSize: 12,
+    color: '#dc2626',
+    fontWeight: '600',
+  },
+
 });
+
+
 

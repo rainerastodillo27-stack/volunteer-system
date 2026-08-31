@@ -671,6 +671,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   const [proposalForm, setProposalForm] = useState<ProposalFormState>(() =>
     createEmptyProposalForm(newProposalTitle || '')
   );
+  const [isSubmittingProposal, setIsSubmittingProposal] = useState(false);
+  const [proposalValidationErrors, setProposalValidationErrors] = useState<Record<string, string>>({});
 
 
 
@@ -1977,7 +1979,45 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   const handleSubmitProposal = async () => {
 
-    if (!user || !proposalIntent) return;
+    if (!user || !proposalIntent || isSubmittingProposal) return;
+
+    // Validate required proposal fields
+    const errors: Record<string, string> = {};
+
+    if (!proposalForm.proposedTitle || !proposalForm.proposedTitle.trim()) {
+      errors.proposedTitle = 'Please enter the proposal title.';
+    }
+
+    if (!proposalForm.proposedDescription || !proposalForm.proposedDescription.trim()) {
+      errors.proposedDescription = 'Please enter the proposal description.';
+    }
+
+    if (!proposalForm.proposedStartDate || !proposalForm.proposedStartDate.trim()) {
+      errors.proposedStartDate = 'Please select a start date.';
+    }
+
+    if (!proposalForm.proposedEndDate || !proposalForm.proposedEndDate.trim()) {
+      errors.proposedEndDate = 'Please select an end date.';
+    } else if (
+      proposalForm.proposedStartDate &&
+      proposalForm.proposedEndDate.trim() < proposalForm.proposedStartDate.trim()
+    ) {
+      errors.proposedEndDate = 'End date cannot be earlier than start date.';
+    }
+
+    if (!proposalForm.proposedLocation || !proposalForm.proposedLocation.trim()) {
+      errors.proposedLocation = 'Please select a region and city/municipality for the project location.';
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setProposalValidationErrors(errors);
+      const firstError = Object.values(errors)[0];
+      Alert.alert('Missing Information', firstError);
+      return;
+    }
+
+    setProposalValidationErrors({});
+    setIsSubmittingProposal(true);
 
     try {
 
@@ -2014,6 +2054,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     } catch (e) {
 
       Alert.alert('Error', 'Failed to submit proposal. Please check your connection.');
+
+    } finally {
+
+      setIsSubmittingProposal(false);
 
     }
 
@@ -2728,23 +2772,53 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
               </View>
 
+              {Object.keys(proposalValidationErrors).length > 0 ? (
+                <View style={styles.formValidationBanner}>
+                  <MaterialIcons name="error-outline" size={18} color="#b91c1c" />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.formValidationBannerTitle}>Missing Required Information</Text>
+                    <Text style={styles.formValidationBannerText}>
+                      {Object.values(proposalValidationErrors)[0]}
+                    </Text>
+                  </View>
+                </View>
+              ) : null}
+
 
 
               <View style={styles.formGroup}>
 
-                <Text style={styles.formLabel}>Project Title</Text>
+                <Text style={styles.formLabel}>
+                  Project Title <Text style={styles.requiredAsterisk}>*</Text>
+                </Text>
 
                 <TextInput
 
-                  style={styles.formInput}
+                  style={[styles.formInput, proposalValidationErrors.proposedTitle ? styles.inputError : null]}
 
                   placeholder="e.g. Community Nutrition Drive 2024"
 
                   value={proposalForm.proposedTitle}
 
-                  onChangeText={t => setProposalForm(f => ({ ...f, proposedTitle: t }))}
+                  onChangeText={t => {
+                    setProposalForm(f => ({ ...f, proposedTitle: t }));
+                    if (proposalValidationErrors.proposedTitle) {
+                      setProposalValidationErrors(prev => {
+                        const n = { ...prev };
+                        delete n.proposedTitle;
+                        return n;
+                      });
+                    }
+                  }}
 
                 />
+
+                {proposalValidationErrors.proposedTitle ? (
+                  <View style={styles.fieldErrorRow}>
+                    <MaterialIcons name="error" size={13} color="#dc2626" />
+                    <Text style={styles.fieldErrorText}>{proposalValidationErrors.proposedTitle}</Text>
+                  </View>
+                ) : null}
 
               </View>
 
@@ -2752,11 +2826,17 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
               <View style={styles.formGroup}>
 
-                <Text style={styles.formLabel}>Detailed Description</Text>
+                <Text style={styles.formLabel}>
+                  Detailed Description <Text style={styles.requiredAsterisk}>*</Text>
+                </Text>
 
                 <TextInput
 
-                  style={[styles.formInput, { height: 120, textAlignVertical: 'top' }]}
+                  style={[
+                    styles.formInput,
+                    { height: 120, textAlignVertical: 'top' },
+                    proposalValidationErrors.proposedDescription ? styles.inputError : null,
+                  ]}
 
                   multiline
 
@@ -2764,9 +2844,25 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                   value={proposalForm.proposedDescription}
 
-                  onChangeText={t => setProposalForm(f => ({ ...f, proposedDescription: t }))}
+                  onChangeText={t => {
+                    setProposalForm(f => ({ ...f, proposedDescription: t }));
+                    if (proposalValidationErrors.proposedDescription) {
+                      setProposalValidationErrors(prev => {
+                        const n = { ...prev };
+                        delete n.proposedDescription;
+                        return n;
+                      });
+                    }
+                  }}
 
                 />
+
+                {proposalValidationErrors.proposedDescription ? (
+                  <View style={styles.fieldErrorRow}>
+                    <MaterialIcons name="error" size={13} color="#dc2626" />
+                    <Text style={styles.fieldErrorText}>{proposalValidationErrors.proposedDescription}</Text>
+                  </View>
+                ) : null}
 
               </View>
 
@@ -2776,17 +2872,26 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                 <View style={[styles.formGroup, { flex: 1 }]}>
 
-                  <Text style={styles.formLabel}>Start Date</Text>
+                  <Text style={styles.formLabel}>
+                    Start Date <Text style={styles.requiredAsterisk}>*</Text>
+                  </Text>
 
                   <TouchableOpacity
 
-                    style={styles.pickerTrigger}
+                    style={[
+                      styles.pickerTrigger,
+                      proposalValidationErrors.proposedStartDate ? styles.pickerTriggerError : null,
+                    ]}
 
                     onPress={() => setShowStartDatePicker(true)}
 
                   >
 
-                    <MaterialIcons name="calendar-today" size={18} color="#166534" />
+                    <MaterialIcons
+                      name="calendar-today"
+                      size={18}
+                      color={proposalValidationErrors.proposedStartDate ? '#dc2626' : '#166534'}
+                    />
 
                     <Text style={[styles.pickerTriggerText, !proposalForm.proposedStartDate && styles.pickerPlaceholder]}>
 
@@ -2795,6 +2900,13 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                     </Text>
 
                   </TouchableOpacity>
+
+                  {proposalValidationErrors.proposedStartDate ? (
+                    <View style={styles.fieldErrorRow}>
+                      <MaterialIcons name="error" size={13} color="#dc2626" />
+                      <Text style={styles.fieldErrorText}>{proposalValidationErrors.proposedStartDate}</Text>
+                    </View>
+                  ) : null}
 
                   {showStartDatePicker && (
 
@@ -2810,7 +2922,17 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                         setShowStartDatePicker(false);
 
-                        if (date) setProposalForm(f => ({ ...f, proposedStartDate: date.toISOString().split('T')[0] }));
+                        if (date) {
+                          const dateStr = date.toISOString().split('T')[0];
+                          setProposalForm(f => ({ ...f, proposedStartDate: dateStr }));
+                          if (proposalValidationErrors.proposedStartDate) {
+                            setProposalValidationErrors(prev => {
+                              const n = { ...prev };
+                              delete n.proposedStartDate;
+                              return n;
+                            });
+                          }
+                        }
 
                       }}
 
@@ -2822,17 +2944,26 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                 <View style={[styles.formGroup, { flex: 1 }]}>
 
-                  <Text style={styles.formLabel}>End Date</Text>
+                  <Text style={styles.formLabel}>
+                    End Date <Text style={styles.requiredAsterisk}>*</Text>
+                  </Text>
 
                   <TouchableOpacity
 
-                    style={styles.pickerTrigger}
+                    style={[
+                      styles.pickerTrigger,
+                      proposalValidationErrors.proposedEndDate ? styles.pickerTriggerError : null,
+                    ]}
 
                     onPress={() => setShowEndDatePicker(true)}
 
                   >
 
-                    <MaterialIcons name="calendar-today" size={18} color="#166534" />
+                    <MaterialIcons
+                      name="calendar-today"
+                      size={18}
+                      color={proposalValidationErrors.proposedEndDate ? '#dc2626' : '#166534'}
+                    />
 
                     <Text style={[styles.pickerTriggerText, !proposalForm.proposedEndDate && styles.pickerPlaceholder]}>
 
@@ -2841,6 +2972,13 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                     </Text>
 
                   </TouchableOpacity>
+
+                  {proposalValidationErrors.proposedEndDate ? (
+                    <View style={styles.fieldErrorRow}>
+                      <MaterialIcons name="error" size={13} color="#dc2626" />
+                      <Text style={styles.fieldErrorText}>{proposalValidationErrors.proposedEndDate}</Text>
+                    </View>
+                  ) : null}
 
                   {showEndDatePicker && (
 
@@ -2856,7 +2994,17 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                         setShowEndDatePicker(false);
 
-                        if (date) setProposalForm(f => ({ ...f, proposedEndDate: date.toISOString().split('T')[0] }));
+                        if (date) {
+                          const dateStr = date.toISOString().split('T')[0];
+                          setProposalForm(f => ({ ...f, proposedEndDate: dateStr }));
+                          if (proposalValidationErrors.proposedEndDate) {
+                            setProposalValidationErrors(prev => {
+                              const n = { ...prev };
+                              delete n.proposedEndDate;
+                              return n;
+                            });
+                          }
+                        }
 
                       }}
 
@@ -2872,9 +3020,14 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
               <View style={styles.formGroup}>
 
-                <Text style={styles.formLabel}>Target Location</Text>
+                <Text style={styles.formLabel}>
+                  Target Location <Text style={styles.requiredAsterisk}>*</Text>
+                </Text>
 
-                <View style={styles.addressContainer}>
+                <View style={[
+                  styles.addressContainer,
+                  proposalValidationErrors.proposedLocation ? styles.addressContainerError : null,
+                ]}>
 
                   <View style={styles.pickerWrap}>
 
@@ -2956,6 +3109,13 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                 </View>
 
+                {proposalValidationErrors.proposedLocation ? (
+                  <View style={styles.fieldErrorRow}>
+                    <MaterialIcons name="error" size={13} color="#dc2626" />
+                    <Text style={styles.fieldErrorText}>{proposalValidationErrors.proposedLocation}</Text>
+                  </View>
+                ) : null}
+
               </View>
 
 
@@ -2978,14 +3138,27 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                 ) : null}
               </View>
 
-              <TouchableOpacity style={styles.submitBtn} onPress={handleSubmitProposal}>
-
+              <TouchableOpacity
+                style={[
+                  styles.submitBtn,
+                  isSubmittingProposal && { opacity: 0.7, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }
+                ]}
+                onPress={handleSubmitProposal}
+                disabled={isSubmittingProposal}
+              >
+                {isSubmittingProposal ? (
+                  <ActivityIndicator size="small" color="#fff" style={{ marginRight: 8 }} />
+                ) : null}
                 <Text style={styles.submitBtnText}>
-                  {proposalRevisionMode ? 'Revise & Resubmit' : 'Submit Proposal for Review'}
+                  {isSubmittingProposal
+                    ? 'Submitting Proposal...'
+                    : proposalRevisionMode
+                    ? 'Revise & Resubmit'
+                    : 'Submit Proposal for Review'}
                 </Text>
-
-                <MaterialIcons name="send" size={20} color="#fff" />
-
+                {!isSubmittingProposal ? (
+                  <MaterialIcons name="send" size={20} color="#fff" style={{ marginLeft: 8 }} />
+                ) : null}
               </TouchableOpacity>
 
             </View>
@@ -7281,6 +7454,71 @@ const styles = StyleSheet.create({
 
     fontStyle: 'italic',
 
+  },
+
+  // ── Validation Error Styles ───────────────────────────────────────────────
+
+  requiredAsterisk: {
+    color: '#dc2626',
+    fontWeight: '700',
+  },
+
+  formValidationBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: '#fef2f2',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1.5,
+    borderColor: '#fca5a5',
+    marginBottom: 10,
+  },
+
+  formValidationBannerTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#991b1b',
+    marginBottom: 2,
+  },
+
+  formValidationBannerText: {
+    fontSize: 12,
+    color: '#b91c1c',
+    lineHeight: 16,
+  },
+
+  inputError: {
+    borderColor: '#ef4444',
+    borderWidth: 1.5,
+    backgroundColor: '#fff5f5',
+  },
+
+  pickerTriggerError: {
+    borderColor: '#ef4444',
+    borderWidth: 1.5,
+    backgroundColor: '#fff5f5',
+  },
+
+  addressContainerError: {
+    borderColor: '#ef4444',
+    borderWidth: 1.5,
+    borderRadius: 12,
+    backgroundColor: '#fff5f5',
+    padding: 4,
+  },
+
+  fieldErrorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 5,
+  },
+
+  fieldErrorText: {
+    fontSize: 12,
+    color: '#dc2626',
+    fontWeight: '600',
   },
 
 });
