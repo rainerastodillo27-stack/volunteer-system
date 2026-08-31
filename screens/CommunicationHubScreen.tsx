@@ -102,6 +102,8 @@ import {
 
   getDirectMessagesForUser,
 
+  sendDirectMessage,
+
   sendGroupMessage,
 
   markDirectMessageReadFirestore,
@@ -1972,7 +1974,14 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         setMessages(current => mergeChatMessageLists(current as Message[], [fullMsg as Message]));
         directMessagesRef.current = mergeChatMessageLists(directMessagesRef.current, [fullMsg as Message]);
 
-        await saveMessage(fullMsg as Message);
+        // Write to BOTH Firestore (real-time sync) and backend (persistence)
+        const { id: _id, ...msgWithoutId } = fullMsg as Message;
+        await Promise.all([
+          sendDirectMessage(msgWithoutId).catch(err => {
+            console.warn('[Chat] Firestore DM send failed (non-fatal):', err);
+          }),
+          saveMessage(fullMsg as Message),
+        ]);
 
       } else if (selectedProjectChat) {
 
@@ -2050,6 +2059,11 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         ? [{ url: proposalForm.photoAttachment, type: 'image' as const }]
         : [];
 
+      console.log('📤 Submitting proposal:');
+      console.log('  - Project ID:', proposalIntent.projectId || 'new');
+      console.log('  - Program Module:', proposalIntent.module);
+      console.log('  - Revision Mode:', proposalRevisionMode);
+
       await submitPartnerProgramProposal(proposalIntent.projectId || 'new', user, {
 
         programModule: (proposalIntent.module as AdvocacyFocus) || 'Nutrition',
@@ -2074,13 +2088,20 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       closeProposalComposer();
 
-      Alert.alert('Success', 'Your proposal has been submitted for review.');
+      const successMessage = proposalRevisionMode 
+        ? 'Your revised proposal has been submitted for review.'
+        : 'Your proposal has been submitted for review.';
+      
+      Alert.alert('Success', successMessage);
 
       // Force a full data reload without skipping messages to ensure new card appears
       await loadData(false);
 
+      console.log('✅ Data reloaded after proposal submission');
+
     } catch (e) {
 
+      console.error('❌ Error submitting proposal:', e);
       Alert.alert('Error', 'Failed to submit proposal. Please check your connection.');
 
     } finally {
@@ -2286,12 +2307,18 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     }
 
     const requestedProgramModule = String(cardData.requestedProgramModule || cardData.programModule || 'Nutrition');
-    const targetProjectId = String(cardData.targetProjectId || cardData.projectId || 'new');
+    // IMPORTANT: Use the application's projectId (not targetProjectId) so backend can match and increment revision
+    const applicationProjectId = String(cardData.projectId || 'new');
     const title = String(cardData.proposedTitle || cardData.title || '');
+
+    console.log('🔄 Opening proposal revision:');
+    console.log('  - Application ID:', applicationId);
+    console.log('  - Project ID:', applicationProjectId);
+    console.log('  - Program Module:', requestedProgramModule);
 
     setProposalIntent({
       module: requestedProgramModule,
-      projectId: targetProjectId,
+      projectId: applicationProjectId,  // This must be the application's projectId for backend matching!
       title,
     });
     setProposalRevisionMode(true);
@@ -3890,10 +3917,11 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                     : `Your proposal for "${moduleLabel}" has been reviewed and needs changes`;
                 } else if (isSubmissionCard) {
                   // This is partner's submission card
-                  statusDisplay = 'SUBMITTED';
+                  const isRevision = revisionNumber > 0 || followsRejection;
+                  statusDisplay = isRevision ? 'RESUBMITTED' : 'SUBMITTED';
                   statusIcon = 'send';
-                  statusColor = '#2563eb';
-                  statusBg = '#dbeafe';
+                  statusColor = isRevision ? '#7c3aed' : '#2563eb';
+                  statusBg = isRevision ? '#ede9fe' : '#dbeafe';
                   summaryLead = revisionNumber > 0
                     ? `Your revised proposal for "${moduleLabel}" has been submitted for review`
                     : `Your proposal for "${moduleLabel}" has been submitted for review`;
@@ -4388,6 +4416,18 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
           item => item.application.id === pd.applicationId || item.application.id === pd.id
         )?.application || null;
         
+        // Check if there's a newer revision of this proposal
+        const currentRevision = pd.revisionNumber || matchedApp?.revisionNumber || 0;
+        const applicationId = pd.applicationId || pd.id || matchedApp?.id;
+        const hasNewerRevision = proposalChats.some(item => {
+          const app = item.application;
+          const appId = app.id;
+          const appProjectId = app.projectId;
+          const matchesApp = appId === applicationId || appProjectId === (pd.projectId || matchedApp?.projectId);
+          const appRevision = app.revisionNumber || 0;
+          return matchesApp && appRevision > currentRevision;
+        });
+        
         // Handle both nested and flat formats
         const extractedData = {
           proposedTitle: proposalDetails.proposedTitle || pd.proposedTitle || 'Project Proposal',
@@ -4411,8 +4451,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         
         // Double-check: use matchedApp status if available (most up-to-date)
         const actualStatus = matchedApp?.status || pdStatus;
-        const isActuallyPending = actualStatus === 'Pending';
-        const canReviseProposal = user?.role === 'partner' && actualStatus === 'Rejected';
+        const isActuallyPending = actualStatus === 'Pending' && !hasNewerRevision; // Not pending if superseded by revision
+        const canReviseProposal = user?.role === 'partner' && actualStatus === 'Rejected' && !hasNewerRevision;
 
         return (
           <View style={styles.modalOverlay}>
@@ -4541,6 +4581,19 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                   <View style={{ marginBottom: 12, padding: 10, backgroundColor: '#fef2f2', borderRadius: 8, borderWidth: 1, borderColor: '#fecaca' }}>
                     <Text style={{ fontSize: 11, fontWeight: '700', color: '#991b1b', marginBottom: 4 }}>Rejection Reason</Text>
                     <Text style={{ fontSize: 13, color: '#7f1d1d', lineHeight: 18 }}>{pd.reviewNotes}</Text>
+                  </View>
+                ) : null}
+
+                {/* Superseded warning */}
+                {hasNewerRevision ? (
+                  <View style={{ marginBottom: 12, padding: 10, backgroundColor: '#fffbeb', borderRadius: 8, borderWidth: 1, borderColor: '#fcd34d' }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                      <MaterialIcons name="info" size={16} color="#d97706" />
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: '#d97706' }}>OLDER VERSION</Text>
+                    </View>
+                    <Text style={{ fontSize: 13, color: '#92400e', lineHeight: 18 }}>
+                      This is an older version. A revised proposal has been submitted.
+                    </Text>
                   </View>
                 ) : null}
               </ScrollView>

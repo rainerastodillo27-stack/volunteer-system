@@ -426,6 +426,8 @@ export interface PartnerProjectApplication {
   reviewedAt?: string;
   reviewedBy?: string;
   reviewNotes?: string;
+  revisionNumber?: number;
+  resubmittedAt?: string;
 }
 
 // Represents a partner-submitted operational or impact report for a project.

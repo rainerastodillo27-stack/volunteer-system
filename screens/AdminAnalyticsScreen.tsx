@@ -548,7 +548,7 @@ function generatePDFReportHTML(
   // Section 1: Volunteers
   if (sections.includes('volunteers')) {
     const totalVolunteers = data.volunteers.length;
-    const activeVolunteers = data.volunteers.filter(v => v.accountStatus === 'active').length;
+    const activeVolunteers = data.volunteers.filter(v => v.registrationStatus === 'Approved').length;
     
     html += `
     <div class="section">
@@ -644,11 +644,11 @@ function generatePDFReportHTML(
           </tr>
         </thead>
         <tbody>
-          ${topSkills.map(skill => `
+          ${topSkills.map((skill: SkillSlice) => `
             <tr>
-              <td>${skill.label}</td>
+              <td>${skill.name}</td>
               <td>${skill.count}</td>
-              <td>${skill.percentage}%</td>
+              <td>${skill.percent}%</td>
             </tr>
           `).join('')}
         </tbody>
@@ -678,7 +678,7 @@ function generatePDFReportHTML(
             const total = q.NGO + q.Hospital + q.Institution + q.Private;
             return `
               <tr>
-                <td>${q.label}</td>
+                <td>${q.quarter}</td>
                 <td>${q.NGO}</td>
                 <td>${q.Hospital}</td>
                 <td>${q.Institution}</td>
@@ -703,7 +703,7 @@ function generatePDFReportHTML(
           ${data.partners.map(partner => `
             <tr>
               <td>${partner.name}</td>
-              <td>${partner.sector || 'N/A'}</td>
+              <td>${partner.sectorType || 'N/A'}</td>
               <td>${partner.status || 'N/A'}</td>
             </tr>
           `).join('')}
@@ -926,8 +926,8 @@ export default function AdminAnalyticsScreen() {
     
     // Calculate total beneficiaries from completed projects
     const totalBeneficiaries = trackedProjects.reduce((sum, project) => {
-      // Get beneficiaries from project data (you may need to adjust field names)
-      const beneficiaries = Number(project.expectedBeneficiaries || 0);
+      // Get beneficiaries from project data (impactCount from reports, or 0 if not tracked directly)
+      const beneficiaries = Number((project as any).expectedBeneficiaries || 0);
       return sum + beneficiaries;
     }, 0);
     
@@ -1001,7 +1001,7 @@ export default function AdminAnalyticsScreen() {
       csvContent += `Completion Percentage,${projectMetrics.completionPercentage}%\n`;
       csvContent += `Total Beneficiaries,${projectMetrics.totalBeneficiaries}\n`;
       csvContent += `Completed Hours,${projectMetrics.completedHours}\n`;
-      csvContent += `Active Volunteers,${filteredVolunteers.filter(v => v.accountStatus === 'active').length}\n\n`;
+      csvContent += `Active Volunteers,${filteredVolunteers.filter(v => v.registrationStatus === 'Approved').length}\n\n`;
 
       // 2. Volunteer Growth (Last 12 Months)
       csvContent += `VOLUNTEER GROWTH - LAST 12 MONTHS\n`;
@@ -1015,7 +1015,7 @@ export default function AdminAnalyticsScreen() {
       csvContent += `TOP 20 SKILLS CONTRIBUTED\n`;
       csvContent += `Skill,Volunteer Count,Percentage\n`;
       skillAnalytics.slices.slice(0, 20).forEach(skill => {
-        csvContent += `"${skill.label}",${skill.count},${skill.percentage}%\n`;
+        csvContent += `"${skill.name}",${skill.count},${skill.percent}%\n`;
       });
       csvContent += `\n`;
 
@@ -1035,9 +1035,9 @@ export default function AdminAnalyticsScreen() {
       // 5. Partner Sectors by Quarter
       csvContent += `PARTNER SECTORS BY QUARTER\n`;
       csvContent += `Quarter,NGO,Hospital,Institution,Private,Total\n`;
-      quarterlyPartnerData.forEach(q => {
+      partnerSectorsByQuarter.forEach(q => {
         const total = q.NGO + q.Hospital + q.Institution + q.Private;
-        csvContent += `${q.label},${q.NGO},${q.Hospital},${q.Institution},${q.Private},${total}\n`;
+        csvContent += `${q.quarter},${q.NGO},${q.Hospital},${q.Institution},${q.Private},${total}\n`;
       });
       csvContent += `\n`;
 
@@ -1049,7 +1049,7 @@ export default function AdminAnalyticsScreen() {
         const startDate = project.startDate ? new Date(project.startDate).toLocaleDateString() : 'N/A';
         const endDate = project.endDate ? new Date(project.endDate).toLocaleDateString() : 'N/A';
         const hoursLogged = filteredTimeLogs.filter(log => log.projectId === project.id)
-          .reduce((sum, log) => sum + (log.hoursLogged || 0), 0);
+          .reduce((sum, log) => sum + getCompletedVolunteerHours(log), 0);
         const volunteerCount = (project.volunteers || []).length;
         const isEvent = project.isEvent ? 'Yes' : 'No';
         csvContent += `"${title}",${project.status},${startDate},${endDate},${hoursLogged},${volunteerCount},${isEvent}\n`;
@@ -1060,10 +1060,10 @@ export default function AdminAnalyticsScreen() {
       csvContent += `ALL VOLUNTEERS\n`;
       csvContent += `Name,Email,Phone,Status,Skills,Joined Date\n`;
       filteredVolunteers.forEach(volunteer => {
-        const name = `${volunteer.firstName || ''} ${volunteer.lastName || ''}`.trim().replace(/"/g, '""');
+        const name = (volunteer.name || 'N/A').replace(/"/g, '""');
         const email = (volunteer.email || 'N/A').replace(/"/g, '""');
-        const phone = volunteer.phoneNumber || 'N/A';
-        const status = volunteer.accountStatus || 'N/A';
+        const phone = volunteer.phone || 'N/A';
+        const status = volunteer.registrationStatus || 'N/A';
         const skills = (volunteer.skills || []).join('; ').replace(/"/g, '""');
         const joinedDate = volunteer.createdAt ? new Date(volunteer.createdAt).toLocaleDateString() : 'N/A';
         csvContent += `"${name}","${email}",${phone},${status},"${skills}",${joinedDate}\n`;
@@ -1073,10 +1073,10 @@ export default function AdminAnalyticsScreen() {
       // 8. All Partners
       csvContent += `ALL PARTNERS\n`;
       csvContent += `Organization Name,Sector,Contact Name,Email,Phone,Status\n`;
-      filteredPartners.forEach(partner => {
+      partners.forEach(partner => {
         const orgName = (partner.name || 'N/A').replace(/"/g, '""');
-        const sector = partner.sector || 'N/A';
-        const contactName = (partner.contactName || 'N/A').replace(/"/g, '""');
+        const sector = partner.sectorType || 'N/A';
+        const contactName = (partner.stakeholderName || 'N/A').replace(/"/g, '""');
         const email = (partner.contactEmail || 'N/A').replace(/"/g, '""');
         const phone = partner.contactPhone || 'N/A';
         const status = partner.status || 'N/A';
@@ -1310,7 +1310,7 @@ export default function AdminAnalyticsScreen() {
 
         {/* Project Metrics Overview */}
         <View style={styles.metricsOverviewCard}>
-          <View style={styles.cardHeader}>
+          <View style={[styles.cardHeader, { marginBottom: ModernTheme.spacing[4] }]}>
             <View style={{ flex: 1 }}>
               <Text style={styles.cardTitle}>PROJECT METRICS OVERVIEW</Text>
               <Text style={styles.cardSubtitle}>Key performance indicators across filtered projects</Text>
@@ -2010,37 +2010,52 @@ export default function AdminAnalyticsScreen() {
                       {
                         volunteers: filteredVolunteers,
                         projects: filteredProjects,
-                        partners: filteredPartners,
+                        partners: partners,
                         reports: filteredReports,
                         timeLogs: filteredTimeLogs,
                         joinRecords: filteredJoinRecords,
-                        applications: filteredApplications,
+                        applications: partnerApplications,
                       },
                       {
                         partnerFilter: selectedPartnerId,
                         programFilter: selectedProgramId,
                         metrics: projectMetrics,
-                        volunteerGrowthData,
+                        volunteerGrowthData: monthPoints,
                         skillAnalytics,
-                        quarterlyPartnerData,
+                        quarterlyPartnerData: partnerSectorsByQuarter,
                       }
                     );
 
-                    // Create downloadable file
+                    // Open report in a new popup tab for viewing/printing
                     if (Platform.OS === 'web') {
-                      const blob = new Blob([htmlContent], { type: 'text/html' });
+                      // Inject a print button into the HTML
+                      const printButtonHtml = `
+                        <div style="position:fixed;top:16px;right:24px;z-index:9999;display:flex;gap:12px;">
+                          <button onclick="window.print()" style="background:#16a34a;color:#fff;border:none;border-radius:8px;padding:10px 22px;font-size:15px;font-weight:600;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.18);">
+                            🖨️ Print / Save as PDF
+                          </button>
+                          <button onclick="window.close()" style="background:#6b7280;color:#fff;border:none;border-radius:8px;padding:10px 18px;font-size:15px;font-weight:600;cursor:pointer;">
+                            ✕ Close
+                          </button>
+                        </div>`;
+                      const fullHtml = htmlContent.replace('<body>', '<body>' + printButtonHtml);
+                      const blob = new Blob([fullHtml], { type: 'text/html' });
                       const url = URL.createObjectURL(blob);
-                      const link = document.createElement('a');
-                      link.href = url;
-                      link.download = `Analytics_Report_${new Date().toISOString().split('T')[0]}.html`;
-                      document.body.appendChild(link);
-                      link.click();
-                      document.body.removeChild(link);
-                      URL.revokeObjectURL(url);
-                      
-                      Alert.alert('Success', 'Analytics report downloaded successfully! Open the HTML file in your browser to print as PDF.');
+                      const popup = window.open(url, '_blank', 'width=1100,height=800,scrollbars=yes,resizable=yes');
+                      if (!popup) {
+                        // Fallback: download if popup was blocked
+                        const link = document.createElement('a');
+                        link.href = url;
+                        link.download = `Analytics_Report_${new Date().toISOString().split('T')[0]}.html`;
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                        Alert.alert('Popup Blocked', 'Please allow popups for this site, then try again. The report was downloaded as a fallback.');
+                      }
+                      // Revoke after a delay so the popup can load
+                      setTimeout(() => URL.revokeObjectURL(url), 60000);
                     } else {
-                      Alert.alert('Download Complete', 'Report generation is currently optimized for web. Please use the web version for downloads.');
+                      Alert.alert('Report Ready', 'Report generation is optimized for the web version. Please use the web app for the best experience.');
                     }
                   } catch (error) {
                     console.error('PDF generation error:', error);
@@ -2877,11 +2892,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   // Generate Report Button styles
-  cardHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: ModernTheme.spacing[4],
-  },
   exportButtonsContainer: {
     flexDirection: 'row',
     gap: ModernTheme.spacing[2],
@@ -2938,7 +2948,7 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     padding: ModernTheme.spacing[5],
     borderBottomWidth: 1,
-    borderBottomColor: ModernTheme.colors.border,
+    borderBottomColor: ModernTheme.colors.border.medium,
   },
   reportModalTitle: {
     fontSize: ModernTheme.typography.fontSize.xl,
@@ -2976,7 +2986,7 @@ const styles = StyleSheet.create({
     height: 22,
     borderRadius: 11,
     borderWidth: 2,
-    borderColor: ModernTheme.colors.border,
+    borderColor: ModernTheme.colors.border.medium,
     marginRight: ModernTheme.spacing[3],
     justifyContent: 'center',
     alignItems: 'center',
@@ -2996,7 +3006,7 @@ const styles = StyleSheet.create({
     height: 20,
     borderRadius: ModernTheme.borderRadius.sm,
     borderWidth: 2,
-    borderColor: ModernTheme.colors.border,
+    borderColor: ModernTheme.colors.border.medium,
     marginRight: ModernTheme.spacing[3],
     justifyContent: 'center',
     alignItems: 'center',
@@ -3038,7 +3048,7 @@ const styles = StyleSheet.create({
     gap: ModernTheme.spacing[3],
     padding: ModernTheme.spacing[5],
     borderTopWidth: 1,
-    borderTopColor: ModernTheme.colors.border,
+    borderTopColor: ModernTheme.colors.border.medium,
   },
   reportCancelButton: {
     paddingHorizontal: ModernTheme.spacing[5],

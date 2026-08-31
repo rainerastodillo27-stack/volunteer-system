@@ -2770,9 +2770,9 @@ def health():
 
 @app.get("/db-health", response_model=None)
 # Returns detailed database diagnostics for troubleshooting.
-def db_health():
+def db_health(force: bool = False):
     configured_mode = get_configured_db_mode()
-    available, error = get_postgres_status(force_refresh=True)
+    available, error = get_postgres_status(force_refresh=force)
     diagnostics = get_postgres_diagnostics()
     timestamp = datetime.now(timezone.utc).isoformat()
 
@@ -5551,8 +5551,8 @@ _admin_dashboard_cache = TTLCache(ttl_seconds=60)
 
 
 @app.get("/admin/dashboard-snapshot")
-# Optimized endpoint that returns all admin dashboard collections in a single DB round-trip.
-# Uses the shared collection cache so repeated calls are served from memory.
+# Optimized endpoint that returns all admin dashboard collections.
+# Uses parallel worker connections and TTLCache for fast sub-second responses.
 def get_admin_dashboard_snapshot() -> dict[str, Any]:
     """Return all collections needed by the admin dashboard in one request."""
     try:
@@ -5563,12 +5563,24 @@ def get_admin_dashboard_snapshot() -> dict[str, Any]:
             return cached
 
         items: dict[str, Any] = {}
-        with get_connection() as connection:
-            for key in _ADMIN_DASHBOARD_KEYS:
+
+        def _fetch_admin_key(key: str) -> tuple[str, Any]:
+            try:
+                with get_connection() as connection:
+                    return key, _get_admin_dashboard_collection(connection, key)
+            except Exception as e:
+                print(f"[WARN] admin dashboard: failed to fetch '{key}': {type(e).__name__}: {e}")
+                return key, []
+
+        max_workers = min(len(_ADMIN_DASHBOARD_KEYS), 6)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_fetch_admin_key, key): key for key in _ADMIN_DASHBOARD_KEYS}
+            for future in as_completed(futures):
                 try:
-                    items[key] = _get_admin_dashboard_collection(connection, key)
+                    key, value = future.result()
+                    items[key] = value
                 except Exception as e:
-                    print(f"[WARN] admin dashboard: failed to fetch '{key}': {type(e).__name__}: {e}")
+                    key = futures[future]
                     items[key] = []
 
         result = {"items": items}

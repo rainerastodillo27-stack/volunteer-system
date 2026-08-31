@@ -472,10 +472,16 @@ RELATIONAL_TABLE_DDL = [
       status text,
       requested_at text,
       reviewed_at text,
-      reviewed_by text
+      reviewed_by text,
+      review_notes text,
+      revision_number integer default 0,
+      resubmitted_at text
     )
     """,
     "alter table partner_project_applications add column if not exists proposal_details text not null default '{}'",
+    "alter table partner_project_applications add column if not exists review_notes text",
+    "alter table partner_project_applications add column if not exists revision_number integer default 0",
+    "alter table partner_project_applications add column if not exists resubmitted_at text",
     "create index if not exists partner_project_applications_project_id_idx on partner_project_applications (project_id)",
     "create index if not exists partner_project_applications_partner_user_id_idx on partner_project_applications (partner_user_id)",
     "create index if not exists partner_project_applications_status_idx on partner_project_applications (status)",
@@ -857,6 +863,9 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("requested_at", False),
             ("reviewed_at", False),
             ("reviewed_by", False),
+            ("review_notes", False),
+            ("revision_number", False),
+            ("resubmitted_at", False),
         ],
     },
     "partnerReports": {
@@ -1049,6 +1058,9 @@ FIELD_NAME_MAPS: dict[str, dict[str, str]] = {
         "requestedAt": "requested_at",
         "reviewedAt": "reviewed_at",
         "reviewedBy": "reviewed_by",
+        "reviewNotes": "review_notes",
+        "revisionNumber": "revision_number",
+        "resubmittedAt": "resubmitted_at",
     },
     "partnerReports": {
         "projectId": "project_id",
@@ -1567,6 +1579,9 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("requestedAt"),
             item.get("reviewedAt"),
             item.get("reviewedBy"),
+            item.get("reviewNotes"),
+            _to_int(item.get("revisionNumber")),
+            item.get("resubmittedAt"),
         )
 
     if key == "partnerReports":
@@ -1934,6 +1949,9 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "requestedAt": row["requested_at"],
             "reviewedAt": row["reviewed_at"],
             "reviewedBy": row["reviewed_by"],
+            "reviewNotes": row.get("review_notes"),
+            "revisionNumber": row.get("revision_number") or 0,
+            "resubmittedAt": row.get("resubmitted_at"),
         }
 
     if key == "partnerReports":
@@ -2294,8 +2312,15 @@ def ensure_relational_mirror_tables(connection: Any) -> None:
                     _trace(f"[TRACE] ensure_relational_mirror_tables: executing DDL #{idx}")
                     try:
                         cursor.execute(statement)
+                        if not getattr(connection, 'autocommit', False):
+                            connection.commit()
                         _trace(f"[TRACE] ensure_relational_mirror_tables: finished DDL #{idx} in {_time.perf_counter() - _t0:.3f}s")
                     except Exception as e:
+                        if not getattr(connection, 'autocommit', False):
+                            try:
+                                connection.rollback()
+                            except Exception:
+                                pass
                         # Log but continue — most DDL errors are benign
                         _trace(f"[WARN] ensure_relational_mirror_tables: DDL #{idx} skipped: {type(e).__name__}: {e}")
         finally:

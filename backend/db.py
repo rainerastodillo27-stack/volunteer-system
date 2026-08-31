@@ -228,6 +228,16 @@ def _is_retryable_connection_error(error: Exception) -> bool:
         "echeckouttimeout",
         "unable to check out connection from the pool",
         "transaction mode",
+        "the connection is closed",
+        "bad connection",
+        "closed connection",
+        "canceling statement due to user request",
+        "connection timeout",
+        "timeout expired",
+        "operationalerror",
+        "interfaceerror",
+        "infailedsqltransaction",
+        "eof detected",
     ]
     return any(marker in normalized for marker in retryable_markers)
 
@@ -340,6 +350,10 @@ def get_postgres_connection():
                 connect_kwargs: dict[str, Any] = {
                     "connect_timeout": timeout_to_use,
                     "application_name": "volcre-backend",
+                    "keepalives": 1,
+                    "keepalives_idle": 30,
+                    "keepalives_interval": 10,
+                    "keepalives_count": 5,
                 }
 
                 # Supabase pooler is PgBouncer-like; prepared statements can fail there.
@@ -409,18 +423,24 @@ def init_postgres_pool() -> None:
     try:
         pool_min_size = _get_pool_min_size()
         pool_max_size = max(_get_pool_max_size(), pool_min_size or 1)
-        # Create connection pool with optimized settings
+        # Create connection pool with optimized keepalive and recycling settings
         _POSTGRES_CONNECTION_POOL = ConnectionPool(
             database_url,
             min_size=pool_min_size,
             max_size=pool_max_size,
             timeout=connect_timeout * 2,  # Timeout waiting for available connection
+            max_idle=60.0,  # Close idle connections after 60s to prevent stale server-side drops
+            max_lifetime=300.0,  # Recycle connections after 5m
             reconnect_timeout=30,  # Allow up to 30s to re-establish lost connections
             check=ConnectionPool.check_connection,  # Validate connections before returning them
             kwargs={
                 "application_name": "volcre-backend-pool",
                 "prepare_threshold": None,  # Disable prepared statements for pooler compatibility
                 "connect_timeout": connect_timeout,
+                "keepalives": 1,
+                "keepalives_idle": 30,
+                "keepalives_interval": 10,
+                "keepalives_count": 5,
             }
         )
         print(f"[OK] Postgres connection pool initialized (min={pool_min_size}, max={pool_max_size}) using {urlsplit(database_url).hostname}")
@@ -434,24 +454,17 @@ def init_postgres_pool() -> None:
 @contextlib.contextmanager
 def get_pooled_postgres_connection():
     """Get a database connection from the pool if available, otherwise create a direct connection."""
+    global _POSTGRES_CONNECTION_POOL
     if _POSTGRES_CONNECTION_POOL is not None:
-        pool_context = None
         try:
-            pool_context = _POSTGRES_CONNECTION_POOL.connection()
-            conn = pool_context.__enter__()
-        except Exception as exc:
-            print(f"[WARN] Failed to get connection from pool: {exc}")
-            if pool_context is not None:
-                try:
-                    pool_context.__exit__(None, None, None)
-                except Exception:
-                    pass
-        else:
-            try:
+            with _POSTGRES_CONNECTION_POOL.connection() as conn:
                 yield conn
-            finally:
-                pool_context.__exit__(None, None, None)
-            return
+                return
+        except Exception as exc:
+            if _is_retryable_connection_error(exc) or "pool" in str(exc).lower():
+                print(f"[WARN] Pool connection error: {exc}. Retrying with direct connection.")
+            else:
+                raise
 
     conn = get_postgres_connection()
     try:
@@ -459,7 +472,10 @@ def get_pooled_postgres_connection():
         with conn:
             yield conn
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 # Returns the default backend database connection.

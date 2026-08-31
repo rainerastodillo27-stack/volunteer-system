@@ -47,7 +47,50 @@ foreach ($pid8081 in $port8081) {
   }
 }
 
-# -- 4. Wait for ports to fully release -----------------------------------
+# -- 4. Kill all Python processes (backend/scripts) -----------------------
+Write-Host "  Stopping all Python processes..."
+$pythonProcs = Get-Process python* -ErrorAction SilentlyContinue
+if ($pythonProcs) {
+  foreach ($proc in $pythonProcs) {
+    try {
+      Stop-Process -Id $proc.Id -Force -ErrorAction Stop
+      Write-Host "  Killed Python process (PID $($proc.Id))"
+    } catch {
+      # Process may have already exited
+    }
+  }
+}
+
+# -- 5. Kill all Node processes related to Expo/Metro ---------------------
+Write-Host "  Stopping Expo/Metro Node processes..."
+# Get all Node processes listening on our ports
+$ourNodePids = @()
+$port8000Node = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess
+$port8081Node = Get-NetTCPConnection -LocalPort 8081 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess
+$port8082Node = Get-NetTCPConnection -LocalPort 8082 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess
+if ($port8000Node) { $ourNodePids += $port8000Node }
+if ($port8081Node) { $ourNodePids += $port8081Node }
+if ($port8082Node) { $ourNodePids += $port8082Node }
+
+$ourNodePids = $ourNodePids | Select-Object -Unique
+foreach ($pid in $ourNodePids) {
+  $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+  if ($proc -and $proc.ProcessName -match 'node') {
+    Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+    Write-Host "  Killed Node process on our ports (PID $pid)"
+  }
+}
+
+# -- 6. Kill ngrok processes if any ---------------------------------------
+$ngrokProcs = Get-Process ngrok* -ErrorAction SilentlyContinue
+if ($ngrokProcs) {
+  foreach ($proc in $ngrokProcs) {
+    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    Write-Host "  Killed ngrok process (PID $($proc.Id))"
+  }
+}
+
+# -- 7. Wait for ports to fully release -----------------------------------
 $waited = 0
 while ($waited -lt 8) {
   $still8000 = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue
@@ -57,7 +100,7 @@ while ($waited -lt 8) {
   $waited++
 }
 
-# -- 5. Clear Python cache to ensure fresh code loads ---------------------
+# -- 8. Clear Python cache to ensure fresh code loads ---------------------
 Write-Host "  Clearing Python cache..."
 $pycacheDir = Join-Path $projectRoot 'backend\__pycache__'
 if (Test-Path $pycacheDir) {
@@ -65,7 +108,7 @@ if (Test-Path $pycacheDir) {
   Write-Host "  Python cache cleared"
 }
 
-# -- 6. Clear mobile app cache (Expo) -------------------------------------
+# -- 9. Clear mobile app cache (Expo) -------------------------------------
 Write-Host "  Clearing mobile app cache..."
 $expoDir = Join-Path $projectRoot '.expo'
 if (Test-Path $expoDir) {
@@ -87,7 +130,7 @@ Get-ChildItem -Path $env:TEMP -Filter 'react-*' -ErrorAction SilentlyContinue | 
 }
 Write-Host "  React Native cache cleared"
 
-# -- 7. Clear web cache (Expo web) ----------------------------------------
+# -- 10. Clear web cache (Expo web) ----------------------------------------
 Write-Host "  Clearing web cache..."
 # Clear Expo web dist build
 $webDistDir = Join-Path $projectRoot 'dist'
