@@ -343,6 +343,9 @@ export default function ReportUploadModal({
       if (!description.trim()) {
         nextErrors.description = 'Add a short summary for the admin side';
       }
+      if (!metrics.beneficiariesServed.trim()) {
+        nextErrors.beneficiariesServed = 'Enter the number of beneficiaries reached';
+      }
     } else if (isPartner) {
       if (!selectedPartnerProjectSummary) {
         nextErrors.project = 'Select an approved project';
@@ -527,6 +530,7 @@ export default function ReportUploadModal({
             ? `Assigned event task:\n${volunteerMetrics.assignedTaskTitles.join(', ')}`
             : '',
           description.trim() ? `Summary:\n${description.trim()}` : '',
+          `Beneficiaries reached: ${metrics.beneficiariesServed || '0'}`,
         ]
           .filter(Boolean)
           .join('\n\n')
@@ -860,6 +864,22 @@ export default function ReportUploadModal({
       ) : null}
 
       <Text style={styles.sectionTitle}>Event Summary</Text>
+
+      <Text style={styles.label}>Beneficiaries Reached *</Text>
+      <Text style={styles.sectionHelper}>
+        Enter the number of people who benefited from this event. This value is used in admin analytics.
+      </Text>
+      <TextInput
+        style={[styles.input, errors.beneficiariesServed && styles.inputError]}
+        placeholder="0"
+        value={metrics.beneficiariesServed}
+        onChangeText={value => handleMetricChange('beneficiariesServed', value)}
+        keyboardType="number-pad"
+        placeholderTextColor="#cbd5e1"
+      />
+      {errors.beneficiariesServed ? (
+        <Text style={styles.errorText}>{errors.beneficiariesServed}</Text>
+      ) : null}
 
       <Text style={styles.label}>Assigned Event Task</Text>
       <View style={styles.readOnlyCardLarge}>

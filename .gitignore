@@ -13,6 +13,7 @@ npm-debug.*
 *.mobileprovision
 *.orig.*
 web-build/
+.web-export-check/
 .env
 .env.local
 

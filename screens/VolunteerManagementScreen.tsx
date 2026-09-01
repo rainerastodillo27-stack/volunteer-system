@@ -34,6 +34,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../contexts/AuthContext';
 import InlineLoadError from '../components/InlineLoadError';
+import UserAccountDetailsModal from '../components/UserAccountDetailsModal';
 import { getProjectDisplayStatus } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 import { getAttachmentLabel, isImageMediaUri, openAttachmentUri } from '../utils/media';
@@ -54,6 +55,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
   const [volunteerTimeLogs, setVolunteerTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const [showAvailabilityModal, setShowAvailabilityModal] = useState(false);
+  const [showAccountDetailsModal, setShowAccountDetailsModal] = useState(false);
   const [daysPerWeek, setDaysPerWeek] = useState('3');
   const [hoursPerWeek, setHoursPerWeek] = useState('12');
   const [availableDays, setAvailableDays] = useState<string[]>(['Monday', 'Wednesday', 'Saturday']);
@@ -624,6 +626,11 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
 
     return (
       <View style={styles.container}>
+        <UserAccountDetailsModal
+          visible={showAccountDetailsModal}
+          onClose={() => setShowAccountDetailsModal(false)}
+          user={selectedUser}
+        />
         <View style={[styles.header, { paddingTop: insets.top, height: 56 + insets.top }]}>
           <TouchableOpacity onPress={() => setView('list')}>
             <MaterialIcons name="arrow-back" size={24} color="#333" />
@@ -708,6 +715,13 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                   >
                     <MaterialIcons name="cancel" size={18} color="#fff" />
                     <Text style={styles.reviewActionButtonText}>Reject</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.reviewActionButton, { backgroundColor: '#166534' }]}
+                    onPress={() => setShowAccountDetailsModal(true)}
+                  >
+                    <MaterialIcons name="visibility" size={18} color="#fff" />
+                    <Text style={styles.reviewActionButtonText}>Details</Text>
                   </TouchableOpacity>
                 </View>
               </View>

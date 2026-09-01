@@ -35,7 +35,6 @@ def add_performance_indexes(connection):
         ("idx_partners_id", "partners", "partners_id"),
         ("idx_volunteers_id", "volunteers", "volunteers_id"),
         ("idx_programs_id", "programs", "programs_id"),
-        ("idx_program_tracks_id", "program_tracks", "program_tracks_id"),
         
         # Foreign key indexes for JOIN operations
         ("idx_volunteers_user_id", "volunteers", "user_id"),
@@ -152,7 +151,7 @@ def analyze_tables(connection):
     
     tables = [
         "projects", "events", "users", "partners", "volunteers",
-        "programs", "program_tracks", "volunteer_matches",
+        "programs", "volunteer_matches",
         "volunteer_time_logs", "partner_project_applications",
         "messages", "project_group_messages"
     ]

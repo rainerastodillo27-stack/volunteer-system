@@ -97,7 +97,7 @@ export default function ReportDetailsModal({
   const statusPresentation = getStatusPresentation(report.status);
   const handleOpenAttachment = async (uri: string) => {
     try {
-      if (Platform.OS !== 'web' && uri.trim().startsWith('data:image/')) {
+      if (isImageMediaUri(uri)) {
         setPreviewAttachmentUri(uri.trim());
         return;
       }
@@ -369,9 +369,9 @@ export default function ReportDetailsModal({
         <View style={styles.attachmentPreviewBackdrop}>
           <View style={styles.attachmentPreviewModalCard}>
             <View style={styles.attachmentPreviewHeader}>
-              <Text style={styles.attachmentPreviewModalTitle}>Preview Photo</Text>
+              <Text style={styles.attachmentPreviewModalTitle}>Full-resolution photo</Text>
               <TouchableOpacity onPress={closeAttachmentPreview} style={styles.attachmentPreviewClose}>
-                <MaterialIcons name="close" size={20} color="#0f172a" />
+                <MaterialIcons name="close" size={20} color="#f8fafc" />
               </TouchableOpacity>
             </View>
             <Image
@@ -807,16 +807,17 @@ const styles = StyleSheet.create({
   },
   attachmentPreviewBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.7)',
+    backgroundColor: 'rgba(15, 23, 42, 0.94)',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20,
+    padding: 8,
   },
   attachmentPreviewModalCard: {
     width: '100%',
-    maxWidth: 720,
-    backgroundColor: '#fff',
-    borderRadius: 20,
+    height: '100%',
+    maxWidth: 1400,
+    backgroundColor: '#0f172a',
+    borderRadius: 12,
     overflow: 'hidden',
   },
   attachmentPreviewHeader: {
@@ -825,20 +826,20 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     padding: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
+    borderBottomColor: '#334155',
   },
   attachmentPreviewModalTitle: {
     fontSize: 16,
     fontWeight: '800',
-    color: '#0f172a',
+    color: '#f8fafc',
   },
   attachmentPreviewClose: {
     padding: 8,
   },
   attachmentPreviewModalImage: {
     width: '100%',
-    height: 420,
-    backgroundColor: '#f8fafc',
+    flex: 1,
+    backgroundColor: '#0f172a',
   },
   metricCard: {
     flex: Platform.select({ web: 0, default: 1 }),

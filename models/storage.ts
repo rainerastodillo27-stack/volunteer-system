@@ -57,7 +57,6 @@ const STORAGE_KEYS = {
   PARTNER_PROJECT_APPLICATIONS: 'partnerProjectApplications',
   PARTNER_REPORTS: 'partnerReports',
   ADMIN_PLANNING_CALENDARS: 'adminPlanningCalendars',
-  ADMIN_PLANNING_ITEMS: 'adminPlanningItems',
   PROGRAM_TRACKS: 'programTracks',
   APP_SETTINGS: 'appSettings',
 };
@@ -495,47 +494,10 @@ function attachPlanningItemToCalendars(
   return nextCalendars;
 }
 
-async function migrateLegacyPlanningItemsIntoCalendars(
+function normalizePlanningCalendars(
   calendars: AdminPlanningCalendar[]
-): Promise<AdminPlanningCalendar[]> {
-  const legacyItems = (await getStorageItem<AdminPlanningItem[]>(STORAGE_KEYS.ADMIN_PLANNING_ITEMS)) || [];
-  const nextCalendars = calendars.map(calendar => normalizeAdminPlanningCalendarRecord(calendar));
-
-  if (legacyItems.length === 0) {
-    return nextCalendars;
-  }
-
-  for (const legacyItem of legacyItems) {
-    const normalizedItem = normalizeAdminPlanningItemRecord(legacyItem);
-    let targetIndex = nextCalendars.findIndex(calendar => calendar.id === normalizedItem.calendarId);
-
-    if (targetIndex < 0) {
-      const fallbackCalendarId = normalizedItem.calendarId || nextCalendars[0]?.id || 'planner-projects';
-      targetIndex = nextCalendars.findIndex(calendar => calendar.id === fallbackCalendarId);
-
-      if (targetIndex < 0) {
-        nextCalendars.push({
-          id: fallbackCalendarId,
-          name: fallbackCalendarId,
-          color: '#0F766E',
-          description: 'Migrated planning lane.',
-          planningItems: [],
-          createdAt: normalizedItem.createdAt,
-          updatedAt: normalizedItem.updatedAt,
-        });
-        targetIndex = nextCalendars.length - 1;
-      }
-    }
-
-    const targetCalendar = nextCalendars[targetIndex];
-    targetCalendar.planningItems = [
-      ...(targetCalendar.planningItems || []).filter(entry => entry.id !== normalizedItem.id),
-      normalizedItem,
-    ];
-  }
-
-  await setStorageItem(STORAGE_KEYS.ADMIN_PLANNING_CALENDARS, nextCalendars);
-  return nextCalendars;
+): AdminPlanningCalendar[] {
+  return calendars.map(calendar => normalizeAdminPlanningCalendarRecord(calendar));
 }
 
 // Broadcasts a local storage timestamp so web tabs refresh message state.
@@ -2321,19 +2283,7 @@ function normalizeAccountPhone(value?: string): string | undefined {
 }
 
 function normalizePartnerContactPhone(value?: string): string | undefined {
-  const normalizedAccountPhone = normalizeAccountPhone(value);
-  if (normalizedAccountPhone) {
-    return normalizedAccountPhone;
-  }
-
-  const digits = (value || '').replace(/\D/g, '');
-  if (/^63\d{9,11}$/.test(digits)) {
-    return `+${digits}`;
-  }
-  if (/^0\d{9,11}$/.test(digits)) {
-    return `+63${digits.slice(1)}`;
-  }
-  return undefined;
+  return normalizeAccountPhone(value);
 }
 
 // Maps one advocacy focus into the existing project/partner category taxonomy.
@@ -3427,7 +3377,7 @@ export async function savePartner(partner: Partner): Promise<void> {
     throw new Error('Please enter a valid partner email address.');
   }
   if (partner.contactPhone?.trim() && !normalizePartnerContactPhone(partner.contactPhone)) {
-    throw new Error('Use a valid Philippine contact number for the partner record.');
+    throw new Error('Use a valid 11-digit Philippine mobile number for the partner record.');
   }
 
   const partners = await getStorageItem<Partner[]>(STORAGE_KEYS.PARTNERS) || [];
@@ -3574,12 +3524,12 @@ async function ensureAdminPlanningCalendarsSeeded(): Promise<AdminPlanningCalend
       (await getStorageItem<AdminPlanningCalendar[]>(STORAGE_KEYS.ADMIN_PLANNING_CALENDARS)) || [];
 
     if (existingCalendars.length > 0) {
-      return migrateLegacyPlanningItemsIntoCalendars(existingCalendars);
+      return normalizePlanningCalendars(existingCalendars);
     }
 
     const seededCalendars = DEFAULT_ADMIN_PLANNING_CALENDARS.map(calendar => ({ ...calendar }));
     await setStorageItem(STORAGE_KEYS.ADMIN_PLANNING_CALENDARS, seededCalendars);
-    return migrateLegacyPlanningItemsIntoCalendars(seededCalendars);
+    return normalizePlanningCalendars(seededCalendars);
   } catch (error) {
     if (!isAbortLikeError(error)) {
       console.error('Failed to seed admin planning calendars:', error);
@@ -4765,6 +4715,7 @@ export async function reviewVolunteerProjectMatch(
   if (!payload.match) {
     throw new Error('Volunteer request review did not complete.');
   }
+  const reviewedMatch = payload.match;
 
   const changedKeys = [
     STORAGE_KEYS.VOLUNTEER_MATCHES,
@@ -4791,20 +4742,26 @@ export async function reviewVolunteerProjectMatch(
   }
   notifyStorageChanged(changedKeys);
 
-  try {
-    const volunteer = await getVolunteer(payload.match.volunteerId);
-    await notifyVolunteerAboutProjectMatchDecision(
-      payload.match.projectId,
-      volunteer?.userId || '',
-      reviewedBy,
-      nextStatus,
-      'request'
-    );
-  } catch (error) {
-    console.error('Error notifying volunteer about request review:', error);
-  }
+  // Do not hold the approval response on the best-effort notification path.
+  // The match/project updates above are already persisted and are what the
+  // reviewer needs to see immediately; notification delivery can complete in
+  // the background without leaving the approval button spinning.
+  void (async () => {
+    try {
+      const volunteer = await getVolunteer(reviewedMatch.volunteerId);
+      await notifyVolunteerAboutProjectMatchDecision(
+        reviewedMatch.projectId,
+        volunteer?.userId || '',
+        reviewedBy,
+        nextStatus,
+        'request'
+      );
+    } catch (error) {
+      console.error('Error notifying volunteer about request review:', error);
+    }
+  })();
 
-  return payload.match;
+  return reviewedMatch;
 }
 
 // Immediately assigns a volunteer to a project on behalf of an admin.
@@ -5423,10 +5380,30 @@ function calculateImpactCountFromMetrics(metrics?: Record<string, number>): numb
     return 0;
   }
 
-  return Object.values(metrics).reduce(
-    (sum, value) => sum + (Number.isFinite(value) ? value : 0),
-    0
-  );
+  // Beneficiary totals are the canonical impact count used by analytics.
+  // Do not let operational metrics (hours, joins, tasks, etc.) inflate that
+  // count when a report explicitly provides a beneficiary value.
+  const beneficiaryKeys = [
+    'beneficiariesServed',
+    'beneficiaries_served',
+    'beneficiaries',
+    'beneficiariesAssisted',
+    'beneficiaries_assisted',
+    'beneficiariesReached',
+    'beneficiaries_reached',
+  ];
+  const beneficiaryValue = beneficiaryKeys
+    .map(key => Number(metrics[key]))
+    .find(value => Number.isFinite(value) && value >= 0);
+  if (beneficiaryValue !== undefined) {
+    return beneficiaryValue;
+  }
+
+  const total = Object.values(metrics).reduce((sum, value) => {
+    const numericValue = Number(value);
+    return sum + (Number.isFinite(numericValue) ? numericValue : 0);
+  }, 0);
+  return Math.max(total, 0);
 }
 
 const REPORT_MEDIA_FILE_MAX_LENGTH = 500;

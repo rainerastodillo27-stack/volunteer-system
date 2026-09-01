@@ -145,21 +145,6 @@ CREATE TABLE public.programs (
   CONSTRAINT programs_pkey PRIMARY KEY (id)
 );
 
--- ── program_tracks ───────────────────────────────────────────
-CREATE TABLE public.program_tracks (
-  id text NOT NULL,
-  title text NOT NULL,
-  description text,
-  icon text,
-  color text,
-  image_url text,
-  sort_order integer NOT NULL DEFAULT 0,
-  is_active boolean NOT NULL DEFAULT true,
-  created_at text,
-  updated_at text,
-  CONSTRAINT program_tracks_pkey PRIMARY KEY (id)
-);
-
 -- ── projects ─────────────────────────────────────────────────
 CREATE TABLE public.projects (
   id text NOT NULL,
@@ -403,23 +388,6 @@ CREATE TABLE public.admin_planning_calendars (
   CONSTRAINT admin_planning_calendars_pkey PRIMARY KEY (admin_planning_calendars_id)
 );
 
--- ── admin_planning_items ─────────────────────────────────────
-CREATE TABLE public.admin_planning_items (
-  admin_planning_items_id text NOT NULL,
-  title text NOT NULL,
-  description text,
-  calendar_id text NOT NULL,
-  linked_project_id text,
-  start_date text NOT NULL,
-  end_date text NOT NULL,
-  location text,
-  participants_label text,
-  created_by text NOT NULL,
-  created_at text NOT NULL,
-  updated_at text NOT NULL,
-  CONSTRAINT admin_planning_items_pkey PRIMARY KEY (admin_planning_items_id)
-);
-
 -- ── Indexes ──────────────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS idx_messages_recipient_id            ON public.messages(recipient_id);
 CREATE INDEX IF NOT EXISTS idx_messages_sender_id               ON public.messages(sender_id);
@@ -435,4 +403,3 @@ CREATE INDEX IF NOT EXISTS idx_volunteer_time_logs_project      ON public.volunt
 CREATE INDEX IF NOT EXISTS idx_reports_project_id               ON public.reports(project_id);
 CREATE INDEX IF NOT EXISTS idx_reports_partner_id               ON public.reports(partner_id);
 CREATE INDEX IF NOT EXISTS idx_status_updates_project_id        ON public.status_updates(project_id);
-CREATE INDEX IF NOT EXISTS idx_admin_planning_items_calendar    ON public.admin_planning_items(calendar_id);

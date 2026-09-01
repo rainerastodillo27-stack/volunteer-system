@@ -187,13 +187,24 @@ function formatProjectDateRange(startValue?: string, endValue?: string): string 
 }
 
 function getReportBeneficiariesServed(report: PartnerReport): number {
-  const beneficiariesServed = Number(report.metrics?.beneficiariesServed);
-  if (Number.isFinite(beneficiariesServed) && beneficiariesServed > 0) {
-    return beneficiariesServed;
+  const beneficiaryKeys = [
+    'beneficiariesServed',
+    'beneficiaries_served',
+    'beneficiaries',
+    'beneficiariesAssisted',
+    'beneficiaries_assisted',
+    'beneficiariesReached',
+    'beneficiaries_reached',
+  ];
+  for (const key of beneficiaryKeys) {
+    const value = Number(report.metrics?.[key]);
+    if (Number.isFinite(value) && value >= 0) {
+      return value;
+    }
   }
 
   const impactCount = Number(report.impactCount);
-  return Number.isFinite(impactCount) && impactCount > 0 ? impactCount : 0;
+  return Number.isFinite(impactCount) && impactCount >= 0 ? impactCount : 0;
 }
 
 function formatImpactCount(value: number): string {

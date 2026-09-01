@@ -34,7 +34,7 @@ import {
   rejectUser,
 } from '../models/storage';
 import { NVCSector, Partner, User, UserRole, UserType, Volunteer } from '../models/types';
-import { isImageMediaUri } from '../utils/media';
+import { getAttachmentLabel, isImageMediaUri, openAttachmentUri } from '../utils/media';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 const roleOptions: UserRole[] = ['admin', 'partner', 'volunteer'];
@@ -330,6 +330,12 @@ export default function UserManagementScreen() {
         (partner.contactPhone || '').trim() === (targetUser.phone || '').trim()
       );
     }) || null;
+
+  const getLinkedVolunteerForUser = (targetUser: User) =>
+    volunteers.find(volunteer =>
+      volunteer.userId === targetUser.id ||
+      (volunteer.email || '').trim().toLowerCase() === (targetUser.email || '').trim().toLowerCase()
+    ) || null;
 
   if (!isAdmin) {
     return (
@@ -1027,6 +1033,112 @@ export default function UserManagementScreen() {
                 </View>
 
               </View>
+
+              {reviewTarget.record.role === 'volunteer' && getLinkedVolunteerForUser(reviewTarget.record) ? (() => {
+                const volunteerProfile = getLinkedVolunteerForUser(reviewTarget.record)!;
+                const registration = (reviewTarget.record as any).volunteerRegistration || {};
+                const validIdPhoto = registration.validIdPhoto || (volunteerProfile as any).validIdPhoto;
+                return (
+                  <View style={styles.reviewDetailsSection}>
+                    <Text style={styles.reviewSectionTitle}>Volunteer Profile Details</Text>
+                    {[
+                      ['Gender', volunteerProfile.gender],
+                      ['Date of Birth', volunteerProfile.dateOfBirth],
+                      ['Civil Status', volunteerProfile.civilStatus],
+                      ['Address', volunteerProfile.homeAddress],
+                      ['Occupation', volunteerProfile.occupation],
+                      ['Workplace / School', volunteerProfile.workplaceOrSchool],
+                      ['College Course', volunteerProfile.collegeCourse],
+                      ['Certifications / Trainings', volunteerProfile.certificationsOrTrainings],
+                      ['Hobbies & Interests', volunteerProfile.hobbiesAndInterests],
+                      ['Special Skills', volunteerProfile.specialSkills],
+                    ].map(([label, value]) => (
+                      <View key={label} style={styles.reviewDetailRow}>
+                        <Text style={styles.reviewDetailLabel}>{label}</Text>
+                        <Text style={styles.reviewDetailValue}>{value || 'Not provided'}</Text>
+                      </View>
+                    ))}
+                    {volunteerProfile.skills?.length ? (
+                      <View style={styles.reviewDetailRow}>
+                        <Text style={styles.reviewDetailLabel}>Skills</Text>
+                        <View style={styles.reviewInterestsWrap}>
+                          {volunteerProfile.skills.map(skill => (
+                            <View key={skill} style={styles.reviewInterestChip}>
+                              <Text style={styles.reviewInterestText}>{skill}</Text>
+                            </View>
+                          ))}
+                        </View>
+                      </View>
+                    ) : null}
+                    {volunteerProfile.affiliations?.length ? (
+                      <View style={styles.reviewDetailRow}>
+                        <Text style={styles.reviewDetailLabel}>Affiliations</Text>
+                        <View style={styles.reviewListValue}>
+                          {volunteerProfile.affiliations.map((affiliation, index) => (
+                            <Text key={`${affiliation.organization}-${index}`} style={styles.reviewDetailValue}>
+                              {affiliation.position || 'Member'} at {affiliation.organization || 'Organization not provided'}
+                            </Text>
+                          ))}
+                        </View>
+                      </View>
+                    ) : null}
+                    {validIdPhoto ? (
+                      <View style={styles.reviewMediaBlock}>
+                        <Text style={styles.reviewDetailLabel}>Valid ID Photo</Text>
+                        <TouchableOpacity onPress={() => void openAttachmentUri(validIdPhoto)}>
+                          <Image source={{ uri: validIdPhoto }} style={styles.reviewDocumentImage} resizeMode="contain" />
+                          <Text style={styles.reviewAttachmentLink}>View full image</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ) : null}
+                  </View>
+                );
+              })() : null}
+
+              {reviewTarget.record.role === 'partner' && getLinkedPartnerForUser(reviewTarget.record) ? (() => {
+                const partnerProfile = getLinkedPartnerForUser(reviewTarget.record)!;
+                return (
+                  <View style={styles.reviewDetailsSection}>
+                    <Text style={styles.reviewSectionTitle}>Partner Application Details</Text>
+                    {[
+                      ['Organization Name', partnerProfile.name],
+                      ['Sector Type', partnerProfile.sectorType],
+                      ['Stakeholder Name', partnerProfile.stakeholderName],
+                      ['DSWD Accreditation No', partnerProfile.dswdAccreditationNo],
+                      ['SEC Registration No', partnerProfile.secRegistrationNo],
+                      ['Address / Location', [partnerProfile.address, partnerProfile.cityMunicipality, partnerProfile.province, partnerProfile.region].filter(Boolean).join(', ')],
+                    ].map(([label, value]) => (
+                      <View key={label} style={styles.reviewDetailRow}>
+                        <Text style={styles.reviewDetailLabel}>{label}</Text>
+                        <Text style={styles.reviewDetailValue}>{value || 'Not provided'}</Text>
+                      </View>
+                    ))}
+                    {partnerProfile.advocacyFocus?.length ? (
+                      <View style={styles.reviewDetailRow}>
+                        <Text style={styles.reviewDetailLabel}>Advocacy Focus</Text>
+                        <View style={styles.reviewInterestsWrap}>
+                          {partnerProfile.advocacyFocus.map(focus => (
+                            <View key={focus} style={styles.reviewInterestChip}>
+                              <Text style={styles.reviewInterestText}>{focus}</Text>
+                            </View>
+                          ))}
+                        </View>
+                      </View>
+                    ) : null}
+                    {partnerProfile.registrationDocuments?.length ? (
+                      <View style={styles.reviewMediaBlock}>
+                        <Text style={styles.reviewDetailLabel}>Submitted Documents</Text>
+                        {partnerProfile.registrationDocuments.map((documentUri, index) => (
+                          <TouchableOpacity key={`${documentUri}-${index}`} style={styles.reviewDocumentRow} onPress={() => void openAttachmentUri(documentUri)}>
+                            <MaterialIcons name="description" size={17} color="#166534" />
+                            <Text style={styles.reviewAttachmentLink} numberOfLines={1}>{getAttachmentLabel(documentUri)}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    ) : null}
+                  </View>
+                );
+              })() : null}
             </ScrollView>
           </View>
         )}
@@ -1844,6 +1956,35 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#166534',
     fontWeight: '500',
+  },
+  reviewListValue: {
+    flex: 1.5,
+    gap: 4,
+    alignItems: 'flex-end',
+  },
+  reviewMediaBlock: {
+    marginTop: 12,
+    gap: 8,
+  },
+  reviewDocumentImage: {
+    width: '100%',
+    height: 210,
+    borderRadius: 10,
+    backgroundColor: '#f1f5f9',
+  },
+  reviewDocumentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    paddingVertical: 6,
+  },
+  reviewAttachmentLink: {
+    flex: 1,
+    marginTop: 4,
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#166534',
+    textDecorationLine: 'underline',
   },
   deleteAccountButton: {
     flexDirection: 'row',

@@ -11,9 +11,11 @@ export default defineConfig({
   },
   fullyParallel: false,
   workers: 1,
-  reporter: process.env.QASE_MODE
-    ? [['list'], ['html', { open: 'never' }], ['junit', { outputFile: 'test-results/playwright-junit.xml' }]]
-    : [['list'], ['html', { open: 'never' }]],
+  reporter: process.env.E2E_VERBOSE
+    ? [['./tests/e2e/terminal-reporter.ts'], ['html', { open: 'never' }]]
+    : process.env.QASE_MODE
+      ? [['list'], ['html', { open: 'never' }], ['junit', { outputFile: 'test-results/playwright-junit.xml' }]]
+      : [['list'], ['html', { open: 'never' }]],
   use: {
     baseURL,
     extraHTTPHeaders: {
@@ -30,14 +32,14 @@ export default defineConfig({
     },
     {
       name: 'admin-web',
-      testMatch: /ui-login\.spec\.ts/,
+      testMatch: /ui-.*\.spec\.ts/,
       use: {
         ...devices['Desktop Chrome'],
       },
     },
     {
       name: 'mobile-mode-web',
-      testMatch: /mobile-mode-login\.spec\.ts/,
+      testMatch: /mobile-.*\.spec\.ts/,
       use: {
         ...devices['Pixel 7'],
         baseURL: `${baseURL.replace(/\/$/, '')}/?mode=mobile`,

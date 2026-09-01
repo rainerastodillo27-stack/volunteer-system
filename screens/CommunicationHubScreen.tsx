@@ -102,8 +102,6 @@ import {
 
   getDirectMessagesForUser,
 
-  sendDirectMessage,
-
   sendGroupMessage,
 
   markDirectMessageReadFirestore,
@@ -133,6 +131,8 @@ import { navigateToAvailableRoute } from '../utils/navigation';
 import { isImageMediaUri, pickDocumentFromDevice, pickImageFromDevice } from '../utils/media';
 
 import { getRequestErrorMessage } from '../utils/requestErrors';
+
+import ProposalMessageTemplate from '../components/ProposalMessageTemplate';
 
 function LazyDateTimePicker(props: any) {
 
@@ -347,7 +347,10 @@ function mergeChatMessageLists<T extends ChatMessage>(...messageGroups: T[][]): 
       recipientId?: string;
       projectId?: string;
     };
-    const timestampBucket = Math.floor(new Date(message.timestamp).getTime() / 5000);
+    // Messages written by the legacy Firestore path and the backend can have
+    // slightly different timestamps. Treat identical content in the same
+    // minute/conversation as one message while merging those sources.
+    const timestampBucket = Math.floor(new Date(message.timestamp).getTime() / 60000);
     const messageSignature = [
       message.senderId,
       messageWithOptionalTargets.recipientId || '',
@@ -2076,14 +2079,9 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         setMessages(current => mergeChatMessageLists(current as Message[], [fullMsg as Message]));
         directMessagesRef.current = mergeChatMessageLists(directMessagesRef.current, [fullMsg as Message]);
 
-        // Write to BOTH Firestore (real-time sync) and backend (persistence)
-        const { id: _id, ...msgWithoutId } = fullMsg as Message;
-        await Promise.all([
-          sendDirectMessage(msgWithoutId).catch(err => {
-            console.warn('[Chat] Firestore DM send failed (non-fatal):', err);
-          }),
-          saveMessage(fullMsg as Message),
-        ]);
+        // Persist through the backend only. The backend broadcasts the saved
+        // message to subscribers, so a second Firestore copy would duplicate it.
+        await saveMessage(fullMsg as Message);
 
       } else if (selectedProjectChat) {
 
@@ -4047,13 +4045,49 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                   ? `${formatProposalDate(data.proposedStartDate)} - ${formatProposalDate(data.proposedEndDate)}`
                   : formatProposalDate(data.proposedStartDate);
 
+                const templateApplication: PartnerProjectApplication = {
+                  id: application.id || m.id,
+                  projectId: application.projectId || application.targetProjectId || 'new',
+                  partnerUserId: application.partnerUserId || application.proposedById || m.senderId || '',
+                  partnerName: application.partnerName || application.proposedByName || user?.name || 'Partner',
+                  partnerEmail: application.partnerEmail || '',
+                  status: (application.status === 'Proposed' ? 'Pending' : application.status || 'Pending') as any,
+                  requestedAt: application.timestamp || application.requestedAt || m.timestamp,
+                  proposalDetails: {
+                    ...proposalDetails,
+                    proposedTitle: data.proposedTitle,
+                    proposedDescription: data.proposedDescription,
+                    proposedStartDate: data.proposedStartDate,
+                    proposedEndDate: data.proposedEndDate,
+                    proposedLocation: data.proposedLocation,
+                    proposedVolunteersNeeded: data.proposedVolunteersNeeded,
+                  },
+                  reviewNotes: application.reviewNotes,
+                } as PartnerProjectApplication;
+
                 return (
 
                   <View key={`proposal-${m.id}-${i}`} style={[styles.messageRow, isOwn ? styles.messageRowOwn : styles.messageRowOther, styles.proposalMessageRow]}>
 
+                    <ProposalMessageTemplate
+                      application={templateApplication}
+                      isAdmin={user?.role === 'admin'}
+                      isOwner={isOwn}
+                      isSubmitting={isReviewing}
+                      onEdit={app => openProposalRevision({ ...app, ...(app.proposalDetails || {}) })}
+                      onApprove={app => void handleReview(app, 'Approved')}
+                      onReject={app => handleRejectWithNotes(app)}
+                      onViewProjects={app => navigateToAvailableRoute(navigation, 'Projects', { projectId: app.projectId })}
+                      onOpenAttachment={url => {
+                        void Linking.openURL(url).catch(() => {
+                          Alert.alert('Attachment', 'Unable to open this attachment on this device.');
+                        });
+                      }}
+                    />
+
                     <TouchableOpacity 
 
-                      style={styles.proposalMsgCard}
+                      style={[styles.proposalMsgCard, { display: 'none' }]}
 
                       onPress={() => {
 
@@ -6061,7 +6095,7 @@ const styles = StyleSheet.create({
 
   messageRow: { maxWidth: '85%', gap: 4 },
 
-  proposalMessageRow: { maxWidth: '92%', width: '92%' },
+  proposalMessageRow: { maxWidth: '100%', width: '100%', alignSelf: 'stretch' },
 
   messageRowOwn: { alignSelf: 'flex-end', alignItems: 'flex-end' },
 

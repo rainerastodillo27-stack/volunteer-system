@@ -1,11 +1,13 @@
 import os
 import json
 import asyncio
+import math
 import threading
 import time
 import secrets
 import smtplib
 import traceback
+import re
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime, timezone, timedelta
@@ -35,6 +37,7 @@ from .db import (
     get_postgres_diagnostics,
     get_postgres_status,
     init_postgres_pool,
+    _is_retryable_connection_error,
 )
 from .field_rules import normalize_comparable_phone
 from .image_compression import compress_base64_image, get_image_size_kb
@@ -281,6 +284,41 @@ REMINDER_LEAD_DAYS = 3
 REMINDER_CHECK_INTERVAL_SECONDS = 3600
 _reminder_scheduler_started = False
 _reminder_scheduler_lock = threading.Lock()
+
+
+def _calculate_report_impact_count(metrics: dict[str, Any]) -> int:
+    """Return the beneficiary total without mixing in operational metrics."""
+    beneficiary_keys = (
+        "beneficiariesServed",
+        "beneficiaries_served",
+        "beneficiaries",
+        "beneficiariesAssisted",
+        "beneficiaries_assisted",
+        "beneficiariesReached",
+        "beneficiaries_reached",
+    )
+    for key in beneficiary_keys:
+        value = metrics.get(key)
+        if isinstance(value, bool):
+            continue
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(numeric_value) and numeric_value >= 0:
+            return max(int(numeric_value), 0)
+
+    total = 0.0
+    for value in metrics.values():
+        if isinstance(value, bool):
+            continue
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(numeric_value):
+            total += numeric_value
+    return max(int(total), 0)
 
 
 def _parse_iso_datetime(value: Any) -> datetime | None:
@@ -1636,6 +1674,40 @@ def _to_int(value: Any) -> int:
         return 0
 
 
+def _decode_json_object(value: Any) -> dict[str, Any]:
+    """Decode a JSON-backed object column returned by PostgreSQL.
+
+    The relational mirror stores JSON fields as text so it can work across the
+    supported database modes.  Snapshot queries return those columns directly,
+    therefore decode them before sending the storage payload to the client.
+    """
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except (TypeError, ValueError):
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
+    return {}
+
+
+def _extract_beneficiaries_from_description(description: Any) -> int | None:
+    """Recover beneficiary totals from legacy volunteer report narratives."""
+    match = re.search(
+        r"\bbeneficiaries\s+(?:reached|served|assisted)\s*:\s*(\d+(?:\.\d+)?)",
+        str(description or ""),
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    try:
+        value = float(match.group(1))
+    except (TypeError, ValueError):
+        return None
+    return int(value) if math.isfinite(value) and value >= 0 else None
+
+
 # Maps hot-storage keys to their backing table names.
 def _hot_table_name(key: str) -> str:
     table_name = HOT_STORAGE_TABLES.get(key)
@@ -1779,7 +1851,7 @@ def _get_admin_dashboard_collection(connection: Any, key: str) -> Any:
                 f"""
                 select {pk_column} as id, project_id, partner_id, partner_user_id, partner_name,
                        submitter_user_id, submitter_name, submitter_role, title,
-                       report_type, description, impact_count, created_at, status,
+                       report_type, description, impact_count, metrics, created_at, status,
                        reviewed_at, reviewed_by, source_report_ids
                 from reports
                 order by {pk_column} asc
@@ -1799,6 +1871,7 @@ def _get_admin_dashboard_collection(connection: Any, key: str) -> Any:
                     "reportType": row["report_type"],
                     "description": row["description"],
                     "impactCount": row["impact_count"],
+                    "metrics": _decode_json_object(row["metrics"]),
                     "createdAt": row["created_at"],
                     "status": row["status"],
                     "reviewedAt": row["reviewed_at"],
@@ -4159,7 +4232,7 @@ def get_partner_applications_by_user(partner_user_id: str) -> dict[str, Any]:
 async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload) -> dict[str, Any]:
     _require_postgres()
     print(f"\n{'='*60}")
-    print(f"📥 PROPOSAL REQUEST RECEIVED")
+    print("[PROPOSAL] REQUEST RECEIVED")
     print(f"  Partner User ID: {payload.partnerUserId}")
     print(f"  Partner Name: {payload.partnerName}")
     print(f"  Project ID: {payload.projectId}")
@@ -4261,7 +4334,7 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
                     proposal_content = f'___PROPOSAL_CARD___:{json.dumps(refreshed_application)}'
                     proposal_timestamp = datetime.now(timezone.utc).isoformat()
                     
-                    print(f"🔄 Creating resubmission message card:")
+                    print("[PROPOSAL] Creating resubmission message card:")
                     print(f"  - Message ID: {proposal_message_id}")
                     print(f"  - Partner ID: {payload.partnerUserId}")
                     print(f"  - Revision Number: {refreshed_application.get('revisionNumber')}")
@@ -4304,9 +4377,9 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
                         "attachments": [],
                     }
                     asyncio.create_task(connection_manager.broadcast_message_event(message_data))
-                    print(f"✅ Resubmission message card created and broadcast successfully")
+                    print("[OK] Resubmission message card created and broadcast successfully")
                 except Exception as e:
-                    print(f"❌ Error creating proposal resubmission message: {e}")
+                    print(f"[ERROR] Error creating proposal resubmission message: {e}")
                     import traceback
                     traceback.print_exc()
                     # Don't fail the entire request if message creation fails, but log it clearly
@@ -4355,7 +4428,7 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
         proposal_content = f'___PROPOSAL_CARD___:{json.dumps(application)}'
         proposal_timestamp = datetime.now(timezone.utc).isoformat()
         
-        print(f"📨 Creating initial proposal submission message card:")
+        print("[PROPOSAL] Creating initial proposal submission message card:")
         print(f"  - Message ID: {proposal_message_id}")
         print(f"  - Partner ID: {payload.partnerUserId}")
         print(f"  - Application ID: {application.get('id')}")
@@ -4398,9 +4471,9 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
             "attachments": [],
         }
         asyncio.create_task(connection_manager.broadcast_message_event(message_data))
-        print(f"✅ Initial proposal message card created and broadcast successfully")
+        print("[OK] Initial proposal message card created and broadcast successfully")
     except Exception as e:
-        print(f"❌ Error creating proposal message: {e}")
+        print(f"[ERROR] Error creating proposal message: {e}")
         import traceback
         traceback.print_exc()
         # Don't fail the entire request if message creation fails
@@ -4716,7 +4789,11 @@ async def review_volunteer_match(match_id: str, payload: VolunteerMatchReviewPay
 
         connection.commit()
 
-    await connection_manager.broadcast_storage_event(list(dict.fromkeys(broadcast_keys)))
+    # Broadcast is best-effort and should not block the reviewer response when
+    # a stale websocket takes a while to time out.
+    asyncio.create_task(
+        connection_manager.broadcast_storage_event(list(dict.fromkeys(broadcast_keys)))
+    )
     return {"match": updated_match}
 
 
@@ -5365,19 +5442,13 @@ async def delete_program_track(track_id: str) -> dict[str, Any]:
         )
     
     with get_connection() as connection:
-        deleted_catalog_count = (
-            delete_rows_by_known_id_columns(connection, "programs", ["programs_id", "id"])
-            + delete_rows_by_known_id_columns(connection, "program_tracks", ["program_tracks_id", "id"])
+        deleted_catalog_count = delete_rows_by_known_id_columns(
+            connection, "programs", ["programs_id", "id"]
         )
-        program_tracks = get_postgres_hot_storage_collection(connection, "programTracks")
         programs = get_postgres_hot_storage_collection(connection, "programs")
         projects = get_postgres_hot_storage_collection(connection, "projects")
         events = get_postgres_hot_storage_collection(connection, "events")
 
-        filtered_tracks = [
-            track for track in program_tracks
-            if str(track.get("id") or "").strip().lower() != normalized_track_key
-        ]
         # For programs table: only match by exact ID (not by category/programModule)
         # This prevents deleting all programs when one is deleted
         filtered_programs = [
@@ -5430,8 +5501,7 @@ async def delete_program_track(track_id: str) -> dict[str, Any]:
         ]
 
         if (
-            len(filtered_tracks) == len(program_tracks)
-            and len(filtered_programs) == len(programs)
+            len(filtered_programs) == len(programs)
             and len(filtered_projects) == len(projects)
             and len(filtered_events) == len(events)
         ):
@@ -5461,12 +5531,9 @@ async def delete_program_track(track_id: str) -> dict[str, Any]:
             }
 
         changed_keys = []
-        if len(filtered_tracks) != len(program_tracks):
-            replace_postgres_hot_storage_collection(connection, "programTracks", filtered_tracks)
-            changed_keys.append("programTracks")
         if len(filtered_programs) != len(programs):
             replace_postgres_hot_storage_collection(connection, "programs", filtered_programs)
-            changed_keys.append("programs")
+            changed_keys.extend(["programs", "programTracks"])
         if len(filtered_projects) != len(projects):
             replace_postgres_hot_storage_collection(connection, "projects", filtered_projects)
             changed_keys.append("projects")
@@ -5496,9 +5563,8 @@ async def delete_program_track(track_id: str) -> dict[str, Any]:
                 if changed_key not in changed_keys:
                     changed_keys.append(changed_key)
 
-        final_deleted_catalog_count = (
-            delete_rows_by_known_id_columns(connection, "programs", ["programs_id", "id"])
-            + delete_rows_by_known_id_columns(connection, "program_tracks", ["program_tracks_id", "id"])
+        final_deleted_catalog_count = delete_rows_by_known_id_columns(
+            connection, "programs", ["programs_id", "id"]
         )
         if final_deleted_catalog_count > 0:
             for catalog_key in ["programTracks", "programs"]:
@@ -5639,6 +5705,26 @@ def get_admin_dashboard_snapshot() -> dict[str, Any]:
 @app.put("/storage/{key}")
 # API endpoint that writes one storage key and broadcasts the change.
 async def put_storage_item(key: str, payload: StoragePayload) -> dict[str, str]:
+    # Supabase pooler connections can be closed while a large relational mirror
+    # write is flushing.  Retry the complete idempotent replacement with a fresh
+    # connection before returning a 500 to the client.
+    for attempt in range(3):
+        try:
+            return await _put_storage_item_once(key, payload)
+        except HTTPException as exc:
+            if attempt >= 2 or not _is_retryable_connection_error(exc):
+                raise
+            print(
+                f"[WARN] Retrying storage write key={key} after transient database error "
+                f"(attempt {attempt + 2}/3): {exc.detail}",
+                flush=True,
+            )
+            await asyncio.sleep(0.5 * (attempt + 1))
+
+    raise HTTPException(status_code=500, detail=f"Storage write failed for '{key}'.")
+
+
+async def _put_storage_item_once(key: str, payload: StoragePayload) -> dict[str, str]:
     _require_postgres()
     if is_hot_storage_key(key):
         if not isinstance(payload.value, list):
@@ -5697,12 +5783,12 @@ async def put_storage_item(key: str, payload: StoragePayload) -> dict[str, str]:
                 # Log full traceback for debugging storage write failures
                 print(f"[ERROR] put_storage_item failed for key={key}: {type(e).__name__}: {e}", flush=True)
                 print(traceback.format_exc(), flush=True)
-                if payload.value and len(payload.value) > 0:
-                    print(f"[ERROR] First item in payload: {payload.value[0]}", flush=True)
                 try:
                     connection.rollback()
                 except Exception:
                     pass
+                if isinstance(e, ValueError):
+                    raise HTTPException(status_code=400, detail=str(e))
                 raise HTTPException(status_code=500, detail=f"Storage write failed for '{key}': {str(e)}")
         
         _invalidate_collection_cache(changed_keys)
@@ -5832,7 +5918,27 @@ async def submit_report(payload: ReportSubmitPayload) -> dict[str, Any]:
     project_id = str(payload.projectId).strip()
     submitter_user_id = str(payload.submitterUserId).strip()
     submitter_role = str(payload.submitterRole).strip().lower()
-    metrics = payload.metrics if isinstance(payload.metrics, dict) else {}
+    metrics = dict(payload.metrics) if isinstance(payload.metrics, dict) else {}
+    report_type = str(payload.reportType or "").strip()
+    if (
+        submitter_role == "volunteer"
+        and report_type == "field_report"
+        and not any(
+            key in metrics
+            for key in (
+                "beneficiariesServed",
+                "beneficiaries_served",
+                "beneficiaries",
+                "beneficiariesAssisted",
+                "beneficiaries_assisted",
+                "beneficiariesReached",
+                "beneficiaries_reached",
+            )
+        )
+    ):
+        narrative_value = _extract_beneficiaries_from_description(payload.description)
+        if narrative_value is not None:
+            metrics["beneficiariesServed"] = narrative_value
     attachments = [
         {
             "url": str(attachment.url).strip(),
@@ -5856,11 +5962,7 @@ async def submit_report(payload: ReportSubmitPayload) -> dict[str, Any]:
         media_file = None
     impact_count = payload.impactCount
     if impact_count is None:
-        impact_count = sum(
-            int(value)
-            for value in metrics.values()
-            if isinstance(value, (int, float))
-        )
+        impact_count = _calculate_report_impact_count(metrics)
 
     report = {
         "id": str(payload.id or f"impact-report-{int(datetime.now(timezone.utc).timestamp() * 1000)}"),
@@ -5911,7 +6013,6 @@ async def submit_report(payload: ReportSubmitPayload) -> dict[str, Any]:
                     )
 
                 volunteer_id = str(volunteer.get("id") or "")
-                report_type = str(payload.reportType or "").strip()
                 is_field_officer = _volunteer_is_field_officer_for_event(connection, volunteer_id, project_id)
                 if report_type == "field_report" and not is_field_officer:
                     raise HTTPException(

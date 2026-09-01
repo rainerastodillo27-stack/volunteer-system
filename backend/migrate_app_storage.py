@@ -24,7 +24,7 @@ COLLECTIONS = [
     "partners", "volunteers", "users", "programs", 
     "projects", "events", "volunteerTimeLogs",
     "volunteerMatches", "partnerProjectApplications",
-    "statusUpdates", "adminPlanningCalendars", "adminPlanningItems"
+    "statusUpdates", "adminPlanningCalendars"
 ]
 
 def fetch_old_data(old_conn, collection: str):

@@ -52,16 +52,9 @@ def normalize_ph_mobile_phone(value: Any) -> str | None:
 
 
 def normalize_ph_contact_phone(value: Any) -> str | None:
-    normalized_mobile = normalize_ph_mobile_phone(value)
-    if normalized_mobile:
-        return normalized_mobile
-
-    digits = digits_only(value)
-    if re.fullmatch(r"63\d{9,11}", digits):
-        return f"+{digits}"
-    if re.fullmatch(r"0\d{9,11}", digits):
-        return f"+63{digits[1:]}"
-    return None
+    # Registration contact numbers use the same canonical representation as
+    # account and volunteer phones: exactly 11 digits beginning with 09.
+    return normalize_ph_mobile_phone(value)
 
 
 def clamp_non_negative_int(value: Any) -> int:
@@ -90,12 +83,20 @@ def sanitize_hot_storage_item(key: str, item: dict[str, Any]) -> dict[str, Any]:
     sanitized = dict(item)
 
     if key == "users":
+        if str(item.get("email") or "").strip() and not is_valid_email(item.get("email")):
+            raise ValueError("Please enter a valid email address.")
+        if str(item.get("phone") or "").strip() and not normalize_ph_mobile_phone(item.get("phone")):
+            raise ValueError("Use a valid 11-digit Philippine mobile number (for example, 09171234567).")
         sanitized["email"] = normalize_email(item.get("email"))
         sanitized["name"] = normalize_name(item.get("name"))
         sanitized["phone"] = normalize_ph_mobile_phone(item.get("phone"))
         return sanitized
 
     if key == "partners":
+        if str(item.get("contactEmail") or "").strip() and not is_valid_email(item.get("contactEmail")):
+            raise ValueError("Please enter a valid partner contact email address.")
+        if str(item.get("contactPhone") or "").strip() and not normalize_ph_contact_phone(item.get("contactPhone")):
+            raise ValueError("Use a valid 11-digit Philippine mobile number for the partner contact.")
         raw_category = str(item.get("category") or "").strip()
         normalized_category = "Disaster" if raw_category == "Other" else raw_category
         sanitized["contactEmail"] = normalize_email(item.get("contactEmail"))
@@ -107,6 +108,10 @@ def sanitize_hot_storage_item(key: str, item: dict[str, Any]) -> dict[str, Any]:
         return sanitized
 
     if key == "volunteers":
+        if str(item.get("email") or "").strip() and not is_valid_email(item.get("email")):
+            raise ValueError("Please enter a valid volunteer email address.")
+        if str(item.get("phone") or "").strip() and not normalize_ph_mobile_phone(item.get("phone")):
+            raise ValueError("Use a valid 11-digit Philippine mobile number for the volunteer profile.")
         sanitized["email"] = normalize_email(item.get("email"))
         sanitized["name"] = normalize_name(item.get("name"))
         sanitized["phone"] = normalize_ph_mobile_phone(item.get("phone"))

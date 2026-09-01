@@ -29,10 +29,10 @@ import type {
 } from '../models/types';
 import ReportUploadModal from '../components/ReportUploadModal';
 import ReportDetailsModal from '../components/ReportDetailsModal';
-import AdminReportsDashboard from '../components/AdminReportsDashboard';
 import VolunteerReportsDashboard, {
   PartnerReportsDashboard,
 } from '../components/VolunteerReportsDashboard';
+import AllReportsView from '../components/AllReportsView';
 
 export interface SubmittedReport {
   id: string;
@@ -113,26 +113,51 @@ function friendlyEventFallbackTitle(projectId: string | undefined, isEvent: bool
   return `Unlisted Project (${projectId})`;
 }
 
+function parseBeneficiariesFromNarrative(description: string | undefined): number | undefined {
+  const match = String(description || '').match(
+    /\bbeneficiaries\s+(?:reached|served|assisted)\s*:\s*(\d+(?:\.\d+)?)/i
+  );
+  if (!match) {
+    return undefined;
+  }
+
+  const value = Number(match[1]);
+  return Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 function normalizeImpactHubReport(
   report: PartnerReport,
   projects: Project[]
 ): SubmittedReport {
-  const linkedProject = projects.find(project => project.id === report.projectId);
+  const normalizedProjectId = String(report.projectId || '').trim();
+  const normalizedSubmitterRole = String(report.submitterRole || 'partner').trim().toLowerCase() as UserRole;
+  const linkedProject = projects.find(
+    project => String(project.id || '').trim() === normalizedProjectId
+  );
 
   const isEvent = linkedProject
     ? Boolean(linkedProject.isEvent)
     : Boolean(
-        report.projectId?.startsWith('event-') ||
-        report.projectId?.includes('-event-') ||
-        report.submitterRole === 'volunteer' ||
+        normalizedProjectId.startsWith('event-') ||
+        normalizedProjectId.includes('-event-') ||
+        normalizedSubmitterRole === 'volunteer' ||
         report.reportType === 'field_report'
       );
 
-  const rawMetrics = report.metrics || {};
+  const rawMetrics =
+    report.metrics && typeof report.metrics === 'object' ? report.metrics : {};
   const metrics: Record<string, number> = {};
   for (const [key, val] of Object.entries(rawMetrics)) {
     const numVal = typeof val === 'number' ? val : Number(val) || 0;
-    if (key === 'beneficiaries' || key === 'beneficiaries_served' || key === 'beneficiariesServed') {
+    if (
+      key === 'beneficiaries' ||
+      key === 'beneficiaries_served' ||
+      key === 'beneficiariesServed' ||
+      key === 'beneficiaries_assisted' ||
+      key === 'beneficiariesAssisted' ||
+      key === 'beneficiaries_reached' ||
+      key === 'beneficiariesReached'
+    ) {
       metrics.beneficiariesServed = numVal;
     } else if (key === 'volunteer_hours' || key === 'volunteerHours') {
       metrics.volunteerHours = numVal;
@@ -145,16 +170,34 @@ function normalizeImpactHubReport(
     }
   }
 
+  // Older field reports may have persisted the beneficiary count only in the
+  // volunteer narrative. Recover it for the admin/partner details view while
+  // preserving an explicitly stored zero or any other metric value.
+  if (
+    metrics.beneficiariesServed === undefined &&
+    (report.reportType === 'field_report' || normalizedSubmitterRole === 'volunteer')
+  ) {
+    const narrativeValue = parseBeneficiariesFromNarrative(report.description);
+    if (narrativeValue !== undefined) {
+      metrics.beneficiariesServed = narrativeValue;
+    } else {
+      const impactCount = Number(report.impactCount);
+      if (Number.isFinite(impactCount) && impactCount > 0) {
+        metrics.beneficiariesServed = impactCount;
+      }
+    }
+  }
+
   return {
     id: report.id,
     submittedBy: report.submitterUserId || report.partnerUserId || '',
     submitterName: report.submitterName || report.partnerName || 'User',
-    submitterRole: report.submitterRole || 'partner',
+    submitterRole: normalizedSubmitterRole,
     reportType: report.reportType || 'program_impact',
     title: report.title || `${report.submitterName || report.partnerName || 'User'} Report`,
     description: report.description || '',
-    projectId: report.projectId,
-    projectTitle: linkedProject?.title || friendlyEventFallbackTitle(report.projectId, isEvent),
+    projectId: normalizedProjectId || undefined,
+    projectTitle: linkedProject?.title || friendlyEventFallbackTitle(normalizedProjectId, isEvent),
     projectKind: isEvent ? 'event' : 'project',
     category: linkedProject?.category,
     metrics,
@@ -239,7 +282,7 @@ function buildPartnerProjectSummaries(
   volunteerTimeLogs: VolunteerTimeLog[],
   volunteerJoinRecords: VolunteerProjectJoinRecord[]
 ): PartnerProjectReportSummary[] {
-  if (!partnerUserId) {
+  if (!partnerUserId && partnerApplications.length === 0) {
     return [];
   }
 
@@ -251,7 +294,8 @@ function buildPartnerProjectSummaries(
           Boolean(application.projectId) &&
           !String(application.projectId).startsWith('program:')
       )
-      .map(application => application.projectId)
+      .map(application => String(application.projectId || '').trim())
+      .filter(Boolean)
   );
 
   // Also collect approved program modules so we can match projects by programModule
@@ -287,7 +331,9 @@ function buildPartnerProjectSummaries(
     })
     .map(project => {
       const linkedEvents = projects.filter(
-        candidate => candidate.isEvent && candidate.parentProjectId === project.id
+        candidate =>
+          candidate.isEvent &&
+          String(candidate.parentProjectId || '').trim() === String(project.id || '').trim()
       );
       const linkedEventIds = new Set(linkedEvents.map(event => event.id));
       const partnerReports = reports
@@ -295,8 +341,8 @@ function buildPartnerProjectSummaries(
           report =>
             shouldDisplayReport(report) &&
             report.submitterRole === 'partner' &&
-            report.submittedBy === partnerUserId &&
-            report.projectId === project.id
+            (!partnerUserId || report.submittedBy === partnerUserId) &&
+            String(report.projectId || '').trim() === String(project.id || '').trim()
         )
         .sort(
           (left, right) =>
@@ -460,11 +506,25 @@ export default function ReportsScreen({ navigation, route }: any) {
   const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const [selectedReportType, setSelectedReportType] = useState<'all' | 'volunteer' | 'partner' | null>(null);
   const [showFilteredReports, setShowFilteredReports] = useState(false);
+  const [activeTopTab, setActiveTopTab] = useState<'all' | 'volunteer' | 'partner'>('all');
   const reportsLoadInFlightRef = useRef<Promise<void> | null>(null);
   const reportsReloadQueuedRef = useRef(false);
   const hasLoadedReportsRef = useRef(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Open partners on their own report dashboard once authentication resolves.
+  // Admins retain the all-reports landing view, while volunteers keep the
+  // existing event-report experience.
+  useEffect(() => {
+    if (user?.role === 'partner') {
+      setActiveTopTab('partner');
+    } else if (user?.role === 'volunteer') {
+      setActiveTopTab('volunteer');
+    } else if (user?.role === 'admin') {
+      setActiveTopTab('all');
+    }
+  }, [user?.role]);
 
   const showToast = useCallback((message: string, type: 'success' | 'error' | 'info' = 'info') => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -505,6 +565,20 @@ export default function ReportsScreen({ navigation, route }: any) {
       setVolunteerProfileId(null);
       setVolunteerTimedInProjectIds([]);
       setVolunteerJoinRecords([]);
+      return snapshot.projects;
+    }
+
+    if (user?.role === 'admin' && user.id) {
+      const snapshot = await getProjectsScreenSnapshot(user, [
+        'projects',
+        'partnerApplications',
+        'volunteerJoinRecords',
+      ]);
+      setProjects(snapshot.projects);
+      setPartnerApplications(snapshot.partnerApplications || []);
+      setVolunteerProfileId(null);
+      setVolunteerTimedInProjectIds([]);
+      setVolunteerJoinRecords(snapshot.volunteerJoinRecords || []);
       return snapshot.projects;
     }
 
@@ -555,11 +629,15 @@ export default function ReportsScreen({ navigation, route }: any) {
         user.role === 'admin' || user.role === 'partner'
           ? getAllPartnerReports()
           : getImpactHubReportsByUser(user.id),
-        user.role === 'partner' ? getAllVolunteerTimeLogs() : Promise.resolve(null),
-        user.role === 'partner' ? getAllVolunteerProjectJoinRecords() : Promise.resolve(null),
+        user.role === 'admin' || user.role === 'partner'
+          ? getAllVolunteerTimeLogs()
+          : Promise.resolve(null),
+        user.role === 'admin' || user.role === 'partner'
+          ? getAllVolunteerProjectJoinRecords()
+          : Promise.resolve(null),
       ]);
 
-      if (user.role === 'partner') {
+      if (user.role === 'admin' || user.role === 'partner') {
         setVolunteerTimeLogs(allTimeLogs || []);
         setVolunteerJoinRecords(allJoinRecords || []);
       }
@@ -663,9 +741,9 @@ export default function ReportsScreen({ navigation, route }: any) {
 
   const partnerProjectSummaries = useMemo(
     () =>
-      user?.role === 'partner'
+      user?.role === 'partner' || user?.role === 'admin'
         ? buildPartnerProjectSummaries(
-            user.id,
+            user.role === 'partner' ? user.id : undefined,
             projects,
             reports,
             volunteers,
@@ -690,6 +768,84 @@ export default function ReportsScreen({ navigation, route }: any) {
     () => partnerProjectSummaries.map(summary => summary.project),
     [partnerProjectSummaries]
   );
+
+  // Partner report views must stay scoped to projects that this partner
+  // proposed and the admin approved.  Events are included only when they
+  // explicitly belong to one of those approved projects.
+  const partnerAcceptedEventProjects = useMemo(() => {
+    const byId = new Map<string, Project>();
+    partnerProjectSummaries.forEach(summary => {
+      summary.linkedEvents.forEach(event => byId.set(event.id, event));
+    });
+    return Array.from(byId.values());
+  }, [partnerProjectSummaries]);
+
+  const partnerAcceptedProjectIds = useMemo(
+    () => new Set(partnerAcceptedProjects.map(project => project.id)),
+    [partnerAcceptedProjects]
+  );
+
+  const partnerAcceptedEventIds = useMemo(
+    () => new Set(partnerAcceptedEventProjects.map(event => event.id)),
+    [partnerAcceptedEventProjects]
+  );
+
+  const partnerVisibleProjects = useMemo(
+    () => [...partnerAcceptedProjects, ...partnerAcceptedEventProjects],
+    [partnerAcceptedEventProjects, partnerAcceptedProjects]
+  );
+
+  const partnerVisibleReports = useMemo(
+    () =>
+      reports.filter(report => {
+        const projectId = String(report.projectId || '').trim();
+        if (!projectId) return false;
+
+        const isOwnApprovedProjectReport =
+          report.submitterRole === 'partner' &&
+          report.submittedBy === user?.id &&
+          partnerAcceptedProjectIds.has(projectId);
+        const isApprovedProjectEventReport =
+          report.submitterRole === 'volunteer' && partnerAcceptedEventIds.has(projectId);
+
+        return isOwnApprovedProjectReport || isApprovedProjectEventReport;
+      }),
+    [partnerAcceptedEventIds, partnerAcceptedProjectIds, reports, user?.id]
+  );
+
+  const partnerVolunteerTimeLogs = useMemo(
+    () => volunteerTimeLogs.filter(log => partnerAcceptedEventIds.has(log.projectId)),
+    [partnerAcceptedEventIds, volunteerTimeLogs]
+  );
+
+  const partnerVolunteerJoinRecords = useMemo(
+    () => volunteerJoinRecords.filter(record => partnerAcceptedEventIds.has(record.projectId)),
+    [partnerAcceptedEventIds, volunteerJoinRecords]
+  );
+
+  const partnerVisibleVolunteers = useMemo(() => {
+    if (user?.role !== 'partner') {
+      return volunteers;
+    }
+
+    const visibleVolunteerKeys = new Set<string>([
+      ...partnerVolunteerJoinRecords.flatMap(record => [record.volunteerId, record.volunteerUserId]),
+      ...partnerVolunteerTimeLogs.map(log => log.volunteerId),
+      ...partnerVisibleReports
+        .filter(report => report.submitterRole === 'volunteer')
+        .map(report => report.submittedBy),
+    ]);
+
+    return volunteers.filter(
+      volunteer => visibleVolunteerKeys.has(volunteer.id) || Boolean(volunteer.userId && visibleVolunteerKeys.has(volunteer.userId))
+    );
+  }, [
+    partnerVisibleReports,
+    partnerVolunteerJoinRecords,
+    partnerVolunteerTimeLogs,
+    user?.role,
+    volunteers,
+  ]);
 
   const handleUploadReport = useCallback(
     async (
@@ -728,6 +884,19 @@ export default function ReportsScreen({ navigation, route }: any) {
         const numericMetrics = Object.fromEntries(
           Object.entries(reportData.metrics).filter(([, value]) => typeof value === 'number')
         ) as Record<string, number>;
+
+        // Keep the beneficiary value durable even if a legacy/custom report
+        // form supplied it only in the volunteer narrative.
+        if (
+          user.role === 'volunteer' &&
+          reportType === 'field_report' &&
+          numericMetrics.beneficiariesServed === undefined
+        ) {
+          const narrativeValue = parseBeneficiariesFromNarrative(reportData.description);
+          if (narrativeValue !== undefined) {
+            numericMetrics.beneficiariesServed = narrativeValue;
+          }
+        }
 
         if (user.role === 'partner') {
           const allowedProjectIds = new Set(partnerAcceptedProjects.map(project => project.id));
@@ -926,41 +1095,111 @@ export default function ReportsScreen({ navigation, route }: any) {
     console.log(`View all clicked for: ${reportType || 'analytics'}`);
   }, []);
 
-  const dashboard =
-    user?.role === 'admin' ? (
-      <AdminReportsDashboard
-        reports={userReports}
-        projects={projects}
-        volunteers={volunteers}
-        onUploadReport={handleOpenUploadModal}
-        onViewReport={handleViewReport}
-        onViewAnalytics={handleViewAnalytics}
-        loading={loading}
-        onRefresh={onRefresh}
-        refreshing={refreshing}
-      />
-    ) : user?.role === 'partner' ? (
+  const dashboard = (() => {
+    if (activeTopTab === 'all') {
+      return (
+        <AllReportsView
+          reports={user?.role === 'partner' ? partnerVisibleReports : reports}
+          projects={user?.role === 'partner' ? partnerVisibleProjects : projects}
+          volunteerTimeLogs={user?.role === 'partner' ? partnerVolunteerTimeLogs : volunteerTimeLogs}
+          volunteers={user?.role === 'partner' ? partnerVisibleVolunteers : volunteers}
+          onViewReport={handleViewReport}
+          reportType="all"
+        />
+      );
+    }
+
+    if (activeTopTab === 'volunteer') {
+      const volunteerReports = user?.role === 'admin'
+        ? reports.filter(report => report.submitterRole === 'volunteer')
+        : user?.role === 'partner'
+        ? partnerVisibleReports.filter(report => report.submitterRole === 'volunteer')
+        : userReports;
+      const volunteerProjects = user?.role === 'admin'
+        ? projects
+        : user?.role === 'partner'
+        ? partnerAcceptedEventProjects
+        : volunteerEventProjects;
+      const scopedVolunteerTimeLogs = user?.role === 'partner'
+        ? partnerVolunteerTimeLogs
+        : volunteerTimeLogs;
+      const scopedVolunteerJoinRecords = user?.role === 'partner'
+        ? partnerVolunteerJoinRecords
+        : volunteerJoinRecords;
+      return (
+        <VolunteerReportsDashboard
+          reports={volunteerReports}
+          projects={volunteerProjects}
+          volunteerTimeLogs={scopedVolunteerTimeLogs}
+          volunteerJoinRecords={scopedVolunteerJoinRecords}
+          onUploadReport={handleOpenUploadModal}
+          onViewReport={handleViewReport}
+          loading={loading}
+          onRefresh={onRefresh}
+          refreshing={refreshing}
+          isAdminView={user?.role === 'admin'}
+          isPartnerView={user?.role === 'partner'}
+          volunteers={user?.role === 'partner' ? partnerVisibleVolunteers : volunteers}
+        />
+      );
+    }
+
+    const partnerDashboardReports = user?.role === 'admin'
+      ? reports.filter(report => {
+          const projectId = String(report.projectId || '').trim();
+          return (
+            (report.submitterRole === 'partner' && partnerAcceptedProjectIds.has(projectId)) ||
+            (report.submitterRole === 'volunteer' && partnerAcceptedEventIds.has(projectId))
+          );
+        })
+      : partnerVisibleReports;
+    return (
       <PartnerReportsDashboard
-        reports={userReports}
+        // Include the approved project's volunteer reports as well as partner
+        // submissions so the dashboard's photos and generated summaries use
+        // the same scoped source data for partners and admins.
+        reports={partnerDashboardReports}
         projects={partnerAcceptedProjects}
+        volunteerTimeLogs={user?.role === 'partner' ? partnerVolunteerTimeLogs : volunteerTimeLogs}
+        volunteerJoinRecords={user?.role === 'partner' ? partnerVolunteerJoinRecords : volunteerJoinRecords}
         onUploadReport={handleOpenUploadModal}
         onViewReport={handleViewReport}
         loading={loading}
         onRefresh={onRefresh}
         refreshing={refreshing}
         projectSummaries={partnerProjectSummaries}
-      />
-    ) : (
-      <VolunteerReportsDashboard
-        reports={userReports}
-        projects={volunteerEventProjects}
-        onUploadReport={handleOpenUploadModal}
-        onViewReport={handleViewReport}
-        loading={loading}
-        onRefresh={onRefresh}
-        refreshing={refreshing}
+        isAdminView={user?.role === 'admin'}
+        volunteers={user?.role === 'partner' ? partnerVisibleVolunteers : volunteers}
       />
     );
+  })();
+
+  const renderTopTabs = () => (
+    <View style={styles.topTabs}>
+      {(user?.role === 'volunteer'
+        ? (['all', 'volunteer'] as const)
+        : (['all', 'volunteer', 'partner'] as const)
+      ).map(tab => {
+        const label = tab === 'all'
+          ? 'All Reports'
+          : tab === 'volunteer'
+            ? 'Volunteer Reports'
+            : 'Partner Reports';
+        const active = activeTopTab === tab;
+        return (
+          <TouchableOpacity
+            key={tab}
+            style={[styles.topTab, active && styles.topTabActive]}
+            onPress={() => setActiveTopTab(tab)}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.topTabText, active && styles.topTabTextActive]}>{label}</Text>
+            {active ? <View style={styles.topTabUnderline} /> : null}
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
 
   return (
     <>
@@ -981,6 +1220,7 @@ export default function ReportsScreen({ navigation, route }: any) {
           <Text style={styles.toastText}>{toast.message}</Text>
         </View>
       ) : null}
+      {renderTopTabs()}
       {dashboard}
       <ReportUploadModal
         visible={showUploadModal}
@@ -1157,6 +1397,37 @@ const styles = StyleSheet.create({
   emptyStateText: {
     fontSize: 14,
     color: '#999',
+  },
+  topTabs: {
+    flexDirection: 'row',
+    gap: 24,
+    paddingHorizontal: 24,
+    paddingTop: 16,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E7E5E4',
+  },
+  topTab: {
+    paddingBottom: 12,
+    alignItems: 'center',
+  },
+  topTabActive: {},
+  topTabText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#6B7280',
+  },
+  topTabTextActive: {
+    color: '#8B5A2B',
+  },
+  topTabUnderline: {
+    position: 'absolute',
+    bottom: -1,
+    left: 0,
+    right: 0,
+    height: 2,
+    backgroundColor: '#C9A86A',
+    borderRadius: 1,
   },
   toastBanner: {
     position: 'absolute',

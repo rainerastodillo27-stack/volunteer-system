@@ -8,30 +8,62 @@ import {
   Platform,
   Linking,
   Alert,
+  ActivityIndicator,
   Image,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
-import { MaterialIcons, Ionicons } from '@expo/vector-icons';
+import { MaterialIcons } from '@expo/vector-icons';
+import { useAuth } from '../contexts/AuthContext';
+import { useNavigation } from '@react-navigation/native';
+import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
+import type { PartnerTabParamList } from '../navigation/PartnerNavigator';
+import { getPartnerDashboardSnapshot, subscribeToStorageChanges } from '../models/storage';
+import { Partner } from '../models/types';
+import AppLogo from '../components/AppLogo';
 import presImage from '../assets/about-us-2020.jpg';
 import livelihoodImage from '../assets/programs/livelihood.jpg';
 import nutritionImage from '../assets/programs/nutrition.jpg';
 import educationImage from '../assets/programs/education.jpg';
-import { useAuth } from '../contexts/AuthContext';
-import { useNavigation } from '@react-navigation/native';
-import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
-import type { VolunteerTabParamList } from '../navigation/VolunteerNavigator';
-import AppLogo from '../components/AppLogo';
 
-type VolunteerNavProp = BottomTabNavigationProp<VolunteerTabParamList>;
+type PartnerNavProp = BottomTabNavigationProp<PartnerTabParamList>;
 
-export default function VolunteerHomeScreen() {
+export default function PartnerHomeScreen() {
   const { user } = useAuth();
-  const navigation = useNavigation<VolunteerNavProp>();
+  const navigation = useNavigation<PartnerNavProp>();
   const insets = useSafeAreaInsets();
+  const [partner, setPartner] = React.useState<Partner | null>(null);
+
+  React.useEffect(() => {
+    if (!user?.id) return;
+    
+    const loadPartner = async () => {
+      try {
+        const snapshot = await getPartnerDashboardSnapshot();
+        const owned = snapshot.partners.find((p: Partner) => 
+          p.ownerUserId === user.id || 
+          (p.contactEmail && p.contactEmail.toLowerCase() === user.email?.toLowerCase())
+        );
+        setPartner(owned || null);
+      } catch (e) {}
+    };
+    
+    loadPartner();
+    const unsub = subscribeToStorageChanges(['partners'], loadPartner);
+    
+    return () => unsub?.();
+  }, [user]);
 
   const handleSeeMission = () => {
-    navigation.navigate('Events');
+    navigation.navigate('Programs');
+  };
+
+  const handleSubmitProposal = () => {
+    navigation.navigate('Dashboard', { openProposalModule: 'Nutrition' });
+  };
+
+  const handleLearnMore = () => {
+    navigation.navigate('Projects');
   };
 
   const handleDonate = () => {
@@ -68,15 +100,7 @@ export default function VolunteerHomeScreen() {
         {/* Header App Bar */}
         <View style={styles.appbar}>
           <View style={styles.brand}>
-            <View style={styles.brandMark}>
-              <Svg width={18} height={18} viewBox="0 0 24 24" fill="none">
-                <Path
-                  d="M12 3C9 7 6 9 6 13a6 6 0 0 0 12 0c0-4-3-6-6-10Z"
-                  fill="#E8A33D"
-                />
-              </Svg>
-            </View>
-              <AppLogo width={64} />
+            <AppLogo width={64} />
           </View>
           <TouchableOpacity
             style={styles.iconBtn}
@@ -89,13 +113,12 @@ export default function VolunteerHomeScreen() {
 
         {/* HERO */}
         <View style={styles.hero}>
-          <Text style={styles.heroEyebrow}>A Nation Free From Hunger</Text>
+          <Text style={styles.heroEyebrow}>Partner Space</Text>
           <Text style={styles.heroTitle}>
-            Nutrition, education, and livelihood, built by people who show up.
+            Hi {partner?.name || user?.name || 'Partner'}
           </Text>
           <Text style={styles.heroSub}>
-            Founded in Bacolod City in 2010, NVC Foundation turns everyday
-            volunteers into lasting change.
+            Registration: {partner?.status || 'Pending'}
           </Text>
           <TouchableOpacity
             style={styles.heroCta}
@@ -279,26 +302,24 @@ export default function VolunteerHomeScreen() {
 
         {/* GIVE */}
         <View style={styles.giveCard}>
-          <Text style={styles.giveTitle}>Volunteer now</Text>
+          <Text style={styles.giveTitle}>Share with us</Text>
           <Text style={styles.giveDesc}>
-            Volunteer now will go to events.
+            Submit your program proposal for review.
           </Text>
           <View style={styles.giveActions}>
             <TouchableOpacity
               style={[styles.btnSolid, { marginRight: 0 }]}
-              onPress={handleSeeMission}
+              onPress={handleSubmitProposal}
               activeOpacity={0.85}
             >
-              <Text style={styles.btnSolidText}>Volunteer now</Text>
+              <Text style={styles.btnSolidText}>Submit proposal</Text>
             </TouchableOpacity>
           </View>
         </View>
 
         {/* OUR PROGRAMS */}
-        <View style={styles.section}>
-          <View style={styles.sectionHead}>
-            <Text style={styles.sectionTitle}>Our Programs</Text>
-          </View>
+        <View style={styles.programsSection}>
+          <Text style={styles.programsTitle}>Our Programs</Text>
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -319,7 +340,7 @@ export default function VolunteerHomeScreen() {
                   nutrition program using Mingo for children of impoverished families to help
                   them build strong bodies and sharp minds.
                 </Text>
-                <TouchableOpacity style={styles.programLearn} onPress={handleSeeMission} activeOpacity={0.85}>
+                <TouchableOpacity style={styles.programLearn} onPress={handleLearnMore} activeOpacity={0.85}>
                   <Text style={styles.programLearnText}>Learn more</Text>
                 </TouchableOpacity>
               </View>
@@ -339,7 +360,7 @@ export default function VolunteerHomeScreen() {
                   poor. These range from infrastructure projects, provision of school supplies,
                   and assisting teachers become better at their craft.
                 </Text>
-                <TouchableOpacity style={styles.programLearn} onPress={handleSeeMission} activeOpacity={0.85}>
+                <TouchableOpacity style={styles.programLearn} onPress={handleLearnMore} activeOpacity={0.85}>
                   <Text style={styles.programLearnText}>Learn more</Text>
                 </TouchableOpacity>
               </View>
@@ -359,7 +380,7 @@ export default function VolunteerHomeScreen() {
                   livelihood projects give adults various opportunities to earn or increase
                   their income.
                 </Text>
-                <TouchableOpacity style={styles.programLearn} onPress={handleSeeMission} activeOpacity={0.85}>
+                <TouchableOpacity style={styles.programLearn} onPress={handleLearnMore} activeOpacity={0.85}>
                   <Text style={styles.programLearnText}>Learn more</Text>
                 </TouchableOpacity>
               </View>
@@ -641,6 +662,17 @@ const styles = StyleSheet.create({
     marginHorizontal: 20,
     marginTop: 26,
   },
+  programsSection: {
+    marginHorizontal: 20,
+    marginTop: 26,
+  },
+  programsTitle: {
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
+    fontWeight: '600',
+    fontSize: 19,
+    color: '#22201B',
+    marginBottom: 14,
+  },
   programsContainer: {
     paddingRight: 20,
   },
@@ -738,3 +770,4 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
 });
+

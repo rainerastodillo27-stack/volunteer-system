@@ -3,6 +3,7 @@ import { StyleSheet, Text, View, useWindowDimensions, Modal, TouchableOpacity, S
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { PartnerProjectApplication, User, VolunteerProjectMatch } from '../models/types';
+import AppLogo from './AppLogo';
 
 type NotificationMessage = {
   id: string;
@@ -228,10 +229,17 @@ export default function ScreenBrandHeader({
   const notifications = buildNotificationsList();
   const hasNotifications = notificationCount > 0;
 
+  if (title === 'Messages') {
+    return null;
+  }
+
   return (
     <>
       <View style={[styles.container, { paddingTop: Math.max(12, insets.top + 8) }]}>
         <View style={[styles.brandBlock, isCompact && styles.brandBlockCompact]}>
+          <View style={{ paddingHorizontal: 4 }}>
+            <AppLogo width={isCompact ? 64 : 80} />
+          </View>
           <View style={[styles.copyBlock, isCompact && styles.copyBlockCompact]}>
             <Text style={[styles.screenTitle, isCompact && styles.screenTitleCompact]} numberOfLines={2}>
               {title}

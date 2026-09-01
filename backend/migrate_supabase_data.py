@@ -60,7 +60,6 @@ COLLECTION_KEYS = [
     "partnerReports",
     "publishedImpactReports",
     "adminPlanningCalendars",
-    "adminPlanningItems",
 ]
 
 DERIVED_COLLECTION_KEYS = ["skills", "tasks"]

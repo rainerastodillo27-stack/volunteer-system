@@ -307,22 +307,6 @@ RELATIONAL_TABLE_DDL = [
     "create index if not exists programs_status_idx on programs (status)",
     "create index if not exists programs_created_at_idx on programs (created_at)",
     f"""
-    create table if not exists program_tracks (
-      id text primary key,
-      title text not null,
-      description text,
-      icon text,
-      color text,
-      image_url text,
-      sort_order integer not null default 0,
-      is_active boolean not null default true,
-      created_at text,
-      updated_at text
-    )
-    """,
-    "create index if not exists program_tracks_sort_order_idx on program_tracks (sort_order)",
-    "create index if not exists program_tracks_is_active_idx on program_tracks (is_active)",
-    f"""
     create table if not exists events (
       id text primary key,
       title text not null,
@@ -552,24 +536,6 @@ RELATIONAL_TABLE_DDL = [
         "alter table admin_planning_calendars add column if not exists planning_items text not null default '[]'",
     "create index if not exists admin_planning_calendars_created_at_idx on admin_planning_calendars (created_at)",
     "create index if not exists admin_planning_calendars_updated_at_idx on admin_planning_calendars (updated_at)",
-    f"""
-    create table if not exists admin_planning_items (
-      id text primary key,
-      title text not null,
-      description text,
-      calendar_id text not null,
-      linked_project_id text,
-      start_date text not null,
-      end_date text not null,
-      location text,
-      participants_label text,
-      created_by text not null,
-      created_at text not null,
-      updated_at text not null
-    )
-    """,
-    "create index if not exists admin_planning_items_calendar_id_idx on admin_planning_items (calendar_id)",
-    "create index if not exists admin_planning_items_linked_project_id_idx on admin_planning_items (linked_project_id)",
 ]
 
 
@@ -743,21 +709,6 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("updated_at", False),
         ],
     },
-    "programTracks": {
-        "table": "program_tracks",
-        "columns": [
-            ("id", False),
-            ("title", False),
-            ("description", False),
-            ("icon", False),
-            ("color", False),
-            ("image_url", False),
-            ("sort_order", False),
-            ("is_active", False),
-            ("created_at", False),
-            ("updated_at", False),
-        ],
-    },
     "events": {
         "table": "events",
         "columns": [
@@ -781,6 +732,9 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("location_region", False),
             ("location_city", False),
             ("location_barangay", False),
+            ("location_venue", False),
+            ("google_meet_url", False),
+            ("notification_settings", False),
             ("volunteers_needed", False),
             ("volunteers", False),
             ("joined_user_ids", False),
@@ -894,7 +848,7 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
         ],
     },
     "publishedImpactReports": {
-        "table": "published_impact_reports",
+        "table": "reports",
         "columns": [
             ("id", False),
             ("project_id", False),
@@ -918,23 +872,6 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("color", False),
             ("description", False),
             ("planning_items", False),
-            ("created_at", False),
-            ("updated_at", False),
-        ],
-    },
-    "adminPlanningItems": {
-        "table": "admin_planning_items",
-        "columns": [
-            ("id", False),
-            ("title", False),
-            ("description", False),
-            ("calendar_id", False),
-            ("linked_project_id", False),
-            ("start_date", False),
-            ("end_date", False),
-            ("location", False),
-            ("participants_label", False),
-            ("created_by", False),
             ("created_at", False),
             ("updated_at", False),
         ],
@@ -978,13 +915,6 @@ FIELD_NAME_MAPS: dict[str, dict[str, str]] = {
         "volunteersNeeded": "volunteers_needed",
         "joinedUserIds": "joined_user_ids",
         "linkedEventCount": "linked_event_count",
-        "createdAt": "created_at",
-        "updatedAt": "updated_at",
-    },
-    "programTracks": {
-        "imageUrl": "image_url",
-        "sortOrder": "sort_order",
-        "isActive": "is_active",
         "createdAt": "created_at",
         "updatedAt": "updated_at",
     },
@@ -1091,16 +1021,6 @@ FIELD_NAME_MAPS: dict[str, dict[str, str]] = {
         "createdAt": "created_at",
         "updatedAt": "updated_at",
     },
-    "adminPlanningItems": {
-        "calendarId": "calendar_id",
-        "linkedProjectId": "linked_project_id",
-        "startDate": "start_date",
-        "endDate": "end_date",
-        "participantsLabel": "participants_label",
-        "createdBy": "created_by",
-        "createdAt": "created_at",
-        "updatedAt": "updated_at",
-    },
 }
 
 
@@ -1120,7 +1040,6 @@ _NON_STANDARD_PK_TABLES: dict[str, str] = {
     "messages": "messages_id",
     "project_group_messages": "project_group_messages_id",
     "admin_planning_calendars": "admin_planning_calendars_id",
-    "admin_planning_items": "admin_planning_items_id",
     "status_updates": "status_updates_id",
     "skills": "skills_id",
     "tasks": "tasks_id",
@@ -1466,20 +1385,6 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("updatedAt"),
         )
 
-    if key == "programTracks":
-        return (
-            item.get("id"),
-            item.get("title") or "",
-            item.get("description"),
-            item.get("icon"),
-            item.get("color"),
-            item.get("imageUrl"),
-            _to_int(item.get("sortOrder")),
-            bool(item.get("isActive", True)),
-            item.get("createdAt"),
-            item.get("updatedAt"),
-        )
-
     if key == "events":
         return (
             item.get("id"),
@@ -1502,6 +1407,9 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("locationRegion"),
             item.get("locationCity"),
             item.get("locationBarangay"),
+            item.get("locationVenue"),
+            item.get("googleMeetUrl"),
+            _json_dump(item.get("notificationSettings"), []),
             _to_int(item.get("volunteersNeeded")),
             _normalize_string_list(item.get("volunteers")),
             _normalize_string_list(item.get("joinedUserIds")),
@@ -1631,22 +1539,6 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("color") or "#0F766E",
             item.get("description"),
             _json_dump(item.get("planningItems"), []),
-            item.get("createdAt") or "",
-            item.get("updatedAt") or "",
-        )
-
-    if key == "adminPlanningItems":
-        return (
-            item.get("id"),
-            item.get("title") or "",
-            item.get("description"),
-            item.get("calendarId") or "",
-            item.get("linkedProjectId"),
-            item.get("startDate") or "",
-            item.get("endDate") or "",
-            item.get("location"),
-            item.get("participantsLabel"),
-            item.get("createdBy") or "",
             item.get("createdAt") or "",
             item.get("updatedAt") or "",
         )
@@ -1833,20 +1725,6 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "updatedAt": row["updated_at"],
         }
 
-    if key == "programTracks":
-        return {
-            "id": row_id,
-            "title": row["title"],
-            "description": row["description"],
-            "icon": row["icon"],
-            "color": row["color"],
-            "imageUrl": row.get("image_url"),
-            "sortOrder": row["sort_order"],
-            "isActive": bool(row.get("is_active", True)),
-            "createdAt": row["created_at"],
-            "updatedAt": row["updated_at"],
-        }
-
     if key == "events":
         return {
             "id": row_id,
@@ -2005,28 +1883,7 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "updatedAt": row["updated_at"],
         }
 
-    if key == "adminPlanningItems":
-        return {
-            "id": row_id,
-            "title": row["title"],
-            "description": row["description"],
-            "calendarId": row["calendar_id"],
-            "linkedProjectId": row["linked_project_id"],
-            "startDate": row["start_date"],
-            "endDate": row["end_date"],
-            "location": row["location"],
-            "participantsLabel": row["participants_label"],
-            "createdBy": row["created_by"],
-            "createdAt": row["created_at"],
-            "updatedAt": row["updated_at"],
-        }
-
     raise KeyError(f"Unsupported relational mirror key: {key}")
-
-
-def refresh_program_rows_from_tracks(connection: Any) -> None:
-    # program_tracks is the authoritative table; no secondary sync needed.
-    pass
 
 
 def _backfill_skills_from_existing_relational_data(connection: Any) -> None:
@@ -2048,111 +1905,6 @@ def _backfill_skills_from_existing_relational_data(connection: Any) -> None:
             on conflict (skills_id) do nothing
             """
         )
-
-
-def ensure_default_program_tracks(connection: Any) -> None:
-    return
-
-
-def migrate_admin_planning_items_into_calendars(connection: Any) -> None:
-        with connection.cursor() as cursor:
-                cursor.execute(
-                        """
-                        with legacy_items as (
-                            select
-                                calendar_id,
-                                jsonb_agg(
-                                    jsonb_build_object(
-                                        'id', admin_planning_items_id,
-                                        'title', title,
-                                        'description', description,
-                                        'calendarId', calendar_id,
-                                        'linkedProjectId', linked_project_id,
-                                        'startDate', start_date,
-                                        'endDate', end_date,
-                                        'location', location,
-                                        'participantsLabel', participants_label,
-                                        'createdBy', created_by,
-                                        'createdAt', created_at,
-                                        'updatedAt', updated_at
-                                    )
-                                    order by created_at, updated_at, admin_planning_items_id
-                                ) as planning_items,
-                                min(created_at) as created_at,
-                                max(updated_at) as updated_at
-                            from admin_planning_items
-                            group by calendar_id
-                        ),
-                        calendar_rows as (
-                            select
-                                c.admin_planning_calendars_id,
-                                coalesce(c.planning_items, '[]')::jsonb as planning_items,
-                                c.name,
-                                c.color,
-                                c.description,
-                                c.created_at,
-                                c.updated_at
-                            from admin_planning_calendars c
-                        )
-                        update admin_planning_calendars c
-                        set planning_items = (
-                            coalesce(c.planning_items, '[]')::jsonb || coalesce(li.planning_items, '[]'::jsonb)
-                        )::text
-                        from legacy_items li
-                        where c.admin_planning_calendars_id = li.calendar_id
-                        """
-                )
-                cursor.execute(
-                        """
-                        insert into admin_planning_calendars (
-                            admin_planning_calendars_id,
-                            name,
-                            color,
-                            description,
-                            planning_items,
-                            created_at,
-                            updated_at
-                        )
-                        select
-                            li.calendar_id,
-                            li.calendar_id,
-                            '#0F766E',
-                            'Migrated planning lane.',
-                            li.planning_items::text,
-                            li.created_at,
-                            li.updated_at
-                        from (
-                            select
-                                calendar_id,
-                                jsonb_agg(
-                                    jsonb_build_object(
-                                        'id', admin_planning_items_id,
-                                        'title', title,
-                                        'description', description,
-                                        'calendarId', calendar_id,
-                                        'linkedProjectId', linked_project_id,
-                                        'startDate', start_date,
-                                        'endDate', end_date,
-                                        'location', location,
-                                        'participantsLabel', participants_label,
-                                        'createdBy', created_by,
-                                        'createdAt', created_at,
-                                        'updatedAt', updated_at
-                                    )
-                                    order by created_at, updated_at, admin_planning_items_id
-                                ) as planning_items,
-                                min(created_at) as created_at,
-                                max(updated_at) as updated_at
-                            from admin_planning_items
-                            group by calendar_id
-                        ) li
-                        left join admin_planning_calendars c on c.admin_planning_calendars_id = li.calendar_id
-                        where c.admin_planning_calendars_id is null
-                        on conflict (admin_planning_calendars_id) do update set
-                            planning_items = excluded.planning_items,
-                            updated_at = excluded.updated_at
-                        """
-                )
 
 
 def ensure_named_primary_key_columns(connection: Any) -> None:
@@ -2334,19 +2086,10 @@ def ensure_relational_mirror_tables(connection: Any) -> None:
         except Exception as e:
             _trace(f"[WARN] ensure_named_primary_key_columns skipped: {e}")
 
-        try:
-            migrate_admin_planning_items_into_calendars(connection)
-        except Exception as e:
-            _trace(f"[WARN] migrate_admin_planning_items_into_calendars skipped: {e}")
-
         # Mark as completed so we never run DDL again this process lifetime
         _ddl_completed = True
         print("[OK] ensure_relational_mirror_tables: DDL completed successfully")
 
-    try:
-        ensure_default_program_tracks(connection)
-    except Exception as e:
-        _trace(f"[WARN] ensure_default_program_tracks skipped: {e}")
     try:
         _backfill_skills_from_existing_relational_data(connection)
     except Exception as e:
@@ -2381,8 +2124,6 @@ def sync_relational_mirror_collection(connection: Any, key: str, items: list[Any
                 """,
                 rows,
             )
-    if key in {"programTracks", "projects", "events"}:
-        refresh_program_rows_from_tracks(connection)
 
 
 def sync_all_relational_mirror_tables(connection: Any, collections: dict[str, list[Any]]) -> None:
@@ -2696,8 +2437,6 @@ def upsert_relational_item(connection: Any, key: str, item: dict[str, Any]) -> d
                       {', '.join(alt_update_assignments)}
                     """
                 cursor.execute(alt_statement, alt_row)
-    if key in {"programTracks", "projects", "events"}:
-        refresh_program_rows_from_tracks(connection)
     if key in {"projects", "events"}:
         _sync_skill_rows_from_project_event_items(connection, [item])
         _sync_task_rows_from_project_event_items(connection, [item])

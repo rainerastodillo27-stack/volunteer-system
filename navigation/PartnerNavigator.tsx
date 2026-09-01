@@ -7,9 +7,11 @@ import { useAuth } from '../contexts/AuthContext';
 import { getUnreadMessagesForUser, subscribeToMessages, getAllUsers, subscribeToStorageChanges, markMessageAsRead } from '../models/storage';
 
 export type PartnerTabParamList = {
+  Home: undefined;
   Dashboard: { openProposalModule?: string } | undefined;
   Programs: { programModule?: string; projectId?: string } | undefined;
   Projects: { projectId?: string } | undefined;
+  ProjectLifecycle: { projectId: string };
   Map: undefined;
   Messages:
     | {
@@ -33,8 +35,10 @@ function lazyScreen<T extends object>(loader: () => { default: React.ComponentTy
 }
 
 const PartnerDashboardScreen = lazyScreen(() => require('../screens/PartnerDashboardScreen'));
+const PartnerHomeScreen = lazyScreen(() => require('../screens/PartnerHomeScreen'));
 const PartnerProgramManagementScreen = lazyScreen(() => require('../screens/PartnerProgramManagementScreen'));
 const PartnerProjectsScreen = lazyScreen(() => require('../screens/PartnerProjectsScreen'));
+const ProjectLifecycleScreen = lazyScreen(() => require('../screens/ProjectLifecycleScreen'));
 const MappingScreen = lazyScreen(() => require('../screens/MappingScreen'));
 const CommunicationHubScreen = lazyScreen(() => require('../screens/CommunicationHubScreen'));
 const PartnerReportsScreen = lazyScreen(() => require('../screens/PartnerReportsScreen'));
@@ -42,9 +46,11 @@ const ProfileScreen = lazyScreen(() => require('../screens/ProfileScreen'));
 
 const getIconName = (routeName: keyof PartnerTabParamList) => {
   switch (routeName) {
+    case 'Home': return 'home';
     case 'Dashboard': return 'dashboard';
     case 'Programs': return 'business-center';
     case 'Projects': return 'assignment';
+    case 'ProjectLifecycle': return 'assignment';
     case 'Map': return 'map';
     case 'Messages': return 'mail';
     case 'Reports': return 'insert-chart';
@@ -103,7 +109,7 @@ export default function PartnerNavigator() {
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
-        headerShown: true,
+        headerShown: route.name !== 'Messages',
         header: ({ options, navigation }) => (
           <ScreenBrandHeader
             title={options.title || route.name}
@@ -128,9 +134,11 @@ export default function PartnerNavigator() {
         },
       })}
     >
+      <Tab.Screen name="Home" component={PartnerHomeScreen} options={{ title: 'Home', headerShown: false }} />
       <Tab.Screen name="Dashboard" component={PartnerDashboardScreen} options={{ title: 'Partner Dashboard' }} />
       <Tab.Screen name="Programs" component={PartnerProgramManagementScreen} options={{ title: 'Program Management' }} />
       <Tab.Screen name="Projects" component={PartnerProjectsScreen} options={{ title: 'My Projects', tabBarLabel: 'Projects' }} />
+      <Tab.Screen name="ProjectLifecycle" component={ProjectLifecycleScreen} options={{ title: 'Project Details', tabBarButton: () => null }} />
       <Tab.Screen name="Map" component={MappingScreen} options={{ title: 'Impact Map' }} />
       <Tab.Screen name="Messages" component={CommunicationHubScreen} options={{ title: 'Messages', tabBarBadge: messageUnreadCount > 0 ? messageUnreadCount : undefined }} />
       <Tab.Screen name="Reports" component={PartnerReportsScreen} options={{ title: 'Reports' }} />

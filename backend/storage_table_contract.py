@@ -10,7 +10,6 @@ CANONICAL_STORAGE_TABLES = {
     "partners": "partners",
     "projects": "projects",
     "programs": "programs",
-    "programTracks": "program_tracks",
     "events": "events",
     "volunteers": "volunteers",
     "statusUpdates": "status_updates",
@@ -19,9 +18,10 @@ CANONICAL_STORAGE_TABLES = {
     "volunteerProjectJoins": "volunteer_event_joins",
     "partnerProjectApplications": "partner_project_applications",
     "partnerReports": "reports",
-    "publishedImpactReports": "published_impact_reports",
+    # Published and unpublished reports share one normalized table and are
+    # separated by reports.generated_at.
+    "publishedImpactReports": "reports",
     "adminPlanningCalendars": "admin_planning_calendars",
-    "adminPlanningItems": "admin_planning_items",
 }
 
 LEGACY_COMPAT_STORAGE_TABLES = {}
@@ -32,6 +32,11 @@ MESSAGE_STORAGE_TABLES = {
 }
 
 LEGACY_AUXILIARY_TABLES = ()
+
+# Normalized lookup/index tables maintained from canonical project and
+# volunteer records, plus operational scheduler state.
+DERIVED_TABLES = ("skills", "tasks")
+RUNTIME_SUPPORT_TABLES = ("event_email_reminders",)
 
 # These tables are not part of the supported schema contract and can be removed
 # when they appear. Keep this list intentionally narrow to avoid dropping legacy
@@ -55,6 +60,8 @@ DEPRECATED_STORAGE_TABLES = (
     "partner_reports",
     "published_impact_reports",
     "team_members",
+    "admin_planning_items",
+    "program_tracks",
 )
 
 KNOWN_ROGUE_TABLES = (

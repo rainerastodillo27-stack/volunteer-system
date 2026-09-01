@@ -27,7 +27,7 @@ DATA_QUALITY_CONSTRAINT_SPECS = [
     ("users", "users_user_type_chk", "user_type is null or user_type in ('Student', 'Adult', 'Senior')"),
     ("partners", "partners_id_len_chk", "length(partners_id) between 1 and 64"),
     ("partners", "partners_contact_email_format_chk", "contact_email is null or (length(contact_email) <= 254 and contact_email ~* '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$')"),
-    ("partners", "partners_contact_phone_chk", "contact_phone is null or contact_phone ~ '^(09[0-9]{9}|\\+63[0-9]{9,11})$'"),
+    ("partners", "partners_contact_phone_mobile_chk", "contact_phone is null or contact_phone ~ '^09[0-9]{9}$'"),
     ("partners", "partners_name_len_chk", "length(name) between 1 and 120"),
     ("partners", "partners_description_len_chk", "description is null or length(description) <= 2000"),
     ("partners", "partners_address_len_chk", "address is null or length(address) <= 255"),
@@ -58,14 +58,14 @@ DATA_QUALITY_CONSTRAINT_SPECS = [
     ("volunteers", "volunteers_workplace_len_chk", "workplace_or_school is null or length(workplace_or_school) <= 120"),
     ("volunteers", "volunteers_college_course_len_chk", "college_course is null or length(college_course) <= 120"),
     ("volunteers", "volunteers_video_url_len_chk", "video_briefing_url is null or length(video_briefing_url) <= 500"),
-    ("projects", "projects_id_len_chk", "length(id) between 1 and 64"),
+    ("projects", "projects_id_len_chk", "length(projects_id) between 1 and 64"),
     ("projects", "projects_volunteers_needed_chk", "volunteers_needed >= 0"),
     ("projects", "projects_status_chk", "status is null or status in ('Planning', 'In Progress', 'On Hold', 'Completed', 'Cancelled')"),
     ("projects", "projects_category_chk", "category is null or category in ('Education', 'Livelihood', 'Nutrition', 'Disaster')"),
     ("projects", "projects_program_module_chk", "program_module is null or program_module in ('Education', 'Livelihood', 'Nutrition', 'Disaster')"),
     ("projects", "projects_title_len_chk", "length(title) between 1 and 150"),
     ("projects", "projects_description_len_chk", "description is null or length(description) <= 3000"),
-    ("programs", "programs_id_len_chk", "length(id) between 1 and 64"),
+    ("programs", "programs_id_len_chk", "length(programs_id) between 1 and 64"),
     ("programs", "programs_volunteers_needed_chk", "volunteers_needed >= 0"),
     ("programs", "programs_linked_event_count_chk", "linked_event_count >= 0"),
     ("programs", "programs_status_chk", "status is null or status in ('Planning', 'In Progress', 'On Hold', 'Completed', 'Cancelled')"),
@@ -112,11 +112,27 @@ DATA_QUALITY_CONSTRAINT_SPECS = [
     ("reports", "reports_format_chk", "format is null or format in ('PDF', 'Excel')"),
     ("reports", "reports_report_file_len_chk", "report_file is null or length(report_file) <= 500"),
     ("reports", "reports_generated_by_len_chk", "generated_by is null or length(generated_by) <= 64"),
-    ("messages", "messages_id_len_chk", "length(id) between 1 and 64"),
+    ("messages", "messages_id_len_chk", "length(messages_id) between 1 and 64"),
     ("messages", "messages_content_len_chk", "length(content) between 1 and 4000"),
-    ("project_group_messages", "project_group_messages_id_len_chk", "length(id) between 1 and 64"),
+    ("project_group_messages", "project_group_messages_id_len_chk", "length(project_group_messages_id) between 1 and 64"),
     ("project_group_messages", "project_group_messages_content_len_chk", "length(content) between 1 and 4000"),
 ]
+
+DATA_QUALITY_UNIQUE_INDEX_SPECS = [
+    ("users", "users_email_unique_ci_idx", "lower(email)", "email is not null and email <> ''"),
+    ("users", "users_phone_unique_idx", "phone", "phone is not null and phone <> ''"),
+    ("volunteers", "volunteers_user_id_unique_idx", "user_id", "user_id is not null and user_id <> ''"),
+    ("partners", "partners_owner_user_id_unique_idx", "owner_user_id", "owner_user_id is not null and owner_user_id <> ''"),
+]
+
+IDENTITY_CONSTRAINT_NAMES = {
+    "users_email_format_chk",
+    "users_phone_mobile_chk",
+    "partners_contact_email_format_chk",
+    "partners_contact_phone_mobile_chk",
+    "volunteers_email_format_chk",
+    "volunteers_phone_mobile_chk",
+}
 
 
 def _public_table_exists(connection: Any, table_name: str) -> bool:
@@ -539,6 +555,33 @@ def apply_data_quality_constraints(connection: Any) -> list[str]:
     return applied
 
 
+def apply_identity_constraints(connection: Any) -> list[str]:
+    applied: list[str] = []
+    with connection.cursor() as cursor:
+        for table_name, constraint_name, condition in DATA_QUALITY_CONSTRAINT_SPECS:
+            if constraint_name not in IDENTITY_CONSTRAINT_NAMES:
+                continue
+            if not _public_table_exists(connection, table_name):
+                continue
+            _add_check_constraint(cursor, table_name, constraint_name, condition)
+            applied.append(constraint_name)
+    return applied
+
+
+def apply_data_quality_unique_indexes(connection: Any) -> list[str]:
+    applied: list[str] = []
+    with connection.cursor() as cursor:
+        for table_name, index_name, expression, predicate in DATA_QUALITY_UNIQUE_INDEX_SPECS:
+            if not _public_table_exists(connection, table_name):
+                continue
+            cursor.execute(
+                f"create unique index if not exists {index_name} "
+                f"on {table_name} ({expression}) where {predicate}"
+            )
+            applied.append(index_name)
+    return applied
+
+
 def drop_empty_rogue_tables(connection: Any) -> list[str]:
     dropped_tables: list[str] = []
 
@@ -622,6 +665,7 @@ def maintain_schema_health(connection: Any) -> dict[str, list[str]]:
     migrated_report_tables = migrate_legacy_report_tables_to_reports(connection)
     migrated_event_joins = migrate_legacy_volunteer_project_joins(connection)
     applied_constraints = apply_data_quality_constraints(connection)
+    applied_unique_indexes = apply_data_quality_unique_indexes(connection)
     
     # Apply data retention and archival policies
     retention_cleanup = apply_retention_policies(connection)
@@ -640,5 +684,6 @@ def maintain_schema_health(connection: Any) -> dict[str, list[str]]:
         "migrated_report_tables": migrated_report_tables,
         "migrated_event_joins": [f"volunteer_event_joins:{migrated_event_joins}"] if migrated_event_joins else [],
         "applied_constraints": applied_constraints,
+        "applied_unique_indexes": applied_unique_indexes,
         "archived_records": archival_messages,
     }

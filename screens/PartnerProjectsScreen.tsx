@@ -12,7 +12,7 @@ import {
   View,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import {
   getAllVolunteerTimeLogs,
@@ -50,6 +50,7 @@ function formatDateRange(startDate: string, endDate: string) {
 
 export default function PartnerProjectsScreen({ route }: any) {
   const { user } = useAuth();
+  const navigation = useNavigation<any>();
   const [projects, setProjects] = useState<Project[]>([]);
   const [partnerApplications, setPartnerApplications] = useState<PartnerProjectApplication[]>([]);
   const [volunteerTimeLogs, setVolunteerTimeLogs] = useState<VolunteerTimeLog[]>([]);
@@ -424,11 +425,22 @@ export default function PartnerProjectsScreen({ route }: any) {
                     {selectedProjectMetrics.project.description || 'No project description yet.'}
                   </Text>
 
-                  <Text style={styles.eventSectionTitle}>Inside This Project</Text>
+                  <View style={styles.eventSectionHeaderRow}>
+                    <Text style={styles.eventSectionTitle}>Inside This Project</Text>
+                    <TouchableOpacity
+                      onPress={() => {
+                        const projectId = selectedProjectMetrics.project.id;
+                        setSelectedProjectId(null);
+                        navigation.navigate('ProjectLifecycle', { projectId });
+                      }}
+                    >
+                      <Text style={styles.moreHereText}>More here</Text>
+                    </TouchableOpacity>
+                  </View>
                   {selectedProjectMetrics.linkedEvents.length === 0 ? (
                     <View style={styles.eventEmptyCard}>
                       <Text style={styles.eventEmptyText}>
-                        No admin-created events have been attached to this project yet.
+                        No events have been attached to this project yet.
                       </Text>
                     </View>
                   ) : (
@@ -829,6 +841,19 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '900',
     color: '#0f172a',
+  },
+  eventSectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginTop: 16,
+    marginBottom: 12,
+  },
+  moreHereText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#166534',
   },
   eventEmptyCard: {
     borderRadius: 14,

@@ -456,11 +456,19 @@ def get_pooled_postgres_connection():
     """Get a database connection from the pool if available, otherwise create a direct connection."""
     global _POSTGRES_CONNECTION_POOL
     if _POSTGRES_CONNECTION_POOL is not None:
+        yielded_connection = False
         try:
             with _POSTGRES_CONNECTION_POOL.connection() as conn:
+                # Once the connection has been yielded, exceptions belong to the
+                # caller's transaction.  Falling through to a second ``yield``
+                # from this except block violates contextlib's generator contract
+                # and raises ``RuntimeError: generator didn't stop after throw()``.
+                yielded_connection = True
                 yield conn
                 return
         except Exception as exc:
+            if yielded_connection:
+                raise
             if _is_retryable_connection_error(exc) or "pool" in str(exc).lower():
                 print(f"[WARN] Pool connection error: {exc}. Retrying with direct connection.")
             else:

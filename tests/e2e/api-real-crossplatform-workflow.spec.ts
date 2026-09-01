@@ -136,6 +136,17 @@ test('real cross-platform workflow: admin, volunteer, and partner interact throu
   expect(reviewedPartnerBody.application.status).toBe('Approved');
   expect(reviewedPartnerBody.project.title).toBe('E2E Live Partner Education Outreach');
 
+  // Verify the approval survived a fresh API read.  This catches persistence
+  // regressions that a response-body assertion alone would miss.
+  const persistedPartnerApplications = await request.get(
+    `${API_URL}/partner-project-applications/by-user/${E2E_USERS.partner.id}`
+  );
+  expect(persistedPartnerApplications.ok()).toBeTruthy();
+  const persistedApplication = (await persistedPartnerApplications.json()).applications.find(
+    (item: any) => item.id === application.id
+  );
+  expect(persistedApplication?.status).toBe('Approved');
+
   const partnerReport = await request.post(`${API_URL}/reports`, {
     data: {
       id: 'e2e-live-partner-impact-report',

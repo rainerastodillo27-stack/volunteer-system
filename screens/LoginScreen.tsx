@@ -724,6 +724,13 @@ export default function LoginScreen() {
       );
 
       const visibleUsers = uniqueUsers
+        // Never show legacy demo shortcuts that were removed from the live database.
+        .filter(
+          (user) =>
+            !["volunteer-1", "partner-user-1", "partner-user-2"].includes(
+              String(user.id || ""),
+            ),
+        )
         .filter((user) =>
           isWeb ? user.role === "admin" : user.role !== "admin",
         )

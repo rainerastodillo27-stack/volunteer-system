@@ -2,10 +2,9 @@ import React, { useMemo, useState, useEffect } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StyleSheet, Text, TouchableOpacity, View, Linking, useWindowDimensions, ScrollView } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { addMonths, format, isSameDay, isSameMonth, subMonths } from 'date-fns';
+import { addDays, addMonths, addWeeks, endOfWeek, format, isSameDay, isSameMonth, startOfWeek, subDays, subMonths, subWeeks } from 'date-fns';
 import type { AdminPlanningCalendar, AdminPlanningItem, Project } from '../models/types';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
-import { formatProjectLocation } from '../utils/locationFormat';
 
 type TimelineEntry = {
   id: string;
@@ -32,6 +31,7 @@ type ProjectTimelineCalendarCardProps = {
   projectFilterIds?: string[];
   statusFilter?: string | null;
   setStatusFilter?: (status: string | null) => void;
+  hideSecondCalendar?: boolean;
   onAddEvent?: (date: Date) => void;
   onOpenProject?: (projectId: string) => void;
   onEditProject?: (projectId: string) => void;
@@ -102,6 +102,20 @@ function getLaneLabel(project: Project): string {
   return project.programModule || project.category || 'Project';
 }
 
+function formatViewLabel(date: Date, viewMode: 'Month' | 'Week' | 'Day' | 'List'): string {
+  if (viewMode === 'Day') {
+    return date.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  }
+
+  if (viewMode === 'Week') {
+    const start = startOfWeek(date, { weekStartsOn: 0 });
+    const end = endOfWeek(date, { weekStartsOn: 0 });
+    return `${start.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} - ${end.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
+  }
+
+  return date.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+}
+
 export default function ProjectTimelineCalendarCard({
   title,
   subtitle,
@@ -114,6 +128,7 @@ export default function ProjectTimelineCalendarCard({
   projectFilterIds,
   statusFilter,
   setStatusFilter,
+  hideSecondCalendar = false,
   onAddEvent,
   onOpenProject,
   onEditProject,
@@ -127,7 +142,7 @@ export default function ProjectTimelineCalendarCard({
     return new Date();
   });
   const [selectedDate, setSelectedDate] = useState<Date>(() => new Date());
-  const [viewMode, setViewMode] = useState<'Month' | 'Week' | 'Day'>('Month');
+  const [viewMode, setViewMode] = useState<'Month' | 'Week' | 'Day' | 'List'>('Month');
   const [showFilterDropdown, setShowFilterDropdown] = useState(false);
 
   const monthGrid = useMemo(() => getMonthGrid(calendarDate), [calendarDate]);
@@ -135,6 +150,12 @@ export default function ProjectTimelineCalendarCard({
     () => calendarDate.toLocaleDateString(undefined, { month: 'long', year: 'numeric' }),
     [calendarDate]
   );
+
+  // Days of the current week (for Week view)
+  const weekGrid = useMemo(() => {
+    const start = startOfWeek(calendarDate, { weekStartsOn: 0 });
+    return Array.from({ length: 7 }, (_, index) => addDays(start, index));
+  }, [calendarDate]);
 
   // Google Calendar Integration states
   const [calendarSettings, setCalendarSettings] = useState({
@@ -364,11 +385,23 @@ export default function ProjectTimelineCalendarCard({
 
   // Navigation handlers
   const handlePrevMonth = () => {
-    setCalendarDate(prev => subMonths(prev, 1));
+    setCalendarDate(prev =>
+      viewMode === 'Day'
+        ? subDays(prev, 1)
+        : viewMode === 'Week'
+          ? subWeeks(prev, 1)
+          : subMonths(prev, 1)
+    );
   };
 
   const handleNextMonth = () => {
-    setCalendarDate(prev => addMonths(prev, 1));
+    setCalendarDate(prev =>
+      viewMode === 'Day'
+        ? addDays(prev, 1)
+        : viewMode === 'Week'
+          ? addWeeks(prev, 1)
+          : addMonths(prev, 1)
+    );
   };
 
   const handleResetToToday = () => {
@@ -519,6 +552,10 @@ export default function ProjectTimelineCalendarCard({
             </View>
           )}
 
+          <View style={styles.syncBadge}>
+            <MaterialIcons name="sync" size={14} color="#166534" />
+            <Text style={styles.syncBadgeText}>Synced with GC</Text>
+          </View>
         </View>
       </View>
 
@@ -526,13 +563,15 @@ export default function ProjectTimelineCalendarCard({
       <View style={[styles.mainLayout, { flexDirection: isMobile ? 'column' : 'row' }]}>
         
         {/* Left Column (Big Calendar + Event List) */}
-        <View style={styles.leftColumn}>
+        <View style={[styles.leftColumn, isMobile && styles.leftColumnMobile]}>
           
           {/* Calendar Header with navigation and Mode buttons */}
           <View style={[styles.calendarControlBar, isMobile && styles.calendarControlBarMobile]}>
-            <View style={styles.calendarMonthNavRow}>
-              <Text style={styles.bigMonthLabel}>{monthLabel}</Text>
-              <View style={styles.calendarNavButtons}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <Text style={[styles.bigMonthLabel, isMobile && styles.bigMonthLabelMobile]}>
+                {formatViewLabel(calendarDate, viewMode)}
+              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                 <TouchableOpacity style={styles.navButton} onPress={handlePrevMonth}>
                   <MaterialIcons name="chevron-left" size={20} color="#475569" />
                 </TouchableOpacity>
@@ -544,14 +583,10 @@ export default function ProjectTimelineCalendarCard({
 
             {/* View Mode Tabs */}
             <View style={[styles.viewModeTabs, isMobile && styles.viewModeTabsMobile]}>
-              {(['Month', 'Week', 'Day'] as const).map(mode => (
+              {(['Month', 'Week', 'Day', 'List'] as const).map(mode => (
                 <TouchableOpacity
                   key={mode}
-                  style={[
-                    styles.viewModeTabButton,
-                    isMobile && styles.viewModeTabButtonMobile,
-                    viewMode === mode && styles.viewModeTabButtonActive,
-                  ]}
+                  style={[styles.viewModeTabButton, isMobile && styles.viewModeTabButtonMobile, viewMode === mode && styles.viewModeTabButtonActive]}
                   onPress={() => setViewMode(mode)}
                 >
                   <Text style={[styles.viewModeTabText, viewMode === mode && styles.viewModeTabTextActive]}>
@@ -563,109 +598,192 @@ export default function ProjectTimelineCalendarCard({
           </View>
 
           {/* Weekday labels */}
-          <View style={styles.weekdayLabelsRow}>
-            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
-              <View key={day} style={styles.weekdayLabelCell}>
-                <Text style={styles.weekdayLabelText}>{day}</Text>
-              </View>
-            ))}
-          </View>
+          {viewMode !== 'List' && (
+            <View style={styles.weekdayLabelsRow}>
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
+                <View key={day} style={styles.weekdayLabelCell}>
+                  <Text style={styles.weekdayLabelText}>{day}</Text>
+                </View>
+              ))}
+            </View>
+          )}
 
           {/* Big Monthly grid */}
-          <View style={styles.bigCalendarGrid}>
-            {monthGrid.map((day, idx) => renderBigCalendarDay(day, idx))}
-          </View>
+          {viewMode === 'List' ? (
+            <View style={styles.listContainer}>
+              <Text style={styles.listIntroText}>
+                All events and planning items, newest first, across the selected date.
+              </Text>
+              {(() => {
+                const visibleEntries = timelineEntries.filter(entry =>
+                  Math.abs(new Date(entry.startDate).getTime() - calendarDate.getTime()) <
+                  1000 * 60 * 60 * 24 * 45
+                );
+                if (visibleEntries.length === 0) {
+                  return (
+                    <View style={styles.emptyTableState}>
+                      <Text style={styles.emptyTableText}>No events to show in this range.</Text>
+                    </View>
+                  );
+                }
+                return visibleEntries.map(entry => {
+                  const project = projects.find(p => p.id === entry.projectId);
+                  return (
+                    <TouchableOpacity
+                      key={entry.id}
+                      style={[styles.listEventRow, { borderLeftColor: entry.color }]}
+                      onPress={() => {
+                        if (entry.projectId) {
+                          onOpenProject?.(entry.projectId);
+                        }
+                      }}
+                    >
+                      <View style={styles.listDateBox}>
+                        <Text style={styles.listDateDay}>{format(new Date(entry.startDate), 'MMM')}</Text>
+                        <Text style={styles.listDateNum}>{format(new Date(entry.startDate), 'd')}</Text>
+                      </View>
+                      <View style={styles.listEventInfo}>
+                        <Text style={styles.listEventTitle} numberOfLines={1}>{entry.title}</Text>
+                        <Text style={styles.listEventMeta} numberOfLines={1}>
+                          {formatRange(entry.startDate, entry.endDate)} • {entry.laneLabel}{' '}
+                          {project ? `• ${getProjectDisplayStatus(project)}` : ''}
+                        </Text>
+                      </View>
+                      <MaterialIcons name="chevron-right" size={18} color="#94a3b8" />
+                    </TouchableOpacity>
+                  );
+                });
+              })()}
+            </View>
+          ) : viewMode === 'Day' ? (
+            <View style={styles.dayViewContainer}>
+              <View
+                style={styles.dayViewHeader}
+              >
+                <Text style={styles.dayViewTitle}>
+                  {calendarDate.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
+                </Text>
+                <Text style={styles.dayViewCount}>
+                  {timelineEntries.filter(entry => isSameDay(new Date(entry.startDate), calendarDate)).length} events
+                </Text>
+              </View>
+              {timelineEntries
+                .filter(entry => isSameDay(new Date(entry.startDate), calendarDate))
+                .map(entry => {
+                  const project = projects.find(p => p.id === entry.projectId);
+                  return (
+                    <TouchableOpacity
+                      key={entry.id}
+                      style={[styles.dayViewEventCard, { borderLeftColor: entry.color }]}
+                      onPress={() => {
+                        if (entry.projectId) {
+                          onOpenProject?.(entry.projectId);
+                        }
+                      }}
+                    >
+                      <Text style={styles.dayViewEventTime}>
+                        {new Date(entry.startDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </Text>
+                      <View style={styles.dayViewEventBody}>
+                        <Text style={styles.dayViewEventTitle} numberOfLines={1}>{entry.title}</Text>
+                        <Text style={styles.dayViewEventMeta} numberOfLines={1}>
+                          {formatRange(entry.startDate, entry.endDate)} • {entry.laneLabel}{' '}
+                          {project ? `• ${getProjectDisplayStatus(project)}` : ''}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              {timelineEntries.filter(entry => isSameDay(new Date(entry.startDate), calendarDate)).length === 0 ? (
+                <View style={styles.emptyTableState}>
+                  <Text style={styles.emptyTableText}>No events scheduled for this day</Text>
+                </View>
+              ) : null}
+            </View>
+          ) : (
+            <View style={styles.bigCalendarGrid}>
+              {(viewMode === 'Week' ? weekGrid : monthGrid).map((day, idx) =>
+                renderBigCalendarDay(day, idx)
+              )}
+            </View>
+          )}
 
           {/* Event List Table at the bottom */}
           <View style={styles.eventTableContainer}>
             <Text style={styles.eventTableTitle}>Event List</Text>
 
-            <ScrollView
-              horizontal={isMobile}
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={isMobile && styles.eventTableScrollContent}
-            >
-              <View style={isMobile && styles.eventTableMobileWidth}>
-                <View style={styles.tableHeader}>
-                  <Text style={[styles.tableHeaderCell, { flex: 1.5 }]}>Time</Text>
-                  <Text style={[styles.tableHeaderCell, { flex: 2 }]}>Event</Text>
-                  <Text style={[styles.tableHeaderCell, { flex: 2 }]}>Location</Text>
-                  <Text style={[styles.tableHeaderCell, { flex: 1.5, textAlign: 'center' }]}>Attendees</Text>
-                  <Text style={[styles.tableHeaderCell, { flex: 1, textAlign: 'center' }]}>Status</Text>
-                  <Text style={[styles.tableHeaderCell, { flex: 1.2, textAlign: 'center' }]}>Actions</Text>
-                </View>
+            <ScrollView horizontal showsHorizontalScrollIndicator>
+            <View style={{ minWidth: isMobile ? 640 : '100%' }}>
+            <View style={styles.tableHeader}>
+              <Text style={[styles.tableHeaderCell, { flex: 1.5 }]}>Time</Text>
+              <Text style={[styles.tableHeaderCell, { flex: 2 }]}>Event</Text>
+              <Text style={[styles.tableHeaderCell, { flex: 2 }]}>Location</Text>
+              <Text style={[styles.tableHeaderCell, { flex: 1.5, textAlign: 'center' }]}>Attendees</Text>
+              <Text style={[styles.tableHeaderCell, { flex: 1, textAlign: 'center' }]}>Status</Text>
+              <Text style={[styles.tableHeaderCell, { flex: 1.5, textAlign: 'center' }]}>Actions</Text>
+            </View>
 
-                {selectedDayEvents.length > 0 ? (
-                  selectedDayEvents.map(entry => {
-                    const project = projects.find(p => p.id === entry.projectId);
-                    const canUseProjectActions = Boolean(project?.id);
-                    const volunteersNeeded = project?.volunteersNeeded || 0;
-                    const joinedCount = project?.volunteers?.length || project?.joinedUserIds?.length || 0;
-                    const displayStatus = project ? getProjectDisplayStatus(project) : 'Open';
+            {selectedDayEvents.length > 0 ? (
+              selectedDayEvents.map(entry => {
+                const project = projects.find(p => p.id === entry.projectId);
+                const volunteersNeeded = project?.volunteersNeeded || 0;
+                const joinedCount = project?.volunteers?.length || project?.joinedUserIds?.length || 0;
+                const displayStatus = project ? getProjectDisplayStatus(project) : 'Open';
 
-                    return (
-                      <View key={entry.id} style={styles.tableRow}>
-                        <Text style={[styles.tableCell, { flex: 1.5 }]}>
-                          {new Date(entry.startDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - {new Date(entry.endDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                return (
+                  <View key={entry.id} style={styles.tableRow}>
+                    <Text style={[styles.tableCell, { flex: 1.5 }]}>
+                      {new Date(entry.startDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - {new Date(entry.endDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </Text>
+                    <Text style={[styles.tableCell, { flex: 2, fontWeight: '700' }]}>{entry.title}</Text>
+                    <Text style={[styles.tableCell, { flex: 2 }]} numberOfLines={1}>
+                      {project?.location?.address || 'TBA'}
+                    </Text>
+                    <Text style={[styles.tableCell, { flex: 1.5, textAlign: 'center' }]}>
+                      {joinedCount} / {volunteersNeeded}
+                    </Text>
+                    <View style={{ flex: 1, alignItems: 'center' }}>
+                      <View style={[styles.statusPill, { backgroundColor: entry.color + '15' }]}>
+                        <Text style={[styles.statusPillText, { color: entry.color }]}>
+                          {displayStatus}
                         </Text>
-                        <Text style={[styles.tableCell, { flex: 2, fontWeight: '700' }]}>{entry.title}</Text>
-                        <Text style={[styles.tableCell, { flex: 2 }]} numberOfLines={1}>
-                          {project ? formatProjectLocation(project) : 'TBA'}
-                        </Text>
-                        <Text style={[styles.tableCell, { flex: 1.5, textAlign: 'center' }]}>
-                          {joinedCount} / {volunteersNeeded}
-                        </Text>
-                        <View style={{ flex: 1, alignItems: 'center' }}>
-                          <View style={[styles.statusPill, { backgroundColor: entry.color + '15' }]}>
-                            <Text style={[styles.statusPillText, { color: entry.color }]}>
-                              {displayStatus}
-                            </Text>
-                          </View>
-                        </View>
-                        <View style={{ flex: 1.2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                          <TouchableOpacity 
-                            style={[styles.actionButton, !canUseProjectActions && styles.actionButtonDisabled]}
-                            disabled={!canUseProjectActions}
-                            onPress={() => {
-                              if (project?.id) {
-                                onOpenProject?.(project.id);
-                              }
-                            }}
-                          >
-                            <MaterialIcons name="visibility" size={18} color={canUseProjectActions ? '#166534' : '#94a3b8'} />
-                          </TouchableOpacity>
-                          <TouchableOpacity 
-                            style={[styles.actionButton, !canUseProjectActions && styles.actionButtonDisabled]}
-                            disabled={!canUseProjectActions}
-                            onPress={() => {
-                              if (project?.id) {
-                                onEditProject?.(project.id);
-                              }
-                            }}
-                          >
-                            <MaterialIcons name="edit" size={18} color={canUseProjectActions ? '#2563eb' : '#94a3b8'} />
-                          </TouchableOpacity>
-                          <TouchableOpacity 
-                            style={[styles.actionButton, !canUseProjectActions && styles.actionButtonDisabled]}
-                            disabled={!canUseProjectActions}
-                            onPress={() => {
-                              if (project?.id) {
-                                onDeleteProject?.(project.id);
-                              }
-                            }}
-                          >
-                            <MaterialIcons name="delete-outline" size={18} color={canUseProjectActions ? '#dc2626' : '#94a3b8'} />
-                          </TouchableOpacity>
-                        </View>
                       </View>
-                    );
-                  })
-                ) : (
-                  <View style={styles.emptyTableState}>
-                    <Text style={styles.emptyTableText}>No events scheduled for this day</Text>
+                    </View>
+                    <View style={{ flex: 1.5, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                      <TouchableOpacity
+                        style={styles.actionButton}
+                        disabled={!project?.id}
+                        onPress={() => project?.id && onOpenProject?.(project.id)}
+                        accessibilityLabel={`View ${entry.title}`}
+                      >
+                        <MaterialIcons name="visibility" size={17} color={project?.id ? '#166534' : '#94a3b8'} />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.actionButton}
+                        disabled={!project?.id || !onEditProject}
+                        onPress={() => project?.id && onEditProject?.(project.id)}
+                        accessibilityLabel={`Edit ${entry.title}`}
+                      >
+                        <MaterialIcons name="edit" size={17} color={project?.id && onEditProject ? '#2563eb' : '#94a3b8'} />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.actionButton}
+                        disabled={!project?.id || !onDeleteProject}
+                        onPress={() => project?.id && onDeleteProject?.(project.id)}
+                        accessibilityLabel={`Delete ${entry.title}`}
+                      >
+                        <MaterialIcons name="delete-outline" size={17} color={project?.id && onDeleteProject ? '#dc2626' : '#94a3b8'} />
+                      </TouchableOpacity>
+                    </View>
                   </View>
-                )}
+                );
+              })
+            ) : (
+              <View style={styles.emptyTableState}>
+                <Text style={styles.emptyTableText}>No events scheduled for this day</Text>
               </View>
+            )}
+            </View>
             </ScrollView>
           </View>
 
@@ -674,68 +792,72 @@ export default function ProjectTimelineCalendarCard({
         {/* Right Column (Sidebar Panel) */}
         <View style={[styles.sidebarPanel, { width: isMobile ? '100%' : 300, borderLeftWidth: isMobile ? 0 : 1, borderTopWidth: isMobile ? 1 : 0 }]}>
           
-          <Text style={styles.sidebarHeading}>Calendar</Text>
+          {!hideSecondCalendar && (
+            <>
+              <Text style={styles.sidebarHeading}>Calendar</Text>
 
-          {/* Month Selector in Mini Calendar */}
-          <View style={styles.miniMonthHeader}>
-            <Text style={styles.miniMonthLabel}>{monthLabel}</Text>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <TouchableOpacity style={styles.navButtonSmall} onPress={handlePrevMonth}>
-                <MaterialIcons name="chevron-left" size={16} color="#475569" />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.navButtonSmall} onPress={handleNextMonth}>
-                <MaterialIcons name="chevron-right" size={16} color="#475569" />
-              </TouchableOpacity>
-            </View>
-          </View>
+              {/* Month Selector in Mini Calendar */}
+              <View style={styles.miniMonthHeader}>
+                <Text style={styles.miniMonthLabel}>{monthLabel}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <TouchableOpacity style={styles.navButtonSmall} onPress={handlePrevMonth}>
+                    <MaterialIcons name="chevron-left" size={16} color="#475569" />
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.navButtonSmall} onPress={handleNextMonth}>
+                    <MaterialIcons name="chevron-right" size={16} color="#475569" />
+                  </TouchableOpacity>
+                </View>
+              </View>
 
-          {/* Mini Calendar Weekday Labels */}
-          <View style={styles.miniWeekRow}>
-            {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map((day, idx) => (
-              <Text key={idx} style={styles.miniWeekLabel}>
-                {day}
-              </Text>
-            ))}
-          </View>
-
-          {/* Mini Calendar Grid */}
-          <View style={styles.miniGrid}>
-            {monthGrid.map((day, index) => {
-              const isCurrentMonth = isSameMonth(day, calendarDate);
-              const isSelected = isSameDay(day, selectedDate);
-              const hasEvents = timelineEntries.some(entry => isSameDay(new Date(entry.startDate), day));
-
-              return (
-                <TouchableOpacity
-                  key={index}
-                  style={[
-                    styles.miniDayCell,
-                    isSelected && styles.miniDayCellSelected,
-                  ]}
-                  onPress={() => {
-                    setSelectedDate(day);
-                    if (!isCurrentMonth) {
-                      setCalendarDate(day);
-                    }
-                    onAddEvent?.(day);
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.miniDayText,
-                      !isCurrentMonth && styles.miniDayTextOutside,
-                      isSelected && styles.miniDayTextSelected,
-                    ]}
-                  >
-                    {format(day, 'd')}
+              {/* Mini Calendar Weekday Labels */}
+              <View style={styles.miniWeekRow}>
+                {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map((day, idx) => (
+                  <Text key={idx} style={styles.miniWeekLabel}>
+                    {day}
                   </Text>
-                  {hasEvents && !isSelected && (
-                    <View style={styles.miniEventDot} />
-                  )}
-                </TouchableOpacity>
-              );
-            })}
-          </View>
+                ))}
+              </View>
+
+              {/* Mini Calendar Grid */}
+              <View style={styles.miniGrid}>
+                {monthGrid.map((day, index) => {
+                  const isCurrentMonth = isSameMonth(day, calendarDate);
+                  const isSelected = isSameDay(day, selectedDate);
+                  const hasEvents = timelineEntries.some(entry => isSameDay(new Date(entry.startDate), day));
+
+                  return (
+                    <TouchableOpacity
+                      key={index}
+                      style={[
+                        styles.miniDayCell,
+                        isSelected && styles.miniDayCellSelected,
+                      ]}
+                      onPress={() => {
+                        setSelectedDate(day);
+                        if (!isCurrentMonth) {
+                          setCalendarDate(day);
+                        }
+                        onAddEvent?.(day);
+                      }}
+                    >
+                      <Text
+                        style={[
+                          styles.miniDayText,
+                          !isCurrentMonth && styles.miniDayTextOutside,
+                          isSelected && styles.miniDayTextSelected,
+                        ]}
+                      >
+                        {format(day, 'd')}
+                      </Text>
+                      {hasEvents && !isSelected && (
+                        <View style={styles.miniEventDot} />
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </>
+          )}
 
           {/* Upcoming Events list */}
           <View style={styles.upcomingEventsSection}>
@@ -795,7 +917,7 @@ export default function ProjectTimelineCalendarCard({
 const styles = StyleSheet.create({
   card: {
     borderRadius: 16,
-    overflow: 'visible',
+    overflow: 'hidden',
     backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: '#dadce0',
@@ -809,9 +931,6 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#dadce0',
     backgroundColor: '#ffffff',
-    position: 'relative',
-    zIndex: 20,
-    elevation: 20,
   },
   googleHeaderTitle: {
     fontSize: 16,
@@ -838,7 +957,7 @@ const styles = StyleSheet.create({
   },
   filterDropdownMenu: {
     position: 'absolute',
-    top: 42,
+    top: 38,
     right: 0,
     backgroundColor: '#ffffff',
     borderRadius: 12,
@@ -846,12 +965,11 @@ const styles = StyleSheet.create({
     borderColor: '#e2e8f0',
     paddingVertical: 6,
     width: 160,
-    zIndex: 100,
     shadowColor: '#000000',
-    shadowOpacity: 0.14,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 24,
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
   },
   filterDropdownItem: {
     paddingHorizontal: 14,
@@ -882,11 +1000,13 @@ const styles = StyleSheet.create({
   },
   mainLayout: {
     backgroundColor: '#ffffff',
-    zIndex: 0,
   },
   leftColumn: {
     flex: 1,
     padding: 20,
+  },
+  leftColumnMobile: {
+    padding: 12,
   },
   calendarControlBar: {
     flexDirection: 'row',
@@ -896,25 +1016,16 @@ const styles = StyleSheet.create({
   },
   calendarControlBarMobile: {
     flexDirection: 'column',
-    alignItems: 'stretch',
+    alignItems: 'flex-start',
     gap: 12,
-  },
-  calendarMonthNavRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  calendarNavButtons: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
   },
   bigMonthLabel: {
     fontSize: 20,
     fontWeight: '800',
     color: '#1e293b',
-    flexShrink: 1,
+  },
+  bigMonthLabelMobile: {
+    fontSize: 16,
   },
   navButton: {
     padding: 6,
@@ -932,20 +1043,20 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fafc',
   },
   viewModeTabsMobile: {
-    alignSelf: 'stretch',
-    width: '100%',
+    flexWrap: 'wrap',
   },
   viewModeTabButton: {
     paddingHorizontal: 16,
     paddingVertical: 8,
   },
   viewModeTabButtonMobile: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     flex: 1,
     alignItems: 'center',
-    paddingHorizontal: 8,
   },
   viewModeTabButtonActive: {
-    backgroundColor: '#f1f5f9',
+    backgroundColor: '#166534',
   },
   viewModeTabText: {
     fontSize: 13,
@@ -953,7 +1064,8 @@ const styles = StyleSheet.create({
     color: '#64748b',
   },
   viewModeTabTextActive: {
-    color: '#166534',
+    color: '#ffffff',
+    fontWeight: '800',
   },
   weekdayLabelsRow: {
     flexDirection: 'row',
@@ -989,8 +1101,9 @@ const styles = StyleSheet.create({
   },
   bigDayCellSelected: {
     borderColor: '#166534',
-    borderWidth: 1.5,
+    borderWidth: 2,
     borderRadius: 8,
+    backgroundColor: '#f0fdf4',
   },
   bigDayHeader: {
     alignItems: 'flex-start',
@@ -1034,13 +1147,6 @@ const styles = StyleSheet.create({
     borderTopColor: '#e2e8f0',
     paddingTop: 20,
   },
-  eventTableScrollContent: {
-    flexGrow: 1,
-  },
-  eventTableMobileWidth: {
-    minWidth: 560,
-    flex: 1,
-  },
   eventTableTitle: {
     fontSize: 16,
     fontWeight: '800',
@@ -1072,6 +1178,16 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#334155',
   },
+  actionButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 7,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   statusPill: {
     paddingHorizontal: 8,
     paddingVertical: 4,
@@ -1081,18 +1197,6 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
   },
-  actionButton: {
-    padding: 6,
-    borderRadius: 6,
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  actionButtonDisabled: {
-    opacity: 0.45,
-  },
   emptyTableState: {
     paddingVertical: 24,
     alignItems: 'center',
@@ -1101,6 +1205,105 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#94a3b8',
     fontWeight: '500',
+  },
+  listContainer: {
+    marginBottom: 0,
+  },
+  listIntroText: {
+    fontSize: 12,
+    color: '#64748b',
+    marginBottom: 14,
+  },
+  listEventRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderLeftWidth: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+    backgroundColor: '#f8fafc',
+    borderRadius: 10,
+    marginBottom: 8,
+  },
+  listDateBox: {
+    width: 52,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 10,
+    backgroundColor: '#166534',
+    paddingVertical: 8,
+  },
+  listDateDay: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#d1fae5',
+    textTransform: 'uppercase',
+  },
+  listDateNum: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+  listEventInfo: {
+    flex: 1,
+  },
+  listEventTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1e293b',
+  },
+  listEventMeta: {
+    fontSize: 11,
+    color: '#64748b',
+    marginTop: 3,
+  },
+  dayViewContainer: {
+    marginBottom: 0,
+  },
+  dayViewHeader: {
+    marginBottom: 16,
+  },
+  dayViewTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#1e293b',
+  },
+  dayViewCount: {
+    fontSize: 12,
+    color: '#64748b',
+    marginTop: 2,
+  },
+  dayViewEventCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    borderLeftWidth: 4,
+    borderRadius: 12,
+    backgroundColor: '#f8fafc',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    marginBottom: 8,
+  },
+  dayViewEventTime: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#475569',
+    width: 64,
+  },
+  dayViewEventBody: {
+    flex: 1,
+  },
+  dayViewEventTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1e293b',
+  },
+  dayViewEventMeta: {
+    fontSize: 11,
+    color: '#64748b',
+    marginTop: 3,
   },
   sidebarPanel: {
     padding: 20,

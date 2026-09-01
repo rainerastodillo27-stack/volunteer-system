@@ -42,6 +42,28 @@ const MAP_FIT_PADDING_PX = 64;
 const MAP_MAX_FIT_ZOOM = 12;
 const MAP_SINGLE_MARKER_ZOOM = 10;
 
+type MapStatusFilter = 'Planning' | 'In Progress' | 'On Hold' | 'Completed' | 'Cancelled';
+
+const MAP_STATUS_FILTERS: Array<{ key: MapStatusFilter; label: string; color: string }> = [
+  { key: 'Planning', label: 'Planning (Draft)', color: '#2563EB' },
+  { key: 'In Progress', label: 'In Progress (Active)', color: '#16A34A' },
+  { key: 'On Hold', label: 'On Hold', color: '#D97706' },
+  { key: 'Completed', label: 'Completed (Closed)', color: '#7C3AED' },
+  { key: 'Cancelled', label: 'Cancelled', color: '#DC2626' },
+];
+
+function matchesMapStatus(project: Project, status: MapStatusFilter): boolean {
+  const displayStatus = String(getProjectDisplayStatus(project));
+  const projectStatus = String(project.status || '');
+  if (status === 'Planning') {
+    return displayStatus === 'Planning' || displayStatus === 'Planned' || Boolean((project as any).proposalStage);
+  }
+  if (status === 'In Progress') {
+    return displayStatus === 'In Progress' || displayStatus === 'Active' || projectStatus === 'Approved';
+  }
+  return displayStatus === status;
+}
+
 type MapStylePresetKey = 'admin-overview' | 'projects-view' | 'events-view' | 'volunteer-view' | 'partner-view';
 
 type MapStylePreset = {
@@ -232,6 +254,7 @@ export default function MappingScreen({ navigation }: any) {
   // Admin event filters
   const [filterDate, setFilterDate] = useState<string>('');
   const [filterProgram, setFilterProgram] = useState<AdvocacyFocus | ''>('');
+  const [filterStatus, setFilterStatus] = useState<MapStatusFilter | null>(null);
   // Location filter state
   const [filterRegion, setFilterRegion] = useState<string>('');
   const [filterCity, setFilterCity] = useState<string>('');
@@ -379,11 +402,11 @@ export default function MappingScreen({ navigation }: any) {
 
   const displayProjects = React.useMemo(() => {
     if (user?.role === 'volunteer') {
-      return projects;
+      return filterStatus ? projects.filter(project => matchesMapStatus(project, filterStatus)) : projects;
     }
 
     if (user?.role === 'partner') {
-      return projects;
+      return filterStatus ? projects.filter(project => matchesMapStatus(project, filterStatus)) : projects;
     }
 
     let baseProjects = projects;
@@ -404,6 +427,10 @@ export default function MappingScreen({ navigation }: any) {
       baseProjects = projects.filter(project => !project.isEvent);
     } else if (selectedMapStyleKey === 'events-view') {
       baseProjects = projects.filter(project => Boolean(project.isEvent));
+    }
+
+    if (filterStatus) {
+      baseProjects = baseProjects.filter(project => matchesMapStatus(project, filterStatus));
     }
 
     // Apply Admin Filters (Date & Program) across admin overview, projects, and events views
@@ -497,7 +524,7 @@ export default function MappingScreen({ navigation }: any) {
     }
 
     return baseProjects;
-  }, [projects, selectedMapStyleKey, selectedVolunteerAccount, selectedPartnerAccount, user?.role, filterDate, filterProgram, filterRegion, filterCity, filterBarangay]);
+  }, [projects, selectedMapStyleKey, selectedVolunteerAccount, selectedPartnerAccount, user?.role, filterDate, filterProgram, filterStatus, filterRegion, filterCity, filterBarangay]);
 
   const mappedProjects = React.useMemo(() => {
     const result = getMappedProjects(displayProjects);
@@ -533,7 +560,18 @@ export default function MappingScreen({ navigation }: any) {
 
   // Calculate impact statistics based on filtered projects
   const impactStats = React.useMemo(() => {
-    const totalProjects = displayProjects.length;
+    // Projects and events are stored together, but the overview card must
+    // follow the active role/view scope. Partner/admin project views count
+    // parent projects; volunteer/event views count the event records that
+    // were actually joined (the volunteer query already scopes these).
+    const eventScoped =
+      user?.role === 'volunteer' ||
+      selectedMapStyleKey === 'volunteer-view' ||
+      selectedMapStyleKey === 'events-view';
+    const scopedProjects = displayProjects.filter(project =>
+      eventScoped ? Boolean(project.isEvent) : !project.isEvent
+    );
+    const totalProjects = scopedProjects.length;
     const totalEvents = displayProjects.filter(p => p.isEvent).length;
     const completedProjects = displayProjects.filter(p => p.status === 'Completed').length;
     const inProgressProjects = displayProjects.filter(p => p.status === 'In Progress').length;
@@ -551,12 +589,12 @@ export default function MappingScreen({ navigation }: any) {
     
     // Count beneficiaries reached
     const totalBeneficiaries = displayProjects.reduce((sum, project) => {
-      return sum + (project.beneficiariesReached || 0);
+      return sum + (Number((project as any).beneficiariesReached) || 0);
     }, 0);
 
     // Calculate volunteer hours
     const totalVolunteerHours = displayProjects.reduce((sum, project) => {
-      return sum + (project.volunteerHours || 0);
+      return sum + (Number((project as any).volunteerHours) || 0);
     }, 0);
 
     return {
@@ -568,7 +606,7 @@ export default function MappingScreen({ navigation }: any) {
       beneficiariesReached: totalBeneficiaries,
       volunteerHours: totalVolunteerHours,
     };
-  }, [displayProjects]);
+  }, [displayProjects, selectedMapStyleKey, user?.role]);
 
   const selectedMapStyle =
     MAP_STYLE_PRESETS.find(preset => preset.key === selectedMapStyleKey) || MAP_STYLE_PRESETS[0];
@@ -1116,6 +1154,42 @@ export default function MappingScreen({ navigation }: any) {
         </View>
 
         {/* Admin filters – date and program (active for Admin) */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.statusFiltersRow}
+        >
+          <TouchableOpacity
+            style={[styles.statusFilterChip, !filterStatus && styles.statusFilterChipAllActive]}
+            onPress={() => setFilterStatus(null)}
+          >
+            <Text style={[styles.statusFilterText, !filterStatus && styles.statusFilterTextActive]}>All</Text>
+            <View style={[styles.statusFilterCount, !filterStatus && styles.statusFilterCountActive]}>
+              <Text style={[styles.statusFilterCountText, !filterStatus && styles.statusFilterTextActive]}>{projects.length}</Text>
+            </View>
+          </TouchableOpacity>
+          {MAP_STATUS_FILTERS.map(status => {
+            const isActive = filterStatus === status.key;
+            const count = projects.filter(project => matchesMapStatus(project, status.key)).length;
+            return (
+              <TouchableOpacity
+                key={status.key}
+                style={[
+                  styles.statusFilterChip,
+                  isActive && { backgroundColor: status.color, borderColor: status.color },
+                ]}
+                onPress={() => setFilterStatus(current => current === status.key ? null : status.key)}
+              >
+                <View style={[styles.statusFilterDot, { backgroundColor: isActive ? '#ffffff' : status.color }]} />
+                <Text style={[styles.statusFilterText, isActive && styles.statusFilterTextActive]}>{status.label}</Text>
+                <View style={[styles.statusFilterCount, isActive && styles.statusFilterCountActive]}>
+                  <Text style={[styles.statusFilterCountText, isActive && styles.statusFilterTextActive]}>{count}</Text>
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+
         {user?.role === 'admin' ? (
           <>
           <View style={styles.adminFiltersRow}>
@@ -2229,6 +2303,54 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
     color: '#64748b',
+  },
+  statusFiltersRow: {
+    alignItems: 'center',
+    gap: 8,
+    paddingTop: 12,
+    paddingBottom: 2,
+  },
+  statusFilterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 20,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  statusFilterChipAllActive: {
+    backgroundColor: '#1e293b',
+    borderColor: '#1e293b',
+  },
+  statusFilterDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  statusFilterText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  statusFilterTextActive: {
+    color: '#ffffff',
+  },
+  statusFilterCount: {
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 10,
+    backgroundColor: '#e2e8f0',
+  },
+  statusFilterCountActive: {
+    backgroundColor: 'rgba(255,255,255,0.25)',
+  },
+  statusFilterCountText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#475569',
   },
   // Admin event filter bar
   adminFiltersRow: {

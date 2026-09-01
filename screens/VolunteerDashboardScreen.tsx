@@ -417,7 +417,6 @@ export default function VolunteerDashboardScreen() {
           'volunteerProjectJoins',
           'volunteerTimeLogs',
           'adminPlanningCalendars',
-          'adminPlanningItems',
           'programTracks',
         ],
         debounce(() => {

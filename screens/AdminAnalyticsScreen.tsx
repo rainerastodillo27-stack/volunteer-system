@@ -85,6 +85,82 @@ function safeDate(value?: string): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+function getReportMetrics(report: PartnerReport): Record<string, unknown> {
+  const rawMetrics = report.metrics as unknown;
+  if (rawMetrics && typeof rawMetrics === 'object') {
+    return rawMetrics as Record<string, unknown>;
+  }
+
+  if (typeof rawMetrics === 'string') {
+    try {
+      const parsed = JSON.parse(rawMetrics);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : {};
+    } catch {
+      return {};
+    }
+  }
+
+  return {};
+}
+
+function parseBeneficiariesFromNarrative(description: string | undefined): number | undefined {
+  const match = String(description || '').match(
+    /\bbeneficiaries\s+(?:reached|served|assisted)\s*:\s*(\d+(?:\.\d+)?)/i
+  );
+  if (!match) {
+    return undefined;
+  }
+
+  const value = Number(match[1]);
+  return Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function getReportBeneficiariesServed(report: PartnerReport): number {
+  const metrics = getReportMetrics(report);
+  const beneficiaryKeys = [
+    'beneficiariesServed',
+    'beneficiaries_served',
+    'beneficiaries',
+    'beneficiariesAssisted',
+    'beneficiaries_assisted',
+    'beneficiariesReached',
+    'beneficiaries_reached',
+  ];
+
+  for (const key of beneficiaryKeys) {
+    const value = Number(metrics[key]);
+    if (Number.isFinite(value) && value >= 0) {
+      return value;
+    }
+  }
+
+  const narrativeValue = parseBeneficiariesFromNarrative(report.description);
+  if (narrativeValue !== undefined) {
+    return narrativeValue;
+  }
+
+  const impactCount = Number(report.impactCount);
+  return Number.isFinite(impactCount) && impactCount >= 0 ? impactCount : 0;
+}
+
+function hasExplicitBeneficiaryMetric(report: PartnerReport): boolean {
+  const metrics = getReportMetrics(report);
+  return [
+    'beneficiariesServed',
+    'beneficiaries_served',
+    'beneficiaries',
+    'beneficiariesAssisted',
+    'beneficiaries_assisted',
+    'beneficiariesReached',
+    'beneficiaries_reached',
+  ].some(key => {
+    const value = Number(metrics[key]);
+    return Number.isFinite(value) && value >= 0;
+  }) || parseBeneficiariesFromNarrative(report.description) !== undefined;
+}
+
 function startOfMonth(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth(), 1);
 }
@@ -865,9 +941,10 @@ export default function AdminAnalyticsScreen() {
   }, [projects, selectedPartnerId, selectedProgramId]);
 
   const filteredReports = useMemo(() => {
-    if (selectedPartnerId === 'all' && selectedProgramId === 'all') return reports;
+    const activeReports = reports.filter(report => report.status !== 'Rejected');
+    if (selectedPartnerId === 'all' && selectedProgramId === 'all') return activeReports;
     const partnerProjectIds = new Set(filteredProjects.map(p => p.id));
-    return reports.filter(r => partnerProjectIds.has(r.projectId));
+    return activeReports.filter(r => partnerProjectIds.has(r.projectId));
   }, [reports, filteredProjects, selectedPartnerId, selectedProgramId]);
 
   const filteredTimeLogs = useMemo(() => {
@@ -924,12 +1001,47 @@ export default function AdminAnalyticsScreen() {
     const completedProjects = trackedProjects.filter(p => p.status === 'Completed').length;
     const completionPercentage = totalProjects > 0 ? Math.round((completedProjects / totalProjects) * 100) : 0;
     
-    // Calculate total beneficiaries from completed projects
-    const totalBeneficiaries = trackedProjects.reduce((sum, project) => {
-      // Get beneficiaries from project data (impactCount from reports, or 0 if not tracked directly)
-      const beneficiaries = Number((project as any).expectedBeneficiaries || 0);
-      return sum + beneficiaries;
-    }, 0);
+    // Impact reports are the authoritative source for beneficiaries reached.
+    // Keep expectedBeneficiaries as a fallback for legacy project records that
+    // predate the reports workflow.
+    // Volunteer reports are the source for event-level beneficiary counts.
+    // A partner report may contain an auto-generated roll-up of those same
+    // volunteer reports, so prefer volunteer values per project and only use
+    // partner/legacy impact counts when no volunteer value exists.
+    const reportsByProject = new Map<string, PartnerReport[]>();
+    filteredReports.forEach(report => {
+      const projectId = String(report.projectId || '').trim();
+      if (!projectId) return;
+      const existing = reportsByProject.get(projectId) || [];
+      existing.push(report);
+      reportsByProject.set(projectId, existing);
+    });
+
+    let reportedBeneficiaries = 0;
+    let hasReportBeneficiaryData = false;
+    reportsByProject.forEach(projectReports => {
+      const volunteerReports = projectReports.filter(
+        report => report.submitterRole === 'volunteer' && hasExplicitBeneficiaryMetric(report)
+      );
+      const sourceReports = volunteerReports.length
+        ? volunteerReports
+        : projectReports.filter(report => report.submitterRole !== 'volunteer');
+
+      if (sourceReports.length > 0) {
+        hasReportBeneficiaryData = true;
+        reportedBeneficiaries += sourceReports.reduce(
+          (sum, report) => sum + getReportBeneficiariesServed(report),
+          0
+        );
+      }
+    });
+    const legacyBeneficiaries = trackedProjects.reduce(
+      (sum, project) => sum + (Number((project as any).expectedBeneficiaries) || 0),
+      0
+    );
+    const totalBeneficiaries = hasReportBeneficiaryData
+      ? reportedBeneficiaries
+      : legacyBeneficiaries;
     
     return {
       totalProjects,
@@ -938,7 +1050,7 @@ export default function AdminAnalyticsScreen() {
       totalBeneficiaries,
       completedHours,
     };
-  }, [trackedProjects, completedHours]);
+  }, [trackedProjects, filteredReports, completedHours]);
   
   const currentTotal = filteredVolunteers.length;
   const previousTotal = monthPoints[monthPoints.length - 2]?.value || 0;

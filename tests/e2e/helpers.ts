@@ -33,6 +33,10 @@ export const E2E_RECORDS = {
 };
 
 export async function seedE2EData(): Promise<void> {
+  if (process.env.SKIP_E2E_SEED === '1') {
+    return;
+  }
+
   let lastOutput = '';
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     const command = process.platform === 'win32' ? process.env.ComSpec || 'cmd.exe' : 'npm';

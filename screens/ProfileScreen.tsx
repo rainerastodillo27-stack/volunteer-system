@@ -18,6 +18,7 @@ import { Picker } from '@react-native-picker/picker';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import InlineLoadError from '../components/InlineLoadError';
+import LogoutConfirmationModal from '../components/LogoutConfirmationModal';
 import { useAuth } from '../contexts/AuthContext';
 import {
   getAllProjects,
@@ -262,31 +263,11 @@ export default function ProfileScreen() {
     setPhotoTimestamp(Date.now());
   }, [user?.profilePhoto]);
 
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
+
   // Confirms logout before clearing the signed-in session.
   const handleLogout = () => {
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      if (window.confirm('Are you sure you want to logout?')) {
-        logout().catch(() => {
-          window.alert('Failed to logout. Please try again.');
-        });
-      }
-      return;
-    }
-
-    Alert.alert('Logout', 'Are you sure you want to logout?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Logout',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await logout();
-          } catch (error) {
-            Alert.alert('Error', 'Failed to logout. Please try again.');
-          }
-        },
-      },
-    ]);
+    setShowLogoutModal(true);
   };
 
   // Opens the profile editor after refreshing the current draft values.
@@ -1297,6 +1278,12 @@ export default function ProfileScreen() {
         <MaterialIcons name="logout" size={20} color="#ffffff" style={{ marginRight: 8 }} />
         <Text style={styles.logoutButtonText}>Logout</Text>
       </TouchableOpacity>
+
+      <LogoutConfirmationModal
+        visible={showLogoutModal}
+        onClose={() => setShowLogoutModal(false)}
+        onConfirm={logout}
+      />
 
       {/* Edit Profile Modal */}
       <Modal visible={showEditModal} animationType="slide" onRequestClose={handleCancelEdit}>

@@ -43,7 +43,6 @@ MIGRATION_ORDER = [
     "partner_project_applications",
     "status_updates",
     "admin_planning_calendars",
-    "admin_planning_items",
     
     # Hot storage tables (if they exist)
     "hot_users",
@@ -59,7 +58,6 @@ MIGRATION_ORDER = [
     "hot_partner_project_applications",
     "hot_status_updates",
     "hot_admin_planning_calendars",
-    "hot_admin_planning_items",
     
     # Relational mirror tables (if they exist)
     "relational_partners",

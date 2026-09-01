@@ -1,20 +1,26 @@
 try:
     from .db import get_postgres_connection
     from .relational_mirror import TABLE_SPECS
+    from .schema_maintenance import DATA_QUALITY_UNIQUE_INDEX_SPECS, IDENTITY_CONSTRAINT_NAMES
     from .storage_table_contract import (
         CANONICAL_STORAGE_TABLES,
+        DERIVED_TABLES,
         LEGACY_AUXILIARY_TABLES,
         LEGACY_COMPAT_STORAGE_TABLES,
         MESSAGE_STORAGE_TABLES,
+        RUNTIME_SUPPORT_TABLES,
     )
 except ImportError:
     from db import get_postgres_connection
     from relational_mirror import TABLE_SPECS
+    from schema_maintenance import DATA_QUALITY_UNIQUE_INDEX_SPECS, IDENTITY_CONSTRAINT_NAMES
     from storage_table_contract import (
         CANONICAL_STORAGE_TABLES,
+        DERIVED_TABLES,
         LEGACY_AUXILIARY_TABLES,
         LEGACY_COMPAT_STORAGE_TABLES,
         MESSAGE_STORAGE_TABLES,
+        RUNTIME_SUPPORT_TABLES,
     )
 
 
@@ -28,9 +34,24 @@ CANONICAL_TABLES = sorted(
 EXPECTED_SUPPORT_TABLES: set[str] = {
     *LEGACY_COMPAT_STORAGE_TABLES.values(),
     *LEGACY_AUXILIARY_TABLES,
+    *DERIVED_TABLES,
+    *RUNTIME_SUPPORT_TABLES,
 }
 
 EXPECTED_TABLES = set(CANONICAL_TABLES) | EXPECTED_SUPPORT_TABLES
+
+# Columns maintained by dedicated API workflows rather than collection mirror
+# replacement are still part of the supported normalized schema.
+API_MANAGED_COLUMNS = {
+    "reports": {
+        "generated_by",
+        "report_file",
+        "format",
+        "published_at",
+        "download_content",
+        "download_mime_type",
+    },
+}
 
 
 def _expected_columns_by_table() -> dict[str, set[str]]:
@@ -38,6 +59,8 @@ def _expected_columns_by_table() -> dict[str, set[str]]:
     for spec in TABLE_SPECS.values():
         table_name = spec["table"]
         expected_columns.setdefault(table_name, set()).update(column_name for column_name, _ in spec["columns"])
+    for table_name, column_names in API_MANAGED_COLUMNS.items():
+        expected_columns.setdefault(table_name, set()).update(column_names)
     return expected_columns
 
 
@@ -121,6 +144,36 @@ def main() -> None:
             if not found_mismatch:
                 print("none")
 
+            print_section("Identity Enforcement")
+            cursor.execute(
+                """
+                select conname, convalidated
+                from pg_constraint
+                where connamespace = 'public'::regnamespace
+                  and conname = any(%s)
+                order by conname
+                """,
+                (list(IDENTITY_CONSTRAINT_NAMES),),
+            )
+            constraint_state = {name: bool(validated) for name, validated in cursor.fetchall()}
+            for constraint_name in sorted(IDENTITY_CONSTRAINT_NAMES):
+                state = constraint_state.get(constraint_name)
+                print(f"{constraint_name}: {'validated' if state else 'missing/unvalidated'}")
+
+            required_indexes = {spec[1] for spec in DATA_QUALITY_UNIQUE_INDEX_SPECS}
+            cursor.execute(
+                """
+                select indexname
+                from pg_indexes
+                where schemaname = 'public' and indexname = any(%s)
+                order by indexname
+                """,
+                (list(required_indexes),),
+            )
+            existing_indexes = {row[0] for row in cursor.fetchall()}
+            for index_name in sorted(required_indexes):
+                print(f"{index_name}: {'present' if index_name in existing_indexes else 'missing'}")
+
             checks = {
                 "duplicate_user_emails": """
                     select lower(coalesce(email, '')) as value, count(*)
@@ -154,7 +207,7 @@ def main() -> None:
                     select partners_id, contact_phone
                     from partners
                     where contact_phone is not null
-                      and contact_phone !~ '^(09[0-9]{9}|\\+63[0-9]{9,11})$'
+                      and contact_phone !~ '^09[0-9]{9}$'
                     order by partners_id
                 """,
                 "invalid_volunteer_phones": """
@@ -165,10 +218,11 @@ def main() -> None:
                     order by volunteers_id
                 """,
                 "projects_without_partner": """
-                    select count(*)
+                    select p.projects_id, p.title, p.partner_id
                     from projects p
                     left join partners pr on pr.partners_id = p.partner_id
                     where coalesce(p.partner_id, '') <> '' and pr.partners_id is null
+                    order by p.projects_id
                 """,
                 "matches_with_missing_project_or_event": """
                     select count(*)

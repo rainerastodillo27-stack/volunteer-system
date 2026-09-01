@@ -1075,19 +1075,27 @@ function getDateKey(sourceDate: Date): string {
 
 function getReportBeneficiariesServed(report: PartnerReport): number {
 
-  const beneficiariesServed = Number(report.metrics?.beneficiariesServed);
-
-  if (Number.isFinite(beneficiariesServed) && beneficiariesServed > 0) {
-
-    return beneficiariesServed;
-
+  const beneficiaryKeys = [
+    'beneficiariesServed',
+    'beneficiaries_served',
+    'beneficiaries',
+    'beneficiariesAssisted',
+    'beneficiaries_assisted',
+    'beneficiariesReached',
+    'beneficiaries_reached',
+  ];
+  for (const key of beneficiaryKeys) {
+    const value = Number(report.metrics?.[key]);
+    if (Number.isFinite(value) && value >= 0) {
+      return value;
+    }
   }
 
 
 
   const impactCount = Number(report.impactCount);
 
-  return Number.isFinite(impactCount) && impactCount > 0 ? impactCount : 0;
+  return Number.isFinite(impactCount) && impactCount >= 0 ? impactCount : 0;
 
 }
 
@@ -3595,7 +3603,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   const { width } = useWindowDimensions();
 
-  const isDesktop = getPlatformOS() === 'web' || width >= 1100;
+  // Treat narrow web viewports as mobile too.  The previous platform check
+  // marked every browser window as desktop, which made the details grid and
+  // hero actions overflow on the partner/admin mobile layouts.
+  const isDesktop = width >= 1100;
 
   // Confirmation dialog hook
   const { dialogState, showConfirm, handleConfirm, handleCancel } = useConfirmDialog();
@@ -3768,7 +3779,59 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
+  const isApprovedPartnerProposalProject = (
+    parentProject: Project,
+    applications: PartnerProjectApplication[] = allPartnerApplications,
+  ) => {
+    if (isAdmin) {
+      return !parentProject.isEvent;
+    }
+    if (user?.role !== 'partner' || parentProject.isEvent || !user.id) {
+      return false;
+    }
+
+    const currentUserId = String(user.id).trim();
+    return applications.some(application => {
+      if (
+        application.status !== 'Approved' ||
+        String(application.partnerUserId || '').trim() !== currentUserId
+      ) {
+        return false;
+      }
+      const applicationProjectId = String(application.projectId || '').trim();
+      const proposalDetails = (application.proposalDetails || {}) as Record<string, unknown>;
+      const approvedProjectId = String(proposalDetails.approvedProjectId || '').trim();
+      const isProposalApplication =
+        applicationProjectId.startsWith('project-proposal-') ||
+        [
+          'proposedTitle',
+          'proposedDescription',
+          'proposedStartDate',
+          'proposedEndDate',
+          'proposedLocation',
+          'communityNeed',
+          'expectedDeliverables',
+        ].some(field => String(proposalDetails[field] || '').trim().length > 0);
+      if (!isProposalApplication) {
+        return false;
+      }
+      const parentProjectId = String(parentProject.id || '').trim();
+      return applicationProjectId === parentProjectId || approvedProjectId === parentProjectId;
+    });
+  };
+
+  const canCreateEventForProject = (parentProject: Project) =>
+    isApprovedPartnerProposalProject(parentProject);
+
   const startInlineEventCreation = (parentProject: Project) => {
+
+    if (!canCreateEventForProject(parentProject)) {
+      Alert.alert(
+        'Approval Required',
+        'You can create events only under a project approved from your partner proposal.'
+      );
+      return;
+    }
 
     setEditingProjectId(null);
 
@@ -3925,6 +3988,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [activeActionTaskId, setActiveActionTaskId] = useState<string | null>(null);
 
   const [unassignedTaskSelections, setUnassignedTaskSelections] = useState<Record<string, string>>({});
+
+  const [quickAssignLoadingId, setQuickAssignLoadingId] = useState<string | null>(null);
 
   const [selectedProgramProposalModule, setSelectedProgramProposalModule] = useState<ProgramSuiteModule | null>(null);
 
@@ -4585,7 +4650,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         // Keep subscriptions focused on keys that affect the visible UI first.
 
-        ['programs', 'projects', 'events', 'partners', 'statusUpdates', 'partnerProjectApplications', 'partnerReports', 'volunteerProjectJoins', 'volunteerMatches', 'volunteerTimeLogs', 'programTracks', 'adminPlanningCalendars', 'adminPlanningItems'],
+        ['programs', 'projects', 'events', 'partners', 'statusUpdates', 'partnerProjectApplications', 'partnerReports', 'volunteerProjectJoins', 'volunteerMatches', 'volunteerTimeLogs', 'programTracks', 'adminPlanningCalendars'],
 
         event => {
 
@@ -5201,7 +5266,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-      // Persist to backend (program_tracks table)
+      // Persist to the canonical programs table.
 
       await saveProgram(program);
 
@@ -5231,7 +5296,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
             ? `"${program.title}" has been updated and saved to the database.`
 
-            : `"${program.title}" is now live in the dashboard and saved to program_tracks.`
+            : `"${program.title}" is now live in the dashboard and saved to programs.`
 
         );
 
@@ -5359,7 +5424,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     }
 
     shouldRestoreListScrollRef.current = true;
-
+    setShowMoreDropdown(false);
     setSelectedProject(project);
 
     await Promise.all([
@@ -5496,19 +5561,41 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-  const openCreateEventInProgramModal = (trackId: string, trackTitle: string) => {
+  const openCreateEventInProgramModal = async (trackId: string, trackTitle: string) => {
 
-    const parentProjects = projects.filter(
-
-      project => !project.isEvent && (project.program_id === trackId || project.parentProjectId === trackId)
-
+    const getEligibleParentProjects = (applications?: PartnerProjectApplication[]) => projects.filter(
+      project =>
+        !project.isEvent &&
+        (project.program_id === trackId || project.parentProjectId === trackId) &&
+        (isAdmin
+          ? true
+          : isApprovedPartnerProposalProject(project, applications ?? allPartnerApplications))
     );
+
+    let parentProjects = getEligibleParentProjects();
+
+    // Applications are loaded lazily on this screen.  Refresh them before
+    // deciding that a partner has no eligible proposal project.
+    if (!isAdmin && user?.role === 'partner' && parentProjects.length === 0) {
+      try {
+        const applications = await getAllPartnerProjectApplications();
+        setAllPartnerApplications(applications);
+        parentProjects = getEligibleParentProjects(applications);
+      } catch (error) {
+        console.warn('Failed to load partner proposal approvals:', error);
+      }
+    }
 
 
 
     if (parentProjects.length === 0) {
 
-      Alert.alert('No Project Available', `Create a project in ${trackTitle} before adding an event.`);
+      Alert.alert(
+        'No Project Available',
+        isAdmin
+          ? `Create a project in ${trackTitle} before adding an event.`
+          : 'Only projects from your approved partner proposals can have events added.'
+      );
 
       return;
 
@@ -5580,7 +5667,27 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   // Opens the project modal in create-event mode with the selected program prefilled.
 
-  const openCreateEventModal = (parentProject: Project) => {
+  const openCreateEventModal = async (parentProject: Project) => {
+
+    let permitted = canCreateEventForProject(parentProject);
+    if (!permitted && !isAdmin && user?.role === 'partner') {
+      try {
+        // Applications are loaded lazily on this screen. Fetch once more when
+        // a partner opens the form before that deferred load has completed.
+        const applications = await getAllPartnerProjectApplications();
+        setAllPartnerApplications(applications);
+        permitted = isApprovedPartnerProposalProject(parentProject, applications);
+      } catch (error) {
+        console.warn('Failed to verify partner proposal approval:', error);
+      }
+    }
+    if (!permitted) {
+      Alert.alert(
+        'Approval Required',
+        'You can create events only under a project approved from your partner proposal.'
+      );
+      return;
+    }
 
     setEditingProjectId(null);
 
@@ -5934,6 +6041,81 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           console.warn('[TASK] Failed to notify volunteer about task assignment:', notifErr);
         }
       }
+    }
+  };
+
+  const handleQuickAssignVolunteer = async (
+    eventProject: Project,
+    taskId: string,
+    volunteer: Pick<ProjectVolunteerEntry, 'id' | 'userId' | 'name'>,
+  ) => {
+    const loadingKey = `${taskId}:${volunteer.id}`;
+    if (quickAssignLoadingId) {
+      return;
+    }
+
+    setQuickAssignLoadingId(loadingKey);
+    try {
+      const targetTask = (eventProject.internalTasks || []).find(task => task.id === taskId);
+      if (!targetTask) {
+        return;
+      }
+
+      const existingIds = getTaskAssignedVolunteerIds(targetTask, volunteers);
+      const volunteerKeys = [volunteer.id, volunteer.userId].filter(Boolean) as string[];
+      if (volunteerKeys.some(key => existingIds.includes(key))) {
+        return;
+      }
+
+      const updatedTask = {
+        ...targetTask,
+        assignedVolunteerIds: [...existingIds, volunteer.id],
+        assignedVolunteerId: volunteer.id,
+        assignedVolunteerName: volunteer.name,
+        assignedVolunteerNames: [
+          ...getTaskAssignedVolunteerNames(targetTask),
+          volunteer.name,
+        ],
+        status: 'Assigned' as const,
+        updatedAt: new Date().toISOString(),
+      };
+      const updatedTasks = (eventProject.internalTasks || []).map(task =>
+        task.id === targetTask.id ? updatedTask : task
+      );
+      const updatedEvent = {
+        ...eventProject,
+        internalTasks: updatedTasks,
+        updatedAt: new Date().toISOString(),
+      };
+
+      await saveProjectLikeRecord(updatedEvent);
+      setProjects(current => current.map(project =>
+        project.id === eventProject.id ? updatedEvent : project
+      ));
+      const fullVolunteer = volunteers.find(candidate =>
+        candidate.id === volunteer.id || candidate.userId === volunteer.id ||
+        (volunteer.userId && (candidate.id === volunteer.userId || candidate.userId === volunteer.userId))
+      );
+      if (fullVolunteer) {
+        void notifyVolunteerAboutTaskUpdate({
+          event: eventProject,
+          task: updatedTask,
+          volunteer: fullVolunteer,
+          actorUserId: user?.id,
+          action: 'assigned',
+        }).catch(notificationError => {
+          // Assignment is already persisted; a notification failure should not
+          // make the action look unsuccessful or roll back the task update.
+          console.warn('[TASK] Failed to notify volunteer about quick assignment:', notificationError);
+        });
+      }
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to assign volunteer to the task.')
+      );
+    } finally {
+      setQuickAssignLoadingId(null);
     }
   };
 
@@ -7189,7 +7371,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   const handleSaveProjectRecord = async () => {
 
-    if (!isAdmin) {
+    const isPartnerEventCreation =
+      !isAdmin &&
+      user?.role === 'partner' &&
+      projectDraft.isEvent &&
+      !editingProjectId;
+
+    if (!isAdmin && !isPartnerEventCreation) {
 
       Alert.alert('Access Restricted', 'Only admin accounts can manage projects.');
 
@@ -7376,6 +7564,31 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       return;
 
+    }
+
+    if (isPartnerEventCreation) {
+      let approvedForParent = Boolean(
+        resolvedEventParentProject &&
+        isApprovedPartnerProposalProject(resolvedEventParentProject)
+      );
+      if (!approvedForParent) {
+        try {
+          const applications = await getAllPartnerProjectApplications();
+          setAllPartnerApplications(applications);
+          approvedForParent = Boolean(
+            resolvedEventParentProject &&
+            isApprovedPartnerProposalProject(resolvedEventParentProject, applications)
+          );
+        } catch (error) {
+          console.warn('Failed to verify partner proposal approval before event save:', error);
+        }
+      }
+      if (!approvedForParent) {
+        failProjectSaveValidation(
+          'Partners can create events only under a project approved from their proposal.'
+        );
+        return;
+      }
     }
 
 
@@ -10772,11 +10985,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-                        {isAdmin && getProjectDisplayStatus(project) !== 'Completed' && getProjectDisplayStatus(project) !== 'Cancelled' && (
+                        {(isAdmin || canCreateEventForProject(project)) && getProjectDisplayStatus(project) !== 'Completed' && getProjectDisplayStatus(project) !== 'Cancelled' && (
 
                           <View style={{ width: '100%' }}>
 
-                            <View style={styles.eventBoxActions} pointerEvents="box-none">
+                            {isAdmin && (
+                              <View style={styles.eventBoxActions} pointerEvents="box-none">
 
                               <Pressable
 
@@ -10838,7 +11052,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                               </Pressable>
 
-                            </View>
+                              </View>
+                            )}
 
 
 
@@ -11042,7 +11257,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
           </View>
 
-          {isAdmin && (
+          {canCreateEventForProject(project) && (
 
             <TouchableOpacity
 
@@ -11268,7 +11483,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
             </Text>
 
-            {isAdmin && (
+            {canCreateEventForProject(project) && (
 
               <TouchableOpacity
 
@@ -11372,7 +11587,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
             <Text style={{ fontSize: 14, color: '#64748b', marginTop: 8, textAlign: 'center' }}>
 
-              Changes saved to program_tracks successfully.
+              Changes saved to programs successfully.
 
             </Text>
 
@@ -11883,40 +12098,49 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         prev && prev.id === matchId ? { ...prev, ...updatedMatchRecord, status } : prev
       );
 
-      // 2. Fetch fresh matches from storage to ensure total synchronization
-      const allMatches = await getAllVolunteerProjectMatches();
-      if (activeSelectedProject) {
-        const targetTitle = String(activeSelectedProject.title || '').trim().toLowerCase();
-        const projectIds = new Set<string>([
-          String(activeSelectedProject.id || '').trim(),
-          String(activeSelectedProject.parentProjectId || '').trim(),
-        ].filter(Boolean));
-        projects.forEach(candidate => {
-          const candidateTitle = String(candidate.title || '').trim().toLowerCase();
-          if (candidateTitle && candidateTitle === targetTitle) {
-            projectIds.add(String(candidate.id || '').trim());
-            if (candidate.parentProjectId) {
-              projectIds.add(String(candidate.parentProjectId).trim());
+      // The API response is authoritative, so release the button immediately
+      // after the review succeeds.  The previous implementation awaited a
+      // full project/details refresh here, leaving the approval button spinning
+      // while several independent collections reloaded (and making a healthy
+      // approval look stuck).
+      const projectForSync = activeSelectedProject;
+      void (async () => {
+        try {
+          const allMatches = await getAllVolunteerProjectMatches();
+          if (projectForSync) {
+            const targetTitle = String(projectForSync.title || '').trim().toLowerCase();
+            const projectIds = new Set<string>([
+              String(projectForSync.id || '').trim(),
+              String(projectForSync.parentProjectId || '').trim(),
+            ].filter(Boolean));
+            projects.forEach(candidate => {
+              const candidateTitle = String(candidate.title || '').trim().toLowerCase();
+              if (candidateTitle && candidateTitle === targetTitle) {
+                projectIds.add(String(candidate.id || '').trim());
+                if (candidate.parentProjectId) {
+                  projectIds.add(String(candidate.parentProjectId).trim());
+                }
+              }
+            });
+            const freshMatches = allMatches.filter(m => projectIds.has(String(m.projectId || '').trim()));
+            setSelectedEventMatches(freshMatches);
+            const refetchedMatch = freshMatches.find(m => m.id === matchId);
+            if (refetchedMatch) {
+              setSelectedMatch(refetchedMatch);
             }
           }
-        });
-        const freshMatches = allMatches.filter(m => projectIds.has(String(m.projectId || '').trim()));
-        setSelectedEventMatches(freshMatches);
-        const refetchedMatch = freshMatches.find(m => m.id === matchId);
-        if (refetchedMatch) {
-          setSelectedMatch(refetchedMatch);
-        }
-      }
 
-      // 3. Trigger project & volunteer reloads across the screen
-      void loadAllVolunteerMatches();
-      if (activeSelectedProject) {
-        void loadVolunteerMatchesForProject(activeSelectedProject.id);
-        void loadVolunteerJoinsForProject(activeSelectedProject.id);
-      }
-      void loadVolunteers();
-      void loadProjects();
-      await handleRefreshProjectDetails();
+          await Promise.all([
+            loadAllVolunteerMatches(),
+            projectForSync ? loadVolunteerMatchesForProject(projectForSync.id) : Promise.resolve(),
+            projectForSync ? loadVolunteerJoinsForProject(projectForSync.id) : Promise.resolve(),
+            loadVolunteers(),
+            loadProjects(),
+          ]);
+        } catch (syncError) {
+          console.warn('Failed to refresh volunteer application data after review:', syncError);
+        }
+      })();
       setReviewerNotes('');
 
       Alert.alert('Success', `Application successfully ${status === 'Matched' ? 'approved' : 'declined'}!`);
@@ -13376,7 +13600,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     const renderNewEventFormContent = () => {
 
-      const trackProjects = projects.filter(p => !p.isEvent && p.programModule === projectDraft.programModule);
+      const trackProjects = projects.filter(
+        p =>
+          !p.isEvent &&
+          p.programModule === projectDraft.programModule &&
+          canCreateEventForProject(p)
+      );
 
       const activeParentProject = projects.find(p => p.id === projectDraft.parentProjectId);
 
@@ -13537,13 +13766,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
           {/* Two-Column Grid Content */}
 
-          <View style={{ flexDirection: isMobile ? 'column' : 'row', gap: 24 }}>
+              <View style={{ flexDirection: isMobile ? 'column' : 'row', gap: 24 }}>
 
 
 
             {/* Left Column (Event details) */}
 
-            <View style={{ flex: 1.6, gap: 20 }}>
+                <View style={[{ gap: 20 }, isMobile ? { width: '100%', flexGrow: 0, flexShrink: 0 } : { flex: 1.6 }]}>
 
 
 
@@ -13627,7 +13856,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 <View style={{ flexDirection: isMobile ? 'column' : 'row', gap: 20 }}>
 
-                  <View style={{ flex: 1.2 }}>
+                  <View style={[isMobile ? { width: '100%', flexGrow: 0, flexShrink: 0 } : { flex: 1.2 }]}>
 
                     <Text style={{ fontSize: 13, fontWeight: '700', color: '#334155', marginBottom: 6 }}>Parent Project <Text style={{ color: '#ef4444' }}>*</Text></Text>
 
@@ -13728,7 +13957,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-                  <View style={{ flex: 1 }}>
+                  <View style={[isMobile ? { width: '100%', flexGrow: 0, flexShrink: 0 } : { flex: 1 }]}>
 
                     <Text style={{ fontSize: 13, fontWeight: '700', color: '#334155', marginBottom: 6 }}>Event Title <Text style={{ color: '#ef4444' }}>*</Text></Text>
 
@@ -13987,7 +14216,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   {/* Left Sub-Column */}
 
-                  <View style={{ flex: 1.2, gap: 16 }}>
+                  <View style={[{ gap: 16 }, isMobile ? { width: '100%', flexGrow: 0, flexShrink: 0 } : { flex: 1.2 }]}>
 
 
 
@@ -14211,13 +14440,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   {/* Right Sub-Column */}
 
-                  <View style={{ flex: 1.4, gap: 6 }}>
+                  <View style={[{ gap: 6 }, isMobile ? { width: '100%', flexGrow: 0, flexShrink: 0 } : { flex: 1.4 }]}>
 
                     <Text style={{ fontSize: 13, fontWeight: '700', color: '#334155' }}>Description <Text style={{ color: '#ef4444' }}>*</Text></Text>
 
 
 
-                    <View style={{ flex: 1, minHeight: 180, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, overflow: 'hidden' }}>
+                    <View style={[{ minHeight: 180, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, overflow: 'hidden' }, !isMobile && { flex: 1 }]}>
 
                       {/* Toolbar */}
 
@@ -14287,7 +14516,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
             {/* Right Column (Sidebar Cards) */}
 
-            <View style={{ flex: 1, gap: 20 }}>
+                <View style={[{ gap: 20 }, isMobile ? { width: '100%', flexGrow: 0, flexShrink: 0 } : { flex: 1 }]}>
 
 
 
@@ -17485,7 +17714,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-              {isAdmin && (
+              {canCreateEventForProject(project) && (
 
                 activeInlineCreateEventProjectId === project.id ? (
 
@@ -17637,7 +17866,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
 
-              {isAdmin && (
+              {canCreateEventForProject(project) && (
 
                 <TouchableOpacity
 
@@ -20384,65 +20613,40 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                             {hasMatchingTask && (
 
                               <TouchableOpacity
-
-                                onPress={async () => {
-
+                                onPress={() => {
                                   const targetTask = taskCards.find(t => {
-
                                     const needed = Math.max(1, Number((t as any).volunteersNeeded || 1));
-
                                     return getTaskAssignedVolunteerIds(t, volunteers).length < needed;
-
                                   });
-
-                                  if (!targetTask) return;
-
-                                  const existingIds = getTaskAssignedVolunteerIds(targetTask);
-
-                                  const updatedTask = {
-
-                                    ...targetTask,
-
-                                    assignedVolunteerIds: [...existingIds, uv.id],
-
-                                    status: 'Assigned' as const,
-
-                                  };
-
-                                  const updatedTasks = taskCards.map(t => t.id === targetTask.id ? updatedTask : t);
-
-                                  await saveProjectLikeRecord({ ...activeSelectedProject, internalTasks: updatedTasks });
-
-                                  setProjects(current => current.map(p => p.id === activeSelectedProject.id ? { ...activeSelectedProject, internalTasks: updatedTasks } : p));
-
-                                  const uvVolunteer = volunteers.find(v => v.id === uv.id || v.userId === uv.id);
-
-                                  if (uvVolunteer) {
-
-                                    void notifyVolunteerAboutTaskUpdate({
-
-                                      event: activeSelectedProject,
-
-                                      task: updatedTask,
-
-                                      volunteer: uvVolunteer,
-
-                                      actorUserId: user?.id,
-
-                                      action: 'assigned',
-
-                                    });
-
+                                  if (targetTask) {
+                                    void handleQuickAssignVolunteer(activeSelectedProject, targetTask.id, uv);
                                   }
-
                                 }}
-
-                                style={{ backgroundColor: '#f0fdf4', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, borderWidth: 1, borderColor: '#bbf7d0', marginLeft: 4 }}
-
+                                disabled={quickAssignLoadingId !== null}
+                                style={{
+                                  backgroundColor: '#f0fdf4',
+                                  paddingHorizontal: 8,
+                                  paddingVertical: 4,
+                                  minHeight: 28,
+                                  minWidth: 86,
+                                  borderRadius: 6,
+                                  borderWidth: 1,
+                                  borderColor: '#bbf7d0',
+                                  marginLeft: 4,
+                                  flexDirection: 'row',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  opacity: quickAssignLoadingId !== null ? 0.65 : 1,
+                                }}
                               >
-
-                                <Text style={{ fontSize: 11, fontWeight: '700', color: '#166534' }}>Quick Assign</Text>
-
+                                {quickAssignLoadingId && quickAssignLoadingId.endsWith(`:${uv.id}`) ? (
+                                  <>
+                                    <ActivityIndicator size="small" color="#166534" />
+                                    <Text style={{ fontSize: 10, fontWeight: '700', color: '#166534', marginLeft: 4 }}>Assigning...</Text>
+                                  </>
+                                ) : (
+                                  <Text style={{ fontSize: 11, fontWeight: '700', color: '#166534' }}>Quick Assign</Text>
+                                )}
                               </TouchableOpacity>
 
                             )}
@@ -21674,7 +21878,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 {/* Non-event: Create Event button */}
 
-                {!activeSelectedProject.isEvent && isAdmin && !isProjectReadOnly && (
+                {!activeSelectedProject.isEvent && canCreateEventForProject(activeSelectedProject) && !isProjectReadOnly && (
 
                   <TouchableOpacity
 
@@ -21824,7 +22028,18 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       )}
 
-
+                      <TouchableOpacity
+                        onPress={() => {
+                          setShowMoreDropdown(false);
+                          if (navigation) {
+                            navigation.navigate('Reports' as any, { projectId: activeSelectedProject.id });
+                          }
+                        }}
+                        style={premiumDetailsStyles.heroMoreDropdownItem}
+                      >
+                        <MaterialIcons name="description" size={18} color="#166534" style={{ marginRight: 12 }} />
+                        <Text style={{ fontSize: 14, fontWeight: '600', color: '#0f172a' }}>View Reports</Text>
+                      </TouchableOpacity>
 
                     </Pressable>
 
@@ -21860,9 +22075,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 <Text style={[premiumDetailsStyles.cardTitle, { marginBottom: 16 }]}>About This Project</Text>
 
-                <View style={premiumDetailsStyles.aboutContainer}>
+                <View style={[premiumDetailsStyles.aboutContainer, !isDesktop && { flexDirection: 'column', gap: 16 }]}>
 
-                  <Text style={premiumDetailsStyles.aboutText}>{detailsDescription}</Text>
+                  <Text style={[premiumDetailsStyles.aboutText, !isDesktop && { flex: 0, width: '100%' }]}>{detailsDescription}</Text>
 
 
 
@@ -21870,7 +22085,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   {activeSelectedProject.isEvent ? (
 
-                    <View style={premiumDetailsStyles.statsBox}>
+                    <View style={[premiumDetailsStyles.statsBox, !isDesktop && { flex: 0, width: '100%' }]}>
 
                       <View style={premiumDetailsStyles.statCell}>
 
@@ -21944,7 +22159,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   ) : (
 
-                    <View style={premiumDetailsStyles.statsBox}>
+                    <View style={[premiumDetailsStyles.statsBox, !isDesktop && { flex: 0, width: '100%' }]}>
 
                       <View style={premiumDetailsStyles.statCell}>
 
@@ -22436,7 +22651,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-                {!activeSelectedProject.isEvent && !isProjectReadOnly && (
+                {!activeSelectedProject.isEvent && canCreateEventForProject(activeSelectedProject) && !isProjectReadOnly && (
 
                   <TouchableOpacity
 
@@ -23820,7 +24035,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                                         <View style={[styles.projectsTableCell, { flex: 1.2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, position: 'relative', zIndex: activeProjectRowActionId === project.id ? 20 : 1 }]}>
 
-                                          {isAdmin && !project.isEvent && !projectEnded && (
+                                          {canCreateEventForProject(project) && !project.isEvent && !projectEnded && (
 
                                             <TouchableOpacity
 
@@ -36807,6 +37022,8 @@ const premiumDetailsStyles = StyleSheet.create({
 
     alignItems: 'center',
 
+    flexShrink: 1,
+
     gap: 6,
 
     backgroundColor: '#166534',
@@ -36835,6 +37052,8 @@ const premiumDetailsStyles = StyleSheet.create({
 
     alignItems: 'center',
 
+    flexShrink: 1,
+
     gap: 6,
 
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
@@ -36855,6 +37074,8 @@ const premiumDetailsStyles = StyleSheet.create({
     flexDirection: 'row',
 
     alignItems: 'center',
+
+    flexShrink: 1,
 
     gap: 6,
 
@@ -36880,6 +37101,8 @@ const premiumDetailsStyles = StyleSheet.create({
 
     fontWeight: '700',
 
+    flexShrink: 1,
+
   },
   heroMoreMenuWrap: {
     position: 'relative',
@@ -36897,6 +37120,7 @@ const premiumDetailsStyles = StyleSheet.create({
     shadowOffset: { width: 0, height: 6 },
     elevation: 12,
     minWidth: 220,
+    maxWidth: 280,
     zIndex: 9999,
     borderWidth: 1,
     borderColor: '#e2e8f0',

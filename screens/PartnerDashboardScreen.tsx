@@ -44,6 +44,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import InlineLoadError from '../components/InlineLoadError';
 
 import ProjectTimelineCalendarCard from '../components/ProjectTimelineCalendarCard';
+import LogoutConfirmationModal from '../components/LogoutConfirmationModal';
 import {
   assertGoogleCalendarAccountMatchesUser,
   getGoogleAuthConfig,
@@ -463,6 +464,7 @@ function parseDateValue(value: string): Date | null {
 export default function PartnerDashboardScreen({ navigation, route }: any) {
 
   const { user, logout } = useAuth();
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
   const { width: viewportWidth } = useWindowDimensions();
   const isCompactCalendarHeader = viewportWidth < 420;
 
@@ -1506,18 +1508,8 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
 
 
-  const handleLogout = async () => {
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      if (window.confirm('Are you sure you want to logout?')) {
-        await logout();
-      }
-      return;
-    }
-
-    Alert.alert('Logout', 'Are you sure you want to logout?', [
-      { text: 'Cancel' },
-      { text: 'Logout', onPress: async () => await logout() },
-    ]);
+  const handleLogout = () => {
+    setShowLogoutModal(true);
   };
 
 
@@ -2741,6 +2733,12 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
         </View>
 
       </Modal>
+
+      <LogoutConfirmationModal
+        visible={showLogoutModal}
+        onClose={() => setShowLogoutModal(false)}
+        onConfirm={logout}
+      />
 
     </View>
 

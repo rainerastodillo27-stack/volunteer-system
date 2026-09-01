@@ -630,7 +630,7 @@ export default function AdminNavigator() {
     <Tab.Navigator
       tabBar={isWeb ? props => <SidebarCapture {...props} onPropsChange={(p, s) => { setTabBarProps(p); setTabBarSignature(s); }} /> : undefined}
       screenOptions={({ route }) => ({
-        headerShown: !isWeb,
+        headerShown: !isWeb && route.name !== 'Messages',
         header: ({ options, navigation }) => (
           <ScreenBrandHeader
             title={options.title || route.name}
