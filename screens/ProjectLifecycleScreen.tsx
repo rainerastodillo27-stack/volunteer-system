@@ -22717,28 +22717,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   onPress={() => {
                     if (navigation) {
-                      navigation.navigate('Volunteers' as any, { projectId: activeSelectedProject.id });
-                    } else {
-                      Alert.alert('Invite Volunteers', 'Navigate to the Volunteers section to manage and invite volunteers for this project.');
-                    }
-                  }}
-
-                >
-
-                  <MaterialIcons name="person-add" size={16} color="#475569" />
-
-                  <Text style={premiumDetailsStyles.actionBtnOutlineText}>Invite Volunteers</Text>
-
-                </TouchableOpacity>
-
-
-
-                <TouchableOpacity
-
-                  style={premiumDetailsStyles.actionBtnOutline}
-
-                  onPress={() => {
-                    if (navigation) {
                       navigation.navigate('Reports' as any, { projectId: activeSelectedProject.id });
                     } else {
                       Alert.alert('View Reports', 'Navigate to the Reports section to view and review submitted reports for this project.');

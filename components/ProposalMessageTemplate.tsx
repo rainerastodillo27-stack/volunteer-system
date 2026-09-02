@@ -9,11 +9,13 @@ interface Props {
   onSubmit?: (app: PartnerProjectApplication) => void;
   onApprove?: (app: PartnerProjectApplication) => void;
   onReject?: (app: PartnerProjectApplication) => void;
-  onOpenAttachment?: (url: string) => void;
+  onOpenAttachment?: (url: string, type?: 'image' | 'document') => void;
   onViewProjects?: (app: PartnerProjectApplication) => void;
   isAdmin?: boolean;
   isOwner?: boolean;
   isSubmitting?: boolean;
+  statusOverride?: PartnerProjectApplication['status'];
+  reviewActionsDisabled?: boolean;
 }
 
 function formatDate(value?: string) {
@@ -30,6 +32,7 @@ function formatDate(value?: string) {
 
 function getFileName(url: string, fallback: string) {
   if (!url) return fallback;
+  if (url.startsWith('data:')) return fallback;
   try {
     const clean = url.split('?')[0];
     const parts = clean.split('/');
@@ -38,6 +41,21 @@ function getFileName(url: string, fallback: string) {
   } catch {
     return fallback;
   }
+}
+
+function formatAttachmentSize(bytes: number): string {
+  if (!bytes || bytes < 1024) return bytes ? `${bytes} B` : '';
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function getAttachmentSize(url: string): string {
+  if (!url.startsWith('data:')) return '';
+  const separatorIndex = url.indexOf(',');
+  if (separatorIndex < 0) return '';
+  const payload = url.slice(separatorIndex + 1).replace(/\s/g, '');
+  const padding = payload.endsWith('==') ? 2 : payload.endsWith('=') ? 1 : 0;
+  return formatAttachmentSize(Math.max(0, Math.floor((payload.length * 3) / 4) - padding));
 }
 
 function truncateFileName(fileName: string, maxLength: number = 22): string {
@@ -52,7 +70,7 @@ function truncateFileName(fileName: string, maxLength: number = 22): string {
   return `${fileName.slice(0, maxLength - 3)}...`;
 }
 
-export default function ProposalMessageTemplate({ application, onEdit, onSubmit, onApprove, onReject, onOpenAttachment, onViewProjects, isAdmin, isOwner, isSubmitting }: Props) {
+export default function ProposalMessageTemplate({ application, onEdit, onSubmit, onApprove, onReject, onOpenAttachment, onViewProjects, isAdmin, isOwner, isSubmitting, statusOverride, reviewActionsDisabled }: Props) {
   const { width } = useWindowDimensions();
   const isMobile = width < 520;
   const d: any = (application as any).proposalDetails || {};
@@ -60,14 +78,11 @@ export default function ProposalMessageTemplate({ application, onEdit, onSubmit,
   const title = d.proposedTitle || 'Untitled Proposal';
   const description = d.proposedDescription || 'No description provided.';
   const targetLocation = d.proposedLocation || 'Location not provided';
-  let cityValue = String((d as any).cityMunicipality || d.proposedLocation || 'Not provided');
-  if (d.proposedLocation && String(d.proposedLocation).includes(',')) {
+  const explicitCity = String((d as any).cityMunicipality || '').trim();
+  let cityValue = explicitCity || String(d.proposedLocation || 'Not provided');
+  if (!explicitCity && d.proposedLocation && String(d.proposedLocation).includes(',')) {
     const parts = String(d.proposedLocation).split(',');
-    cityValue = parts[parts.length - 1].trim() || cityValue;
-  } else if ((d as any).cityMunicipality) {
-    cityValue = (d as any).cityMunicipality;
-  } else if (d.proposedLocation && d.proposedLocation !== targetLocation) {
-    cityValue = d.proposedLocation;
+    cityValue = parts[Math.max(0, parts.length - 2)].trim() || cityValue;
   }
 
   const startDate = formatDate(d.proposedStartDate || 'TBD');
@@ -82,41 +97,45 @@ export default function ProposalMessageTemplate({ application, onEdit, onSubmit,
 
   const photoName = photoUrl ? getFileName(photoUrl, 'Proposal photo') : 'No photo attached';
   const docName = docUrl ? getFileName(docUrl, 'Proposal document') : 'No document attached';
+  const photoSize = getAttachmentSize(photoUrl);
+  const docSize = getAttachmentSize(docUrl);
 
-  // Status badge: DRAFT for Pending, else Approved/Rejected/Submitted
+  // The card can be an older submission snapshot while the live application has
+  // already been reviewed. Use the live status for the badge without replacing
+  // the snapshot's project details.
   const rawStatus = (application.status || 'Pending').toLowerCase();
+  const visibleStatus = String(statusOverride || application.status || 'Pending').toLowerCase();
   let badgeText = 'DRAFT';
   let badgeBg = '#EDE9FE';
   let badgeColor = '#7C3AED';
-  if (rawStatus === 'approved') {
+  if (visibleStatus === 'approved') {
     badgeText = 'Approved';
     badgeBg = '#DCFCE7';
     badgeColor = '#166534';
-  } else if (rawStatus === 'rejected') {
+  } else if (visibleStatus === 'rejected') {
     badgeText = 'Rejected';
     badgeBg = '#FEE2E2';
     badgeColor = '#DC2626';
-  } else if (rawStatus === 'submitted') {
+  } else if (visibleStatus === 'submitted') {
     badgeText = 'SUBMITTED';
     badgeBg = '#DBEAFE';
     badgeColor = '#1D4ED8';
-  } else if (rawStatus === 'pending') {
+  } else if (visibleStatus === 'pending') {
     badgeText = 'PENDING REVIEW';
     badgeBg = '#FEF3C7';
     badgeColor = '#B45309';
   }
 
-  const handleOpen = (url: string) => {
+  const handleOpen = (url: string, type?: 'image' | 'document') => {
     if (!url) {
       Alert.alert('No file', 'No attachment available.');
       return;
     }
-    if (onOpenAttachment) return onOpenAttachment(url);
+    if (onOpenAttachment) return onOpenAttachment(url, type);
     Linking.openURL(url).catch(() => Alert.alert('Unable to open attachment'));
   };
 
   const isDraft = rawStatus === 'draft' || rawStatus === 'proposed' || !application.status;
-
   if (rawStatus === 'approved') {
     return (
       <View style={styles.approvedCardContainer}>
@@ -175,6 +194,14 @@ export default function ProposalMessageTemplate({ application, onEdit, onSubmit,
 
   const isRevisionRequested = rawStatus === 'revision requested' || rawStatus === 'needs revision' || rawStatus === 'revision';
   const isResubmitted = rawStatus === 'resubmitted';
+  const canEdit = Boolean(onEdit) && (
+    !reviewActionsDisabled && (
+      (isAdmin && rawStatus === 'pending') ||
+      (!isAdmin && (isOwner || rawStatus === 'rejected' || visibleStatus === 'rejected') && (
+        isRevisionRequested || rawStatus === 'rejected' || isDraft || visibleStatus === 'rejected'
+      ))
+    )
+  );
 
   if (isRevisionRequested) {
     const revisionFeedback = (d as any).reviewNote || application.reviewNotes || 'Please review and update the proposal details based on admin feedback.';
@@ -224,14 +251,16 @@ export default function ProposalMessageTemplate({ application, onEdit, onSubmit,
         </View>
 
         {/* Edit & Resubmit Action */}
-        <TouchableOpacity
-          style={[styles.viewProjectsButton, { backgroundColor: '#d97706' }]}
-          onPress={() => onEdit?.(application)}
-          activeOpacity={0.85}
-        >
-          <MaterialIcons name="edit" size={16} color="#ffffff" style={{ marginRight: 6 }} />
-          <Text style={styles.viewProjectsButtonText}>Edit & Resubmit Proposal</Text>
-        </TouchableOpacity>
+        {canEdit ? (
+          <TouchableOpacity
+            style={[styles.viewProjectsButton, { backgroundColor: '#d97706' }]}
+            onPress={() => onEdit?.(application)}
+            activeOpacity={0.85}
+          >
+            <MaterialIcons name="edit" size={16} color="#ffffff" style={{ marginRight: 6 }} />
+            <Text style={styles.viewProjectsButtonText}>Edit & Resubmit Proposal</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
     );
   }
@@ -273,14 +302,16 @@ export default function ProposalMessageTemplate({ application, onEdit, onSubmit,
           </View>
         </View>
 
-        <TouchableOpacity
-          style={[styles.viewProjectsButton, { backgroundColor: '#2563eb' }]}
-          onPress={() => onEdit?.(application)}
-          activeOpacity={0.85}
-        >
-          <MaterialIcons name="edit" size={16} color="#ffffff" style={{ marginRight: 6 }} />
-          <Text style={styles.viewProjectsButtonText}>Edit Proposal</Text>
-        </TouchableOpacity>
+        {canEdit ? (
+          <TouchableOpacity
+            style={[styles.viewProjectsButton, { backgroundColor: '#2563eb' }]}
+            onPress={() => onEdit?.(application)}
+            activeOpacity={0.85}
+          >
+            <MaterialIcons name="edit" size={16} color="#ffffff" style={{ marginRight: 6 }} />
+            <Text style={styles.viewProjectsButtonText}>Edit Proposal</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
     );
   }
@@ -333,14 +364,16 @@ export default function ProposalMessageTemplate({ application, onEdit, onSubmit,
         </View>
 
         {/* Edit & Resubmit Action */}
-        <TouchableOpacity
-          style={[styles.viewProjectsButton, { backgroundColor: '#dc2626' }]}
-          onPress={() => onEdit?.(application)}
-          activeOpacity={0.85}
-        >
-          <MaterialIcons name="edit" size={16} color="#ffffff" style={{ marginRight: 6 }} />
-          <Text style={styles.viewProjectsButtonText}>Edit & Resubmit Proposal</Text>
-        </TouchableOpacity>
+        {canEdit ? (
+          <TouchableOpacity
+            style={[styles.viewProjectsButton, { backgroundColor: '#dc2626' }]}
+            onPress={() => onEdit?.(application)}
+            activeOpacity={0.85}
+          >
+            <MaterialIcons name="edit" size={16} color="#ffffff" style={{ marginRight: 6 }} />
+            <Text style={styles.viewProjectsButtonText}>Edit & Resubmit Proposal</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
     );
   }
@@ -443,11 +476,15 @@ export default function ProposalMessageTemplate({ application, onEdit, onSubmit,
               <Text style={styles.attachName} numberOfLines={1} ellipsizeMode="middle">
                 {truncateFileName(photoName, 20)}
               </Text>
-              <Text style={styles.attachSize}>1.2 MB</Text>
+              <Text style={styles.attachSize}>
+                {photoUrl ? photoSize || 'Photo attachment' : 'No photo attached'}
+              </Text>
             </View>
-            <TouchableOpacity onPress={() => handleOpen(photoUrl)} style={styles.downloadBtn}>
-              <MaterialIcons name="file-download" size={18} color="#64748B" />
-            </TouchableOpacity>
+            {photoUrl ? (
+              <TouchableOpacity onPress={() => handleOpen(photoUrl, 'image')} style={styles.downloadBtn}>
+                <MaterialIcons name="visibility" size={18} color="#64748B" />
+              </TouchableOpacity>
+            ) : null}
           </View>
         </View>
 
@@ -461,39 +498,51 @@ export default function ProposalMessageTemplate({ application, onEdit, onSubmit,
               <Text style={styles.attachName} numberOfLines={1} ellipsizeMode="middle">
                 {truncateFileName(docName, 20)}
               </Text>
-              <Text style={styles.attachSize}>2.6 MB</Text>
+              <Text style={styles.attachSize}>{docUrl ? docSize || 'Document attachment' : 'No document attached'}</Text>
             </View>
-            <TouchableOpacity onPress={() => handleOpen(docUrl)} style={styles.downloadBtn}>
-              <MaterialIcons name="file-download" size={18} color="#64748B" />
-            </TouchableOpacity>
+            {docUrl ? (
+              <TouchableOpacity onPress={() => handleOpen(docUrl, 'document')} style={styles.downloadBtn}>
+                <MaterialIcons name="visibility" size={18} color="#64748B" />
+              </TouchableOpacity>
+            ) : null}
           </View>
         </View>
       </View>
 
       {/* Footer */}
       <View style={styles.footer}>
-        <TouchableOpacity
-          style={styles.editBtn}
-          onPress={() => onEdit?.(application)}
-          activeOpacity={0.85}
-        >
-          <Text style={styles.editText}>Edit</Text>
-        </TouchableOpacity>
+        {canEdit ? (
+          <TouchableOpacity
+            style={styles.editBtn}
+            onPress={() => onEdit?.(application)}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.editText}>
+              {visibleStatus === 'rejected' && !isAdmin ? 'Edit & Resubmit' : 'Edit'}
+            </Text>
+          </TouchableOpacity>
+        ) : !isAdmin && rawStatus === 'pending' ? (
+          <View style={styles.waitingStatus}>
+            <MaterialIcons name="schedule" size={15} color="#B45309" />
+            <Text style={styles.waitingStatusText}>Waiting for admin review</Text>
+          </View>
+        ) : <View />}
 
         {isAdmin && application.status === 'Pending' ? (
           <View style={{ flexDirection: 'row', gap: 8 }}>
             <TouchableOpacity
-              style={[styles.submitBtn, { backgroundColor: '#fff', borderWidth: 1, borderColor: '#E2E8F0' }]}
-              onPress={() => onReject?.(application)}
+              style={[styles.submitBtn, { backgroundColor: '#fff', borderWidth: 1, borderColor: '#E2E8F0' }, reviewActionsDisabled && styles.disabledAction]}
+              onPress={() => !reviewActionsDisabled && onReject?.(application)}
               activeOpacity={0.85}
+              disabled={Boolean(reviewActionsDisabled) || isSubmitting}
             >
               <Text style={[styles.submitText, { color: '#64748B' }]}>Reject</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.submitBtn, { backgroundColor: '#16A34A', opacity: isSubmitting ? 0.7 : 1 }]}
-              onPress={() => !isSubmitting && onApprove?.(application)}
+              style={[styles.submitBtn, { backgroundColor: '#16A34A', opacity: isSubmitting ? 0.7 : 1 }, reviewActionsDisabled && styles.disabledAction]}
+              onPress={() => !isSubmitting && !reviewActionsDisabled && onApprove?.(application)}
               activeOpacity={0.85}
-              disabled={isSubmitting}
+              disabled={isSubmitting || Boolean(reviewActionsDisabled)}
             >
               {isSubmitting ? (
                 <ActivityIndicator size="small" color="#fff" style={{ marginRight: 6 }} />
@@ -686,6 +735,20 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     gap: 12,
   },
+  waitingStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#FEF3C7',
+  },
+  waitingStatusText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#B45309',
+  },
   editBtn: {
     backgroundColor: '#E9ECEF',
     paddingHorizontal: 18,
@@ -707,6 +770,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: 8,
+  },
+  disabledAction: {
+    opacity: 0.45,
   },
   submitText: {
     fontSize: 13,

@@ -177,34 +177,25 @@ export default function PartnerProgramManagementScreen() {
     [programs]
   );
 
-  const availableProjects = useMemo(
+  const availablePrograms = useMemo(
     () =>
-      allProjects
-        .filter(project => {
-          const id = String(project.id || '').trim().toLowerCase();
-          // Exclude events, top-level programs, and any project whose ID is already a program
-          if (project.isEvent) return false;
-          if (TOP_LEVEL_PROGRAM_IDS.has(id)) return false;
-          if (programIds.has(String(project.id || '').trim())) return false;
-          return true;
-        })
+      programs
+        .filter(program => !program.isEvent && !program.parentProjectId)
         .sort((left, right) =>
           new Date(right.updatedAt || right.createdAt || 0).getTime() -
           new Date(left.updatedAt || left.createdAt || 0).getTime()
         ),
-    [allProjects, programIds]
+    [programs]
   );
 
-  const filteredProjects = useMemo(() => {
+  const filteredPrograms = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
-    return availableProjects.filter(project => {
-      const module = getProgramModule(project);
-      if (selectedCategoryTab !== 'All' && module !== selectedCategoryTab) return false;
+    return availablePrograms.filter(program => {
       if (!query) return true;
-      return [project.title, project.description, project.location?.address, ...(project.skillsNeeded || [])]
+      return [program.title, program.description, program.location?.address]
         .some(value => String(value || '').toLowerCase().includes(query));
     });
-  }, [availableProjects, searchQuery, selectedCategoryTab]);
+  }, [availablePrograms, searchQuery]);
 
   const approvedProposalProjects = useMemo(
     () =>
@@ -239,13 +230,13 @@ export default function PartnerProgramManagementScreen() {
     });
   };
 
-  const handleOpenProjectProposal = (project: Project) => {
-    const module = getProgramModule(project) || '';
+  const handleOpenProjectProposal = (program: Project) => {
+    const module = getProgramModule(program) || program.title || program.id;
     setDetailModalProject(null);
     navigation.navigate('Messages', {
       newProposalModule: module,
-      newProposalProjectId: project.id,
-      newProposalTitle: project.title,
+      newProposalProjectId: program.id,
+      newProposalTitle: program.title,
     });
   };
 
@@ -272,16 +263,16 @@ export default function PartnerProgramManagementScreen() {
         </View>
         <Text style={styles.heroTitle}>NVC Program Management</Text>
         <Text style={styles.heroSubtitle}>
-          Explore active projects, review requirements, and submit a proposal using your existing messaging workflow.
+          Browse NVC programs, review their goals, and submit a project proposal to partner with us.
         </Text>
       </View>
 
       <View style={styles.sectionHeaderRow}>
         <View>
-          <Text style={styles.availableProgramHeader}>Available Projects</Text>
-          <Text style={styles.sectionSubtitle}>Projects currently available for partner collaboration.</Text>
+          <Text style={styles.availableProgramHeader}>Available Programs</Text>
+          <Text style={styles.sectionSubtitle}>NVC programs open for partner project proposals.</Text>
         </View>
-        <Text style={styles.projectCountText}>{availableProjects.length}</Text>
+        <Text style={styles.projectCountText}>{availablePrograms.length}</Text>
       </View>
 
       <View style={styles.filterBar}>
@@ -289,7 +280,7 @@ export default function PartnerProgramManagementScreen() {
           <MaterialIcons name="search" size={18} color="#94a3b8" />
           <TextInput
             style={styles.searchInput}
-            placeholder="Search projects by name, location, or skill..."
+            placeholder="Search programs by name or description..."
             placeholderTextColor="#94a3b8"
             value={searchQuery}
             onChangeText={setSearchQuery}
@@ -302,86 +293,63 @@ export default function PartnerProgramManagementScreen() {
         </View>
       </View>
 
-      {availableProjects.length > 0 ? (
-        filteredProjects.length > 0 ? (
-          <View style={styles.projectsGrid}>
-            {filteredProjects.map(project => {
-              const module = getProgramModule(project) || '';
-              const accent = getProgramAccent(module);
-              const imageSource = getPrimaryProjectImageSource(project);
-              return (
-                <View key={project.id} style={[styles.projectCard, isDesktop && styles.projectCardDesktop]}>
-                  <View style={[styles.cardHeaderWrap, { backgroundColor: accent }]}>
-                    {imageSource ? <Image source={imageSource} style={styles.cardHeaderImage} resizeMode="cover" /> : null}
-                    {!imageSource ? <MaterialIcons name={getProgramIcon(module)} size={46} color="#ffffff" /> : null}
-                    <View style={styles.cardHeaderOverlay}>
-                      <View style={[styles.projectStatusBadge, { backgroundColor: getProjectStatusColor(project) }]}>
-                        <Text style={styles.projectStatusText}>{getProjectDisplayStatus(project)}</Text>
-                      </View>
+      {availablePrograms.length === 0 ? (
+        <View style={styles.emptyCard}>
+          <MaterialIcons name="folder-open" size={36} color="#cbd5e1" />
+          <Text style={styles.emptyText}>No programs available yet.</Text>
+        </View>
+      ) : filteredPrograms.length === 0 ? (
+        <View style={styles.emptyCard}>
+          <MaterialIcons name="search-off" size={36} color="#cbd5e1" />
+          <Text style={styles.emptyText}>No programs match your search.</Text>
+        </View>
+      ) : (
+        <View style={styles.projectsGrid}>
+          {filteredPrograms.map(program => {
+            const accent = program.color || '#166534';
+            const imageSource = getPrimaryProjectImageSource(program);
+            const hasApplied = partnerApplications.some(
+              app => app.projectId === program.id || app.proposalDetails?.requestedProgramModule === program.id
+            );
+            return (
+              <View key={program.id} style={[styles.projectCard, isDesktop && styles.projectCardDesktop]}>
+                <View style={[styles.cardHeaderWrap, { backgroundColor: accent }]}>
+                  {imageSource ? <Image source={imageSource} style={styles.cardHeaderImage} resizeMode="cover" /> : null}
+                  {!imageSource ? <MaterialIcons name="assignment" size={46} color="#ffffff" /> : null}
+                  <View style={styles.cardHeaderOverlay}>
+                    <View style={[styles.projectStatusBadge, { backgroundColor: '#166534' }]}>
+                      <Text style={styles.projectStatusText}>OPEN</Text>
                     </View>
                   </View>
-                  <View style={styles.cardBody}>
-                    <Text style={styles.projectCardTitle} numberOfLines={2}>{project.title}</Text>
-                    <Text style={styles.projectCardDescription} numberOfLines={3}>{project.description || 'No project description provided.'}</Text>
-                    <View style={styles.cardMetaBox}>
+                </View>
+                <View style={styles.cardBody}>
+                  <Text style={styles.projectCardTitle} numberOfLines={2}>{program.title}</Text>
+                  <Text style={styles.projectCardDescription} numberOfLines={3}>{program.description || 'No description provided.'}</Text>
+                  <View style={styles.cardMetaBox}>
+                    {program.location?.address ? (
                       <View style={styles.metaRow}>
                         <MaterialIcons name="place" size={14} color="#64748b" />
-                        <Text style={styles.metaText} numberOfLines={1}>{project.location?.address || 'Location not provided'}</Text>
+                        <Text style={styles.metaText} numberOfLines={1}>{program.location.address}</Text>
                       </View>
-                      {/* volunteers requested row removed */}
-                      {project.skillsNeeded?.length ? (
-                        <View style={styles.metaRow}>
-                          <MaterialIcons name="psychology" size={14} color="#64748b" />
-                          <Text style={styles.metaText} numberOfLines={1}>{project.skillsNeeded.join(', ')}</Text>
-                        </View>
-                      ) : null}
-                    </View>
-                    <View style={styles.cardActionRow}>
-                      <TouchableOpacity style={styles.detailsButton} onPress={() => setDetailModalProject(project)}>
-                        <Text style={styles.detailsButtonText}>Learn More</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity style={[styles.proposalButton, { backgroundColor: accent }]} onPress={() => handleOpenProjectProposal(project)}>
-                        <MaterialIcons name="edit-note" size={16} color="#ffffff" />
-                        <Text style={styles.proposalButtonText}>Submit Proposal</Text>
-                      </TouchableOpacity>
-                    </View>
+                    ) : null}
+                  </View>
+                  <View style={styles.cardActionRow}>
+                    <TouchableOpacity style={styles.detailsButton} onPress={() => setDetailModalProject(program)}>
+                      <Text style={styles.detailsButtonText}>Learn More</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.proposalButton, { backgroundColor: hasApplied ? '#94a3b8' : accent }]}
+                      onPress={() => handleOpenProjectProposal(program)}
+                    >
+                      <MaterialIcons name="edit-note" size={16} color="#ffffff" />
+                      <Text style={styles.proposalButtonText}>{hasApplied ? 'Submit Another' : 'Submit Proposal'}</Text>
+                    </TouchableOpacity>
                   </View>
                 </View>
-              );
-            })}
-          </View>
-        ) : (
-          <View style={styles.emptyCard}>
-            <MaterialIcons name="folder-open" size={36} color="#cbd5e1" />
-            <Text style={styles.emptyText}>No projects match the selected filters.</Text>
-          </View>
-        )
-      ) : (
-        <>
-          {programCards.length === 0 ? (
-            <View style={styles.emptyCard}><Text style={styles.emptyText}>No programs available yet.</Text></View>
-          ) : null}
-          {programCards.map(card => {
-            const application = applicationByModule.get(card.module);
-            const buttonLabel = application ? 'Submit Another Proposal' : 'Submit Project Proposal';
-            return (
-              <View key={card.id} style={[styles.programCard, { borderColor: `${card.accent}66` }]}>
-                <View style={styles.programHeader}>
-                  <View style={[styles.iconBadge, { backgroundColor: card.accent }]}>
-                    <MaterialIcons name={card.icon} size={20} color="#fff" />
-                  </View>
-                  <View style={styles.programCopy}>
-                    <Text style={styles.programTitle}>{card.title}</Text>
-                    <Text style={styles.programDescription}>{card.description}</Text>
-                  </View>
-                </View>
-                <TouchableOpacity style={styles.primaryButton} onPress={() => handleOpenProposal(card)}>
-                  <Text style={styles.primaryButtonText}>{buttonLabel}</Text>
-                </TouchableOpacity>
               </View>
             );
           })}
-        </>
+        </View>
       )}
 
       {allProjects.length > 0 ? (

@@ -2076,7 +2076,7 @@ export async function getAllProgramTracks(): Promise<ProgramTrack[]> {
   // Programs are now stored ONLY in the programs table.
   // Always fetch fresh from the network so deleted programs are never returned
   // from a stale in-memory or localStorage cache.
-  invalidateSharedStorageCache([STORAGE_KEYS.PROGRAMS]);
+  // invalidateSharedStorageCache([STORAGE_KEYS.PROGRAMS]);
   const allPrograms = (await getStorageItem<Project[]>(STORAGE_KEYS.PROGRAMS)) || [];
 
   // Convert top-level programs to ProgramTrack format
@@ -5165,6 +5165,34 @@ export async function submitPartnerProgramProposal(
 
   await updatePartnerProjectApplicationCache(payload.application);
 
+  return payload.application;
+}
+
+// Saves administrator edits to a pending partner proposal without resubmitting it.
+export async function updatePartnerProjectApplicationDetails(
+  applicationId: string,
+  updatedBy: string,
+  proposalDetails: PartnerProjectProposalDetails,
+): Promise<PartnerProjectApplication> {
+  const payload = await requestApiJson<{ application?: PartnerProjectApplication | null }>(
+    `/partner-project-applications/${encodeURIComponent(applicationId)}/details`,
+    {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        updatedBy,
+        proposalDetails,
+      }),
+    }
+  );
+
+  if (!payload.application) {
+    throw new Error('Proposal changes were not saved.');
+  }
+
+  await updatePartnerProjectApplicationCache(payload.application);
   return payload.application;
 }
 

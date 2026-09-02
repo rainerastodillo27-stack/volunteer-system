@@ -87,6 +87,7 @@ import {
   subscribeToStorageChanges,
 
   submitPartnerProgramProposal,
+  updatePartnerProjectApplicationDetails,
 
   reviewPartnerProjectApplication,
 
@@ -507,6 +508,7 @@ type ProposalFormState = {
   expectedDeliverables: string;
 
   photoAttachment?: string;
+  documentAttachment?: string;
 
 };
 
@@ -520,6 +522,7 @@ const createEmptyProposalForm = (title = ''): ProposalFormState => ({
   communityNeed: '',
   expectedDeliverables: '',
   photoAttachment: '',
+  documentAttachment: '',
 });
 
 
@@ -646,6 +649,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   const [proposalIntent, setProposalIntent] = useState<{ module?: string; projectId?: string; title?: string } | null>(null);
 
   const [proposalRevisionMode, setProposalRevisionMode] = useState(false);
+  const [proposalAdminEditMode, setProposalAdminEditMode] = useState(false);
+  const [editingProposalApplicationId, setEditingProposalApplicationId] = useState<string | null>(null);
 
 
 
@@ -693,6 +698,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
 
   const scrollRef = useRef<ScrollView>(null);
+
+  const proposalComposerScrollRef = useRef<ScrollView>(null);
 
   const selectedUserRef = useRef<User | null>(null);
 
@@ -1597,6 +1604,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       });
       setProposalRevisionMode(false);
+      setProposalAdminEditMode(false);
+      setEditingProposalApplicationId(null);
 
       setProposalForm(f => ({ ...f, proposedTitle: newProposalTitle || '' }));
 
@@ -1634,13 +1643,31 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   useEffect(() => {
 
-    if (scrollRef.current) {
+    // Do not let message refreshes move the proposal editor while a partner or
+    // admin is entering details. The editor has its own scroll position.
+    if (proposalIntent) return;
 
-      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
+    const timer = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
 
-    }
+    return () => clearTimeout(timer);
 
-  }, [messages]);
+  }, [messages, proposalIntent]);
+
+
+
+  useEffect(() => {
+
+    if (!proposalIntent) return;
+
+    // Opening an editor should always start at the beginning of the form,
+    // even when the previous conversation scroll view was at the bottom.
+    const timer = setTimeout(() => {
+      proposalComposerScrollRef.current?.scrollTo({ y: 0, animated: false });
+    }, 0);
+
+    return () => clearTimeout(timer);
+
+  }, [proposalIntent, proposalRevisionMode, proposalAdminEditMode]);
 
 
 
@@ -1700,9 +1727,32 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     setProposalForm(current => ({ ...current, photoAttachment: '' }));
   };
 
+  const handlePickProposalDocument = async () => {
+    try {
+      const pickedDocument = await pickDocumentFromDevice();
+      if (!pickedDocument) {
+        return;
+      }
+      setProposalForm(current => ({ ...current, documentAttachment: pickedDocument }));
+    } catch (error: any) {
+      Alert.alert('Document Upload Failed', error?.message || 'Unable to upload a document. Please try again.');
+    }
+  };
+
+  const handleRemoveProposalDocument = () => {
+    setProposalForm(current => ({ ...current, documentAttachment: '' }));
+  };
+
   const closeProposalComposer = () => {
     setProposalForm(createEmptyProposalForm());
     setProposalRevisionMode(false);
+    setProposalAdminEditMode(false);
+    setEditingProposalApplicationId(null);
+    setSelectedRegionCode('');
+    setSelectedCityCode('');
+    setFilteredCities([]);
+    setLocRegion('');
+    setLocCity('');
     setProposalIntent(null);
     navigation.setParams({
       newProposalModule: undefined,
@@ -1724,6 +1774,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
     setProposalRevisionMode(false);
 
+    setProposalAdminEditMode(false);
+
+    setEditingProposalApplicationId(null);
+
     setShowConversationMenu(false);
 
     setMessages([]);
@@ -1739,8 +1793,14 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
 
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
+  const [previewDocumentUri, setPreviewDocumentUri] = useState<string | null>(null);
+  const [previewDocumentName, setPreviewDocumentName] = useState('Document preview');
 
-  const handleOpenProposalAttachment = async (uri: string, attachmentIndex: number) => {
+  const handleOpenProposalAttachment = async (
+    uri: string,
+    attachmentIndex: number,
+    attachmentType?: 'image' | 'document',
+  ) => {
 
     const normalizedUri = String(uri || '').trim();
 
@@ -1750,8 +1810,9 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
     }
 
-    // Check if it's an image
-    const isImage = isImageMediaUri(normalizedUri);
+    // Prefer the attachment's explicit type. This avoids treating every remote
+    // document URL as an image just because it uses http(s).
+    const isImage = attachmentType === 'image' || (!attachmentType && isImageMediaUri(normalizedUri));
 
     try {
 
@@ -1761,22 +1822,19 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
           setPreviewImageUri(normalizedUri);
           return;
         }
-        
-        // For non-images, download as before
-        if (typeof document !== 'undefined') {
-          const link = document.createElement('a');
-          link.href = normalizedUri;
-          link.target = '_blank';
-          link.rel = 'noopener noreferrer';
-          link.download = getAttachmentName(normalizedUri, attachmentIndex);
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-        }
+
+        setPreviewDocumentName(getAttachmentName(normalizedUri, attachmentIndex));
+        setPreviewDocumentUri(normalizedUri);
         return;
       }
 
-      await Linking.openURL(normalizedUri);
+      if (isImage) {
+        setPreviewImageUri(normalizedUri);
+        return;
+      }
+
+      setPreviewDocumentName(getAttachmentName(normalizedUri, attachmentIndex));
+      setPreviewDocumentUri(normalizedUri);
 
     } catch {
 
@@ -1784,6 +1842,26 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
     }
 
+  };
+
+  const closeAttachmentPreview = () => {
+    setPreviewImageUri(null);
+    setPreviewDocumentUri(null);
+  };
+
+  const openPreviewDocumentExternally = () => {
+    if (!previewDocumentUri) {
+      return;
+    }
+
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.open(previewDocumentUri, '_blank', 'noopener,noreferrer');
+      return;
+    }
+
+    void Linking.openURL(previewDocumentUri).catch(() => {
+      Alert.alert('Attachment Unavailable', 'Unable to open this document right now.');
+    });
   };
 
 
@@ -2155,33 +2233,66 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
     try {
 
-      const proposalAttachments = proposalForm.photoAttachment
-        ? [{ url: proposalForm.photoAttachment, type: 'image' as const }]
-        : [];
+      const proposalAttachments = [
+        ...(proposalForm.photoAttachment
+          ? [{ url: proposalForm.photoAttachment, type: 'image' as const }]
+          : []),
+        ...(proposalForm.documentAttachment
+          ? [{ url: proposalForm.documentAttachment, type: 'document' as const }]
+          : []),
+      ];
+
+      const proposalDetails: PartnerProjectProposalDetails = {
+        ...proposalForm,
+        proposedVolunteersNeeded: Number(proposalForm.proposedVolunteersNeeded) || 0,
+        requestedProgramModule: (proposalIntent.module as AdvocacyFocus) || 'Nutrition',
+        targetProjectId: proposalIntent.projectId,
+        attachments: proposalAttachments,
+      };
 
       console.log('📤 Submitting proposal:');
       console.log('  - Project ID:', proposalIntent.projectId || 'new');
       console.log('  - Program Module:', proposalIntent.module);
       console.log('  - Revision Mode:', proposalRevisionMode);
 
+      if (proposalAdminEditMode && editingProposalApplicationId) {
+        const {
+          targetProjectId: _applicationProjectId,
+          ...adminProposalDetails
+        } = proposalDetails;
+        const updatedApplication = await updatePartnerProjectApplicationDetails(
+          editingProposalApplicationId,
+          user.id,
+          adminProposalDetails as PartnerProjectProposalDetails,
+        );
+
+        setProposalChats(current => current.map(item =>
+          item.application.id === updatedApplication.id
+            ? {
+                ...item,
+                application: updatedApplication,
+                projectTitle:
+                  updatedApplication.proposalDetails?.proposedTitle || item.projectTitle,
+              }
+            : item
+        ));
+        setSelectedProposalApplication(current =>
+          current?.id === updatedApplication.id ? updatedApplication : current
+        );
+        closeProposalComposer();
+        setReviewNotice({
+          title: 'Proposal changes saved',
+          message: 'The updated proposal is ready for review.',
+          tone: 'success',
+        });
+        Alert.alert('Saved', 'The proposal changes were saved successfully.');
+        void loadData(false).catch(() => null);
+        return;
+      }
+
       await submitPartnerProgramProposal(proposalIntent.projectId || 'new', user, {
-
         programModule: (proposalIntent.module as AdvocacyFocus) || 'Nutrition',
-
-        proposalDetails: {
-
-          ...proposalForm,
-
-          proposedVolunteersNeeded: Number(proposalForm.proposedVolunteersNeeded) || 0,
-
-          requestedProgramModule: (proposalIntent.module as AdvocacyFocus) || 'Nutrition',
-
-          targetProjectId: proposalIntent.projectId,
-
-          attachments: proposalAttachments,
-
-        }
-
+        proposalDetails,
       });
 
       console.log('✅ Proposal submitted successfully, refreshing messages...');
@@ -2211,16 +2322,6 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     }
 
   };
-
-
-
-  useEffect(() => {
-
-    const composed = composePhilippineAddress(locRegion, locCity, '');
-
-    setProposalForm(f => ({ ...f, proposedLocation: composed }));
-
-  }, [locRegion, locCity]);
 
 
 
@@ -2403,19 +2504,38 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     const currentApplication = proposalChats.find(
       item => item.application.id === applicationId
     )?.application;
-    if (currentApplication && currentApplication.status !== 'Rejected') {
+    const isAdminEdit = user.role === 'admin';
+    const expectedStatus = isAdminEdit ? 'Pending' : 'Rejected';
+    if (currentApplication && currentApplication.status !== expectedStatus) {
       Alert.alert(
-        'Proposal finalized',
-        'This proposal has already been approved or is pending review and can no longer be revised.'
+        isAdminEdit ? 'Proposal finalized' : 'Proposal cannot be revised',
+        isAdminEdit
+          ? 'Only pending proposals can be edited by an administrator.'
+          : 'Only rejected proposals can be revised and resubmitted.'
       );
       setActiveProposalCardData(null);
       return;
     }
 
-    const requestedProgramModule = String(cardData.requestedProgramModule || cardData.programModule || 'Nutrition');
+    const sourceApplication = currentApplication || cardData;
+    const sourceDetails = (sourceApplication.proposalDetails || cardData.proposalDetails || cardData) as any;
+    const requestedProgramModule = String(
+      sourceDetails.requestedProgramModule || cardData.requestedProgramModule || cardData.programModule || 'Nutrition'
+    );
     // IMPORTANT: Use the application's projectId (not targetProjectId) so backend can match and increment revision
-    const applicationProjectId = String(cardData.projectId || 'new');
-    const title = String(cardData.proposedTitle || cardData.title || '');
+    const applicationProjectId = String(sourceApplication.projectId || cardData.projectId || 'new');
+    const title = String(sourceDetails.proposedTitle || cardData.proposedTitle || cardData.title || '');
+    const attachments = Array.isArray(sourceDetails.attachments) ? sourceDetails.attachments : [];
+    const photoAttachment = String(
+      attachments.find((attachment: any) => attachment?.type === 'image')?.url ||
+      sourceDetails.photoAttachment ||
+      ''
+    );
+    const documentAttachment = String(
+      attachments.find((attachment: any) => attachment?.type === 'document')?.url ||
+      sourceDetails.documentAttachment ||
+      ''
+    );
 
     console.log('🔄 Opening proposal revision:');
     console.log('  - Application ID:', applicationId);
@@ -2427,17 +2547,27 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       projectId: applicationProjectId,  // This must be the application's projectId for backend matching!
       title,
     });
-    setProposalRevisionMode(true);
+    setProposalRevisionMode(!isAdminEdit);
+    setProposalAdminEditMode(isAdminEdit);
+    setEditingProposalApplicationId(isAdminEdit ? applicationId : null);
+    setProposalValidationErrors({});
+    setSelectedRegionCode('');
+    setSelectedCityCode('');
+    setFilteredCities([]);
+    setLocRegion('');
+    setLocCity('');
 
     setProposalForm({
       proposedTitle: title,
-      proposedDescription: String(cardData.proposedDescription || ''),
-      proposedStartDate: String(cardData.proposedStartDate || ''),
-      proposedEndDate: String(cardData.proposedEndDate || ''),
-      proposedLocation: String(cardData.proposedLocation || ''),
-      proposedVolunteersNeeded: String(cardData.proposedVolunteersNeeded || ''),
-      communityNeed: String(cardData.communityNeed || ''),
-      expectedDeliverables: String(cardData.expectedDeliverables || ''),
+      proposedDescription: String(sourceDetails.proposedDescription || ''),
+      proposedStartDate: String(sourceDetails.proposedStartDate || ''),
+      proposedEndDate: String(sourceDetails.proposedEndDate || ''),
+      proposedLocation: String(sourceDetails.proposedLocation || ''),
+      proposedVolunteersNeeded: String(sourceDetails.proposedVolunteersNeeded ?? ''),
+      communityNeed: String(sourceDetails.communityNeed || ''),
+      expectedDeliverables: String(sourceDetails.expectedDeliverables || ''),
+      photoAttachment,
+      documentAttachment,
     });
 
     setView('detail');
@@ -2880,9 +3010,13 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
             <View style={{ flex: 1, flexShrink: 1 }}>
 
-              <Text style={styles.detailTitle} numberOfLines={1} ellipsizeMode="tail">New Project Proposal</Text>
+              <Text style={styles.detailTitle} numberOfLines={1} ellipsizeMode="tail">
+                {proposalAdminEditMode ? 'Edit Project Proposal' : proposalRevisionMode ? 'Revise Project Proposal' : 'New Project Proposal'}
+              </Text>
 
-              <Text style={styles.detailSubtitle} numberOfLines={1} ellipsizeMode="tail">Track: {proposalIntent.module}</Text>
+              <Text style={styles.detailSubtitle} numberOfLines={1} ellipsizeMode="tail">
+                {proposalAdminEditMode ? 'Update details before review' : `Track: ${proposalIntent.module}`}
+              </Text>
 
             </View>
 
@@ -2890,7 +3024,15 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
 
 
-          <ScrollView contentContainerStyle={styles.detailScrollContent}>
+          <ScrollView
+            key={proposalAdminEditMode
+              ? `admin-edit-${editingProposalApplicationId || 'proposal'}`
+              : proposalRevisionMode
+                ? 'partner-revision'
+                : 'new-proposal'}
+            ref={proposalComposerScrollRef}
+            contentContainerStyle={styles.detailScrollContent}
+          >
 
             <View style={styles.proposalCard}>
 
@@ -3189,6 +3331,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                           setLocCity('');
 
+                          setProposalForm(current => ({ ...current, proposedLocation: '' }));
+
                         }}
 
                         style={styles.picker}
@@ -3227,6 +3371,16 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                           setLocCity(city ? city.name : '');
 
+                          const region = PHRegions.find(item => item.code === selectedRegionCode);
+                          setProposalForm(current => ({
+                            ...current,
+                            proposedLocation: composePhilippineAddress(
+                              region?.name || '',
+                              city?.name || '',
+                              '',
+                            ),
+                          }));
+
                         }}
 
                         style={styles.picker}
@@ -3257,6 +3411,42 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
 
               <View style={styles.formGroup}>
+                <Text style={styles.formLabel}>Volunteer Slots</Text>
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Number of volunteers needed"
+                  keyboardType="number-pad"
+                  value={proposalForm.proposedVolunteersNeeded}
+                  onChangeText={text => setProposalForm(current => ({
+                    ...current,
+                    proposedVolunteersNeeded: text.replace(/[^0-9]/g, ''),
+                  }))}
+                />
+              </View>
+
+              <View style={styles.formGroup}>
+                <Text style={styles.formLabel}>Community Need</Text>
+                <TextInput
+                  style={[styles.formInput, { height: 90, textAlignVertical: 'top' }]}
+                  placeholder="Describe the community need"
+                  multiline
+                  value={proposalForm.communityNeed}
+                  onChangeText={text => setProposalForm(current => ({ ...current, communityNeed: text }))}
+                />
+              </View>
+
+              <View style={styles.formGroup}>
+                <Text style={styles.formLabel}>Expected Deliverables</Text>
+                <TextInput
+                  style={[styles.formInput, { height: 90, textAlignVertical: 'top' }]}
+                  placeholder="Describe the expected deliverables"
+                  multiline
+                  value={proposalForm.expectedDeliverables}
+                  onChangeText={text => setProposalForm(current => ({ ...current, expectedDeliverables: text }))}
+                />
+              </View>
+
+              <View style={styles.formGroup}>
                 <Text style={styles.formLabel}>Proposal Photo</Text>
                 <TouchableOpacity style={styles.photoUploadButton} onPress={handlePickProposalPhoto}>
                   <MaterialIcons name="photo-camera" size={18} color="#ffffff" />
@@ -3269,6 +3459,29 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                     <Image source={{ uri: proposalForm.photoAttachment }} style={styles.photoPreview} resizeMode="cover" />
                     <TouchableOpacity style={styles.photoRemoveButton} onPress={handleRemoveProposalPhoto}>
                       <Text style={styles.photoRemoveButtonText}>Remove</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
+              </View>
+
+              <View style={styles.formGroup}>
+                <Text style={styles.formLabel}>Proposal Document</Text>
+                <TouchableOpacity style={styles.documentUploadButton} onPress={handlePickProposalDocument}>
+                  <MaterialIcons name="attach-file" size={18} color="#ffffff" />
+                  <Text style={styles.documentUploadButtonText}>
+                    {proposalForm.documentAttachment ? 'Change Document' : 'Attach Document'}
+                  </Text>
+                </TouchableOpacity>
+                {proposalForm.documentAttachment ? (
+                  <View style={styles.documentPreviewContainer}>
+                    <View style={styles.documentPreviewContent}>
+                      <MaterialIcons name="insert-drive-file" size={30} color="#10b981" />
+                      <Text style={styles.documentPreviewText} numberOfLines={1}>
+                        {getAttachmentName(proposalForm.documentAttachment, 0)}
+                      </Text>
+                    </View>
+                    <TouchableOpacity style={styles.documentRemoveButton} onPress={handleRemoveProposalDocument}>
+                      <Text style={styles.documentRemoveButtonText}>Remove</Text>
                     </TouchableOpacity>
                   </View>
                 ) : null}
@@ -3287,13 +3500,15 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                 ) : null}
                 <Text style={styles.submitBtnText}>
                   {isSubmittingProposal
-                    ? 'Submitting Proposal...'
+                    ? proposalAdminEditMode ? 'Saving Changes...' : 'Submitting Proposal...'
+                    : proposalAdminEditMode
+                    ? 'Save Changes'
                     : proposalRevisionMode
                     ? 'Revise & Resubmit'
                     : 'Submit Proposal for Review'}
                 </Text>
                 {!isSubmittingProposal ? (
-                  <MaterialIcons name="send" size={20} color="#fff" style={{ marginLeft: 8 }} />
+                  <MaterialIcons name={proposalAdminEditMode ? 'save' : 'send'} size={20} color="#fff" style={{ marginLeft: 8 }} />
                 ) : null}
               </TouchableOpacity>
 
@@ -3543,9 +3758,11 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                       const attachmentUri = String(attachment?.url || '').trim();
 
+                      const attachmentType = String(attachment?.type || '').trim() as 'image' | 'document' | '';
+
                       const isImageAttachment =
 
-                        String(attachment?.type || '').trim() === 'image' || isImageMediaUri(attachmentUri);
+                        attachmentType === 'image' || (!attachmentType && isImageMediaUri(attachmentUri));
 
                       if (!attachmentUri) {
 
@@ -3563,7 +3780,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                             <TouchableOpacity
 
-                              onPress={() => void handleOpenProposalAttachment(attachmentUri, attachmentIndex)}
+                              onPress={() => void handleOpenProposalAttachment(attachmentUri, attachmentIndex, attachmentType || undefined)}
 
                               activeOpacity={0.85}
 
@@ -3597,7 +3814,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                               style={styles.attachmentDownloadButton}
 
-                              onPress={() => void handleOpenProposalAttachment(attachmentUri, attachmentIndex)}
+                              onPress={() => void handleOpenProposalAttachment(attachmentUri, attachmentIndex, attachmentType || undefined)}
 
                               activeOpacity={0.85}
 
@@ -3636,6 +3853,15 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
               {user?.role === 'admin' && app.status === 'Pending' && (
 
                 <View style={styles.adminActionRow}>
+
+                  <TouchableOpacity
+                    style={[styles.actionBtn, { backgroundColor: '#f1f5f9' }, isReviewing && { opacity: 0.5 }]}
+                    onPress={() => openProposalRevision(app)}
+                    disabled={isReviewing}
+                  >
+                    <MaterialIcons name="edit" size={16} color="#166534" />
+                    <Text style={[styles.actionBtnText, { color: '#166534' }]}>Edit & Save</Text>
+                  </TouchableOpacity>
 
                   <TouchableOpacity
                     style={[styles.actionBtn, styles.approveBtn, isReviewing && { opacity: 0.7 }]}
@@ -3966,29 +4192,41 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                 const application = parseProposalCardContent(m.content);
                 if (!application) return null;
-                
-                // Handle both nested (proposalDetails) and flat (legacy) formats
-                const proposalDetails = application.proposalDetails || {};
-                const data = {
-                  proposedTitle: proposalDetails.proposedTitle || application.proposedTitle || 'Untitled Proposal',
-                  proposedDescription: proposalDetails.proposedDescription || application.proposedDescription || 'No description provided.',
-                  proposedStartDate: proposalDetails.proposedStartDate || application.proposedStartDate || 'TBD',
-                  proposedEndDate: proposalDetails.proposedEndDate || application.proposedEndDate || 'TBD',
-                  proposedLocation: proposalDetails.proposedLocation || application.proposedLocation || 'TBD',
-                  proposedVolunteersNeeded: proposalDetails.proposedVolunteersNeeded || application.proposedVolunteersNeeded || '0',
-                  status: application.status || 'Pending',
-                  id: application.id,
-                };
 
-                const isApproved = application.status === 'Approved';
-                const isRejected = application.status === 'Rejected';
-                const revisionNumber = Number(application.revisionNumber || 0);
-                const applicationId = String(application.applicationId || application.id || '');
-                
-                // Determine if this is a review card (from admin) or submission card (from partner)
+                const messageApplicationId = String(application.applicationId || application.id || '');
+                const liveApplication = proposalChats.find(
+                  item => item.application.id === messageApplicationId
+                )?.application;
                 const isReviewCard = m.id.startsWith('review-card-');
                 const isSubmissionCard = m.id.startsWith('msg-proposal-');
+                const liveStatusOverride =
+                  !isReviewCard && liveApplication && liveApplication.status !== application.status
+                    ? liveApplication.status
+                    : undefined;
+                const cardApplication =
+                  application.status === 'Pending' && liveApplication?.status === 'Pending'
+                    ? liveApplication
+                    : application;
                 
+                // Handle both nested (proposalDetails) and flat (legacy) formats
+                const proposalDetails = cardApplication.proposalDetails || {};
+                const data = {
+                  proposedTitle: proposalDetails.proposedTitle || cardApplication.proposedTitle || 'Untitled Proposal',
+                  proposedDescription: proposalDetails.proposedDescription || cardApplication.proposedDescription || 'No description provided.',
+                  proposedStartDate: proposalDetails.proposedStartDate || cardApplication.proposedStartDate || 'TBD',
+                  proposedEndDate: proposalDetails.proposedEndDate || cardApplication.proposedEndDate || 'TBD',
+                  proposedLocation: proposalDetails.proposedLocation || cardApplication.proposedLocation || 'TBD',
+                  proposedVolunteersNeeded: proposalDetails.proposedVolunteersNeeded || cardApplication.proposedVolunteersNeeded || '0',
+                  status: cardApplication.status || 'Pending',
+                  id: cardApplication.id,
+                };
+
+                const isApproved = cardApplication.status === 'Approved';
+                const isRejected = cardApplication.status === 'Rejected';
+                const revisionNumber = Number(cardApplication.revisionNumber || 0);
+                const applicationId = messageApplicationId;
+                
+                // Determine if this is a review card (from admin) or submission card (from partner)
                 const followsRejection = filteredMessages.slice(0, i).some(previousMessage => {
                   const previousApplication = parseProposalCardContent(previousMessage.content);
                   if (!previousApplication) return false;
@@ -4010,7 +4248,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                 let summaryLead = '';
                 
                 const moduleLabel =
-                  String(proposalDetails.requestedProgramModule || application.programModule || '').trim() ||
+                  String(proposalDetails.requestedProgramModule || cardApplication.programModule || '').trim() ||
                   data.proposedTitle;
                 
                 if (isReviewCard) {
@@ -4046,13 +4284,13 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                   : formatProposalDate(data.proposedStartDate);
 
                 const templateApplication: PartnerProjectApplication = {
-                  id: application.id || m.id,
-                  projectId: application.projectId || application.targetProjectId || 'new',
-                  partnerUserId: application.partnerUserId || application.proposedById || m.senderId || '',
-                  partnerName: application.partnerName || application.proposedByName || user?.name || 'Partner',
-                  partnerEmail: application.partnerEmail || '',
-                  status: (application.status === 'Proposed' ? 'Pending' : application.status || 'Pending') as any,
-                  requestedAt: application.timestamp || application.requestedAt || m.timestamp,
+                  id: cardApplication.id || m.id,
+                  projectId: cardApplication.projectId || cardApplication.targetProjectId || 'new',
+                  partnerUserId: cardApplication.partnerUserId || cardApplication.proposedById || m.senderId || '',
+                  partnerName: cardApplication.partnerName || cardApplication.proposedByName || user?.name || 'Partner',
+                  partnerEmail: cardApplication.partnerEmail || '',
+                  status: (cardApplication.status === 'Proposed' ? 'Pending' : cardApplication.status || 'Pending') as any,
+                  requestedAt: cardApplication.timestamp || cardApplication.requestedAt || m.timestamp,
                   proposalDetails: {
                     ...proposalDetails,
                     proposedTitle: data.proposedTitle,
@@ -4062,7 +4300,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                     proposedLocation: data.proposedLocation,
                     proposedVolunteersNeeded: data.proposedVolunteersNeeded,
                   },
-                  reviewNotes: application.reviewNotes,
+                  reviewNotes: cardApplication.reviewNotes,
                 } as PartnerProjectApplication;
 
                 return (
@@ -4074,13 +4312,15 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                       isAdmin={user?.role === 'admin'}
                       isOwner={isOwn}
                       isSubmitting={isReviewing}
+                      statusOverride={liveStatusOverride}
+                      reviewActionsDisabled={Boolean(user?.role === 'admin' && liveStatusOverride)}
                       onEdit={app => openProposalRevision({ ...app, ...(app.proposalDetails || {}) })}
                       onApprove={app => void handleReview(app, 'Approved')}
                       onReject={app => handleRejectWithNotes(app)}
                       onViewProjects={app => navigateToAvailableRoute(navigation, 'Projects', { projectId: app.projectId })}
-                      onOpenAttachment={url => {
-                        void Linking.openURL(url).catch(() => {
-                          Alert.alert('Attachment', 'Unable to open this attachment on this device.');
+                      onOpenAttachment={(url, type) => {
+                        void handleOpenProposalAttachment(url, 0, type).catch(() => {
+                          Alert.alert('Attachment', 'Unable to preview this attachment on this device.');
                         });
                       }}
                     />
@@ -4709,8 +4949,9 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                     <View style={styles.attachmentList}>
                       {proposalDetails.attachments.map((attachment: any, attachmentIndex: number) => {
                         const attachmentUri = String(attachment?.url || '').trim();
+                        const attachmentType = String(attachment?.type || '').trim() as 'image' | 'document' | '';
                         const isImageAttachment =
-                          String(attachment?.type || '').trim() === 'image' || isImageMediaUri(attachmentUri);
+                          attachmentType === 'image' || (!attachmentType && isImageMediaUri(attachmentUri));
                         if (!attachmentUri) {
                           return null;
                         }
@@ -4719,7 +4960,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                           <View key={`${attachmentUri}-${attachmentIndex}`} style={styles.attachmentCard}>
                             {isImageAttachment ? (
                               <TouchableOpacity
-                                onPress={() => void handleOpenProposalAttachment(attachmentUri, attachmentIndex)}
+                                onPress={() => void handleOpenProposalAttachment(attachmentUri, attachmentIndex, attachmentType || undefined)}
                                 activeOpacity={0.85}
                               >
                                 <Image source={{ uri: attachmentUri }} style={styles.attachmentPreviewImage} />
@@ -4736,7 +4977,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                               </Text>
                               <TouchableOpacity
                                 style={styles.attachmentDownloadButton}
-                                onPress={() => void handleOpenProposalAttachment(attachmentUri, attachmentIndex)}
+                                onPress={() => void handleOpenProposalAttachment(attachmentUri, attachmentIndex, attachmentType || undefined)}
                                 activeOpacity={0.85}
                               >
                                 <MaterialIcons name="download" size={18} color="#166534" />
@@ -5183,6 +5424,55 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
         </View>
 
+      </Modal>
+
+      <Modal
+        visible={Boolean(previewDocumentUri)}
+        transparent
+        animationType="fade"
+        onRequestClose={closeAttachmentPreview}
+      >
+        <View style={styles.imagePreviewBackdrop}>
+          <View style={styles.documentPreviewModalCard}>
+            <View style={styles.imagePreviewHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.imagePreviewTitle}>Preview Document</Text>
+                <Text style={styles.documentPreviewModalName} numberOfLines={1}>
+                  {previewDocumentName}
+                </Text>
+              </View>
+              <TouchableOpacity onPress={closeAttachmentPreview} style={styles.imagePreviewClose}>
+                <MaterialIcons name="close" size={20} color="#0f172a" />
+              </TouchableOpacity>
+            </View>
+
+            {Platform.OS === 'web' && previewDocumentUri ? (
+              <View style={styles.documentPreviewFrame}>
+                {React.createElement('iframe', {
+                  src: previewDocumentUri,
+                  title: previewDocumentName,
+                  style: { width: '100%', height: '100%', border: '0' },
+                })}
+              </View>
+            ) : (
+              <View style={styles.documentPreviewFallback}>
+                <MaterialIcons name="description" size={54} color="#166534" />
+                <Text style={styles.documentPreviewFallbackText}>
+                  This document is ready to view.
+                </Text>
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={styles.documentPreviewOpenButton}
+              onPress={openPreviewDocumentExternally}
+              activeOpacity={0.85}
+            >
+              <MaterialIcons name="open-in-new" size={17} color="#ffffff" />
+              <Text style={styles.documentPreviewOpenButtonText}>Open Document</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </Modal>
 
       <View style={styles.layout}>
@@ -6087,6 +6377,27 @@ const styles = StyleSheet.create({
 
   },
 
+  documentPreviewModalCard: {
+    width: '100%',
+    maxWidth: 820,
+    height: '88%',
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    overflow: 'hidden',
+  },
+
+  documentPreviewModalName: { marginTop: 3, color: '#64748b', fontSize: 12 },
+
+  documentPreviewFrame: { flex: 1, backgroundColor: '#f8fafc' },
+
+  documentPreviewFallback: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, backgroundColor: '#f8fafc' },
+
+  documentPreviewFallbackText: { color: '#475569', fontSize: 14, fontWeight: '700' },
+
+  documentPreviewOpenButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, margin: 14, paddingVertical: 12, borderRadius: 12, backgroundColor: '#166534' },
+
+  documentPreviewOpenButtonText: { color: '#fff', fontSize: 13, fontWeight: '800' },
+
 
 
   messagesList: { flex: 1 },
@@ -6393,6 +6704,10 @@ const styles = StyleSheet.create({
 
   photoUploadButtonText: { color: '#fff', fontSize: 14, fontWeight: '700' },
 
+  documentUploadButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, backgroundColor: '#0f766e', paddingVertical: 12, borderRadius: 14, paddingHorizontal: 14, marginTop: 6 },
+
+  documentUploadButtonText: { color: '#fff', fontSize: 14, fontWeight: '700' },
+
   photoPreviewContainer: { marginTop: 10, alignItems: 'center', gap: 8 },
 
   photoPreview: { width: '100%', height: 180, borderRadius: 14, backgroundColor: '#f1f5f9' },
@@ -6400,6 +6715,16 @@ const styles = StyleSheet.create({
   photoRemoveButton: { marginTop: 8, alignSelf: 'flex-end', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 12, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0' },
 
   photoRemoveButtonText: { color: '#334155', fontSize: 13, fontWeight: '700' },
+
+  documentPreviewContainer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10, padding: 12, borderRadius: 14, backgroundColor: '#f0fdf4', borderWidth: 1, borderColor: '#bbf7d0', gap: 10 },
+
+  documentPreviewContent: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10, minWidth: 0 },
+
+  documentPreviewText: { flex: 1, color: '#166534', fontSize: 13, fontWeight: '700' },
+
+  documentRemoveButton: { paddingVertical: 8, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#bbf7d0' },
+
+  documentRemoveButtonText: { color: '#166534', fontSize: 12, fontWeight: '700' },
 
   formRow: { flexDirection: 'row', gap: 12 },
 

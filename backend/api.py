@@ -209,6 +209,12 @@ class PartnerProjectJoinRequestPayload(BaseModel):
     proposalDetails: dict[str, Any] | None = None
 
 
+# Request payload for an administrator editing a pending partner proposal.
+class PartnerProjectApplicationUpdatePayload(BaseModel):
+    proposalDetails: dict[str, Any]
+    updatedBy: str
+
+
 # Request payload for reviewing a partner join request.
 class PartnerProjectApplicationReviewPayload(BaseModel):
     status: str
@@ -1735,6 +1741,8 @@ def _invalidate_collection_cache(keys: list[str] | set[str] | tuple[str, ...] | 
 def _get_cached_collection(connection: Any, key: str) -> Any:
     if key in NON_CACHEABLE_COLLECTION_KEYS:
         if is_hot_storage_key(key):
+            if key == "volunteerTimeLogs":
+                return _get_admin_dashboard_collection(connection, key)
             return get_postgres_hot_storage_collection(connection, key)
         if key in SPECIAL_STORAGE_KEYS:
             return _get_special_storage_collection(connection, key)
@@ -1746,7 +1754,10 @@ def _get_cached_collection(connection: Any, key: str) -> Any:
         return cached
 
     if is_hot_storage_key(key):
-        value = get_postgres_hot_storage_collection(connection, key)
+        if key == "volunteerTimeLogs":
+            value = _get_admin_dashboard_collection(connection, key)
+        else:
+            value = get_postgres_hot_storage_collection(connection, key)
     elif key in SPECIAL_STORAGE_KEYS:
         value = _get_special_storage_collection(connection, key)
     else:
@@ -4475,6 +4486,99 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
         pass
     
     return {"application": application}
+
+
+@app.patch("/partner-project-applications/{application_id}/details")
+# API endpoint that lets an administrator save edits to a pending proposal
+# without creating a new submission or changing its review status.
+async def update_partner_project_application_details(
+    application_id: str, payload: PartnerProjectApplicationUpdatePayload
+) -> dict[str, Any]:
+    _require_postgres()
+
+    updated_by = str(payload.updatedBy or "").strip()
+    if not updated_by:
+        raise HTTPException(status_code=400, detail="An administrator id is required.")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    broadcast_keys = ["partnerProjectApplications"]
+    ensure_message_storage_once()
+
+    with get_connection() as connection:
+        application = _postgres_get_hot_item_by_id(connection, "partnerProjectApplications", application_id)
+        if application is None:
+            raise HTTPException(status_code=404, detail="Application not found.")
+
+        if str(application.get("status") or "").strip() != "Pending":
+            raise HTTPException(status_code=409, detail="Only pending proposals can be edited.")
+
+        existing_details = application.get("proposalDetails")
+        existing_details = existing_details if isinstance(existing_details, dict) else {}
+        incoming_details = payload.proposalDetails if isinstance(payload.proposalDetails, dict) else {}
+        merged_details = {**existing_details, **incoming_details}
+
+        fallback_project = None
+        target_project_id = str(merged_details.get("targetProjectId") or "").strip()
+        if target_project_id:
+            fallback_project, _ = _postgres_get_project_like_item_by_id(connection, target_project_id)
+
+        requested_program_module = str(
+            merged_details.get("requestedProgramModule")
+            or existing_details.get("requestedProgramModule")
+            or ""
+        ).strip()
+        normalized_details = _normalize_partner_proposal_details(
+            merged_details,
+            requested_program_module,
+            fallback_project,
+        )
+        updated_application = {
+            **application,
+            "proposalDetails": normalized_details,
+            "updatedAt": now_iso,
+            "updatedBy": updated_by,
+        }
+        _postgres_upsert_hot_item(connection, "partnerProjectApplications", updated_application)
+
+        # Keep the current submission card in sync for every participant. Review
+        # cards remain historical snapshots and are intentionally left unchanged.
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "select messages_id, content from public.messages where content like %s",
+                ("___PROPOSAL_CARD___:%",),
+            )
+            proposal_messages = cursor.fetchall()
+            for message_id, content in proposal_messages:
+                if not isinstance(content, str) or not content.startswith("___PROPOSAL_CARD___:"):
+                    continue
+                try:
+                    card = json.loads(content[len("___PROPOSAL_CARD___:"):])
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                card_application_id = str(card.get("applicationId") or card.get("id") or "").strip()
+                if card_application_id != application_id or str(message_id).startswith("review-card-"):
+                    continue
+                updated_card = {
+                    **card,
+                    **normalized_details,
+                    "proposalDetails": normalized_details,
+                    "status": updated_application.get("status"),
+                    "applicationId": application_id,
+                    "id": application_id,
+                    "projectId": updated_application.get("projectId"),
+                    "updatedAt": now_iso,
+                    "updatedBy": updated_by,
+                }
+                cursor.execute(
+                    "update public.messages set content = %s where messages_id = %s",
+                    (f'___PROPOSAL_CARD___:{json.dumps(updated_card)}', message_id),
+                )
+                broadcast_keys.append("messages")
+
+        connection.commit()
+
+    asyncio.create_task(connection_manager.broadcast_storage_event(broadcast_keys))
+    return {"application": updated_application}
 
 
 @app.post("/partner-project-applications/{application_id}/review")
