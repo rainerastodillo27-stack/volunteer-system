@@ -1,0 +1,15 @@
+{
+  "generated_at": "20260902T184856Z",
+  "target_event_ids": [
+    "e2e-event-nutrition-1",
+    "e2e-live-event-review",
+    "e2e-live-event-attendance"
+  ],
+  "target_project_ids": [
+    "project-proposal-1788367238553",
+    "project-proposal-1788371677761",
+    "e2e-live-project-attendance",
+    "e2e-live-project-review",
+    "e2e-project-nutrition-1"
+  ]
+}
