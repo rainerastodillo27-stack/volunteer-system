@@ -20569,12 +20569,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                 <View style={{ backgroundColor: '#f8fafc', padding: 16, borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0' }}>
 
                   <Text style={{ fontSize: 12, fontWeight: '800', color: '#0f172a', textTransform: 'uppercase', marginBottom: 16 }}>
-
-                    UNASSIGNED VOLUNTEERS ({unassignedVolunteers.length})
-
+                    QUICK ASSIGN VOLUNTEERS ({unassignedVolunteers.length})
                   </Text>
-
-                  
 
                   {unassignedVolunteers.length === 0 ? (
 
@@ -20582,81 +20578,105 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   ) : (
 
-                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
-
-                      {unassignedVolunteers.map(uv => {
-
-                        const hasMatchingTask = taskCards.some(t => {
-
+                    <View>
+                      {unassignedVolunteers.map((uv, uvIndex) => {
+                        const fullVol = volunteers.find(v => v.id === uv.id || v.userId === uv.id);
+                        const uvSkills: string[] = (fullVol?.skills || []).filter(Boolean);
+                        const assignedToTaskCount = taskCards.filter(t =>
+                          getTaskAssignedVolunteerIds(t, volunteers).some(vid => vid === uv.id || vid === uv.userId)
+                        ).length;
+                        const availableTasks = taskCards.filter(t => {
                           const needed = Math.max(1, Number((t as any).volunteersNeeded || 1));
-
-                          const assigned = getTaskAssignedVolunteerIds(t, volunteers).length;
-
-                          return assigned < needed;
-
+                          const assigned = getTaskAssignedVolunteerIds(t, volunteers);
+                          const alreadyIn = assigned.some(vid => vid === uv.id || vid === uv.userId);
+                          return !alreadyIn && assigned.length < needed;
                         });
-
-
+                        const selectedTaskId = unassignedTaskSelections[uv.id] || '';
+                        const isAssigning = Boolean(quickAssignLoadingId && quickAssignLoadingId.endsWith(`:${uv.id}`));
+                        const canAssign = Boolean(selectedTaskId) && availableTasks.some(t => t.id === selectedTaskId);
 
                         return (
-
-                          <View key={uv.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#ffffff', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: '#cbd5e1' }}>
-
-                            <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' }}>
-
-                              <MaterialIcons name="person" size={12} color="#475569" />
-
+                          <View
+                            key={uv.id}
+                            style={{
+                              flexDirection: 'row',
+                              alignItems: 'center',
+                              paddingVertical: 14,
+                              borderTopWidth: uvIndex === 0 ? 0 : 1,
+                              borderTopColor: '#e2e8f0',
+                              gap: 12,
+                            }}
+                          >
+                            <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                              <MaterialIcons name="person" size={20} color="#475569" />
                             </View>
 
-                            <Text style={{ fontSize: 13, fontWeight: '700', color: '#0f172a' }}>{uv.name}</Text>
+                            <View style={{ flex: 1, minWidth: 0 }}>
+                              <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a' }} numberOfLines={1}>{uv.name}</Text>
+                              {uvSkills.length > 0 && (
+                                <Text style={{ fontSize: 12, color: '#64748b', marginTop: 2 }} numberOfLines={2}>
+                                  Preferred skills: {uvSkills.join(', ')}
+                                </Text>
+                              )}
+                              <Text style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>
+                                Currently assigned to {assignedToTaskCount} task{assignedToTaskCount !== 1 ? 's' : ''}
+                              </Text>
+                            </View>
 
-                            {hasMatchingTask && (
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                              <Text style={{ fontSize: 13, color: '#475569', fontWeight: '600' }}>Assign to</Text>
+                              <View style={{
+                                borderWidth: 1,
+                                borderColor: '#cbd5e1',
+                                borderRadius: 8,
+                                backgroundColor: '#ffffff',
+                                minWidth: 160,
+                                justifyContent: 'center',
+                              }}>
+                                <Picker
+                                  selectedValue={selectedTaskId}
+                                  onValueChange={(val) => {
+                                    setUnassignedTaskSelections(prev => ({ ...prev, [uv.id]: String(val || '') }));
+                                  }}
+                                  style={{ height: 38 }}
+                                  enabled={availableTasks.length > 0 && quickAssignLoadingId === null}
+                                >
+                                  <Picker.Item label="Select task" value="" />
+                                  {availableTasks.map(t => (
+                                    <Picker.Item key={t.id} label={t.title} value={t.id} />
+                                  ))}
+                                </Picker>
+                              </View>
 
                               <TouchableOpacity
                                 onPress={() => {
-                                  const targetTask = taskCards.find(t => {
-                                    const needed = Math.max(1, Number((t as any).volunteersNeeded || 1));
-                                    return getTaskAssignedVolunteerIds(t, volunteers).length < needed;
-                                  });
-                                  if (targetTask) {
-                                    void handleQuickAssignVolunteer(activeSelectedProject, targetTask.id, uv);
+                                  if (canAssign) {
+                                    void handleQuickAssignVolunteer(activeSelectedProject, selectedTaskId, uv);
+                                    setUnassignedTaskSelections(prev => ({ ...prev, [uv.id]: '' }));
                                   }
                                 }}
-                                disabled={quickAssignLoadingId !== null}
+                                disabled={!canAssign || quickAssignLoadingId !== null}
                                 style={{
-                                  backgroundColor: '#f0fdf4',
-                                  paddingHorizontal: 8,
-                                  paddingVertical: 4,
-                                  minHeight: 28,
-                                  minWidth: 86,
-                                  borderRadius: 6,
-                                  borderWidth: 1,
-                                  borderColor: '#bbf7d0',
-                                  marginLeft: 4,
-                                  flexDirection: 'row',
+                                  backgroundColor: canAssign ? '#166534' : '#e2e8f0',
+                                  paddingHorizontal: 14,
+                                  paddingVertical: 9,
+                                  borderRadius: 8,
+                                  minWidth: 72,
                                   alignItems: 'center',
                                   justifyContent: 'center',
                                   opacity: quickAssignLoadingId !== null ? 0.65 : 1,
                                 }}
                               >
-                                {quickAssignLoadingId && quickAssignLoadingId.endsWith(`:${uv.id}`) ? (
-                                  <>
-                                    <ActivityIndicator size="small" color="#166534" />
-                                    <Text style={{ fontSize: 10, fontWeight: '700', color: '#166534', marginLeft: 4 }}>Assigning...</Text>
-                                  </>
+                                {isAssigning ? (
+                                  <ActivityIndicator size="small" color="#ffffff" />
                                 ) : (
-                                  <Text style={{ fontSize: 11, fontWeight: '700', color: '#166534' }}>Quick Assign</Text>
+                                  <Text style={{ fontSize: 13, fontWeight: '700', color: canAssign ? '#ffffff' : '#94a3b8' }}>Assign</Text>
                                 )}
                               </TouchableOpacity>
-
-                            )}
-
+                            </View>
                           </View>
-
                         );
-
                       })}
-
                     </View>
 
                   )}
