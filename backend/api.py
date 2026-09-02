@@ -4071,6 +4071,18 @@ async def start_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogStartP
                 status_code=400,
                 detail="Upload an attendance photo to confirm you are on site.",
             )
+        try:
+            if "," in attendance_photo:
+                header, b64_body = attendance_photo.split(",", 1)
+                compressed = compress_base64_image(b64_body, max_size_bytes=60_000, max_width=640)
+                if compressed:
+                    attendance_photo = f"{header},{compressed}"
+            else:
+                compressed = compress_base64_image(attendance_photo, max_size_bytes=60_000, max_width=640)
+                if compressed:
+                    attendance_photo = compressed
+        except Exception:
+            pass
 
         existing_logs = _postgres_reset_stale_daily_time_logs(connection, volunteer_id, now)
         today_log = next(
@@ -4168,6 +4180,20 @@ async def end_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogEndPaylo
 
         completion_report = str(payload.completionReport or "").strip()
         completion_photo = str(payload.completionPhoto or "").strip()
+        if completion_photo:
+            try:
+                if "," in completion_photo:
+                    header, b64_body = completion_photo.split(",", 1)
+                    compressed = compress_base64_image(b64_body, max_size_bytes=60_000, max_width=640)
+                    if compressed:
+                        completion_photo = f"{header},{compressed}"
+                else:
+                    compressed = compress_base64_image(completion_photo, max_size_bytes=60_000, max_width=640)
+                    if compressed:
+                        completion_photo = compressed
+            except Exception:
+                pass
+
         if not completion_report:
             raise HTTPException(
                 status_code=400,
