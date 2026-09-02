@@ -38,7 +38,7 @@ import { navigateToAvailableRoute } from '../utils/navigation';
 import { formatProjectLocation } from '../utils/locationFormat';
 
 const sectorOptions: PartnerSectorType[] = ['NGO', 'Hospital', 'Institution', 'Private'];
-const advocacyOptions: AdvocacyFocus[] = ['Nutrition', 'Education', 'Livelihood', 'Disaster'];
+const advocacyOptions: AdvocacyFocus[] = [];
 
 function formatPartnerDate(value?: string, fallback = 'Date not set'): string {
   const date = new Date(value || '');

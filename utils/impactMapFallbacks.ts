@@ -1,6 +1,6 @@
 import type { PartnerProjectApplication, Project, VolunteerProjectJoinRecord } from '../models/types';
 
-const CATEGORY_VALUES: Project['category'][] = ['Education', 'Livelihood', 'Nutrition', 'Disaster'];
+const CATEGORY_VALUES: Project['category'][] = [];
 const USELESS_TITLES = new Set([
   '',
   'n/a',
@@ -107,7 +107,7 @@ const LEGACY_SAMPLE_PROJECTS: Record<
 function inferCategory(...values: Array<unknown>): Project['category'] {
   const text = values.map(value => String(value || '')).join(' ').toLowerCase();
   const match = CATEGORY_VALUES.find(category => text.includes(category.toLowerCase()));
-  return match || 'Education';
+  return match || '';
 }
 
 function formatTitleFromId(projectId: string, fallback: string): string {

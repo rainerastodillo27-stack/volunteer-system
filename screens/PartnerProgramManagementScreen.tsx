@@ -36,7 +36,7 @@ type ProgramCardConfig = {
   accent: string;
 };
 
-const CATEGORY_TABS: Array<'All' | AdvocacyFocus> = ['All', 'Nutrition', 'Education', 'Livelihood', 'Disaster'];
+const CATEGORY_TABS: Array<'All' | AdvocacyFocus> = ['All'];
 
 const TOP_LEVEL_PROGRAM_IDS = new Set([
   'nutrition',
@@ -50,15 +50,6 @@ const TOP_LEVEL_PROGRAM_IDS = new Set([
 ]);
 
 function getAdvocacyFocusFromText(value?: string): AdvocacyFocus | null {
-  const normalized = String(value || '').trim().toLowerCase();
-  if (!normalized) {
-    return null;
-  }
-
-  if (normalized.includes('nutrition')) return 'Nutrition';
-  if (normalized.includes('education')) return 'Education';
-  if (normalized.includes('livelihood')) return 'Livelihood';
-  if (normalized.includes('disaster')) return 'Disaster';
   return null;
 }
 
@@ -72,17 +63,11 @@ function getProgramModule(program: Project): AdvocacyFocus | null {
 }
 
 function getProgramIcon(module: AdvocacyFocus): keyof typeof MaterialIcons.glyphMap {
-  if (module === 'Nutrition') return 'restaurant';
-  if (module === 'Education') return 'school';
-  if (module === 'Livelihood') return 'work';
-  return 'warning';
+  return 'assignment';
 }
 
 function getProgramAccent(module: AdvocacyFocus): string {
-  if (module === 'Nutrition') return '#dc2626';
-  if (module === 'Education') return '#2563eb';
-  if (module === 'Livelihood') return '#7c3aed';
-  return '#ea580c';
+  return '#166534';
 }
 
 export default function PartnerProgramManagementScreen() {
@@ -187,15 +172,27 @@ export default function PartnerProgramManagementScreen() {
     return byModule;
   }, [partnerApplications]);
 
+  const programIds = useMemo(
+    () => new Set(programs.map(p => String(p.id || '').trim())),
+    [programs]
+  );
+
   const availableProjects = useMemo(
     () =>
       allProjects
-        .filter(project => !project.isEvent && !TOP_LEVEL_PROGRAM_IDS.has(String(project.id || '').trim().toLowerCase()))
+        .filter(project => {
+          const id = String(project.id || '').trim().toLowerCase();
+          // Exclude events, top-level programs, and any project whose ID is already a program
+          if (project.isEvent) return false;
+          if (TOP_LEVEL_PROGRAM_IDS.has(id)) return false;
+          if (programIds.has(String(project.id || '').trim())) return false;
+          return true;
+        })
         .sort((left, right) =>
           new Date(right.updatedAt || right.createdAt || 0).getTime() -
           new Date(left.updatedAt || left.createdAt || 0).getTime()
         ),
-    [allProjects]
+    [allProjects, programIds]
   );
 
   const filteredProjects = useMemo(() => {
@@ -243,7 +240,7 @@ export default function PartnerProgramManagementScreen() {
   };
 
   const handleOpenProjectProposal = (project: Project) => {
-    const module = getProgramModule(project) || 'Nutrition';
+    const module = getProgramModule(project) || '';
     setDetailModalProject(null);
     navigation.navigate('Messages', {
       newProposalModule: module,
@@ -288,22 +285,7 @@ export default function PartnerProgramManagementScreen() {
       </View>
 
       <View style={styles.filterBar}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsScrollContent}>
-          {CATEGORY_TABS.map(tab => {
-            const selected = selectedCategoryTab === tab;
-            const accent = tab === 'All' ? '#166534' : getProgramAccent(tab);
-            return (
-              <TouchableOpacity
-                key={tab}
-                style={[styles.filterTab, selected && { backgroundColor: accent, borderColor: accent }]}
-                onPress={() => setSelectedCategoryTab(tab)}
-              >
-                <Text style={[styles.filterTabText, selected && styles.filterTabTextActive]}>{tab}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-        <View style={styles.searchBox}>
+        <View style={[styles.searchBox, { flex: 1, maxWidth: '100%' }]}>
           <MaterialIcons name="search" size={18} color="#94a3b8" />
           <TextInput
             style={styles.searchInput}
@@ -324,7 +306,7 @@ export default function PartnerProgramManagementScreen() {
         filteredProjects.length > 0 ? (
           <View style={styles.projectsGrid}>
             {filteredProjects.map(project => {
-              const module = getProgramModule(project) || 'Nutrition';
+              const module = getProgramModule(project) || '';
               const accent = getProgramAccent(module);
               const imageSource = getPrimaryProjectImageSource(project);
               return (
@@ -333,9 +315,6 @@ export default function PartnerProgramManagementScreen() {
                     {imageSource ? <Image source={imageSource} style={styles.cardHeaderImage} resizeMode="cover" /> : null}
                     {!imageSource ? <MaterialIcons name={getProgramIcon(module)} size={46} color="#ffffff" /> : null}
                     <View style={styles.cardHeaderOverlay}>
-                      <View style={[styles.moduleBadge, { backgroundColor: accent }]}>
-                        <Text style={styles.moduleBadgeText}>{module.toUpperCase()}</Text>
-                      </View>
                       <View style={[styles.projectStatusBadge, { backgroundColor: getProjectStatusColor(project) }]}>
                         <Text style={styles.projectStatusText}>{getProjectDisplayStatus(project)}</Text>
                       </View>
@@ -349,10 +328,7 @@ export default function PartnerProgramManagementScreen() {
                         <MaterialIcons name="place" size={14} color="#64748b" />
                         <Text style={styles.metaText} numberOfLines={1}>{project.location?.address || 'Location not provided'}</Text>
                       </View>
-                      <View style={styles.metaRow}>
-                        <MaterialIcons name="people" size={14} color="#64748b" />
-                        <Text style={styles.metaText}>{project.volunteersNeeded || 0} volunteers requested</Text>
-                      </View>
+                      {/* volunteers requested row removed */}
                       {project.skillsNeeded?.length ? (
                         <View style={styles.metaRow}>
                           <MaterialIcons name="psychology" size={14} color="#64748b" />
@@ -464,7 +440,7 @@ export default function PartnerProgramManagementScreen() {
             <View style={styles.detailModalCard}>
               <View style={styles.modalHeaderRow}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.detailModalEyebrow}>{(getProgramModule(detailModalProject) || 'Program').toUpperCase()}</Text>
+                  <Text style={styles.detailModalEyebrow}>PROJECT</Text>
                   <Text style={styles.detailModalTitle}>{detailModalProject.title}</Text>
                 </View>
                 <TouchableOpacity onPress={() => setDetailModalProject(null)} style={styles.modalCloseButton}>

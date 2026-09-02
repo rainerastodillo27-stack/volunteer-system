@@ -59,7 +59,7 @@ export default function PartnerHomeScreen() {
   };
 
   const handleSubmitProposal = () => {
-    navigation.navigate('Dashboard', { openProposalModule: 'Nutrition' });
+    navigation.navigate('Dashboard');
   };
 
   const handleLearnMore = () => {
@@ -130,82 +130,7 @@ export default function PartnerHomeScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* MISSION PILLARS */}
-        <View style={styles.section}>
-          <View style={styles.sectionHead}>
-            <Text style={styles.sectionTitle}>Our mission</Text>
-          </View>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.pillarsContainer}
-          >
-            {/* Nutrition */}
-            <View style={styles.pillar}>
-              <View style={[styles.pillarIcon, styles.pillarN]}>
-                <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
-                  <Path
-                    d="M12 2C9 6 5 9 5 14a7 7 0 0 0 14 0c0-5-4-8-7-12Z"
-                    stroke="#C97F1F"
-                    strokeWidth={2}
-                  />
-                </Svg>
-              </View>
-              <Text style={styles.pillarTitle}>Nutrition</Text>
-              <Text style={styles.pillarDesc}>
-                Nutritious food and scalable protocols for children of the poor.
-              </Text>
-            </View>
-
-            {/* Education */}
-            <View style={styles.pillar}>
-              <View style={[styles.pillarIcon, styles.pillarE]}>
-                <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
-                  <Path
-                    d="M4 6l8-3 8 3-8 3-8-3Z"
-                    stroke="#1F3A2E"
-                    strokeWidth={2}
-                  />
-                  <Path
-                    d="M4 6v7l8 3 8-3V6"
-                    stroke="#1F3A2E"
-                    strokeWidth={2}
-                  />
-                </Svg>
-              </View>
-              <Text style={styles.pillarTitle}>Education</Text>
-              <Text style={styles.pillarDesc}>
-                Formal and non-formal learning for children and their families.
-              </Text>
-            </View>
-
-            {/* Livelihood */}
-            <View style={styles.pillar}>
-              <View style={[styles.pillarIcon, styles.pillarL]}>
-                <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
-                  <rect
-                    x="4"
-                    y="10"
-                    width="16"
-                    height="9"
-                    rx="1.5"
-                    stroke="#B0432B"
-                    strokeWidth={2}
-                  />
-                  <Path
-                    d="M8 10V7a4 4 0 0 1 8 0v3"
-                    stroke="#B0432B"
-                    strokeWidth={2}
-                  />
-                </Svg>
-              </View>
-              <Text style={styles.pillarTitle}>Livelihood</Text>
-              <Text style={styles.pillarDesc}>
-                Sustainable income opportunities for whole communities.
-              </Text>
-            </View>
-          </ScrollView>
-        </View>
+        {/* Mission Pillars section removed */}
 
         {/* IMPACT STAT */}
         <View style={styles.impactCard}>
@@ -316,77 +241,7 @@ export default function PartnerHomeScreen() {
             </TouchableOpacity>
           </View>
         </View>
-
-        {/* OUR PROGRAMS */}
-        <View style={styles.programsSection}>
-          <Text style={styles.programsTitle}>Our Programs</Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.programsContainer}
-          >
-            <View style={styles.programCard}>
-              <View style={styles.programImg}>
-                <Image
-                  source={nutritionImage}
-                  style={{ width: '100%', height: '100%' }}
-                  resizeMode="cover"
-                />
-              </View>
-              <View style={styles.programBody}>
-                <Text style={styles.programName}>Nutrition</Text>
-                <Text style={styles.programDesc}>
-                  NVC manufactures Mingo, a nutritious instant complementary food. We run a
-                  nutrition program using Mingo for children of impoverished families to help
-                  them build strong bodies and sharp minds.
-                </Text>
-                <TouchableOpacity style={styles.programLearn} onPress={handleLearnMore} activeOpacity={0.85}>
-                  <Text style={styles.programLearnText}>Learn more</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-            <View style={styles.programCard}>
-              <View style={styles.programImg}>
-                <Image
-                  source={educationImage}
-                  style={{ width: '100%', height: '100%' }}
-                  resizeMode="cover"
-                />
-              </View>
-              <View style={styles.programBody}>
-                <Text style={styles.programName}>Education</Text>
-                <Text style={styles.programDesc}>
-                  NVC’s education projects enhance the quality of schooling for children of the
-                  poor. These range from infrastructure projects, provision of school supplies,
-                  and assisting teachers become better at their craft.
-                </Text>
-                <TouchableOpacity style={styles.programLearn} onPress={handleLearnMore} activeOpacity={0.85}>
-                  <Text style={styles.programLearnText}>Learn more</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-            <View style={styles.programCard}>
-              <View style={styles.programImg}>
-                <Image
-                  source={livelihoodImage}
-                  style={{ width: '100%', height: '100%' }}
-                  resizeMode="cover"
-                />
-              </View>
-              <View style={styles.programBody}>
-                <Text style={styles.programName}>Livelihood</Text>
-                <Text style={styles.programDesc}>
-                  To help improve the lives of families in the communities we serve, our
-                  livelihood projects give adults various opportunities to earn or increase
-                  their income.
-                </Text>
-                <TouchableOpacity style={styles.programLearn} onPress={handleLearnMore} activeOpacity={0.85}>
-                  <Text style={styles.programLearnText}>Learn more</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </ScrollView>
-        </View>
+        {/* Our Programs section removed */}
       </ScrollView>
     </View>
   );

@@ -3,9 +3,9 @@
 // User role and profile enums used throughout the app.
 export type UserRole = 'admin' | 'volunteer' | 'partner';
 export type UserType = 'Student' | 'Adult' | 'Senior';
-export type NVCSector = 'Education' | 'Livelihood' | 'Nutrition';
+export type NVCSector = string; // Pillar categories removed
 export type PartnerSectorType = 'NGO' | 'Hospital' | 'Institution' | 'Private';
-export type AdvocacyFocus = 'Nutrition' | 'Education' | 'Livelihood' | 'Disaster';
+export type AdvocacyFocus = string; // Pillar categories removed
 export type PartnerReportType = 'General' | 'Medical' | 'Logistics';
 export type ImpactHubReportType =
   | PartnerReportType
@@ -81,7 +81,7 @@ export interface Partner {
   name: string;
   stakeholderName?: string;
   description?: string;
-  category: 'Education' | 'Livelihood' | 'Nutrition' | 'Disaster';
+  category: string; // Pillar categories removed
   sectorType: PartnerSectorType;
   dswdAccreditationNo: string;
   secRegistrationNo?: string;
@@ -182,7 +182,7 @@ export interface Project {
   statusMode?: 'System' | 'Manual';
   manualStatus?: 'Planning' | 'In Progress' | 'On Hold' | 'Completed' | 'Cancelled';
   status: 'Planning' | 'In Progress' | 'On Hold' | 'Completed' | 'Cancelled';
-  category: 'Education' | 'Livelihood' | 'Nutrition' | 'Disaster';
+  category: string; // Pillar categories removed
   startDate: string;
   endDate: string;
   location: {

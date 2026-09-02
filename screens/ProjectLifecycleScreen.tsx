@@ -1265,7 +1265,7 @@ const createEmptyProjectDraft = (
 
   partnerId = '',
 
-  programModule: AdvocacyFocus = 'Education',
+  programModule: AdvocacyFocus = '',
 
   isEvent = false,
 
@@ -2781,9 +2781,9 @@ const InlineProjectForm = React.memo(({
 
                     const matchedTitle = matchedSection?.title || '';
 
-                    const knownModules: AdvocacyFocus[] = ['Education', 'Livelihood', 'Nutrition', 'Disaster'];
+                    const knownModules: AdvocacyFocus[] = [];
 
-                    let advocacyFocus: AdvocacyFocus = 'Education';
+                    let advocacyFocus: AdvocacyFocus = '';
 
                     for (const module of knownModules) {
 
@@ -3699,7 +3699,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     setProjectEditorMode('project');
 
-    const knownModules: AdvocacyFocus[] = ['Education', 'Livelihood', 'Nutrition', 'Disaster'];
+    const knownModules: AdvocacyFocus[] = [];
 
     const advocacyFocus: AdvocacyFocus = knownModules.includes(trackId as AdvocacyFocus)
 
@@ -4066,7 +4066,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   const [projectDraft, setProjectDraft] = useState<ProjectDraft>(() => {
 
-    const initialModule = (route.params?.programModule as AdvocacyFocus) || 'Education';
+    const initialModule = (route.params?.programModule as AdvocacyFocus) || '';
 
     return createEmptyProjectDraft('', initialModule);
 
@@ -5485,7 +5485,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     // Determine advocacy focus from the track ID if it's a known module, else default to Education
 
-    const knownModules: AdvocacyFocus[] = ['Education', 'Livelihood', 'Nutrition', 'Disaster'];
+    const knownModules: AdvocacyFocus[] = [];
 
     const advocacyFocus: AdvocacyFocus = knownModules.includes(trackId as AdvocacyFocus)
 

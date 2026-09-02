@@ -789,7 +789,7 @@ export default function VolunteerEventsScreen() {
         >
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Filter By Category</Text>
-            {['All', 'Nutrition', 'Education', 'Livelihood', 'Disaster'].map(cat => (
+            {['All'].map(cat => (
               <TouchableOpacity
                 key={cat}
                 style={[styles.modalOption, filterCategory === cat && styles.modalOptionActive]}

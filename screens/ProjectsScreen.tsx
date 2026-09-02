@@ -382,7 +382,7 @@ function getProjectSuggestion(project: Project, volunteer: Volunteer | null): Re
     ...normalizeWords(project.description),
     ...normalizeWords(project.location.address),
     ...((project.skillsNeeded || []).flatMap(normalizeWords)),
-    ...CATEGORY_KEYWORDS[project.category],
+    ...((project.category && (CATEGORY_KEYWORDS as any)[project.category]) || []),
   ]);
 
   const matchedTerms = skillTerms.filter((term) => projectTerms.includes(term)).slice(0, 3);
@@ -417,10 +417,10 @@ function getProjectImageSources(project: Project): ImageSourcePropType[] {
   }
 
   if (project.programModule && project.programModule in PROGRAM_IMAGE_BY_CATEGORY) {
-    imageSources.push(PROGRAM_IMAGE_BY_CATEGORY[project.programModule as Project['category']] as ImageSourcePropType);
+    if ((PROGRAM_IMAGE_BY_CATEGORY as any)[project.programModule]) { imageSources.push((PROGRAM_IMAGE_BY_CATEGORY as any)[project.programModule] as ImageSourcePropType); }
   }
 
-  const categoryImageSource = PROGRAM_IMAGE_BY_CATEGORY[project.category];
+  const categoryImageSource = project.category ? (PROGRAM_IMAGE_BY_CATEGORY as any)[project.category] : undefined;
   if (categoryImageSource && !imageSources.includes(categoryImageSource)) {
     imageSources.push(categoryImageSource);
   }
@@ -453,12 +453,12 @@ function ProjectCardImage({
         onPress={onPress}
         style={({ pressed }) => [
           styles.programImageFallback,
-          styles[`programImageFallback${project.category}`],
+          (styles as any)[`programImageFallback${project.category}`],
           pressed && styles.programImagePressed,
         ]}
       >
         <MaterialIcons
-          name={FALLBACK_ICON_BY_CATEGORY[project.category]}
+          name={(project.category && (FALLBACK_ICON_BY_CATEGORY as any)[project.category]) || 'folder'}
           size={34}
           color="#166534"
         />
@@ -489,7 +489,7 @@ function ProjectCardImage({
       />
       <View style={styles.programImageTitleBadge}>
         <Text style={styles.programImageTitle}>{project.title}</Text>
-        <Text style={styles.programImageCategory}>{project.category}</Text>
+        {project.category ? <Text style={styles.programImageCategory}>{project.category}</Text> : null}
       </View>
       <View style={styles.programImageOverlay}>
         <Text style={styles.programImageOverlayText}>Click image to open</Text>

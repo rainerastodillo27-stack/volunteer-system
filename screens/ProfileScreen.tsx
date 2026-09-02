@@ -42,7 +42,7 @@ import { TASK_SKILL_OPTIONS } from '../utils/skills';
 import VolunteerImpactMap from '../components/VolunteerImpactMap';
 
 const USER_TYPES: UserType[] = ['Student', 'Adult', 'Senior'];
-const PILLAR_OPTIONS: NVCSector[] = ['Nutrition', 'Education', 'Livelihood'];
+const PILLAR_OPTIONS: NVCSector[] = [];
 const SAVE_SYNC_RETRY_COUNT = 3;
 const SAVE_SYNC_RETRY_DELAY_MS = 250;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -1437,30 +1437,7 @@ export default function ProfileScreen() {
                   editable={!saveLoading}
                 />
 
-                <Text style={styles.fieldLabel}>Advocacy Focus</Text>
-                <View style={styles.optionRow}>
-                  {['Nutrition', 'Education', 'Livelihood', 'Disaster'].map(focus => {
-                    const isSelected = advocacyFocusDraft.includes(focus as AdvocacyFocus);
-                    return (
-                      <TouchableOpacity
-                        key={focus}
-                        style={[styles.optionChip, isSelected && styles.optionChipActive]}
-                        onPress={() => {
-                          setAdvocacyFocusDraft(prev =>
-                            isSelected
-                              ? prev.filter(f => f !== focus)
-                              : [...prev, focus as AdvocacyFocus]
-                          );
-                        }}
-                        disabled={saveLoading}
-                      >
-                        <Text style={[styles.optionChipText, isSelected && styles.optionChipTextActive]}>
-                          {focus}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
+                {/* Advocacy Focus field removed */}
 
                 <Text style={styles.fieldLabel}>Location Address</Text>
                 <TextInput

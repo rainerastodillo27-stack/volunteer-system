@@ -484,7 +484,7 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
   const [reportForm, setReportForm] = useState<ReportFormState>(createEmptyReportForm());
 
-  const [proposalForm, setProposalForm] = useState<ProposalFormState>(createEmptyProposalForm('Disaster'));
+  const [proposalForm, setProposalForm] = useState<ProposalFormState>(createEmptyProposalForm(''));
 
   const [showProposalModal, setShowProposalModal] = useState(false);
 
