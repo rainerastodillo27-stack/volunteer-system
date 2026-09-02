@@ -12,9 +12,10 @@ from pathlib import Path
 from backend.db import get_postgres_connection
 
 KEEP_USER_IDS = {
-    "user-1788132906999",  # Rainer Astodillo — partner
-    "user-1788128433682",  # Raijen — volunteer
-    "user-1788121297340",  # Rainer Astodillo — volunteer
+    "user-1788285740560",  # NVC — nvc@gmail.com
+    "user-1788132906999",  # Rainer Astodillo — partner (rainerastodillo079@gmail.com)
+    "user-1788128433682",  # Raijen — volunteer (rainerastodillo7@gmail.com)
+    "user-1788121297340",  # Rainer Astodillo — volunteer (rainerastodillo27@gmail.com)
 }
 
 
@@ -32,12 +33,18 @@ def main() -> int:
     try:
         users = rows(conn, "users")
         targets = [u for u in users if str(u.get("users_id") or "") not in KEEP_USER_IDS]
-        print("TARGETS")
+        print("TARGETS TO REMOVE:")
         for u in targets:
             print(f"- {u.get('users_id')} | {u.get('name')} | {u.get('role')} | {u.get('email')}")
+        print("\nACCOUNTS BEING KEPT:")
+        for u in users:
+            if str(u.get("users_id") or "") in KEEP_USER_IDS:
+                print(f"+ {u.get('users_id')} | {u.get('name')} | {u.get('role')} | {u.get('email')}")
+
         if not args.apply:
-            print("DRY RUN: no changes made")
+            print("\nDRY RUN: no changes made. Run with --apply to execute deletion.")
             return 0
+
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         backup_dir = Path("migration_backups")
         backup_dir.mkdir(exist_ok=True)
@@ -53,14 +60,21 @@ def main() -> int:
         placeholders = ",".join(["%s"] * len(target_ids))
         with conn.cursor() as cur:
             # Remove dependent operational records, then profiles and accounts.
-            for table, column in [("messages", "sender_id"), ("messages", "recipient_id"), ("project_group_messages", "sender_id"), ("volunteer_event_joins", "volunteer_user_id")]:
+            for table, column in [
+                ("messages", "sender_id"),
+                ("messages", "recipient_id"),
+                ("project_group_messages", "sender_id"),
+                ("volunteer_event_joins", "volunteer_user_id"),
+                ("partner_project_applications", "partner_user_id"),
+            ]:
                 cur.execute(f"DELETE FROM public.{table} WHERE {column} IN ({placeholders})", target_ids)
+            cur.execute(f"DELETE FROM public.reports WHERE submitter_user_id IN ({placeholders}) OR partner_user_id IN ({placeholders})", target_ids + target_ids)
             cur.execute(f"DELETE FROM public.volunteer_matches WHERE volunteer_id IN (SELECT volunteers_id FROM public.volunteers WHERE user_id IN ({placeholders}))", target_ids)
             cur.execute(f"DELETE FROM public.volunteer_time_logs WHERE volunteer_id IN (SELECT volunteers_id FROM public.volunteers WHERE user_id IN ({placeholders}))", target_ids)
             cur.execute(f"DELETE FROM public.volunteers WHERE user_id IN ({placeholders})", target_ids)
             cur.execute(f"DELETE FROM public.partners WHERE owner_user_id IN ({placeholders})", target_ids)
             cur.execute(f"DELETE FROM public.users WHERE users_id IN ({placeholders})", target_ids)
-        changed = ["users", "volunteers", "partners", "messages", "project_group_messages", "volunteer_event_joins", "volunteer_matches", "volunteer_time_logs"]
+        changed = ["users", "volunteers", "partners", "messages", "project_group_messages", "volunteer_event_joins", "volunteer_matches", "volunteer_time_logs", "partner_project_applications", "reports"]
         conn.commit()
         print(f"BACKUP {backup_path}")
         print(f"DELETED {len(targets)} accounts")

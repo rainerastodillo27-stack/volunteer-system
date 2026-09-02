@@ -470,7 +470,7 @@ def _has_required_demo_seed(connection: Any) -> bool:
         if not get_postgres_hot_storage_collection(connection, key):
             return False
     return any(
-        str(item.get("email") or "").strip().lower() == "admin@nvc.org"
+        str(item.get("email") or "").strip().lower() in {"admin@nvc.org", "nvc@gmail.com"}
         for item in get_postgres_hot_storage_collection(connection, "users")
         if isinstance(item, dict)
     )

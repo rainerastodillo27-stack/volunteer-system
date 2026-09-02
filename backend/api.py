@@ -2999,7 +2999,7 @@ def _resolve_admin_message_user_id(connection: Any, preferred_user_id: str | Non
             from users
             where role = 'admin'
             order by
-              case when lower(coalesce(email, '')) = 'admin@nvc.org' then 0 else 1 end,
+              case when lower(coalesce(email, '')) = 'nvc@gmail.com' then 0 else 1 end,
               created_at asc nulls last,
               users_id asc
             limit 1
@@ -3010,7 +3010,7 @@ def _resolve_admin_message_user_id(connection: Any, preferred_user_id: str | Non
     if row is not None and row[0]:
         return str(row[0])
 
-    return preferred_id or "user-admin-1780189738"
+    return preferred_id or "user-1788285740560"
 
 
 _PROPOSAL_CARD_PREFIX = "___PROPOSAL_CARD___:"
@@ -3245,38 +3245,7 @@ def lookup_user(identifier: str) -> dict[str, Any]:
 
 
 # Demo accounts for offline/development mode
-DEMO_ACCOUNTS = [
-    {
-        "id": "user-admin-1780189738",
-        "email": "admin@nvc.org",
-        "password": "admin123",
-        "role": "admin",
-        "name": "Admin Account",
-        "phone": "09170000001",
-        "created_at": "2026-01-01T00:00:00Z",
-        "approvalStatus": "approved"
-    },
-    {
-        "id": "user-volunteer-1780189738",
-        "email": "volunteer@example.com",
-        "password": "volunteer123",
-        "role": "volunteer",
-        "name": "Volunteer Account",
-        "phone": "09123456789",
-        "created_at": "2026-01-01T00:00:00Z",
-        "approvalStatus": "approved"
-    },
-    {
-        "id": "user-partner-1780189738",
-        "email": "partner@livelihoods.org",
-        "password": "partner123",
-        "role": "partner",
-        "name": "Kabankalan LGU",
-        "phone": "09198765432",
-        "created_at": "2026-01-01T00:00:00Z",
-        "approvalStatus": "approved"
-    },
-]
+DEMO_ACCOUNTS = []
 
 def _normalize_phone(phone: str) -> str:
     """Normalize phone for comparison"""

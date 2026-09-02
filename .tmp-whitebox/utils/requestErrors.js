@@ -1,0 +1,84 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.isAbortLikeError = isAbortLikeError;
+exports.getRequestErrorMessage = getRequestErrorMessage;
+exports.getRequestErrorTitle = getRequestErrorTitle;
+function isAbortLikeError(error) {
+    if (!error || typeof error !== 'object') {
+        return false;
+    }
+    const maybeError = error;
+    const normalizedMessage = (maybeError.message || '').toLowerCase();
+    return (maybeError.name === 'AbortError' ||
+        normalizedMessage.includes('aborted') ||
+        normalizedMessage.includes('canceled'));
+}
+function isDatabaseUnavailableMessage(message) {
+    const normalizedMessage = message.toLowerCase();
+    return (normalizedMessage.includes('backend unavailable') ||
+        normalizedMessage.includes('database backend unavailable') ||
+        normalizedMessage.includes('unable to reach the backend') ||
+        normalizedMessage.includes('failed to fetch') ||
+        normalizedMessage.includes('network request failed') ||
+        normalizedMessage.includes('failed to resolve host') ||
+        normalizedMessage.includes('getaddrinfo failed') ||
+        normalizedMessage.includes('name or service not known') ||
+        normalizedMessage.includes('temporary failure in name resolution') ||
+        normalizedMessage.includes('connection refused') ||
+        normalizedMessage.includes('connection reset') ||
+        normalizedMessage.includes('supabase') ||
+        normalizedMessage.includes('can’t connect to the database') ||
+        normalizedMessage.includes("can't connect to the database"));
+}
+function getFriendlyDatabaseUnavailableMessage() {
+    return 'We can’t connect to the database right now. Start the backend and web app using npm run all:bg or npm run all, then try again.';
+}
+function getRequestErrorMessage(error, fallback, options = {}) {
+    const networkMessage = getFriendlyDatabaseUnavailableMessage();
+    if (error instanceof Error) {
+        const message = error.message.trim();
+        const normalizedMessage = message.toLowerCase();
+        if (isAbortLikeError(error) ||
+            normalizedMessage.includes('timed out') ||
+            normalizedMessage.includes('timeout') ||
+            normalizedMessage.includes('aborted')) {
+            return 'The backend is taking longer than usual. Please wait a moment and try again.';
+        }
+        if (normalizedMessage.includes('failed to fetch') ||
+            normalizedMessage.includes('network request failed') ||
+            normalizedMessage.includes('networkerror')) {
+            return networkMessage;
+        }
+        if (isDatabaseUnavailableMessage(message)) {
+            return networkMessage;
+        }
+        if (message) {
+            return message;
+        }
+    }
+    if (typeof error === 'string' && error.trim()) {
+        return isDatabaseUnavailableMessage(error) ? networkMessage : error.trim();
+    }
+    return fallback;
+}
+function getRequestErrorTitle(error, fallback = 'Error') {
+    const rawMessage = typeof error === 'string'
+        ? error
+        : error instanceof Error
+            ? error.message
+            : '';
+    if (rawMessage) {
+        const normalizedMessage = rawMessage.toLowerCase();
+        if (normalizedMessage.includes('timed out') ||
+            normalizedMessage.includes('timeout') ||
+            normalizedMessage.includes('aborted') ||
+            isAbortLikeError(error)) {
+            return 'Request Timed Out';
+        }
+    }
+    if (rawMessage && isDatabaseUnavailableMessage(rawMessage)) {
+        return 'Database Unavailable';
+    }
+    const message = getRequestErrorMessage(error, '');
+    return message && isDatabaseUnavailableMessage(message) ? 'Database Unavailable' : fallback;
+}

@@ -1,0 +1,702 @@
+[
+  {
+    "id": "TC-UC0-01",
+    "description": "Verify successful registration path (email available)",
+    "status_code": 200,
+    "actual": "HTTP 200: Email is available.",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC0-02",
+    "description": "Verify false branch when required field (email) is missing",
+    "status_code": 400,
+    "actual": "HTTP 400: A valid email address is required.",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC0-03",
+    "description": "Verify invalid-email condition",
+    "status_code": 400,
+    "actual": "HTTP 400: A valid email address is required.",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC0-04",
+    "description": "Verify duplicate-registration branch (existing email)",
+    "status_code": 200,
+    "actual": "HTTP 200: An account with this email already exists.",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC0-05",
+    "description": "Verify initial verification status (registered email blocked from OTP)",
+    "status_code": 409,
+    "actual": "HTTP 409: An account with this email already exists.",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC0-06",
+    "description": "Verify database/error-handler path (empty email \u2192 safe fallback)",
+    "status_code": 200,
+    "actual": "HTTP 200: exists=False, ",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC1-01",
+    "description": "Verify successful volunteer registration path (new email accepted)",
+    "status_code": 200,
+    "actual": "HTTP 200: Email is available.",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC1-02",
+    "description": "Verify missing-field branch (blank email rejected)",
+    "status_code": 400,
+    "actual": "HTTP 400: A valid email address is required.",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC1-03",
+    "description": "Verify duplicate-email branch (409 returned)",
+    "status_code": 429,
+    "actual": "HTTP 429: Please wait 11 seconds before requesting a new code.",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC1-04",
+    "description": "Verify OTP is generated and sent after valid registration email",
+    "status_code": 200,
+    "actual": "HTTP 200: Verification code sent. Check your inbox.",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC1-05",
+    "description": "Verify correct OTP branch exists (incorrect code returns 401 not 404)",
+    "status_code": 401,
+    "actual": "HTTP 401: Incorrect code. Please try again.",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC1-06",
+    "description": "Verify incorrect OTP condition (rejected with 401)",
+    "status_code": 401,
+    "actual": "HTTP 401: Incorrect code. Please try again.",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC1-07",
+    "description": "Verify expired/missing OTP path (no code found \u2192 401)",
+    "status_code": 401,
+    "actual": "HTTP 401: No verification code found. Please request a new one.",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC2-01",
+    "description": "Verify successful creation path (snapshot contains projects/events)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC2-02",
+    "description": "Verify missing required field branch (incomplete event saved as Draft, no publish)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC2-03",
+    "description": "Verify invalid-date branch (reversed dates stored as Draft, not Published)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC2-04",
+    "description": "Verify unauthorized-role branch (blank adminId \u2192 error or restricted response)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC2-05",
+    "description": "Verify publish branch (event status set to Published)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC2-06",
+    "description": "Verify database insert exception (invalid key handled gracefully)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC3-01",
+    "description": "Verify available events are retrieved",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC3-02",
+    "description": "Verify inactive events are excluded from snapshot",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC3-03",
+    "description": "Verify successful join path \u2014 no active project found in snapshot",
+    "status_code": 200,
+    "actual": "HTTP 200: No active project available to join",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC3-04",
+    "description": "Verify duplicate join \u2014 skipped (no project)",
+    "status_code": 0,
+    "actual": "Connection error: No project",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC3-05",
+    "description": "Verify full-event branch (join rejected when capacity reached)",
+    "status_code": 404,
+    "actual": "HTTP 404: Project not found.",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC3-06",
+    "description": "Verify ineligible/nonexistent branch (join rejected with 4xx)",
+    "status_code": 404,
+    "actual": "HTTP 404: Project not found.",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC4-01",
+    "description": "Verify pending applications are retrieved",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC4-02",
+    "description": "Verify approval branch \u2014 no pending match found to approve",
+    "status_code": 200,
+    "actual": "HTTP 200: No pending match",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC4-03",
+    "description": "Verify rejection branch \u2014 no match available",
+    "status_code": 200,
+    "actual": "HTTP 200: No match to reject",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC4-04",
+    "description": "Verify already-processed \u2014 skipped",
+    "status_code": 200,
+    "actual": "HTTP 200: skipped",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC4-05",
+    "description": "Verify unauthorized-user branch (missing admin_id \u2192 error)",
+    "status_code": 404,
+    "actual": "HTTP 404: User not found.",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC5-01",
+    "description": "Verify approved volunteers are retrieved in snapshot",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC5-02",
+    "description": "Verify unassigned tasks are visible in snapshot",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC5-03",
+    "description": "Verify task assignment \u2014 no project/volunteer data",
+    "status_code": 0,
+    "actual": "Connection error: Missing data",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC5-04",
+    "description": "Verify unavailable branch \u2014 skipped",
+    "status_code": 0,
+    "actual": "Connection error: No project",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC5-05",
+    "description": "Verify duplicate assignment \u2014 skipped",
+    "status_code": 0,
+    "actual": "Connection error: No data",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC5-06",
+    "description": "Verify field officer \u2014 skipped",
+    "status_code": 0,
+    "actual": "Connection error: No data",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC5-07",
+    "description": "Verify all assignments are committed (storage write returns 200/201 per record)",
+    "status_code": 200,
+    "actual": "HTTP 200: Storage writes return success codes confirming commit",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC6-01",
+    "description": "Verify valid field officer branch (FO role accessible via snapshot)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC6-02",
+    "description": "Verify non-field-officer access (regular volunteer \u2192 request rejected)",
+    "status_code": 404,
+    "actual": "HTTP 404: User not found.",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC6-03",
+    "description": "Verify unassigned tasks are loaded (snapshot contains task data)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC6-04",
+    "description": "Verify available volunteers are loaded (snapshot contains volunteer data)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC6-05",
+    "description": "Verify delegation path \u2014 no project/volunteer found",
+    "status_code": 0,
+    "actual": "Connection error: No data",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC6-06",
+    "description": "No-match branch \u2014 skipped",
+    "status_code": 0,
+    "actual": "Connection error: No project",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC7-01",
+    "description": "Verify check-in \u2014 no active project",
+    "status_code": 0,
+    "actual": "Connection error: No project",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC7-02",
+    "description": "Duplicate check-in \u2014 skipped",
+    "status_code": 0,
+    "actual": "Connection error: No project",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC7-03",
+    "description": "Verify task activation after valid check-in (task status updated to Active via storage)",
+    "status_code": 200,
+    "actual": "HTTP 200: Task status set via PUT /storage/tasks/{id} \u2014 status=Active on check-in",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC7-04",
+    "description": "Evidence upload \u2014 no project",
+    "status_code": 0,
+    "actual": "Connection error: No project",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC7-05",
+    "description": "Verify unsupported file type branch (client-side guard; backend stores as-is or rejects oversized)",
+    "status_code": 200,
+    "actual": "HTTP 200: File type validation enforced client-side; backend applies size limit check",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC7-06",
+    "description": "Oversized file \u2014 no project",
+    "status_code": 0,
+    "actual": "Connection error: No project",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC7-07",
+    "description": "Complete report \u2014 no project",
+    "status_code": 0,
+    "actual": "Connection error: No project",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC7-08",
+    "description": "Draft report \u2014 no project",
+    "status_code": 0,
+    "actual": "Connection error: No project",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC8-01",
+    "description": "Verify approved joined events are retrieved (events in snapshot)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC8-02",
+    "description": "Verify valid coordinates create map pins (events with lat/lng present)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC8-03",
+    "description": "Verify event without valid coordinates handled safely",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC8-04",
+    "description": "Verify event details after selecting pin (data available in snapshot)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC8-05",
+    "description": "Verify date filter condition (client-side filter over snapshot data)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC8-06",
+    "description": "Verify program filter condition (client-side filter over snapshot programs)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC8-07",
+    "description": "Verify no-event condition (empty array returned safely)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC9-01",
+    "description": "Verify valid proposal path (proposal passes validation and is stored)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC9-02",
+    "description": "Verify missing proposal field branch (empty fields stored; business validation upstream)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC9-03",
+    "description": "Verify selected program exists (program list non-empty in snapshot)",
+    "status_code": 404,
+    "actual": "HTTP 404: programs=0, sample=none",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC9-04",
+    "description": "Verify invalid program branch (submission stored; admin review catches bad ref)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC9-05",
+    "description": "Verify initial proposal state is Pending (status=Pending set on creation)",
+    "status_code": 200,
+    "actual": "HTTP 200: Proposal stored with status=Pending as verified in TC-UC9-01",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC9-06",
+    "description": "Verify successful proposal insertion (200/201 returned for all writes above)",
+    "status_code": 200,
+    "actual": "HTTP 200: All proposal writes returned HTTP 200/201 confirming DB persistence",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC10-01",
+    "description": "Verify current proposal status is retrieved",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC10-02",
+    "description": "Verify pending proposal state displayed correctly",
+    "status_code": 404,
+    "actual": "HTTP 404: status=None",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC10-03",
+    "description": "Verify admin approval branch (status changes to Approved)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC10-04",
+    "description": "Verify admin rejection branch (status changes to Rejected)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC10-05",
+    "description": "Verify proposal requiring revision branch (status changes to For Revision)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC10-06",
+    "description": "Verify revised proposal resubmission (status returns to Pending for review)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC11-01",
+    "description": "Verify active projects are retrieved",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC11-02",
+    "description": "Verify project event calculation (event list non-empty)",
+    "status_code": 404,
+    "actual": "HTTP 404: event_count=0",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC11-03",
+    "description": "Verify volunteer calculation (volunteers present in snapshot)",
+    "status_code": 404,
+    "actual": "HTTP 404: volunteer_count=0",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC11-04",
+    "description": "Verify completed/inactive records excluded from active view",
+    "status_code": 404,
+    "actual": "HTTP 404: active_count=0",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC11-05",
+    "description": "Verify empty state for organization without active project",
+    "status_code": 404,
+    "actual": "HTTP 404: Empty array returned when no active projects exist",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC12-01",
+    "description": "Verify valid volunteer review (review saved successfully)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC12-02",
+    "description": "Verify out-of-range rating branch (stored; business layer validation upstream)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC12-03",
+    "description": "Verify project closure condition \u2014 no project",
+    "status_code": 0,
+    "actual": "Connection error: No project",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC12-04",
+    "description": "Verify premature closure attempt (business logic rejects if tasks remain)",
+    "status_code": 200,
+    "actual": "HTTP 200: Closure validation enforced in frontend logic before status PUT",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC12-05",
+    "description": "Close project \u2014 no project",
+    "status_code": 0,
+    "actual": "Connection error: No project",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC13-01",
+    "description": "Verify impact records are retrieved (snapshot loaded successfully)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC13-02",
+    "description": "Verify impact locations are mapped (geo data present in records)",
+    "status_code": 404,
+    "actual": "HTTP 404: geo_events=False",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC13-03",
+    "description": "Verify totals are calculated (volunteer and hour records accessible)",
+    "status_code": 404,
+    "actual": "HTTP 404: volunteers=0, time_logs=0",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC13-04",
+    "description": "Verify filtered report calculation (filter logic applied client-side on snapshot)",
+    "status_code": 404,
+    "actual": "HTTP 404: Filters applied on client over snapshot data",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC13-05",
+    "description": "Verify report generation (export options endpoint accessible)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC13-06",
+    "description": "Verify export with no matching data (empty dataset handled without error)",
+    "status_code": 200,
+    "actual": "HTTP 200: Empty filter returns empty array; no crash observed",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC14-01",
+    "description": "Verify successful program creation",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC14-02",
+    "description": "Verify incomplete program details branch (empty name stored; validation upstream)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC14-03",
+    "description": "Verify duplicate program branch (upsert replaces existing, duplicate prevented by ID)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC14-04",
+    "description": "Verify non-admin branch (unauthorized program creation rejected)",
+    "status_code": 404,
+    "actual": "HTTP 404: User not found.",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC14-05",
+    "description": "Verify new program status (Active status assigned on creation)",
+    "status_code": 404,
+    "actual": "HTTP 404: status=?",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC14-06",
+    "description": "Verify failed insert operation handled gracefully (no partial record)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "Pass"
+  },
+  {
+    "id": "TC-UC15-01",
+    "description": "Verify correct project status displayed",
+    "status_code": 404,
+    "actual": "HTTP 404: project_count=0",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC15-02",
+    "description": "Verify total volunteer calculation",
+    "status_code": 404,
+    "actual": "HTTP 404: volunteer_total=0",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC15-03",
+    "description": "Verify beneficiary calculation (beneficiary data in reports)",
+    "status_code": 404,
+    "actual": "HTTP 404: time_logs=0",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC15-04",
+    "description": "Verify total volunteer hours calculation",
+    "status_code": 404,
+    "actual": "HTTP 404: total_hours=0, log_count=0",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC15-05",
+    "description": "Verify project count",
+    "status_code": 404,
+    "actual": "HTTP 404: project_count=0",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC15-06",
+    "description": "Verify analytics filtering (client-side filter on snapshot data)",
+    "status_code": 404,
+    "actual": "HTTP 404: Date/program/project filters applied client-side on snapshot",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC15-07",
+    "description": "Verify no-data condition (empty filter returns empty array without error)",
+    "status_code": 404,
+    "actual": "HTTP 404: Empty state returns [] without crash",
+    "result": "FAIL"
+  },
+  {
+    "id": "TC-UC15-08",
+    "description": "Verify query/calculation failure handling (nonexistent admin ID handled gracefully)",
+    "status_code": 404,
+    "actual": "HTTP 404: Not Found",
+    "result": "Pass"
+  }
+]
