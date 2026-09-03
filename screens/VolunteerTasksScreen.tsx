@@ -301,6 +301,11 @@ function getTaskAssignedVolunteerNames(task: ProjectInternalTask): string[] {
   );
 }
 
+function getTaskVolunteerLimit(task: Pick<ProjectInternalTask, 'volunteersNeeded'>): number {
+  const parsedLimit = Number(task.volunteersNeeded);
+  return Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : 1;
+}
+
 function isVolunteerAssignedToTask(
   task: ProjectInternalTask,
   volunteerId?: string | null,
@@ -943,6 +948,21 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       const isAlreadyAssigned = Boolean(
         volunteerId && currentTask && currentAssignedVolunteerIds.includes(volunteerId)
       );
+
+      if (
+        mode === 'assign' &&
+        currentTask &&
+        !isAlreadyAssigned &&
+        currentAssignedVolunteerIds.length >= getTaskVolunteerLimit(currentTask)
+      ) {
+        const taskVolunteerLimit = getTaskVolunteerLimit(currentTask);
+        Alert.alert(
+          'Assignment Limit Reached',
+          `This task can have at most ${taskVolunteerLimit} volunteer${taskVolunteerLimit === 1 ? '' : 's'} assigned.`
+        );
+        return;
+      }
+
       const nextAssignedVolunteerIds = !volunteerId
         ? []
         : mode === 'remove'

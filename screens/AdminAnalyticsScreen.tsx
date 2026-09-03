@@ -85,82 +85,6 @@ function safeDate(value?: string): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function getReportMetrics(report: PartnerReport): Record<string, unknown> {
-  const rawMetrics = report.metrics as unknown;
-  if (rawMetrics && typeof rawMetrics === 'object') {
-    return rawMetrics as Record<string, unknown>;
-  }
-
-  if (typeof rawMetrics === 'string') {
-    try {
-      const parsed = JSON.parse(rawMetrics);
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-        ? parsed as Record<string, unknown>
-        : {};
-    } catch {
-      return {};
-    }
-  }
-
-  return {};
-}
-
-function parseBeneficiariesFromNarrative(description: string | undefined): number | undefined {
-  const match = String(description || '').match(
-    /\bbeneficiaries\s+(?:reached|served|assisted)\s*:\s*(\d+(?:\.\d+)?)/i
-  );
-  if (!match) {
-    return undefined;
-  }
-
-  const value = Number(match[1]);
-  return Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
-function getReportBeneficiariesServed(report: PartnerReport): number {
-  const metrics = getReportMetrics(report);
-  const beneficiaryKeys = [
-    'beneficiariesServed',
-    'beneficiaries_served',
-    'beneficiaries',
-    'beneficiariesAssisted',
-    'beneficiaries_assisted',
-    'beneficiariesReached',
-    'beneficiaries_reached',
-  ];
-
-  for (const key of beneficiaryKeys) {
-    const value = Number(metrics[key]);
-    if (Number.isFinite(value) && value >= 0) {
-      return value;
-    }
-  }
-
-  const narrativeValue = parseBeneficiariesFromNarrative(report.description);
-  if (narrativeValue !== undefined) {
-    return narrativeValue;
-  }
-
-  const impactCount = Number(report.impactCount);
-  return Number.isFinite(impactCount) && impactCount >= 0 ? impactCount : 0;
-}
-
-function hasExplicitBeneficiaryMetric(report: PartnerReport): boolean {
-  const metrics = getReportMetrics(report);
-  return [
-    'beneficiariesServed',
-    'beneficiaries_served',
-    'beneficiaries',
-    'beneficiariesAssisted',
-    'beneficiaries_assisted',
-    'beneficiariesReached',
-    'beneficiaries_reached',
-  ].some(key => {
-    const value = Number(metrics[key]);
-    return Number.isFinite(value) && value >= 0;
-  }) || parseBeneficiariesFromNarrative(report.description) !== undefined;
-}
-
 function startOfMonth(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth(), 1);
 }
@@ -563,7 +487,6 @@ function generatePDFReportHTML(
   analytics: {
     partnerFilter: string | 'all';
     programFilter: string | 'all';
-    metrics: any;
     volunteerGrowthData: any[];
     skillAnalytics: any;
     quarterlyPartnerData: any[];
@@ -637,10 +560,6 @@ function generatePDFReportHTML(
         <div class="metric-card">
           <div class="label">Active Volunteers</div>
           <div class="value">${activeVolunteers}</div>
-        </div>
-        <div class="metric-card">
-          <div class="label">Completion Rate</div>
-          <div class="value">${analytics.metrics?.completionPercentage || 0}%</div>
         </div>
       </div>
       
@@ -802,21 +721,6 @@ function generatePDFReportHTML(
     html += `
     <div class="section">
       <h2>5. Project Status Overview</h2>
-      <div class="metric-grid">
-        <div class="metric-card">
-          <div class="label">Total Projects</div>
-          <div class="value">${data.projects.length}</div>
-        </div>
-        <div class="metric-card">
-          <div class="label">Completed Hours</div>
-          <div class="value">${analytics.metrics?.completedHours || 0}</div>
-        </div>
-        <div class="metric-card">
-          <div class="label">Total Beneficiaries</div>
-          <div class="value">${analytics.metrics?.totalBeneficiaries || 0}</div>
-        </div>
-      </div>
-      
       <h3>Status Breakdown</h3>
       <table>
         <thead>
@@ -995,63 +899,6 @@ export default function AdminAnalyticsScreen() {
     [filteredTimeLogs]
   );
   
-  // Calculate project metrics
-  const projectMetrics = useMemo(() => {
-    const totalProjects = trackedProjects.length;
-    const completedProjects = trackedProjects.filter(p => p.status === 'Completed').length;
-    const completionPercentage = totalProjects > 0 ? Math.round((completedProjects / totalProjects) * 100) : 0;
-    
-    // Impact reports are the authoritative source for beneficiaries reached.
-    // Keep expectedBeneficiaries as a fallback for legacy project records that
-    // predate the reports workflow.
-    // Volunteer reports are the source for event-level beneficiary counts.
-    // A partner report may contain an auto-generated roll-up of those same
-    // volunteer reports, so prefer volunteer values per project and only use
-    // partner/legacy impact counts when no volunteer value exists.
-    const reportsByProject = new Map<string, PartnerReport[]>();
-    filteredReports.forEach(report => {
-      const projectId = String(report.projectId || '').trim();
-      if (!projectId) return;
-      const existing = reportsByProject.get(projectId) || [];
-      existing.push(report);
-      reportsByProject.set(projectId, existing);
-    });
-
-    let reportedBeneficiaries = 0;
-    let hasReportBeneficiaryData = false;
-    reportsByProject.forEach(projectReports => {
-      const volunteerReports = projectReports.filter(
-        report => report.submitterRole === 'volunteer' && hasExplicitBeneficiaryMetric(report)
-      );
-      const sourceReports = volunteerReports.length
-        ? volunteerReports
-        : projectReports.filter(report => report.submitterRole !== 'volunteer');
-
-      if (sourceReports.length > 0) {
-        hasReportBeneficiaryData = true;
-        reportedBeneficiaries += sourceReports.reduce(
-          (sum, report) => sum + getReportBeneficiariesServed(report),
-          0
-        );
-      }
-    });
-    const legacyBeneficiaries = trackedProjects.reduce(
-      (sum, project) => sum + (Number((project as any).expectedBeneficiaries) || 0),
-      0
-    );
-    const totalBeneficiaries = hasReportBeneficiaryData
-      ? reportedBeneficiaries
-      : legacyBeneficiaries;
-    
-    return {
-      totalProjects,
-      completedProjects,
-      completionPercentage,
-      totalBeneficiaries,
-      completedHours,
-    };
-  }, [trackedProjects, filteredReports, completedHours]);
-  
   const currentTotal = filteredVolunteers.length;
   const previousTotal = monthPoints[monthPoints.length - 2]?.value || 0;
   const monthlyDelta = currentTotal - previousTotal;
@@ -1105,17 +952,7 @@ export default function AdminAnalyticsScreen() {
       csvContent += `Generated: ${new Date().toLocaleString()}\n`;
       csvContent += `Filters: ${filterInfo}\n\n`;
 
-      // 1. Project Metrics Summary
-      csvContent += `PROJECT METRICS SUMMARY\n`;
-      csvContent += `Metric,Value\n`;
-      csvContent += `Total Projects,${projectMetrics.totalProjects}\n`;
-      csvContent += `Completed Projects,${projectMetrics.completedProjects}\n`;
-      csvContent += `Completion Percentage,${projectMetrics.completionPercentage}%\n`;
-      csvContent += `Total Beneficiaries,${projectMetrics.totalBeneficiaries}\n`;
-      csvContent += `Completed Hours,${projectMetrics.completedHours}\n`;
-      csvContent += `Active Volunteers,${filteredVolunteers.filter(v => v.registrationStatus === 'Approved').length}\n\n`;
-
-      // 2. Volunteer Growth (Last 12 Months)
+      // 1. Volunteer Growth (Last 12 Months)
       csvContent += `VOLUNTEER GROWTH - LAST 12 MONTHS\n`;
       csvContent += `Month,Cumulative Volunteers\n`;
       monthPoints.slice(-12).forEach(point => {
@@ -1123,7 +960,7 @@ export default function AdminAnalyticsScreen() {
       });
       csvContent += `\n`;
 
-      // 3. Skills Distribution (Top 20)
+      // 2. Skills Distribution (Top 20)
       csvContent += `TOP 20 SKILLS CONTRIBUTED\n`;
       csvContent += `Skill,Volunteer Count,Percentage\n`;
       skillAnalytics.slices.slice(0, 20).forEach(skill => {
@@ -1131,7 +968,7 @@ export default function AdminAnalyticsScreen() {
       });
       csvContent += `\n`;
 
-      // 4. Events Summary
+      // 3. Events Summary
       const events = filteredProjects.filter(p => p.isEvent);
       csvContent += `EVENTS SUMMARY\n`;
       csvContent += `Event Title,Start Date,End Date,Volunteer Count,Status\n`;
@@ -1144,7 +981,7 @@ export default function AdminAnalyticsScreen() {
       });
       csvContent += `\n`;
 
-      // 5. Partner Sectors by Quarter
+      // 4. Partner Sectors by Quarter
       csvContent += `PARTNER SECTORS BY QUARTER\n`;
       csvContent += `Quarter,NGO,Hospital,Institution,Private,Total\n`;
       partnerSectorsByQuarter.forEach(q => {
@@ -1153,7 +990,7 @@ export default function AdminAnalyticsScreen() {
       });
       csvContent += `\n`;
 
-      // 6. All Projects
+      // 5. All Projects
       csvContent += `ALL PROJECTS\n`;
       csvContent += `Title,Status,Start Date,End Date,Hours Logged,Volunteers,Is Event\n`;
       filteredProjects.forEach(project => {
@@ -1168,7 +1005,7 @@ export default function AdminAnalyticsScreen() {
       });
       csvContent += `\n`;
 
-      // 7. All Volunteers
+      // 6. All Volunteers
       csvContent += `ALL VOLUNTEERS\n`;
       csvContent += `Name,Email,Phone,Status,Skills,Joined Date\n`;
       filteredVolunteers.forEach(volunteer => {
@@ -1182,7 +1019,7 @@ export default function AdminAnalyticsScreen() {
       });
       csvContent += `\n`;
 
-      // 8. All Partners
+      // 7. All Partners
       csvContent += `ALL PARTNERS\n`;
       csvContent += `Organization Name,Sector,Contact Name,Email,Phone,Status\n`;
       partners.forEach(partner => {
@@ -1420,81 +1257,25 @@ export default function AdminAnalyticsScreen() {
           </View>
         </View>
 
-        {/* Project Metrics Overview */}
-        <View style={styles.metricsOverviewCard}>
-          <View style={[styles.cardHeader, { marginBottom: ModernTheme.spacing[4] }]}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.cardTitle}>PROJECT METRICS OVERVIEW</Text>
-              <Text style={styles.cardSubtitle}>Key performance indicators across filtered projects</Text>
-            </View>
-            <View style={styles.exportButtonsContainer}>
-              <TouchableOpacity
-                style={styles.exportCSVButton}
-                onPress={() => exportToCSV()}
-                activeOpacity={0.8}
-              >
-                <MaterialIcons name="table-chart" size={20} color="#16a34a" />
-                <Text style={styles.exportCSVButtonText}>Export CSV</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.generateReportButton}
-                onPress={() => setShowReportModal(true)}
-                activeOpacity={0.8}
-              >
-                <MaterialIcons name="picture-as-pdf" size={20} color="#fff" />
-                <Text style={styles.generateReportButtonText}>Generate PDF</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-          
-          <View style={styles.metricsGrid}>
-            {/* Project Completion */}
-            <View style={styles.metricBox}>
-              <View style={styles.metricIconCircle}>
-                <MaterialIcons name="check-circle" size={28} color={ModernTheme.colors.primary[600]} />
-              </View>
-              <Text style={styles.metricValue}>{projectMetrics.completionPercentage}%</Text>
-              <Text style={styles.metricLabel}>Project Completion</Text>
-              <Text style={styles.metricSubtext}>
-                {projectMetrics.completedProjects} of {projectMetrics.totalProjects} completed
-              </Text>
-            </View>
-
-            {/* Volunteer Hours */}
-            <View style={styles.metricBox}>
-              <View style={[styles.metricIconCircle, { backgroundColor: ModernTheme.colors.accent[50] }]}>
-                <MaterialIcons name="schedule" size={28} color={ModernTheme.colors.accent[600]} />
-              </View>
-              <Text style={styles.metricValue}>{projectMetrics.completedHours.toLocaleString()}</Text>
-              <Text style={styles.metricLabel}>Volunteer Hours</Text>
-              <Text style={styles.metricSubtext}>
-                Total hours contributed
-              </Text>
-            </View>
-
-            {/* Beneficiaries Reached */}
-            <View style={styles.metricBox}>
-              <View style={[styles.metricIconCircle, { backgroundColor: ModernTheme.colors.status.completed + '20' }]}>
-                <MaterialIcons name="people-outline" size={28} color={ModernTheme.colors.status.completed} />
-              </View>
-              <Text style={styles.metricValue}>{projectMetrics.totalBeneficiaries.toLocaleString()}</Text>
-              <Text style={styles.metricLabel}>Beneficiaries Reached</Text>
-              <Text style={styles.metricSubtext}>
-                Across all projects
-              </Text>
-            </View>
-
-            {/* Active Volunteers */}
-            <View style={styles.metricBox}>
-              <View style={[styles.metricIconCircle, { backgroundColor: ModernTheme.colors.primary[100] }]}>
-                <MaterialIcons name="groups" size={28} color={ModernTheme.colors.primary[700]} />
-              </View>
-              <Text style={styles.metricValue}>{currentTotal}</Text>
-              <Text style={styles.metricLabel}>Active Volunteers</Text>
-              <Text style={styles.metricSubtext}>
-                Total registered
-              </Text>
-            </View>
+        <View style={styles.analyticsActionsRow}>
+          <Text style={styles.analyticsActionsHint}>Use the filters above to prepare an analytics export.</Text>
+          <View style={styles.exportButtonsContainer}>
+            <TouchableOpacity
+              style={styles.exportCSVButton}
+              onPress={() => exportToCSV()}
+              activeOpacity={0.8}
+            >
+              <MaterialIcons name="table-chart" size={20} color="#16a34a" />
+              <Text style={styles.exportCSVButtonText}>Export CSV</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.generateReportButton}
+              onPress={() => setShowReportModal(true)}
+              activeOpacity={0.8}
+            >
+              <MaterialIcons name="picture-as-pdf" size={20} color="#fff" />
+              <Text style={styles.generateReportButtonText}>Generate PDF</Text>
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -2131,7 +1912,6 @@ export default function AdminAnalyticsScreen() {
                       {
                         partnerFilter: selectedPartnerId,
                         programFilter: selectedProgramId,
-                        metrics: projectMetrics,
                         volunteerGrowthData: monthPoints,
                         skillAnalytics,
                         quarterlyPartnerData: partnerSectorsByQuarter,
@@ -2340,57 +2120,6 @@ const styles = StyleSheet.create({
     fontSize: ModernTheme.typography.fontSize.md,
     fontWeight: ModernTheme.typography.fontWeight.semibold,
     color: ModernTheme.colors.text.secondary,
-  },
-  // Project Metrics Overview styles
-  metricsOverviewCard: {
-    borderRadius: ModernTheme.borderRadius.lg,
-    backgroundColor: ModernTheme.colors.background.card,
-    borderWidth: 0,
-    borderColor: 'transparent',
-    padding: ModernTheme.spacing[5],
-    ...ModernTheme.shadows.base,
-  },
-  metricsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: ModernTheme.spacing[3],
-    marginTop: ModernTheme.spacing[4],
-  },
-  metricBox: {
-    flex: 1,
-    minWidth: 200,
-    padding: ModernTheme.spacing[4],
-    backgroundColor: ModernTheme.colors.background.tertiary,
-    borderRadius: ModernTheme.borderRadius.md,
-    alignItems: 'center',
-    ...ModernTheme.shadows.xs,
-  },
-  metricIconCircle: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: ModernTheme.colors.primary[50],
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: ModernTheme.spacing[3],
-  },
-  metricValue: {
-    fontSize: 32,
-    fontWeight: ModernTheme.typography.fontWeight.bold,
-    color: ModernTheme.colors.text.primary,
-    marginBottom: ModernTheme.spacing[1],
-  },
-  metricLabel: {
-    fontSize: ModernTheme.typography.fontSize.sm,
-    fontWeight: ModernTheme.typography.fontWeight.semibold,
-    color: ModernTheme.colors.text.secondary,
-    textAlign: 'center',
-    marginBottom: ModernTheme.spacing[1],
-  },
-  metricSubtext: {
-    fontSize: ModernTheme.typography.fontSize.xs,
-    color: ModernTheme.colors.text.tertiary,
-    textAlign: 'center',
   },
   chartCard: {
     borderRadius: ModernTheme.borderRadius.lg,
@@ -3003,9 +2732,28 @@ const styles = StyleSheet.create({
     fontWeight: ModernTheme.typography.fontWeight.medium,
     textAlign: 'center',
   },
+  analyticsActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: ModernTheme.spacing[3],
+    marginBottom: ModernTheme.spacing[4],
+    padding: ModernTheme.spacing[4],
+    borderRadius: ModernTheme.borderRadius.lg,
+    backgroundColor: ModernTheme.colors.background.card,
+    ...ModernTheme.shadows.base,
+  },
+  analyticsActionsHint: {
+    flex: 1,
+    minWidth: 220,
+    color: ModernTheme.colors.text.secondary,
+    fontSize: ModernTheme.typography.fontSize.sm,
+  },
   // Generate Report Button styles
   exportButtonsContainer: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: ModernTheme.spacing[2],
   },
   exportCSVButton: {

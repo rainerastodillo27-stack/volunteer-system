@@ -92,7 +92,6 @@ export interface PartnerProjectReportSummary {
   partnerReports: SubmittedReport[];
   volunteerAccounts: PartnerVolunteerAccountSummary[];
   generatedTitle: string;
-  generatedDescription: string;
 }
 
 function friendlyEventFallbackTitle(projectId: string | undefined, isEvent: boolean): string {
@@ -244,33 +243,6 @@ function isVolunteerAssignedToTask(
   );
 
   return assignedVolunteerIds.includes(volunteerId);
-}
-
-function formatMetricNumber(value: number | undefined, suffix = ''): string {
-  if (!value) {
-    return `0${suffix}`;
-  }
-
-  return `${Number.isInteger(value) ? value : value.toFixed(1)}${suffix}`;
-}
-
-function buildPartnerGeneratedDescription(
-  project: Project,
-  linkedEvents: Project[],
-  metrics: SubmittedReport['metrics'],
-  volunteerAccounts: PartnerVolunteerAccountSummary[]
-): string {
-  return [
-    `Project Title: ${project.title}`,
-    `Project Description: ${project.description || 'No project description yet.'}`,
-    `Accepted Project Selected: ${project.title}`,
-    `Linked Events: ${linkedEvents.length}`,
-    `Volunteer Event Joins: ${formatMetricNumber(metrics.volunteerEventJoins ?? metrics.volunteerHours)}`,
-    `Verified Attendance from completed time logs: ${formatMetricNumber(metrics.verifiedAttendance)}`,
-    `Active Volunteers: ${formatMetricNumber(metrics.activeVolunteers)}`,
-    `Beneficiaries Served from volunteer reports: ${formatMetricNumber(metrics.beneficiariesServed)}`,
-    `Volunteer Accounts Included: ${volunteerAccounts.length}`,
-  ].join('\n\n');
 }
 
 function buildPartnerProjectSummaries(
@@ -469,12 +441,6 @@ function buildPartnerProjectSummaries(
         partnerReports,
         volunteerAccounts,
         generatedTitle: `${project.title} Partner Impact Report`,
-        generatedDescription: buildPartnerGeneratedDescription(
-          project,
-          linkedEvents,
-          metrics,
-          volunteerAccounts
-        ),
       };
     })
     .sort(

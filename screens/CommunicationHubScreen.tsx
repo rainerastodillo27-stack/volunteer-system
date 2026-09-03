@@ -699,6 +699,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   const scrollRef = useRef<ScrollView>(null);
 
+  const shouldAutoScrollMessagesRef = useRef(true);
+
   const proposalComposerScrollRef = useRef<ScrollView>(null);
 
   const selectedUserRef = useRef<User | null>(null);
@@ -1643,9 +1645,32 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   useEffect(() => {
 
+    // A newly opened conversation should start in the latest-message position.
+    // Once the user drags away from the bottom, background message refreshes
+    // must not take control of the scroll position again.
+    shouldAutoScrollMessagesRef.current = true;
+
+  }, [selectedUser?.id, selectedProjectChat?.project.id, proposalIntent]);
+
+
+
+  const handleMessagesScroll = (event: any) => {
+
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+
+    const distanceFromBottom = contentSize.height - (contentOffset.y + layoutMeasurement.height);
+
+    shouldAutoScrollMessagesRef.current = distanceFromBottom <= 80;
+
+  };
+
+
+
+  useEffect(() => {
+
     // Do not let message refreshes move the proposal editor while a partner or
     // admin is entering details. The editor has its own scroll position.
-    if (proposalIntent) return;
+    if (proposalIntent || !shouldAutoScrollMessagesRef.current) return;
 
     const timer = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
 
@@ -4161,6 +4186,12 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
           style={styles.messagesList}
 
           contentContainerStyle={styles.messagesListContent}
+
+          onScroll={handleMessagesScroll}
+
+          scrollEventThrottle={100}
+
+          keyboardShouldPersistTaps="handled"
 
         >
 

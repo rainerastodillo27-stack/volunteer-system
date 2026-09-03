@@ -5801,6 +5801,46 @@ def get_admin_dashboard_snapshot() -> dict[str, Any]:
         return {"items": {k: [] for k in _ADMIN_DASHBOARD_KEYS}}
 
 
+def _validate_internal_task_assignment_limits(items: list[Any]) -> None:
+    """Reject project writes where a task has more assignees than its estimate."""
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+
+        for task in item.get("internalTasks") or []:
+            if not isinstance(task, dict):
+                continue
+
+            raw_limit = task.get("volunteersNeeded")
+            if raw_limit is None or str(raw_limit).strip() == "":
+                # Preserve older field-officer/task records that predate the
+                # per-task estimate field. New task writes always provide it.
+                continue
+
+            try:
+                parsed_limit = float(raw_limit)
+            except (TypeError, ValueError) as error:
+                raise ValueError("Each task's estimated volunteer count must be a whole number of at least 1.") from error
+
+            if not parsed_limit.is_integer() or parsed_limit < 1:
+                raise ValueError("Each task's estimated volunteer count must be a whole number of at least 1.")
+
+            assigned_ids = {
+                str(task.get("assignedVolunteerId") or "").strip(),
+                *[
+                    str(value or "").strip()
+                    for value in (task.get("assignedVolunteerIds") or [])
+                ],
+            }
+            assigned_ids.discard("")
+            if len(assigned_ids) > int(parsed_limit):
+                task_title = str(task.get("title") or "Untitled task").strip()
+                raise ValueError(
+                    f"Task '{task_title}' allows at most {int(parsed_limit)} volunteer"
+                    f"{'s' if int(parsed_limit) != 1 else ''} to be assigned."
+                )
+
+
 @app.put("/storage/{key}")
 # API endpoint that writes one storage key and broadcasts the change.
 async def put_storage_item(key: str, payload: StoragePayload) -> dict[str, str]:
@@ -5828,6 +5868,12 @@ async def _put_storage_item_once(key: str, payload: StoragePayload) -> dict[str,
     if is_hot_storage_key(key):
         if not isinstance(payload.value, list):
             raise HTTPException(status_code=400, detail=f"Storage key '{key}' expects a list payload.")
+
+        if key in {"projects", "events"}:
+            try:
+                _validate_internal_task_assignment_limits(payload.value)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
 
         changed_keys = [key]
         with get_connection() as connection:

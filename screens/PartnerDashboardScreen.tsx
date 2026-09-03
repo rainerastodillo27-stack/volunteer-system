@@ -1770,6 +1770,8 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
         planningItems={planningItems}
 
+        hideSecondCalendar
+
         projectFilterIds={timelineProjectIds}
         statusFilter={calendarStatusFilter}
         setStatusFilter={setCalendarStatusFilter}

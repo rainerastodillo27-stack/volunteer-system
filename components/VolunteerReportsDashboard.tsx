@@ -734,12 +734,6 @@ export function PartnerReportsDashboard({
   const reportStatus = activeReport?.status || (hasQuarterReport ? 'Submitted' : 'Draft');
 
   // Quarterly Stats - 0 and — when no report for the quarter
-  const totalProjectsCount = useMemo(() => {
-    if (!hasQuarterReport) return 0;
-    return projects.filter(p => !p.isEvent).length || projectSummaries.length || 0;
-  }, [hasQuarterReport, projects, projectSummaries]);
-  const projectTrend = '—';
-
   const skillsCount = useMemo(() => {
     if (!hasQuarterReport) return 0;
     const sSet = new Set<string>();
@@ -1091,43 +1085,9 @@ export function PartnerReportsDashboard({
           </View>
         </View>
 
-        {/* 3. Five KPI Stat Cards */}
+        {/* 3. Report KPI Stat Cards */}
         <View style={{ flexDirection: 'row', gap: 12, flexWrap: 'wrap' }}>
-          {/* Card 1: Total Projects */}
-          <View
-            style={{
-              flex: 1,
-              minWidth: 180,
-              backgroundColor: '#ffffff',
-              borderRadius: 14,
-              borderWidth: 1,
-              borderColor: '#e2e8f0',
-              padding: 16,
-              gap: 8,
-            }}
-          >
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-              <View
-                style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: 18,
-                  backgroundColor: '#FEF3C7',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                <MaterialIcons name="folder" size={20} color="#D97706" />
-              </View>
-              <Text style={{ fontSize: 12, fontWeight: '700', color: '#475569' }}>Total Projects</Text>
-            </View>
-            <Text style={{ fontSize: 28, fontWeight: '900', color: '#0f172a' }}>{totalProjectsCount}</Text>
-            <Text style={{ fontSize: 11, fontWeight: '700', color: projectTrend === '—' ? '#64748b' : '#16A34A' }}>
-              {projectTrend}
-            </Text>
-          </View>
-
-          {/* Card 2: Skills Contributed */}
+          {/* Card 1: Skills Contributed */}
           <View
             style={{
               flex: 1,
@@ -1161,7 +1121,7 @@ export function PartnerReportsDashboard({
             </Text>
           </View>
 
-          {/* Card 3: Events Conducted */}
+          {/* Card 2: Events Conducted */}
           <View
             style={{
               flex: 1,
@@ -1195,7 +1155,7 @@ export function PartnerReportsDashboard({
             </Text>
           </View>
 
-          {/* Card 4: Sectors Partner (Donut Chart) */}
+          {/* Card 3: Sectors Partner (Donut Chart) */}
           <View
             style={{
               flex: 1.2,
@@ -1258,7 +1218,7 @@ export function PartnerReportsDashboard({
             </View>
           </View>
 
-          {/* Card 5: Volunteers Involved */}
+          {/* Card 4: Volunteers Involved */}
           <View
             style={{
               flex: 1,
@@ -1514,7 +1474,7 @@ export function PartnerReportsDashboard({
             </View>
             <Text style={{ fontSize: 13, color: '#475569', lineHeight: 20 }}>
               {activeReport?.description ||
-                `The ${currentQuarter.label} partner program conducted in collaboration with ${orgName} includes ${totalProjectsCount} active project initiatives and ${eventsConductedCount} community events engaging ${volunteersCount} volunteers.`}
+                `The ${currentQuarter.label} partner program conducted in collaboration with ${orgName} includes ${eventsConductedCount} community events engaging ${volunteersCount} volunteers.`}
             </Text>
             <TouchableOpacity
               style={{
@@ -1698,14 +1658,6 @@ function getVolunteerReportsForSummary(summary: PartnerProjectReportSummary): Su
     );
 }
 
-function formatMetricValue(value?: number): string {
-  if (!value) {
-    return '0';
-  }
-
-  return Number.isInteger(value) ? String(value) : value.toFixed(1);
-}
-
 function buildProjectSummaryContent(summary: PartnerProjectReportSummary): string {
   const volunteerReports = getVolunteerReportsForSummary(summary);
   const linkedEvents = summary.linkedEvents.length
@@ -1722,9 +1674,6 @@ function buildProjectSummaryContent(summary: PartnerProjectReportSummary): strin
           [
             `- ${account.submitterName}`,
             `  Volunteer Reports: ${account.reports.length}`,
-            `  Verified Attendance: ${account.verifiedAttendance}`,
-            `  Volunteer Event Joins: ${account.volunteerEventJoins}`,
-            `  Beneficiaries Served: ${account.beneficiariesServed}`,
             account.reports.length
               ? `  Reports: ${account.reports.map(report => report.title).join(', ')}`
               : null,
@@ -1754,14 +1703,6 @@ function buildProjectSummaryContent(summary: PartnerProjectReportSummary): strin
   return [
     `Project Summary: ${summary.project.title}`,
     `Project Description: ${summary.project.description || 'No project description provided.'}`,
-    '',
-    'Project Metrics',
-    `Volunteer Reports Submitted: ${volunteerReports.length}`,
-    `Verified Attendance: ${formatMetricValue(summary.metrics.verifiedAttendance)}`,
-    `Volunteer Event Joins: ${formatMetricValue(summary.metrics.volunteerEventJoins ?? summary.metrics.volunteerHours)}`,
-    `Active Volunteers: ${formatMetricValue(summary.metrics.activeVolunteers)}`,
-    `Beneficiaries Served: ${formatMetricValue(summary.metrics.beneficiariesServed)}`,
-    `Linked Events Count: ${summary.linkedEvents.length}`,
     '',
     'Linked Events',
     linkedEvents,
