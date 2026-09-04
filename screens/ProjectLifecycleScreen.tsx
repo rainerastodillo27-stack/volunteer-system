@@ -104,7 +104,6 @@ import {
 
   getAllVolunteerProjectMatches,
 
-  getAllVolunteerTimeLogs,
 
   getAllPartners,
 
@@ -884,7 +883,9 @@ function getDateRangeKeys(startDate?: string, endDate?: string): string[] {
 
   let guard = 0;
 
-  while (current <= finalDate && guard < 90) {
+  // Keep a generous safety guard for malformed dates while still supporting
+  // events that run longer than a typical quarter.
+  while (current <= finalDate && guard < 3660) {
 
     keys.push(getLocalDateKey(current.toISOString()));
 
@@ -5413,9 +5414,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     try {
 
-      const logs = await getAllVolunteerTimeLogs();
-
-      setVolunteerTimeLogs(logs);
+      // Attendance photos are submitted by another account, so always read
+      // this collection fresh instead of rendering a stale local snapshot.
+      clearStorageCache(['volunteerTimeLogs']);
+      const logs = (await getStorageItem<VolunteerTimeLog[]>('volunteerTimeLogs')) || [];
+      setVolunteerTimeLogs(
+        logs.sort((left, right) => new Date(right.timeIn).getTime() - new Date(left.timeIn).getTime())
+      );
 
     } catch (error) {
 
@@ -19545,7 +19550,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     const handleExportAttendanceReport = () => {
 
-      const todayKey = getLocalDateKey(currentDate.toISOString());
+      const exportDateKey = resolvedAttendanceDateKey;
 
       const eventVolunteers = getProjectVolunteerEntries(activeSelectedProject);
 
@@ -19553,7 +19558,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         const volunteerLogs = volunteerTimeLogs.filter(log => log.volunteerId === volunteer.id && log.projectId === activeSelectedProject.id);
 
-        const todayLog = volunteerLogs.find(log => getLocalDateKey(log.attendanceConfirmedAt || log.timeIn) === todayKey);
+        const todayLog = volunteerLogs.find(
+          log => getLocalDateKey(log.attendanceConfirmedAt || log.timeIn) === resolvedAttendanceDateKey
+        );
 
         
 
@@ -19625,7 +19632,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         link.href = url;
 
-        link.download = `attendance-report-${activeSelectedProject.title.toLowerCase().replace(/\s+/g, '-')}-${todayKey}.csv`;
+        link.download = `attendance-report-${activeSelectedProject.title.toLowerCase().replace(/\s+/g, '-')}-${exportDateKey}.csv`;
 
         document.body.appendChild(link);
 
@@ -19689,13 +19696,16 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     const renderAttendanceTasksView = (project: Project) => {
 
-      const todayKey = getLocalDateKey(currentDate.toISOString());
-
+      const selectedAttendanceDate = /^\d{4}-\d{2}-\d{2}$/.test(resolvedAttendanceDateKey)
+        ? new Date(`${resolvedAttendanceDateKey}T00:00:00`)
+        : normalizeDateOnlyValue(currentDate);
+      const attendanceDateMin = getDateOnlyBoundary(project.startDate);
+      const attendanceDateMax = getDateOnlyBoundary(project.endDate, true);
       let dateLabel = 'TBD';
 
       try {
 
-        dateLabel = format(new Date(project.startDate), 'MMM d, yyyy (EEEE)');
+        dateLabel = format(selectedAttendanceDate, 'MMM d, yyyy (EEEE)');
 
       } catch {}
 
@@ -19764,7 +19774,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         const volunteerLogs = volunteerTimeLogs.filter(log => log.volunteerId === volunteer.id && log.projectId === project.id);
 
-        const todayLog = volunteerLogs.find(log => getLocalDateKey(log.attendanceConfirmedAt || log.timeIn) === todayKey);
+        const todayLog = volunteerLogs.find(
+          log => getLocalDateKey(log.attendanceConfirmedAt || log.timeIn) === resolvedAttendanceDateKey
+        );
 
 
 
@@ -19790,9 +19802,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       const activeAttendanceLogs = activeAttendanceVolunteer
         ? volunteerTimeLogs
           .filter(log => log.projectId === project.id && log.volunteerId === activeAttendanceVolunteer.id)
+          .filter(log => getLocalDateKey(log.attendanceConfirmedAt || log.timeIn) === resolvedAttendanceDateKey)
           .sort((a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime())
         : [];
       const activeAttendanceLog = activeAttendanceLogs[0] || null;
+      const activeAttendancePhotoUri = activeAttendanceLog?.attendancePhoto || activeAttendanceLog?.completionPhoto || '';
 
 
 
@@ -19901,6 +19915,98 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             </TouchableOpacity>
 
           </View>
+
+          {eventWorkspaceTab === 'Attendance' && (
+            <>
+          <View style={styles.attendanceDatePickerContainer}>
+            <View style={styles.attendanceDatePickerHeader}>
+              <View style={styles.attendanceDatePickerHeaderCopy}>
+                <View style={styles.attendanceDatePickerEyebrowRow}>
+                  <MaterialIcons name="event-available" size={16} color="#166534" />
+                  <Text style={styles.attendanceDatePickerLabel}>Attendance date</Text>
+                </View>
+                <Text style={styles.attendanceDatePickerHint}>
+                  Showing attendance records for one day within this event’s schedule.
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel={`Choose attendance date, currently ${dateLabel}`}
+                onPress={() => setAttendancePickerVisible(true)}
+                activeOpacity={0.85}
+                style={styles.attendanceDatePickerTrigger}
+              >
+                <MaterialIcons name="calendar-month" size={18} color="#166534" />
+                <Text style={styles.attendanceDatePickerTriggerText}>{dateLabel}</Text>
+                <MaterialIcons name="expand-more" size={20} color="#166534" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.attendanceDatePickerRange}>
+              <MaterialIcons name="date-range" size={15} color="#64748b" />
+              <Text style={styles.attendanceDatePickerRangeText}>
+                Event window: {formatProjectDateRangeLabel(project.startDate, project.endDate)}
+              </Text>
+              <Text style={styles.attendanceDatePickerCountText}>
+                {selectedDateAttendanceEntries.length} with attendance
+              </Text>
+            </View>
+          </View>
+
+          <Modal
+            visible={attendancePickerVisible}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setAttendancePickerVisible(false)}
+          >
+            <Pressable
+              style={styles.datePickerOverlay}
+              onPress={() => setAttendancePickerVisible(false)}
+            >
+              <Pressable
+                style={styles.attendancePickerModalCard}
+                onPress={event => event.stopPropagation()}
+              >
+                <View style={styles.attendancePickerModalHeader}>
+                  <View style={styles.attendancePickerModalTitleRow}>
+                    <View style={styles.attendancePickerModalIcon}>
+                      <MaterialIcons name="calendar-month" size={20} color="#166534" />
+                    </View>
+                    <View>
+                      <Text style={styles.attendancePickerModalTitle}>Choose attendance date</Text>
+                      <Text style={styles.attendancePickerModalSubtitle}>
+                        Dates outside the event are unavailable.
+                      </Text>
+                    </View>
+                  </View>
+                  <TouchableOpacity
+                    accessibilityRole="button"
+                    accessibilityLabel="Close date picker"
+                    onPress={() => setAttendancePickerVisible(false)}
+                    style={styles.attendancePickerCloseButton}
+                  >
+                    <MaterialIcons name="close" size={20} color="#64748b" />
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.attendancePickerModalBody}>
+                  <CalendarDatePicker
+                    selectedDate={selectedAttendanceDate}
+                    minDate={attendanceDateMin}
+                    maxDate={attendanceDateMax}
+                    onDateSelect={date => {
+                      setSelectedAttendanceDateKey(getLocalDateKey(date.toISOString()));
+                    }}
+                    onClose={() => setAttendancePickerVisible(false)}
+                  />
+                </View>
+              </Pressable>
+            </Pressable>
+          </Modal>
+
+            </>
+          )}
 
 
 
@@ -21293,7 +21399,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                     const completedTasks = assignedTasks.filter(t => t.status === 'Completed');
 
-                    const logs = volunteerTimeLogs.filter(log => log.projectId === activeSelectedProject.id && log.volunteerId === volunteer.id).sort((a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime());
+                    const logs = volunteerTimeLogs
+                      .filter(log => log.projectId === activeSelectedProject.id && log.volunteerId === volunteer.id)
+                      .filter(log => getLocalDateKey(log.attendanceConfirmedAt || log.timeIn) === resolvedAttendanceDateKey)
+                      .sort((a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime());
 
                     const activeLog = logs[0];
 
@@ -21741,9 +21850,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       setActiveActionTaskId(null);
 
-                      if (activeAttendanceLog?.attendancePhoto) {
+                      if (activeAttendancePhotoUri && isImageMediaUri(activeAttendancePhotoUri)) {
 
-                        setPreviewImageUri(activeAttendanceLog.attendancePhoto);
+                        setPreviewImageUri(activeAttendancePhotoUri);
                         setPreviewAttendanceLog(activeAttendanceLog);
 
                         setPreviewImageModalVisible(true);
@@ -21760,9 +21869,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   >
 
-                    <MaterialIcons name="photo-camera" size={16} color={activeAttendanceLog?.attendancePhoto ? '#166534' : '#94a3b8'} />
+                    <MaterialIcons name="photo-camera" size={16} color={activeAttendancePhotoUri ? '#166534' : '#94a3b8'} />
 
-                    <Text style={{ fontSize: 14, fontWeight: '700', color: activeAttendanceLog?.attendancePhoto ? '#334155' : '#94a3b8' }}>View Photo</Text>
+                    <Text style={{ fontSize: 14, fontWeight: '700', color: activeAttendancePhotoUri ? '#334155' : '#94a3b8' }}>View Photo</Text>
 
                   </TouchableOpacity>
 
@@ -22549,7 +22658,21 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   <Text style={premiumDetailsStyles.cardTitle}>Recent Reports</Text>
 
-                  <TouchableOpacity onPress={() => Alert.alert('Reports', 'Show all reports list.')}>
+                  <TouchableOpacity
+                    onPress={() => {
+                      const didNavigate = navigation
+                        ? navigateToAvailableRoute(navigation, 'Reports', {
+                            projectId: activeSelectedProject.id,
+                          })
+                        : false;
+
+                      if (!didNavigate) {
+                        Alert.alert('Reports', 'The Reports section is not available right now.');
+                      }
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel="View all reports"
+                  >
 
                     <Text style={premiumDetailsStyles.cardLink}>View all reports</Text>
 
@@ -32198,6 +32321,204 @@ const styles = StyleSheet.create({
 
   },
 
+  attendanceDatePickerHeader: {
+
+    flexDirection: 'row',
+
+    alignItems: 'center',
+
+    justifyContent: 'space-between',
+
+    gap: 16,
+
+  },
+
+  attendanceDatePickerHeaderCopy: {
+
+    flex: 1,
+
+    minWidth: 180,
+
+  },
+
+  attendanceDatePickerEyebrowRow: {
+
+    flexDirection: 'row',
+
+    alignItems: 'center',
+
+    gap: 7,
+
+    marginBottom: 5,
+
+  },
+
+  attendanceDatePickerHint: {
+
+    fontSize: 12,
+
+    lineHeight: 18,
+
+    color: '#64748b',
+
+  },
+
+  attendanceDatePickerTrigger: {
+
+    minHeight: 46,
+
+    maxWidth: 300,
+
+    flexDirection: 'row',
+
+    alignItems: 'center',
+
+    gap: 8,
+
+    borderRadius: 12,
+
+    borderWidth: 1,
+
+    borderColor: '#a7d3b2',
+
+    backgroundColor: '#f0fdf4',
+
+    paddingHorizontal: 13,
+
+    paddingVertical: 10,
+
+  },
+
+  attendanceDatePickerTriggerText: {
+
+    flexShrink: 1,
+
+    fontSize: 13,
+
+    fontWeight: '800',
+
+    color: '#166534',
+
+  },
+
+  attendanceDatePickerRange: {
+
+    flexDirection: 'row',
+
+    alignItems: 'center',
+
+    flexWrap: 'wrap',
+
+    gap: 6,
+
+    marginTop: 12,
+
+    paddingTop: 10,
+
+    borderTopWidth: 1,
+
+    borderTopColor: '#e2e8f0',
+
+  },
+
+  attendanceDatePickerRangeText: {
+
+    flex: 1,
+
+    minWidth: 180,
+
+    fontSize: 12,
+
+    color: '#475569',
+
+  },
+
+  attendanceDatePickerCountText: {
+
+    fontSize: 12,
+
+    fontWeight: '800',
+
+    color: '#166534',
+
+  },
+
+  attendancePickerModalHeader: {
+
+    flexDirection: 'row',
+
+    alignItems: 'flex-start',
+
+    justifyContent: 'space-between',
+
+    gap: 12,
+
+  },
+
+  attendancePickerModalTitleRow: {
+
+    flexDirection: 'row',
+
+    alignItems: 'center',
+
+    gap: 10,
+
+    flex: 1,
+
+  },
+
+  attendancePickerModalIcon: {
+
+    width: 38,
+
+    height: 38,
+
+    borderRadius: 12,
+
+    alignItems: 'center',
+
+    justifyContent: 'center',
+
+    backgroundColor: '#dcfce7',
+
+  },
+
+  attendancePickerModalTitle: {
+
+    fontSize: 17,
+
+    fontWeight: '800',
+
+    color: '#0f172a',
+
+  },
+
+  attendancePickerModalSubtitle: {
+
+    marginTop: 3,
+
+    fontSize: 12,
+
+    color: '#64748b',
+
+  },
+
+  attendancePickerCloseButton: {
+
+    width: 34,
+
+    height: 34,
+
+    borderRadius: 10,
+
+    alignItems: 'center',
+
+    justifyContent: 'center',
+
+    backgroundColor: '#f8fafc',
+
+  },
+
   attendanceDatePickerLabel: {
 
     fontSize: 12,
@@ -32206,7 +32527,7 @@ const styles = StyleSheet.create({
 
     color: '#475569',
 
-    marginBottom: 8,
+    marginBottom: 0,
 
     textTransform: 'uppercase',
 

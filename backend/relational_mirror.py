@@ -2011,6 +2011,8 @@ def ensure_volunteer_time_logs_table_shape(connection: Any) -> None:
                 "alter table volunteer_time_logs add column if not exists attendance_checked_at text",
                 "alter table volunteer_time_logs add column if not exists attendance_checked_by text",
                 "alter table volunteer_time_logs add column if not exists attendance_checked_by_name text",
+                "alter table volunteer_time_logs add column if not exists completion_photo text",
+                "alter table volunteer_time_logs add column if not exists completion_report text",
             ]:
                 try:
                     cursor.execute(stmt)

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { addMonths, format, isSameDay, isSameMonth, subMonths } from 'date-fns';
@@ -55,6 +55,12 @@ export default function CalendarDatePicker({
   maxDate,
 }: CalendarDatePickerProps) {
   const [currentMonth, setCurrentMonth] = useState(selectedDate || new Date());
+
+  useEffect(() => {
+    if (selectedDate) {
+      setCurrentMonth(selectedDate);
+    }
+  }, [selectedDate]);
   const normalizedMinDate = useMemo(
     () => (minDate ? normalizeDateOnly(minDate) : undefined),
     [minDate]
