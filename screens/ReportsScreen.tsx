@@ -13,7 +13,6 @@ import {
   submitFieldReport,
   getImpactHubReportsByUser,
   submitImpactHubReport,
-  reviewPartnerReport,
   subscribeToStorageChanges,
   savePartnerReport,
 } from '../models/storage';
@@ -202,12 +201,7 @@ function normalizeImpactHubReport(
     metrics,
     attachments: report.attachments || [],
     mediaFile: report.mediaFile,
-    status:
-      report.status === 'Reviewed'
-        ? 'Approved'
-        : report.status === 'Rejected'
-        ? 'Rejected'
-        : 'Submitted',
+    status: report.status === 'Rejected' ? 'Rejected' : 'Submitted',
     submittedAt: report.createdAt,
     approvalNotes: report.reviewNotes,
     approvedBy: report.reviewedBy,
@@ -972,42 +966,6 @@ export default function ReportsScreen({ navigation, route }: any) {
     setSelectedReport(null);
   }, []);
 
-  const handleApproveReport = useCallback(
-    async (reportId: string, notes: string) => {
-      if (!user?.id) return;
-      try {
-        await reviewPartnerReport(reportId, user.id, 'Reviewed', notes || undefined);
-        setShowDetailsModal(false);
-        setSelectedReport(null);
-        showToast('Report approved. The submitter has been notified.', 'success');
-        // Reload in background without blocking
-        void loadReportsCoalesced();
-      } catch (error: any) {
-        showToast(error?.message || 'Failed to approve report.', 'error');
-      }
-    },
-    [loadReportsCoalesced, showToast, user?.id]
-  );
-
-  const handleRejectReport = useCallback(
-    async (reportId: string, notes: string) => {
-      if (!user?.id) return;
-      try {
-        await reviewPartnerReport(reportId, user.id, 'Rejected', notes || undefined);
-        setShowDetailsModal(false);
-        setSelectedReport(null);
-        // Optimistically remove from display immediately
-        setReports(prev => prev.filter(report => report.id !== reportId));
-        showToast('Report rejected. The submitter has been notified.', 'info');
-        // Reload in background to sync any changes
-        void loadReportsCoalesced();
-      } catch (error: any) {
-        showToast(error?.message || 'Failed to reject report.', 'error');
-      }
-    },
-    [loadReportsCoalesced, showToast, user?.id]
-  );
-
   const handleCloseUploadModal = useCallback(() => {
     setShowUploadModal(false);
     setUploadModalInitialValues(null);
@@ -1070,6 +1028,7 @@ export default function ReportsScreen({ navigation, route }: any) {
           volunteerTimeLogs={user?.role === 'partner' ? partnerVolunteerTimeLogs : volunteerTimeLogs}
           volunteers={user?.role === 'partner' ? partnerVisibleVolunteers : volunteers}
           onViewReport={handleViewReport}
+          onUploadReport={handleOpenUploadModal}
           reportType="all"
         />
       );
@@ -1214,11 +1173,7 @@ export default function ReportsScreen({ navigation, route }: any) {
         visible={showDetailsModal}
         report={selectedReport}
         onClose={handleCloseDetails}
-        onApprove={user?.role === 'admin' ? handleApproveReport : undefined}
-        onReject={user?.role === 'admin' ? handleRejectReport : undefined}
         onRevise={user?.role !== 'admin' ? handleReviseReport : undefined}
-        userRole={user?.role}
-        showModerationActions={user?.role === 'admin'}
       />
       <Modal
         visible={showFilteredReports}

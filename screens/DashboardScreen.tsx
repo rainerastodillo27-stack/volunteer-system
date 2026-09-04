@@ -560,7 +560,9 @@ export default function DashboardScreen({ navigation }: any) {
         inboundInquiries: partners.filter(p => p.status === 'Pending').length,
         timeIns: sortedTimeLogs.length,
         timeOuts: sortedTimeLogs.filter(log => Boolean(log.timeOut)).length,
-        pendingReports: (partnerReports || []).filter(report => report.status === 'Submitted').length,
+        // Reports are available immediately after submission; they do not
+        // wait for an administrator review step.
+        pendingReports: 0,
       });
 
       setPendingVolunteerJoinRequests(

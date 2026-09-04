@@ -2,10 +2,12 @@ from typing import Any
 
 try:
     from .field_rules import normalize_email, sanitize_hot_storage_item
+    from .password_utils import hash_password, is_bcrypt_hash
     from .relational_mirror import sync_relational_mirror_collection
     from .storage_table_contract import KNOWN_ROGUE_TABLES, LEGACY_COMPAT_STORAGE_TABLES
 except ImportError:
     from field_rules import normalize_email, sanitize_hot_storage_item
+    from password_utils import hash_password, is_bcrypt_hash
     from relational_mirror import sync_relational_mirror_collection
     from storage_table_contract import KNOWN_ROGUE_TABLES, LEGACY_COMPAT_STORAGE_TABLES
 
@@ -505,7 +507,14 @@ def sync_legacy_app_users_from_hot_storage(connection: Any) -> int:
                 (
                     str(user["id"]),
                     email,
-                    str(user.get("password") or ""),
+                    (
+                        str(user.get("password") or "")
+                        if (
+                            not str(user.get("password") or "")
+                            or is_bcrypt_hash(str(user.get("password") or ""))
+                        )
+                        else hash_password(str(user.get("password") or ""))
+                    ),
                     str(user.get("role") or "volunteer"),
                     str(user.get("name") or user["id"])[:120],
                     user.get("phone"),

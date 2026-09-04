@@ -789,7 +789,7 @@ export default function AdminReportsDashboard({
             <View style={styles.mastheadText}>
               <Text style={styles.title}>Reports</Text>
               <Text style={styles.subtitle}>
-                Review submitted reports and field metrics across volunteers and partners
+                View submitted reports and field metrics across volunteers and partners
               </Text>
             </View>
             <TouchableOpacity

@@ -1,6 +1,11 @@
 import re
 from typing import Any
 
+try:
+    from .password_utils import hash_password, is_bcrypt_hash
+except ImportError:
+    from password_utils import hash_password, is_bcrypt_hash
+
 
 EMAIL_MAX_LENGTH = 254
 NAME_MAX_LENGTH = 120
@@ -90,6 +95,9 @@ def sanitize_hot_storage_item(key: str, item: dict[str, Any]) -> dict[str, Any]:
         sanitized["email"] = normalize_email(item.get("email"))
         sanitized["name"] = normalize_name(item.get("name"))
         sanitized["phone"] = normalize_ph_mobile_phone(item.get("phone"))
+        password = str(item.get("password") or "")
+        if password and not is_bcrypt_hash(password):
+            sanitized["password"] = hash_password(password)
         return sanitized
 
     if key == "partners":

@@ -241,7 +241,73 @@ export default function PartnerHomeScreen() {
             </TouchableOpacity>
           </View>
         </View>
-        {/* Our Programs section removed */}
+
+        {/* OUR PROGRAMS */}
+        <View style={styles.programsSection}>
+          <Text style={styles.programsTitle}>Our Programs</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.programsContainer}
+          >
+            <View style={styles.programCard}>
+              <View style={styles.programImg}>
+                <Image
+                  source={nutritionImage}
+                  style={{ width: '100%', height: '100%' }}
+                  resizeMode="cover"
+                />
+              </View>
+              <View style={styles.programBody}>
+                <Text style={styles.programName}>Nutrition</Text>
+                <Text style={styles.programDesc}>
+                  NVC manufactures Mingo, a nutritious instant complementary food. We run a nutrition program using Mingo for children of impoverished families to help them build strong bodies and sharp minds.
+                </Text>
+                <TouchableOpacity style={styles.programLearn} onPress={handleLearnMore} activeOpacity={0.85}>
+                  <Text style={styles.programLearnText}>Learn more</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <View style={styles.programCard}>
+              <View style={styles.programImg}>
+                <Image
+                  source={educationImage}
+                  style={{ width: '100%', height: '100%' }}
+                  resizeMode="cover"
+                />
+              </View>
+              <View style={styles.programBody}>
+                <Text style={styles.programName}>Education</Text>
+                <Text style={styles.programDesc}>
+                  NVC’s education projects enhance the quality of schooling for children of the poor. These range from infrastructure projects, provision of school supplies, and assisting teachers become better at their craft.
+                </Text>
+                <TouchableOpacity style={styles.programLearn} onPress={handleLearnMore} activeOpacity={0.85}>
+                  <Text style={styles.programLearnText}>Learn more</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <View style={styles.programCard}>
+              <View style={styles.programImg}>
+                <Image
+                  source={livelihoodImage}
+                  style={{ width: '100%', height: '100%' }}
+                  resizeMode="cover"
+                />
+              </View>
+              <View style={styles.programBody}>
+                <Text style={styles.programName}>Livelihood</Text>
+                <Text style={styles.programDesc}>
+                  To help improve the lives of families in the communities we serve, our livelihood projects give adults various opportunities to earn or increase their income.
+                </Text>
+                <TouchableOpacity style={styles.programLearn} onPress={handleLearnMore} activeOpacity={0.85}>
+                  <Text style={styles.programLearnText}>Learn more</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </ScrollView>
+        </View>
       </ScrollView>
     </View>
   );

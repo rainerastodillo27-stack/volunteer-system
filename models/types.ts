@@ -31,7 +31,8 @@ export interface AppSettings {
 export interface User {
   id: string;
   email?: string;
-  password?: string; // Deprecated: authentication now uses Gmail + OTP, no password stored
+  /** Write-only credential. Never returned by the API or persisted in app storage. */
+  password?: string;
   role: UserRole;
   name: string;
   phone?: string;

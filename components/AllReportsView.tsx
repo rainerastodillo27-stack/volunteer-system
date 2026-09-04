@@ -11,6 +11,7 @@ interface Props {
   volunteerTimeLogs?: VolunteerTimeLog[];
   volunteers?: Volunteer[];
   onViewReport: (report: SubmittedReport) => void;
+  onUploadReport?: () => void;
   reportType?: 'all' | 'volunteer' | 'partner';
 }
 
@@ -51,12 +52,36 @@ function photoFolderKey(report: SubmittedReport): string {
   return report.projectId || 'photos';
 }
 
-export default function AllReportsView({ reports, projects, volunteerTimeLogs = [], volunteers = [], onViewReport, reportType = 'all' }: Props) {
+function reportHasPhoto(report: SubmittedReport): boolean {
+  return Boolean(
+    report.attachments?.some(attachment => attachment.type === 'image') ||
+      isImageMediaUri(report.mediaFile || '')
+  );
+}
+
+function reportHasDocument(report: SubmittedReport): boolean {
+  const documentExtensions = /\.(pdf|doc|docx|xls|xlsx|csv)(?:$|[?#])/i;
+  return Boolean(
+    report.attachments?.some(
+      attachment =>
+        attachment.type === 'document' || documentExtensions.test(attachment.url)
+    ) ||
+      documentExtensions.test(report.title || '') ||
+      documentExtensions.test(report.mediaFile || '')
+  );
+}
+
+function reportHasAttachment(report: SubmittedReport): boolean {
+  return Boolean(report.mediaFile || report.attachments?.length);
+}
+
+export default function AllReportsView({ reports, projects, volunteerTimeLogs = [], volunteers = [], onViewReport, onUploadReport, reportType = 'all' }: Props) {
   const { width: viewportWidth } = useWindowDimensions();
   const isNarrow = viewportWidth < 700;
   const [activeFilter, setActiveFilter] = useState<'All' | 'Events' | 'Photos'>('All');
   const [search, setSearch] = useState('');
   const [showFilter, setShowFilter] = useState(false);
+  const [attachmentFilter, setAttachmentFilter] = useState<'all' | 'photos' | 'documents' | 'none'>('all');
   const [selectedEventFolderKey, setSelectedEventFolderKey] = useState<string | null>(null);
   const [selectedPhotoFolderKey, setSelectedPhotoFolderKey] = useState<string | null>(null);
 
@@ -102,15 +127,43 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
 
   const searchFiltered = useMemo(() => {
     let r = allItems.filter(r => (r as any).status !== 'Rejected');
+    if (attachmentFilter !== 'all') {
+      r = r.filter(rep => {
+        const hasPhoto = reportHasPhoto(rep);
+        const hasDocument = reportHasDocument(rep);
+        if (attachmentFilter === 'photos') return hasPhoto;
+        if (attachmentFilter === 'documents') return hasDocument;
+        return !reportHasAttachment(rep);
+      });
+    }
     if (search.trim()) {
       const q = search.trim().toLowerCase();
-      r = r.filter(rep => `${rep.title} ${rep.description} ${rep.submitterName} ${rep.projectTitle}`.toLowerCase().includes(q));
+      r = r.filter(rep => {
+        const project = rep.projectId ? projectById.get(rep.projectId) : undefined;
+        const searchableText = [
+          rep.title,
+          rep.description,
+          rep.submitterName,
+          rep.submitterRole,
+          rep.projectTitle,
+          rep.reportType,
+          rep.category,
+          project?.title,
+          project?.category,
+          project?.location?.address,
+          ...(rep.attachments || []).flatMap(attachment => [attachment.url, attachment.description]),
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        return searchableText.includes(q);
+      });
     }
     return r.sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
-  }, [allItems, search]);
+  }, [allItems, attachmentFilter, projectById, search]);
 
   const eventReports = useMemo(() => searchFiltered.filter(r => (r as any).projectKind === 'event'), [searchFiltered]);
-  const photoReports = useMemo(() => searchFiltered.filter(r => ((r as any).attachments && (r as any).attachments.some((a: any) => a.type === 'image')) || isImageMediaUri((r as any).mediaFile || '')), [searchFiltered]);
+  const photoReports = useMemo(() => searchFiltered.filter(reportHasPhoto), [searchFiltered]);
 
   // Build folders grouped by project — for Events/All show relevant, for Photos hide
   const folders = useMemo(() => {
@@ -126,7 +179,7 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
       f.reports.push(rep);
       if (new Date(rep.submittedAt).getTime() > new Date(f.updatedAt).getTime()) f.updatedAt = rep.submittedAt;
     });
-    if (map.size === 0) {
+    if (map.size === 0 && activeFilter === 'All' && attachmentFilter === 'all' && !search.trim()) {
       const srcProjects = projects.filter(p => p.isEvent).slice(0, 7);
       srcProjects.forEach(p => {
         if (!map.has(p.id)) map.set(p.id, { key: p.id, title: p.title, reports: [], updatedAt: p.updatedAt || p.createdAt });
@@ -134,7 +187,7 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
     }
     const arr = Array.from(map.values()).sort((a, b) => b.reports.length - a.reports.length || a.title.localeCompare(b.title));
     return arr;
-  }, [searchFiltered, eventReports, activeFilter, projects, projectById]);
+  }, [searchFiltered, eventReports, activeFilter, attachmentFilter, search, projects, projectById]);
 
   // Photos folders: group by image reports
   const photoFolders = useMemo(() => {
@@ -186,6 +239,21 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
     ? photoReports.filter(report => photoFolderKey(report) === selectedPhotoFolderKey)
     : photoReports;
   const selectedPhotoFolder = photoFolders.find(folder => folder.key === selectedPhotoFolderKey);
+  const attachmentFilterLabel =
+    attachmentFilter === 'photos'
+      ? 'Has Photos'
+      : attachmentFilter === 'documents'
+      ? 'Has Documents'
+      : attachmentFilter === 'none'
+      ? 'No Attachments'
+      : 'Filter';
+
+  const selectAttachmentFilter = (nextFilter: typeof attachmentFilter) => {
+    setAttachmentFilter(nextFilter);
+    setShowFilter(false);
+    setSelectedEventFolderKey(null);
+    setSelectedPhotoFolderKey(null);
+  };
 
   return (
     <View style={{ flex: 1, backgroundColor: '#F8FAF6' }}>
@@ -228,13 +296,50 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
               onChangeText={setSearch}
             />
           </View>
-          <TouchableOpacity style={styles.filterBtn} onPress={() => setShowFilter(v => !v)} activeOpacity={0.85}>
+          <TouchableOpacity
+            style={[styles.filterBtn, attachmentFilter !== 'all' && styles.filterBtnActive]}
+            onPress={() => setShowFilter(v => !v)}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel="Filter reports"
+          >
             <MaterialIcons name="filter-list" size={18} color="#5B564C" />
-            <Text style={styles.filterBtnText}>Filter</Text>
-            <MaterialIcons name="keyboard-arrow-down" size={18} color="#5B564C" />
+            <Text style={styles.filterBtnText}>{attachmentFilterLabel}</Text>
+            <MaterialIcons name={showFilter ? 'keyboard-arrow-up' : 'keyboard-arrow-down'} size={18} color="#5B564C" />
           </TouchableOpacity>
         </View>
       </View>
+
+      {showFilter ? (
+        <View style={[styles.filterMenu, isNarrow && styles.filterMenuNarrow]}>
+          <Text style={styles.filterMenuTitle}>Filter reports</Text>
+          {([
+            ['all', 'All reports'],
+            ['photos', 'Has photos'],
+            ['documents', 'Has documents'],
+            ['none', 'No attachments'],
+          ] as const).map(([value, label]) => (
+            <TouchableOpacity
+              key={value}
+              style={styles.filterMenuItem}
+              onPress={() => selectAttachmentFilter(value)}
+              activeOpacity={0.8}
+            >
+              <Text
+                style={[
+                  styles.filterMenuItemText,
+                  attachmentFilter === value && styles.filterMenuItemTextActive,
+                ]}
+              >
+                {label}
+              </Text>
+              {attachmentFilter === value ? (
+                <MaterialIcons name="check" size={16} color="#166534" />
+              ) : null}
+            </TouchableOpacity>
+          ))}
+        </View>
+      ) : null}
 
       {(activeFilter === 'All' || activeFilter === 'Events') && (
         <View style={styles.sectionCard}>
@@ -519,7 +624,14 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
       </ScrollView>
       {/* Floating upload button like image bottom right */}
       <View style={styles.fabWrap} pointerEvents="box-none">
-        <TouchableOpacity style={styles.fab} activeOpacity={0.85} onPress={() => {}}>
+        <TouchableOpacity
+          style={[styles.fab, !onUploadReport && styles.fabDisabled]}
+          activeOpacity={0.85}
+          onPress={onUploadReport}
+          disabled={!onUploadReport}
+          accessibilityRole="button"
+          accessibilityLabel="Upload report"
+        >
           <MaterialIcons name="file-upload" size={28} color="#fff" />
         </TouchableOpacity>
       </View>
@@ -603,7 +715,58 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 8,
   },
+  filterBtnActive: {
+    backgroundColor: '#FFFBF5',
+    borderColor: '#8B5A2B',
+  },
   filterBtnText: { fontSize: 13, fontWeight: '700', color: '#5B564C' },
+  filterMenu: {
+    alignSelf: 'flex-end',
+    width: 220,
+    marginTop: -4,
+    marginBottom: 4,
+    padding: 8,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#E7E5E4',
+    borderRadius: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 4,
+    zIndex: 5,
+  },
+  filterMenuNarrow: {
+    alignSelf: 'stretch',
+    width: '100%',
+  },
+  filterMenuTitle: {
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#9CA3AF',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  filterMenuItem: {
+    minHeight: 36,
+    paddingHorizontal: 8,
+    borderRadius: 7,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  filterMenuItemText: {
+    fontSize: 13,
+    color: '#374151',
+    fontWeight: '600',
+  },
+  filterMenuItemTextActive: {
+    color: '#166534',
+    fontWeight: '800',
+  },
   sectionCard: {
     backgroundColor: '#fff',
     borderRadius: 14,
@@ -741,5 +904,8 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 8,
     elevation: 6,
+  },
+  fabDisabled: {
+    opacity: 0.45,
   },
 });

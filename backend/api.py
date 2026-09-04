@@ -41,6 +41,7 @@ from .db import (
 )
 from .field_rules import normalize_comparable_phone
 from .image_compression import compress_base64_image, get_image_size_kb
+from .password_utils import hash_password, is_bcrypt_hash, verify_password
 from .relational_mirror import (
     TABLE_SPECS,
     ensure_volunteer_time_logs_table_shape,
@@ -1978,9 +1979,20 @@ def _get_media_light_collection(connection: Any, key: str) -> list[dict[str, Any
 
 
 # Fetches a single hot-storage row by item id.
-def _postgres_get_hot_item_by_id(connection: Any, key: str, item_id: str) -> dict[str, Any] | None:
+def _postgres_get_hot_item_by_id(
+    connection: Any,
+    key: str,
+    item_id: str,
+    *,
+    include_password: bool = False,
+) -> dict[str, Any] | None:
     try:
-        return get_relational_item_by_id(connection, key, item_id)
+        return get_relational_item_by_id(
+            connection,
+            key,
+            item_id,
+            include_password=include_password,
+        )
     except KeyError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -2985,7 +2997,14 @@ def _get_user_by_identifier(identifier: str, connection: Any | None = None) -> d
             row = cursor.fetchone()
         if row is None:
             return None
-        return _postgres_get_hot_item_by_id(active_connection, "users", row[0])
+        # Authentication is the only backend path that needs the stored hash.
+        # It is never returned by the normal user/storage APIs.
+        return _postgres_get_hot_item_by_id(
+            active_connection,
+            "users",
+            row[0],
+            include_password=True,
+        )
 
     if connection is not None:
         return query_user(connection)
@@ -3256,7 +3275,11 @@ def _get_volunteer_login_block_reason(connection: Any, user: dict[str, Any]) -> 
 @app.get("/users/lookup")
 # API endpoint that looks up a user by email or phone.
 def lookup_user(identifier: str) -> dict[str, Any]:
-    return {"user": _get_user_by_identifier(identifier)}
+    user = _get_user_by_identifier(identifier)
+    if user is not None:
+        user = dict(user)
+        user.pop("password", None)
+    return {"user": user}
 
 
 # Demo accounts for offline/development mode
@@ -3474,6 +3497,7 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
     
     # Try demo account first (fast path)
     user = _get_demo_account(payload.identifier)
+    is_demo_account = user is not None
     
     # If demo account not found, try the shared database directly.
     if user is None:
@@ -3496,8 +3520,21 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
             detail=_get_identifier_error_message(payload.identifier),
         )
 
-    if user.get("password") != payload.password:
+    submitted_password = str(payload.password or "").strip()
+    stored_password = user.get("password")
+    if not verify_password(submitted_password, stored_password):
         raise HTTPException(status_code=401, detail="Incorrect password")
+
+    # Upgrade any legacy plaintext value immediately if startup migration did
+    # not already handle it. This keeps the compatibility window short.
+    if not is_demo_account and isinstance(stored_password, str) and not is_bcrypt_hash(stored_password):
+        with get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "update users set password = %s where users_id = %s",
+                    (hash_password(submitted_password), user.get("id")),
+                )
+            connection.commit()
 
     print(f"[DEBUG] Password correct for: {user.get('id')}")
     
@@ -3520,7 +3557,9 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
         except Exception as e:
             print(f"[DEBUG] Error during approval check: {e}")
 
-    return {"user": user, "message": "Login successful"}
+    public_user = dict(user)
+    public_user.pop("password", None)
+    return {"user": public_user, "message": "Login successful"}
 
 
 @app.post("/auth/send-rejection-email")
@@ -6135,7 +6174,9 @@ async def submit_report(payload: ReportSubmitPayload) -> dict[str, Any]:
             if str(report_id).strip()
         ],
         "createdAt": str(payload.createdAt or now).strip() or now,
-        "status": str(payload.status or "Submitted").strip() or "Submitted",
+        # Reports are available immediately after submission; there is no
+        # pending review state in the report workflow.
+        "status": "Submitted",
         "reviewedAt": None,
         "reviewedBy": None,
     }

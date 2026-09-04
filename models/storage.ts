@@ -1162,7 +1162,7 @@ async function getLocalStorageItem<T>(key: string): Promise<T | null> {
     try {
       const raw = window.localStorage.getItem(getPersistedCacheKey(key));
       const rawTs = window.localStorage.getItem(getPersistedCacheTimestampKey(key));
-      const parsed = raw ? (JSON.parse(raw) as T) : null;
+      const parsed = raw ? sanitizeStorageCacheValue(key, JSON.parse(raw) as T) : null;
       const ts = rawTs ? Number(rawTs) : 0;
       if (rawTs && Number.isFinite(ts) && ts > 0) {
         sharedStorageCacheTimestamps.set(key, ts);
@@ -1182,7 +1182,7 @@ async function getLocalStorageItem<T>(key: string): Promise<T | null> {
     ]);
     const valueRaw = raw?.[1] ?? null;
     const tsRaw = rawTs?.[1] ?? null;
-    const parsed = valueRaw ? (JSON.parse(valueRaw) as T) : null;
+    const parsed = valueRaw ? sanitizeStorageCacheValue(key, JSON.parse(valueRaw) as T) : null;
     const ts = tsRaw ? Number(tsRaw) : 0;
     if (tsRaw && Number.isFinite(ts) && ts > 0) {
       sharedStorageCacheTimestamps.set(key, ts);
@@ -1192,6 +1192,22 @@ async function getLocalStorageItem<T>(key: string): Promise<T | null> {
   } catch {
     return null;
   }
+}
+
+// Passwords are accepted only as write-only values for the backend. Never
+// retain them in localStorage, AsyncStorage, or the in-memory storage cache.
+function sanitizeStorageCacheValue<T>(key: string, value: T | null): T | null {
+  if (key !== STORAGE_KEYS.USERS || !Array.isArray(value)) {
+    return value;
+  }
+
+  return value.map((item) => {
+    if (!item || typeof item !== 'object') {
+      return item;
+    }
+    const { password: _password, ...safeUser } = item as Record<string, unknown>;
+    return safeUser;
+  }) as T;
 }
 
 // Restore saved backend URL override at earliest module load
@@ -1206,9 +1222,10 @@ void (async () => {
 })();
 
 async function setLocalStorageItem<T>(key: string, value: T): Promise<void> {
-  memoryStorageCache.set(key, value);
+  const safeValue = sanitizeStorageCacheValue(key, value);
+  memoryStorageCache.set(key, safeValue);
 
-  const serialized = JSON.stringify(value);
+  const serialized = JSON.stringify(safeValue);
   const ts = String(Date.now());
 
   // Web: localStorage
@@ -1284,7 +1301,7 @@ function getFreshSharedStorageCacheValue<T>(
 }
 
 function setSharedStorageCacheValue<T>(key: string, value: T | null): void {
-  memoryStorageCache.set(key, value);
+  memoryStorageCache.set(key, sanitizeStorageCacheValue(key, value));
   sharedStorageCacheTimestamps.set(key, Date.now());
 }
 
@@ -1389,8 +1406,9 @@ async function getLocalStorageItems(keys: string[]): Promise<Record<string, unkn
         if (rawTs && Number.isFinite(ts) && ts > 0) {
           sharedStorageCacheTimestamps.set(key, ts);
         }
-        memoryStorageCache.set(key, parsed);
-        results[key] = parsed;
+        const safeParsed = sanitizeStorageCacheValue(key, parsed);
+        memoryStorageCache.set(key, safeParsed);
+        results[key] = safeParsed;
       }
     } catch {
       // Fallback: results initialized with nulls for remaining keys
@@ -1417,8 +1435,9 @@ async function getLocalStorageItems(keys: string[]): Promise<Record<string, unkn
       if (tsRaw && Number.isFinite(ts) && ts > 0) {
         sharedStorageCacheTimestamps.set(key, ts);
       }
-      memoryStorageCache.set(key, parsed);
-      results[key] = parsed;
+      const safeParsed = sanitizeStorageCacheValue(key, parsed);
+      memoryStorageCache.set(key, safeParsed);
+      results[key] = safeParsed;
     }
   } catch {
     for (const key of keysToFetch) { results[key] = null; }
@@ -2041,8 +2060,19 @@ export async function setStorageItem<T>(key: string, value: T): Promise<void> {
   try {
     await saveRemoteStorageItem(key, value);
     setSharedStorageCacheValue(key, value);
+    if (key === STORAGE_KEYS.USERS) {
+      // Replace any pre-bcrypt local cache with the redacted server-safe copy.
+      const safeValue = sanitizeStorageCacheValue(key, value);
+      if (safeValue !== null) {
+        await setLocalStorageItem(key, safeValue);
+      }
+    }
     projectsSnapshotCache.clear();
   } catch (error) {
+    if (key === STORAGE_KEYS.USERS) {
+      // Never fall back to storing a plaintext credential on the device.
+      throw error;
+    }
     if (isExpectedRemoteStorageError(error) || isAbortLikeError(error)) {
       await setLocalStorageItem(key, value);
       setSharedStorageCacheValue(key, value);
@@ -2698,7 +2728,7 @@ function getRegistrationPasswordValidationMessage(password: string): string | nu
 export async function createUserAccount(input: {
   name: string;
   email?: string;
-  password?: string; // Deprecated: OTP auth — no password needed
+  password?: string; // Write-only raw password; backend stores only its bcrypt hash.
   phone?: string;
   role: UserRole;
   userType: UserType;
@@ -2975,36 +3005,6 @@ async function canVolunteerLogin(user: User): Promise<{
   };
 }
 
-async function loginWithStoredCredentials(
-  identifier: string,
-  password: string
-): Promise<User | null> {
-  const users = await getAllUsers();
-  const matchedUser = getMatchingUserByLoginIdentifier(users, identifier);
-  if (!matchedUser) {
-    return null;
-  }
-
-  if ((matchedUser.password || '').trim() !== password.trim()) {
-    return null;
-  }
-
-  const [volunteerAccess, partnerAccess] = await Promise.all([
-    canVolunteerLogin(matchedUser),
-    canPartnerLogin(matchedUser),
-  ]);
-
-  if (!volunteerAccess.allowed) {
-    throw new Error(volunteerAccess.reason || 'Your volunteer account cannot log in right now.');
-  }
-
-  if (!partnerAccess.allowed) {
-    throw new Error(partnerAccess.reason || 'Your partner account cannot log in right now.');
-  }
-
-  return matchedUser;
-}
-
 // Looks up a single user by email address, email username alias, or phone number.
 export async function getUserByEmailOrPhone(identifier: string): Promise<User | null> {
   try {
@@ -3039,20 +3039,8 @@ export async function loginWithCredentials(
     });
     return payload.user || null;
   } catch (error: any) {
-    if (error?.message === 'Invalid email/phone or password.') {
-      return loginWithStoredCredentials(identifier, password);
-    }
-
-    const fallbackMessages = [
-      'Database unavailable while checking your account. Please try again.',
-      'Failed to fetch',
-      'Network request failed',
-      'Database Unavailable',
-    ];
-    if (fallbackMessages.some(message => String(error?.message || '').includes(message))) {
-      return loginWithStoredCredentials(identifier, password);
-    }
-
+    // Password verification must happen on the backend. Cached account data
+    // never contains enough information to authenticate a user safely.
     throw error;
   }
 }
@@ -5660,31 +5648,6 @@ export async function submitPartnerReport(input: {
     impactCount: input.impactCount,
     mediaFile: input.mediaFile,
   });
-}
-
-// Marks a submitted partner report as reviewed by admin.
-export async function reviewPartnerReport(
-  reportId: string,
-  reviewedBy: string,
-  nextStatus: 'Reviewed' | 'Rejected' = 'Reviewed',
-  reviewNotes?: string
-): Promise<PartnerReport> {
-  const reports = await getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [];
-  const reportIndex = reports.findIndex(report => report.id === reportId);
-  if (reportIndex === -1) {
-    throw new Error('Partner report not found.');
-  }
-
-  const updatedReport: PartnerReport = {
-    ...reports[reportIndex],
-    status: nextStatus,
-    reviewedAt: new Date().toISOString(),
-    reviewedBy,
-    reviewNotes: reviewNotes?.trim() || undefined,
-  };
-  reports[reportIndex] = updatedReport;
-  await setStorageItem(STORAGE_KEYS.PARTNER_REPORTS, reports);
-  return updatedReport;
 }
 
 // Adds a user directly to an event once access has been approved.

@@ -30,7 +30,7 @@ DROP TABLE IF EXISTS public.program_tracks CASCADE;
 CREATE TABLE public.users (
   users_id text NOT NULL,
   email text,
-  password text NOT NULL,
+  password text NOT NULL, -- bcrypt hash; plaintext passwords must never be stored
   role text NOT NULL,
   name text NOT NULL,
   phone text,

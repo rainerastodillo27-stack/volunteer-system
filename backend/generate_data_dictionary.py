@@ -55,7 +55,7 @@ def _column_description(column_name: str) -> str:
         "phone": "Canonical Philippine mobile number: exactly 11 digits in 09XXXXXXXXX format.",
         "contact_phone": "Canonical partner Philippine mobile number: exactly 11 digits in 09XXXXXXXXX format.",
         "contact_email": "Normalized lowercase partner contact email.",
-        "password": "Account credential value currently used by the application.",
+        "password": "Bcrypt account password hash; never exposed to clients.",
         "planning_items": "JSON array of planning entries owned by this calendar.",
         "generated_at": "When populated, identifies a generated/published report.",
         "internal_tasks": "JSON array of tasks owned by the project/event.",

@@ -4,6 +4,11 @@ import threading
 from datetime import datetime, timezone
 from typing import Any
 
+try:
+    from .password_utils import hash_password, is_bcrypt_hash
+except ImportError:
+    from password_utils import hash_password, is_bcrypt_hash
+
 
 JSON_ARRAY = "'[]'"
 JSON_OBJECT = "'{}'"
@@ -22,12 +27,50 @@ def _trace(message: str) -> None:
         print(message)
 
 
+def _password_for_storage(value: Any, existing_value: str | None = None) -> str:
+    """Return a bcrypt value while preserving an existing hash on partial updates."""
+
+    normalized_value = str(value or "")
+    if not normalized_value:
+        return str(existing_value or "")
+    if is_bcrypt_hash(normalized_value):
+        return normalized_value
+    return hash_password(normalized_value)
+
+
+def _migrate_plaintext_user_passwords(connection: Any) -> int:
+    """Upgrade legacy plaintext values in the runtime users table once."""
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("select users_id, password from users")
+            rows = cursor.fetchall()
+            updates = [
+                (hash_password(str(password)), user_id)
+                for user_id, password in rows
+                if password and not is_bcrypt_hash(str(password))
+            ]
+            if updates:
+                cursor.executemany(
+                    "update users set password = %s where users_id = %s",
+                    updates,
+                )
+        if updates and not getattr(connection, "autocommit", False):
+            connection.commit()
+        if updates:
+            print(f"[OK] Migrated {len(updates)} user password(s) to bcrypt")
+        return len(updates)
+    except Exception as error:
+        _trace(f"[WARN] Plaintext user password migration skipped: {type(error).__name__}: {error}")
+        return 0
+
+
 RELATIONAL_TABLE_DDL = [
     f"""
     create table if not exists users (
       id text primary key,
       email text,
-      password text not null,
+      password text not null, -- bcrypt hash; never store plaintext credentials
       role text not null,
       name text not null,
       phone text,
@@ -1227,7 +1270,7 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
         return (
             item.get("id"),
             item.get("email"),
-            item.get("password") or "",
+            _password_for_storage(item.get("password")),
             item.get("role") or "",
             item.get("name") or "",
             item.get("phone"),
@@ -1564,14 +1607,18 @@ def _row_filter_clause(key: str) -> str | None:
     return None
 
 
-def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
+def _row_to_item(
+    key: str,
+    row: dict[str, Any],
+    *,
+    include_password: bool = False,
+) -> dict[str, Any]:
     row_id = _row_id(key, row)
 
     if key == "users":
-        return {
+        user = {
             "id": row_id,
             "email": row["email"],
-            "password": row["password"],
             "role": row["role"],
             "name": row["name"],
             "phone": row["phone"],
@@ -1583,6 +1630,9 @@ def _row_to_item(key: str, row: dict[str, Any]) -> dict[str, Any]:
             "rejectionReason": row.get("rejection_reason"),
             "createdAt": row["created_at"],
         }
+        if include_password:
+            user["password"] = row["password"]
+        return user
 
     if key == "partners":
         return {
@@ -2088,6 +2138,9 @@ def ensure_relational_mirror_tables(connection: Any) -> None:
         except Exception as e:
             _trace(f"[WARN] ensure_named_primary_key_columns skipped: {e}")
 
+        # Upgrade legacy plaintext credentials before normal reads begin.
+        _migrate_plaintext_user_passwords(connection)
+
         # Mark as completed so we never run DDL again this process lifetime
         _ddl_completed = True
         print("[OK] ensure_relational_mirror_tables: DDL completed successfully")
@@ -2108,6 +2161,30 @@ def sync_relational_mirror_collection(connection: Any, key: str, items: list[Any
         return
 
     normalized_items = [item for item in items if isinstance(item, dict) and item.get("id")]
+    if key == "users":
+        # User objects returned to the client intentionally omit passwords. Keep
+        # the database hash when a profile/status update replaces the collection.
+        existing_passwords: dict[str, str] = {}
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("select users_id, password from users")
+                existing_passwords = {
+                    str(user_id): str(password)
+                    for user_id, password in cursor.fetchall()
+                    if user_id and password
+                }
+        except Exception:
+            existing_passwords = {}
+
+        normalized_items = [
+            (
+                {**item, "password": existing_passwords.get(str(item.get("id")), "")}
+                if not str(item.get("password") or "").strip()
+                else item
+            )
+            for item in normalized_items
+        ]
+
     rows = [_normalize_row(key, item) for item in normalized_items]
     column_names = [column_name for column_name, _ in spec["columns"]]
     placeholders = ["%s" for _ in spec["columns"]]
@@ -2233,7 +2310,13 @@ def get_relational_collection(connection: Any, key: str) -> list[dict[str, Any]]
     return [_row_to_item(key, row) for row in rows]
 
 
-def get_relational_item_by_id(connection: Any, key: str, item_id: str) -> dict[str, Any] | None:
+def get_relational_item_by_id(
+    connection: Any,
+    key: str,
+    item_id: str,
+    *,
+    include_password: bool = False,
+) -> dict[str, Any] | None:
     spec = TABLE_SPECS.get(key)
     if not spec:
         raise KeyError(f"Unsupported relational mirror key: {key}")
@@ -2276,10 +2359,10 @@ def get_relational_item_by_id(connection: Any, key: str, item_id: str) -> dict[s
                 row = cursor.fetchone()
                 if isinstance(row, dict) and alt_pk in row:
                     row[pk_col] = row[alt_pk]
-                    return _row_to_item(key, row)
+                    return _row_to_item(key, row, include_password=include_password)
                 return None
         row = cursor.fetchone()
-    return None if row is None else _row_to_item(key, row)
+    return None if row is None else _row_to_item(key, row, include_password=include_password)
 
 
 def get_relational_items_by_field(
@@ -2387,7 +2470,23 @@ def upsert_relational_item(connection: Any, key: str, item: dict[str, Any]) -> d
     if not isinstance(item_id, (str, int)) or str(item_id) == "":
         raise ValueError(f"Relational storage key '{key}' expects an object with an id.")
 
-    row = _normalize_row(key, item)
+    item_for_storage = item
+    if key == "users" and not str(item.get("password") or "").strip():
+        existing_password = ""
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "select password from users where users_id = %s",
+                    (item_id,),
+                )
+                existing_row = cursor.fetchone()
+                if existing_row:
+                    existing_password = str(existing_row[0] or "")
+        except Exception:
+            existing_password = ""
+        item_for_storage = {**item, "password": existing_password}
+
+    row = _normalize_row(key, item_for_storage)
     column_names = [column_name for column_name, _ in spec["columns"]]
     placeholders = ["%s" for _ in spec["columns"]]
     primary_key_column = _primary_key_column(key)

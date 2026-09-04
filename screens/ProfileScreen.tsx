@@ -80,7 +80,6 @@ export default function ProfileScreen() {
   const [nameDraft, setNameDraft] = useState('');
   const [emailDraft, setEmailDraft] = useState('');
   const [phoneDraft, setPhoneDraft] = useState('');
-  const [passwordDraft, setPasswordDraft] = useState('');
   const [newPasswordDraft, setNewPasswordDraft] = useState('');
   const [confirmPasswordDraft, setConfirmPasswordDraft] = useState('');
   const [userTypeDraft, setUserTypeDraft] = useState<UserType>('Adult');
@@ -225,7 +224,6 @@ export default function ProfileScreen() {
     setNameDraft(user.name || '');
     setEmailDraft(user.email || '');
     setPhoneDraft(user.phone || '');
-    setPasswordDraft(user.password || '');
     setNewPasswordDraft('');
     setConfirmPasswordDraft('');
     setUserTypeDraft(user.userType || 'Adult');
@@ -333,14 +331,14 @@ export default function ProfileScreen() {
   };
 
   // Waits for updated credentials to be readable from shared storage before closing save flow.
-  const waitForCredentialSync = async (identifier: string, password: string, userId: string) => {
+  const waitForCredentialSync = async (identifier: string, userId: string) => {
     console.log('[ProfileScreen] Waiting for credential sync');
     
     for (let attempt = 0; attempt < SAVE_SYNC_RETRY_COUNT; attempt += 1) {
       const syncedUser = await getUserByEmailOrPhone(identifier);
       console.log(`[ProfileScreen] Sync attempt ${attempt + 1}, found user:`, !!syncedUser);
       
-      if (syncedUser && syncedUser.id === userId && syncedUser.password === password) {
+      if (syncedUser && syncedUser.id === userId) {
         console.log('[ProfileScreen] Credentials synced successfully!');
         return syncedUser;
       }
@@ -369,8 +367,7 @@ export default function ProfileScreen() {
     
     console.log('[ProfileScreen] Saving profile, photo draft:', profilePhotoDraft?.substring(0, 50));
     
-    // Use new password if provided, otherwise keep current password
-    let normalizedPassword = passwordDraft.trim();
+    let normalizedPassword: string | undefined;
     if (newPasswordDraft.trim()) {
       if (newPasswordDraft !== confirmPasswordDraft) {
         Alert.alert('Validation Error', 'New passwords do not match.');
@@ -383,8 +380,8 @@ export default function ProfileScreen() {
       normalizedPassword = newPasswordDraft.trim();
     }
 
-    if (!normalizedName || !normalizedPassword) {
-      Alert.alert('Validation Error', 'Name and password are required.');
+    if (!normalizedName) {
+      Alert.alert('Validation Error', 'Name is required.');
       return;
     }
 
@@ -429,7 +426,7 @@ export default function ProfileScreen() {
         name: normalizedName,
         email: normalizedEmail || undefined,
         phone: normalizedPhone || undefined,
-        password: normalizedPassword,
+        ...(normalizedPassword ? { password: normalizedPassword } : {}),
         profilePhoto: profilePhotoDraft || undefined,
         userType: userTypeDraft,
         pillarsOfInterest: pillarsDraft,
@@ -454,7 +451,9 @@ export default function ProfileScreen() {
       console.log('[ProfileScreen] User saved with new profile photo');
       
       // Update context immediately with the saved user
-      await updateUserProfile(updatedUser);
+      const safeUpdatedUser = { ...updatedUser };
+      delete safeUpdatedUser.password;
+      await updateUserProfile(safeUpdatedUser);
 
       if (user.role === 'volunteer') {
         const baseVolunteerProfile: Volunteer = volunteerProfile || {
@@ -543,7 +542,6 @@ export default function ProfileScreen() {
       const loginIdentifier = normalizedEmail || normalizedPhone;
       await waitForCredentialSync(
         loginIdentifier,
-        normalizedPassword,
         user.id
       );
 

@@ -208,10 +208,6 @@ function normalizePhoneInput(value: string): string {
   return value.replace(/\D/g, "").slice(0, 11);
 }
 
-function normalizeLoginPhone(value?: string): string {
-  return (value || "").replace(/\D/g, "");
-}
-
 function normalizeEmailInput(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -222,30 +218,6 @@ function getUserNotFoundDisplay(): { title: string; message: string } {
     message:
       "No account was found for that username, email, or phone number. Please input a valid email, username, or phone.",
   };
-}
-
-function findUserByLoginIdentifier(
-  users: User[],
-  identifier: string,
-): User | null {
-  const normalizedIdentifier = identifier.trim().toLowerCase();
-  const usernameAlias = normalizedIdentifier.includes("@")
-    ? ""
-    : normalizedIdentifier.split("@", 1)[0];
-  const normalizedPhone = normalizeLoginPhone(identifier);
-
-  return (
-    users.find((user) => {
-      const email = (user.email || "").trim().toLowerCase();
-      const phone = normalizeLoginPhone(user.phone);
-
-      return (
-        email === normalizedIdentifier ||
-        (Boolean(usernameAlias) && email.split("@", 1)[0] === usernameAlias) ||
-        (Boolean(normalizedPhone) && phone === normalizedPhone)
-      );
-    }) || null
-  );
 }
 
 function getLoginFailureDisplay(error: unknown): {
@@ -292,68 +264,6 @@ function getLoginFailureDisplay(error: unknown): {
     title: getRequestErrorTitle(error, "Login Failed"),
     message,
   };
-}
-
-function getCachedLoginFailureDisplay(matchedUser: User | null): {
-  title: string;
-  message: string;
-} {
-  if (matchedUser) {
-    return {
-      title: "Incorrect Password",
-      message:
-        "Incorrect password. Please input a valid password and try again.",
-    };
-  }
-
-  return getUserNotFoundDisplay();
-}
-
-function getCachedApprovalBlock(
-  user: User | null,
-): { title: string; message: string } | null {
-  if (!user) {
-    return null;
-  }
-
-  if (user.role === "volunteer") {
-    if (user.approvalStatus === "pending") {
-      return {
-        title: "Login Unavailable",
-        message: "Your volunteer account is still pending approval.",
-      };
-    }
-
-    if (user.approvalStatus === "rejected") {
-      return {
-        title: "Login Unavailable",
-        message:
-          user.rejectionReason ||
-          "Your volunteer account was rejected. Please contact the admin team.",
-      };
-    }
-  }
-
-  if (user.role === "partner") {
-    if (user.approvalStatus === "pending") {
-      return {
-        title: "Login Unavailable",
-        message:
-          "Your organization application is still pending admin approval.",
-      };
-    }
-
-    if (user.approvalStatus === "rejected") {
-      return {
-        title: "Login Unavailable",
-        message:
-          user.rejectionReason ||
-          "Your organization application was rejected. Please contact the admin team.",
-      };
-    }
-  }
-
-  return null;
 }
 
 function getMobileRoleLabel(role: MobileEntryRole): string {
@@ -810,74 +720,6 @@ export default function LoginScreen() {
 
     if (!trimmedIdentifier || !trimmedPassword) {
       showLoginError("Validation Error", "Please fill in all fields");
-      return;
-    }
-
-    const locallyMatchedUser = findUserByLoginIdentifier(
-      savedAccounts,
-      trimmedIdentifier,
-    );
-    const localPasswordMatches =
-      locallyMatchedUser &&
-      (locallyMatchedUser.password || "").trim() === trimmedPassword;
-
-    if (backendStatus !== "online" && savedAccounts.length > 0) {
-      if (!localPasswordMatches) {
-        const failure = getCachedLoginFailureDisplay(locallyMatchedUser);
-        showLoginError(failure.title, failure.message);
-        return;
-      }
-
-      const user = locallyMatchedUser;
-      if (!user) {
-        const failure = getCachedLoginFailureDisplay(locallyMatchedUser);
-        showLoginError(failure.title, failure.message);
-        return;
-      }
-
-      if (!isWeb && user.role === "admin") {
-        showLoginError(
-          "Access Restricted",
-          "Admin accounts can only log in on the web portal.",
-        );
-        return;
-      }
-
-      if (!isWeb && activeMobileRole && user.role !== activeMobileRole) {
-        showLoginError(
-          "Role Mismatch",
-          getMobileRoleMismatchMessage(activeMobileRole, user.role),
-        );
-        return;
-      }
-
-      if (isWeb && user.role !== "admin") {
-        showLoginError(
-          "Access Restricted",
-          "Volunteer and partner accounts can only log in on mobile.",
-        );
-        return;
-      }
-
-      const cachedApprovalBlock = getCachedApprovalBlock(user);
-      if (cachedApprovalBlock) {
-        showLoginError(cachedApprovalBlock.title, cachedApprovalBlock.message);
-        return;
-      }
-
-      setLoading(true);
-      try {
-        await login(user);
-        setLoginError(null);
-        setIdentifier("");
-        setPassword("");
-        setBackendStatus("checking");
-        setBackendMessage(
-          "Signed in with cached account data while the backend reconnects.",
-        );
-      } finally {
-        setLoading(false);
-      }
       return;
     }
 
@@ -1645,8 +1487,8 @@ export default function LoginScreen() {
     }
   };
 
-  // Signs in immediately with a saved account shown on this device.
-  const handleUseSavedAccount = async (account: User) => {
+  // Prefills a saved account without exposing or locally verifying its password.
+  const handleUseSavedAccount = (account: User) => {
     const nextIdentifier = account.email || account.phone || "";
     if (!nextIdentifier) {
       Alert.alert(
@@ -1658,16 +1500,14 @@ export default function LoginScreen() {
 
     setLoginError(null);
     setIdentifier(nextIdentifier);
-    const nextPassword = account.password || "";
-    setPassword(nextPassword);
+    setPassword("");
     if (!isWeb && account.role !== "admin") {
       setSelectedMobileRole(account.role);
     }
-    await performLogin(
-      nextIdentifier,
-      nextPassword,
-      account.role === "admin" ? null : account.role,
-    );
+    setLoginError({
+      title: "Password required",
+      message: "Enter this account's password to continue.",
+    });
   };
 
   const visibleSavedAccounts =
@@ -2227,11 +2067,8 @@ export default function LoginScreen() {
                             account.phone ||
                             "No login identifier"}
                         </Text>
-                        <Text style={styles.savedAccountPassword}>
-                          {account.password}
-                        </Text>
                         <Text style={styles.savedAccountHint}>
-                          Tap to sign in instantly
+                          Tap to use this account, then enter its password
                         </Text>
                       </TouchableOpacity>
                     ))}
@@ -2325,11 +2162,8 @@ export default function LoginScreen() {
                             account.phone ||
                             "No login identifier"}
                         </Text>
-                        <Text style={styles.savedAccountPassword}>
-                          {account.password}
-                        </Text>
                         <Text style={styles.savedAccountHint}>
-                          Tap to sign in instantly
+                          Tap to use this account, then enter its password
                         </Text>
                       </TouchableOpacity>
                     ))}
@@ -4481,11 +4315,6 @@ const styles = StyleSheet.create({
     color: "#334155",
     fontFamily: "monospace",
     marginBottom: 2,
-  },
-  savedAccountPassword: {
-    fontSize: 13,
-    color: "#334155",
-    fontFamily: "monospace",
   },
   savedAccountHint: {
     marginTop: 6,

@@ -125,8 +125,6 @@ import {
 
   saveVolunteerProjectMatch,
 
-  reviewPartnerReport,
-
   reviewPartnerProjectApplication,
 
   reviewVolunteerProjectMatch,
@@ -8449,72 +8447,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         getRequestErrorTitle(error),
 
         getRequestErrorMessage(error, 'Failed to review partner application.')
-
-      );
-
-    }
-
-  };
-
-
-
-  const handleReviewPartnerReport = async (reportId: string) => {
-
-    if (!isAdmin || !user?.id || !selectedProject) {
-
-      return;
-
-    }
-
-
-
-    const previousReports = partnerReports;
-
-    const now = new Date().toISOString();
-
-    setPartnerReports(currentReports =>
-
-      currentReports.map(report =>
-
-        report.id === reportId
-
-          ? {
-
-            ...report,
-
-            status: 'Reviewed',
-
-            reviewedAt: now,
-
-            reviewedBy: user.id,
-
-          }
-
-          : report
-
-      )
-
-    );
-
-    showTaskSaveNotice('Partner report marked as reviewed.', 1200);
-
-
-
-    try {
-
-      await reviewPartnerReport(reportId, user.id);
-
-      void loadPartnerReportsForProject(selectedProject.id);
-
-    } catch (error) {
-
-      setPartnerReports(previousReports);
-
-      Alert.alert(
-
-        getRequestErrorTitle(error),
-
-        getRequestErrorMessage(error, 'Failed to review the partner report.')
 
       );
 
@@ -22718,7 +22650,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                         premiumDetailsStyles.statusBadge,
 
-                        { backgroundColor: report.status === 'Reviewed' ? '#f0fdf4' : '#eff6ff' }
+                        {
+                          backgroundColor: report.status === 'Rejected' ? '#fef2f2' : '#f0fdf4',
+                        }
 
                       ]}>
 
@@ -22726,11 +22660,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                           premiumDetailsStyles.statusBadgeText,
 
-                          { color: report.status === 'Reviewed' ? '#166534' : '#1e40af' }
+                          { color: report.status === 'Rejected' ? '#b91c1c' : '#166534' }
 
                         ]}>
 
-                          {report.status === 'Reviewed' ? 'Approved' : 'For Review'}
+                          {report.status === 'Rejected' ? 'Rejected' : 'Submitted'}
 
                         </Text>
 
@@ -22978,7 +22912,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                     if (navigation) {
                       navigation.navigate('Reports' as any, { projectId: activeSelectedProject.id });
                     } else {
-                      Alert.alert('View Reports', 'Navigate to the Reports section to view and review submitted reports for this project.');
+                      Alert.alert('View Reports', 'Navigate to the Reports section to view submitted reports for this project.');
                     }
                   }}
 

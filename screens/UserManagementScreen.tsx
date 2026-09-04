@@ -131,7 +131,8 @@ export default function UserManagementScreen() {
     setNameDraft(targetUser.name);
     setEmailDraft(targetUser.email || '');
     setPhoneDraft(targetUser.phone || '');
-    setPasswordDraft(targetUser.password || 'password123');
+    // Passwords are write-only and are never returned by the backend.
+    setPasswordDraft('');
     setRoleDraft(targetUser.role);
     setUserTypeDraft(targetUser.userType || 'Adult');
     setPillarsDraft(targetUser.pillarsOfInterest || []);
@@ -206,11 +207,14 @@ export default function UserManagementScreen() {
         name: nameDraft.trim(),
         email: emailDraft.trim().toLowerCase(),
         phone: phoneDraft.trim() || undefined,
-        password: passwordDraft.trim() || selectedUser.password || 'Password123!',
         role: roleDraft,
         userType: userTypeDraft,
         pillarsOfInterest: pillarsDraft,
       };
+
+      if (passwordDraft.trim()) {
+        updatedUser.password = passwordDraft.trim();
+      }
 
       await saveUser(updatedUser);
 
@@ -912,8 +916,8 @@ export default function UserManagementScreen() {
                 ))}
               </View>
 
-              <Text style={styles.inputLabel}>Password</Text>
-              <TextInput style={styles.formInput} value={passwordDraft} onChangeText={setPasswordDraft} secureTextEntry />
+              <Text style={styles.inputLabel}>New Password (optional)</Text>
+              <TextInput style={styles.formInput} placeholder="Leave blank to keep current password" value={passwordDraft} onChangeText={setPasswordDraft} secureTextEntry />
 
               {selectedUser && selectedUser.id !== user?.id && (
                 <>

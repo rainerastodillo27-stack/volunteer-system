@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import {
   Modal,
   View,
@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   ScrollView,
   Platform,
-  TextInput,
   Image,
   useWindowDimensions,
   Alert,
@@ -26,66 +25,21 @@ interface ReportDetailsModalProps {
   visible: boolean;
   report: SubmittedReport | null;
   onClose: () => void;
-  onApprove?: (reportId: string, notes: string) => void;
-  onReject?: (reportId: string, notes: string) => void;
   onRevise?: (report: SubmittedReport) => void;
-  userRole?: 'admin' | 'volunteer' | 'partner';
-  showModerationActions?: boolean;
 }
 
 export default function ReportDetailsModal({
   visible,
   report,
   onClose,
-  onApprove,
-  onReject,
   onRevise,
-  userRole,
-  showModerationActions = false,
 }: ReportDetailsModalProps) {
-  const [approvalNotes, setApprovalNotes] = useState('');
-  const [showApprovalForm, setShowApprovalForm] = useState(false);
-  const [actionType, setActionType] = useState<'approve' | 'reject' | null>(null);
   const [previewAttachmentUri, setPreviewAttachmentUri] = useState<string | null>(null);
   const { width } = useWindowDimensions();
 
-  const canApprove =
-    Boolean(report) &&
-    showModerationActions &&
-    userRole === 'admin' &&
-    report?.status === 'Submitted' &&
-    !report?.approvedBy;
-
-  useEffect(() => {
-    if (!canApprove) {
-      setApprovalNotes('');
-      setShowApprovalForm(false);
-      setActionType(null);
-    }
-  }, [canApprove, report?.id]);
-
   if (!report) return null;
 
-  const handleApprove = () => {
-    if (onApprove) {
-      onApprove(report.id, approvalNotes);
-      setApprovalNotes('');
-      setShowApprovalForm(false);
-    }
-  };
-
-  const handleReject = () => {
-    if (onReject) {
-      onReject(report.id, approvalNotes);
-      setApprovalNotes('');
-      setShowApprovalForm(false);
-    }
-  };
-
   const handleClose = () => {
-    setApprovalNotes('');
-    setShowApprovalForm(false);
-    setActionType(null);
     onClose();
   };
 
@@ -300,44 +254,6 @@ export default function ReportDetailsModal({
               </View>
             </View>
 
-            {/* Approval History */}
-            {report.approvedBy && (
-              <View style={styles.sectionCard}>
-                <Text style={styles.sectionTitle}>Approval History</Text>
-                <View style={styles.approvalHistory}>
-                  <View
-                    style={[
-                      styles.approvalHistoryItem,
-                      report.status === 'Approved' && styles.approvalHistoryApproved,
-                    ]}
-                  >
-                    <MaterialIcons
-                      name={report.status === 'Approved' ? 'check' : 'close'}
-                      size={18}
-                      color="#fff"
-                      style={styles.approvalHistoryIcon}
-                    />
-                    <View style={styles.approvalHistoryContent}>
-                      <Text style={styles.approvalHistoryStatus}>
-                        {report.status === 'Approved' ? 'Approved' : 'Rejected'}
-                      </Text>
-                      <Text style={styles.approvalHistoryBy}>by {report.approvedBy}</Text>
-                      {report.approvedAt && (
-                        <Text style={styles.approvalHistoryDate}>
-                          {formatDisplayDate(report.approvedAt, 'Unknown date')}
-                        </Text>
-                      )}
-                    </View>
-                  </View>
-                  {report.approvalNotes && (
-                    <View style={styles.approvalNotesBox}>
-                      <Text style={styles.approvalNotesLabel}>Notes:</Text>
-                      <Text style={styles.approvalNotesText}>{report.approvalNotes}</Text>
-                    </View>
-                  )}
-                </View>
-              </View>
-            )}
           </ScrollView>
 
           {/* Footer */}
@@ -421,11 +337,6 @@ function buildReportDownloadContent(report: SubmittedReport): string {
     '',
     'Metrics',
     metricLines.length ? metricLines.join('\n') : 'No metrics captured.',
-    report.approvedBy ? '' : null,
-    report.approvedBy ? 'Approval History' : null,
-    report.approvedBy ? `Reviewed By: ${report.approvedBy}` : null,
-    report.approvedAt ? `Reviewed At: ${formatDisplayDateTime(report.approvedAt, 'Unknown date')}` : null,
-    report.approvalNotes ? `Approval Notes: ${report.approvalNotes}` : null,
   ]
     .filter(Boolean)
     .join('\n');
@@ -491,6 +402,12 @@ function formatMetricKey(key: string): string {
 function getStatusPresentation(status: SubmittedReport['status']) {
   switch (status) {
     case 'Approved':
+      return {
+        icon: 'check-circle' as const,
+        badgeBackground: '#dcfce7',
+        badgeText: '#166534',
+      };
+    case 'Submitted':
       return {
         icon: 'check-circle' as const,
         badgeBackground: '#dcfce7',
