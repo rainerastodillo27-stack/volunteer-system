@@ -1,0 +1,24 @@
+name: Deploy to VPS on Push
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to VPS via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 129.121.73.76
+          username: root
+          password: ${{ secrets.VPS_PASSWORD }}
+          script: |
+            cd /var/www/volunteer-system
+            git pull origin main
+            source .venv/bin/activate
+            pip install -r backend/requirements.txt
+            pkill -9 -f "backend.api:app"
+            sleep 1
+            nohup /var/www/volunteer-system/.venv/bin/python -m uvicorn backend.api:app --host 0.0.0.0 --port 8001 --ws websockets > backend.log 2>&1 &
