@@ -13,7 +13,7 @@ jobs:
         with:
           host: 129.121.73.76
           username: root
-          password: ${{ secrets.VPS_PASSWORD }}
+          password: ${{ secrets.VPS || secrets.VPS_PASSWORD }}
           script: |
             cd /var/www/volunteer-system
             git pull origin main
