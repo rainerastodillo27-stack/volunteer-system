@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
-import { StyleSheet, Text, TouchableOpacity, View, Linking, useWindowDimensions, ScrollView } from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View, Linking, Platform, useWindowDimensions, ScrollView } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { addDays, addMonths, addWeeks, endOfWeek, format, isSameDay, isSameMonth, startOfWeek, subDays, subMonths, subWeeks } from 'date-fns';
 import type { AdminPlanningCalendar, AdminPlanningItem, Project } from '../models/types';
@@ -411,7 +411,9 @@ export default function ProjectTimelineCalendarCard({
   };
 
   const { width } = useWindowDimensions();
-  const isMobile = width < 992;
+  const isMobileModeOnWeb = Platform.OS === 'web' && typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('mode') === 'mobile';
+  const isMobile = Platform.OS !== 'web' || isMobileModeOnWeb || width < 992;
 
   // Render a single day cell in the big monthly calendar
   const renderBigCalendarDay = (day: Date, idx: number) => {
@@ -475,20 +477,23 @@ export default function ProjectTimelineCalendarCard({
         </View>
 
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, position: 'relative', zIndex: 10 }}>
-          {/* Status Filter Icon Button */}
-          <TouchableOpacity
-            style={styles.filterButton}
-            onPress={() => setShowFilterDropdown(!showFilterDropdown)}
-            activeOpacity={0.8}
-          >
-            <MaterialIcons name="filter-list" size={20} color={statusFilter ? '#166534' : '#475569'} />
-            {statusFilter && (
-              <View style={styles.filterActiveIndicator} />
-            )}
-          </TouchableOpacity>
+          {/* Status filtering remains available on desktop. Keep the mobile
+              calendar header focused on the calendar itself. */}
+          {!isMobile ? (
+            <TouchableOpacity
+              style={styles.filterButton}
+              onPress={() => setShowFilterDropdown(!showFilterDropdown)}
+              activeOpacity={0.8}
+            >
+              <MaterialIcons name="filter-list" size={20} color={statusFilter ? '#166534' : '#475569'} />
+              {statusFilter && (
+                <View style={styles.filterActiveIndicator} />
+              )}
+            </TouchableOpacity>
+          ) : null}
 
           {/* Filter Dropdown */}
-          {showFilterDropdown && (
+          {!isMobile && showFilterDropdown && (
             <View style={styles.filterDropdownMenu}>
               <TouchableOpacity
                 style={styles.filterDropdownItem}
@@ -552,10 +557,6 @@ export default function ProjectTimelineCalendarCard({
             </View>
           )}
 
-          <View style={styles.syncBadge}>
-            <MaterialIcons name="sync" size={14} color="#166534" />
-            <Text style={styles.syncBadgeText}>Synced with GC</Text>
-          </View>
         </View>
       </View>
 
@@ -897,16 +898,6 @@ export default function ProjectTimelineCalendarCard({
             </View>
           </View>
 
-          {/* View Full Calendar Button */}
-          <TouchableOpacity
-            style={styles.viewFullCalendarButton}
-            onPress={handleResetToToday}
-            activeOpacity={0.8}
-          >
-            <MaterialIcons name="calendar-today" size={16} color="#166534" />
-            <Text style={styles.viewFullCalendarButtonText}>View full calendar</Text>
-          </TouchableOpacity>
-
         </View>
 
       </View>
@@ -983,20 +974,6 @@ const styles = StyleSheet.create({
   filterDropdownTextActive: {
     color: '#166534',
     fontWeight: '700',
-  },
-  syncBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: '#f0fdf4',
-  },
-  syncBadgeText: {
-    color: '#166534',
-    fontSize: 11,
-    fontWeight: '600',
   },
   mainLayout: {
     backgroundColor: '#ffffff',
@@ -1442,21 +1419,5 @@ const styles = StyleSheet.create({
     color: '#94a3b8',
     textAlign: 'center',
     paddingVertical: 12,
-  },
-  viewFullCalendarButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    borderWidth: 1,
-    borderColor: '#166534',
-    borderRadius: 8,
-    paddingVertical: 10,
-    width: '100%',
-  },
-  viewFullCalendarButtonText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#166534',
   },
 });

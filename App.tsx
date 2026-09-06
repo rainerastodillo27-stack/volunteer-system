@@ -42,7 +42,7 @@ if (typeof document !== "undefined") {
 
   // Apply Nunito globally to the body for web
   document.body.style.fontFamily =
-    'Nunito, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    'Nunito, sans-serif';
 
   // When running in ?mode=mobile, inject a <style> tag that constrains the
   // entire app AND all modal portals to a phone-sized frame.  React Native

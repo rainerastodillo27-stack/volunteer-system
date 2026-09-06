@@ -42,7 +42,7 @@ export function createWebMapMarkerIcon({
     ? `
       <circle cx="47" cy="16" r="13" fill="#ffffff"/>
       <circle cx="47" cy="16" r="11" fill="#166534"/>
-      <text x="47" y="20" text-anchor="middle" font-family="Arial, sans-serif" font-size="${safeCountLabel.length > 2 ? 9 : 11}" font-weight="700" fill="#ffffff">${escapeXml(safeCountLabel)}</text>
+      <text x="47" y="20" text-anchor="middle" font-family="Nunito, sans-serif" font-size="${safeCountLabel.length > 2 ? 9 : 11}" font-weight="700" fill="#ffffff">${escapeXml(safeCountLabel)}</text>
     `
     : '';
   const svg = `

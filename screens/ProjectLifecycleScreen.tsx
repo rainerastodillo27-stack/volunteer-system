@@ -28,7 +28,6 @@ import {
 
   Image,
 
-  ImageBackground,
 
   ActivityIndicator,
 
@@ -180,6 +179,7 @@ import {
 } from '../utils/projectMap';
 
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
+import { getAttendanceWindowKey, isEventAttendanceLate } from '../utils/attendanceSchedule';
 
 import { getAttachmentLabel, getPrimaryReportMediaUri, isImageMediaUri, openAttachmentUri, pickDocumentFromDevice, pickImageFromDevice } from '../utils/media';
 
@@ -1764,28 +1764,6 @@ function compareProjectsForSort(left: Project, right: Project, sortKey: Projects
 
 
 
-function normalizeExternalUrl(value: string): string {
-
-  const trimmedValue = value.trim();
-
-  if (!trimmedValue) {
-
-    return '';
-
-  }
-
-  if (/^https?:\/\//i.test(trimmedValue)) {
-
-    return trimmedValue;
-
-  }
-
-  return `https://${trimmedValue}`;
-
-}
-
-
-
 function getDateOnlyBoundary(value?: string, endOfDay = false): Date | undefined {
 
   const parsedDate = new Date(value || '');
@@ -2516,7 +2494,7 @@ const InlineProjectForm = React.memo(({
 
 
 
-  const renderCoverImageUpload = () => {
+  const renderCoverImageUpload = (label = 'Project Cover Image (Optional)') => {
 
     const hasImage = Boolean(projectDraft.imageUrl);
 
@@ -2524,7 +2502,7 @@ const InlineProjectForm = React.memo(({
 
       <View style={{ gap: 6, marginVertical: 8 }}>
 
-        <Text style={{ fontSize: 12, fontWeight: '700', color: '#475569' }}>Project Cover Image (Optional)</Text>
+        <Text style={{ fontSize: 12, fontWeight: '700', color: '#475569' }}>{label}</Text>
 
         {hasImage ? (
 
@@ -2910,7 +2888,7 @@ const InlineProjectForm = React.memo(({
 
                     boxSizing: 'border-box',
 
-                    fontFamily: 'inherit',
+                    fontFamily: "'Nunito', sans-serif",
 
                   } as any}
 
@@ -2984,7 +2962,7 @@ const InlineProjectForm = React.memo(({
 
                     boxSizing: 'border-box',
 
-                    fontFamily: 'inherit',
+                    fontFamily: "'Nunito', sans-serif",
 
                   } as any}
 
@@ -3386,7 +3364,7 @@ const InlineProjectForm = React.memo(({
 
                       {projectDraft.attachmentUrl
 
-                        ? projectDraft.attachmentUrl.split('/').pop() || 'Attached document'
+                        ? getAttachmentLabel(projectDraft.attachmentUrl)
 
                         : 'Upload document'}
 
@@ -3468,48 +3446,6 @@ const InlineProjectForm = React.memo(({
 
                 borderWidth: 1.5,
 
-                borderColor: '#166534',
-
-                borderRadius: 8,
-
-                height: 40,
-
-                alignItems: 'center',
-
-                justifyContent: 'center',
-
-                flexDirection: 'row',
-
-                gap: 6,
-
-                backgroundColor: '#fff',
-
-              }}
-
-              onPress={() => {
-
-                handleProjectDraftChange('status', 'Planning');
-
-                handleSaveProjectRecord();
-
-              }}
-
-            >
-
-              <MaterialIcons name="save" size={16} color="#166534" />
-
-              <Text style={{ color: '#166534', fontWeight: '700', fontSize: 13 }}>Save as Draft</Text>
-
-            </TouchableOpacity>
-
-
-
-            <TouchableOpacity
-
-              style={{
-
-                borderWidth: 1.5,
-
                 borderColor: '#cbd5e1',
 
                 borderRadius: 8,
@@ -3535,72 +3471,6 @@ const InlineProjectForm = React.memo(({
           </View>
 
 
-
-          {/* Need Help Card */}
-
-          <View style={{
-
-            backgroundColor: '#f1f5f9',
-
-            borderRadius: 12,
-
-            padding: 16,
-
-            gap: 8,
-
-          }}>
-
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-
-              <MaterialIcons name="help-outline" size={18} color="#475569" />
-
-              <Text style={{ fontSize: 13, fontWeight: '800', color: '#1e293b' }}>Need help?</Text>
-
-            </View>
-
-            <Text style={{ fontSize: 12, color: '#475569', lineHeight: 16 }}>
-
-              Learn how to create and manage projects.
-
-            </Text>
-
-            <TouchableOpacity
-
-              onPress={() => Linking.openURL('https://www.google.com')}
-
-              style={{
-
-                flexDirection: 'row',
-
-                alignItems: 'center',
-
-                justifyContent: 'center',
-
-                backgroundColor: '#fff',
-
-                borderWidth: 1,
-
-                borderColor: '#cbd5e1',
-
-                borderRadius: 8,
-
-                height: 36,
-
-                gap: 4,
-
-                marginTop: 4,
-
-              }}
-
-            >
-
-              <Text style={{ fontSize: 12, fontWeight: '700', color: '#475569' }}>View Guide</Text>
-
-              <MaterialIcons name="launch" size={12} color="#475569" />
-
-            </TouchableOpacity>
-
-          </View>
 
         </View>
 
@@ -3651,6 +3521,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [partners, setPartners] = useState<Partner[]>([]);
 
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+
+  const [showProjectFullDetailsModal, setShowProjectFullDetailsModal] = useState(false);
 
   const [statusUpdates, setStatusUpdates] = useState<StatusUpdate[]>([]);
 
@@ -3876,9 +3748,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     );
 
-    nextDraft.imageUrl = parentProject.imageUrl || '';
+    // Leave the event image empty unless the creator picks an event-specific
+    // photo. Mobile clients then inherit the current parent-project photo, so
+    // changing the project image stays reflected in events without their own
+    // photo.
+    nextDraft.imageUrl = '';
 
-    nextDraft.imageHidden = Boolean(parentProject.imageHidden);
+    nextDraft.imageHidden = false;
 
     nextDraft.address = parentProject.location.address || '';
 
@@ -3931,8 +3807,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     setEventAllDay(false);
 
     setEventRepeat('Does not repeat');
-
-    setEventZoomLink('');
 
     setEventOwner('THEA SALINAS');
 
@@ -4034,7 +3908,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   );
 
-  // Status filter for the projects view ΓÇö null means show all
+  // Status filter for the projects view - null means show all
 
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
 
@@ -4102,8 +3976,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [eventAllDay, setEventAllDay] = useState(false);
 
   const [eventRepeat, setEventRepeat] = useState('Does not repeat');
-
-  const [eventZoomLink, setEventZoomLink] = useState('');
 
   const [eventOwner, setEventOwner] = useState('THEA SALINAS');
 
@@ -4253,7 +4125,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     const eventDateKeys = getDateRangeKeys(selectedProject.startDate, selectedProject.endDate);
 
-    const todayKey = getLocalDateKey(currentDate.toISOString());
+    const todayKey = getAttendanceWindowKey(selectedProject.startDate, currentDate.toISOString());
 
     setSelectedAttendanceDateKey(
 
@@ -4527,6 +4399,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
             try {
 
+              setProjects(currentProjects => currentProjects.filter(item => item.id !== project.id));
+              setSelectedProject(currentProject => currentProject?.id === project.id ? null : currentProject);
+
               if (project.isEvent) {
 
                 await deleteEvent(project.id);
@@ -4537,10 +4412,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
               }
 
-              void loadProjects();
-
             } catch (err) {
 
+              void loadProjects();
               Alert.alert('Error', 'Failed to delete project.');
 
             }
@@ -4719,7 +4593,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     try {
 
-      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'programTracks', 'volunteerJoinRecords']);
+      const snapshot = await getProjectsScreenSnapshot(
+        user,
+        ['projects', 'programTracks', 'volunteerJoinRecords'],
+        false,
+        true,
+      );
 
       const allProjects = snapshot.projects || [];
 
@@ -5101,7 +4980,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         color: '#6366f1', // Default indigo
 
-        imageUrl: 'https://images.unsplash.com/photo-1497366216548-37526070297c?q=80&w=1470&auto=format&fit=crop',
+        imageUrl: undefined,
 
         isActive: true,
 
@@ -5119,21 +4998,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-      // Delay closing to show success checkmark
-
-      setTimeout(async () => {
-
-        await loadProgramTracks();
-
-        setIsAddProgramSuccess(false);
-
-        setNewProgramName('');
-
-        setShowAddProgramModal(false);
-
-        Alert.alert('Γ£à Program Added', `"${newProgram.title}" has been added to the dashboard.`);
-
-      }, 1000);
+      setIsAddProgramSuccess(false);
+      setNewProgramName('');
+      setShowAddProgramModal(false);
+      void loadProgramTracks();
+      Alert.alert('Program Added', `"${newProgram.title}" has been added to the dashboard.`);
 
     } catch (error) {
 
@@ -5255,7 +5124,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         isActive: true,
 
-        createdAt: now,
+        createdAt: editingProgramId
+          ? programTracks.find(track => track.id === editingProgramId)?.createdAt || now
+          : now,
 
         updatedAt: now,
 
@@ -5291,35 +5162,16 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-      // Show success then close modal
-
       setIsAddProgramSuccess(true);
-
-      setTimeout(async () => {
-
-        // Sync the local program list so the new card stays visible immediately.
-
-        await loadProgramTracks();
-
-        setIsAddProgramSuccess(false);
-
-        setShowProgramCrudModal(false);
-
-        // System notification after modal closes
-
-        Alert.alert(
-
-          editingProgramId ? 'Γ£à Program Updated' : 'Γ£à Program Created',
-
-          editingProgramId
-
-            ? `"${program.title}" has been updated and saved to the database.`
-
-            : `"${program.title}" is now live in the dashboard and saved to programs.`
-
-        );
-
-      }, 1000);
+      setIsAddProgramSuccess(false);
+      setShowProgramCrudModal(false);
+      void loadProgramTracks();
+      Alert.alert(
+        editingProgramId ? 'Program Updated' : 'Program Created',
+        editingProgramId
+          ? `"${program.title}" has been updated and saved to the database.`
+          : `"${program.title}" is now live in the dashboard and saved to programs.`
+      );
 
     } catch (error) {
 
@@ -5345,19 +5197,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       setActionLoadingKey(`deleteProgram-${trackId}`);
 
+      // Remove the card immediately while the database cascade finishes.
+      // The list is restored by the error refresh if the request fails.
+      setProgramTracks(current => current.filter(track => track.id !== trackId));
+
       try {
 
-        // Delete from backend FIRST - don't do optimistic update
         await deleteProgram(trackId);
-
-        // Force clear cache to ensure fresh data
-        clearStorageCache(['programs', 'programTracks', 'projects', 'events']);
-
-        // Wait for backend to complete
-        await new Promise(resolve => setTimeout(resolve, 500));
-
-        // Only after success, reload the data
-        await loadProgramTracks();
 
         // Show success message
         showTaskSaveNotice(`Program "${trackTitle}" was deleted successfully.`, 1500);
@@ -5448,9 +5294,16 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     shouldRestoreListScrollRef.current = true;
     setShowMoreDropdown(false);
+    setShowProjectFullDetailsModal(false);
+    // Every folder/event opens on its own attendance context.
+    setEventWorkspaceTab('Attendance');
+    setSelectedAttendanceVolunteerId(null);
+    setSelectedAttendancePhotoUri(null);
+    setSelectedAttendanceDateKey(null);
     setSelectedProject(project);
 
-    await Promise.all([
+    // Detail collections load in the background so navigation is immediate.
+    void Promise.all([
 
       loadStatusUpdates(project.id),
 
@@ -5736,9 +5589,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     );
 
-    nextDraft.imageUrl = parentProject.imageUrl || '';
+    // Leave the event image empty unless the creator picks an event-specific
+    // photo. Mobile clients then inherit the current parent-project photo, so
+    // changing the project image stays reflected in events without their own
+    // photo.
+    nextDraft.imageUrl = '';
 
-    nextDraft.imageHidden = Boolean(parentProject.imageHidden);
+    nextDraft.imageHidden = false;
 
     nextDraft.address = parentProject.location.address || '';
 
@@ -5791,8 +5648,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     setEventAllDay(false);
 
     setEventRepeat('Does not repeat');
-
-    setEventZoomLink('');
 
     setEventOwner('THEA SALINAS');
 
@@ -5971,8 +5826,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       setEventTimeEnd(extractTimeIn12HourFormat(project.endDate));
 
       setEventAllDay(false);
-
-      setEventZoomLink(project.googleMeetUrl || (project as any).meetUrl || (project as any).zoomLink || '');
 
       setEventNotifications(
 
@@ -6302,24 +6155,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         // Delete from backend
 
         await deleteProjectLikeRecord(event);
-
-
-
-        // Force clear cache to ensure fresh data
-
-        clearStorageCache(['events', 'projects', 'statusUpdates', 'volunteerProjectJoins', 'volunteerMatches', 'volunteerTimeLogs']);
-
-
-
-        // Wait a bit to ensure backend deletion propagates
-
-        await new Promise(resolve => setTimeout(resolve, 300));
-
-
-
-        // Reload fresh data
-
-        await loadProjects();
 
 
 
@@ -6965,6 +6800,114 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
+  const renderCoverImageUpload = (label = 'Project Cover Image (Optional)') => {
+
+    const hasImage = Boolean(projectDraft.imageUrl);
+
+    return (
+
+      <View style={{ gap: 6, marginVertical: 8 }}>
+
+        <Text style={{ fontSize: 12, fontWeight: '700', color: '#475569' }}>{label}</Text>
+
+        {hasImage ? (
+
+          <View style={{
+
+            height: 140,
+
+            borderRadius: 10,
+
+            borderWidth: 1,
+
+            borderColor: '#cbd5e1',
+
+            overflow: 'hidden',
+
+            position: 'relative',
+
+          }}>
+
+            <Image source={{ uri: projectDraft.imageUrl }} style={{ width: '100%', height: '100%', resizeMode: 'cover' }} />
+
+            <TouchableOpacity
+
+              onPress={handleRemoveProjectImage}
+
+              style={{
+
+                position: 'absolute',
+
+                top: 8,
+
+                right: 8,
+
+                backgroundColor: '#b91c1c',
+
+                borderRadius: 6,
+
+                paddingVertical: 4,
+
+                paddingHorizontal: 8,
+
+              }}
+
+            >
+
+              <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700' }}>Remove</Text>
+
+            </TouchableOpacity>
+
+          </View>
+
+        ) : (
+
+          <TouchableOpacity
+
+            onPress={handlePickProjectImage}
+
+            style={{
+
+              height: 100,
+
+              borderRadius: 10,
+
+              borderWidth: 1.5,
+
+              borderColor: '#cbd5e1',
+
+              borderStyle: 'dashed',
+
+              backgroundColor: '#f8fafc',
+
+              alignItems: 'center',
+
+              justifyContent: 'center',
+
+              gap: 6,
+
+            }}
+
+          >
+
+            <MaterialIcons name="image" size={24} color="#64748b" />
+
+            <Text style={{ fontSize: 13, fontWeight: '700', color: '#475569' }}>Click or drag image to upload</Text>
+
+            <Text style={{ fontSize: 11, color: '#94a3b8' }}>Recommended size: 1200 x 600px (JPG, PNG)</Text>
+
+          </TouchableOpacity>
+
+        )}
+
+      </View>
+
+    );
+
+  };
+
+
+
   const openCreateTaskModal = () => {
 
     setEditingTaskId(null);
@@ -7221,6 +7164,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     shouldRestoreListScrollRef.current = true;
 
+    setShowProjectFullDetailsModal(false);
+
     setSelectedProject(null);
 
   };
@@ -7373,9 +7318,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         (event.description || '') +
 
-        '\n\nVolunteer slots: ' + (event.volunteersNeeded || '0') +
-
-        (event.googleMeetUrl ? '\n\nGoogle Meet: ' + event.googleMeetUrl : '')
+        '\n\nVolunteer slots: ' + (event.volunteersNeeded || '0')
 
       )}`,
 
@@ -7789,10 +7732,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       .filter(notification => Number(notification.value) > 0);
 
-    const normalizedGoogleMeetUrl = normalizeExternalUrl(eventZoomLink);
-
-
-
     const draftBaseProject: Project = {
 
       id:
@@ -7850,8 +7789,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       locationBarangay: selectedLocationBarangay?.name,
 
       locationVenue: projectDraft.isEvent ? projectPlaceVenue.trim() : undefined,
-
-      googleMeetUrl: projectDraft.isEvent ? normalizedGoogleMeetUrl || undefined : undefined,
 
       notificationSettings: projectDraft.isEvent ? sanitizedEventNotifications : undefined,
 
@@ -8017,7 +7954,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       await saveProjectLikeRecord(projectToSave);
 
-      await loadProjects();
+      // The saved record is already in the local cache/UI. Reconcile in the
+      // background so closing the modal is not held by a second collection read.
+      void loadProjects();
 
       setIsSavingEvent(false);
 
@@ -8167,18 +8106,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-        // Force clear cache to ensure fresh data
-
-        clearStorageCache(['projects', 'events', 'statusUpdates', 'volunteerProjectJoins', 'volunteerMatches', 'volunteerTimeLogs', 'partnerProjectApplications', 'partnerReports']);
-
-
-
-        // Wait a bit to ensure backend deletion propagates
-
-        await new Promise(resolve => setTimeout(resolve, 300));
-
-
-
         // Navigate back and clear related state
 
         handleReturnToProjectList();
@@ -8190,12 +8117,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         setPartnerReports([]);
 
         setVolunteerJoinRecords([]);
-
-
-
-        // Reload fresh data
-
-        await loadProjects();
 
 
 
@@ -8944,8 +8865,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         }
 
-        await loadProjects();
-
         Alert.alert('Deleted', project.isEvent ? 'Event removed.' : 'Project removed.');
 
       } catch (error) {
@@ -9545,15 +9464,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       clearStorageCache(['projects', 'events']);
 
-      const notificationTasks: Promise<void>[] = [];
-
-
-
       for (const previousVolunteer of notificationPreviousVolunteers) {
 
         if (previousTask) {
 
-          notificationTasks.push(notifyVolunteerAboutTaskUnassignment({
+          void notifyVolunteerAboutTaskUnassignment({
 
             event: currentSelectedProject,
 
@@ -9563,7 +9478,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
             actorUserId: user?.id,
 
-          }));
+          }).catch(error => console.warn('[TASK] Unassignment notification failed:', error));
 
         }
 
@@ -9573,7 +9488,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       for (const assignedVolunteer of notificationAssignedVolunteers) {
 
-        notificationTasks.push(notifyVolunteerAboutTaskUpdate({
+        void notifyVolunteerAboutTaskUpdate({
 
           event: updatedProject,
 
@@ -9585,21 +9500,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
           action: 'assigned',
 
-        }));
+        }).catch(error => console.warn('[TASK] Assignment notification failed:', error));
 
       }
 
 
-
-      if (notificationTasks.length > 0) {
-
-        await Promise.all(notificationTasks);
-
-      }
-
-
-
-      await loadProjects();
 
       setProjects(currentProjects =>
 
@@ -9612,6 +9517,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       );
 
       setSelectedProject(updatedProject);
+      void loadProjects();
 
       setIsTaskSaveSuccess(true);
 
@@ -9966,7 +9872,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     const pendingRequestCount = getPendingVolunteerRequestCountForProject(project.id);
 
-    const projectImageSource = getPrimaryProjectImageSource(project);
+    const projectParent = project.parentProjectId
+      ? projects.find(candidate => candidate.id === project.parentProjectId)
+      : undefined;
+    const projectImageSource = getPrimaryProjectImageSource(project, projectParent);
 
     const projectCategoryLabel = `${project.isEvent ? 'Event' : 'Project'} | ${project.programModule || project.category}`;
 
@@ -12093,6 +12002,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       const updatedMatchRecord = await reviewVolunteerProjectMatch(matchId, status, user.id);
 
+      // The API response is authoritative; release the action immediately
+      // before refreshing the surrounding event data in the background.
+      setReviewActionLoadingId(null);
+
       // 1. Immediately update local selectedEventMatches and selectedMatch state
       setSelectedEventMatches(prev =>
         prev.map(m => m.id === matchId ? { ...m, ...updatedMatchRecord, status } : m)
@@ -13379,7 +13292,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                               }}
                               disabled={reviewActionLoadingId !== null}
                             >
-                              <Text style={{ fontSize: 14, fontWeight: '700', color: '#ef4444' }}>Decline</Text>
+                              {reviewActionLoadingId === `${selectedMatch.id}-Rejected` ? (
+                                <ActivityIndicator size="small" color="#ef4444" />
+                              ) : (
+                                <Text style={{ fontSize: 14, fontWeight: '700', color: '#ef4444' }}>Decline</Text>
+                              )}
                             </TouchableOpacity>
 
                             <TouchableOpacity
@@ -14163,8 +14080,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   </TouchableOpacity>
 
-
-
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
 
                     <Text style={{ fontSize: 13, color: '#334155', fontWeight: '500' }}>Repeat</Text>
@@ -14285,77 +14200,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-                    {/* Google Meet Link / URL (Optional) */}
-
-                    <View style={{ gap: 6 }}>
-
-                      <Text style={{ fontSize: 13, fontWeight: '700', color: '#334155' }}>Google Meet Link / URL (Optional)</Text>
-
-                      <View style={{ flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, backgroundColor: '#ffffff', height: 38, paddingLeft: 8, paddingRight: 4, gap: 4 }}>
-
-                        <TextInput
-
-                          style={{ flex: 1, fontSize: 13, color: '#0f172a', fontWeight: '500', height: '100%', padding: 0 }}
-
-                          placeholder="https://meet.google.com/..."
-
-                          placeholderTextColor="#94a3b8"
-
-                          value={eventZoomLink}
-
-                          onChangeText={setEventZoomLink}
-
-                        />
-
-                        <TouchableOpacity
-
-                          style={{
-
-                            flexDirection: 'row',
-
-                            alignItems: 'center',
-
-                            borderWidth: 1,
-
-                            borderColor: '#166534',
-
-                            borderRadius: 6,
-
-                            paddingVertical: 4,
-
-                            paddingHorizontal: 10,
-
-                            backgroundColor: '#ffffff',
-
-                            gap: 4,
-
-                          }}
-
-                          onPress={() => {
-
-                            const normalizedUrl = normalizeExternalUrl(eventZoomLink);
-
-                            if (normalizedUrl) {
-
-                              Linking.openURL(normalizedUrl).catch(err => console.log(err));
-
-                            }
-
-                          }}
-
-                        >
-
-                          <Text style={{ fontSize: 12, fontWeight: '700', color: '#166534' }}>Join Meet</Text>
-
-                          <MaterialIcons name="open-in-new" size={12} color="#166534" />
-
-                        </TouchableOpacity>
-
-                      </View>
-
-                    </View>
-
-
+                    {renderCoverImageUpload('Event Photo (Optional)')}
 
                     {/* Document Attachment */}
 
@@ -14363,75 +14208,91 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       <Text style={{ fontSize: 13, fontWeight: '700', color: '#334155' }}>Document Attachment (Optional)</Text>
 
-                      <TouchableOpacity
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
 
-                        onPress={handlePickProjectDocument}
+                        <TouchableOpacity
 
-                        style={{ 
+                          onPress={handlePickProjectDocument}
 
-                          flexDirection: 'row', 
+                          style={{
 
-                          alignItems: 'center', 
+                            flex: 1,
 
-                          borderWidth: 1, 
+                            flexDirection: 'row',
 
-                          borderColor: '#cbd5e1', 
+                            alignItems: 'center',
 
-                          borderRadius: 8, 
+                            borderWidth: 1,
 
-                          backgroundColor: '#ffffff', 
+                            borderColor: '#cbd5e1',
 
-                          padding: 10, 
+                            borderRadius: 8,
 
-                          gap: 8 
+                            backgroundColor: '#ffffff',
 
-                        }}
+                            padding: 10,
 
-                      >
+                            gap: 8,
 
-                        <MaterialIcons 
+                          }}
 
-                          name={projectDraft.attachmentUrl ? 'attach-file' : 'upload-file'} 
+                        >
 
-                          size={18} 
+                          <MaterialIcons
 
-                          color="#2563eb" 
+                            name={projectDraft.attachmentUrl ? 'attach-file' : 'upload-file'}
 
-                        />
+                            size={18}
 
-                        <Text style={{ flex: 1, fontSize: 13, color: projectDraft.attachmentUrl ? '#0f172a' : '#94a3b8', fontWeight: '500' }} numberOfLines={1}>
+                            color="#2563eb"
 
-                          {projectDraft.attachmentUrl 
+                          />
 
-                            ? projectDraft.attachmentUrl.split('/').pop() || 'Attached document'
+                          <Text style={{ flex: 1, fontSize: 13, color: projectDraft.attachmentUrl ? '#0f172a' : '#94a3b8', fontWeight: '500' }} numberOfLines={1}>
 
-                            : 'Upload document'}
+                            {projectDraft.attachmentUrl
 
-                        </Text>
+                              ? getAttachmentLabel(projectDraft.attachmentUrl)
 
-                        {projectDraft.attachmentUrl && (
+                              : 'Upload document'}
 
-                          <TouchableOpacity 
+                          </Text>
 
-                            onPress={(e) => {
+                        </TouchableOpacity>
 
-                              e.stopPropagation();
+                        {projectDraft.attachmentUrl ? (
 
-                              handleRemoveProjectDocument();
+                          <TouchableOpacity
+
+                            onPress={handleRemoveProjectDocument}
+
+                            accessibilityRole="button"
+
+                            accessibilityLabel="Remove document"
+
+                            style={{
+
+                              padding: 10,
+
+                              borderWidth: 1,
+
+                              borderColor: '#fecaca',
+
+                              borderRadius: 8,
+
+                              backgroundColor: '#fff7f7',
 
                             }}
 
-                            style={{ padding: 4 }}
-
                           >
 
-                            <MaterialIcons name="close" size={16} color="#64748b" />
+                            <MaterialIcons name="close" size={16} color="#dc2626" />
 
                           </TouchableOpacity>
 
-                        )}
+                        ) : null}
 
-                      </TouchableOpacity>
+                      </View>
 
                     </View>
 
@@ -14541,9 +14402,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   {eventNotifications.map((notif, index) => (
 
-                    <View key={index} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <View key={index} style={{ flexDirection: isMobile ? 'column' : 'row', alignItems: isMobile ? 'stretch' : 'center', gap: 8 }}>
 
-                      <View style={{ flex: 1.5, height: 40, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, backgroundColor: '#fff', justifyContent: 'center' }}>
+                      <View style={{ flex: isMobile ? undefined : 1, minWidth: isMobile ? undefined : 140, height: 40, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, backgroundColor: '#fff', justifyContent: 'center', overflow: 'hidden' }}>
 
                         <Picker
 
@@ -14559,7 +14420,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                         >
 
-                          <Picker.Item label="Send notification" value="Notification" />
+                          <Picker.Item label="Notification" value="Notification" />
 
                           <Picker.Item label="Email" value="Email" />
 
@@ -14569,7 +14430,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       <TextInput
 
-                        style={[styles.formInput, { flex: 0.8, height: 40, marginBottom: 0, textAlign: 'center' }]}
+                        style={[styles.formInput, { flex: isMobile ? undefined : 0.65, width: isMobile ? '100%' : undefined, minWidth: isMobile ? undefined : 64, height: 40, marginBottom: 0, textAlign: 'center' }]}
 
                         keyboardType="numeric"
 
@@ -14583,7 +14444,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       />
 
-                      <View style={{ flex: 1.2, height: 40, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, backgroundColor: '#fff', justifyContent: 'center' }}>
+                      <View style={{ flex: isMobile ? undefined : 0.85, minWidth: isMobile ? undefined : 100, height: 40, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, backgroundColor: '#fff', justifyContent: 'center', overflow: 'hidden' }}>
 
                         <Picker
 
@@ -15004,44 +14865,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               </View>
 
 
-
-              {/* Card 3: Need Help? */}
-
-              <View style={{ borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 16, padding: 20, backgroundColor: '#f8fafc' }}>
-
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-
-                  <View style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: '#166534', alignItems: 'center', justifyContent: 'center' }}>
-
-                    <MaterialIcons name="help" size={16} color="#fff" />
-
-                  </View>
-
-                  <Text style={{ fontSize: 15, fontWeight: '700', color: '#166534' }}>Need Help?</Text>
-
-                </View>
-
-                <Text style={{ fontSize: 13, color: '#475569', marginBottom: 12, lineHeight: 18 }}>
-
-                  Learn how to create and manage events.
-
-                </Text>
-
-                <TouchableOpacity
-
-                  style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 16, backgroundColor: '#fff', gap: 6, alignSelf: 'flex-start' }}
-
-                  onPress={() => Linking.openURL('https://example.com/guide').catch(() => { })}
-
-                >
-
-                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#334155' }}>View Guide</Text>
-
-                  <MaterialIcons name="open-in-new" size={14} color="#334155" />
-
-                </TouchableOpacity>
-
-              </View>
 
 
 
@@ -15481,7 +15304,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                         <Text style={styles.uploadTitle}>No custom picture uploaded yet.</Text>
 
-                        <Text style={styles.uploadSubtitle}>The app will use the default project image.</Text>
+                        <Text style={styles.uploadSubtitle}>No project picture selected.</Text>
 
                       </>
 
@@ -16303,7 +16126,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                           <Text style={styles.uploadTitle}>
 
-                            Document uploaded: {projectDraft.attachmentUrl.split('/').pop() || 'Attached document'}
+                            Document uploaded: {getAttachmentLabel(projectDraft.attachmentUrl)}
 
                           </Text>
 
@@ -16659,7 +16482,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 >
 
-                  <Text style={[programWebStyles.navCtaText, { color: accent }]}>View projects ΓåÆ</Text>
+                  <Text style={[programWebStyles.navCtaText, { color: accent }]}>View projects</Text>
 
                 </TouchableOpacity>
 
@@ -16885,7 +16708,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   >
 
-                    <Text style={[programWebStyles.footerPrimaryText, { color: accent }]}>View projects ΓåÆ</Text>
+                    <Text style={[programWebStyles.footerPrimaryText, { color: accent }]}>View projects</Text>
 
                   </TouchableOpacity>
 
@@ -18743,7 +18566,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         projectTimeLogEntries
 
-          .map(log => getLocalDateKey(log.attendanceConfirmedAt || log.timeIn))
+          .map(log => getAttendanceWindowKey(activeSelectedProject.startDate, log.attendanceConfirmedAt || log.timeIn))
 
           .filter(Boolean)
 
@@ -18763,11 +18586,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         ? selectedAttendanceDateKey
 
-        : availableAttendanceDateKeys.includes(getLocalDateKey(currentDate.toISOString()))
+        : availableAttendanceDateKeys.includes(getAttendanceWindowKey(activeSelectedProject.startDate, currentDate.toISOString()))
 
-          ? getLocalDateKey(currentDate.toISOString())
+          ? getAttendanceWindowKey(activeSelectedProject.startDate, currentDate.toISOString())
 
-          : availableAttendanceDateKeys[availableAttendanceDateKeys.length - 1] || getLocalDateKey(currentDate.toISOString());
+          : availableAttendanceDateKeys[availableAttendanceDateKeys.length - 1] || getAttendanceWindowKey(activeSelectedProject.startDate, currentDate.toISOString());
 
     const projectVolunteerAttendanceCards: ProjectVolunteerAttendanceCard[] = volunteerEntries
 
@@ -18779,7 +18602,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
           .filter(
 
-            log => getLocalDateKey(log.attendanceConfirmedAt || log.timeIn) === resolvedAttendanceDateKey
+            log => getAttendanceWindowKey(activeSelectedProject.startDate, log.attendanceConfirmedAt || log.timeIn) === resolvedAttendanceDateKey
 
           )
 
@@ -18867,14 +18690,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     const hasPartneredOrg = Boolean(selectedPartnerName);
 
-    const activeProjectImageSource = getPrimaryProjectImageSource(activeSelectedProject);
-
-    const hasCustomProjectImage = Boolean(activeSelectedProject.imageUrl && isImageMediaUri(activeSelectedProject.imageUrl));
-
-    const hasVisibleProjectImage = Boolean(activeProjectImageSource);
-
-    const internalTasks = Array.isArray(activeSelectedProject.internalTasks) ? activeSelectedProject.internalTasks : [];
-
     const parentProject =
 
       activeSelectedProject.parentProjectId
@@ -18882,6 +18697,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         ? projects.find(project => project.id === activeSelectedProject.parentProjectId) || null
 
         : null;
+
+    const activeProjectImageSource = getPrimaryProjectImageSource(activeSelectedProject, parentProject || undefined);
+
+    const hasCustomProjectImage = Boolean(activeSelectedProject.imageUrl && isImageMediaUri(activeSelectedProject.imageUrl));
+
+    const hasVisibleProjectImage = Boolean(activeProjectImageSource);
+
+    const internalTasks = Array.isArray(activeSelectedProject.internalTasks) ? activeSelectedProject.internalTasks : [];
 
     const detailEntityLabel = activeSelectedProject.isEvent ? 'Event' : 'Project';
 
@@ -19056,7 +18879,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
             : 'No skills tagged',
 
-          meta: 'Aggregated from this eventΓÇÖs task skills and event skill tags',
+          meta: "Aggregated from this event's task skills and event skill tags",
 
         },
 
@@ -19162,7 +18985,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       try {
 
-        const todayKey = getLocalDateKey(currentDate.toISOString());
+        const todayKey = getAttendanceWindowKey(activeSelectedProject.startDate, currentDate.toISOString());
 
         const allLogs = await getStorageItem<VolunteerTimeLog[]>('volunteerTimeLogs') || [];
 
@@ -19172,7 +18995,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
           log.projectId === activeSelectedProject.id && 
 
-          getLocalDateKey(log.attendanceConfirmedAt || log.timeIn) === todayKey
+          getAttendanceWindowKey(activeSelectedProject.startDate, log.attendanceConfirmedAt || log.timeIn) === todayKey
 
         );
 
@@ -19293,7 +19116,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         }
 
-        const todayKey = getLocalDateKey(currentDate.toISOString());
+        const todayKey = getAttendanceWindowKey(activeSelectedProject.startDate, currentDate.toISOString());
 
         const allLogs = await getStorageItem<VolunteerTimeLog[]>('volunteerTimeLogs') || [];
 
@@ -19303,7 +19126,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
           log.projectId === activeSelectedProject.id && 
 
-          getLocalDateKey(log.attendanceConfirmedAt || log.timeIn) === todayKey
+          getAttendanceWindowKey(activeSelectedProject.startDate, log.attendanceConfirmedAt || log.timeIn) === todayKey
 
         );
 
@@ -19491,12 +19314,18 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         const volunteerLogs = volunteerTimeLogs.filter(log => log.volunteerId === volunteer.id && log.projectId === activeSelectedProject.id);
 
         const todayLog = volunteerLogs.find(
-          log => getLocalDateKey(log.attendanceConfirmedAt || log.timeIn) === resolvedAttendanceDateKey
+          log => getAttendanceWindowKey(activeSelectedProject.startDate, log.attendanceConfirmedAt || log.timeIn) === resolvedAttendanceDateKey
         );
 
         
 
-        const isLate = todayLog && (todayLog.note?.startsWith('[Late]') || todayLog.note?.includes('late') || false);
+        const isLate = Boolean(
+          todayLog && (
+            todayLog.note?.startsWith('[Late]') ||
+            todayLog.note?.includes('late') ||
+            (activeSelectedProject.isEvent && isEventAttendanceLate(activeSelectedProject.startDate, todayLog.timeIn))
+          )
+        );
 
         const isPresent = todayLog && !isLate;
 
@@ -19707,12 +19536,18 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         const volunteerLogs = volunteerTimeLogs.filter(log => log.volunteerId === volunteer.id && log.projectId === project.id);
 
         const todayLog = volunteerLogs.find(
-          log => getLocalDateKey(log.attendanceConfirmedAt || log.timeIn) === resolvedAttendanceDateKey
+          log => getAttendanceWindowKey(project.startDate, log.attendanceConfirmedAt || log.timeIn) === resolvedAttendanceDateKey
         );
 
 
 
-        const isLate = todayLog && (todayLog.note?.startsWith('[Late]') || todayLog.note?.includes('late') || false);
+        const isLate = Boolean(
+          todayLog && (
+            todayLog.note?.startsWith('[Late]') ||
+            todayLog.note?.includes('late') ||
+            (project.isEvent && isEventAttendanceLate(project.startDate, todayLog.timeIn))
+          )
+        );
 
         const isPresent = todayLog && !isLate;
 
@@ -19734,7 +19569,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       const activeAttendanceLogs = activeAttendanceVolunteer
         ? volunteerTimeLogs
           .filter(log => log.projectId === project.id && log.volunteerId === activeAttendanceVolunteer.id)
-          .filter(log => getLocalDateKey(log.attendanceConfirmedAt || log.timeIn) === resolvedAttendanceDateKey)
+          .filter(log => getAttendanceWindowKey(project.startDate, log.attendanceConfirmedAt || log.timeIn) === resolvedAttendanceDateKey)
           .sort((a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime())
         : [];
       const activeAttendanceLog = activeAttendanceLogs[0] || null;
@@ -21325,15 +21160,23 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   }).map(volunteer => {
 
-                    const assignedTasks = taskCards.filter(t => getTaskAssignedVolunteerIds(t).includes(volunteer.id));
+                    const volunteerIdentifiers = new Set(
+                      [volunteer.id, volunteer.userId]
+                        .map(value => String(value || '').trim())
+                        .filter(Boolean)
+                    );
 
-                    const assignedRoles = assignedTasks.map(t => t.title).join(', ') || 'Unassigned';
+                    const assignedTasks = taskCards.filter(task =>
+                      getTaskAssignedVolunteerIds(task, volunteers).some(assignedId => volunteerIdentifiers.has(assignedId))
+                    );
+
+                    const assignedRoles = assignedTasks.map(t => t.title).join(', ') || 'No task assigned';
 
                     const completedTasks = assignedTasks.filter(t => t.status === 'Completed');
 
                     const logs = volunteerTimeLogs
-                      .filter(log => log.projectId === activeSelectedProject.id && log.volunteerId === volunteer.id)
-                      .filter(log => getLocalDateKey(log.attendanceConfirmedAt || log.timeIn) === resolvedAttendanceDateKey)
+                      .filter(log => log.projectId === activeSelectedProject.id && volunteerIdentifiers.has(log.volunteerId))
+                      .filter(log => getAttendanceWindowKey(activeSelectedProject.startDate, log.attendanceConfirmedAt || log.timeIn) === resolvedAttendanceDateKey)
                       .sort((a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime());
 
                     const activeLog = logs[0];
@@ -21356,13 +21199,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       textColor = '#166534';
 
-                      // Basic logic for Late: if timeIn is after project startDate
-
+                      // Apply the 15-minute grace period to the selected event's daily start window.
                       const projectStartTime = new Date(activeSelectedProject.startDate).getTime();
-
                       const logTime = new Date(activeLog.timeIn).getTime();
+                      const isLateForEvent = activeSelectedProject.isEvent
+                        ? isEventAttendanceLate(activeSelectedProject.startDate, activeLog.timeIn)
+                        : Boolean(projectStartTime && logTime > projectStartTime + 15 * 60000);
 
-                      if (projectStartTime && logTime > projectStartTime + 15 * 60000) {
+                      if (isLateForEvent) {
 
                         attendanceStatus = 'Late';
 
@@ -21472,7 +21316,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                           ) : (
 
-                            <Text style={{ fontSize: 13, color: '#94a3b8' }}>ΓÇö</Text>
+                            <Text style={{ fontSize: 13, color: '#94a3b8' }}>Not timed in</Text>
 
                           )}
 
@@ -21496,7 +21340,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                           ) : (
 
-                            <Text style={{ fontSize: 13, color: '#94a3b8' }}>ΓÇö</Text>
+                            <Text style={{ fontSize: 13, color: '#94a3b8' }}>No task assigned</Text>
 
                           )}
 
@@ -21999,17 +21843,22 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
           <View style={premiumDetailsStyles.heroBanner}>
 
-            <ImageBackground
+            <View style={premiumDetailsStyles.heroBackground}>
 
-              source={activeProjectImageSource || { uri: 'https://images.unsplash.com/photo-1488521787991-ed7bbaae773c?q=80&w=1200&auto=format&fit=crop' }}
-
-              style={premiumDetailsStyles.heroBackground}
-
-              imageStyle={{ borderRadius: 16 }}
-
-              resizeMode="cover"
-
-            >
+              {activeProjectImageSource ? (
+                <Image
+                  source={activeProjectImageSource}
+                  style={[StyleSheet.absoluteFillObject, { borderRadius: 16 }]}
+                  resizeMode="cover"
+                />
+              ) : (
+                <View
+                  style={[
+                    StyleSheet.absoluteFillObject,
+                    { borderRadius: 16, backgroundColor: '#dfe8e1' },
+                  ]}
+                />
+              )}
 
               <View style={[premiumDetailsStyles.heroOverlay, { borderRadius: 16 }]} />
 
@@ -22248,7 +22097,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-            </ImageBackground>
+            </View>
 
           </View>
 
@@ -22534,7 +22383,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                             <Text style={premiumDetailsStyles.eventMeta}>
 
-                              {format(new Date(event.startDate), 'MMMM d, yyyy')} ΓÇó {formatProjectDateLabel(event.startDate)}
+                              {format(new Date(event.startDate), 'MMMM d, yyyy')} - {formatProjectDateLabel(event.startDate)}
 
                             </Text>
 
@@ -22638,7 +22487,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                         <Text style={premiumDetailsStyles.reportMeta}>
 
-                          {format(new Date(report.createdAt), 'MMM d, yyyy')} ΓÇó Submitted by {report.partnerName || 'John D.'}
+                          {format(new Date(report.createdAt), 'MMM d, yyyy')} - Submitted by {report.partnerName || 'John D.'}
 
                         </Text>
 
@@ -22798,7 +22647,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       // Open/download the document
 
-                      openAttachmentUri(projectDocumentAttachment.url);
+                      void openAttachmentUri(projectDocumentAttachment.url).catch((error: any) => {
+                        Alert.alert(
+                          'Document View Failed',
+                          error?.message || 'Unable to open document.',
+                        );
+                      });
 
                     } else if (!isProjectReadOnly) {
 
@@ -22828,7 +22682,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                     {projectDocumentAttachment?.url
 
-                      ? projectDocumentAttachment.url.split('/').pop() || 'Attached document'
+                      ? getAttachmentLabel(projectDocumentAttachment.url)
 
                       : isProjectReadOnly ? 'No document attached' : 'Upload document'}
 
@@ -22842,7 +22696,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   style={premiumDetailsStyles.summaryLink}
 
-                  onPress={() => Alert.alert('Details', 'Show full project metadata.')}
+                  onPress={() => setShowProjectFullDetailsModal(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`View full details for ${activeSelectedProject.title}`}
 
                 >
 
@@ -22928,38 +22784,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-              {/* Share Project Card */}
-
-              <View style={premiumDetailsStyles.card}>
-
-                <Text style={[premiumDetailsStyles.cardTitle, { marginBottom: 12 }]}>Share Project</Text>
-
-                <Text style={premiumDetailsStyles.shareDesc}>
-
-                  Invite partners and volunteers to collaborate on this project.
-
-                </Text>
-
-
-
-                <TouchableOpacity
-
-                  style={premiumDetailsStyles.actionBtnOutline}
-
-                  onPress={() => Alert.alert('Share Link', 'Project link copied to clipboard.')}
-
-                >
-
-                  <MaterialIcons name="link" size={16} color="#475569" />
-
-                  <Text style={premiumDetailsStyles.actionBtnOutlineText}>Share Project Link</Text>
-
-                </TouchableOpacity>
-
-              </View>
-
-
-
             </View>
 
 
@@ -22968,9 +22792,126 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-          {renderProgramProposalModal()}
+        {renderProgramProposalModal()}
 
         </ScrollView>
+
+        <Modal
+          visible={showProjectFullDetailsModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowProjectFullDetailsModal(false)}
+        >
+          <View style={premiumDetailsStyles.fullDetailsBackdrop}>
+            <View style={[premiumDetailsStyles.fullDetailsWindow, !isDesktop && premiumDetailsStyles.fullDetailsWindowMobile]}>
+              <View style={premiumDetailsStyles.fullDetailsHeader}>
+                <View style={premiumDetailsStyles.fullDetailsHeaderCopy}>
+                  <Text style={styles.detailsEyebrow}>{detailEntityLabel} details</Text>
+                  <Text style={premiumDetailsStyles.fullDetailsTitle}>{activeSelectedProject.title}</Text>
+                </View>
+
+                <TouchableOpacity
+                  onPress={() => setShowProjectFullDetailsModal(false)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close full details"
+                  style={premiumDetailsStyles.fullDetailsCloseButton}
+                >
+                  <MaterialIcons name="close" size={22} color="#475569" />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView
+                style={premiumDetailsStyles.fullDetailsScroll}
+                contentContainerStyle={premiumDetailsStyles.fullDetailsContent}
+                showsVerticalScrollIndicator
+              >
+                <Text style={premiumDetailsStyles.fullDetailsSectionTitle}>Overview</Text>
+                <Text style={premiumDetailsStyles.fullDetailsDescription}>{detailsDescription}</Text>
+
+                <View style={premiumDetailsStyles.fullDetailsFieldGrid}>
+                  {[
+                    { label: 'Status', value: getProjectDisplayStatus(activeSelectedProject) },
+                    { label: 'Program', value: getProjectProgramTitle(activeSelectedProject) },
+                    { label: 'Start date', value: formattedStartDate },
+                    { label: 'End date', value: formattedEndDate },
+                    { label: 'Location', value: formattedProjectLocation },
+                    { label: activeSelectedProject.isEvent ? 'Confirmed volunteers' : 'Volunteers', value: String(volunteerSlotsFilled) },
+                    ...(activeSelectedProject.isEvent
+                      ? [{ label: 'Volunteer slots', value: String(volunteerSlotsNeeded) }]
+                      : []),
+                    ...(hasPartneredOrg ? [{ label: 'Partner', value: selectedPartnerName }] : []),
+                    ...(parentProject ? [{ label: 'Parent project', value: parentProject.title }] : []),
+                  ].map(detail => (
+                    <View key={detail.label} style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
+                      <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>{detail.label}</Text>
+                      <Text style={premiumDetailsStyles.fullDetailsFieldValue}>{detail.value || 'Not provided'}</Text>
+                    </View>
+                  ))}
+                </View>
+
+                <Text style={premiumDetailsStyles.fullDetailsSectionTitle}>Volunteer settings</Text>
+                <View style={premiumDetailsStyles.fullDetailsFieldGrid}>
+                  {[
+                    { label: 'Accept volunteers', value: activeSelectedProject.acceptVolunteers === false ? 'No' : 'Yes' },
+                    { label: 'Application required', value: activeSelectedProject.applicationRequired === false ? 'No' : 'Yes' },
+                    { label: 'Review required', value: activeSelectedProject.reviewRequired === false ? 'No' : 'Yes' },
+                    { label: 'Application deadline', value: activeSelectedProject.applicationDeadline ? formatProjectDateLabel(activeSelectedProject.applicationDeadline) : 'No deadline' },
+                  ].map(detail => (
+                    <View key={detail.label} style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
+                      <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>{detail.label}</Text>
+                      <Text style={premiumDetailsStyles.fullDetailsFieldValue}>{detail.value}</Text>
+                    </View>
+                  ))}
+                </View>
+
+                <Text style={premiumDetailsStyles.fullDetailsSectionTitle}>Planning and delivery</Text>
+                <View style={premiumDetailsStyles.fullDetailsFieldGrid}>
+                  <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
+                    <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>Skills needed</Text>
+                    <Text style={premiumDetailsStyles.fullDetailsFieldValue}>
+                      {activeSelectedProject.skillsNeeded?.length ? activeSelectedProject.skillsNeeded.join(', ') : 'No skills tagged'}
+                    </Text>
+                  </View>
+                  <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
+                    <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>Volunteer requirements</Text>
+                    <Text style={premiumDetailsStyles.fullDetailsFieldValue}>
+                      {activeSelectedProject.volunteerRequirements?.length ? activeSelectedProject.volunteerRequirements.join(', ') : 'No requirements listed'}
+                    </Text>
+                  </View>
+                  <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
+                    <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>Community need</Text>
+                    <Text style={premiumDetailsStyles.fullDetailsFieldValue}>{activeSelectedProject.communityNeed || 'Not provided'}</Text>
+                  </View>
+                  <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
+                    <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>Expected deliverables</Text>
+                    <Text style={premiumDetailsStyles.fullDetailsFieldValue}>{activeSelectedProject.expectedDeliverables || 'Not provided'}</Text>
+                  </View>
+                  <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
+                    <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>Tasks</Text>
+                    <Text style={premiumDetailsStyles.fullDetailsFieldValue}>{internalTasks.length ? `${internalTasks.length} task${internalTasks.length === 1 ? '' : 's'}` : 'No tasks created'}</Text>
+                  </View>
+                  <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
+                    <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>Document attachment</Text>
+                    <Text style={premiumDetailsStyles.fullDetailsFieldValue}>
+                      {projectDocumentAttachment?.url ? getAttachmentLabel(projectDocumentAttachment.url) : 'No document attached'}
+                    </Text>
+                  </View>
+                </View>
+              </ScrollView>
+
+              <View style={premiumDetailsStyles.fullDetailsFooter}>
+                <TouchableOpacity
+                  onPress={() => setShowProjectFullDetailsModal(false)}
+                  style={premiumDetailsStyles.fullDetailsDoneButton}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close project details"
+                >
+                  <Text style={premiumDetailsStyles.fullDetailsDoneButtonText}>Done</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
 
         {renderProjectEditorModal()}
 
@@ -23080,7 +23021,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       }}>{statusFilter}</Text>
 
-                      {' '}ΓÇö switch to Projects or Events to see filtered results.
+                      {' '} - switch to Projects or Events to see filtered results.
 
                     </Text>
 
@@ -24032,19 +23973,19 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                                   {/* Table Headers */}
 
-                                  <View style={styles.projectsTableHeader}>
+                                  <View style={[styles.projectsTableHeader, !isDesktop && styles.projectsTableHeaderMobile]}>
 
-                                    <Text style={[styles.projectsTableHeaderCell, { flex: 4 }]}>Project Name</Text>
+                                    <Text style={[styles.projectsTableHeaderCell, { flex: 4, minWidth: 0 }, !isDesktop && styles.projectsTableHeaderCellMobile]}>Project Name</Text>
 
-                                    <Text style={[styles.projectsTableHeaderCell, { flex: 1.5, textAlign: 'center' }]}>Status</Text>
+                                    <Text style={[styles.projectsTableHeaderCell, { flex: 1.5, minWidth: 0, textAlign: 'center' }, !isDesktop && styles.projectsTableHeaderCellMobile]}>Status</Text>
 
-                                    <Text style={[styles.projectsTableHeaderCell, { flex: 2, textAlign: 'center' }]}>Schedule</Text>
+                                    <Text style={[styles.projectsTableHeaderCell, { flex: 2, minWidth: 0, textAlign: 'center' }, !isDesktop && styles.projectsTableHeaderCellMobile]}>Schedule</Text>
 
-                                    <Text style={[styles.projectsTableHeaderCell, { flex: 2, textAlign: 'center' }]}>Location</Text>
+                                    <Text style={[styles.projectsTableHeaderCell, { flex: 2, minWidth: 0, textAlign: 'center' }, !isDesktop && styles.projectsTableHeaderCellMobile]}>Location</Text>
 
-                                    <Text style={[styles.projectsTableHeaderCell, { flex: 1.5, textAlign: 'center' }]}>Volunteers</Text>
+                                    <Text style={[styles.projectsTableHeaderCell, { flex: 1.5, minWidth: 0, textAlign: 'center' }, !isDesktop && styles.projectsTableHeaderCellMobile]}>Volunteers</Text>
 
-                                    <Text style={[styles.projectsTableHeaderCell, { flex: 1.2, textAlign: 'center' }]}>Actions</Text>
+                                    <Text style={[styles.projectsTableHeaderCell, { flex: 1.2, minWidth: 0, textAlign: 'center' }, !isDesktop && styles.projectsTableHeaderCellMobile]}>Actions</Text>
 
                                   </View>
 
@@ -24080,17 +24021,17 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                                       ) : null}
 
-                                      <View style={[styles.projectsTableRow, projectEnded && styles.projectsTableRowEnded]}>
+                                      <View style={[styles.projectsTableRow, projectEnded && styles.projectsTableRowEnded, !isDesktop && styles.projectsTableRowMobile]}>
 
                                         {/* Project Name & Desc */}
 
-                                        <View style={[styles.projectsTableCell, { flex: 4 }]}>
+                                        <View style={[styles.projectsTableCell, { flex: 4, minWidth: 0 }, !isDesktop && styles.projectsTableCellMobile]}>
 
                                           <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
 
                                             <View style={[styles.projectsStatusDotSmall, { backgroundColor: getProjectStatusColor(project), marginTop: 4 }]} />
 
-                                            <View style={{ marginLeft: 8, flex: 1 }}>
+                                            <View style={{ marginLeft: 8, flex: 1, minWidth: 0 }}>
 
                                               <Text style={styles.projectsTableRowName}>{project.title}</Text>
 
@@ -24114,7 +24055,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                                         {/* Status Pill */}
 
-                                        <View style={[styles.projectsTableCell, { flex: 1.5, alignItems: 'center', justifyContent: 'center' }]}>
+                                        <View style={[styles.projectsTableCell, { flex: 1.5, minWidth: 0, alignItems: 'center', justifyContent: 'center' }, !isDesktop && styles.projectsTableCellMobile]}>
 
                                           <View style={[styles.projectsTableRowStatusPill, { backgroundColor: getProjectStatusColor(project) + '15' }]}>
 
@@ -24132,13 +24073,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                                         {/* Schedule */}
 
-                                        <View style={[styles.projectsTableCell, { flex: 2, alignItems: 'center', justifyContent: 'center' }]}>
+                                        <View style={[styles.projectsTableCell, { flex: 2, minWidth: 0, alignItems: 'center', justifyContent: 'center' }, !isDesktop && styles.projectsTableCellMobile]}>
 
-                                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                          <View style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
 
                                             <MaterialIcons name="calendar-today" size={14} color="#64748b" />
 
-                                            <View>
+                                            <View style={{ flex: 1, minWidth: 0 }}>
 
                                               <Text style={styles.projectsTableRowScheduleText}>
 
@@ -24184,13 +24125,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                                         {/* Location */}
 
-                                        <View style={[styles.projectsTableCell, { flex: 2, alignItems: 'center', justifyContent: 'center' }]}>
+                                        <View style={[styles.projectsTableCell, { flex: 2, minWidth: 0, alignItems: 'center', justifyContent: 'center' }, !isDesktop && styles.projectsTableCellMobile]}>
 
-                                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                          <View style={{ width: '100%', minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
 
                                             <MaterialIcons name="location-on" size={14} color="#64748b" />
 
-                                            <Text style={styles.projectsTableRowLocationText} numberOfLines={1}>
+                                            <Text style={[styles.projectsTableRowLocationText, { flex: 1, minWidth: 0 }]} numberOfLines={isDesktop ? 1 : 3}>
 
                                               {formatProjectLocation(project)}
 
@@ -24204,7 +24145,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                                         {/* Volunteers */}
 
-                                        <View style={[styles.projectsTableCell, { flex: 1.5, alignItems: 'center', justifyContent: 'center' }]}>
+                                        <View style={[styles.projectsTableCell, { flex: 1.5, minWidth: 0, alignItems: 'center', justifyContent: 'center' }, !isDesktop && styles.projectsTableCellMobile]}>
 
                                           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
 
@@ -24224,7 +24165,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                                         {/* Actions */}
 
-                                        <View style={[styles.projectsTableCell, { flex: 1.2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, position: 'relative', zIndex: activeProjectRowActionId === project.id ? 20 : 1 }]}>
+                                        <View style={[styles.projectsTableCell, { flex: 1.2, minWidth: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, position: 'relative', zIndex: activeProjectRowActionId === project.id ? 20 : 1 }, !isDesktop && styles.projectsTableCellMobile]}>
 
                                           {canCreateEventForProject(project) && !project.isEvent && !projectEnded && (
 
@@ -27817,6 +27758,10 @@ const styles = StyleSheet.create({
 
   },
 
+  projectsTableHeaderMobile: {
+    display: 'none',
+  },
+
   projectsTableHeaderCell: {
 
     fontSize: 11,
@@ -27827,6 +27772,10 @@ const styles = StyleSheet.create({
 
     textTransform: 'uppercase'
 
+  },
+
+  projectsTableHeaderCellMobile: {
+    display: 'none',
   },
 
   projectsTableGroupRow: {
@@ -27870,6 +27819,11 @@ const styles = StyleSheet.create({
     alignItems: 'center'
 
   },
+  projectsTableRowMobile: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: 10,
+  },
   projectsTableRowEnded: {
     opacity: 0.55,
     backgroundColor: '#f8fafc',
@@ -27877,7 +27831,17 @@ const styles = StyleSheet.create({
 
   projectsTableCell: {
 
-    justifyContent: 'center'
+    justifyContent: 'center',
+    minWidth: 0,
+    flexShrink: 1,
+
+  },
+  projectsTableCellMobile: {
+    width: '100%',
+    flex: 0,
+    alignItems: 'flex-start',
+    justifyContent: 'flex-start',
+    paddingVertical: 2,
 
   },
   projectsTableActionIconButton: {
@@ -36387,7 +36351,7 @@ const programWebStyles = StyleSheet.create({
 
     color: '#475569',
 
-    fontFamily: 'monospace',
+    fontFamily: 'Nunito',
 
   },
 
@@ -37862,6 +37826,252 @@ const premiumDetailsStyles = StyleSheet.create({
 
   },
 
+  fullDetailsBackdrop: {
+
+    flex: 1,
+
+    backgroundColor: 'rgba(15, 23, 42, 0.58)',
+
+    alignItems: 'center',
+
+    justifyContent: 'center',
+
+    padding: 20,
+
+  },
+
+  fullDetailsWindow: {
+
+    width: '100%',
+
+    maxWidth: 760,
+
+    maxHeight: '90%',
+
+    backgroundColor: '#ffffff',
+
+    borderRadius: 18,
+
+    overflow: 'hidden',
+
+    shadowColor: '#0f172a',
+
+    shadowOffset: { width: 0, height: 10 },
+
+    shadowOpacity: 0.18,
+
+    shadowRadius: 24,
+
+    elevation: 8,
+
+  },
+
+  fullDetailsWindowMobile: {
+
+    maxHeight: '94%',
+
+  },
+
+  fullDetailsHeader: {
+
+    flexDirection: 'row',
+
+    alignItems: 'flex-start',
+
+    justifyContent: 'space-between',
+
+    gap: 16,
+
+    paddingHorizontal: 22,
+
+    paddingVertical: 18,
+
+    borderBottomWidth: 1,
+
+    borderBottomColor: '#e2e8f0',
+
+  },
+
+  fullDetailsHeaderCopy: {
+
+    flex: 1,
+
+    gap: 5,
+
+  },
+
+  fullDetailsTitle: {
+
+    fontSize: 22,
+
+    lineHeight: 28,
+
+    fontWeight: '800',
+
+    color: '#0f172a',
+
+  },
+
+  fullDetailsCloseButton: {
+
+    width: 36,
+
+    height: 36,
+
+    borderRadius: 18,
+
+    alignItems: 'center',
+
+    justifyContent: 'center',
+
+    backgroundColor: '#f1f5f9',
+
+  },
+
+  fullDetailsScroll: {
+
+    flexShrink: 1,
+
+  },
+
+  fullDetailsContent: {
+
+    padding: 22,
+
+    gap: 12,
+
+  },
+
+  fullDetailsSectionTitle: {
+
+    marginTop: 4,
+
+    fontSize: 15,
+
+    fontWeight: '800',
+
+    color: '#166534',
+
+  },
+
+  fullDetailsDescription: {
+
+    fontSize: 14,
+
+    lineHeight: 21,
+
+    color: '#475569',
+
+    marginBottom: 4,
+
+  },
+
+  fullDetailsFieldGrid: {
+
+    flexDirection: 'row',
+
+    flexWrap: 'wrap',
+
+    gap: 12,
+
+    marginBottom: 6,
+
+  },
+
+  fullDetailsField: {
+
+    width: '48%',
+
+    minHeight: 74,
+
+    padding: 13,
+
+    borderRadius: 12,
+
+    borderWidth: 1,
+
+    borderColor: '#dbe5de',
+
+    backgroundColor: '#f8fbf9',
+
+  },
+
+  fullDetailsFieldMobile: {
+
+    width: '100%',
+
+  },
+
+  fullDetailsFieldLabel: {
+
+    marginBottom: 6,
+
+    fontSize: 11,
+
+    fontWeight: '800',
+
+    color: '#64748b',
+
+    textTransform: 'uppercase',
+
+    letterSpacing: 0.4,
+
+  },
+
+  fullDetailsFieldValue: {
+
+    fontSize: 14,
+
+    lineHeight: 20,
+
+    fontWeight: '700',
+
+    color: '#0f172a',
+
+  },
+
+  fullDetailsFooter: {
+
+    paddingHorizontal: 22,
+
+    paddingVertical: 14,
+
+    borderTopWidth: 1,
+
+    borderTopColor: '#e2e8f0',
+
+    alignItems: 'flex-end',
+
+  },
+
+  fullDetailsDoneButton: {
+
+    minWidth: 96,
+
+    alignItems: 'center',
+
+    justifyContent: 'center',
+
+    paddingHorizontal: 18,
+
+    paddingVertical: 10,
+
+    borderRadius: 8,
+
+    backgroundColor: '#166534',
+
+  },
+
+  fullDetailsDoneButtonText: {
+
+    color: '#ffffff',
+
+    fontSize: 13,
+
+    fontWeight: '800',
+
+  },
+
   statusBadge: {
 
     paddingHorizontal: 10,
@@ -38005,18 +38215,6 @@ const premiumDetailsStyles = StyleSheet.create({
     fontSize: 13,
 
     fontWeight: '700',
-
-  },
-
-  shareDesc: {
-
-    fontSize: 12,
-
-    color: '#64748b',
-
-    lineHeight: 18,
-
-    marginBottom: 16,
 
   },
 

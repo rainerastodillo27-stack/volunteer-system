@@ -1,16 +1,16 @@
 import React, { useEffect, useState } from 'react';
-import ModernTheme from '../utils/modernTheme';
 import {
   ActivityIndicator,
+  Appearance,
   Alert,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { MaterialIcons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
 import {
   clearStorageCache,
@@ -25,7 +25,10 @@ import { AppSettings } from '../models/types';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 import LogoutConfirmationModal from '../components/LogoutConfirmationModal';
 
-const STARTUP_SCREENS: AppSettings['startupScreen'][] = ['Dashboard', 'Projects', 'Reports', 'Messages'];
+const APPEARANCE_OPTIONS: Array<{ value: AppSettings['themeMode']; label: string; icon: 'light-mode' | 'dark-mode' }> = [
+  { value: 'light', label: 'Light mode', icon: 'light-mode' },
+  { value: 'dark', label: 'Dark mode', icon: 'dark-mode' },
+];
 
 // Shows configurable app preferences and a few safe maintenance actions.
 export default function SystemSettingsScreen() {
@@ -57,6 +60,15 @@ export default function SystemSettingsScreen() {
 
     void load();
   }, []);
+
+  useEffect(() => {
+    Appearance.setColorScheme?.(settings.themeMode);
+    if (typeof document !== 'undefined') {
+      document.documentElement.style.colorScheme = settings.themeMode;
+      document.documentElement.dataset.nvcTheme = settings.themeMode;
+      document.body.style.backgroundColor = settings.themeMode === 'dark' ? '#0f172a' : '#ffffff';
+    }
+  }, [settings.themeMode]);
 
   const updateSetting = async <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
     const previous = settings;
@@ -116,29 +128,6 @@ export default function SystemSettingsScreen() {
     setShowLogoutModal(true);
   };
 
-  const renderToggleRow = (
-    key: keyof AppSettings,
-    title: string,
-    description: string,
-    value: boolean,
-  ) => (
-    <View style={styles.settingRow}>
-      <View style={styles.settingCopy}>
-        <Text style={styles.settingTitle}>{title}</Text>
-        <Text style={styles.settingDescription}>{description}</Text>
-      </View>
-      <View style={styles.settingControl}>
-        {savingKey === key ? <ActivityIndicator size="small" color="#166534" /> : null}
-        <Switch
-          value={value}
-          onValueChange={nextValue => void updateSetting(key, nextValue as AppSettings[typeof key])}
-          trackColor={{ false: '#cbd5e1', true: '#86efac' }}
-          thumbColor={value ? '#166534' : '#f8fafc'}
-        />
-      </View>
-    </View>
-  );
-
   if (isLoading) {
     return (
       <View style={styles.loadingState}>
@@ -148,82 +137,78 @@ export default function SystemSettingsScreen() {
     );
   }
 
+  const isDarkMode = settings.themeMode === 'dark';
+  const settingsColors = isDarkMode
+    ? {
+        page: '#0f172a',
+        card: '#172033',
+        border: '#334155',
+        text: '#f8fafc',
+        muted: '#cbd5e1',
+        input: '#0f172a',
+      }
+    : {
+        page: '#f1f5f9',
+        card: '#ffffff',
+        border: '#e2e8f0',
+        text: '#0f172a',
+        muted: '#64748b',
+        input: '#f8fafc',
+      };
+
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.title}>System Settings</Text>
+    <ScrollView style={[styles.container, { backgroundColor: settingsColors.page }]} contentContainerStyle={styles.content}>
+      <Text style={[styles.title, { color: settingsColors.text }]}>System Settings</Text>
 
-      <View style={styles.card}>
-        <Text style={styles.sectionTitle}>General Preferences</Text>
-        {renderToggleRow(
-          'notificationsEnabled',
-          'Notifications',
-          'Keep alerts and reminders enabled inside the app.',
-          settings.notificationsEnabled,
-        )}
-        {renderToggleRow(
-          'autoRefreshEnabled',
-          'Auto Refresh',
-          'Refresh dashboard-style screens automatically when they reopen.',
-          settings.autoRefreshEnabled,
-        )}
-        {renderToggleRow(
-          'compactDashboard',
-          'Compact Layout',
-          'Prefer denser cards and tighter spacing where supported.',
-          settings.compactDashboard,
-        )}
-        {renderToggleRow(
-          'approvalConfirmations',
-          'Approval Confirmations',
-          'Show confirmation prompts before approvals, rejections, and similar actions.',
-          settings.approvalConfirmations,
-        )}
-        {renderToggleRow(
-          'showProgramContext',
-          'Show Program Context',
-          'Display saved program context details in program management views.',
-          settings.showProgramContext,
-        )}
-      </View>
-
-      <View style={styles.card}>
-        <Text style={styles.sectionTitle}>Startup Screen</Text>
-        <Text style={styles.sectionDescription}>
-          Choose which main screen should be treated as your preferred landing area.
+      <View style={[styles.card, { backgroundColor: settingsColors.card, borderColor: settingsColors.border }]}>
+        <Text style={[styles.sectionTitle, { color: settingsColors.text }]}>Appearance</Text>
+        <Text style={[styles.sectionDescription, { color: settingsColors.muted }]}>
+          Choose a light or dark display preference for the app and device controls.
         </Text>
-        <View style={styles.chipRow}>
-          {STARTUP_SCREENS.map(option => {
-            const isSelected = settings.startupScreen === option;
+        <View style={styles.appearanceRow}>
+          {APPEARANCE_OPTIONS.map(option => {
+            const isSelected = settings.themeMode === option.value;
             return (
               <TouchableOpacity
-                key={option}
-                style={[styles.chip, isSelected && styles.chipSelected]}
-                onPress={() => void updateSetting('startupScreen', option)}
+                key={option.value}
+                style={[
+                  styles.appearanceOption,
+                  { backgroundColor: settingsColors.input, borderColor: settingsColors.border },
+                  isSelected && styles.appearanceOptionSelected,
+                ]}
+                onPress={() => void updateSetting('themeMode', option.value)}
                 activeOpacity={0.85}
               >
-                <Text style={[styles.chipText, isSelected && styles.chipTextSelected]}>{option}</Text>
+                {savingKey === 'themeMode' && isSelected ? (
+                  <ActivityIndicator size="small" color="#ffffff" />
+                ) : (
+                  <MaterialIcons name={option.icon} size={19} color={isSelected ? '#ffffff' : '#166534'} />
+                )}
+                  <Text style={[styles.appearanceOptionText, { color: settingsColors.text }, isSelected && styles.appearanceOptionTextSelected]}>
+                    {option.label}
+                  </Text>
               </TouchableOpacity>
             );
           })}
         </View>
       </View>
 
-      <View style={styles.card}>
-        <Text style={styles.sectionTitle}>Application</Text>
-        <Text style={styles.infoLabel}>App Name</Text>
-        <Text style={styles.infoText}>NVC</Text>
-        <Text style={styles.infoLabel}>Version</Text>
-        <Text style={styles.infoText}>1.0.0</Text>
-        <Text style={styles.infoLabel}>Backend URL (Active)</Text>
-        <Text style={styles.infoText}>{getApiBaseUrl()}</Text>
+      <View style={[styles.card, { backgroundColor: settingsColors.card, borderColor: settingsColors.border }]}>
+        <Text style={[styles.sectionTitle, { color: settingsColors.text }]}>Application</Text>
+        <Text style={[styles.infoLabel, { color: settingsColors.muted }]}>App Name</Text>
+        <Text style={[styles.infoText, { color: settingsColors.text }]}>NVC</Text>
+        <Text style={[styles.infoLabel, { color: settingsColors.muted }]}>Version</Text>
+        <Text style={[styles.infoText, { color: settingsColors.text }]}>1.0.0</Text>
+        <Text style={[styles.infoLabel, { color: settingsColors.muted }]}>Backend URL (Active)</Text>
+        <Text style={[styles.infoText, { color: settingsColors.text }]}>{getApiBaseUrl()}</Text>
 
-        <Text style={[styles.infoLabel, { marginTop: 16 }]}>Custom Backend URL</Text>
-        <Text style={[styles.settingDescription, { marginBottom: 6 }]}>
+        <Text style={[styles.infoLabel, { marginTop: 16, color: settingsColors.muted }]}>Custom Backend URL</Text>
+        <Text style={[styles.settingDescription, { marginBottom: 6, color: settingsColors.muted }]}>
           Paste an ngrok URL (e.g. https://abc123.ngrok-free.app) or a local IP to override the
           default. Leave blank to use the built-in address.
         </Text>
         <TextInput
-          style={styles.urlInput}
+          style={[styles.urlInput, { backgroundColor: settingsColors.input, borderColor: settingsColors.border, color: settingsColors.text }]}
           value={customUrlInput}
           onChangeText={setCustomUrlInput}
           placeholder="https://abc123.ngrok-free.app"
@@ -233,7 +218,7 @@ export default function SystemSettingsScreen() {
           keyboardType="url"
         />
         <TouchableOpacity
-          style={[styles.secondaryButton, { marginTop: 8 }]}
+          style={[styles.secondaryButton, { marginTop: 8, backgroundColor: settingsColors.input, borderColor: settingsColors.border }]}
           onPress={async () => {
             setSavingUrl(true);
             try {
@@ -257,43 +242,43 @@ export default function SystemSettingsScreen() {
           {savingUrl ? (
             <ActivityIndicator size="small" color="#166534" />
           ) : (
-            <Text style={styles.secondaryButtonText}>Save Backend URL</Text>
+            <Text style={[styles.secondaryButtonText, { color: isDarkMode ? '#86efac' : '#166534' }]}>Save Backend URL</Text>
           )}
         </TouchableOpacity>
       </View>
 
-      <View style={styles.card}>
-        <Text style={styles.sectionTitle}>Maintenance</Text>
-        <Text style={styles.sectionDescription}>
+      <View style={[styles.card, { backgroundColor: settingsColors.card, borderColor: settingsColors.border }]}>
+        <Text style={[styles.sectionTitle, { color: settingsColors.text }]}>Maintenance</Text>
+        <Text style={[styles.sectionDescription, { color: settingsColors.muted }]}>
           Safe utility actions for local cleanup and demo data support.
         </Text>
         <TouchableOpacity
-          style={styles.secondaryButton}
+          style={[styles.secondaryButton, { backgroundColor: settingsColors.input, borderColor: settingsColors.border }]}
           onPress={() => void handleRefreshCache()}
           disabled={actionKey === 'cache'}
         >
           {actionKey === 'cache' ? (
             <ActivityIndicator size="small" color="#166534" />
           ) : (
-            <Text style={styles.secondaryButtonText}>Refresh Local Cache</Text>
+            <Text style={[styles.secondaryButtonText, { color: isDarkMode ? '#86efac' : '#166534' }]}>Refresh Local Cache</Text>
           )}
         </TouchableOpacity>
         <TouchableOpacity
-          style={styles.ghostButton}
+          style={[styles.ghostButton, { backgroundColor: settingsColors.card, borderColor: settingsColors.border }]}
           onPress={() => void handleResetSettings()}
           disabled={actionKey === 'reset'}
         >
           {actionKey === 'reset' ? (
             <ActivityIndicator size="small" color="#475569" />
           ) : (
-            <Text style={styles.ghostButtonText}>Reset Preferences</Text>
+            <Text style={[styles.ghostButtonText, { color: settingsColors.muted }]}>Reset Preferences</Text>
           )}
         </TouchableOpacity>
       </View>
 
-      <View style={styles.card}>
-        <Text style={styles.sectionTitle}>Session</Text>
-        <Text style={styles.infoText}>{user?.email}</Text>
+      <View style={[styles.card, { backgroundColor: settingsColors.card, borderColor: settingsColors.border }]}>
+        <Text style={[styles.sectionTitle, { color: settingsColors.text }]}>Session</Text>
+        <Text style={[styles.infoText, { color: settingsColors.text }]}>{user?.email}</Text>
         <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
           <Text style={styles.logoutButtonText}>Logout</Text>
         </TouchableOpacity>
@@ -355,57 +340,39 @@ const styles = StyleSheet.create({
     color: '#64748b',
     marginBottom: 14,
   },
-  settingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
-  },
-  settingCopy: {
-    flex: 1,
-  },
-  settingTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#0f172a',
-  },
   settingDescription: {
     marginTop: 4,
     fontSize: 13,
     lineHeight: 18,
     color: '#64748b',
   },
-  settingControl: {
+  appearanceRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  appearanceOption: {
+    flex: 1,
+    minHeight: 44,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-  },
-  chipRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-  },
-  chip: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 999,
-    backgroundColor: '#f8fafc',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: '#cbd5e1',
+    backgroundColor: '#f8fafc',
   },
-  chipSelected: {
+  appearanceOptionSelected: {
     backgroundColor: '#166534',
     borderColor: '#166534',
   },
-  chipText: {
+  appearanceOptionText: {
     fontSize: 13,
     fontWeight: '700',
     color: '#334155',
   },
-  chipTextSelected: {
+  appearanceOptionTextSelected: {
     color: '#ffffff',
   },
   infoLabel: {

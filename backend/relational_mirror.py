@@ -2196,13 +2196,16 @@ def sync_relational_mirror_collection(connection: Any, key: str, items: list[Any
         else:
             cursor.execute(f"delete from {spec['table']}")
         if rows:
-            cursor.executemany(
-                f"""
+            insert_sql = f"""
                 insert into {spec['table']} ({', '.join(column_names)})
                 values ({', '.join(placeholders)})
-                """,
-                rows,
-            )
+            """
+            # Supabase transaction poolers can terminate a large psycopg
+            # executemany pipeline when JSON/base64 fields are present. Keep
+            # each row as a normal statement so large migrations and regular
+            # collection writes remain reliable.
+            for row in rows:
+                cursor.execute(insert_sql, row)
 
 
 def sync_all_relational_mirror_tables(connection: Any, collections: dict[str, list[Any]]) -> None:

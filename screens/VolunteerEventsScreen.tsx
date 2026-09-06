@@ -31,51 +31,11 @@ import {
 import { Project, Volunteer, VolunteerProjectMatch, VolunteerProjectJoinRecord, AdminPlanningCalendar, AdminPlanningItem } from '../models/types';
 import { getRequestErrorMessage } from '../utils/requestErrors';
 import { getActiveProjectJoinCount } from '../utils/projectVolunteers';
+import { getPrimaryProjectImageSource } from '../utils/projectMap';
 import { format } from 'date-fns';
 
 type SortOption = 'date' | 'priority' | 'title';
 type FilterCategory = 'All' | 'Nutrition' | 'Education' | 'Livelihood' | 'Disaster';
-
-const getEventImage = (category: string, title: string) => {
-  const t = title.toLowerCase();
-  if (t.includes('gala') || t.includes('wedding')) {
-    return 'https://images.unsplash.com/photo-1519167758481-83f550bb49b3?w=500&auto=format&fit=crop&q=80';
-  }
-  if (t.includes('market') || t.includes('farm')) {
-    return 'https://images.unsplash.com/photo-1533900298318-6b8da08a523e?w=500&auto=format&fit=crop&q=80';
-  }
-  if (t.includes('party') || t.includes('picnic') || t.includes('block')) {
-    return 'https://images.unsplash.com/photo-1517457373958-b7bdd4587205?w=500&auto=format&fit=crop&q=80';
-  }
-  if (t.includes('concert') || t.includes('post malone') || t.includes('music')) {
-    return 'https://images.unsplash.com/photo-1506157786151-b8491531f063?w=500&auto=format&fit=crop&q=80';
-  }
-  if (t.includes('forum') || t.includes('business') || t.includes('conference')) {
-    return 'https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=500&auto=format&fit=crop&q=80';
-  }
-  if (t.includes('dinner') || t.includes('charity')) {
-    return 'https://images.unsplash.com/photo-1511795409834-ef04bbd61622?w=500&auto=format&fit=crop&q=80';
-  }
-  if (t.includes('comic') || t.includes('culture') || t.includes('expo')) {
-    return 'https://images.unsplash.com/photo-1560969184-10fe8719e047?w=500&auto=format&fit=crop&q=80';
-  }
-  if (t.includes('cheese') || t.includes('food') || t.includes('festival')) {
-    return 'https://images.unsplash.com/photo-1555939594-58d7cb561ad1?w=500&auto=format&fit=crop&q=80';
-  }
-  if (category === 'Nutrition') {
-    return 'https://images.unsplash.com/photo-1498837167922-ddd27525d352?w=500&auto=format&fit=crop&q=80';
-  }
-  if (category === 'Education') {
-    return 'https://images.unsplash.com/photo-1503676260728-1c00da094a0b?w=500&auto=format&fit=crop&q=80';
-  }
-  if (category === 'Livelihood') {
-    return 'https://images.unsplash.com/photo-1489659639091-8b687bc4386e?w=500&auto=format&fit=crop&q=80';
-  }
-  if (category === 'Disaster') {
-    return 'https://images.unsplash.com/photo-1488521787991-ed7bbaae773c?w=500&auto=format&fit=crop&q=80';
-  }
-  return 'https://images.unsplash.com/photo-1501281668745-f7f57925c3b4?w=500&auto=format&fit=crop&q=80';
-};
 
 const convertPlanningItemToProjectEvent = (
   item: AdminPlanningItem,
@@ -205,12 +165,17 @@ export default function VolunteerEventsScreen() {
     if (!user) return;
     try {
       const [snapshot, calendars, items, volunteersList] = await Promise.all([
-        getProjectsScreenSnapshot(user, [
-          'projects',
-          'volunteerProfile',
-          'volunteerMatches',
-          'volunteerJoinRecords',
-        ]),
+        getProjectsScreenSnapshot(
+          user,
+          [
+            'projects',
+            'volunteerProfile',
+            'volunteerMatches',
+            'volunteerJoinRecords',
+          ],
+          false,
+          false, // event list doesn't need project images on initial load
+        ),
         getAllAdminPlanningCalendars(),
         getAllAdminPlanningItems(),
         getAllVolunteers().catch(() => []),
@@ -282,6 +247,7 @@ export default function VolunteerEventsScreen() {
         await saveEvent(event);
       }
       const match = await requestVolunteerProjectJoin(event.id, user.id);
+      setLoadingEventId(null);
       setVolunteerMatches(current => [
         match,
         ...current.filter(existing => existing.projectId !== event.id),
@@ -474,14 +440,10 @@ export default function VolunteerEventsScreen() {
     const totalSlots = Number(item.volunteersNeeded || 0);
     const displayTotalSlots = totalSlots > 0 ? totalSlots : (item.volunteersNeeded || 20);
 
-    let imageUrl = item.imageUrl;
-    if (!imageUrl && item.parentProjectId) {
-      const parentProject = records.find(p => p.id === item.parentProjectId);
-      if (parentProject?.imageUrl) {
-        imageUrl = parentProject.imageUrl;
-      }
-    }
-    const displayImageUri = imageUrl || getEventImage(item.category, item.title);
+    const parentProject = item.parentProjectId
+      ? records.find(p => p.id === item.parentProjectId)
+      : undefined;
+    const displayImageSource = getPrimaryProjectImageSource(item, parentProject);
 
     return (
       <TouchableOpacity
@@ -491,11 +453,15 @@ export default function VolunteerEventsScreen() {
       >
         {/* Card Header Image */}
         <View style={styles.cardImageContainer}>
-          <Image
-            source={{ uri: displayImageUri }}
-            style={StyleSheet.absoluteFillObject}
-            resizeMode="cover"
-          />
+          {displayImageSource ? (
+            <Image
+              source={displayImageSource}
+              style={StyleSheet.absoluteFillObject}
+              resizeMode="cover"
+            />
+          ) : (
+            <View style={styles.cardImagePlaceholder} />
+          )}
           <View style={styles.badgeOverlayRow}>
             <View style={styles.eventOverlayBadge}>
               <Text style={styles.eventOverlayText}>EVENT</Text>

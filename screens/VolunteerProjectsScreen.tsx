@@ -26,13 +26,7 @@ import {
 import { ProgramTrack, Project, VolunteerProjectMatch, VolunteerProjectJoinRecord } from '../models/types';
 import { getRequestErrorMessage, isAbortLikeError } from '../utils/requestErrors';
 import { getProjectDisplayStatus } from '../utils/projectStatus';
-
-const PROGRAM_IMAGE_BY_CATEGORY: Record<Project['category'], ImageSourcePropType> = {
-  Nutrition: require('../assets/programs/nutrition.jpg'),
-  Education: require('../assets/programs/education.jpg'),
-  Livelihood: require('../assets/programs/livelihood.jpg'),
-  Disaster: require('../assets/programs/mingo-relief.jpg'),
-};
+import { getPrimaryProjectImageSource } from '../utils/projectMap';
 
 type ProgramGroup = {
   id: string;
@@ -100,11 +94,11 @@ function getProjectProgramId(project: Project, programTracks: ProgramTrack[] = [
   return projectFocus;
 }
 
-function getProjectImageSource(project: Project): ImageSourcePropType {
-  if (!project.imageHidden && project.imageUrl) {
-    return { uri: project.imageUrl };
-  }
-  return PROGRAM_IMAGE_BY_CATEGORY[project.programModule || project.category];
+function getProjectImageSource(
+  project: Project,
+  parentProject?: Project,
+): ImageSourcePropType | undefined {
+  return getPrimaryProjectImageSource(project, parentProject);
 }
 
 function formatProjectDateRange(startValue?: string, endValue?: string): string {
@@ -188,7 +182,12 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
 
       try {
         console.log('[VolunteerProjectsScreen] Starting data load for user:', user.id);
-        const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'programs', 'programTracks', 'volunteerProfile', 'volunteerMatches', 'volunteerJoinRecords']);
+        const snapshot = await getProjectsScreenSnapshot(
+          user,
+          ['projects', 'programs', 'programTracks', 'volunteerProfile', 'volunteerMatches', 'volunteerJoinRecords'],
+          false,
+          false, // project list cards load images lazily
+        );
         const snapshotRecords = snapshot.projects || [];
         const rawProgramTracks = snapshot.programTracks || [];
         const rawPrograms = snapshot.programs || [];
@@ -473,6 +472,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
       
       setLoadingProjectId(eventId);
       const match = await requestVolunteerProjectJoin(eventId, user.id);
+      setLoadingProjectId(null);
       setVolunteerMatches(prev => [match, ...prev.filter(existing => existing.projectId !== eventId)]);
       Alert.alert('Request Sent', 'Your event join request was sent to admin. You will be notified when it is approved.');
     } catch (error) {
@@ -575,6 +575,10 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
     const isFull = volunteersNeeded > 0 && totalSlotsTaken >= volunteersNeeded;
 
     const isDisabled = isJoined || isPending || isEnded || isFull || isLoading;
+    const parentProject = event.parentProjectId
+      ? records.find(project => project.id === event.parentProjectId)
+      : undefined;
+    const eventImageSource = getProjectImageSource(event, parentProject);
 
     return (
       <TouchableOpacity
@@ -584,10 +588,14 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
         activeOpacity={0.88}
       >
         <View style={styles.eventImageWrap}>
-          <Image
-            source={getProjectImageSource(event)}
-            style={[styles.cardImage, (isEnded || isFull) && styles.cardImageEnded]}
-          />
+          {eventImageSource ? (
+            <Image
+              source={eventImageSource}
+              style={[styles.cardImage, (isEnded || isFull) && styles.cardImageEnded]}
+            />
+          ) : (
+            <View style={[styles.cardImage, styles.cardImagePlaceholder]} />
+          )}
           <View style={[styles.floatingBadge, { backgroundColor: isEnded ? '#475569' : isFull && !isJoined ? '#dc2626' : visual.color }]}>
             <MaterialIcons
               name={isFull && !isJoined ? 'group-off' : 'event-available'}
@@ -836,6 +844,10 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
               const visual = getProgramVisual(getProjectProgramId(project, programs));
               const projectStatus = getProjectDisplayStatus(project);
               const projectEnded = projectStatus === 'Completed' || projectStatus === 'Cancelled';
+              const projectParent = project.parentProjectId
+                ? records.find(candidate => candidate.id === project.parentProjectId)
+                : undefined;
+              const projectImageSource = getProjectImageSource(project, projectParent);
               return (
                 <TouchableOpacity
                   key={project.id}
@@ -843,7 +855,14 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
                   onPress={() => setSelectedProjectId(project.id)}
                   activeOpacity={0.88}
                 >
-                  <Image source={getProjectImageSource(project)} style={[styles.cardImage, projectEnded && styles.cardImageEnded]} />
+                    {projectImageSource ? (
+                      <Image
+                        source={projectImageSource}
+                        style={[styles.cardImage, projectEnded && styles.cardImageEnded]}
+                      />
+                    ) : (
+                      <View style={[styles.cardImage, styles.cardImagePlaceholder]} />
+                    )}
                   <View style={styles.cardContent}>
                     <View style={styles.cardLabelRow}>
                       <View style={[styles.miniIcon, { backgroundColor: visual.softColor }]}>
@@ -1127,6 +1146,7 @@ const styles = StyleSheet.create({
   },
   eventImageWrap: { position: 'relative' },
   cardImage: { width: '100%', height: 142, backgroundColor: '#e5e7eb' },
+  cardImagePlaceholder: { backgroundColor: '#e5e7eb' },
   cardImageEnded: { opacity: 0.5 },
   floatingBadge: {
     position: 'absolute',

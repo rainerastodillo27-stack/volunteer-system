@@ -82,13 +82,18 @@ export default function MappingScreen({ navigation }: any) {
   const loadProjects = async () => {
     try {
       // Load snapshot first to render map quickly, defer large collections
-      const snapshot = await getProjectsScreenSnapshot(user, [
-        'projects',
-        'partnerProjectApplications',
-        'volunteerJoinRecords',
-        'volunteerProfile',
-        'volunteerMatches',
-      ]);
+      const snapshot = await getProjectsScreenSnapshot(
+        user,
+        [
+          'projects',
+          'partnerProjectApplications',
+          'volunteerJoinRecords',
+          'volunteerProfile',
+          'volunteerMatches',
+        ],
+        false,
+        false, // map pins don't render project images
+      );
       const allPartners = await getAllPartners();
       const mapSourceProjects = withImpactMapFallbackProjects(
         snapshot.projects,
@@ -469,7 +474,10 @@ export default function MappingScreen({ navigation }: any) {
             {selectedProject && (
               <ScrollView style={styles.modalContent}>
                 {(() => {
-                  const projectImageSource = getPrimaryProjectImageSource(selectedProject);
+                  const parentProject = selectedProject.parentProjectId
+                    ? projects.find(project => project.id === selectedProject.parentProjectId)
+                    : undefined;
+                  const projectImageSource = getPrimaryProjectImageSource(selectedProject, parentProject);
                   if (!projectImageSource) {
                     return null;
                   }

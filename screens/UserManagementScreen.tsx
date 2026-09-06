@@ -1,5 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
-import ModernTheme from '../utils/modernTheme';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -11,6 +10,7 @@ import {
   ScrollView,
   Image,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -28,6 +28,8 @@ import {
   savePartner,
   saveVolunteer,
   setCurrentUser,
+  clearStorageCache,
+  getStorageItem,
   subscribeToStorageChanges,
   getPendingUserApprovals,
   approveUser,
@@ -53,8 +55,9 @@ export default function UserManagementScreen() {
   const [pendingUserApprovals, setPendingUserApprovals] = useState<User[]>([]);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
-  const [showAddModal, setShowAddModal] = useState(false);
   const [showActionMenuUser, setShowActionMenuUser] = useState<User | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const loadVersionRef = useRef(0);
 
   // Form state drafts
   const [nameDraft, setNameDraft] = useState('');
@@ -75,21 +78,43 @@ export default function UserManagementScreen() {
   const [itemsPerPage, setItemsPerPage] = useState(10);
 
   // Load user data
-  const loadUsers = useCallback(async () => {
+  const loadUsers = useCallback(async (forceRefresh = false) => {
+    const requestVersion = ++loadVersionRef.current;
     try {
-      const [allUsers, allPartners] = await Promise.all([getAllUsers(), getAllPartners()]);
+      if (forceRefresh) {
+        clearStorageCache(['users', 'partners', 'volunteers']);
+      }
+
+      const [allUsersResult, allPartnersResult] = await Promise.all([
+        forceRefresh ? getStorageItem<User[]>('users') : getAllUsers(),
+        forceRefresh ? getStorageItem<Partner[]>('partners') : getAllPartners(),
+      ]);
+      const allUsers = allUsersResult || [];
+      const allPartners = allPartnersResult || [];
       setVolunteers([]);
       setPendingUserApprovals([]);
-      setTimeout(async () => {
+
+      const loadSupplementalData = async () => {
         try {
-          const [allVolunteers, pendingApprovals] = await Promise.all([
-            getAllVolunteers(),
-            getPendingUserApprovals(),
+          const [allVolunteersResult, pendingApprovals] = await Promise.all([
+            forceRefresh ? getStorageItem<Volunteer[]>('volunteers') : getAllVolunteers(),
+            forceRefresh
+              ? Promise.resolve(allUsers.filter(user => user.role !== 'admin' && user.approvalStatus === 'pending'))
+              : getPendingUserApprovals(),
           ]);
-          setVolunteers(allVolunteers);
+          if (requestVersion !== loadVersionRef.current) return;
+          setVolunteers(allVolunteersResult || []);
           setPendingUserApprovals(pendingApprovals);
         } catch {}
-      }, 50);
+      };
+
+      if (forceRefresh) {
+        await loadSupplementalData();
+      } else {
+        setTimeout(() => void loadSupplementalData(), 50);
+      }
+
+      if (requestVersion !== loadVersionRef.current) return;
 
       const sortedUsers = [...allUsers].sort((a, b) => {
         const createdAtDiff = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
@@ -108,6 +133,16 @@ export default function UserManagementScreen() {
       });
     }
   }, []);
+
+  const handleRefreshUsers = useCallback(async () => {
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+    try {
+      await loadUsers(true);
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [isRefreshing, loadUsers]);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -145,54 +180,6 @@ export default function UserManagementScreen() {
     setSelectedUser(null);
   };
 
-  const openAddModal = () => {
-    setNameDraft('');
-    setEmailDraft('');
-    setPhoneDraft('');
-    setPasswordDraft('Password123!');
-    setRoleDraft('volunteer');
-    setUserTypeDraft('Adult');
-    setPillarsDraft([]);
-    setShowAddModal(true);
-  };
-
-  const closeAddModal = () => {
-    setShowAddModal(false);
-  };
-
-  // Add user logic
-  const handleAddUser = async () => {
-    if (!nameDraft.trim() || !emailDraft.trim()) {
-      Alert.alert('Validation Error', 'Name and Email are required.');
-      return;
-    }
-
-    try {
-      const newUser: User = {
-        id: `user-${Date.now()}`,
-        name: nameDraft.trim(),
-        email: emailDraft.trim().toLowerCase(),
-        phone: phoneDraft.trim() || undefined,
-        password: passwordDraft.trim() || 'Password123!',
-        role: roleDraft,
-        userType: userTypeDraft,
-        pillarsOfInterest: pillarsDraft,
-        createdAt: new Date().toISOString(),
-        approvalStatus: 'approved',
-      };
-
-      await saveUser(newUser);
-      closeAddModal();
-      setSuccessNotice({
-        title: 'User Added',
-        message: `Account for ${newUser.name} created successfully.`,
-      });
-      void loadUsers();
-    } catch (error) {
-      Alert.alert(getRequestErrorTitle(error), getRequestErrorMessage(error, 'Failed to add user.'));
-    }
-  };
-
   // Save changes logic
   const handleSaveUser = async () => {
     if (!selectedUser) return;
@@ -218,46 +205,56 @@ export default function UserManagementScreen() {
 
       await saveUser(updatedUser);
 
-      // Sync linked volunteer and partner profile records
-      try {
-        const [volunteers, partnersList] = await Promise.all([
-          getAllVolunteers(),
-          getAllPartners(),
-        ]);
-
-        const linkedVolunteer = volunteers.find(
-          v => v.userId === updatedUser.id || (v.email && v.email.toLowerCase() === updatedUser.email?.toLowerCase())
-        );
-        if (linkedVolunteer && updatedUser.email) {
-          await saveVolunteer({
-            ...linkedVolunteer,
-            name: updatedUser.name,
-            email: updatedUser.email,
-            phone: updatedUser.phone || linkedVolunteer.phone,
-          });
-        }
-
-        const linkedPartner = partnersList.find(
-          p => p.ownerUserId === updatedUser.id || (p.contactEmail && p.contactEmail.toLowerCase() === updatedUser.email?.toLowerCase())
-        );
-        if (linkedPartner) {
-          await savePartner({
-            ...linkedPartner,
-            name: updatedUser.name,
-            contactEmail: updatedUser.email || linkedPartner.contactEmail,
-            contactPhone: updatedUser.phone || linkedPartner.contactPhone,
-          });
-        }
-      } catch (syncErr) {
-        console.warn('Profile sync notice:', syncErr);
-      }
-
+      // Update the visible account immediately. Linked profile maintenance is
+      // independent of the account save and should not hold the editor open.
+      setUsers(currentUsers =>
+        currentUsers.map(account => account.id === updatedUser.id ? updatedUser : account)
+      );
       closeEditModal();
       setSuccessNotice({
         title: 'Changes Saved',
         message: `${updatedUser.name}'s details were updated successfully.`,
       });
-      void loadUsers();
+
+      void (async () => {
+        try {
+          const [linkedVolunteers, linkedPartners] = await Promise.all([
+            getAllVolunteers(),
+            getAllPartners(),
+          ]);
+
+          const linkedVolunteer = linkedVolunteers.find(
+            volunteer => volunteer.userId === updatedUser.id ||
+              (volunteer.email && volunteer.email.toLowerCase() === updatedUser.email?.toLowerCase())
+          );
+          const volunteerSave = linkedVolunteer && updatedUser.email
+            ? saveVolunteer({
+                ...linkedVolunteer,
+                name: updatedUser.name,
+                email: updatedUser.email,
+                phone: updatedUser.phone || linkedVolunteer.phone,
+              })
+            : Promise.resolve();
+
+          const linkedPartner = linkedPartners.find(
+            partner => partner.ownerUserId === updatedUser.id ||
+              (partner.contactEmail && partner.contactEmail.toLowerCase() === updatedUser.email?.toLowerCase())
+          );
+          const partnerSave = linkedPartner
+            ? savePartner({
+                ...linkedPartner,
+                name: updatedUser.name,
+                contactEmail: updatedUser.email || linkedPartner.contactEmail,
+                contactPhone: updatedUser.phone || linkedPartner.contactPhone,
+              })
+            : Promise.resolve();
+
+          await Promise.all([volunteerSave, partnerSave]);
+        } catch (syncErr) {
+          console.warn('Profile sync notice:', syncErr);
+        }
+        void loadUsers();
+      })();
     } catch (error) {
       Alert.alert(getRequestErrorTitle(error), getRequestErrorMessage(error, 'Failed to update user.'));
     }
@@ -272,6 +269,11 @@ export default function UserManagementScreen() {
     }
 
     const executeDelete = async () => {
+      const previousUsers = users;
+      setUsers(currentUsers => currentUsers.filter(existingUser => existingUser.id !== targetUser.id));
+      setPendingUserApprovals(currentApprovals =>
+        currentApprovals.filter(existingUser => existingUser.id !== targetUser.id)
+      );
       try {
         await deleteUser(targetUser.id);
         setSuccessNotice({
@@ -279,8 +281,8 @@ export default function UserManagementScreen() {
           message: `${targetUser.name}'s account has been removed.`,
         });
         Alert.alert('Account Deleted', `${targetUser.name}'s account has been removed.`);
-        void loadUsers();
       } catch (error) {
+        setUsers(previousUsers);
         Alert.alert(getRequestErrorTitle(error), getRequestErrorMessage(error, 'Failed to delete user account.'));
       }
     };
@@ -405,10 +407,6 @@ export default function UserManagementScreen() {
             </View>
           </View>
           <View style={styles.headerActions}>
-            <TouchableOpacity style={styles.primaryAddButton} onPress={openAddModal} activeOpacity={0.85}>
-              <MaterialIcons name="add" size={20} color="#ffffff" />
-              <Text style={styles.primaryAddButtonText}>Add New User</Text>
-            </TouchableOpacity>
             <TouchableOpacity style={styles.secondaryExportButton} onPress={handleExportCSV} activeOpacity={0.85}>
               <MaterialIcons name="file-download" size={18} color="#475569" />
               <Text style={styles.secondaryExportButtonText}>Export</Text>
@@ -558,10 +556,15 @@ export default function UserManagementScreen() {
             {/* Refresh Button */}
             <TouchableOpacity
               style={styles.refreshIconButton}
-              onPress={() => void loadUsers()}
+              onPress={() => void handleRefreshUsers()}
+              disabled={isRefreshing}
               activeOpacity={0.7}
             >
-              <MaterialIcons name="refresh" size={18} color="#475569" />
+              {isRefreshing ? (
+                <ActivityIndicator size="small" color="#475569" />
+              ) : (
+                <MaterialIcons name="refresh" size={18} color="#475569" />
+              )}
             </TouchableOpacity>
           </View>
         </View>
@@ -807,64 +810,6 @@ export default function UserManagementScreen() {
           </View>
         </View>
       </ScrollView>
-
-      {/* Add New User Modal */}
-      <Modal visible={showAddModal} animationType="slide" transparent onRequestClose={closeAddModal}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContentCard}>
-            <View style={styles.modalHeaderBar}>
-              <Text style={styles.modalHeadingTitle}>Add New User</Text>
-              <TouchableOpacity onPress={closeAddModal}>
-                <MaterialIcons name="close" size={22} color="#64748b" />
-              </TouchableOpacity>
-            </View>
-            <ScrollView style={styles.modalFormBody}>
-              <Text style={styles.inputLabel}>Full Name</Text>
-              <TextInput style={styles.formInput} placeholder="e.g. Maria Santos" value={nameDraft} onChangeText={setNameDraft} />
-
-              <Text style={styles.inputLabel}>Email Address</Text>
-              <TextInput
-                style={styles.formInput}
-                placeholder="maria.santos@email.com"
-                keyboardType="email-address"
-                autoCapitalize="none"
-                value={emailDraft}
-                onChangeText={setEmailDraft}
-              />
-
-              <Text style={styles.inputLabel}>Phone Number</Text>
-              <TextInput style={styles.formInput} placeholder="0918 123 4567" keyboardType="phone-pad" value={phoneDraft} onChangeText={setPhoneDraft} />
-
-              <Text style={styles.inputLabel}>Role</Text>
-              <View style={styles.optionRow}>
-                {roleOptions.map(r => (
-                  <TouchableOpacity
-                    key={r}
-                    style={[styles.optionChip, roleDraft === r && styles.optionChipActive]}
-                    onPress={() => setRoleDraft(r)}
-                  >
-                    <Text style={[styles.optionChipText, roleDraft === r && styles.optionChipTextActive]}>
-                      {r.charAt(0).toUpperCase() + r.slice(1)}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              <Text style={styles.inputLabel}>Default Password</Text>
-              <TextInput style={styles.formInput} placeholder="Password" value={passwordDraft} onChangeText={setPasswordDraft} secureTextEntry />
-            </ScrollView>
-
-            <View style={styles.modalFooterActions}>
-              <TouchableOpacity style={styles.cancelFormButton} onPress={closeAddModal}>
-                <Text style={styles.cancelFormButtonText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.submitFormButton} onPress={handleAddUser}>
-                <Text style={styles.submitFormButtonText}>Create User</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
 
       {/* Edit User Modal */}
       <Modal visible={showEditModal} animationType="slide" transparent onRequestClose={closeEditModal}>
@@ -1210,37 +1155,18 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: '700',
     color: '#0f172a',
-    fontFamily: 'DM Sans, sans-serif',
+    fontFamily: 'Nunito',
   },
   pageSubtitle: {
     fontSize: 14,
     color: '#64748b',
     marginTop: 2,
-    fontFamily: 'DM Sans, sans-serif',
+    fontFamily: 'Nunito',
   },
   headerActions: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-  },
-  primaryAddButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#15803d',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 8,
-    shadowColor: '#15803d',
-    shadowOpacity: 0.15,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
-  },
-  primaryAddButtonText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '600',
-    fontFamily: 'DM Sans, sans-serif',
   },
   secondaryExportButton: {
     flexDirection: 'row',
@@ -1257,7 +1183,7 @@ const styles = StyleSheet.create({
     color: '#334155',
     fontSize: 14,
     fontWeight: '600',
-    fontFamily: 'DM Sans, sans-serif',
+    fontFamily: 'Nunito',
   },
   bannerWrap: {
     marginBottom: 16,
@@ -1322,20 +1248,20 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '800',
     color: '#0f172a',
-    fontFamily: 'DM Sans, sans-serif',
+    fontFamily: 'Nunito',
   },
   summaryTitle: {
     fontSize: 13,
     fontWeight: '700',
     color: '#334155',
     marginTop: 2,
-    fontFamily: 'DM Sans, sans-serif',
+    fontFamily: 'Nunito',
   },
   summarySubtext: {
     fontSize: 11,
     color: '#64748b',
     marginTop: 1,
-    fontFamily: 'DM Sans, sans-serif',
+    fontFamily: 'Nunito',
   },
 
   // Tabs
@@ -1358,7 +1284,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#64748b',
-    fontFamily: 'DM Sans, sans-serif',
+    fontFamily: 'Nunito',
   },
   tabButtonTextActive: {
     color: '#16a34a',
@@ -1392,7 +1318,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     color: '#0f172a',
-    fontFamily: 'DM Sans, sans-serif',
+    fontFamily: 'Nunito',
     outlineStyle: 'none' as any,
   },
   toolbarRight: {
@@ -1415,7 +1341,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#334155',
     fontWeight: '500',
-    fontFamily: 'DM Sans, sans-serif',
+    fontFamily: 'Nunito',
   },
   refreshIconButton: {
     width: 42,
@@ -1481,7 +1407,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#64748b',
     letterSpacing: 0.5,
-    fontFamily: 'DM Sans, sans-serif',
+    fontFamily: 'Nunito',
   },
   tableBodyRow: {
     flexDirection: 'row',
@@ -1538,7 +1464,7 @@ const styles = StyleSheet.create({
   avatarText: {
     fontSize: 14,
     fontWeight: '700',
-    fontFamily: 'DM Sans, sans-serif',
+    fontFamily: 'Nunito',
   },
   userNameMeta: {
     marginLeft: 10,
@@ -1547,13 +1473,13 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#0f172a',
-    fontFamily: 'DM Sans, sans-serif',
+    fontFamily: 'Nunito',
   },
   userSubText: {
     fontSize: 12,
     color: '#64748b',
     marginTop: 1,
-    fontFamily: 'DM Sans, sans-serif',
+    fontFamily: 'Nunito',
   },
 
   // Pills
@@ -1568,7 +1494,7 @@ const styles = StyleSheet.create({
   rolePillText: {
     fontSize: 12,
     fontWeight: '600',
-    fontFamily: 'DM Sans, sans-serif',
+    fontFamily: 'Nunito',
   },
   statusPill: {
     flexDirection: 'row',
@@ -1598,7 +1524,7 @@ const styles = StyleSheet.create({
   statusText: {
     fontSize: 12,
     fontWeight: '600',
-    fontFamily: 'DM Sans, sans-serif',
+    fontFamily: 'Nunito',
   },
   statusTextActive: {
     color: '#15803d',
@@ -1609,7 +1535,7 @@ const styles = StyleSheet.create({
   tdText: {
     fontSize: 13,
     color: '#334155',
-    fontFamily: 'DM Sans, sans-serif',
+    fontFamily: 'Nunito',
   },
   actionIconButton: {
     width: 32,
@@ -1660,7 +1586,7 @@ const styles = StyleSheet.create({
   paginationCountText: {
     fontSize: 13,
     color: '#64748b',
-    fontFamily: 'DM Sans, sans-serif',
+    fontFamily: 'Nunito',
   },
   paginationControls: {
     flexDirection: 'row',

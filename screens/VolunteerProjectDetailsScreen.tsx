@@ -74,10 +74,10 @@ export default function VolunteerProjectDetailsScreen({
       const volunteerId = profile?.id || user.id;
 
       const [projectData, matches, partnersList, projectsList, allJoins, volunteersList] = await Promise.all([
-        getProject(projectId),
+        getProject(projectId, true),
         getVolunteerProjectMatches(volunteerId).catch(() => []),
         getAllPartners().catch(() => []),
-        getAllProjects().catch(() => []),
+        getAllProjects(true).catch(() => []),
         getAllVolunteerProjectJoinRecords().catch(() => []),
         getAllVolunteers().catch(() => []),
       ]);
@@ -123,6 +123,7 @@ export default function VolunteerProjectDetailsScreen({
     try {
       setLoadingAction('join');
       const match = await requestVolunteerProjectJoin(project.id, user.id);
+      setLoadingAction(null);
       setVolunteerMatches(prev => [match, ...prev.filter(existing => existing.projectId !== project.id)]);
       Alert.alert('Success', `Successfully requested to join "${project.title}"!`);
       void loadData();
@@ -170,6 +171,18 @@ export default function VolunteerProjectDetailsScreen({
   const totalSlots = Number(project.volunteersNeeded || 0);
   const displayTotalSlots = totalSlots > 0 ? totalSlots : (project.volunteersNeeded || 30);
   const isFull = !isJoined && totalSlots > 0 && joinedCount >= totalSlots;
+  const reminderDescriptions = (project.notificationSettings || [])
+    .filter(setting => Number(setting.value) > 0)
+    .map(setting => {
+      const reminderValue = Number(setting.value);
+      const unit = setting.unit || 'minutes';
+      const unitLabel = reminderValue === 1 ? unit.replace(/s$/, '') : unit;
+      const channelLabel = setting.type === 'Email' ? 'an email' : 'an in-app';
+      return `${channelLabel} reminder ${reminderValue} ${unitLabel} before the event`;
+    });
+  const reminderDescription = reminderDescriptions.length > 0
+    ? reminderDescriptions.join(' and ')
+    : 'an in-app reminder 1 day before the event';
 
   const formatEventDate = (start: string, end: string) => {
     if (!start) return 'TBD';
@@ -189,7 +202,7 @@ export default function VolunteerProjectDetailsScreen({
     }
   };
 
-  const projectImageSource = getPrimaryProjectImageSource(project);
+  const projectImageSource = getPrimaryProjectImageSource(project, parentProject || undefined);
 
   const renderJoinButton = (styleProps = {}) => {
     if (isPending) {
@@ -481,30 +494,10 @@ export default function VolunteerProjectDetailsScreen({
           <Text style={[styles.rightCardHeaderTitle, { color: '#166534' }]}>Event Reminders</Text>
         </View>
         <Text style={styles.reminderCardText}>
-          You will receive a reminder 1 day before the event.
+          You will receive {reminderDescription}.
         </Text>
       </View>
 
-      {/* Need Help Card */}
-      <View style={styles.rightCard}>
-        <View style={styles.rightCardHeaderRow} {...({} as any)}>
-          <MaterialIcons name="help-outline" size={18} color="#1e293b" />
-          <Text style={styles.rightCardHeaderTitle}>Need Help?</Text>
-        </View>
-        <Text style={styles.reminderCardText}>
-          Learn more about volunteering and event guidelines.
-        </Text>
-        <TouchableOpacity
-          style={styles.outlineBtn}
-          activeOpacity={0.8}
-          onPress={() => Alert.alert('Guide', 'Opening volunteer guidelines...')}
-        >
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <Text style={styles.outlineBtnText}>View Guide</Text>
-            <MaterialIcons name="open-in-new" size={14} color="#475569" />
-          </View>
-        </TouchableOpacity>
-      </View>
     </View>
   );
 

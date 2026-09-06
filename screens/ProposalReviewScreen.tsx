@@ -475,7 +475,7 @@ const styles = StyleSheet.create({
     padding: 12,
     fontSize: 14,
     color: '#1e293b',
-    fontFamily: 'DM Sans',
+    fontFamily: 'Nunito',
     textAlignVertical: 'top',
   },
   modalActions: { flexDirection: 'row', gap: 12, marginTop: 20, marginBottom: 20 },

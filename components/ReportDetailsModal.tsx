@@ -44,6 +44,12 @@ export default function ReportDetailsModal({
   };
 
   const isWideLayout = Platform.OS === 'web' && width >= 960;
+  const visibleMetricEntries = Object.entries(report.metrics).filter(([key, value]) => {
+    // Keep legacy beneficiary data available in stored reports, but do not
+    // show it in the report details summary.
+    if (key === 'volunteerHours' || key === 'beneficiariesServed') return false;
+    return value !== undefined && value !== null;
+  });
   const attachmentPreviews = getAttachmentUris([
     report.mediaFile || '',
     ...(report.attachments || []),
@@ -235,16 +241,11 @@ export default function ReportDetailsModal({
               <View style={styles.sectionHeaderRow}>
                 <Text style={styles.sectionTitle}>Key Metrics</Text>
                 <Text style={styles.sectionCaption}>
-                  {Object.values(report.metrics).filter(value => value !== undefined && value !== null).length} captured
+                  {visibleMetricEntries.length} captured
                 </Text>
               </View>
                 <View style={[styles.metricsDisplay, isWideLayout && styles.metricsDisplayWide]}>
-                {Object.entries(report.metrics)
-                  .filter(([key, value]) => {
-                    // Filter out volunteerHours metric and empty values
-                    if (key === 'volunteerHours') return false;
-                    return value !== undefined && value !== null;
-                  })
+                {visibleMetricEntries
                   .map(([key, value]) => (
                     <View key={key} style={styles.metricCard}>
                       <Text style={styles.metricCardLabel}>{formatMetricKey(key)}</Text>
@@ -305,8 +306,9 @@ export default function ReportDetailsModal({
 function buildReportDownloadContent(report: SubmittedReport): string {
   const metricLines = Object.entries(report.metrics)
     .filter(([key, value]) => {
-      // Filter out volunteerHours and empty values
-      if (key === 'volunteerHours') return false;
+    // Keep legacy beneficiary data stored, but omit it from the downloaded
+    // report summary along with the other hidden metric.
+    if (key === 'volunteerHours' || key === 'beneficiariesServed') return false;
       return value !== undefined && value !== null;
     })
     .map(([key, value]) => `${formatMetricKey(key)}: ${value}`);

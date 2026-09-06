@@ -70,7 +70,7 @@ import {
 
   getProject,
 
-  getMessagesForUser,
+  getMessageSummariesForUser,
 
   getProjectsScreenSnapshot,
 
@@ -101,8 +101,6 @@ import {
 
   subscribeToGroupMessages,
 
-  getDirectMessagesForUser,
-
   sendGroupMessage,
 
   markDirectMessageReadFirestore,
@@ -129,7 +127,7 @@ import {
 
 import { navigateToAvailableRoute } from '../utils/navigation';
 
-import { isImageMediaUri, pickDocumentFromDevice, pickImageFromDevice } from '../utils/media';
+import { downloadAttachmentUri, isImageMediaUri, pickDocumentFromDevice, pickImageFromDevice } from '../utils/media';
 
 import { getRequestErrorMessage } from '../utils/requestErrors';
 
@@ -171,7 +169,7 @@ function LazyDateTimePicker(props: any) {
 
             fontSize: '14px',
 
-            fontFamily: 'inherit',
+            fontFamily: "'Nunito', sans-serif",
 
             color: '#1e293b',
 
@@ -238,8 +236,9 @@ type ProjectChatItem = {
 };
 
 const PROPOSAL_PREFIX = '___PROPOSAL_CARD___:';
-// WebSocket delivery is immediate. This covers a temporarily disconnected socket.
-const DIRECT_BACKEND_MESSAGE_POLL_MS = 1000;
+// WebSocket delivery is immediate. This is only a low-frequency fallback when
+// a device briefly loses its socket, not a second-by-second database poll.
+const DIRECT_BACKEND_MESSAGE_POLL_MS = 20000;
 
 
 
@@ -632,6 +631,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   const [directMessages, setDirectMessages] = useState<Message[]>([]);
 
+  // Bumped after a live socket reconnect or storage-side card edit so the
+  // selected thread can reconcile missed data immediately.
+  const [messageRealtimeVersion, setMessageRealtimeVersion] = useState(0);
+
   const [projectChats, setProjectChats] = useState<ProjectChatItem[]>([]);
 
   const [proposalChats, setProposalChats] = useState<ProposalChatItem[]>([]);
@@ -651,6 +654,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   const [proposalRevisionMode, setProposalRevisionMode] = useState(false);
   const [proposalAdminEditMode, setProposalAdminEditMode] = useState(false);
   const [editingProposalApplicationId, setEditingProposalApplicationId] = useState<string | null>(null);
+  const [proposalRevisionApplicationId, setProposalRevisionApplicationId] = useState<string | null>(null);
 
 
 
@@ -679,6 +683,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   const [activeProposalCardData, setActiveProposalCardData] = useState<any>(null);
 
   const [isReviewing, setIsReviewing] = useState(false);
+
+  const [reviewingStatus, setReviewingStatus] = useState<'Approved' | 'Rejected' | null>(null);
+
+  const [reviewingApplicationId, setReviewingApplicationId] = useState<string | null>(null);
 
   const [rejectionNotes, setRejectionNotes] = useState('');
 
@@ -796,6 +804,19 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       if (!otherUserId) return;
 
+      const previousMessage = directMessagesRef.current.find(
+        message => message.id === incomingMessage.id
+      );
+      const wasUnreadForCurrentUser = Boolean(
+        previousMessage &&
+        previousMessage.recipientId === messageUserId &&
+        !previousMessage.read
+      );
+      const isUnreadForCurrentUser =
+        incomingMessage.recipientId === messageUserId && !incomingMessage.read;
+      const unreadDelta = Number(isUnreadForCurrentUser) - Number(wasUnreadForCurrentUser);
+      const incomingTimestamp = new Date(incomingMessage.timestamp).getTime();
+
       invalidateMessageCache(messageUserId, otherUserId);
       const mergedMessages = mergeChatMessageLists(directMessagesRef.current, [incomingMessage]);
       directMessagesRef.current = mergedMessages;
@@ -808,14 +829,15 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
             return nextConversations;
           }
 
-          const isNewUnreadMessage =
-            conversation.lastMessage?.id !== incomingMessage.id &&
-            incomingMessage.recipientId === messageUserId &&
-            !incomingMessage.read;
+          const currentLastTimestamp = new Date(conversation.lastMessage?.timestamp || 0).getTime();
+          const shouldReplaceLastMessage =
+            !conversation.lastMessage ||
+            conversation.lastMessage.id === incomingMessage.id ||
+            incomingTimestamp >= currentLastTimestamp;
           nextConversations.push({
             ...conversation,
-            lastMessage: incomingMessage,
-            unreadCount: conversation.unreadCount + (isNewUnreadMessage ? 1 : 0),
+            lastMessage: shouldReplaceLastMessage ? incomingMessage : conversation.lastMessage,
+            unreadCount: Math.max(0, conversation.unreadCount + unreadDelta),
           });
           return nextConversations;
         }, [])
@@ -827,8 +849,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
               return [{
                 user: otherUser,
                 lastMessage: incomingMessage,
-                unreadCount:
-                  incomingMessage.recipientId === messageUserId && !incomingMessage.read ? 1 : 0,
+                unreadCount: isUnreadForCurrentUser ? 1 : 0,
               }];
             })()
         )
@@ -841,6 +862,12 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       if (selectedUserRef.current?.id === otherUserId) {
         setMessages(current => mergeChatMessageLists(current as Message[], [incomingMessage]));
       }
+    }, () => {
+      // The websocket is the primary realtime path. After a reconnect, fetch
+      // the small sidebar summary and the selected thread once so no update
+      // that happened while offline is left behind.
+      invalidateMessageCache(messageUserId, selectedUserRef.current?.id);
+      setMessageRealtimeVersion(current => current + 1);
     });
   }, [messageUserId, user]);
 
@@ -856,23 +883,59 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
 
 
+  // Accounts are the first useful part of the Messages screen.  Load them
+  // independently so a slow project/proposal request never holds back the
+  // contact list or a route that opens a specific conversation.
+  const loadMessageAccounts = useCallback(async () => {
+    if (!user || !messageUserId) return;
+
+    try {
+      const users = await getAllUsers();
+      const others = users.filter(candidate => candidate.id !== messageUserId);
+      const allowedDirectUsers = user.role === 'volunteer' || user.role === 'partner'
+        ? others.filter(candidate => candidate.role === 'admin')
+        : others;
+
+      allUsersRef.current = allowedDirectUsers;
+      setAllUsers(allowedDirectUsers);
+    } catch (error) {
+      console.warn('[Messages] Unable to load accounts:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, [messageUserId, user]);
+
+
+
   const loadData = useCallback(async (skipMessages = false) => {
 
     if (!user || !messageUserId) return;
 
     try {
-      const [usersResult, snapshotResult, firestoreMessagesResult, storedMessagesResult, partnerApplicationsResult] = await Promise.allSettled([
+      // Project/group-chat data and its linked proposal records can be much
+      // larger than a direct-message screen needs.  Do not let that work
+      // compete with account or conversation loading until its tab is opened.
+      const snapshotRequest = activeSection === 'projects'
+        ? getProjectsScreenSnapshot(user, undefined, false, false /* images not needed for messaging */)
+        : Promise.resolve({
+            projects: [] as Project[],
+            partnerApplications: [] as PartnerProjectApplication[],
+            volunteerJoinRecords: [],
+            volunteerProfile: null,
+            timeLogs: [],
+          });
+
+      const [usersResult, snapshotResult, storedMessagesResult, partnerApplicationsResult] = await Promise.allSettled([
 
         getAllUsers(),
 
-        getProjectsScreenSnapshot(user),
+        snapshotRequest,
 
-        // Skip message fetches on background refreshes — Firestore/WebSocket subscriptions keep them live
-        skipMessages ? Promise.resolve([] as Message[]) : getDirectMessagesForUser(messageUserId),
+        // The sidebar needs only small last-message previews.  The selected
+        // conversation fetches its own full cards/attachments on demand.
+        skipMessages ? Promise.resolve([] as Message[]) : getMessageSummariesForUser(messageUserId),
 
-        skipMessages ? Promise.resolve([] as Message[]) : getMessagesForUser(messageUserId),
-
-        user.role === 'volunteer'
+        activeSection !== 'proposals'
 
           ? Promise.resolve([] as PartnerProjectApplication[])
 
@@ -907,13 +970,11 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       // newer proposal revision from the admin thread.
       let msgs = directMessagesRef.current;
       if (!skipMessages) {
-        const firestoreMessages = firestoreMessagesResult.status === 'fulfilled'
-          ? firestoreMessagesResult.value.filter(message => !message.content?.startsWith(PROPOSAL_PREFIX))
-          : [];
-
         const storedMessages = storedMessagesResult.status === 'fulfilled' ? storedMessagesResult.value : [];
 
-        msgs = mergeChatMessageLists(firestoreMessages, storedMessages);
+        // Keep a fully loaded selected thread intact when the lightweight
+        // sidebar refresh arrives.  The full record wins for matching IDs.
+        msgs = mergeChatMessageLists(storedMessages, directMessagesRef.current);
 
         directMessagesRef.current = msgs;
 
@@ -1255,9 +1316,18 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
     }
 
-  }, [messageUserId, user]);
+  }, [activeSection, messageUserId, user]);
 
 
+
+  // Reconcile immediately after the message socket reconnects or a backend
+  // workflow edits a proposal card. This is a one-shot sync, not a poll.
+  useEffect(() => {
+    if (messageRealtimeVersion === 0 || activeSection === 'projects') {
+      return;
+    }
+    void loadData(false);
+  }, [activeSection, loadData, messageRealtimeVersion]);
 
   // Firestore real-time listener; tears down automatically when conversation changes.
 
@@ -1408,7 +1478,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
     return undefined;
 
-  }, [messageUserId, selectedProjectChat?.project.id, selectedUser?.id, user]);
+  }, [messageRealtimeVersion, messageUserId, selectedProjectChat?.project.id, selectedUser?.id, user]);
 
 
 
@@ -1448,15 +1518,27 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   useFocusEffect(useCallback(() => {
 
+    void loadMessageAccounts();
     void loadData();
 
     // Background refreshes skip the heavy message fetches — Firestore subscriptions handle message freshness
     return subscribeToStorageChanges(
       ['users', 'projects', 'partnerProjectApplications', 'messages', 'projectGroupMessages'],
-      event => loadData(!event.keys.includes('messages'))
+      event => {
+        if (event.keys.includes('users')) {
+          void loadMessageAccounts();
+        }
+        if (event.keys.includes('messages')) {
+          invalidateMessageCache(messageUserId, selectedUserRef.current?.id);
+          setMessageRealtimeVersion(current => current + 1);
+        }
+        // Direct-message records arrive over their own websocket. This keeps
+        // side panels and proposal lists current without another heavy chat read.
+        void loadData(true);
+      }
     );
 
-  }, [loadData]));
+  }, [loadData, loadMessageAccounts, messageUserId]));
 
 
 
@@ -1468,6 +1550,11 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
     }
 
+
+
+    // Load proposal data when its tab opens instead of making every Messages
+    // visit fetch all proposal attachments.
+    void loadData(true);
 
 
     const pollTimer = setInterval(() => {
@@ -1482,6 +1569,14 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     return () => clearInterval(pollTimer);
 
   }, [activeSection, loadData, user?.role]);
+
+
+
+  useEffect(() => {
+    if (activeSection === 'projects') {
+      void loadData(true);
+    }
+  }, [activeSection, loadData]);
 
 
 
@@ -1596,6 +1691,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
     if (newProposalModule || newProposalProjectId) {
 
+      // A fresh proposal must never inherit a stuck spinner from an earlier
+      // attempt. This also keeps "Submit Another" immediately usable.
+      setIsSubmittingProposal(false);
+
       setProposalIntent({
 
         module: newProposalModule,
@@ -1608,6 +1707,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       setProposalRevisionMode(false);
       setProposalAdminEditMode(false);
       setEditingProposalApplicationId(null);
+      setProposalRevisionApplicationId(null);
 
       setProposalForm(f => ({ ...f, proposedTitle: newProposalTitle || '' }));
 
@@ -1769,10 +1869,12 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   };
 
   const closeProposalComposer = () => {
+    setIsSubmittingProposal(false);
     setProposalForm(createEmptyProposalForm());
     setProposalRevisionMode(false);
     setProposalAdminEditMode(false);
     setEditingProposalApplicationId(null);
+    setProposalRevisionApplicationId(null);
     setSelectedRegionCode('');
     setSelectedCityCode('');
     setFilteredCities([]);
@@ -1803,6 +1905,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
     setEditingProposalApplicationId(null);
 
+    setProposalRevisionApplicationId(null);
+
     setShowConversationMenu(false);
 
     setMessages([]);
@@ -1818,6 +1922,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
 
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
+  const [previewImageName, setPreviewImageName] = useState('Photo preview');
   const [previewDocumentUri, setPreviewDocumentUri] = useState<string | null>(null);
   const [previewDocumentName, setPreviewDocumentName] = useState('Document preview');
 
@@ -1844,6 +1949,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       if (Platform.OS === 'web') {
         if (isImage) {
           // For images, show in preview modal
+          setPreviewImageName(getAttachmentName(normalizedUri, attachmentIndex));
           setPreviewImageUri(normalizedUri);
           return;
         }
@@ -1854,6 +1960,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       }
 
       if (isImage) {
+        setPreviewImageName(getAttachmentName(normalizedUri, attachmentIndex));
         setPreviewImageUri(normalizedUri);
         return;
       }
@@ -1871,7 +1978,22 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   const closeAttachmentPreview = () => {
     setPreviewImageUri(null);
+    setPreviewImageName('Photo preview');
     setPreviewDocumentUri(null);
+  };
+
+  const downloadPreviewAttachment = async () => {
+    const uri = previewImageUri || previewDocumentUri;
+    if (!uri) {
+      return;
+    }
+
+    try {
+      await downloadAttachmentUri(uri, previewImageUri ? previewImageName : previewDocumentName);
+      Alert.alert('Download ready', 'The attachment is ready to save or share.');
+    } catch {
+      Alert.alert('Download failed', 'Unable to download this attachment right now.');
+    }
   };
 
   const openPreviewDocumentExternally = () => {
@@ -2269,6 +2391,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       const proposalDetails: PartnerProjectProposalDetails = {
         ...proposalForm,
+        previousApplicationId: proposalRevisionApplicationId || undefined,
         proposedVolunteersNeeded: Number(proposalForm.proposedVolunteersNeeded) || 0,
         requestedProgramModule: (proposalIntent.module as AdvocacyFocus) || 'Nutrition',
         targetProjectId: proposalIntent.projectId,
@@ -2322,6 +2445,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       console.log('✅ Proposal submitted successfully, refreshing messages...');
 
+      // The proposal is already saved. Close the composer and clear the
+      // loading state immediately; refreshing the message list must not keep
+      // the submit button stuck in its loading state.
+      setIsSubmittingProposal(false);
       closeProposalComposer();
 
       const successMessage = proposalRevisionMode 
@@ -2330,15 +2457,18 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       
       Alert.alert('Success', successMessage);
 
-      // Force a full data reload without skipping messages to ensure new card appears
-      await loadData(false);
-
-      console.log('✅ Data reloaded after proposal submission');
+      // Refresh the new proposal card in the background.
+      void loadData(false).then(() => {
+        console.log('✅ Data reloaded after proposal submission');
+      }).catch(() => null);
 
     } catch (e) {
 
       console.error('❌ Error submitting proposal:', e);
-      Alert.alert('Error', 'Failed to submit proposal. Please check your connection.');
+      Alert.alert(
+        'Unable to Submit Proposal',
+        getRequestErrorMessage(e, 'Failed to submit proposal. Please try again.')
+      );
 
     } finally {
 
@@ -2403,6 +2533,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       return;
     }
 
+    setReviewingStatus(status);
+    setReviewingApplicationId(app.id);
     setIsReviewing(true);
 
     const previousProposalChats = proposalChats;
@@ -2415,9 +2547,62 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       // Call API first so we have the real result
       console.log('Calling reviewPartnerProjectApplication API...');
-      const reviewedApplication = await reviewPartnerProjectApplication(app.id, status, user?.id || '', notes);
+      const reviewedApplication = await reviewPartnerProjectApplication(
+        app.id,
+        status,
+        user?.id || '',
+        notes,
+        reviewMessage => {
+          // Render the persisted review card from the response right away.
+          // The WebSocket will deliver the same record to the partner and
+          // safely dedupe it here if it arrives a moment later.
+          const otherUserId =
+            reviewMessage.senderId === messageUserId
+              ? reviewMessage.recipientId
+              : reviewMessage.recipientId === messageUserId
+                ? reviewMessage.senderId
+                : app.partnerUserId;
+
+          if (!otherUserId) return;
+
+          invalidateMessageCache(messageUserId, otherUserId);
+          const mergedMessages = mergeChatMessageLists(directMessagesRef.current, [reviewMessage]);
+          directMessagesRef.current = mergedMessages;
+          setDirectMessages(mergedMessages);
+
+          setConversations(current => {
+            const existingConversation = current.find(item => item.user.id === otherUserId);
+            const nextConversations = current.map(item =>
+              item.user.id === otherUserId
+                ? { ...item, lastMessage: reviewMessage }
+                : item
+            );
+            if (!existingConversation) {
+              const otherUser = allUsersRef.current.find(candidate => candidate.id === otherUserId);
+              if (otherUser) {
+                nextConversations.push({ user: otherUser, lastMessage: reviewMessage, unreadCount: 0 });
+              }
+            }
+            return nextConversations.sort(
+              (left, right) =>
+                new Date(right.lastMessage?.timestamp || 0).getTime() -
+                new Date(left.lastMessage?.timestamp || 0).getTime()
+            );
+          });
+
+          if (selectedUserRef.current?.id === otherUserId) {
+            setMessages(current => mergeChatMessageLists(current as Message[], [reviewMessage]));
+          }
+        }
+      );
       console.log('API Response:', reviewedApplication);
       console.log('Project ID:', reviewedApplication.projectId);
+
+      // The API has already saved the review and delivered its notification
+      // card. Stop the spinner before local UI/cache reconciliation.
+      setIsReviewing(false);
+      setReviewingStatus(null);
+      setReviewingApplicationId(null);
 
 
       // Keep reviewed proposals visible so rejected applications can still be referenced and approved history remains visible
@@ -2516,6 +2701,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     } finally {
 
       setIsReviewing(false);
+      setReviewingStatus(null);
+      setReviewingApplicationId(null);
 
     }
 
@@ -2575,6 +2762,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     setProposalRevisionMode(!isAdminEdit);
     setProposalAdminEditMode(isAdminEdit);
     setEditingProposalApplicationId(isAdminEdit ? applicationId : null);
+    setProposalRevisionApplicationId(isAdminEdit ? null : applicationId);
     setProposalValidationErrors({});
     setSelectedRegionCode('');
     setSelectedCityCode('');
@@ -2911,7 +3099,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
               {pendingProposalCount > 0
 
-                ? `Project Proposals ΓÇó ${pendingProposalCount} pending`
+                ? `Project Proposals - ${pendingProposalCount} pending`
 
                 : 'Project Proposals'}
 
@@ -2925,7 +3113,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                 p.projectTitle,
 
-                `${p.application.partnerName} ΓÇó ${p.application.status}`,
+                `${p.application.partnerName} - ${p.application.status}`,
 
                 selectedProposalApplication?.id === p.application.id,
 
@@ -3893,11 +4081,11 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                     onPress={() => handleReview(app, 'Approved')}
                     disabled={isReviewing}
                   >
-                    {isReviewing ? (
+                    {isReviewing && reviewingStatus === 'Approved' ? (
                       <ActivityIndicator size="small" color="#fff" style={{ marginRight: 6 }} />
                     ) : null}
                     <Text style={styles.actionBtnText}>
-                      {isReviewing ? 'Approving...' : 'Approve Proposal'}
+                      {isReviewing && reviewingStatus === 'Approved' ? 'Approving...' : 'Approve Proposal'}
                     </Text>
                   </TouchableOpacity>
 
@@ -3906,7 +4094,12 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                     onPress={() => handleRejectWithNotes(app)}
                     disabled={isReviewing}
                   >
-                    <Text style={[styles.actionBtnText, { color: '#ef4444' }]}>Reject</Text>
+                    {isReviewing && reviewingStatus === 'Rejected' ? (
+                      <ActivityIndicator size="small" color="#ef4444" style={{ marginRight: 6 }} />
+                    ) : null}
+                    <Text style={[styles.actionBtnText, { color: '#ef4444' }]}> 
+                      {isReviewing && reviewingStatus === 'Rejected' ? 'Rejecting...' : 'Reject'}
+                    </Text>
                   </TouchableOpacity>
 
                 </View>
@@ -4342,7 +4535,12 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                       application={templateApplication}
                       isAdmin={user?.role === 'admin'}
                       isOwner={isOwn}
-                      isSubmitting={isReviewing}
+                      isSubmitting={isReviewing && reviewingApplicationId === templateApplication.id}
+                      reviewAction={
+                        reviewingApplicationId === templateApplication.id
+                          ? reviewingStatus === 'Approved' ? 'approve' : reviewingStatus === 'Rejected' ? 'reject' : null
+                          : null
+                      }
                       statusOverride={liveStatusOverride}
                       reviewActionsDisabled={Boolean(user?.role === 'admin' && liveStatusOverride)}
                       onEdit={app => openProposalRevision({ ...app, ...(app.proposalDetails || {}) })}
@@ -4482,15 +4680,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                               ]}
 
-                              onPress={() => {
-
-                                void Linking.openURL(attachmentUri).catch(() => {
-
-                                  Alert.alert('Attachment', 'Unable to open this attachment on this device.');
-
-                                });
-
-                              }}
+                              onPress={() => void handleOpenProposalAttachment(attachmentUri, attachmentIndex)}
 
                               activeOpacity={0.85}
 
@@ -5057,7 +5247,12 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                     }}
                     disabled={isReviewing}
                   >
-                    <Text style={[styles.actionBtnText, { color: '#dc2626' }]}>Reject</Text>
+                    {isReviewing && reviewingStatus === 'Rejected' ? (
+                      <ActivityIndicator size="small" color="#dc2626" style={{ marginRight: 6 }} />
+                    ) : null}
+                    <Text style={[styles.actionBtnText, { color: '#dc2626' }]}>
+                      {isReviewing && reviewingStatus === 'Rejected' ? 'Rejecting...' : 'Reject'}
+                    </Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={[styles.actionBtn, styles.approveBtn, { flex: 2 }, isReviewing && { opacity: 0.7 }]}
@@ -5070,11 +5265,11 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                     }}
                     disabled={isReviewing}
                   >
-                    {isReviewing ? (
+                    {isReviewing && reviewingStatus === 'Approved' ? (
                       <ActivityIndicator size="small" color="#fff" style={{ marginRight: 6 }} />
                     ) : null}
                     <Text style={styles.actionBtnText}>
-                      {isReviewing ? 'Approving...' : 'Approve Proposal'}
+                      {isReviewing && reviewingStatus === 'Approved' ? 'Approving...' : 'Approve Proposal'}
                     </Text>
                   </TouchableOpacity>
                 </View>
@@ -5421,7 +5616,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
         animationType="fade"
 
-        onRequestClose={() => setPreviewImageUri(null)}
+        onRequestClose={closeAttachmentPreview}
 
       >
 
@@ -5433,11 +5628,27 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
               <Text style={styles.imagePreviewTitle}>Preview Photo</Text>
 
-              <TouchableOpacity onPress={() => setPreviewImageUri(null)} style={styles.imagePreviewClose}>
+              <View style={styles.imagePreviewHeaderActions}>
 
-                <MaterialIcons name="close" size={20} color="#0f172a" />
+                <TouchableOpacity
+                  style={styles.imagePreviewDownload}
+                  onPress={() => void downloadPreviewAttachment()}
+                  activeOpacity={0.85}
+                >
 
-              </TouchableOpacity>
+                  <MaterialIcons name="download" size={17} color="#ffffff" />
+
+                  <Text style={styles.imagePreviewDownloadText}>Download</Text>
+
+                </TouchableOpacity>
+
+                <TouchableOpacity onPress={closeAttachmentPreview} style={styles.imagePreviewClose}>
+
+                  <MaterialIcons name="close" size={20} color="#0f172a" />
+
+                </TouchableOpacity>
+
+              </View>
 
             </View>
 
@@ -5472,9 +5683,19 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                   {previewDocumentName}
                 </Text>
               </View>
-              <TouchableOpacity onPress={closeAttachmentPreview} style={styles.imagePreviewClose}>
-                <MaterialIcons name="close" size={20} color="#0f172a" />
-              </TouchableOpacity>
+              <View style={styles.imagePreviewHeaderActions}>
+                <TouchableOpacity
+                  style={styles.imagePreviewDownload}
+                  onPress={() => void downloadPreviewAttachment()}
+                  activeOpacity={0.85}
+                >
+                  <MaterialIcons name="download" size={17} color="#ffffff" />
+                  <Text style={styles.imagePreviewDownloadText}>Download</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={closeAttachmentPreview} style={styles.imagePreviewClose}>
+                  <MaterialIcons name="close" size={20} color="#0f172a" />
+                </TouchableOpacity>
+              </View>
             </View>
 
             {Platform.OS === 'web' && previewDocumentUri ? (
@@ -6382,6 +6603,44 @@ const styles = StyleSheet.create({
 
   },
 
+  imagePreviewHeaderActions: {
+
+    flexDirection: 'row',
+
+    alignItems: 'center',
+
+    gap: 8,
+
+  },
+
+  imagePreviewDownload: {
+
+    flexDirection: 'row',
+
+    alignItems: 'center',
+
+    gap: 6,
+
+    paddingHorizontal: 12,
+
+    paddingVertical: 8,
+
+    borderRadius: 10,
+
+    backgroundColor: '#166534',
+
+  },
+
+  imagePreviewDownloadText: {
+
+    color: '#ffffff',
+
+    fontSize: 12,
+
+    fontWeight: '800',
+
+  },
+
   imagePreviewTitle: {
 
     fontSize: 16,
@@ -7051,7 +7310,7 @@ const styles = StyleSheet.create({
 
 
 
-  // ΓöÇΓöÇ Message Hub Template Panel ΓöÇΓöÇ
+  // Message Hub Template Panel
 
   msgHubOuter: {
 
@@ -7473,7 +7732,7 @@ const styles = StyleSheet.create({
 
 
 
-  // Message Hub ΓÇö Proposal Form styles
+  // Message Hub - Proposal Form styles
 
   msgHubFormWrap: {
 
@@ -7629,7 +7888,7 @@ const styles = StyleSheet.create({
 
 
 
-  // ΓöÇΓöÇ Proposal Card Styles ΓöÇΓöÇ
+  // Proposal Card Styles
 
   proposalMsgCard: {
     backgroundColor: '#fff',

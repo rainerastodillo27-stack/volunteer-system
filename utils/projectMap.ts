@@ -1,132 +1,38 @@
 import { ImageSourcePropType } from 'react-native';
 import { Project } from '../models/types';
 import { getProjectStatusColor } from './projectStatus';
-import { isImageMediaUri } from './media';
-import artisansOfHopeImage from '../assets/programs/artisans-of-hope.jpg';
-import educationImage from '../assets/programs/education.jpg';
-import farmToForkImage from '../assets/programs/farm-to-fork.jpg';
-import growingHopeImage from '../assets/programs/growing-hope.jpg';
-import livelihoodImage from '../assets/programs/livelihood.jpg';
-import lovebagsImage from '../assets/programs/lovebags.jpg';
-import mingoReliefImage from '../assets/programs/mingo-relief.jpg';
-import nutritionImage from '../assets/programs/nutrition.jpg';
-import peterProjectImage from '../assets/programs/peter-project.jpg';
-import projectJosephImage from '../assets/programs/project-joseph.jpg';
-import schoolSupportImage from '../assets/programs/school-support.jpg';
+import { getAttachmentUris, isImageMediaUri } from './media';
 
-const PROGRAM_IMAGE_BY_CATEGORY: Partial<Record<Project['category'], ImageSourcePropType>> = {
-  Nutrition: nutritionImage,
-  Education: educationImage,
-  Livelihood: livelihoodImage,
-};
-
-const PROGRAM_PHOTO_BY_TITLE: Record<string, ImageSourcePropType> = {
-  'Farm to Fork Program': farmToForkImage,
-  'Mingo for Nutritional Support': nutritionImage,
-  'Mingo for Emergency Relief': mingoReliefImage,
-  LoveBags: lovebagsImage,
-  'School Support': schoolSupportImage,
-  'Artisans of Hope': artisansOfHopeImage,
-  'Project Joseph': projectJosephImage,
-  'Growing Hope': growingHopeImage,
-  'Peter Project': peterProjectImage,
-};
-
-const PROGRAM_PHOTO_MATCHERS: Array<{
-  matches: (project: Project, normalizedTitle: string) => boolean;
-  source: ImageSourcePropType;
-}> = [
-  {
-    matches: (_project, normalizedTitle) => normalizedTitle.includes('farm to fork'),
-    source: farmToForkImage,
-  },
-  {
-    matches: (_project, normalizedTitle) =>
-      normalizedTitle.includes('lovebag') || normalizedTitle.includes('school bag'),
-    source: lovebagsImage,
-  },
-  {
-    matches: (_project, normalizedTitle) => normalizedTitle.includes('school'),
-    source: schoolSupportImage,
-  },
-  {
-    matches: (_project, normalizedTitle) => normalizedTitle.includes('artisans'),
-    source: artisansOfHopeImage,
-  },
-  {
-    matches: (_project, normalizedTitle) =>
-      normalizedTitle.includes('joseph') || normalizedTitle.includes('sewing'),
-    source: projectJosephImage,
-  },
-  {
-    matches: (_project, normalizedTitle) =>
-      normalizedTitle.includes('growing hope') || normalizedTitle.includes('garden'),
-    source: growingHopeImage,
-  },
-  {
-    matches: (_project, normalizedTitle) => normalizedTitle.includes('peter'),
-    source: peterProjectImage,
-  },
-  {
-    matches: (project, normalizedTitle) =>
-      normalizedTitle.includes('mingo') || normalizedTitle.includes('masiglang') || project.category === 'Nutrition',
-    source: nutritionImage,
-  },
-];
-
-function getProgramPhotoSource(project: Project): ImageSourcePropType | undefined {
-  if (!project || !project.title) {
+function getOwnProjectImageSource(project?: Project): ImageSourcePropType | undefined {
+  if (!project) {
     return undefined;
   }
 
-  if (PROGRAM_PHOTO_BY_TITLE[project.title]) {
-    return PROGRAM_PHOTO_BY_TITLE[project.title];
+  // The relational project/event records store the uploaded cover in
+  // imageUrl. Older records may only expose it through attachments, so keep
+  // that as a compatibility source too. A real uploaded URL wins over the
+  // hidden flag left behind by older records; explicit removal clears both.
+  const imageCandidates = [
+    project.imageUrl?.trim() || '',
+    ...getAttachmentUris(project.attachments).filter(attachment => isImageMediaUri(attachment)),
+  ].filter(Boolean);
+  const imageUri = imageCandidates.find(isImageMediaUri);
+
+  if (!imageUri || (project.imageHidden && !project.imageUrl?.trim())) {
+    return undefined;
   }
 
-  const normalizedTitle = project.title.trim().toLowerCase();
-  return PROGRAM_PHOTO_MATCHERS.find((entry) => entry.matches(project, normalizedTitle))?.source;
+  return { uri: imageUri };
 }
 
-function getProjectImageSources(project: Project): ImageSourcePropType[] {
-  if (!project) {
-    return [];
-  }
-
-  if (project.imageHidden) {
-    return [];
-  }
-
-  const imageSources: ImageSourcePropType[] = [];
-  const hasUploadedProjectImage = isImageMediaUri(project.imageUrl);
-  if (hasUploadedProjectImage) {
-    imageSources.push({ uri: project.imageUrl! });
-  }
-  const isProposalCreatedProject = String(project.id || '').startsWith('project-proposal-');
-  if (isProposalCreatedProject && !hasUploadedProjectImage) {
-    return imageSources;
-  }
-  const programPhotoSource = getProgramPhotoSource(project);
-
-  if (programPhotoSource) {
-    imageSources.push(programPhotoSource);
-  }
-
-  if (project.programModule && project.programModule in PROGRAM_IMAGE_BY_CATEGORY) {
-    imageSources.push(
-      PROGRAM_IMAGE_BY_CATEGORY[project.programModule as Project['category']] as ImageSourcePropType
-    );
-  }
-
-  const categoryImageSource = project.category ? PROGRAM_IMAGE_BY_CATEGORY[project.category] : undefined;
-  if (categoryImageSource && !imageSources.includes(categoryImageSource)) {
-    imageSources.push(categoryImageSource);
-  }
-
-  return imageSources;
-}
-
-export function getPrimaryProjectImageSource(project: Project): ImageSourcePropType | undefined {
-  return getProjectImageSources(project)[0];
+export function getPrimaryProjectImageSource(
+  project: Project,
+  parentProject?: Project,
+): ImageSourcePropType | undefined {
+  // Always prefer the exact record's uploaded image. An event may inherit its
+  // parent project's uploaded image only when the event has no own image.
+  const parentImage = project?.isEvent ? getOwnProjectImageSource(parentProject) : undefined;
+  return getOwnProjectImageSource(project) || parentImage;
 }
 
 type ProjectCoordinates = Pick<Project['location'], 'latitude' | 'longitude'>;

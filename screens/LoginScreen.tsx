@@ -3499,7 +3499,7 @@ const styles = StyleSheet.create({
     textShadowColor: "rgba(0, 0, 0, 0.45)",
     textShadowOffset: { width: 0, height: 4 },
     textShadowRadius: 12,
-    fontFamily: "'DM Sans', sans-serif",
+    fontFamily: "'Nunito', sans-serif",
     letterSpacing: -0.5,
   },
   webHeroSubHeadingOriginal: {
@@ -3511,7 +3511,7 @@ const styles = StyleSheet.create({
     textShadowColor: "rgba(0, 0, 0, 0.35)",
     textShadowOffset: { width: 0, height: 2 },
     textShadowRadius: 8,
-    fontFamily: "'DM Sans', sans-serif",
+    fontFamily: "'Nunito', sans-serif",
     letterSpacing: 0.2,
   },
   webHeroHeading: {
@@ -4222,13 +4222,13 @@ const styles = StyleSheet.create({
   demoEmail: {
     fontSize: 13,
     color: "#333",
-    fontFamily: "monospace",
+    fontFamily: "Nunito",
     marginBottom: 2,
   },
   demoPassword: {
     fontSize: 13,
     color: "#333",
-    fontFamily: "monospace",
+    fontFamily: "Nunito",
   },
   mobileOnlyCard: {
     backgroundColor: "#f8fafc",
@@ -4313,7 +4313,7 @@ const styles = StyleSheet.create({
   savedAccountCredential: {
     fontSize: 13,
     color: "#334155",
-    fontFamily: "monospace",
+    fontFamily: "Nunito",
     marginBottom: 2,
   },
   savedAccountHint: {

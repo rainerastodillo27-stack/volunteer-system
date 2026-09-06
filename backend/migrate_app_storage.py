@@ -16,7 +16,7 @@ if env_file.exists():
                 key, value = line.split("=", 1)
                 os.environ[key] = value
 
-OLD_DB_URL = "postgresql://postgres.oshkcfyytdzojswnrbhu:CAPSTONE_ISCAP1@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres?sslmode=require"
+OLD_DB_URL = os.getenv("OLD_SUPABASE_DB_URL", "").strip()
 NEW_DB_URL = os.getenv("SUPABASE_DB_URL")
 
 # Collections to migrate from old DB hot storage
@@ -80,6 +80,8 @@ def main():
     print("=" * 70)
     print()
     
+    if not OLD_DB_URL:
+        raise RuntimeError("OLD_SUPABASE_DB_URL is not set.")
     old_conn = psycopg.connect(OLD_DB_URL)
     new_conn = psycopg.connect(NEW_DB_URL)
     

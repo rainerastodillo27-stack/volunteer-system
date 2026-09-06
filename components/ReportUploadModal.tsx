@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   Modal,
   View,
@@ -22,6 +22,7 @@ import type {
 import type { Project, VolunteerProjectJoinRecord, VolunteerTimeLog } from '../models/types';
 import { isImageMediaUri, pickImageFromDevice } from '../utils/media';
 import { useAuth } from '../contexts/AuthContext';
+import { getAttendanceWindowKey } from '../utils/attendanceSchedule';
 
 type MaterialIconName = keyof typeof MaterialIcons.glyphMap;
 
@@ -82,6 +83,7 @@ export default function ReportUploadModal({
   const [showProjectPicker, setShowProjectPicker] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submissionError, setSubmissionError] = useState<string | null>(null);
+  const submissionGuardRef = useRef(false);
 
   const isVolunteer = userRole === 'volunteer';
   const isPartner = userRole === 'partner';
@@ -132,17 +134,6 @@ export default function ReportUploadModal({
     [volunteerProfileId]
   );
 
-  const getLocalDateKey = (value: string) => {
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) {
-      return '';
-    }
-
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${date.getFullYear()}-${month}-${day}`;
-  };
-
   const volunteerMetrics = useMemo(() => {
     if (!isVolunteer || !selectedProject) {
       return {
@@ -156,6 +147,9 @@ export default function ReportUploadModal({
     }
 
     const logsForProject = (volunteerTimeLogs || []).filter(log => log.projectId === selectedProject);
+    const selectedProjectRecord = projects.find(
+      project => project.id === selectedProject
+    ) as Project | undefined;
     const eventJoinCount = (volunteerJoinRecords || []).filter(
       record =>
         record.projectId === selectedProject &&
@@ -164,7 +158,10 @@ export default function ReportUploadModal({
     const attendanceDays = new Set(
       logsForProject
         .filter(log => Boolean(log.attendanceConfirmedAt || log.timeIn))
-        .map(log => getLocalDateKey(log.attendanceConfirmedAt || log.timeIn || ''))
+        .map(log => getAttendanceWindowKey(
+          selectedProjectRecord?.startDate,
+          log.attendanceConfirmedAt || log.timeIn || ''
+        ))
         .filter(Boolean)
     ).size;
     const hoursServed = logsForProject.reduce((sum, log) => {
@@ -182,9 +179,6 @@ export default function ReportUploadModal({
           new Date(left.attendanceConfirmedAt || left.timeIn).getTime()
       )
       .find(log => Boolean((log.attendancePhoto || log.completionPhoto || '').trim()));
-    const selectedProjectRecord = projects.find(
-      project => project.id === selectedProject
-    ) as Project | undefined;
     const assignedTaskTitles = selectedProjectRecord
       ? (selectedProjectRecord.internalTasks || [])
           .filter(task => isVolunteerAssignedToTask(task))
@@ -312,7 +306,7 @@ export default function ReportUploadModal({
 
   const getMetricFieldsForType = () => {
     if (isVolunteer) {
-      return ['beneficiariesServed'];
+      return [];
     }
 
     const baseFields = ['volunteerEventJoins', 'verifiedAttendance', 'activeVolunteers'];
@@ -343,9 +337,6 @@ export default function ReportUploadModal({
       if (!description.trim()) {
         nextErrors.description = 'Add a short summary for the admin side';
       }
-      if (!metrics.beneficiariesServed.trim()) {
-        nextErrors.beneficiariesServed = 'Enter the number of beneficiaries reached';
-      }
     } else if (isPartner) {
       if (!selectedPartnerProjectSummary) {
         nextErrors.project = 'Select an approved project';
@@ -374,6 +365,7 @@ export default function ReportUploadModal({
   };
 
   const handleReset = useCallback(() => {
+    submissionGuardRef.current = false;
     setTitle('');
     setDescription('');
     setSelectedProject(undefined);
@@ -426,7 +418,7 @@ export default function ReportUploadModal({
   }, []);
 
   const handleSubmit = useCallback(async () => {
-    if (isSubmitting) {
+    if (isSubmitting || submissionGuardRef.current) {
       return;
     }
     setSubmissionError(null);
@@ -482,6 +474,7 @@ export default function ReportUploadModal({
       };
 
       Keyboard.dismiss();
+      submissionGuardRef.current = true;
       setIsSubmitting(true);
       try {
         const submissionSucceeded = await onSubmit(reportData);
@@ -496,6 +489,7 @@ export default function ReportUploadModal({
         setSubmissionError(err?.message || 'Failed to submit report. Please try again.');
       } finally {
         setIsSubmitting(false);
+        submissionGuardRef.current = false;
       }
       return;
     }
@@ -530,7 +524,6 @@ export default function ReportUploadModal({
             ? `Assigned event task:\n${volunteerMetrics.assignedTaskTitles.join(', ')}`
             : '',
           description.trim() ? `Summary:\n${description.trim()}` : '',
-          `Beneficiaries reached: ${metrics.beneficiariesServed || '0'}`,
         ]
           .filter(Boolean)
           .join('\n\n')
@@ -557,6 +550,7 @@ export default function ReportUploadModal({
     };
 
     Keyboard.dismiss();
+    submissionGuardRef.current = true;
     setIsSubmitting(true);
     try {
       const submissionSucceeded = await onSubmit(reportData);
@@ -574,6 +568,7 @@ export default function ReportUploadModal({
       Alert.alert('Submission Error', errorMessage);
     } finally {
       setIsSubmitting(false);
+      submissionGuardRef.current = false;
     }
 
   }, [
@@ -858,28 +853,12 @@ export default function ReportUploadModal({
             ).toLocaleDateString()}`}
           </Text>
           <Text style={styles.eventSummaryHint}>
-            Time-in days are counted from your log entries for this event until the end date.
+            Time-in days follow the event's selected start time until the end date.
           </Text>
         </View>
       ) : null}
 
       <Text style={styles.sectionTitle}>Event Summary</Text>
-
-      <Text style={styles.label}>Beneficiaries Reached *</Text>
-      <Text style={styles.sectionHelper}>
-        Enter the number of people who benefited from this event. This value is used in admin analytics.
-      </Text>
-      <TextInput
-        style={[styles.input, errors.beneficiariesServed && styles.inputError]}
-        placeholder="0"
-        value={metrics.beneficiariesServed}
-        onChangeText={value => handleMetricChange('beneficiariesServed', value)}
-        keyboardType="number-pad"
-        placeholderTextColor="#cbd5e1"
-      />
-      {errors.beneficiariesServed ? (
-        <Text style={styles.errorText}>{errors.beneficiariesServed}</Text>
-      ) : null}
 
       <Text style={styles.label}>Assigned Event Task</Text>
       <View style={styles.readOnlyCardLarge}>

@@ -150,8 +150,8 @@ def create_whitebox_docx():
         table.autofit = False
 
         # Table Column Widths (Sum = ~9.8 inches)
-        # ID (0.8"), Segment (1.1"), Desc (1.3"), Input (1.2"), Expected (1.4"), Actual (2.3"), Result (0.6"), Remarks (1.1")
-        widths = [Inches(0.85), Inches(1.15), Inches(1.35), Inches(1.2), Inches(1.4), Inches(2.4), Inches(0.55), Inches(1.1)]
+        # ID (0.85"), Segment (1.15"), Desc (1.35"), Input (1.2"), Actual (2.4"), Expected (1.4"), Result (0.55"), Remarks (1.1")
+        widths = [Inches(0.85), Inches(1.15), Inches(1.35), Inches(1.2), Inches(2.4), Inches(1.4), Inches(0.55), Inches(1.1)]
 
         # Header Row
         hdr_row = table.rows[0]
@@ -202,21 +202,16 @@ def create_whitebox_docx():
                     r.font.size = Pt(8.5)
                     r.font.bold = True
                     r.font.color.rgb = RGBColor(22, 163, 74) # Green for Pass
-                elif c_idx == 5: # Actual Behavior (with log)
-                    # Check for [LOG: ...] part
-                    if "[LOG:" in val:
-                        parts = val.split("[LOG:", 1)
-                        r1 = p.add_run(parts[0].strip() + "\n")
-                        r1.font.size = Pt(8)
-                        
-                        log_text = "[LOG:" + parts[1].strip()
-                        r2 = p.add_run(log_text)
-                        r2.font.name = 'Consolas'
-                        r2.font.size = Pt(7.5)
-                        r2.font.color.rgb = RGBColor(3, 105, 161) # Cyan/Blue for log
-                    else:
-                        r = p.add_run(val)
-                        r.font.size = Pt(8)
+                elif c_idx in (4, 5) and "[LOG:" in val: # Actual Behavior with log
+                    parts = val.split("[LOG:", 1)
+                    r1 = p.add_run(parts[0].strip() + "\n")
+                    r1.font.size = Pt(8)
+                    
+                    log_text = "[LOG:" + parts[1].strip()
+                    r2 = p.add_run(log_text)
+                    r2.font.name = 'Consolas'
+                    r2.font.size = Pt(7.5)
+                    r2.font.color.rgb = RGBColor(3, 105, 161) # Cyan/Blue for log
                 else:
                     r = p.add_run(val)
                     r.font.size = Pt(8)

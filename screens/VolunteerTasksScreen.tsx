@@ -18,6 +18,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import InlineLoadError from '../components/InlineLoadError';
 import { useAuth } from '../contexts/AuthContext';
 import Svg, { Circle, Path, G } from 'react-native-svg';
+import { getAttendanceWindowKey, hasEventStartedForToday } from '../utils/attendanceSchedule';
 
 function EmptyTasksIllustration() {
   return (
@@ -166,6 +167,15 @@ function formatEventDateLabel(startDate?: string, endDate?: string): string {
   return startLabel === endLabel ? startLabel : `${startLabel} - ${endLabel}`;
 }
 
+function formatEventStartTime(startDate?: string): string {
+  const start = startDate ? new Date(startDate) : null;
+  if (!start || Number.isNaN(start.getTime())) {
+    return 'the event start time';
+  }
+
+  return start.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
 function getLocalDateKey(value?: string, now: Date = new Date()): string {
   const date = value ? new Date(value) : now;
   if (Number.isNaN(date.getTime())) {
@@ -202,21 +212,6 @@ function getDateRangeKeys(startDate?: string, endDate?: string): string[] {
   }
 
   return keys;
-}
-
-function hasEventStartedForToday(startValue?: string, now: Date = new Date()): boolean {
-  if (!startValue) {
-    return true;
-  }
-
-  const startDate = new Date(startValue);
-  if (Number.isNaN(startDate.getTime())) {
-    return true;
-  }
-
-  const attendanceStart = new Date(startDate);
-  attendanceStart.setHours(9, 0, 0, 0);
-  return now >= attendanceStart;
 }
 
 function hasEventEndedForToday(endValue?: string, now: Date = new Date()): boolean {
@@ -343,15 +338,15 @@ function getTrackedTaskStatus(
     };
   }
 
-  const todayKey = getLocalDateKey();
+  const todayKey = getAttendanceWindowKey(project.startDate);
   const activeLog = timeLogs.find(
-    log => getLocalDateKey(log.attendanceConfirmedAt || log.timeIn) === todayKey
+    log => getAttendanceWindowKey(project.startDate, log.attendanceConfirmedAt || log.timeIn) === todayKey
   );
   if (activeLog) {
     return {
       status: 'In Progress',
       updatedAt: activeLog.attendanceConfirmedAt || activeLog.timeIn,
-      statusTrackingNote: 'In progress after your attendance has been confirmed for today.',
+      statusTrackingNote: 'In progress after your attendance has been confirmed for this attendance window.',
     };
   }
 
@@ -367,7 +362,7 @@ function getTrackedTaskStatus(
       return {
         status: 'Assigned',
         updatedAt: latestCompletedLog.attendanceConfirmedAt || latestCompletedLog.timeIn,
-        statusTrackingNote: 'Attendance is already confirmed for the latest event day. It will refresh on the next event day.',
+        statusTrackingNote: `Attendance is already confirmed for the latest attendance window. It will refresh at ${formatEventStartTime(project.startDate)} on the next event day.`,
       };
     }
 
@@ -403,12 +398,12 @@ function getTaskEventAttendanceState(
       new Date(right.timeOut || right.timeIn).getTime() -
       new Date(left.timeOut || left.timeIn).getTime()
   );
-  const todayKey = getLocalDateKey();
+  const todayKey = getAttendanceWindowKey(project.startDate);
   const todayLog =
-    sortedLogs.find(log => getLocalDateKey(log.attendanceConfirmedAt || log.timeIn) === todayKey) || null;
+    sortedLogs.find(log => getAttendanceWindowKey(project.startDate, log.attendanceConfirmedAt || log.timeIn) === todayKey) || null;
   const latestLog = sortedLogs[0] || null;
   const hasConfirmedToday = sortedLogs.some(
-    log => getLocalDateKey(log.attendanceConfirmedAt || log.timeIn) === todayKey
+    log => getAttendanceWindowKey(project.startDate, log.attendanceConfirmedAt || log.timeIn) === todayKey
   );
   const eventHasNotStarted = !hasEventStartedForToday(project.startDate);
   const lifecycleStatus = getProjectDisplayStatus(project);
@@ -419,15 +414,15 @@ function getTaskEventAttendanceState(
   const canConfirmAttendance =
     isAssigned && !hasConfirmedToday && !eventHasNotStarted && !eventHasEnded;
 
-  let helperText = 'Attendance confirmation is ready for today.';
+  let helperText = 'Attendance confirmation is ready for this attendance window.';
   if (!isAssigned) {
     helperText = 'You need an assigned task before attendance opens for this event.';
   } else if (eventHasNotStarted) {
-    helperText = 'Attendance confirmation unlocks at 9:00 AM on the event start date.';
+    helperText = `Attendance confirmation unlocks at ${formatEventStartTime(project.startDate)} on the event start date.`;
   } else if (eventHasEnded) {
     helperText = 'Attendance is closed because the event timeline already ended.';
   } else if (hasConfirmedToday) {
-    helperText = 'Attendance is already confirmed for today. It will reset on the next event day.';
+    helperText = `Attendance is already confirmed for this attendance window. It will reset at ${formatEventStartTime(project.startDate)} on the next event day.`;
   }
 
   return {
@@ -747,7 +742,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
           ? nextTasks.find(task => task.id === current.id && task.projectId === current.projectId) || null
           : current
       );
-      showAttendanceNotice('Attendance confirmed for today.');
+      showAttendanceNotice('Attendance confirmed for this attendance window.');
     } catch (error) {
       Alert.alert(
         getRequestErrorTitle(error, 'Unable to confirm attendance'),
@@ -836,7 +831,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       new Set(
         allVolunteerTimeLogs
           .filter(log => log.projectId === selectedManagedEvent.id)
-          .map(log => getLocalDateKey(log.attendanceConfirmedAt || log.timeIn))
+          .map(log => getAttendanceWindowKey(selectedManagedEvent.startDate, log.attendanceConfirmedAt || log.timeIn))
           .filter(Boolean)
       )
     ).sort((left, right) => new Date(left).getTime() - new Date(right).getTime());
@@ -852,7 +847,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       return;
     }
 
-    const todayKey = getLocalDateKey();
+    const todayKey = getAttendanceWindowKey(selectedManagedEvent.startDate);
     setSelectedManagedAttendanceDateKey(current => {
       if (current && managedEventAttendanceDateKeys.includes(current)) {
         return current;
@@ -869,9 +864,9 @@ export default function VolunteerTasksScreen({ navigation }: any) {
   const resolvedManagedAttendanceDateKey =
     selectedManagedAttendanceDateKey && managedEventAttendanceDateKeys.includes(selectedManagedAttendanceDateKey)
       ? selectedManagedAttendanceDateKey
-      : managedEventAttendanceDateKeys.includes(getLocalDateKey())
-      ? getLocalDateKey()
-      : managedEventAttendanceDateKeys[0] || getLocalDateKey();
+      : managedEventAttendanceDateKeys.includes(getAttendanceWindowKey(selectedManagedEvent?.startDate))
+      ? getAttendanceWindowKey(selectedManagedEvent?.startDate)
+      : managedEventAttendanceDateKeys[0] || getAttendanceWindowKey(selectedManagedEvent?.startDate);
 
   const managedEventAttendanceEntries = useMemo(() => {
     if (!selectedManagedEvent) {
@@ -883,7 +878,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
         const logs = allVolunteerTimeLogs
           .filter(log => log.projectId === selectedManagedEvent.id && log.volunteerId === volunteer.id)
           .filter(
-            log => getLocalDateKey(log.attendanceConfirmedAt || log.timeIn) === resolvedManagedAttendanceDateKey
+            log => getAttendanceWindowKey(selectedManagedEvent.startDate, log.attendanceConfirmedAt || log.timeIn) === resolvedManagedAttendanceDateKey
           )
           .sort(
             (left, right) =>
@@ -897,7 +892,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
           checkedAttendanceDays: new Set(
             logs
               .filter(log => Boolean(log.attendanceCheckedAt))
-              .map(log => getLocalDateKey(log.attendanceConfirmedAt || log.timeIn))
+              .map(log => getAttendanceWindowKey(selectedManagedEvent.startDate, log.attendanceConfirmedAt || log.timeIn))
               .filter(Boolean)
           ).size,
         };
@@ -927,7 +922,13 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       return;
     }
 
+    const loadingKey = `task-assignment-${eventProject.id}-${taskId}`;
+    if (actionLoadingKey) {
+      return;
+    }
+
     try {
+      setActionLoadingKey(loadingKey);
       const isFieldOfficerForEvent = (eventProject.internalTasks || []).some(
         task => task.isFieldOfficer && isVolunteerAssignedToTask(task, volunteerProfile.id)
       );
@@ -1009,22 +1010,54 @@ export default function VolunteerTasksScreen({ navigation }: any) {
         };
       });
 
-      await saveEvent({
+      const updatedProject: Project = {
         ...eventProject,
         internalTasks: updatedTasks,
         updatedAt: new Date().toISOString(),
+      };
+      const previousProjects = allProjects;
+      const nextProjects = allProjects.map(project =>
+        project.id === updatedProject.id ? updatedProject : project
+      );
+      const nextTasks = collectAssignedTasks(
+        nextProjects,
+        volunteerProfile,
+        volunteerJoinRecordByProjectId,
+        volunteerTimeLogs
+      );
+      // Reflect the assignment immediately; the database write follows.
+      setAllProjects(nextProjects);
+      setTasks(nextTasks);
+      setSelectedTask(current => {
+        if (!current) {
+          return current;
+        }
+        return nextTasks.find(task => task.id === current.id && task.projectId === current.projectId) || null;
       });
-      const notificationTasks: Promise<void>[] = [];
+
+      try {
+        await saveEvent(updatedProject);
+      } catch (error) {
+        setAllProjects(previousProjects);
+        setTasks(collectAssignedTasks(
+          previousProjects,
+          volunteerProfile,
+          volunteerJoinRecordByProjectId,
+          volunteerTimeLogs
+        ));
+        throw error;
+      }
+
       if (currentTask && removedVolunteer) {
-        notificationTasks.push(notifyVolunteerAboutTaskUnassignment({
+        void notifyVolunteerAboutTaskUnassignment({
           event: eventProject,
           task: currentTask,
           volunteer: removedVolunteer,
           actorUserId: user?.id,
-        }));
+        }).catch(error => console.warn('[TASK] Unassignment notification failed:', error));
       }
       if (currentTask && assignedVolunteer && shouldNotifyAssignedVolunteer) {
-        notificationTasks.push(notifyVolunteerAboutTaskUpdate({
+        void notifyVolunteerAboutTaskUpdate({
           event: eventProject,
           task: {
             ...currentTask,
@@ -1033,28 +1066,8 @@ export default function VolunteerTasksScreen({ navigation }: any) {
           volunteer: assignedVolunteer,
           actorUserId: user?.id,
           action: 'assigned',
-        }));
+        }).catch(error => console.warn('[TASK] Assignment notification failed:', error));
       }
-      if (notificationTasks.length > 0) {
-        await Promise.all(notificationTasks);
-      }
-      const updatedProject: Project = {
-        ...eventProject,
-        internalTasks: updatedTasks,
-        updatedAt: new Date().toISOString(),
-      };
-      const nextProjects = allProjects.map(project =>
-        project.id === updatedProject.id ? updatedProject : project
-      );
-      clearStorageCache(['projects', 'events']);
-      const nextTasks = collectAssignedTasks(
-        nextProjects,
-        volunteerProfile,
-        volunteerJoinRecordByProjectId,
-        volunteerTimeLogs
-      );
-      setAllProjects(nextProjects);
-      setTasks(nextTasks);
       setSelectedTask(current => {
         if (!current) {
           return current;
@@ -1084,6 +1097,8 @@ export default function VolunteerTasksScreen({ navigation }: any) {
     } catch (error) {
       console.error('Error assigning event task:', error);
       Alert.alert('Error', 'Failed to update the event task assignment.');
+    } finally {
+      setActionLoadingKey(current => current === loadingKey ? null : current);
     }
   };
 
@@ -2546,16 +2561,21 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                                         styles.assignmentButton,
                                         isAssigned && styles.assignmentButtonActive,
                                       ]}
+                                      disabled={Boolean(actionLoadingKey)}
                                       onPress={() => handleTaskVolunteerChipPress(eventTask, volunteer)}
                                     >
-                                      <Text
-                                        style={[
-                                          styles.assignmentButtonText,
-                                          isAssigned && styles.assignmentButtonTextActive,
-                                        ]}
-                                      >
-                                        {volunteer.name}
-                                      </Text>
+                                      {actionLoadingKey === `task-assignment-${selectedManagedEvent.id}-${eventTask.id}` ? (
+                                        <ActivityIndicator size="small" color={isAssigned ? '#166534' : '#ffffff'} />
+                                      ) : (
+                                        <Text
+                                          style={[
+                                            styles.assignmentButtonText,
+                                            isAssigned && styles.assignmentButtonTextActive,
+                                          ]}
+                                        >
+                                          {volunteer.name}
+                                        </Text>
+                                      )}
                                     </TouchableOpacity>
                                   );
                                 })}

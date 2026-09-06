@@ -477,7 +477,7 @@ export default function VolunteerImpactMap({
             const container = document.createElement('div');
             container.style.minWidth = '220px';
             container.style.maxWidth = '280px';
-            container.style.fontFamily = 'DM Sans, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
+            container.style.fontFamily = "'Nunito', sans-serif";
             container.style.fontSize = '12px';
             container.style.lineHeight = '16px';
 

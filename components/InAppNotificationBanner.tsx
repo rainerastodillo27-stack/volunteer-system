@@ -13,7 +13,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../contexts/AuthContext';
 import {
-  getMessagesForUser,
+  getUnreadMessagesForUser,
   getVolunteerByUserId,
   markMessageAsRead,
   subscribeToMessages,
@@ -148,7 +148,10 @@ export default function InAppNotificationBanner() {
       let iconBg = '#dcfce7';
       let iconColor = '#166534';
 
-      if (content.startsWith('You were assigned to')) {
+      if (content.startsWith('Reminder: you joined')) {
+        title = 'Event Reminder';
+        icon = 'event-available';
+      } else if (content.startsWith('You were assigned to')) {
         title = 'Task Assigned';
         icon = 'assignment-turned-in';
         iconBg = '#e0f2fe';
@@ -202,8 +205,8 @@ export default function InAppNotificationBanner() {
     if (!user?.id) return;
     try {
       const [userMessages, volMessages] = await Promise.all([
-        getMessagesForUser(user.id).catch(() => []),
-        volunteerProfileId ? getMessagesForUser(volunteerProfileId).catch(() => []) : Promise.resolve([]),
+        getUnreadMessagesForUser(user.id).catch(() => []),
+        volunteerProfileId ? getUnreadMessagesForUser(volunteerProfileId).catch(() => []) : Promise.resolve([]),
       ]);
       const messages = [...userMessages, ...volMessages];
 
@@ -262,10 +265,10 @@ export default function InAppNotificationBanner() {
       window.addEventListener('storage', windowStorageListener);
     }
 
-    // 4. Periodic polling fallback every 3 seconds
+    // 4. Periodic polling fallback for unread notifications
     const interval = setInterval(() => {
       void checkRecentMessages();
-    }, 3000);
+    }, 10000);
 
     return () => {
       unsubscribeWs();

@@ -92,7 +92,7 @@ import {
 
 } from '../models/types';
 
-import { isImageMediaUri, pickImageFromDevice, pickDocumentFromDevice } from '../utils/media';
+import { getAttachmentLabel, isImageMediaUri, pickImageFromDevice, pickDocumentFromDevice } from '../utils/media';
 
 import { navigateToAvailableRoute } from '../utils/navigation';
 
@@ -399,7 +399,7 @@ function LazyDateTimePicker(props: any) {
 
             fontSize: '14px',
 
-            fontFamily: 'inherit',
+            fontFamily: "'Nunito', sans-serif",
 
             color: '#0f172a',
 
@@ -2668,7 +2668,7 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
                         <Text style={styles.documentPreviewText} numberOfLines={1}>
 
-                          {proposalForm.documentAttachment.split('/').pop() || 'Document attached'}
+                          {getAttachmentLabel(proposalForm.documentAttachment)}
 
                         </Text>
 

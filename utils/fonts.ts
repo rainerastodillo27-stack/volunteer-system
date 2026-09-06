@@ -2,15 +2,8 @@ import { Platform } from 'react-native';
 import { useFonts } from 'expo-font';
 
 /**
- * Hook to manage DM Sans font family across the app
- * In bare React Native, fonts are linked at the native level (Xcode/Android)
- * This hook simply returns true since fonts are pre-loaded
+ * Load the Nunito font family used throughout the app.
  */
-export function useDMSansFont() {
-  // Fonts are linked at native level, so they're always available
-  return true;
-}
-
 export function useNunitoFont() {
   const [fontsLoaded] = useFonts({
     Nunito: require('../assets/fonts/Nunito-Regular.ttf'),

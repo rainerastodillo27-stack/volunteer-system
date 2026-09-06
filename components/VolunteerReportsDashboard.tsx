@@ -137,7 +137,30 @@ export function VolunteerReportsDashboard({
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
 
   const visibleReports = useMemo(
-    () => reports.filter(report => report.status !== 'Rejected'),
+    () => {
+      const seenVolunteerSubmissions = new Set<string>();
+
+      return [...reports]
+        .filter(report => report.status !== 'Rejected')
+        .sort(
+          (left, right) =>
+            new Date(right.submittedAt).getTime() - new Date(left.submittedAt).getTime()
+        )
+        .filter(report => {
+          if (report.submitterRole !== 'volunteer') {
+            return true;
+          }
+
+          const submitterKey = report.submittedBy || report.submitterName || report.id;
+          const submissionKey = `${report.projectId || 'unlinked'}::${submitterKey}`;
+          if (seenVolunteerSubmissions.has(submissionKey)) {
+            return false;
+          }
+
+          seenVolunteerSubmissions.add(submissionKey);
+          return true;
+        });
+    },
     [reports]
   );
   const eventCount = useMemo(
@@ -243,9 +266,8 @@ export function VolunteerReportsDashboard({
       if (!photo || !isImageMediaUri(photo)) return;
       const join = volunteerJoinRecords.find(r => r.projectId === eventId && ((r as any).volunteerId === (log as any).volunteerId || (r as any).volunteerUserId === (log as any).volunteerId));
       const name = (join as any)?.volunteerName || 'Volunteer';
-      const key = (log as any).volunteerId || name;
-
       const vDetails = volunteerById.get((log as any).volunteerId) || volunteerByUserId.get((log as any).volunteerId);
+      const key = (join as any)?.volunteerId || (join as any)?.volunteerUserId || vDetails?.id || vDetails?.userId || (log as any).volunteerId || name;
       const avatarUri = (vDetails as any)?.validIdPhoto || (vDetails as any)?.avatarUri || undefined;
       const volunteerName = vDetails?.name || name;
 
@@ -255,14 +277,24 @@ export function VolunteerReportsDashboard({
     });
     visibleReports.filter(r => r.projectId === eventId).forEach(rep => {
       const uris = getAttachmentUris([rep.mediaFile || '', ...(rep.attachments || [])]).filter(isImageMediaUri);
-      const key = rep.submittedBy || rep.submitterName || `rep-${rep.id}`;
-
+      const join = volunteerJoinRecords.find(r =>
+        r.projectId === eventId &&
+        (
+          (r as any).volunteerId === rep.submittedBy ||
+          (r as any).volunteerUserId === rep.submittedBy ||
+          (r as any).volunteerName === rep.submitterName
+        )
+      );
       const vDetails = volunteerById.get(rep.submittedBy) || volunteerByUserId.get(rep.submittedBy);
+      const key = (join as any)?.volunteerId || (join as any)?.volunteerUserId || vDetails?.id || vDetails?.userId || rep.submittedBy || rep.submitterName || `rep-${rep.id}`;
       const avatarUri = (vDetails as any)?.validIdPhoto || (vDetails as any)?.avatarUri || undefined;
       const volunteerName = vDetails?.name || rep.submitterName || 'Volunteer';
 
       if (!map.has(key)) map.set(key, { key, name: volunteerName, submittedDate: new Date(rep.submittedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }), photos: [], avatarUri });
       const entry = map.get(key)!;
+      if (new Date(rep.submittedAt).getTime() > new Date(entry.submittedDate).getTime()) {
+        entry.submittedDate = new Date(rep.submittedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      }
       uris.forEach(uri => { if (!entry.photos.includes(uri)) entry.photos.push(uri); });
     });
     // Include join records even without photo so volunteer still appears

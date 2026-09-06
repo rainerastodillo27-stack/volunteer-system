@@ -1,0 +1,58 @@
+{
+  "createdAt": "2026-09-05T16:18:44.462761+00:00",
+  "collections": {
+    "users": [],
+    "partners": [],
+    "volunteers": [],
+    "programs": [],
+    "projects": [],
+    "events": [],
+    "statusUpdates": [],
+    "volunteerMatches": [],
+    "volunteerTimeLogs": [],
+    "volunteerProjectJoins": [],
+    "partnerProjectApplications": [],
+    "partnerReports": [],
+    "publishedImpactReports": [],
+    "adminPlanningCalendars": [],
+    "skills": [],
+    "tasks": []
+  },
+  "directTables": {
+    "messages": [],
+    "messagesColumns": [
+      "messages_id",
+      "sender_id",
+      "recipient_id",
+      "project_id",
+      "content",
+      "timestamp",
+      "read",
+      "attachments"
+    ],
+    "project_group_messages": [],
+    "project_group_messagesColumns": [
+      "project_group_messages_id",
+      "project_id",
+      "sender_id",
+      "content",
+      "timestamp",
+      "kind",
+      "need_post",
+      "scope_proposal",
+      "response_to_message_id",
+      "response_action",
+      "response_to_title",
+      "attachments"
+    ],
+    "event_email_reminders": [],
+    "event_email_remindersColumns": [
+      "reminder_id",
+      "event_id",
+      "volunteer_id",
+      "volunteer_email",
+      "reminder_type",
+      "sent_at"
+    ]
+  }
+}

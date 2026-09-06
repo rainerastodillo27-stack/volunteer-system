@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import ModernTheme from '../utils/modernTheme';
 import {
   View,
@@ -24,10 +24,10 @@ import {
   getAllVolunteerTimeLogs,
   getVolunteerProjectMatches,
   saveVolunteer,
+  getStorageItem,
   subscribeToStorageChanges,
   approveUser,
   rejectUser,
-  getUser,
   sendRejectionEmail,
   getApiBaseUrl,
 } from '../models/storage';
@@ -51,6 +51,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   const hasInitialVolunteerId = Boolean(route?.params?.volunteerId);
   const [view, setView] = useState<'list' | 'detail'>(hasInitialVolunteerId ? 'detail' : 'list');
   const [selectedVolunteer, setSelectedVolunteer] = useState<Volunteer | null>(null);
+  const selectedVolunteerIdRef = useRef<string | null>(null);
   const [selectedVolunteerCompletedProjectIds, setSelectedVolunteerCompletedProjectIds] = useState<string[]>([]);
   const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
   const [volunteerTimeLogs, setVolunteerTimeLogs] = useState<VolunteerTimeLog[]>([]);
@@ -66,6 +67,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   const [rejectionError, setRejectionError] = useState<string | null>(null);
   const [isRejecting, setIsRejecting] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
+  const [isAssigningProjectId, setIsAssigningProjectId] = useState<string | null>(null);
   const [expandedSection, setExpandedSection] = useState<'applications' | 'approved' | 'profiles' | 'reports' | null>(null);
 
   useEffect(() => {
@@ -117,7 +119,9 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     }
 
     // Select the volunteer and load their details
+    selectedVolunteerIdRef.current = targetVolunteer.id;
     setSelectedVolunteer(targetVolunteer);
+    setSelectedUser(null);
     void loadSelectedVolunteerDetails(targetVolunteer.id, targetVolunteer.userId);
     setView('detail');
     // Clear the param after processing
@@ -130,7 +134,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     }
 
     return subscribeToStorageChanges(
-      ['volunteers', 'projects', 'volunteerMatches', 'volunteerProjectJoins', 'volunteerTimeLogs'],
+      ['volunteers', 'users', 'projects', 'volunteerMatches', 'volunteerProjectJoins', 'volunteerTimeLogs'],
       () => {
         void loadVolunteers();
         void loadProjects();
@@ -200,28 +204,44 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   const loadSelectedVolunteerDetails = async (volunteerId: string, linkedUserId?: string) => {
     try {
       const matches = await getVolunteerProjectMatches(volunteerId);
-      setVolunteerMatches(matches);
+      if (selectedVolunteerIdRef.current === volunteerId) {
+        setVolunteerMatches(matches);
+      }
     } catch (err) {
-      setVolunteerMatches([]);
+      if (selectedVolunteerIdRef.current === volunteerId) {
+        setVolunteerMatches([]);
+      }
     }
 
-    setSelectedVolunteerCompletedProjectIds([]);
+    if (selectedVolunteerIdRef.current === volunteerId) {
+      setSelectedVolunteerCompletedProjectIds([]);
+    }
     setTimeout(async () => {
       try {
         const completedProjectIds = await getVolunteerCompletedProjectIds(volunteerId);
-        setSelectedVolunteerCompletedProjectIds(completedProjectIds);
+        if (selectedVolunteerIdRef.current === volunteerId) {
+          setSelectedVolunteerCompletedProjectIds(completedProjectIds);
+        }
       } catch {}
     }, 50);
 
     try {
       if (linkedUserId) {
-        const linkedUser = await getUser(linkedUserId);
-        setSelectedUser(linkedUser);
-      } else {
+        // Profile details must come from the current linked account, not the
+        // fast cache used by list screens. This prevents one volunteer's old
+        // membership data from appearing on another volunteer's profile.
+        const users = await getStorageItem<User[]>('users');
+        const linkedUser = (users || []).find(account => account.id === linkedUserId) || null;
+        if (selectedVolunteerIdRef.current === volunteerId) {
+          setSelectedUser(linkedUser);
+        }
+      } else if (selectedVolunteerIdRef.current === volunteerId) {
         setSelectedUser(null);
       }
     } catch {
-      setSelectedUser(null);
+      if (selectedVolunteerIdRef.current === volunteerId) {
+        setSelectedUser(null);
+      }
     }
   };
 
@@ -232,7 +252,9 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
       return;
     }
 
+    selectedVolunteerIdRef.current = volunteer.id;
     setSelectedVolunteer(volunteer);
+    setSelectedUser(null);
     void loadSelectedVolunteerDetails(volunteer.id, volunteer.userId);
     setView('detail');
   };
@@ -276,7 +298,6 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
       } else {
         await saveVolunteer(updated);
       }
-      void loadVolunteers();
     } catch (error) {
       setVolunteers(previousVolunteers);
       setSelectedVolunteer(previousSelected);
@@ -310,16 +331,19 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     try {
       // Modal stays open — spinner is shown inside the modal while we process
 
-      // Send rejection email first (non-blocking on failure)
+      // Send rejection email in the background; the account decision does not
+      // need to wait for an external mail service.
       const volunteerEmail = (selectedVolunteer.email || selectedUser?.email || '').trim();
-      let emailNotice = '';
+      const emailNotice = volunteerEmail ? ` Notification email queued for ${volunteerEmail}.` : '';
       if (volunteerEmail) {
-        try {
-          await sendRejectionEmail(volunteerEmail, selectedVolunteer.name, trimmedReason, 'volunteer');
-          emailNotice = ` Notification email sent to ${volunteerEmail}.`;
-        } catch (emailErr) {
+        void sendRejectionEmail(
+          volunteerEmail,
+          selectedUser?.name || selectedVolunteer.name,
+          trimmedReason,
+          'volunteer'
+        ).catch(emailErr => {
           console.warn('[REJECTION-EMAIL] Failed to send rejection email:', emailErr);
-        }
+        });
       }
 
       // Call backend approve endpoint with status=rejected to fully delete the user and all linked records
@@ -356,9 +380,8 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
       closeRejectModal();
       setVolunteers(current => current.filter(v => v.id !== selectedVolunteer.id));
       setSelectedVolunteer(null);
-      setActionNotice(`Application for ${selectedVolunteer.name} has been rejected and removed from the system.${emailNotice}`);
+      setActionNotice(`Application for ${selectedUser?.name || selectedVolunteer.name} has been rejected and removed from the system.${emailNotice}`);
 
-      void loadVolunteers();
     } catch (error) {
       setVolunteers(previousVolunteers);
       Alert.alert(
@@ -377,7 +400,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
       return;
     }
 
-    if (!selectedVolunteer) return;
+    if (!selectedVolunteer || isAssigningProjectId) return;
 
     const previousVolunteerMatches = volunteerMatches;
     const now = new Date().toISOString();
@@ -394,6 +417,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     };
     setVolunteerMatches(currentMatches => [...currentMatches, optimisticMatch]);
     setActionNotice('Volunteer assigned to event and notified.');
+    setIsAssigningProjectId(projectId);
 
     try {
       const savedMatch = await assignVolunteerToProject(projectId, selectedVolunteer.id, user?.id || '');
@@ -407,6 +431,8 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
         getRequestErrorTitle(error),
         getRequestErrorMessage(error, 'Failed to match volunteer.')
       );
+    } finally {
+      setIsAssigningProjectId(null);
     }
   };
 
@@ -596,7 +622,12 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
         .filter(match => match.status === 'Matched' || match.status === 'Completed')
         .map(match => match.projectId)
     );
-    const joinedProjects = projects.filter(p => p.isEvent && (p.joinedUserIds || []).includes(selectedVolunteer.id));
+    const joinedProjects = projects.filter(
+      p =>
+        p.isEvent &&
+        ((p.joinedUserIds || []).includes(selectedVolunteer.userId) ||
+          (p.volunteers || []).includes(selectedVolunteer.id))
+    );
     const eventsFromJoined = new Set(joinedProjects.map(p => p.id));
     const allUniqueEvents = new Set([...eventsFromTimeLogs, ...eventsFromMatches, ...eventsFromJoined]);
     const eventsJoinedCount = allUniqueEvents.size;
@@ -619,6 +650,10 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     const membershipSheet = selectedUser?.volunteerMembershipSheet;
     const pillarsOfInterest = selectedUser?.pillarsOfInterest || [];
     const userType: UserType | undefined = selectedUser?.userType;
+    const profileName = (selectedUser?.name || selectedVolunteer.name || '').trim() || 'Unnamed volunteer';
+    const profileEmail = (selectedUser?.email || selectedVolunteer.email || '').trim().toLowerCase();
+    const profilePhone = (selectedUser?.phone || selectedVolunteer.phone || '').trim();
+    const profileSkills = membershipSheet?.skills?.length ? membershipSheet.skills : selectedVolunteer.skills;
     const certificateUri = (membershipSheet?.certificationsOrTrainings || selectedVolunteer.certificationsOrTrainings || '').trim();
     const availableDaysLabel = selectedVolunteer.availability?.availableDays?.length
       ? selectedVolunteer.availability.availableDays.join(', ')
@@ -654,15 +689,15 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
               <View style={styles.applicationCardTopRow}>
                 <View style={[styles.applicationAvatarRow, { marginBottom: 0, flex: 1 }]}>
                   <View style={styles.applicationAvatar}>
-                    <Text style={styles.applicationAvatarText}>{selectedVolunteer.name.charAt(0)}</Text>
+                    <Text style={styles.applicationAvatarText}>{profileName.charAt(0)}</Text>
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.applicationName}>{selectedVolunteer.name}</Text>
-                    {selectedVolunteer.email ? (
-                      <Text style={styles.applicationEmail}>{selectedVolunteer.email}</Text>
+                    <Text style={styles.applicationName}>{profileName}</Text>
+                    {profileEmail ? (
+                      <Text style={styles.applicationEmail}>{profileEmail}</Text>
                     ) : null}
-                    {selectedVolunteer.phone ? (
-                      <Text style={styles.applicationPhone}>{selectedVolunteer.phone}</Text>
+                    {profilePhone ? (
+                      <Text style={styles.applicationPhone}>{profilePhone}</Text>
                     ) : null}
                     <View style={[styles.registrationBadge, styles.registrationBadgePending]}>
                       <Text style={styles.registrationBadgeText}>Pending Review</Text>
@@ -734,7 +769,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                   <View style={{ marginLeft: 8 }}>
                     <Text style={styles.applicationInfoLabel}>User Type</Text>
                     <Text style={styles.applicationInfoValue}>
-                      {userType || membershipSheet ? (userType || 'Adult') : 'Adult'}
+                      {userType || '-'}
                     </Text>
                   </View>
                 </View>
@@ -850,11 +885,11 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                       </View>
                     </View>
 
-                    {selectedVolunteer.skills && selectedVolunteer.skills.length > 0 ? (
+                    {profileSkills && profileSkills.length > 0 ? (
                       <View style={{ marginTop: 10 }}>
                         <Text style={styles.applicationFieldLabel}>Tagged Skills</Text>
                         <View style={styles.applicationSkillsWrap}>
-                          {selectedVolunteer.skills.map(skill => (
+                          {profileSkills.map(skill => (
                             <View key={skill} style={styles.applicationSkillTag}>
                               <Text style={styles.applicationSkillTagText}>{skill}</Text>
                             </View>
@@ -934,15 +969,15 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
               <View style={styles.applicationCardTopRow}>
                 <View style={[styles.applicationAvatarRow, { marginBottom: 0, flex: 1 }]}>
                   <View style={styles.applicationAvatar}>
-                    <Text style={styles.applicationAvatarText}>{selectedVolunteer.name.charAt(0)}</Text>
+                    <Text style={styles.applicationAvatarText}>{profileName.charAt(0)}</Text>
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.applicationName}>{selectedVolunteer.name}</Text>
-                    {selectedVolunteer.email ? (
-                      <Text style={styles.applicationEmail}>{selectedVolunteer.email}</Text>
+                    <Text style={styles.applicationName}>{profileName}</Text>
+                    {profileEmail ? (
+                      <Text style={styles.applicationEmail}>{profileEmail}</Text>
                     ) : null}
-                    {selectedVolunteer.phone ? (
-                      <Text style={styles.applicationPhone}>{selectedVolunteer.phone}</Text>
+                    {profilePhone ? (
+                      <Text style={styles.applicationPhone}>{profilePhone}</Text>
                     ) : null}
                     {selectedVolunteer.registrationStatus === 'Rejected' ? (
                       <View style={[styles.registrationBadge, { backgroundColor: '#fee2e2' }]}>
@@ -977,7 +1012,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                   <View style={{ marginLeft: 8 }}>
                     <Text style={styles.applicationInfoLabel}>User Type</Text>
                     <Text style={styles.applicationInfoValue}>
-                      {userType || membershipSheet ? (userType || 'Adult') : 'Adult'}
+                      {userType || '-'}
                     </Text>
                   </View>
                 </View>
@@ -1116,11 +1151,11 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                       </View>
                     </View>
 
-                    {selectedVolunteer.skills && selectedVolunteer.skills.length > 0 ? (
+                    {profileSkills && profileSkills.length > 0 ? (
                       <View style={{ marginTop: 10 }}>
                         <Text style={styles.applicationFieldLabel}>Tagged Skills</Text>
                         <View style={styles.applicationSkillsWrap}>
-                          {selectedVolunteer.skills.map(skill => (
+                          {profileSkills.map(skill => (
                             <View key={skill} style={styles.applicationSkillTag}>
                               <Text style={styles.applicationSkillTagText}>{skill}</Text>
                             </View>
@@ -1166,8 +1201,16 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                       {availableProjects.slice(0, 3).map(projectEntry => (
                         <View key={projectEntry.id} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                           <Text style={styles.applicationAvailableItem}>{projectEntry.title}</Text>
-                          <TouchableOpacity onPress={() => handleMatchVolunteer(projectEntry.id)}>
-                            <MaterialIcons name="add-circle" size={20} color="#4CAF50" />
+                          <TouchableOpacity
+                            onPress={() => handleMatchVolunteer(projectEntry.id)}
+                            disabled={Boolean(isAssigningProjectId)}
+                            style={{ opacity: isAssigningProjectId && isAssigningProjectId !== projectEntry.id ? 0.45 : 1 }}
+                          >
+                            {isAssigningProjectId === projectEntry.id ? (
+                              <ActivityIndicator size="small" color="#166534" />
+                            ) : (
+                              <MaterialIcons name="add-circle" size={20} color="#4CAF50" />
+                            )}
                           </TouchableOpacity>
                         </View>
                       ))}
@@ -1351,11 +1394,11 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
               {selectedVolunteer && (
                 <View style={{ backgroundColor: '#f8fafc', padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
                   <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' }}>
-                    <Text style={{ fontSize: 14, fontWeight: '700', color: '#475569' }}>{selectedVolunteer.name.charAt(0)}</Text>
+                    <Text style={{ fontSize: 14, fontWeight: '700', color: '#475569' }}>{profileName.charAt(0)}</Text>
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a' }}>{selectedVolunteer.name}</Text>
-                    <Text style={{ fontSize: 12, color: '#64748b' }}>{selectedVolunteer.email || selectedVolunteer.phone || 'Volunteer Applicant'}</Text>
+                    <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a' }}>{profileName}</Text>
+                    <Text style={{ fontSize: 12, color: '#64748b' }}>{profileEmail || profilePhone || 'Volunteer Applicant'}</Text>
                   </View>
                   <View style={{ backgroundColor: '#fef3c7', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 }}>
                     <Text style={{ fontSize: 11, fontWeight: '700', color: '#d97706' }}>Pending Review</Text>

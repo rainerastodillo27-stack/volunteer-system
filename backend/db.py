@@ -181,6 +181,14 @@ def _get_database_url_candidates() -> list[str]:
             candidates.append(normalized_value)
 
     if primary_url:
+        # The transaction pooler (6543) is useful for short stateless bursts,
+        # but this backend keeps a connection pool and performs several quick
+        # reads per request. Prefer the session pooler when Supabase exposes
+        # the equivalent 5432 endpoint, then retain the configured URL as a
+        # safe fallback.
+        session_url = _to_session_pooler_database_url(primary_url)
+        if session_url:
+            add_candidate(session_url)
         add_candidate(primary_url)
 
     if fallback_url:

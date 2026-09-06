@@ -19,6 +19,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import Svg, { Circle, Rect, Path, G, Line, Defs, LinearGradient } from 'react-native-svg';
 import {
   getDashboardSnapshot,
+  getAllVolunteerTimeLogs,
   subscribeToStorageChanges,
 } from '../models/storage';
 import type {
@@ -575,6 +576,23 @@ export default function DashboardScreen({ navigation }: any) {
         latestTimeInProjectId: latestTimeInLog?.projectId,
         latestTimeOutProjectId: latestTimeOutLog?.projectId,
       });
+
+      // Time logs are not part of the critical dashboard request. Load the
+      // optional workflow counters after the dashboard is already usable.
+      void getAllVolunteerTimeLogs().then(nextTimeLogs => {
+        const sortedLogs = [...(nextTimeLogs || [])].sort(
+          (a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime()
+        );
+        setWorkflowStats(current => ({
+          ...current,
+          timeIns: sortedLogs.length,
+          timeOuts: sortedLogs.filter(log => Boolean(log.timeOut)).length,
+        }));
+        setTimeTrackingTarget({
+          latestTimeInProjectId: sortedLogs[0]?.projectId,
+          latestTimeOutProjectId: sortedLogs.find(log => Boolean(log.timeOut))?.projectId,
+        });
+      }).catch(() => null);
 
       // Count joined work per volunteer from joins, event rosters, task assignments,
       // and older profile history without adding per-volunteer API calls.
@@ -1798,7 +1816,7 @@ const styles = StyleSheet.create({
     marginRight: 16,
   },
   welcomeTitle: {
-    fontFamily: 'DM Sans', fontSize: 22,
+    fontFamily: 'Nunito', fontSize: 22,
     fontWeight: '800',
     color: '#0f172a',
   },

@@ -217,6 +217,30 @@ function shouldDisplayReport(report: SubmittedReport): boolean {
   return report.status !== 'Rejected';
 }
 
+function dedupeVolunteerReports(reports: SubmittedReport[]): SubmittedReport[] {
+  const seenVolunteerSubmissions = new Set<string>();
+
+  return [...reports]
+    .sort(
+      (left, right) =>
+        new Date(right.submittedAt).getTime() - new Date(left.submittedAt).getTime()
+    )
+    .filter(report => {
+      if (report.submitterRole !== 'volunteer') {
+        return true;
+      }
+
+      const submitterKey = report.submittedBy || report.submitterName || report.id;
+      const submissionKey = `${report.projectId || 'unlinked'}::${submitterKey}`;
+      if (seenVolunteerSubmissions.has(submissionKey)) {
+        return false;
+      }
+
+      seenVolunteerSubmissions.add(submissionKey);
+      return true;
+    });
+}
+
 function isVolunteerAssignedToTask(
   task: { assignedVolunteerId?: string; assignedVolunteerIds?: string[] },
   volunteerId?: string | null
@@ -499,7 +523,7 @@ export default function ReportsScreen({ navigation, route }: any) {
         'timeLogs',
         'volunteerProfile',
         'volunteerProjectJoins',
-      ]);
+      ], false, false /* reports don't need project images */);
       setProjects(snapshot.projects);
       setPartnerApplications([]);
       setVolunteerProfileId(snapshot.volunteerProfile?.id || null);
@@ -519,7 +543,7 @@ export default function ReportsScreen({ navigation, route }: any) {
     }
 
     if (user?.role === 'partner' && user.id) {
-      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'partnerApplications']);
+      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'partnerApplications'], false, false /* reports */);
       setProjects(snapshot.projects);
       setPartnerApplications(snapshot.partnerApplications || []);
       setVolunteerProfileId(null);
@@ -533,7 +557,7 @@ export default function ReportsScreen({ navigation, route }: any) {
         'projects',
         'partnerApplications',
         'volunteerJoinRecords',
-      ]);
+      ], false, false /* reports */);
       setProjects(snapshot.projects);
       setPartnerApplications(snapshot.partnerApplications || []);
       setVolunteerProfileId(null);
@@ -547,7 +571,7 @@ export default function ReportsScreen({ navigation, route }: any) {
     setVolunteerTimeLogs([]);
     setVolunteerJoinRecords([]);
     setPartnerApplications([]);
-    const allProjects = await getAllProjects();
+    const allProjects = await getAllProjects(false /* reports don't need images */);
     setProjects(allProjects);
     return allProjects;
   }, [user]);
@@ -603,13 +627,11 @@ export default function ReportsScreen({ navigation, route }: any) {
       }
 
       setReports(
-        rawReports
-          .map(report => normalizeImpactHubReport(report, allProjects))
-          .filter(shouldDisplayReport)
-          .sort(
-            (left, right) =>
-              new Date(right.submittedAt).getTime() - new Date(left.submittedAt).getTime()
-          )
+        dedupeVolunteerReports(
+          rawReports
+            .map(report => normalizeImpactHubReport(report, allProjects))
+            .filter(shouldDisplayReport)
+        )
       );
       hasLoadedReportsRef.current = true;
     } catch (error) {

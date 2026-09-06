@@ -39,10 +39,7 @@ except ImportError:
     )
 
 
-DEFAULT_OLD_DB_URL = (
-    "postgresql://postgres.oshkcfyytdzojswnrbhu:CAPSTONE_ISCAP1"
-    "@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres?sslmode=require"
-)
+DEFAULT_OLD_DB_URL = ""
 
 COLLECTION_KEYS = [
     "users",
@@ -63,7 +60,18 @@ COLLECTION_KEYS = [
 ]
 
 DERIVED_COLLECTION_KEYS = ["skills", "tasks"]
-DIRECT_TABLES = ["messages", "project_group_messages"]
+DIRECT_TABLES = ["messages", "project_group_messages", "event_email_reminders"]
+
+RUNTIME_SUPPORT_TABLE_DDL = """
+create table if not exists public.event_email_reminders (
+  reminder_id text primary key,
+  event_id text not null,
+  volunteer_id text not null,
+  volunteer_email text not null,
+  reminder_type text not null,
+  sent_at timestamptz not null
+)
+"""
 
 
 def load_dotenv_file() -> None:
@@ -224,6 +232,7 @@ def ensure_target_schema(connection: Any) -> None:
     with connection.cursor() as cursor:
         for statement in BASE_DDL:
             cursor.execute(statement)
+        cursor.execute(RUNTIME_SUPPORT_TABLE_DDL)
     connection.commit()
 
 
@@ -269,7 +278,9 @@ def migrate_direct_table(source: Any, target: Any, table_name: str) -> tuple[int
 def main() -> None:
     load_dotenv_file()
 
-    old_db_url = os.getenv("OLD_SUPABASE_DB_URL", DEFAULT_OLD_DB_URL)
+    old_db_url = os.getenv("OLD_SUPABASE_DB_URL", DEFAULT_OLD_DB_URL).strip()
+    if not old_db_url:
+        raise RuntimeError("OLD_SUPABASE_DB_URL is not set. The source database must be supplied explicitly for a migration.")
     new_db_url = os.getenv("SUPABASE_DB_URL", "").strip()
     if not new_db_url:
         raise RuntimeError("SUPABASE_DB_URL is not set.")

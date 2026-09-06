@@ -84,10 +84,21 @@ export default function VolunteerNavigator() {
     };
   }, [user?.id]);
 
-  const handleNotificationsSeen = React.useCallback(async () => {
+  const handleNotificationClick = React.useCallback((item: { type?: string; data?: { id?: string } }) => {
+    if (item.type !== 'message' || !item.data?.id) return;
+    const messageId = item.data.id;
+    setUnreadMessages(current => current.filter(message => message.id !== messageId));
+    setMessageUnreadCount(current => Math.max(0, current - 1));
+    void markMessageAsRead(messageId).catch(() => undefined);
+  }, []);
+
+  const handleMessagesTabPress = React.useCallback(() => {
     if (!user?.id || unreadMessages.length === 0) return;
-    await Promise.all(
-      unreadMessages.map((msg) => markMessageAsRead(msg.id).catch(() => undefined))
+    const messagesToMark = unreadMessages;
+    setUnreadMessages([]);
+    setMessageUnreadCount(0);
+    void Promise.all(
+      messagesToMark.map((msg) => markMessageAsRead(msg.id).catch(() => undefined))
     );
   }, [unreadMessages, user?.id]);
 
@@ -102,7 +113,7 @@ export default function VolunteerNavigator() {
             userId={user?.id}
             notificationCount={unreadMessages.length}
             unreadMessages={unreadMessages}
-            onNotificationOpen={handleNotificationsSeen}
+            onNotificationClick={handleNotificationClick}
           />
         ),
         tabBarIcon: ({ color, size }) => (
@@ -125,7 +136,12 @@ export default function VolunteerNavigator() {
       <Tab.Screen name="ProjectDetails" component={VolunteerProjectDetailsScreen} options={{ title: 'Project Details', tabBarButton: () => null }} />
       <Tab.Screen name="Tasks" component={VolunteerTasksScreen} options={{ title: 'My Tasks' }} />
       <Tab.Screen name="Map" component={MappingScreen} options={{ title: 'Impact Map' }} />
-      <Tab.Screen name="Messages" component={CommunicationHubScreen} options={{ title: 'Messages', tabBarBadge: messageUnreadCount > 0 ? messageUnreadCount : undefined }} />
+      <Tab.Screen
+        name="Messages"
+        component={CommunicationHubScreen}
+        listeners={{ tabPress: handleMessagesTabPress }}
+        options={{ title: 'Messages', tabBarBadge: messageUnreadCount > 0 ? messageUnreadCount : undefined }}
+      />
       <Tab.Screen name="Reports" component={VolunteerReportsScreen} options={{ title: 'My Reports' }} />
       <Tab.Screen name="Profile" component={ProfileScreen} options={{ title: 'My Profile' }} />
     </Tab.Navigator>

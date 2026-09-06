@@ -110,6 +110,13 @@ type AdminNotificationItem = {
   icon: keyof typeof MaterialIcons.glyphMap;
   route: keyof AdminTabParamList;
   params?: any;
+  data?: any;
+};
+
+type AdminNotificationReference = {
+  id?: string;
+  type?: 'approval' | 'message' | 'report' | 'partner-application' | 'volunteer-request';
+  data?: any;
 };
 
 const SIDEBAR_GROUPS = [
@@ -227,27 +234,6 @@ function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle, on
         ))}
       </ScrollView>
 
-      {!collapsed && (
-        <TouchableOpacity
-          style={styles.sidebarHelpCard}
-          activeOpacity={0.85}
-          onPress={() => {
-            navigation.navigate('Messages', {
-              conversationUserId: 'admin-nvc',
-              navTimestamp: Date.now(),
-            });
-          }}
-        >
-          <View style={styles.sidebarHelpIcon}>
-            <MaterialIcons name="headset-mic" size={20} color="#16a34a" />
-          </View>
-          <View style={styles.sidebarHelpCopy}>
-            <Text style={styles.sidebarHelpTitle}>Need help?</Text>
-            <Text style={styles.sidebarHelpText}>Contact support</Text>
-          </View>
-          <MaterialIcons name="chevron-right" size={16} color="#64748b" />
-        </TouchableOpacity>
-      )}
     </View>
   );
 }
@@ -411,10 +397,11 @@ export default function AdminNavigator() {
 
   const handleNotificationsSeen = React.useCallback(async () => {
     if (!user?.id || unreadMessages.length === 0) return;
-    await Promise.all(
-      unreadMessages.map((msg) => markMessageAsRead(msg.id).catch(() => undefined))
-    );
+    const messagesToMark = unreadMessages;
     setUnreadMessages([]);
+    await Promise.all(
+      messagesToMark.map((msg) => markMessageAsRead(msg.id).catch(() => undefined))
+    );
   }, [unreadMessages, user?.id]);
 
   const markReportsSeen = React.useCallback(async () => {
@@ -435,6 +422,55 @@ export default function AdminNavigator() {
       )
     );
   }, [unreadReports, user?.id]);
+
+  const markNotificationItemSeen = React.useCallback(
+    (item: AdminNotificationReference) => {
+      const itemId = item.data?.id || item.id || '';
+      const notificationType = item.type ||
+        (item.id?.startsWith('user-') ? 'approval' :
+          item.id?.startsWith('message-') ? 'message' :
+            item.id?.startsWith('report-') ? 'report' :
+              item.id?.startsWith('partner-application-') ? 'partner-application' :
+                item.id?.startsWith('volunteer-request-') ? 'volunteer-request' : undefined);
+
+      if (!itemId || !notificationType) return;
+
+      if (notificationType === 'message') {
+        setUnreadMessages(current => current.filter(message => message.id !== itemId));
+        void markMessageAsRead(itemId).catch(() => undefined);
+        return;
+      }
+
+      if (notificationType === 'report') {
+        const report = item.data;
+        setSeenReportIds(current => new Set(current).add(itemId));
+        setUnreadReports(current => current.filter(unreadReport => unreadReport.id !== itemId));
+        if (report && user?.id) {
+          void savePartnerReport({
+            ...report,
+            viewedBy: Array.from(new Set([...(report.viewedBy || []), user.id])),
+          }).catch(() => undefined);
+        }
+        return;
+      }
+
+      if (notificationType === 'approval') {
+        setSeenPendingUserIds(current => new Set(current).add(itemId));
+        setPendingUsers(current => current.filter(pendingUser => pendingUser.id !== itemId));
+        return;
+      }
+
+      if (notificationType === 'partner-application') {
+        setSeenPartnerApplicationIds(current => new Set(current).add(itemId));
+        setPendingPartnerApplications(current => current.filter(application => application.id !== itemId));
+        return;
+      }
+
+      setSeenVolunteerRequestIds(current => new Set(current).add(itemId));
+      setPendingVolunteerRequests(current => current.filter(request => request.id !== itemId));
+    },
+    [user?.id]
+  );
 
   const markRouteNotificationsSeen = React.useCallback(
     (route: keyof AdminTabParamList) => {
@@ -482,13 +518,6 @@ export default function AdminNavigator() {
     ]
   );
 
-  const markAllNotificationsSeen = React.useCallback(() => {
-    void handleNotificationsSeen();
-    void markReportsSeen();
-    markRouteNotificationsSeen('Projects');
-    markRouteNotificationsSeen('Users');
-  }, [handleNotificationsSeen, markReportsSeen, markRouteNotificationsSeen]);
-
   const navigateFromTopBar = React.useCallback(
     (route: keyof AdminTabParamList, params?: any) => {
       markRouteNotificationsSeen(route);
@@ -498,6 +527,15 @@ export default function AdminNavigator() {
       (tabBarProps?.navigation as any)?.navigate(route, params);
     },
     [markRouteNotificationsSeen, tabBarProps?.navigation]
+  );
+
+  const navigateFromNotification = React.useCallback(
+    (item: AdminNotificationItem) => {
+      markNotificationItemSeen(item);
+      setIsNotificationPanelOpen(false);
+      tabBarProps?.navigation?.navigate(item.route, item.params);
+    },
+    [markNotificationItemSeen, tabBarProps?.navigation]
   );
 
   const notificationItems = React.useMemo<AdminNotificationItem[]>(() => {
@@ -515,6 +553,7 @@ export default function AdminNavigator() {
         timestamp: formatTimestamp(pendingUser.createdAt),
         icon: 'person-add',
         route: 'Users',
+        data: pendingUser,
       })),
       ...unreadMessages.map((message): AdminNotificationItem => ({
         id: `message-${message.id}`,
@@ -524,6 +563,7 @@ export default function AdminNavigator() {
         icon: 'mail',
         route: 'Messages',
         params: { conversationUserId: message.senderId || message.recipientId },
+        data: message,
       })),
       ...unreadReports.map((report): AdminNotificationItem => ({
         id: `report-${report.id}`,
@@ -533,6 +573,7 @@ export default function AdminNavigator() {
         icon: 'insert-chart',
         route: 'Reports',
         params: { projectId: report.projectId },
+        data: report,
       })),
       ...pendingPartnerApplications.map((application): AdminNotificationItem => ({
         id: `partner-application-${application.id}`,
@@ -545,6 +586,7 @@ export default function AdminNavigator() {
         icon: 'business',
         route: 'Projects',
         params: { projectId: application.projectId },
+        data: application,
       })),
       ...pendingVolunteerRequests.map((request): AdminNotificationItem => ({
         id: `volunteer-request-${request.id}`,
@@ -554,6 +596,7 @@ export default function AdminNavigator() {
         icon: 'volunteer-activism',
         route: 'Projects',
         params: { projectId: request.projectId },
+        data: request,
       })),
     ];
   }, [
@@ -648,7 +691,7 @@ export default function AdminNavigator() {
             unreadReports={unreadReports}
             pendingPartnerApplications={pendingPartnerApplications}
             pendingVolunteerRequests={pendingVolunteerRequests}
-            onNotificationOpen={markAllNotificationsSeen}
+            onNotificationClick={markNotificationItemSeen}
           />
         ),
         tabBarIcon: ({ color, size }) => <MaterialIcons name={getIconName(route.name as keyof AdminTabParamList)} size={size} color={color} />,
@@ -661,6 +704,7 @@ export default function AdminNavigator() {
       <Tab.Screen
         name="Projects"
         component={AdminProjectsScreen}
+        listeners={{ tabPress: () => markRouteNotificationsSeen('Projects') }}
         options={{
           title: 'Projects',
           tabBarBadge:
@@ -672,10 +716,25 @@ export default function AdminNavigator() {
       <Tab.Screen name="Partners" component={PartnerManagementScreen} options={{ title: 'Partner Management' }} />
       <Tab.Screen name="Volunteers" component={VolunteerManagementScreen} options={{ title: 'Volunteer Management' }} />
       <Tab.Screen name="Map" component={MappingScreen} options={{ title: 'Map' }} />
-      <Tab.Screen name="Messages" component={CommunicationHubScreen} options={{ title: 'Messages', tabBarBadge: messageUnreadCount > 0 ? messageUnreadCount : undefined }} />
-      <Tab.Screen name="Reports" component={AdminReportsScreen} options={{ title: 'Reports', tabBarBadge: reportNotificationCount > 0 ? reportNotificationCount : undefined }} />
+      <Tab.Screen
+        name="Messages"
+        component={CommunicationHubScreen}
+        listeners={{ tabPress: () => markRouteNotificationsSeen('Messages') }}
+        options={{ title: 'Messages', tabBarBadge: messageUnreadCount > 0 ? messageUnreadCount : undefined }}
+      />
+      <Tab.Screen
+        name="Reports"
+        component={AdminReportsScreen}
+        listeners={{ tabPress: () => markRouteNotificationsSeen('Reports') }}
+        options={{ title: 'Reports', tabBarBadge: reportNotificationCount > 0 ? reportNotificationCount : undefined }}
+      />
       <Tab.Screen name="Analytics" component={AdminAnalyticsScreen} options={{ title: 'Analytics' }} />
-      <Tab.Screen name="Users" component={UserManagementScreen} options={{ title: 'User Management', tabBarBadge: pendingUserApprovalCount > 0 ? pendingUserApprovalCount : undefined }} />
+      <Tab.Screen
+        name="Users"
+        component={UserManagementScreen}
+        listeners={{ tabPress: () => markRouteNotificationsSeen('Users') }}
+        options={{ title: 'User Management', tabBarBadge: pendingUserApprovalCount > 0 ? pendingUserApprovalCount : undefined }}
+      />
       <Tab.Screen name="Profile" component={ProfileScreen} options={{ title: 'Admin Profile' }} />
       <Tab.Screen name="Settings" component={SystemSettingsScreen} options={{ title: 'System Settings' }} />
     </Tab.Navigator>
@@ -699,7 +758,6 @@ export default function AdminNavigator() {
             activeOpacity={0.8}
             onPress={() => {
               setIsNotificationPanelOpen(true);
-              markAllNotificationsSeen();
             }}
           >
             <MaterialIcons
@@ -856,7 +914,7 @@ export default function AdminNavigator() {
                   <TouchableOpacity
                     key={item.id}
                     style={styles.topPanelItem}
-                    onPress={() => navigateFromTopBar(item.route, item.params)}
+                    onPress={() => navigateFromNotification(item)}
                     activeOpacity={0.75}
                   >
                     <View style={styles.topPanelItemIcon}>
@@ -1134,10 +1192,5 @@ const styles = StyleSheet.create({
   sidebarSubmenu: { marginLeft: 28, marginBottom: 8, gap: 4 },
   sidebarSubmenuItem: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, paddingHorizontal: 10, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.45)' },
   sidebarSubmenuText: { fontSize: 13, color: '#15803d', fontWeight: '700' },
-  sidebarHelpCard: { marginHorizontal: 12, marginBottom: 24, padding: 12, borderRadius: 10, backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#e2e8f0', flexDirection: 'row', alignItems: 'center', gap: 10 },
-  sidebarHelpIcon: { width: 32, height: 32, borderRadius: 6, backgroundColor: '#f0fdf4', alignItems: 'center', justifyContent: 'center' },
-  sidebarHelpCopy: { flex: 1 },
-  sidebarHelpTitle: { fontSize: 12, fontWeight: '800', color: '#1e293b' },
-  sidebarHelpText: { marginTop: 2, fontSize: 10, color: '#64748b' },
   sidebarCopyright: { marginHorizontal: 12, marginBottom: 28, fontSize: 12, color: '#75839a' },
 });

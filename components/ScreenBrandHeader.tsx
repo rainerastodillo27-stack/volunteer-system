@@ -36,8 +36,7 @@ type ScreenBrandHeaderProps = {
   pendingPartnerApplications?: PartnerProjectApplication[];
   pendingVolunteerRequests?: Array<VolunteerProjectMatch & { volunteerName?: string; projectTitle?: string }>;
   onNotificationDismiss?: () => void;
-  onNotificationOpen?: () => void;
-  onNotificationClick?: (item: NotificationItemType) => void;
+  onNotificationClick?: (item: NotificationItemType) => void | Promise<void>;
   navigation?: any;
   userId?: string;
 };
@@ -61,7 +60,6 @@ export default function ScreenBrandHeader({
   pendingPartnerApplications = [],
   pendingVolunteerRequests = [],
   onNotificationDismiss,
-  onNotificationOpen,
   onNotificationClick,
   navigation,
   userId,
@@ -80,7 +78,6 @@ export default function ScreenBrandHeader({
 
   const handleOpenNotificationModal = () => {
     setShowNotificationModal(true);
-    onNotificationOpen?.();
   };
 
   const formatTimestamp = (value: string) => {
@@ -160,6 +157,10 @@ export default function ScreenBrandHeader({
   };
 
   const handleNotificationClick = (item: NotificationItemType) => {
+    // A notification is considered checked only when the user selects it.
+    // Opening the bell or dismissing the panel must leave all items unread.
+    void onNotificationClick?.(item);
+
     if (navigation) {
       switch (item.type) {
         case 'approval':
@@ -188,7 +189,6 @@ export default function ScreenBrandHeader({
       }
     }
 
-    onNotificationClick?.(item);
     handleDismissNotification();
   };
 

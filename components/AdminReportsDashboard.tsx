@@ -609,8 +609,9 @@ export default function AdminReportsDashboard({
       <html>
         <head>
           <title>Admin Reports Table</title>
+          <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@300;400;500;600;700;800&display=swap" />
           <style>
-            body { font-family: Arial, sans-serif; padding: 24px; color: #0f172a; }
+            body { font-family: 'Nunito', sans-serif; padding: 24px; color: #0f172a; }
             h1 { margin-bottom: 8px; }
             p { margin-top: 0; margin-bottom: 20px; color: #475569; }
             table { width: 100%; border-collapse: collapse; }

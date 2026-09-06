@@ -1,6 +1,8 @@
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { Linking, Platform } from 'react-native';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
 import { compressImage } from './imageCompression';
 
 // Safe Platform accessor for web environments
@@ -37,6 +39,16 @@ function buildUnsupportedFileError(fileNameOrMime: string): Error {
   );
 }
 const DATA_URI_PATTERN = /^data:([^;,]+)(;base64)?,/i;
+
+// Keep browser-selected images consistent with native uploads. Compression is
+// best-effort so a picker still succeeds if the browser cannot use canvas.
+async function compressPickedImageDataUri(dataUri: string): Promise<string> {
+  try {
+    return (await compressImage(dataUri)) || dataUri;
+  } catch {
+    return dataUri;
+  }
+}
 
 // Returns true when the provided string can be rendered as an image preview.
 export function isImageMediaUri(value?: string | null): boolean {
@@ -75,7 +87,7 @@ export function getAttachmentUris(
 
 // Builds a short admin-friendly attachment label from a URI or data URI.
 export function getAttachmentLabel(value?: string | null): string {
-  const normalizedValue = (value || '').trim();
+  const normalizedValue = typeof value === 'string' ? value.trim() : '';
   if (!normalizedValue) {
     return 'Attachment';
   }
@@ -101,24 +113,167 @@ export function getAttachmentLabel(value?: string | null): string {
 
 // Opens local, remote, or data URI attachments in the most compatible way available.
 export async function openAttachmentUri(uri: string): Promise<void> {
-  const normalizedUri = uri.trim();
+  const normalizedUri = typeof uri === 'string' ? uri.trim() : '';
   if (!normalizedUri) {
     throw new Error('Attachment URI is empty.');
   }
 
   if (getPlatformOS() === 'web' && typeof window !== 'undefined') {
-    const newWindow = window.open(normalizedUri, '_blank', 'noopener,noreferrer');
-    if (!newWindow && typeof document !== 'undefined') {
-      const link = document.createElement('a');
-      link.href = normalizedUri;
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      link.click();
+    let objectUrl: string | null = null;
+    let attachmentWindow: Window | null = null;
+
+    try {
+      // Open a blank tab during the click gesture first. This avoids popup blockers
+      // when a data URI needs to be converted into a browser-friendly Blob URL.
+      if (normalizedUri.startsWith('data:')) {
+        attachmentWindow = window.open('about:blank', '_blank');
+
+        if (typeof fetch === 'function' && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+          const response = await fetch(normalizedUri);
+          if (!response.ok) {
+            throw new Error('The document data could not be read.');
+          }
+
+          objectUrl = URL.createObjectURL(await response.blob());
+        }
+      }
+
+      const targetUri = objectUrl || normalizedUri;
+      if (attachmentWindow && !attachmentWindow.closed) {
+        attachmentWindow.location.href = targetUri;
+      } else {
+        const newWindow = window.open(targetUri, '_blank', 'noopener,noreferrer');
+        if (!newWindow && typeof document !== 'undefined') {
+          const link = document.createElement('a');
+          link.href = targetUri;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          link.click();
+        }
+      }
+
+      if (objectUrl) {
+        window.setTimeout(() => URL.revokeObjectURL(objectUrl as string), 60_000);
+      }
+    } catch (error) {
+      if (attachmentWindow && !attachmentWindow.closed) {
+        attachmentWindow.close();
+      }
+
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+
+      throw error instanceof Error ? error : new Error('Unable to open attachment.');
     }
+
     return;
   }
 
   await Linking.openURL(normalizedUri);
+}
+
+function sanitizeDownloadFilename(filename: string, uri: string): string {
+  const fallbackName = getAttachmentLabel(uri) || 'attachment';
+  const baseName = String(filename || fallbackName)
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, '-') || 'attachment';
+
+  if (baseName.includes('.')) {
+    return baseName;
+  }
+
+  const mimeMatch = uri.match(/^data:([^;,]+)/i);
+  const mimeExtension = mimeMatch?.[1]?.split('/')[1]?.split('+')[0];
+  const uriExtension = uri.split('?')[0].split('#')[0].split('.').pop();
+  const extension = mimeExtension || (uriExtension && uriExtension.length <= 5 ? uriExtension : 'bin');
+  return `${baseName}.${extension}`;
+}
+
+function getMimeType(filename: string): string {
+  const extension = filename.split('.').pop()?.toLowerCase();
+  if (extension === 'png') return 'image/png';
+  if (extension === 'jpg' || extension === 'jpeg') return 'image/jpeg';
+  if (extension === 'gif') return 'image/gif';
+  if (extension === 'webp') return 'image/webp';
+  if (extension === 'pdf') return 'application/pdf';
+  return 'application/octet-stream';
+}
+
+// Downloads a photo/document from a message or proposal attachment. On web
+// this uses the browser download flow; on native it saves to the app cache and
+// opens the platform share/save sheet.
+export async function downloadAttachmentUri(uri: string, filename?: string): Promise<void> {
+  const normalizedUri = typeof uri === 'string' ? uri.trim() : '';
+  if (!normalizedUri) {
+    throw new Error('Attachment URI is empty.');
+  }
+
+  const safeFilename = sanitizeDownloadFilename(filename || '', normalizedUri);
+
+  if (Platform.OS === 'web' && typeof document !== 'undefined') {
+    let downloadUri = normalizedUri;
+    let objectUrl: string | null = null;
+
+    try {
+      if (typeof fetch === 'function' && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+        const response = await fetch(normalizedUri);
+        if (response.ok) {
+          objectUrl = URL.createObjectURL(await response.blob());
+          downloadUri = objectUrl;
+        }
+      }
+    } catch {
+      // Cross-origin files may block fetch; the anchor fallback below still
+      // works for servers that expose a downloadable URL.
+    }
+
+    const link = document.createElement('a');
+    link.href = downloadUri;
+    link.download = safeFilename;
+    link.rel = 'noopener';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    if (objectUrl) {
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl as string), 60_000);
+    }
+    return;
+  }
+
+  let localUri = normalizedUri;
+  const cacheDirectory = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+  if (!cacheDirectory) {
+    throw new Error('The device storage directory is unavailable.');
+  }
+
+  if (normalizedUri.startsWith('data:')) {
+    const separatorIndex = normalizedUri.indexOf(',');
+    const header = separatorIndex >= 0 ? normalizedUri.slice(0, separatorIndex) : '';
+    const payload = separatorIndex >= 0 ? normalizedUri.slice(separatorIndex + 1) : '';
+    if (!header.includes(';base64')) {
+      throw new Error('This attachment format cannot be saved on this device.');
+    }
+    localUri = `${cacheDirectory}${safeFilename}`;
+    await FileSystem.writeAsStringAsync(localUri, payload, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+  } else if (/^https?:\/\//i.test(normalizedUri)) {
+    localUri = `${cacheDirectory}${safeFilename}`;
+    const result = await FileSystem.downloadAsync(normalizedUri, localUri);
+    localUri = result.uri;
+  }
+
+  if (await Sharing.isAvailableAsync()) {
+    await Sharing.shareAsync(localUri, {
+      mimeType: getMimeType(safeFilename),
+      dialogTitle: `Save ${safeFilename}`,
+    });
+    return;
+  }
+
+  await Linking.openURL(localUri);
 }
 
 // Returns the best available image/media URI from a primary field plus attachments.
@@ -148,8 +303,14 @@ export async function pickImageFromDevice(): Promise<string | null> {
           return;
         }
         const reader = new FileReader();
-        reader.onload = (event: any) => {
-          resolve(event.target.result);
+        reader.onload = async (event: any) => {
+          const imageDataUri = String(event.target?.result || '');
+          if (!imageDataUri) {
+            resolve(null);
+            return;
+          }
+
+          resolve(await compressPickedImageDataUri(imageDataUri));
         };
         reader.onerror = () => {
           resolve(null);
@@ -214,8 +375,8 @@ export async function pickAttendancePhotoFromDevice(): Promise<string | null> {
         }
 
         const reader = new FileReader();
-        reader.onload = (event: any) => {
-          const dataUri: string = event.target.result;
+        reader.onload = async (event: any) => {
+          const dataUri = String(event.target?.result || '');
 
           // Final safety check: the data URI prefix must be an image MIME type.
           if (!dataUri.startsWith('data:image/')) {
@@ -223,7 +384,7 @@ export async function pickAttendancePhotoFromDevice(): Promise<string | null> {
             return;
           }
 
-          resolve(dataUri);
+          resolve(await compressPickedImageDataUri(dataUri));
         };
         reader.onerror = () => {
           reject(new Error('Failed to read the selected file. Please try again.'));
@@ -277,43 +438,23 @@ export async function pickAttendancePhotoFromDevice(): Promise<string | null> {
 
 // Opens the device file picker for documents and returns a persistable file URI/data URI.
 export async function pickDocumentFromDevice(): Promise<string | null> {
-  if (Platform.OS === 'web') {
-    return new Promise((resolve) => {
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = '*/*';
-      input.onchange = (e: any) => {
-        const file = e.target.files?.[0];
-        if (!file) {
-          resolve(null);
-          return;
-        }
-        const reader = new FileReader();
-        reader.onload = (event: any) => {
-          resolve(event.target.result);
-        };
-        reader.onerror = () => {
-          resolve(null);
-        };
-        reader.readAsDataURL(file);
-      };
-      input.click();
-    });
-  }
-
   try {
     const result = await DocumentPicker.getDocumentAsync({
       type: '*/*',
       copyToCacheDirectory: true,
+      base64: true,
     });
 
     if (result.canceled || !result.assets || result.assets.length === 0) {
       return null;
     }
 
-    return result.assets[0].uri;
+    const asset = result.assets[0];
+    // On web, base64 is a data URI that can be saved with the project/event.
+    // On native, the cache URI is the persistable document reference.
+    return asset.base64 || asset.uri || null;
   } catch (error) {
     console.error('Error picking document:', error);
-    return null;
+    throw error;
   }
 }

@@ -68,6 +68,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   compactDashboard: false,
   approvalConfirmations: true,
   showProgramContext: true,
+  themeMode: 'light',
   startupScreen: 'Dashboard',
   customBackendUrl: '',
 };
@@ -113,8 +114,11 @@ const API_REQUEST_RETRY_BASE_MS = 300;
 const API_REQUEST_RETRY_MAX_MS = 2000;
 const SHARED_STORAGE_CACHE_TTL_MS = 600000;
 const PROJECTS_SNAPSHOT_CACHE_TTL_MS = 120000; // Increased from 1m to 2m
-const MESSAGES_CACHE_TTL_MS = 3000; // 3s — Firestore handles real-time; short TTL prevents stale proposal cards
-const CONVERSATION_CACHE_TTL_MS = 3000; // 3s — same reason
+// Direct-message writes invalidate these caches and arrive over WebSocket, so
+// caching for a short window removes repeated network/database reads without
+// sacrificing real-time chat updates.
+const MESSAGES_CACHE_TTL_MS = 30000;
+const CONVERSATION_CACHE_TTL_MS = 30000;
 const STORAGE_CHANGE_POLL_INTERVAL_MS = 5000; // Increased from 3s to 5s
 const STORAGE_CHANGE_DEBOUNCE_MS = 800; // Increased from 500ms
 const STORAGE_CHANGE_CALLBACK_COOLDOWN_MS = 1500; // Increased from 1s
@@ -128,9 +132,12 @@ const NEGROS_OCCIDENTAL_BOUNDS = {
 let apiReadyConfirmedAt = 0;
 let apiReadyCheckPromise: Promise<void> | null = null;
 const inFlightJsonRequests = new Map<string, Promise<unknown>>();
+const inFlightStorageItemRequests = new Map<string, Promise<unknown>>();
+const inFlightStorageBatchRequests = new Map<string, Promise<Record<string, unknown | null>>>();
 const projectsSnapshotCache = new Map<string, { data: unknown; timestamp: number }>();
-// Message-specific caches — short TTL, invalidated on send/receive via WebSocket
+// Message-specific caches, invalidated on send/receive via WebSocket.
 const messagesForUserCache = new Map<string, { data: Message[]; timestamp: number }>();
+const messageSummaryCache = new Map<string, { data: Message[]; timestamp: number }>();
 const conversationCache = new Map<string, { data: Message[]; timestamp: number }>();
 const groupMessagesCache = new Map<string, { data: ProjectGroupMessage[]; timestamp: number }>();
 
@@ -963,13 +970,31 @@ async function waitForApiReady(): Promise<void> {
   }
 }
 
-async function fetchRemoteStorageItem<T>(key: string): Promise<T | null> {
-  const response = await fetchApiResponse(`/storage/${encodeURIComponent(key)}`);
-  const payload = (await response.json()) as { value: T | null };
-  return payload.value ?? null;
+async function fetchRemoteStorageItem<T>(key: string, includeImages: boolean = true): Promise<T | null> {
+  const requestKey = `${key}:${includeImages ? 'images' : 'no-images'}`;
+  const existingRequest = inFlightStorageItemRequests.get(requestKey);
+  if (existingRequest) {
+    return existingRequest as Promise<T | null>;
+  }
+
+  const request = (async () => {
+    const url = `/storage/${encodeURIComponent(key)}${!includeImages ? '?include_images=false' : ''}`;
+    const response = await fetchApiResponse(url);
+    const payload = (await response.json()) as { value: T | null };
+    return payload.value ?? null;
+  })();
+  inFlightStorageItemRequests.set(requestKey, request);
+
+  try {
+    return await request;
+  } finally {
+    if (inFlightStorageItemRequests.get(requestKey) === request) {
+      inFlightStorageItemRequests.delete(requestKey);
+    }
+  }
 }
 
-async function fetchRemoteStorageItems(
+async function fetchRemoteStorageItemsUncached(
   keys: string[]
 ): Promise<Record<string, unknown | null>> {
   // Optimization: If fetching the exact admin dashboard key set, use the dedicated endpoint
@@ -1016,6 +1041,28 @@ async function fetchRemoteStorageItems(
   });
   const payload = (await response.json()) as { items?: Record<string, unknown | null> };
   return payload.items || {};
+}
+
+// Coalesce simultaneous requests for the same collection set. Multiple mounted
+// screens can request the same data during startup; one backend query is enough.
+async function fetchRemoteStorageItems(
+  keys: string[]
+): Promise<Record<string, unknown | null>> {
+  const requestKey = [...new Set(keys)].sort().join('|');
+  const existingRequest = inFlightStorageBatchRequests.get(requestKey);
+  if (existingRequest) {
+    return existingRequest;
+  }
+
+  const request = fetchRemoteStorageItemsUncached(keys);
+  inFlightStorageBatchRequests.set(requestKey, request);
+  try {
+    return await request;
+  } finally {
+    if (inFlightStorageBatchRequests.get(requestKey) === request) {
+      inFlightStorageBatchRequests.delete(requestKey);
+    }
+  }
 }
 
 async function getApiErrorMessage(response: Response, fallback: string): Promise<string> {
@@ -1301,8 +1348,53 @@ function getFreshSharedStorageCacheValue<T>(
 }
 
 function setSharedStorageCacheValue<T>(key: string, value: T | null): void {
-  memoryStorageCache.set(key, sanitizeStorageCacheValue(key, value));
+  const safeValue = sanitizeStorageCacheValue(key, value);
+  memoryStorageCache.set(key, safeValue);
   sharedStorageCacheTimestamps.set(key, Date.now());
+
+  // Asynchronously persist to local cache (AsyncStorage on native, localStorage on web)
+  // so future app launches hit local storage in <50ms.
+  if (safeValue !== null && !isLocalOnlyStorageKey(key)) {
+    void setLocalStorageItem(key, safeValue);
+  }
+}
+
+// Writes one record without fetching and replacing the entire collection.
+// The backend returns its canonical normalized record for the local cache.
+async function saveRemoteStorageRecord<T extends { id: string }>(
+  key: string,
+  record: T
+): Promise<T> {
+  const response = await fetchApiResponse(
+    `/storage/${encodeURIComponent(key)}/items/${encodeURIComponent(record.id)}`,
+    {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(record),
+    }
+  );
+  const payload = (await response.json()) as { item?: T | null };
+  return payload.item || record;
+}
+
+// Replaces or appends a record only when a complete collection is already cached.
+// If it is not cached, the realtime subscriber will fetch the authoritative list.
+function upsertCachedStorageRecord<T extends { id: string }>(key: string, record: T): void {
+  const cached = memoryStorageCache.get(key);
+  if (!Array.isArray(cached)) {
+    return;
+  }
+
+  const nextValue = [...(cached as T[])];
+  const existingIndex = nextValue.findIndex(item => item.id === record.id);
+  if (existingIndex >= 0) {
+    nextValue[existingIndex] = record;
+  } else {
+    nextValue.push(record);
+  }
+  setSharedStorageCacheValue(key, nextValue);
 }
 
 function invalidateSharedStorageCache(keys?: string[]): void {
@@ -1350,7 +1442,7 @@ function triggerBackgroundStorageRefresh(keys: string[]): void {
 }
 
 // Returns cached data immediately (if available) and refreshes in the background.
-export async function getStorageItemFast<T>(key: string): Promise<T | null> {
+export async function getStorageItemFast<T>(key: string, includeImages: boolean = true): Promise<T | null> {
   try {
     // OPTIMIZED: Return cached data immediately on both Web and Mobile
     const cached = await getLocalStorageItem<T>(key);
@@ -1366,7 +1458,7 @@ export async function getStorageItemFast<T>(key: string): Promise<T | null> {
     }
 
     // No cache available, fetch from server
-    const value = await getStorageItem<T>(key);
+    const value = await getStorageItem<T>(key, includeImages);
     return value;
   } catch {
     // On error, try to return cached data even if stale
@@ -1374,7 +1466,7 @@ export async function getStorageItemFast<T>(key: string): Promise<T | null> {
     if (cached !== null) {
       return cached;
     }
-    return getStorageItem<T>(key);
+    return getStorageItem<T>(key, includeImages);
   }
 }
 
@@ -1458,7 +1550,10 @@ export async function getStorageItemsFast(keys: string[]): Promise<Record<string
     const cachedAt = sharedStorageCacheTimestamps.get(key);
     const isFresh = cachedAt !== undefined && Date.now() - cachedAt <= SHARED_STORAGE_CACHE_TTL_MS;
 
-    if (cachedAt !== undefined) {
+    // A fresh cache is already safe to display. Refreshing it again here used
+    // to notify subscribers, which in turn scheduled another refresh and kept
+    // the app busy in a background request loop.
+    if (cached !== null && cachedAt !== undefined && !isFresh) {
       keysToRefresh.push(key);
     }
 
@@ -1536,7 +1631,7 @@ async function sendAccountApprovalEmailNotification(
     }
   }
 
-  await requestApiJson('/auth/approval-email', {
+  const response = await requestApiJson<{ success?: boolean; message?: string }>('/auth/approval-email', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -1548,6 +1643,10 @@ async function sendAccountApprovalEmailNotification(
       approvedByName,
     }),
   });
+
+  if (response.success === false) {
+    throw new Error(response.message || 'Approval email could not be sent.');
+  }
 }
 
 // Filters expected network and backend errors from real application exceptions.
@@ -1570,7 +1669,7 @@ function isExpectedRemoteStorageError(error: unknown): boolean {
 
 // Generic storage functions
 // Reads one storage value from the backend or local cache.
-export async function getStorageItem<T>(key: string): Promise<T | null> {
+export async function getStorageItem<T>(key: string, includeImages: boolean = true): Promise<T | null> {
   if (isLocalOnlyStorageKey(key)) {
     try {
       return await getLocalStorageItem<T>(key);
@@ -1582,7 +1681,7 @@ export async function getStorageItem<T>(key: string): Promise<T | null> {
 
   try {
     if (getPlatformOS() === 'web') {
-      const remoteValue = await fetchRemoteStorageItem<T>(key);
+      const remoteValue = await fetchRemoteStorageItem<T>(key, includeImages);
       setSharedStorageCacheValue(key, remoteValue);
       return remoteValue;
     }
@@ -1592,7 +1691,7 @@ export async function getStorageItem<T>(key: string): Promise<T | null> {
       return cachedValue.value;
     }
 
-    const remoteValue = await fetchRemoteStorageItem<T>(key);
+    const remoteValue = await fetchRemoteStorageItem<T>(key, includeImages);
     setSharedStorageCacheValue(key, remoteValue);
     return remoteValue;
   } catch (error) {
@@ -1682,6 +1781,36 @@ export async function getStorageItems(
     console.error(`Error reading shared storage batch from backend:`, error);
     throw error;
   }
+}
+
+// Loads only the collections needed to make the first screen usable.
+// This is intentionally a single cached batch instead of several collection calls.
+export async function getCriticalGlobalData(): Promise<{
+  projects: Project[];
+  volunteers: Volunteer[];
+  partners: Partner[];
+}> {
+  const items = await getStorageItemsFast([
+    STORAGE_KEYS.PROGRAMS,
+    STORAGE_KEYS.PROJECTS,
+    STORAGE_KEYS.EVENTS,
+    STORAGE_KEYS.VOLUNTEERS,
+    STORAGE_KEYS.PARTNERS,
+  ]);
+
+  const programs = (items[STORAGE_KEYS.PROGRAMS] as Project[] | null) || [];
+  const projects = (items[STORAGE_KEYS.PROJECTS] as Project[] | null) || [];
+  const events = (items[STORAGE_KEYS.EVENTS] as Project[] | null) || [];
+  const partners = ((items[STORAGE_KEYS.PARTNERS] as Partner[] | null) || [])
+    .map(normalizePartnerRecord)
+    .filter(partner => !partner.contactEmail?.toLowerCase().includes('eduindia.org'));
+
+  return {
+    projects: mergeProjectAndEventRecords([...programs, ...projects], events),
+    volunteers: ((items[STORAGE_KEYS.VOLUNTEERS] as Volunteer[] | null) || [])
+      .map(normalizeVolunteerRecord),
+    partners,
+  };
 }
 
 // Loads the combined data set required by the admin dashboard screen.
@@ -1780,38 +1909,35 @@ export async function getPartnerDashboardSnapshot(): Promise<{
   await ensurePartnerOwnershipLinks();
 
   // CORE LOAD: Essential data for partner dashboard (minimizes egress)
-  const coreItems = await getStorageItemsFast([
-    STORAGE_KEYS.USERS,
-    STORAGE_KEYS.PROJECTS,
-    STORAGE_KEYS.PROGRAMS,
-    STORAGE_KEYS.PROGRAM_TRACKS,
-    STORAGE_KEYS.EVENTS,
-    STORAGE_KEYS.PARTNERS,
-    STORAGE_KEYS.VOLUNTEERS,
-    STORAGE_KEYS.STATUS_UPDATES,
-    STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
-    STORAGE_KEYS.PARTNER_REPORTS,
-    STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
-  ]);
-
-  // SUPPLEMENTAL LOAD: Additional data needed for partner dashboard
-  // Load these to ensure they're available
-  let supplementalItems: Record<string, unknown | null> = {};
-  try {
-    supplementalItems = await getStorageItemsFast([
+  // Fetch dashboard and supplemental collections together so a cold screen load
+  // is limited by one batch instead of waiting for a second request wave.
+  const [coreItems, supplementalItems] = await Promise.all([
+    getStorageItemsFast([
+      STORAGE_KEYS.USERS,
+      STORAGE_KEYS.PROJECTS,
+      STORAGE_KEYS.PROGRAMS,
+      STORAGE_KEYS.PROGRAM_TRACKS,
+      STORAGE_KEYS.EVENTS,
+      STORAGE_KEYS.PARTNERS,
+      STORAGE_KEYS.VOLUNTEERS,
+      STORAGE_KEYS.STATUS_UPDATES,
+      STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
+      STORAGE_KEYS.PARTNER_REPORTS,
+      STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
+    ]),
+    getStorageItemsFast([
       STORAGE_KEYS.VOLUNTEER_MATCHES,
       STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
       STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
-    ]);
-  } catch (error) {
-    console.warn('Supplemental data failed to load:', error);
-    // Return empty arrays for failed supplemental data
-    supplementalItems = {
-      [STORAGE_KEYS.VOLUNTEER_MATCHES]: [],
-      [STORAGE_KEYS.VOLUNTEER_TIME_LOGS]: [],
-      [STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS]: [],
-    };
-  }
+    ]).catch(error => {
+      console.warn('Supplemental data failed to load:', error);
+      return {
+        [STORAGE_KEYS.VOLUNTEER_MATCHES]: [],
+        [STORAGE_KEYS.VOLUNTEER_TIME_LOGS]: [],
+        [STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS]: [],
+      };
+    }),
+  ]);
 
   const partners = ((coreItems[STORAGE_KEYS.PARTNERS] as Partner[] | null) || [])
     .filter(p => !p.contactEmail?.toLowerCase().includes('eduindia.org'));
@@ -1934,24 +2060,7 @@ export async function getDashboardTimelineSnapshot(): Promise<DashboardTimelineS
       STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
     ]);
 
-    // LAZY LOAD: Supplemental data in background, non-blocking
-    (async () => {
-      try {
-        await getStorageItemsFast([
-          STORAGE_KEYS.USERS,
-          STORAGE_KEYS.PARTNERS,
-          STORAGE_KEYS.VOLUNTEERS,
-          STORAGE_KEYS.STATUS_UPDATES,
-          STORAGE_KEYS.VOLUNTEER_MATCHES,
-          STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
-          STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
-          STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
-          STORAGE_KEYS.PARTNER_REPORTS,
-        ]);
-      } catch (error) {
-        console.warn('Supplemental timeline data failed to load (non-blocking):', error);
-      }
-    })();
+    // Supplemental data is loaded on demand by individual screens to avoid blocking initial render.
 
     const programs = (coreItems[STORAGE_KEYS.PROGRAMS] as Project[] | null) || [];
     const projects = mergeProjectAndEventRecords(
@@ -1982,7 +2091,8 @@ export async function getDashboardTimelineSnapshot(): Promise<DashboardTimelineS
 export async function getProjectsScreenSnapshot(
   user?: Pick<User, 'id' | 'role'> | null,
   fields?: string[],
-  forceRefresh: boolean = false
+  forceRefresh: boolean = false,
+  includeImages: boolean = true
 ): Promise<ProjectsScreenSnapshot> {
   const params = new URLSearchParams();
   if (user?.id) {
@@ -1994,8 +2104,12 @@ export async function getProjectsScreenSnapshot(
   if (fields && fields.length > 0) {
     params.set('fields', fields.join(','));
   }
+  if (!includeImages) {
+    params.set('include_images', 'false');
+  }
 
-  const cacheKey = `snapshot:${params.toString()}`;
+  // Cache key includes images flag so image-less and image-full snapshots are stored separately
+  const cacheKey = `snapshot:${includeImages ? '1' : '0'}:${params.toString()}`;
   const cached = projectsSnapshotCache.get(cacheKey);
   if (!forceRefresh && cached && Date.now() - cached.timestamp < PROJECTS_SNAPSHOT_CACHE_TTL_MS) {
     console.log(`[Data] ProjectsSnapshot cache hit (${cacheKey.slice(0, 40)}...)`);
@@ -2003,7 +2117,7 @@ export async function getProjectsScreenSnapshot(
   }
 
   const query = params.toString();
-  const timerLabel = `[Data] ProjectsSnapshot (${user?.role || 'unknown'})`;
+  const timerLabel = `[Data] ProjectsSnapshot (${user?.role || 'unknown'}, images=${includeImages})`;
   console.time(timerLabel);
   const snapshotStart = Date.now();
 
@@ -2104,10 +2218,8 @@ export async function saveAppSettings(settings: Partial<AppSettings>): Promise<v
 
 export async function getAllProgramTracks(): Promise<ProgramTrack[]> {
   // Programs are now stored ONLY in the programs table.
-  // Always fetch fresh from the network so deleted programs are never returned
-  // from a stale in-memory or localStorage cache.
-  // invalidateSharedStorageCache([STORAGE_KEYS.PROGRAMS]);
-  const allPrograms = (await getStorageItem<Project[]>(STORAGE_KEYS.PROGRAMS)) || [];
+  // Use the shared cache for the first paint and let the realtime listener refresh it.
+  const allPrograms = (await getStorageItemFast<Project[]>(STORAGE_KEYS.PROGRAMS)) || [];
 
   // Convert top-level programs to ProgramTrack format
   const programTracks: ProgramTrack[] = allPrograms
@@ -2132,8 +2244,8 @@ export async function getAllProgramTracks(): Promise<ProgramTrack[]> {
 }
 
 export async function saveProgram(program: ProgramTrack): Promise<void> {
-  // Programs are stored as Project records in the 'programs' collection
-  const allPrograms = (await getStorageItem<Project[]>(STORAGE_KEYS.PROGRAMS)) || [];
+  // Programs are stored as Project records in the 'programs' collection.
+  // Persist only this record so creation/editing does not wait for the whole collection.
   const now = new Date().toISOString();
   const programId = String(program.id || program.title).trim();
   const programFocusText = `${programId} ${program.title || ''}`.toLowerCase();
@@ -2182,19 +2294,11 @@ export async function saveProgram(program: ProgramTrack): Promise<void> {
     color: (program as any).color || '#6366f1',
   };
 
-  const existingIndex = allPrograms.findIndex(entry => entry.id === programId);
-  if (existingIndex >= 0) {
-    // Preserve original createdAt for updates
-    projectRecord.createdAt = allPrograms[existingIndex].createdAt;
-    allPrograms[existingIndex] = projectRecord;
-  } else {
-    allPrograms.push(projectRecord);
-  }
-
-  await setStorageItem(STORAGE_KEYS.PROGRAMS, allPrograms);
-  // Clear both shared and snapshot caches so mobile app sees changes immediately
+  const savedProgram = await saveRemoteStorageRecord(STORAGE_KEYS.PROGRAMS, projectRecord);
+  upsertCachedStorageRecord(STORAGE_KEYS.PROGRAMS, savedProgram);
   invalidateSharedStorageCache([STORAGE_KEYS.PROGRAM_TRACKS]);
   projectsSnapshotCache.clear();
+  notifyStorageChanged([STORAGE_KEYS.PROGRAMS]);
 }
 
 export async function deleteProgram(programId: string): Promise<void> {
@@ -2230,7 +2334,9 @@ export async function deleteProgram(programId: string): Promise<void> {
     STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
   ];
   invalidateSharedStorageCache(changedKeys);
-  await Promise.all(changedKeys.map(key => deleteLocalStorageItem(key)));
+  void Promise.all(changedKeys.map(key => deleteLocalStorageItem(key))).catch(error => {
+    console.warn('[storage] Failed to clear one or more deleted-program cache entries:', error);
+  });
   projectsSnapshotCache.clear();
   notifyStorageChanged(changedKeys);
 }
@@ -2253,14 +2359,9 @@ export async function saveUser(user: User): Promise<void> {
     email: normalizedEmail,
     phone: normalizedPhone || undefined,
   };
-  const users = await getStorageItem<User[]>(STORAGE_KEYS.USERS) || [];
-  const existingIndex = users.findIndex(u => u.id === normalizedUser.id);
-  if (existingIndex >= 0) {
-    users[existingIndex] = normalizedUser;
-  } else {
-    users.push(normalizedUser);
-  }
-  await setStorageItem(STORAGE_KEYS.USERS, users);
+  const savedUser = await saveRemoteStorageRecord(STORAGE_KEYS.USERS, normalizedUser);
+  upsertCachedStorageRecord(STORAGE_KEYS.USERS, savedUser);
+  notifyStorageChanged([STORAGE_KEYS.USERS]);
 }
 
 // Validates DSWD accreditation numbers before partner applications are saved.
@@ -3201,59 +3302,42 @@ export async function getApprovedUsers(): Promise<User[]> {
 
 // Approves a pending user account.
 export async function approveUser(userId: string, adminId: string): Promise<User> {
-  const user = await getUser(userId);
-  if (!user) {
-    throw new Error('User not found.');
+  const payload = await requestApiJson<{
+    user?: User | null;
+  }>(
+    `/auth/users/${encodeURIComponent(userId)}/approve?admin_id=${encodeURIComponent(adminId)}`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ status: 'approved' }),
+    }
+  );
+
+  if (!payload.user) {
+    throw new Error('User approval did not complete.');
   }
 
-  const approvedAt = new Date().toISOString();
-  const updatedUser: User = {
-    ...user,
-    approvalStatus: 'approved',
-    approvedBy: adminId,
-    approvedAt,
-    rejectionReason: undefined,
-  };
+  upsertCachedStorageRecord(STORAGE_KEYS.USERS, payload.user);
+  invalidateSharedStorageCache([
+    STORAGE_KEYS.VOLUNTEERS,
+    STORAGE_KEYS.PARTNERS,
+    STORAGE_KEYS.MESSAGES,
+  ]);
+  notifyStorageChanged([
+    STORAGE_KEYS.USERS,
+    STORAGE_KEYS.VOLUNTEERS,
+    STORAGE_KEYS.PARTNERS,
+    STORAGE_KEYS.MESSAGES,
+  ]);
 
-  await saveUser(updatedUser);
+  // Email delivery must not hold the approval response open.
+  void sendAccountApprovalEmailNotification(payload.user, adminId).catch(error => {
+    console.error('[ApprovalEmail] Failed to send approval email:', error);
+  });
 
-  if (updatedUser.role === 'volunteer') {
-    const linkedVolunteers = await getLinkedVolunteersForUserAccount(updatedUser);
-    await Promise.all(
-      linkedVolunteers.map(volunteer =>
-        saveVolunteer({
-          ...volunteer,
-          registrationStatus: 'Approved',
-          reviewedBy: adminId,
-          reviewedAt: approvedAt,
-          credentialsUnlockedAt: approvedAt,
-        })
-      )
-    );
-  }
-
-  if (updatedUser.role === 'partner') {
-    const linkedPartners = await getLinkedPartnerRecordsForUserAccount(updatedUser);
-    await Promise.all(
-      linkedPartners.map(partner =>
-        savePartner({
-          ...partner,
-          status: 'Approved',
-          validatedBy: adminId,
-          validatedAt: approvedAt,
-          credentialsUnlockedAt: approvedAt,
-        })
-      )
-    );
-  }
-
-  try {
-    await sendAccountApprovalEmailNotification(updatedUser, adminId);
-  } catch (error) {
-    console.error('[ApprovalEmail] Failed to send account approval email:', error);
-  }
-
-  return updatedUser;
+  return payload.user;
 }
 
 // Rejects a pending user account with an optional reason.
@@ -3347,7 +3431,14 @@ export async function sendRejectionEmail(
 
     if (response.ok) {
       const data = await response.json();
-      return { success: true, message: data.message || 'Rejection email sent successfully.' };
+      return {
+        success: data.success !== false,
+        message: data.message || (
+          data.success === false
+            ? 'Rejection email could not be sent.'
+            : 'Rejection email sent successfully.'
+        ),
+      };
     } else {
       console.warn('[EMAIL] Rejection email endpoint returned non-OK:', response.status);
       return { success: false, message: `Server returned ${response.status}` };
@@ -3368,9 +3459,7 @@ export async function savePartner(partner: Partner): Promise<void> {
     throw new Error('Use a valid 11-digit Philippine mobile number for the partner record.');
   }
 
-  const partners = await getStorageItem<Partner[]>(STORAGE_KEYS.PARTNERS) || [];
-  const existingIndex = partners.findIndex(p => p.id === partner.id);
-  const existingPartner = existingIndex >= 0 ? partners[existingIndex] : null;
+  const existingPartner = await getPartner(partner.id);
 
   let ownerUserId = partner.ownerUserId || existingPartner?.ownerUserId;
   if (!ownerUserId && partner.contactEmail?.trim()) {
@@ -3390,12 +3479,9 @@ export async function savePartner(partner: Partner): Promise<void> {
     } as Partner),
   };
 
-  if (existingIndex >= 0) {
-    partners[existingIndex] = normalizedPartner;
-  } else {
-    partners.push(normalizedPartner);
-  }
-  await setStorageItem(STORAGE_KEYS.PARTNERS, partners);
+  const savedPartner = await saveRemoteStorageRecord(STORAGE_KEYS.PARTNERS, normalizedPartner);
+  upsertCachedStorageRecord(STORAGE_KEYS.PARTNERS, savedPartner);
+  notifyStorageChanged([STORAGE_KEYS.PARTNERS]);
 }
 
 // Looks up a single partner organization by id.
@@ -3599,41 +3685,25 @@ export async function deleteAdminPlanningItem(itemId: string): Promise<void> {
 // Project Storage
 // Inserts or updates a project or event record.
 export async function saveProject(project: Project): Promise<void> {
-  invalidateSharedStorageCache([STORAGE_KEYS.PROJECTS]);
-  const projects = await getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS) || [];
-  const existingIndex = projects.findIndex(p => p.id === project.id);
   const normalizedProject = normalizeProjectRecord({
     ...project,
     isEvent: false,
     skillsNeeded: normalizeProjectSkillsNeeded(project, project.internalTasks || []),
   });
-  if (existingIndex >= 0) {
-    projects[existingIndex] = normalizedProject;
-  } else {
-    projects.push(normalizedProject);
-  }
-  await setStorageItem(STORAGE_KEYS.PROJECTS, projects);
-  // Clear snapshot cache so mobile app sees changes immediately
+  const savedProject = await saveRemoteStorageRecord(STORAGE_KEYS.PROJECTS, normalizedProject);
+  upsertCachedStorageRecord(STORAGE_KEYS.PROJECTS, savedProject);
   projectsSnapshotCache.clear();
   notifyStorageChanged([STORAGE_KEYS.PROJECTS]);
 }
 
 // Inserts or updates an event record in the dedicated events collection.
 export async function saveEvent(event: Project): Promise<void> {
-  invalidateSharedStorageCache([STORAGE_KEYS.EVENTS]);
-  const events = await getStorageItem<Project[]>(STORAGE_KEYS.EVENTS) || [];
-  const existingIndex = events.findIndex(entry => entry.id === event.id);
   const normalizedEvent = normalizeEventRecord({
     ...event,
     skillsNeeded: normalizeProjectSkillsNeeded(event, event.internalTasks || []),
   });
-  if (existingIndex >= 0) {
-    events[existingIndex] = normalizedEvent;
-  } else {
-    events.push(normalizedEvent);
-  }
-  await setStorageItem(STORAGE_KEYS.EVENTS, events);
-  // Clear snapshot cache so mobile app sees changes immediately
+  const savedEvent = await saveRemoteStorageRecord(STORAGE_KEYS.EVENTS, normalizedEvent);
+  upsertCachedStorageRecord(STORAGE_KEYS.EVENTS, savedEvent);
   projectsSnapshotCache.clear();
   notifyStorageChanged([STORAGE_KEYS.EVENTS]);
 }
@@ -3865,11 +3935,11 @@ export async function getProject(id: string): Promise<Project | null> {
 }
 
 // Returns all projects and events from shared storage.
-export async function getAllProjects(): Promise<Project[]> {
+export async function getAllProjects(includeImages: boolean = true): Promise<Project[]> {
   const [programs, projects, events] = await Promise.all([
-    getStorageItemFast<Project[]>(STORAGE_KEYS.PROGRAMS),
-    getStorageItemFast<Project[]>(STORAGE_KEYS.PROJECTS),
-    getStorageItemFast<Project[]>(STORAGE_KEYS.EVENTS),
+    getStorageItemFast<Project[]>(STORAGE_KEYS.PROGRAMS, includeImages),
+    getStorageItemFast<Project[]>(STORAGE_KEYS.PROJECTS, includeImages),
+    getStorageItemFast<Project[]>(STORAGE_KEYS.EVENTS, includeImages),
   ]);
 
   return mergeProjectAndEventRecords(
@@ -3936,15 +4006,13 @@ export async function saveVolunteer(volunteer: Volunteer): Promise<void> {
     throw new Error('Use a valid Philippine mobile number for the volunteer profile.');
   }
 
-  const volunteers = await getStorageItem<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS) || [];
-  const existingIndex = volunteers.findIndex(v => v.id === volunteer.id);
   const normalizedVolunteer = normalizeVolunteerRecord(volunteer);
-  if (existingIndex >= 0) {
-    volunteers[existingIndex] = normalizedVolunteer;
-  } else {
-    volunteers.push(normalizedVolunteer);
-  }
-  await setStorageItem(STORAGE_KEYS.VOLUNTEERS, volunteers);
+  const savedVolunteer = await saveRemoteStorageRecord(
+    STORAGE_KEYS.VOLUNTEERS,
+    normalizedVolunteer
+  );
+  upsertCachedStorageRecord(STORAGE_KEYS.VOLUNTEERS, savedVolunteer);
+  notifyStorageChanged([STORAGE_KEYS.VOLUNTEERS]);
 }
 
 // Looks up a single volunteer profile by id.
@@ -4097,14 +4165,9 @@ export async function reviewVolunteerRegistration(
 // Volunteer Time Logs
 // Inserts or updates a volunteer time log entry.
 export async function saveVolunteerTimeLog(log: VolunteerTimeLog): Promise<void> {
-  const logs = await getStorageItem<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS) || [];
-  const existingIndex = logs.findIndex(l => l.id === log.id);
-  if (existingIndex >= 0) {
-    logs[existingIndex] = log;
-  } else {
-    logs.push(log);
-  }
-  await setStorageItem(STORAGE_KEYS.VOLUNTEER_TIME_LOGS, logs);
+  const savedLog = await saveRemoteStorageRecord(STORAGE_KEYS.VOLUNTEER_TIME_LOGS, log);
+  upsertCachedStorageRecord(STORAGE_KEYS.VOLUNTEER_TIME_LOGS, savedLog);
+  notifyStorageChanged([STORAGE_KEYS.VOLUNTEER_TIME_LOGS]);
 }
 
 // Returns all time log entries for one volunteer profile.
@@ -4126,23 +4189,24 @@ export async function setVolunteerAttendanceChecked(
   checked: boolean,
   checkedByUserId: string
 ): Promise<VolunteerTimeLog> {
-  const logs = (await getStorageItem<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS)) || [];
-  const existingLog = logs.find(log => log.id === logId);
-  if (!existingLog) {
-    throw new Error('Attendance log not found.');
+  const payload = await requestApiJson<{ log?: VolunteerTimeLog | null }>(
+    `/volunteer-time-logs/${encodeURIComponent(logId)}/attendance-check`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ checked, checkedByUserId }),
+    }
+  );
+
+  if (!payload.log) {
+    throw new Error('Attendance update did not complete.');
   }
 
-  const users = (await getStorageItem<User[]>(STORAGE_KEYS.USERS)) || [];
-  const checkedByUser = users.find(candidate => candidate.id === checkedByUserId);
-  const updatedLog: VolunteerTimeLog = {
-    ...existingLog,
-    attendanceCheckedAt: checked ? new Date().toISOString() : undefined,
-    attendanceCheckedBy: checked ? checkedByUserId : undefined,
-    attendanceCheckedByName: checked ? checkedByUser?.name || 'Field Officer' : undefined,
-  };
-
-  await saveVolunteerTimeLog(updatedLog);
-  return updatedLog;
+  upsertCachedStorageRecord(STORAGE_KEYS.VOLUNTEER_TIME_LOGS, payload.log);
+  notifyStorageChanged([STORAGE_KEYS.VOLUNTEER_TIME_LOGS]);
+  return payload.log;
 }
 
 // Starts a volunteer time log for the selected project.
@@ -4335,10 +4399,25 @@ export async function getMessagesForUser(userId: string): Promise<Message[]> {
     return cached.data;
   }
   const payload = await requestApiJson<{ messages?: Message[] }>(
-    `/messages?user_id=${encodeURIComponent(userId)}&limit=500`
+    `/messages?user_id=${encodeURIComponent(userId)}&limit=120`
   );
   const messages = payload.messages || [];
   messagesForUserCache.set(userId, { data: messages, timestamp: Date.now() });
+  return messages;
+}
+
+// Returns lightweight message previews for the conversations/accounts sidebar.
+// Full proposal cards and attachments stay in the selected conversation request.
+export async function getMessageSummariesForUser(userId: string): Promise<Message[]> {
+  const cached = messageSummaryCache.get(userId);
+  if (cached && Date.now() - cached.timestamp < MESSAGES_CACHE_TTL_MS) {
+    return cached.data;
+  }
+  const payload = await requestApiJson<{ messages?: Message[] }>(
+    `/messages?user_id=${encodeURIComponent(userId)}&limit=80&compact=true`
+  );
+  const messages = payload.messages || [];
+  messageSummaryCache.set(userId, { data: messages, timestamp: Date.now() });
   return messages;
 }
 
@@ -4358,7 +4437,7 @@ export async function getConversation(userId1: string, userId2: string): Promise
     return cached.data;
   }
   const payload = await requestApiJson<{ messages?: Message[] }>(
-    `/messages/conversation?user1=${encodeURIComponent(userId1)}&user2=${encodeURIComponent(userId2)}&limit=500`
+    `/messages/conversation?user1=${encodeURIComponent(userId1)}&user2=${encodeURIComponent(userId2)}&limit=120`
   );
   const messages = payload.messages || [];
   conversationCache.set(cacheKey, { data: messages, timestamp: Date.now() });
@@ -4388,6 +4467,7 @@ export async function getProjectGroupMessages(
 export function invalidateMessageCache(userId?: string, conversationPartnerId?: string, projectId?: string): void {
   if (userId) {
     messagesForUserCache.delete(userId);
+    messageSummaryCache.delete(userId);
   }
   if (userId && conversationPartnerId) {
     const cacheKey = [userId, conversationPartnerId].sort().join(':');
@@ -4419,7 +4499,8 @@ export type MessageSubscriptionEvent =
 // Opens a realtime websocket subscription for direct and project chat updates.
 export function subscribeToMessages(
   userId: string,
-  onChange: (event: MessageSubscriptionEvent) => void
+  onChange: (event: MessageSubscriptionEvent) => void,
+  onConnected?: () => void
 ): () => void {
 
   let socket: WebSocket | null = null;
@@ -4452,6 +4533,9 @@ export function subscribeToMessages(
           socket.send('ping');
         }
       }, 25000);
+      // Let an open chat immediately reconcile anything that changed while a
+      // mobile device or browser tab was reconnecting.
+      onConnected?.();
     };
 
     socket.onmessage = event => {
@@ -4538,31 +4622,9 @@ export async function getStatusUpdatesByProject(projectId: string): Promise<Stat
 // Volunteer Project Match Storage
 // Persists a volunteer-to-project match or request record.
 export async function saveVolunteerProjectMatch(match: VolunteerProjectMatch): Promise<void> {
-  const matches = await getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES) || [];
-  const existingIndex = matches.findIndex(
-    existingMatch =>
-      existingMatch.id === match.id ||
-      (
-        existingMatch.projectId === match.projectId &&
-        existingMatch.volunteerId === match.volunteerId
-      )
-  );
-  if (existingIndex >= 0) {
-    matches[existingIndex] = match;
-  } else {
-    matches.push(match);
-  }
-  await setStorageItem(STORAGE_KEYS.VOLUNTEER_MATCHES, matches);
-  invalidateSharedStorageCache([
-    STORAGE_KEYS.VOLUNTEER_MATCHES,
-    STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
-    STORAGE_KEYS.VOLUNTEERS,
-    STORAGE_KEYS.PROJECTS,
-  ]);
-  if (match.status === 'Matched') {
-    await attachVolunteerToProject(match.projectId, match.volunteerId);
-  }
-  await syncVolunteerEngagementStatus(match.volunteerId);
+  const savedMatch = await saveRemoteStorageRecord(STORAGE_KEYS.VOLUNTEER_MATCHES, match);
+  upsertCachedStorageRecord(STORAGE_KEYS.VOLUNTEER_MATCHES, savedMatch);
+  notifyStorageChanged([STORAGE_KEYS.VOLUNTEER_MATCHES]);
 }
 
 // Returns match records for one volunteer profile.
@@ -4671,11 +4733,9 @@ export async function requestVolunteerProjectJoin(
 
   await saveVolunteerProjectMatch(requestedMatch);
 
-  try {
-    await notifyAdminAboutVolunteerProjectJoinRequest(projectId, volunteer);
-  } catch (error) {
+  void notifyAdminAboutVolunteerProjectJoinRequest(projectId, volunteer).catch(error => {
     console.error('Error notifying admin about volunteer join request:', error);
-  }
+  });
 
   return requestedMatch;
 }
@@ -4798,19 +4858,21 @@ export async function assignVolunteerToProject(
   };
 
   await saveVolunteerProjectMatch(assignedMatch);
-  await ensureVolunteerProjectJoinRecord(projectId, volunteerId, 'AdminMatch');
+  await Promise.all([
+    attachVolunteerToProject(projectId, volunteerId),
+    ensureVolunteerProjectJoinRecord(projectId, volunteerId, 'AdminMatch'),
+    syncVolunteerEngagementStatus(volunteerId),
+  ]);
 
-  try {
-    await notifyVolunteerAboutProjectMatchDecision(
-      projectId,
-      volunteer.userId,
-      assignedBy,
-      'Matched',
-      'assignment'
-    );
-  } catch (error) {
+  void notifyVolunteerAboutProjectMatchDecision(
+    projectId,
+    volunteer.userId,
+    assignedBy,
+    'Matched',
+    'assignment'
+  ).catch(error => {
     console.error('Error notifying volunteer about assignment:', error);
-  }
+  });
 
   return assignedMatch;
 }
@@ -4819,19 +4881,16 @@ export async function assignVolunteerToProject(
 export async function saveVolunteerProjectJoinRecord(
   record: VolunteerProjectJoinRecord
 ): Promise<void> {
-  const records =
-    await getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS) || [];
   const normalizedRecord: VolunteerProjectJoinRecord = {
     ...record,
     participationStatus: record.participationStatus || 'Active',
   };
-  const existingIndex = records.findIndex(existingRecord => existingRecord.id === record.id);
-  if (existingIndex >= 0) {
-    records[existingIndex] = normalizedRecord;
-  } else {
-    records.push(normalizedRecord);
-  }
-  await setStorageItem(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS, records);
+  const savedRecord = await saveRemoteStorageRecord(
+    STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
+    normalizedRecord
+  );
+  upsertCachedStorageRecord(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS, savedRecord);
+  notifyStorageChanged([STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS]);
 }
 
 // Returns joined-volunteer records for a single project.
@@ -4839,7 +4898,7 @@ export async function getVolunteerProjectJoinRecords(
   projectId: string
 ): Promise<VolunteerProjectJoinRecord[]> {
   const records =
-    await getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS) || [];
+    await getStorageItemFast<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS) || [];
   return records
     .filter(record => record.projectId === projectId)
     .map(record => ({
@@ -4901,7 +4960,7 @@ export async function reconcileApprovedVolunteerEventMemberships(): Promise<void
   const [matches, volunteers, projects, existingRecords] = await Promise.all([
     getAllVolunteerProjectMatches(),
     getAllVolunteers(),
-    getAllProjects(),
+    getAllProjects(false), // images not needed for membership reconciliation
     getAllVolunteerProjectJoinRecords(),
   ]);
 
@@ -5033,15 +5092,13 @@ export async function completeVolunteerProjectParticipation(
 export async function savePartnerProjectApplication(
   application: PartnerProjectApplication
 ): Promise<void> {
-  const applications =
-    await getStorageItem<PartnerProjectApplication[]>(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS) || [];
-  const existingIndex = applications.findIndex(app => app.id === application.id);
-  if (existingIndex >= 0) {
-    applications[existingIndex] = application;
-  } else {
-    applications.push(application);
-  }
-  await setStorageItem(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS, applications);
+  const savedApplication = await saveRemoteStorageRecord(
+    STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
+    application
+  );
+  upsertCachedStorageRecord(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS, savedApplication);
+  projectsSnapshotCache.clear();
+  notifyStorageChanged([STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS]);
 }
 
 // Returns partner applications for a specific project.
@@ -5049,7 +5106,7 @@ export async function getPartnerProjectApplications(
   projectId: string
 ): Promise<PartnerProjectApplication[]> {
   const applications =
-    await getStorageItem<PartnerProjectApplication[]>(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS) || [];
+    await getStorageItemFast<PartnerProjectApplication[]>(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS) || [];
   return applications
     .filter(app => app.projectId === projectId)
     .sort((a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime());
@@ -5058,35 +5115,20 @@ export async function getPartnerProjectApplications(
 // Returns partner applications across all programs.
 export async function getAllPartnerProjectApplications(): Promise<PartnerProjectApplication[]> {
   const applications =
-    await getStorageItem<PartnerProjectApplication[]>(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS) || [];
+    await getStorageItemFast<PartnerProjectApplication[]>(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS) || [];
   return applications.sort((a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime());
 }
 
-async function updatePartnerProjectApplicationCache(
+function updatePartnerProjectApplicationCache(
   application: PartnerProjectApplication
-): Promise<void> {
-  const applications =
-    await getStorageItem<PartnerProjectApplication[]>(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS) || [];
-  const existingIndex = applications.findIndex(app => app.id === application.id);
-  const nextApplications =
-    existingIndex >= 0
-      ? applications.map(app => (app.id === application.id ? application : app))
-      : [...applications, application];
-
-  setSharedStorageCacheValue(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS, nextApplications);
+): void {
+  upsertCachedStorageRecord(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS, application);
   projectsSnapshotCache.clear();
   notifyStorageChanged([STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS]);
 }
 
-async function updateApprovedProposalProjectCache(project: Project): Promise<void> {
-  const projects = (await getStorageItemFast<Project[]>(STORAGE_KEYS.PROJECTS)) || [];
-  const existingIndex = projects.findIndex(item => item.id === project.id);
-  const nextProjects =
-    existingIndex >= 0
-      ? projects.map(item => (item.id === project.id ? project : item))
-      : [project, ...projects];
-
-  setSharedStorageCacheValue(STORAGE_KEYS.PROJECTS, nextProjects);
+function updateApprovedProposalProjectCache(project: Project): void {
+  upsertCachedStorageRecord(STORAGE_KEYS.PROJECTS, project);
   projectsSnapshotCache.clear();
   notifyStorageChanged([STORAGE_KEYS.PROJECTS]);
 }
@@ -5151,7 +5193,7 @@ export async function submitPartnerProgramProposal(
     throw new Error('Partner program proposal did not complete.');
   }
 
-  await updatePartnerProjectApplicationCache(payload.application);
+  updatePartnerProjectApplicationCache(payload.application);
 
   return payload.application;
 }
@@ -5180,7 +5222,7 @@ export async function updatePartnerProjectApplicationDetails(
     throw new Error('Proposal changes were not saved.');
   }
 
-  await updatePartnerProjectApplicationCache(payload.application);
+  updatePartnerProjectApplicationCache(payload.application);
   return payload.application;
 }
 
@@ -5197,11 +5239,13 @@ export async function reviewPartnerProjectApplication(
   applicationId: string,
   status: 'Approved' | 'Rejected',
   reviewedBy: string,
-  reviewNotes?: string
+  reviewNotes?: string,
+  onReviewMessage?: (message: Message) => void
 ): Promise<PartnerProjectApplication> {
   const payload = await requestApiJson<{
     application?: PartnerProjectApplication | null;
     project?: Project | null;
+    reviewMessage?: Message | null;
   }>(
     `/partner-project-applications/${encodeURIComponent(applicationId)}/review`,
     {
@@ -5221,9 +5265,14 @@ export async function reviewPartnerProjectApplication(
     throw new Error('Application review did not complete.');
   }
 
-  await updatePartnerProjectApplicationCache(payload.application);
+  updatePartnerProjectApplicationCache(payload.application);
   if (payload.project) {
-    await updateApprovedProposalProjectCache(payload.project);
+    updateApprovedProposalProjectCache(payload.project);
+  }
+  if (payload.reviewMessage) {
+    // The review response contains the persisted card, so the reviewer can
+    // render it immediately instead of waiting for a second fetch/socket tick.
+    onReviewMessage?.(payload.reviewMessage);
   }
 
   return payload.application;
@@ -5277,35 +5326,34 @@ export async function reviewPartnerRegistration(
     credentialsUnlockedAt: status === 'Approved' ? now : undefined,
   };
 
-  await savePartner(updatedPartner);
-
   const linkedUser = await getLinkedUserAccountForPartner(updatedPartner);
-  if (linkedUser) {
-    await saveUser({
-      ...linkedUser,
-      approvalStatus: status === 'Approved' ? 'approved' : 'rejected',
-      approvedBy: status === 'Approved' ? reviewedBy : undefined,
-      approvedAt: status === 'Approved' ? now : undefined,
-      rejectionReason:
-        status === 'Rejected'
-          ? 'Partner registration rejected by administrator.'
-          : undefined,
-    });
-  }
+  const linkedUserUpdate = linkedUser
+    ? saveUser({
+        ...linkedUser,
+        approvalStatus: status === 'Approved' ? 'approved' : 'rejected',
+        approvedBy: status === 'Approved' ? reviewedBy : undefined,
+        approvedAt: status === 'Approved' ? now : undefined,
+        rejectionReason:
+          status === 'Rejected'
+            ? 'Partner registration rejected by administrator.'
+            : undefined,
+      })
+    : Promise.resolve();
+
+  // These are independent targeted writes; wait for the slower one only once.
+  await Promise.all([savePartner(updatedPartner), linkedUserUpdate]);
 
   if (status === 'Approved') {
-    try {
-      await sendAccountApprovalEmailNotification(
-        linkedUser || {
-          email: updatedPartner.contactEmail,
-          name: updatedPartner.name,
-          role: 'partner',
-        },
-        reviewedBy
-      );
-    } catch (error) {
+    void sendAccountApprovalEmailNotification(
+      linkedUser || {
+        email: updatedPartner.contactEmail,
+        name: updatedPartner.name,
+        role: 'partner',
+      },
+      reviewedBy
+    ).catch(error => {
       console.error('[ApprovalEmail] Failed to send partner approval email:', error);
-    }
+    });
   }
 
   return updatedPartner;
@@ -5689,6 +5737,7 @@ export async function clearAllStorage(): Promise<void> {
     memoryStorageCache.clear();
     projectsSnapshotCache.clear();
     messagesForUserCache.clear();
+    messageSummaryCache.clear();
     conversationCache.clear();
     groupMessagesCache.clear();
   } catch (error) {
@@ -5732,15 +5781,6 @@ async function ensureVolunteerProjectJoinRecord(
 ): Promise<void> {
   const project = await getProject(projectId);
   if (!project?.isEvent) {
-    return;
-  }
-
-  const records =
-    await getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS) || [];
-  const existingRecord = records.find(
-    record => record.projectId === projectId && record.volunteerId === volunteerId
-  );
-  if (existingRecord) {
     return;
   }
 

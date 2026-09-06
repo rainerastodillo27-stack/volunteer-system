@@ -17,8 +17,9 @@ if env_file.exists():
                 key, value = line.split("=", 1)
                 os.environ[key] = value
 
-# Old database connection string
-OLD_DB_URL = "postgresql://postgres.oshkcfyytdzojswnrbhu:CAPSTONE_ISCAP1@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres?sslmode=require"
+# The source database must be supplied explicitly when this legacy migration
+# utility is used; never keep an old Supabase credential in the repository.
+OLD_DB_URL = os.getenv("OLD_SUPABASE_DB_URL", "").strip()
 # New database connection string (from .env)
 NEW_DB_URL = os.getenv("SUPABASE_DB_URL")
 
@@ -141,6 +142,9 @@ def main():
     print("=" * 70)
     print()
     
+    if not OLD_DB_URL:
+        print("ERROR: OLD_SUPABASE_DB_URL not found in environment")
+        sys.exit(1)
     if not NEW_DB_URL:
         print("ERROR: SUPABASE_DB_URL not found in environment")
         sys.exit(1)

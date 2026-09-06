@@ -97,7 +97,9 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
   const [addressDraft, setAddressDraft] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [sectorFilter, setSectorFilter] = useState<PartnerSectorType | 'All'>('All');
+  const [showSectorFilterDropdown, setShowSectorFilterDropdown] = useState(false);
   const [approvingPartnerId, setApprovingPartnerId] = useState<string | null>(null);
+  const [reviewActionLoadingId, setReviewActionLoadingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (navigation) {
@@ -186,15 +188,35 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
 
   const handleApprovePartner = async (partner: Partner) => {
     if (approvingPartnerId) return;
+    const previousAllPartners = allPartnersList;
+    const previousApprovedPartners = partners;
+    const updatedPartner: Partner = {
+      ...partner,
+      status: 'Approved',
+      validatedBy: user?.id || 'admin',
+      validatedAt: new Date().toISOString(),
+    };
     setApprovingPartnerId(partner.id);
+    setAllPartnersList(current =>
+      current.map(item => (item.id === partner.id ? updatedPartner : item))
+    );
+    setPartners(current => [
+      ...current.filter(item => item.id !== partner.id),
+      updatedPartner,
+    ]);
+    if (selectedPartner?.id === partner.id) {
+      setSelectedPartner(updatedPartner);
+    }
     try {
       await reviewPartnerRegistration(partner.id, 'Approved', user?.id || 'admin');
       setActionNotice(`Approved "${partner.name}". Organization credentials unlocked.`);
-      await loadPartners();
-      if (selectedPartner?.id === partner.id) {
-        setSelectedPartner(curr => curr ? { ...curr, status: 'Approved' } : null);
-      }
+      void loadPartners();
     } catch (error) {
+      setAllPartnersList(previousAllPartners);
+      setPartners(previousApprovedPartners);
+      if (selectedPartner?.id === partner.id) {
+        setSelectedPartner(partner);
+      }
       Alert.alert('Error', error instanceof Error ? error.message : 'Failed to approve partner.');
     } finally {
       setApprovingPartnerId(null);
@@ -222,13 +244,37 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
   const confirmReviewAction = async () => {
     if (!reviewTarget || !reviewTargetType || !reviewMode) return;
 
+    const target = reviewTarget;
+    const targetType = reviewTargetType;
+    const mode = reviewMode;
+    const actionId = `${targetType}:${target.id}:${mode}`;
+    if (reviewActionLoadingId) return;
+
+    const previousAllPartners = allPartnersList;
+    const previousApprovedPartners = partners;
+    const previousApplications = applications;
+    setReviewActionLoadingId(actionId);
+
     try {
-      if (reviewTargetType === 'partner') {
-        const partnerTarget = reviewTarget as Partner;
+      if (targetType === 'partner') {
+        const partnerTarget = target as Partner;
         const rejectionReason =
-          reviewMode === 'revision'
+          mode === 'revision'
             ? 'Returned for revision by administrator.'
             : 'Partner registration rejected by administrator.';
+        const updatedPartner: Partner = {
+          ...partnerTarget,
+          status: 'Rejected',
+          validatedBy: user?.id || 'admin',
+          validatedAt: new Date().toISOString(),
+        };
+        setAllPartnersList(current =>
+          current.map(item => (item.id === updatedPartner.id ? updatedPartner : item))
+        );
+        setPartners(current => current.filter(item => item.id !== updatedPartner.id));
+        if (selectedPartner?.id === updatedPartner.id) {
+          setSelectedPartner(updatedPartner);
+        }
         await reviewPartnerRegistration(
           partnerTarget.id,
           'Rejected',
@@ -236,16 +282,29 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
           rejectionReason
         );
         setActionNotice(
-          reviewMode === 'revision'
+          mode === 'revision'
             ? `Sent "${partnerTarget.name}" back for revision.`
             : `Totally rejected "${partnerTarget.name}".`
         );
       } else {
-        const proposalTarget = reviewTarget as PartnerProjectApplication;
+        const proposalTarget = target as PartnerProjectApplication;
         const reviewNotes =
-          reviewMode === 'revision'
+          mode === 'revision'
             ? 'Returned for revision by administrator.'
             : 'Partner project proposal rejected by administrator.';
+        const reviewedAt = new Date().toISOString();
+        setApplications(current =>
+          current.map(item => item.id === proposalTarget.id
+            ? {
+                ...item,
+                status: 'Rejected',
+                reviewedAt,
+                reviewedBy: user?.id || 'admin',
+                reviewNotes,
+              }
+            : item
+          )
+        );
         await reviewPartnerProjectApplication(
           proposalTarget.id,
           'Rejected',
@@ -254,33 +313,57 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
         );
         const title = proposalTarget.proposalDetails?.proposedTitle || proposalTarget.projectId;
         setActionNotice(
-          reviewMode === 'revision'
+          mode === 'revision'
             ? `Sent proposal "${title}" back for revision.`
             : `Totally rejected proposal "${title}".`
         );
       }
 
       closeReviewModal();
-      await loadPartners();
-      await loadProjects();
+      void loadPartners();
+      void loadProjects();
     } catch (error) {
+      setAllPartnersList(previousAllPartners);
+      setPartners(previousApprovedPartners);
+      setApplications(previousApplications);
       Alert.alert('Error', error instanceof Error ? error.message : 'Failed to perform review action.');
+    } finally {
+      setReviewActionLoadingId(null);
     }
   };
 
   const handleApproveProposal = async (application: PartnerProjectApplication) => {
+    const actionId = `proposal:${application.id}:approve`;
+    if (reviewActionLoadingId) return;
+    const previousApplications = applications;
+    const reviewedAt = new Date().toISOString();
+    setReviewActionLoadingId(actionId);
+    setApplications(current =>
+      current.map(item => item.id === application.id
+        ? {
+            ...item,
+            status: 'Approved',
+            reviewedAt,
+            reviewedBy: user?.id || 'admin',
+          }
+        : item
+      )
+    );
     try {
       const reviewedApp = await reviewPartnerProjectApplication(application.id, 'Approved', user?.id || 'admin');
       const title = application.proposalDetails?.proposedTitle || application.projectId;
       setActionNotice(`Approved proposal "${title}".`);
-      await loadPartners();
-      await loadProjects();
+      void loadPartners();
+      void loadProjects();
       
       if (reviewedApp.projectId) {
         navigateToAvailableRoute(navigation, 'Projects', { projectId: reviewedApp.projectId });
       }
     } catch (error) {
+      setApplications(previousApplications);
       Alert.alert('Error', error instanceof Error ? error.message : 'Failed to approve proposal.');
+    } finally {
+      setReviewActionLoadingId(null);
     }
   };
 
@@ -481,10 +564,6 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
   }, [partneredProjects, allPartnersList, searchTerm]);
 
   const partnerProjectCount = partneredProjects.length;
-  const nextSectorFilter = () => {
-    const currentIndex = sectorFilters.indexOf(sectorFilter);
-    setSectorFilter(sectorFilters[(currentIndex + 1) % sectorFilters.length]);
-  };
   const getPartnerInitials = (name: string) => name.split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase();
   const getPartnerSince = (partner: Partner) => formatPartnerShortDate(partner.validatedAt || partner.createdAt);
 
@@ -1033,11 +1112,46 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
                 style={styles.searchInput}
               />
             </View>
-            <TouchableOpacity style={styles.filterButton} onPress={nextSectorFilter}>
-              <MaterialIcons name="filter-list" size={20} color="#475467" />
-              <Text style={styles.filterText}>{sectorFilter === 'All' ? 'All types' : sectorFilter}</Text>
-              <MaterialIcons name="keyboard-arrow-down" size={18} color="#667085" />
-            </TouchableOpacity>
+            <View style={styles.filterWrapper}>
+              <TouchableOpacity
+                style={styles.filterButton}
+                onPress={() => setShowSectorFilterDropdown(current => !current)}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Filter partners by sector"
+              >
+                <MaterialIcons name="filter-list" size={20} color="#475467" />
+                <Text style={styles.filterText}>{sectorFilter === 'All' ? 'All types' : sectorFilter}</Text>
+                <MaterialIcons
+                  name={showSectorFilterDropdown ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
+                  size={18}
+                  color="#667085"
+                />
+              </TouchableOpacity>
+              {showSectorFilterDropdown && (
+                <View style={styles.filterDropdown}>
+                  {sectorFilters.map(option => {
+                    const isSelected = option === sectorFilter;
+                    return (
+                      <TouchableOpacity
+                        key={option}
+                        style={[styles.filterOption, isSelected && styles.filterOptionSelected]}
+                        onPress={() => {
+                          setSectorFilter(option);
+                          setShowSectorFilterDropdown(false);
+                        }}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={[styles.filterOptionText, isSelected && styles.filterOptionTextSelected]}>
+                          {option === 'All' ? 'All types' : option}
+                        </Text>
+                        {isSelected ? <MaterialIcons name="check" size={16} color="#166534" /> : null}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+            </View>
           </View>
 
           <View style={styles.partnerList}>
@@ -1216,27 +1330,34 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
 
                   <View style={styles.applicationActionsRow}>
                     <TouchableOpacity
-                      style={styles.appRejectButton}
+                      style={[styles.appRejectButton, reviewActionLoadingId && { opacity: 0.55 }]}
                       onPress={() => openProposalReview(proposal, 'revision')}
+                      disabled={Boolean(reviewActionLoadingId)}
                     >
                       <MaterialIcons name="replay" size={16} color="#dc2626" />
                       <Text style={styles.appRejectButtonText}>For Revise</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity
-                      style={[styles.appRejectButton, styles.appRejectButtonHard]}
+                      style={[styles.appRejectButton, styles.appRejectButtonHard, reviewActionLoadingId && { opacity: 0.55 }]}
                       onPress={() => handleRejectProposal(proposal)}
+                      disabled={Boolean(reviewActionLoadingId)}
                     >
                       <MaterialIcons name="block" size={16} color="#b91c1c" />
                       <Text style={styles.appRejectButtonText}>Totally Reject</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity
-                      style={styles.appApproveButton}
+                      style={[styles.appApproveButton, reviewActionLoadingId && { opacity: 0.7 }]}
                       onPress={() => handleApproveProposal(proposal)}
+                      disabled={Boolean(reviewActionLoadingId)}
                     >
-                      <MaterialIcons name="check" size={16} color="#fff" />
-                      <Text style={styles.appApproveButtonText}>Approve Proposal</Text>
+                      {reviewActionLoadingId === `proposal:${proposal.id}:approve`
+                        ? <ActivityIndicator size="small" color="#fff" style={{ marginRight: 6 }} />
+                        : <MaterialIcons name="check" size={16} color="#fff" />}
+                      <Text style={styles.appApproveButtonText}>
+                        {reviewActionLoadingId === `proposal:${proposal.id}:approve` ? 'Approving...' : 'Approve Proposal'}
+                      </Text>
                     </TouchableOpacity>
                   </View>
                 </View>
@@ -1330,16 +1451,18 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
                       </TouchableOpacity>
 
                       <TouchableOpacity
-                        style={styles.appRejectButton}
+                        style={[styles.appRejectButton, (approvingPartnerId || reviewActionLoadingId) && { opacity: 0.55 }]}
                         onPress={() => openPartnerReview(partner, 'revision')}
+                        disabled={Boolean(approvingPartnerId || reviewActionLoadingId)}
                       >
                         <MaterialIcons name="replay" size={16} color="#dc2626" />
                         <Text style={styles.appRejectButtonText}>For Revise</Text>
                       </TouchableOpacity>
 
                       <TouchableOpacity
-                        style={[styles.appRejectButton, styles.appRejectButtonHard]}
+                        style={[styles.appRejectButton, styles.appRejectButtonHard, (approvingPartnerId || reviewActionLoadingId) && { opacity: 0.55 }]}
                         onPress={() => openPartnerReview(partner, 'rejection')}
+                        disabled={Boolean(approvingPartnerId || reviewActionLoadingId)}
                       >
                         <MaterialIcons name="block" size={16} color="#b91c1c" />
                         <Text style={styles.appRejectButtonText}>Totally Reject</Text>
@@ -1442,15 +1565,27 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
                 : `This will mark "${(reviewTarget as PartnerProjectApplication)?.proposalDetails?.proposedTitle || (reviewTarget as PartnerProjectApplication)?.projectId || ''}" as rejected.`}
             </Text>
             <View style={styles.reviewModalActions}>
-              <TouchableOpacity style={styles.reviewModalCancel} onPress={closeReviewModal}>
+              <TouchableOpacity
+                style={[styles.reviewModalCancel, reviewActionLoadingId && { opacity: 0.55 }]}
+                onPress={closeReviewModal}
+                disabled={Boolean(reviewActionLoadingId)}
+              >
                 <Text style={styles.reviewModalCancelText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.reviewModalConfirm, reviewMode === 'revision' && styles.reviewModalConfirmRevision]}
+                style={[
+                  styles.reviewModalConfirm,
+                  reviewMode === 'revision' && styles.reviewModalConfirmRevision,
+                  reviewActionLoadingId && { opacity: 0.75 },
+                ]}
                 onPress={confirmReviewAction}
+                disabled={Boolean(reviewActionLoadingId)}
               >
+                {reviewActionLoadingId ? <ActivityIndicator size="small" color="#fff" style={{ marginRight: 6 }} /> : null}
                 <Text style={styles.reviewModalConfirmText}>
-                  {reviewMode === 'revision' ? 'Send Back' : 'Reject Now'}
+                  {reviewActionLoadingId
+                    ? (reviewMode === 'revision' ? 'Sending...' : 'Rejecting...')
+                    : (reviewMode === 'revision' ? 'Send Back' : 'Reject Now')}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -1991,6 +2126,7 @@ const styles = StyleSheet.create({
     padding: 12,
     flexDirection: 'row',
     gap: 10,
+    zIndex: 10,
   },
   searchBox: {
     flex: 1,
@@ -2021,6 +2157,47 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 6,
+  },
+  filterWrapper: {
+    position: 'relative',
+    zIndex: 20,
+  },
+  filterDropdown: {
+    position: 'absolute',
+    top: 46,
+    right: 0,
+    minWidth: 150,
+    paddingVertical: 6,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dde3e8',
+    borderRadius: 10,
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.14,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+    zIndex: 30,
+  },
+  filterOption: {
+    minHeight: 38,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  filterOptionSelected: {
+    backgroundColor: '#f0fdf4',
+  },
+  filterOptionText: {
+    fontSize: 13,
+    color: '#475467',
+    fontWeight: '600',
+  },
+  filterOptionTextSelected: {
+    color: '#166534',
+    fontWeight: '700',
   },
   filterText: {
     flex: 1,

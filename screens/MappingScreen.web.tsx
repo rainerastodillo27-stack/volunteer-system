@@ -587,30 +587,34 @@ export default function MappingScreen({ navigation }: any) {
       });
     });
     
-    // Count beneficiaries reached
-    const totalBeneficiaries = displayProjects.reduce((sum, project) => {
-      return sum + (Number((project as any).beneficiariesReached) || 0);
-    }, 0);
-
-    // Calculate volunteer hours
-    const totalVolunteerHours = displayProjects.reduce((sum, project) => {
-      return sum + (Number((project as any).volunteerHours) || 0);
-    }, 0);
-
     return {
       totalProjects,
       totalEvents,
       completedProjects,
       inProgressProjects,
       volunteersEngaged: uniqueVolunteerIds.size,
-      beneficiariesReached: totalBeneficiaries,
-      volunteerHours: totalVolunteerHours,
     };
   }, [displayProjects, selectedMapStyleKey, user?.role]);
 
   const selectedMapStyle =
     MAP_STYLE_PRESETS.find(preset => preset.key === selectedMapStyleKey) || MAP_STYLE_PRESETS[0];
-  const featuredProject = mappedProjects[0] || null;
+  const today = new Date();
+  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+  const endOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999).getTime();
+  const featuredProject =
+    mappedProjects.find(project => {
+      if (!project.isEvent || !project.startDate) return false;
+      const start = new Date(project.startDate).getTime();
+      const end = project.endDate ? new Date(project.endDate).getTime() : start;
+      return Number.isFinite(start) && Number.isFinite(end) && start <= endOfToday && end >= startOfToday;
+    }) ||
+    mappedProjects.find(project => {
+      if (!project.isEvent || !project.startDate) return false;
+      const start = new Date(project.startDate).getTime();
+      return Number.isFinite(start) && start > endOfToday;
+    }) ||
+    mappedProjects[0] ||
+    null;
   const statusLegend = [
     { label: 'In Progress', color: '#5B9B57' },
     { label: 'Planned', color: '#5F8FDC' },
@@ -728,7 +732,7 @@ export default function MappingScreen({ navigation }: any) {
             const container = document.createElement('div');
             container.style.minWidth = '220px';
             container.style.maxWidth = '280px';
-            container.style.fontFamily = 'DM Sans, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
+            container.style.fontFamily = "'Nunito', sans-serif";
             container.style.fontSize = '12px';
             container.style.lineHeight = '16px';
 
@@ -954,14 +958,19 @@ export default function MappingScreen({ navigation }: any) {
   // Loads map projects and narrows visibility based on the active role.
   const loadProjects = async () => {
     try {
-      const snapshot = await getProjectsScreenSnapshot(user, [
-        'projects',
-        'partnerProjectApplications',
-        'volunteerJoinRecords',
-        'volunteerProfile',
-        'volunteerMatches',
-        'programTracks',
-      ]);
+      const snapshot = await getProjectsScreenSnapshot(
+        user,
+        [
+          'projects',
+          'partnerProjectApplications',
+          'volunteerJoinRecords',
+          'volunteerProfile',
+          'volunteerMatches',
+          'programTracks',
+        ],
+        false,
+        false, // map markers don't need project images
+      );
       const allPartners = await getAllPartners();
       const mapSourceProjects = withImpactMapFallbackProjects(
         snapshot.projects,
@@ -1199,7 +1208,10 @@ export default function MappingScreen({ navigation }: any) {
               <input
                 type="date"
                 value={filterDate}
-                onChange={(e: any) => setFilterDate(e.target.value)}
+                onChange={(e: any) => {
+                  const nextValue = String(e.target.value || '');
+                  setFilterDate(/^\d{4}-\d{2}-\d{2}$/.test(nextValue) ? nextValue : '');
+                }}
                 style={{
                   border: '1px solid #fed7aa',
                   borderRadius: '6px',
@@ -1208,7 +1220,7 @@ export default function MappingScreen({ navigation }: any) {
                   background: '#ffffff',
                   fontSize: 13,
                   color: '#1e293b',
-                  fontFamily: 'inherit',
+                  fontFamily: "'Nunito', sans-serif",
                   cursor: 'pointer',
                   minWidth: 130,
                 }}
@@ -1309,7 +1321,7 @@ export default function MappingScreen({ navigation }: any) {
                   background: '#ffffff',
                   fontSize: 13,
                   color: '#1e293b',
-                  fontFamily: 'inherit',
+                  fontFamily: "'Nunito', sans-serif",
                   cursor: 'pointer',
                   minWidth: 150,
                 }}
@@ -1332,7 +1344,7 @@ export default function MappingScreen({ navigation }: any) {
                     background: '#ffffff',
                     fontSize: 13,
                     color: '#1e293b',
-                    fontFamily: 'inherit',
+                    fontFamily: "'Nunito', sans-serif",
                     cursor: 'pointer',
                     minWidth: 150,
                   }}
@@ -1356,7 +1368,7 @@ export default function MappingScreen({ navigation }: any) {
                     background: '#ffffff',
                     fontSize: 13,
                     color: '#1e293b',
-                    fontFamily: 'inherit',
+                    fontFamily: "'Nunito', sans-serif",
                     cursor: 'pointer',
                     minWidth: 150,
                   }}
@@ -1446,17 +1458,6 @@ export default function MappingScreen({ navigation }: any) {
                 <Text style={styles.impactStatLabel}>Volunteers Engaged</Text>
               </View>
 
-              <View style={styles.impactStatCard}>
-                <MaterialIcons name="favorite" size={28} color="#dc2626" />
-                <Text style={styles.impactStatValue}>{impactStats.beneficiariesReached.toLocaleString()}</Text>
-                <Text style={styles.impactStatLabel}>Beneficiaries Reached</Text>
-              </View>
-
-              <View style={styles.impactStatCard}>
-                <MaterialIcons name="schedule" size={28} color="#ca8a04" />
-                <Text style={styles.impactStatValue}>{impactStats.volunteerHours.toLocaleString()}</Text>
-                <Text style={styles.impactStatLabel}>Volunteer Hours</Text>
-              </View>
             </View>
           </View>
           </>
@@ -1540,7 +1541,10 @@ export default function MappingScreen({ navigation }: any) {
             {selectedProject && (
               <ScrollView style={styles.modalContent}>
                 {(() => {
-                  const projectImageSource = getPrimaryProjectImageSource(selectedProject);
+                  const parentProject = selectedProject.parentProjectId
+                    ? projects.find(project => project.id === selectedProject.parentProjectId)
+                    : undefined;
+                  const projectImageSource = getPrimaryProjectImageSource(selectedProject, parentProject);
                   if (!projectImageSource) {
                     return null;
                   }

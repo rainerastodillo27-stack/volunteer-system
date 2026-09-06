@@ -14,6 +14,7 @@ interface Props {
   isAdmin?: boolean;
   isOwner?: boolean;
   isSubmitting?: boolean;
+  reviewAction?: 'approve' | 'reject' | null;
   statusOverride?: PartnerProjectApplication['status'];
   reviewActionsDisabled?: boolean;
 }
@@ -70,7 +71,7 @@ function truncateFileName(fileName: string, maxLength: number = 22): string {
   return `${fileName.slice(0, maxLength - 3)}...`;
 }
 
-export default function ProposalMessageTemplate({ application, onEdit, onSubmit, onApprove, onReject, onOpenAttachment, onViewProjects, isAdmin, isOwner, isSubmitting, statusOverride, reviewActionsDisabled }: Props) {
+export default function ProposalMessageTemplate({ application, onEdit, onSubmit, onApprove, onReject, onOpenAttachment, onViewProjects, isAdmin, isOwner, isSubmitting, reviewAction, statusOverride, reviewActionsDisabled }: Props) {
   const { width } = useWindowDimensions();
   const isMobile = width < 520;
   const d: any = (application as any).proposalDetails || {};
@@ -136,6 +137,8 @@ export default function ProposalMessageTemplate({ application, onEdit, onSubmit,
   };
 
   const isDraft = rawStatus === 'draft' || rawStatus === 'proposed' || !application.status;
+  const isApproving = Boolean(isSubmitting && reviewAction === 'approve');
+  const isRejecting = Boolean(isSubmitting && reviewAction === 'reject');
   if (rawStatus === 'approved') {
     return (
       <View style={styles.approvedCardContainer}>
@@ -536,7 +539,12 @@ export default function ProposalMessageTemplate({ application, onEdit, onSubmit,
               activeOpacity={0.85}
               disabled={Boolean(reviewActionsDisabled) || isSubmitting}
             >
-              <Text style={[styles.submitText, { color: '#64748B' }]}>Reject</Text>
+              {isRejecting ? (
+                <ActivityIndicator size="small" color="#DC2626" style={{ marginRight: 6 }} />
+              ) : null}
+              <Text style={[styles.submitText, { color: '#64748B' }]}>
+                {isRejecting ? 'Rejecting...' : 'Reject'}
+              </Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.submitBtn, { backgroundColor: '#16A34A', opacity: isSubmitting ? 0.7 : 1 }, reviewActionsDisabled && styles.disabledAction]}
@@ -544,12 +552,12 @@ export default function ProposalMessageTemplate({ application, onEdit, onSubmit,
               activeOpacity={0.85}
               disabled={isSubmitting || Boolean(reviewActionsDisabled)}
             >
-              {isSubmitting ? (
+              {isApproving ? (
                 <ActivityIndicator size="small" color="#fff" style={{ marginRight: 6 }} />
               ) : (
                 <MaterialIcons name="check" size={16} color="#fff" />
               )}
-              <Text style={styles.submitText}>{isSubmitting ? 'Approving...' : 'Approve'}</Text>
+              <Text style={styles.submitText}>{isApproving ? 'Approving...' : 'Approve'}</Text>
             </TouchableOpacity>
           </View>
         ) : isDraft && isOwner ? (

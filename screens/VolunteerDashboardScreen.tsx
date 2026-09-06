@@ -22,7 +22,7 @@ import type { VolunteerTabParamList } from '../navigation/VolunteerNavigator';
 import {
   getProjectsScreenSnapshot,
   getDashboardTimelineSnapshot,
-  getMessagesForUser,
+  getUnreadMessagesForUser,
   reconcileApprovedVolunteerEventMemberships,
   subscribeToStorageChanges,
   subscribeToMessages,
@@ -342,10 +342,13 @@ export default function VolunteerDashboardScreen() {
             'timeLogs',
             'programTracks',
           ],
-          force
+          force,
+          false // images not needed for dashboard list view
         ),
         getDashboardTimelineSnapshot(),
-        getMessagesForUser(user.id),
+        // The dashboard only displays an unread count; avoid downloading every
+        // chat card and its attachments just to calculate that number.
+        getUnreadMessagesForUser(user.id),
       ]);
 
       setProjects(projectSnapshot.projects || []);
@@ -606,8 +609,9 @@ export default function VolunteerDashboardScreen() {
     try {
       setLoading(true);
       await requestVolunteerProjectJoin(project.id, user.id);
+      setLoading(false);
       Alert.alert('Success', `Successfully requested to join "${project.title}"!`);
-      await loadDashboardData(true);
+      void loadDashboardData(true);
     } catch (err) {
       Alert.alert('Error', getRequestErrorMessage(err, 'Failed to join project'));
     } finally {

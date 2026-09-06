@@ -1,6 +1,6 @@
 import React, { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import ModernTheme from '../utils/modernTheme';
-import { View, FlatList, StyleSheet, Text, TouchableOpacity, Alert, Pressable, Image, ImageSourcePropType, Modal, Platform, TextInput, ScrollView, useWindowDimensions } from 'react-native';
+import { View, FlatList, StyleSheet, Text, TouchableOpacity, Alert, Pressable, Image, ImageSourcePropType, Modal, Platform, TextInput, ScrollView, useWindowDimensions, ActivityIndicator } from 'react-native';
 
 // Safe Platform accessor for web environments
 function getPlatformOS(): string {
@@ -578,6 +578,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
   const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
   const [allVolunteers, setAllVolunteers] = useState<Volunteer[]>([]);
   const [loadingProjectId, setLoadingProjectId] = useState<string | null>(null);
+  const [taskLoadingKey, setTaskLoadingKey] = useState<string | null>(null);
   const [attendanceNotice, setAttendanceNotice] = useState<string | null>(null);
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
   const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
@@ -650,7 +651,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
   const loadProjectsData = useCallback(async () => {
     const startedAt = perfNow();
     try {
-      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'volunteerProfile']);
+      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'volunteerProfile'], false, false /* images loaded lazily */);
       applySnapshot(snapshot);
       try {
         setAllPartnerReports(await getAllPartnerReports());
@@ -1248,6 +1249,10 @@ export default function ProjectsScreen({ navigation, route }: any) {
     taskId: string,
     volunteerId?: string
   ) => {
+    const loadingKey = `${eventProject.id}:${taskId}`;
+    if (taskLoadingKey) {
+      return;
+    }
     if (!isFieldOfficerForEvent(eventProject)) {
       Alert.alert('Access Restricted', 'Only admins and the assigned field officer for this event can manage volunteer task assignments.');
       return;
@@ -1293,23 +1298,34 @@ export default function ProjectsScreen({ navigation, route }: any) {
         };
       });
 
-      await saveEvent({
+      const updatedEvent = {
         ...eventProject,
         internalTasks: updatedTasks,
         updatedAt: new Date().toISOString(),
-      });
+      };
+      const previousProjects = projects;
+      setTaskLoadingKey(loadingKey);
+      setProjects(currentProjects =>
+        currentProjects.map(project => project.id === updatedEvent.id ? updatedEvent : project)
+      );
 
-      const notificationTasks: Promise<void>[] = [];
+      try {
+        await saveEvent(updatedEvent);
+      } catch (error) {
+        setProjects(previousProjects);
+        throw error;
+      }
+
       if (currentTask && previouslyAssignedVolunteer) {
-        notificationTasks.push(notifyVolunteerAboutTaskUnassignment({
+        void notifyVolunteerAboutTaskUnassignment({
           event: eventProject,
           task: currentTask,
           volunteer: previouslyAssignedVolunteer,
           actorUserId: user?.id,
-        }));
+        }).catch(error => console.warn('[TASK] Unassignment notification failed:', error));
       }
       if (currentTask && assignedVolunteer && shouldNotifyAssignedVolunteer) {
-        notificationTasks.push(notifyVolunteerAboutTaskUpdate({
+        void notifyVolunteerAboutTaskUpdate({
           event: eventProject,
           task: {
             ...currentTask,
@@ -1321,10 +1337,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
           volunteer: assignedVolunteer,
           actorUserId: user?.id,
           action: 'assigned',
-        }));
-      }
-      if (notificationTasks.length > 0) {
-        await Promise.all(notificationTasks);
+        }).catch(error => console.warn('[TASK] Assignment notification failed:', error));
       }
 
       void loadProjectsData();
@@ -1334,8 +1347,10 @@ export default function ProjectsScreen({ navigation, route }: any) {
         getRequestErrorTitle(error),
         getRequestErrorMessage(error, 'Failed to update the event assignment.')
       );
+    } finally {
+      setTaskLoadingKey(current => current === loadingKey ? null : current);
     }
-  }, [getAssignableVolunteersForEvent, isFieldOfficerForEvent, loadProjectsData]);
+  }, [getAssignableVolunteersForEvent, isFieldOfficerForEvent, loadProjectsData, projects, taskLoadingKey, user?.id]);
 
   useEffect(() => {
     const requestedProjectId = route?.params?.projectId;
@@ -2105,9 +2120,14 @@ export default function ProjectsScreen({ navigation, route }: any) {
                                         <View style={styles.assignmentChipRow}>
                                           <TouchableOpacity
                                             style={styles.assignmentChip}
+                                            disabled={Boolean(taskLoadingKey)}
                                             onPress={() => void handleAssignEventTask(event, task.id)}
                                           >
-                                            <Text style={styles.assignmentChipText}>Unassign</Text>
+                                            {taskLoadingKey === `${event.id}:${task.id}` ? (
+                                              <ActivityIndicator size="small" color="#166534" />
+                                            ) : (
+                                              <Text style={styles.assignmentChipText}>Unassign</Text>
+                                            )}
                                           </TouchableOpacity>
                                           {assignableVolunteers.map(volunteer => (
                                             <TouchableOpacity
@@ -2116,16 +2136,21 @@ export default function ProjectsScreen({ navigation, route }: any) {
                                                 styles.assignmentChip,
                                                 task.assignedVolunteerId === volunteer.id && styles.assignmentChipActive,
                                               ]}
+                                              disabled={Boolean(taskLoadingKey)}
                                               onPress={() => void handleAssignEventTask(event, task.id, volunteer.id)}
                                             >
-                                              <Text
-                                                style={[
-                                                  styles.assignmentChipText,
-                                                  task.assignedVolunteerId === volunteer.id && styles.assignmentChipTextActive,
-                                                ]}
-                                              >
-                                                {volunteer.name}
-                                              </Text>
+                                              {taskLoadingKey === `${event.id}:${task.id}` ? (
+                                                <ActivityIndicator size="small" color="#166534" />
+                                              ) : (
+                                                <Text
+                                                  style={[
+                                                    styles.assignmentChipText,
+                                                    task.assignedVolunteerId === volunteer.id && styles.assignmentChipTextActive,
+                                                  ]}
+                                                >
+                                                  {volunteer.name}
+                                                </Text>
+                                              )}
                                             </TouchableOpacity>
                                           ))}
                                         </View>
@@ -3116,9 +3141,14 @@ export default function ProjectsScreen({ navigation, route }: any) {
                         <View style={styles.assignmentChipRow}>
                           <TouchableOpacity
                             style={styles.assignmentChip}
+                            disabled={Boolean(taskLoadingKey)}
                             onPress={() => void handleAssignEventTask(selectedEvent, task.id)}
                           >
-                            <Text style={styles.assignmentChipText}>Unassign</Text>
+                            {taskLoadingKey === `${selectedEvent.id}:${task.id}` ? (
+                              <ActivityIndicator size="small" color="#166534" />
+                            ) : (
+                              <Text style={styles.assignmentChipText}>Unassign</Text>
+                            )}
                           </TouchableOpacity>
                           {selectedEventAssignableVolunteers.map(volunteer => (
                             <TouchableOpacity
@@ -3127,16 +3157,21 @@ export default function ProjectsScreen({ navigation, route }: any) {
                                 styles.assignmentChip,
                                 task.assignedVolunteerId === volunteer.id && styles.assignmentChipActive,
                               ]}
+                              disabled={Boolean(taskLoadingKey)}
                               onPress={() => void handleAssignEventTask(selectedEvent, task.id, volunteer.id)}
                             >
-                              <Text
-                                style={[
-                                  styles.assignmentChipText,
-                                  task.assignedVolunteerId === volunteer.id && styles.assignmentChipTextActive,
-                                ]}
-                              >
-                                {volunteer.name}
-                              </Text>
+                              {taskLoadingKey === `${selectedEvent.id}:${task.id}` ? (
+                                <ActivityIndicator size="small" color="#166534" />
+                              ) : (
+                                <Text
+                                  style={[
+                                    styles.assignmentChipText,
+                                    task.assignedVolunteerId === volunteer.id && styles.assignmentChipTextActive,
+                                  ]}
+                                >
+                                  {volunteer.name}
+                                </Text>
+                              )}
                             </TouchableOpacity>
                           ))}
                         </View>

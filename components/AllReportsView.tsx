@@ -75,6 +75,10 @@ function reportHasAttachment(report: SubmittedReport): boolean {
   return Boolean(report.mediaFile || report.attachments?.length);
 }
 
+function isAttendanceReport(report: SubmittedReport): boolean {
+  return String(report.id || '').startsWith('timelog-');
+}
+
 export default function AllReportsView({ reports, projects, volunteerTimeLogs = [], volunteers = [], onViewReport, onUploadReport, reportType = 'all' }: Props) {
   const { width: viewportWidth } = useWindowDimensions();
   const isNarrow = viewportWidth < 700;
@@ -162,12 +166,14 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
     return r.sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
   }, [allItems, attachmentFilter, projectById, search]);
 
-  const eventReports = useMemo(() => searchFiltered.filter(r => (r as any).projectKind === 'event'), [searchFiltered]);
+  const attendanceReports = useMemo(() => searchFiltered.filter(isAttendanceReport), [searchFiltered]);
+  const taskReports = useMemo(() => searchFiltered.filter(report => !isAttendanceReport(report)), [searchFiltered]);
+  const eventReports = useMemo(() => taskReports.filter(r => (r as any).projectKind === 'event'), [taskReports]);
   const photoReports = useMemo(() => searchFiltered.filter(reportHasPhoto), [searchFiltered]);
 
   // Build folders grouped by project — for Events/All show relevant, for Photos hide
   const folders = useMemo(() => {
-    const sourceReports = activeFilter === 'Photos' ? [] as SubmittedReport[] : activeFilter === 'Events' ? eventReports : searchFiltered;
+    const sourceReports = activeFilter === 'Photos' ? [] as SubmittedReport[] : activeFilter === 'Events' ? eventReports : taskReports;
     const map = new Map<string, { key: string; title: string; reports: SubmittedReport[]; updatedAt: string }>();
     const targetReports = sourceReports;
     targetReports.forEach(rep => {
@@ -187,7 +193,7 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
     }
     const arr = Array.from(map.values()).sort((a, b) => b.reports.length - a.reports.length || a.title.localeCompare(b.title));
     return arr;
-  }, [searchFiltered, eventReports, activeFilter, attachmentFilter, search, projects, projectById]);
+  }, [taskReports, eventReports, activeFilter, attachmentFilter, search, projects, projectById]);
 
   // Photos folders: group by image reports
   const photoFolders = useMemo(() => {
@@ -228,12 +234,19 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
     }
   }, [photoFolders, selectedPhotoFolderKey]);
 
-  const totalReports = activeFilter === 'Photos' ? photoReports.length : activeFilter === 'Events' ? eventReports.length : searchFiltered.length;
+  const totalReports = activeFilter === 'Photos' ? photoReports.length : activeFilter === 'Events' ? eventReports.length : taskReports.length;
   const totalFolders = activeFilter === 'Photos' ? photoFolders.length : folders.length;
-  const eventSectionReports = activeFilter === 'All' ? searchFiltered : eventReports;
+  const eventSectionReports = activeFilter === 'All' ? taskReports : eventReports;
   const tableReports = selectedEventFolderKey
     ? eventSectionReports.filter(report => reportFolderKey(report) === selectedEventFolderKey)
     : eventSectionReports;
+  // Keep attendance in the same folder context as task/field reports. When an
+  // event folder is selected, its attendance must switch immediately too;
+  // otherwise the folder appears to change while the attendance table stays
+  // on every event.
+  const visibleAttendanceReports = selectedEventFolderKey
+    ? attendanceReports.filter(report => reportFolderKey(report) === selectedEventFolderKey)
+    : attendanceReports;
   const selectedEventFolder = folders.find(folder => folder.key === selectedEventFolderKey);
   const photoTableReports = selectedPhotoFolderKey
     ? photoReports.filter(report => photoFolderKey(report) === selectedPhotoFolderKey)
@@ -254,6 +267,62 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
     setSelectedEventFolderKey(null);
     setSelectedPhotoFolderKey(null);
   };
+
+  const renderReportRows = (items: SubmittedReport[]) => items.map(rep => {
+    const proj = rep.projectId ? projectById.get(rep.projectId) : undefined;
+    const eventTitle = proj?.title || rep.projectTitle || (reportType === 'partner' ? 'Unlisted Project' : 'Unlisted Event');
+    const eventSub = proj?.location?.address || proj?.category || rep.category || 'NVC';
+    const dateStr = new Date(rep.submittedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    const bg = avatarBg(rep.submitterName);
+    const ic = fileIcon(rep);
+    return (
+      <View key={rep.id} style={styles.tr}>
+        <View style={[styles.td, { flex: 2.2, flexDirection: 'row', alignItems: 'center', gap: 10 }]}>
+          <View style={[styles.fileIconBox, { backgroundColor: ic.bg }]}>
+            {ic.icon === 'picture-as-pdf' ? (
+              <Text style={[styles.fileIconText, { color: ic.color }]}>Pdf</Text>
+            ) : ic.icon === 'image' ? (
+              <MaterialIcons name="image" size={16} color={ic.color} />
+            ) : (
+              <Text style={[styles.fileIconText, { color: ic.color }]}>W</Text>
+            )}
+          </View>
+          <Text style={styles.reportName} numberOfLines={1}>{rep.title}</Text>
+        </View>
+        <View style={[styles.td, { flex: 1.4 }]}>
+          <Text style={styles.eventName} numberOfLines={1}>{eventTitle}</Text>
+          <Text style={styles.eventSub} numberOfLines={1}>{eventSub}</Text>
+        </View>
+        <View style={[styles.td, { flex: 1 }]}>
+          <Text style={styles.dateText}>{dateStr}</Text>
+        </View>
+        <View style={[styles.td, { flex: 1.2, flexDirection: 'row', alignItems: 'center', gap: 10 }]}>
+          <View style={[styles.avatar, { backgroundColor: bg }]}>
+            <Text style={styles.avatarText}>{initials(rep.submitterName)}</Text>
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.submitterName} numberOfLines={1}>{rep.submitterName}</Text>
+            <Text style={styles.submitterRole} numberOfLines={1}>{rep.submitterRole === 'volunteer' ? 'Volunteer' : rep.submitterRole === 'partner' ? 'Partner' : 'Coordinator'}</Text>
+          </View>
+        </View>
+        <View style={[styles.td, { flex: 0.6, flexDirection: 'row', justifyContent: 'flex-end', gap: 12, alignItems: 'center' }]}>
+          <TouchableOpacity
+            onPress={() => {
+              const url = rep.attachments?.[0]?.url || rep.mediaFile;
+              if (url) Linking.openURL(url).catch(() => Alert.alert('Unable to open file'));
+              else onViewReport(rep);
+            }}
+            activeOpacity={0.7}
+          >
+            <MaterialIcons name="file-download" size={20} color="#64748b" />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => onViewReport(rep)} activeOpacity={0.7}>
+            <MaterialIcons name="more-vert" size={20} color="#64748b" />
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  });
 
   return (
     <View style={{ flex: 1, backgroundColor: '#F8FAF6' }}>
@@ -349,8 +418,8 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
                 <MaterialIcons name="folder" size={20} color="#8B5A2B" />
               </View>
               <View>
-                <Text style={styles.sectionTitle}>{reportType === 'partner' ? 'Project Reports' : 'Events Reports'}</Text>
-                <Text style={styles.sectionSubtitle}>{reportType === 'partner' ? 'All folders and reports related to projects.' : 'All folders and reports related to events.'}</Text>
+                <Text style={styles.sectionTitle}>{reportType === 'partner' ? 'Project Reports' : 'Task & Field Reports'}</Text>
+                <Text style={styles.sectionSubtitle}>{reportType === 'partner' ? 'All folders and reports related to projects.' : 'Submitted task and field reports related to events.'}</Text>
               </View>
             </View>
             <View style={styles.sectionHeaderRight}>
@@ -424,61 +493,46 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
             <Text style={styles.emptyTableText}>No reports found</Text>
           </View>
         ) : (
-          tableReports.map(rep => {
-            const proj = rep.projectId ? projectById.get(rep.projectId) : undefined;
-            const eventTitle = proj?.title || rep.projectTitle || (reportType === 'partner' ? 'Unlisted Project' : 'Unlisted Event');
-            const eventSub = proj?.location?.address || proj?.category || rep.category || 'NVC';
-            const dateStr = new Date(rep.submittedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-            const bg = avatarBg(rep.submitterName);
-            const ic = fileIcon(rep);
-            return (
-              <View key={rep.id} style={styles.tr}>
-                <View style={[styles.td, { flex: 2.2, flexDirection: 'row', alignItems: 'center', gap: 10 }]}>
-                  <View style={[styles.fileIconBox, { backgroundColor: ic.bg }]}>
-                    {ic.icon === 'picture-as-pdf' ? (
-                      <Text style={[styles.fileIconText, { color: ic.color }]}>Pdf</Text>
-                    ) : ic.icon === 'image' ? (
-                      <MaterialIcons name="image" size={16} color={ic.color} />
-                    ) : (
-                      <Text style={[styles.fileIconText, { color: ic.color }]}>W</Text>
-                    )}
-                  </View>
-                  <Text style={styles.reportName} numberOfLines={1}>{rep.title}</Text>
-                </View>
-                <View style={[styles.td, { flex: 1.4 }]}>
-                  <Text style={styles.eventName} numberOfLines={1}>{eventTitle}</Text>
-                  <Text style={styles.eventSub} numberOfLines={1}>{eventSub}</Text>
-                </View>
-                <View style={[styles.td, { flex: 1 }]}>
-                  <Text style={styles.dateText}>{dateStr}</Text>
-                </View>
-                <View style={[styles.td, { flex: 1.2, flexDirection: 'row', alignItems: 'center', gap: 10 }]}>
-                  <View style={[styles.avatar, { backgroundColor: bg }]}>
-                    <Text style={styles.avatarText}>{initials(rep.submitterName)}</Text>
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.submitterName} numberOfLines={1}>{rep.submitterName}</Text>
-                    <Text style={styles.submitterRole} numberOfLines={1}>{rep.submitterRole === 'volunteer' ? 'Volunteer' : rep.submitterRole === 'partner' ? 'Partner' : 'Coordinator'}</Text>
-                  </View>
-                </View>
-                <View style={[styles.td, { flex: 0.6, flexDirection: 'row', justifyContent: 'flex-end', gap: 12, alignItems: 'center' }]}>
-                  <TouchableOpacity
-                    onPress={() => {
-                      const url = rep.attachments?.[0]?.url || rep.mediaFile;
-                      if (url) Linking.openURL(url).catch(() => Alert.alert('Unable to open file'));
-                      else onViewReport(rep);
-                    }}
-                    activeOpacity={0.7}
-                  >
-                    <MaterialIcons name="file-download" size={20} color="#64748b" />
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => onViewReport(rep)} activeOpacity={0.7}>
-                    <MaterialIcons name="more-vert" size={20} color="#64748b" />
-                  </TouchableOpacity>
-                </View>
+          renderReportRows(tableReports)
+          )}
+        </View>
+      )}
+
+      {/* Attendance is kept separate from submitted task/field reports. */}
+      {(activeFilter === 'All' || activeFilter === 'Events') && (
+        <View style={[styles.sectionCard, { marginTop: 16 }]}>
+          <View style={styles.sectionHeader}>
+            <View style={styles.sectionHeaderLeft}>
+              <View style={[styles.sectionIconBox, { backgroundColor: '#DCFCE7' }]}>
+                <MaterialIcons name="event-available" size={20} color="#166534" />
               </View>
-            );
-          })
+              <View>
+                <Text style={styles.sectionTitle}>Attendance Reports</Text>
+                <Text style={styles.sectionSubtitle}>Attendance confirmations and attendance photos recorded for events.</Text>
+              </View>
+            </View>
+            <View style={styles.sectionHeaderRight}>
+              <Text style={styles.sectionMeta}>
+                {selectedEventFolder
+                  ? `${selectedEventFolder.title} • ${visibleAttendanceReports.length} report${visibleAttendanceReports.length === 1 ? '' : 's'}`
+                  : `${visibleAttendanceReports.length} report${visibleAttendanceReports.length === 1 ? '' : 's'}`}
+              </Text>
+              <MaterialIcons name="keyboard-arrow-up" size={20} color="#5B564C" />
+            </View>
+          </View>
+          <View style={styles.tableHeader}>
+            <Text style={[styles.th, { flex: 2.2 }]}>Attendance <Text style={styles.thSort}>↕</Text></Text>
+            <Text style={[styles.th, { flex: 1.4 }]}>Event <Text style={styles.thSort}>↕</Text></Text>
+            <Text style={[styles.th, { flex: 1 }]}>Date <Text style={styles.thSort}>↕</Text></Text>
+            <Text style={[styles.th, { flex: 1.2 }]}>Submitted By <Text style={styles.thSort}>↕</Text></Text>
+            <Text style={[styles.th, { flex: 0.6, textAlign: 'right' }]}>Actions</Text>
+          </View>
+          {visibleAttendanceReports.length === 0 ? (
+            <View style={styles.emptyTable}>
+              <Text style={styles.emptyTableText}>No attendance reports found</Text>
+            </View>
+          ) : (
+            renderReportRows(visibleAttendanceReports)
           )}
         </View>
       )}

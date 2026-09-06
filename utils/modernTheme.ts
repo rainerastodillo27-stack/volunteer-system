@@ -95,9 +95,9 @@ export const ModernTheme = {
   // Typography - Modern, clean font stack
   typography: {
     fontFamily: {
-      primary: "'DM Sans', sans-serif",
-      display: "'DM Sans', sans-serif",
-      mono: '"SF Mono", "Consolas", "Liberation Mono", monospace',
+      primary: "'Nunito', sans-serif",
+      display: "'Nunito', sans-serif",
+      mono: "'Nunito', sans-serif",
     },
 
     fontSize: {

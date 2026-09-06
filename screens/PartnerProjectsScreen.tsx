@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import ModernTheme from '../utils/modernTheme';
 import {
   ActivityIndicator,
+  Image,
   Modal,
   Pressable,
   RefreshControl,
@@ -21,6 +22,7 @@ import {
 } from '../models/storage';
 import { PartnerProjectApplication, Project, VolunteerTimeLog } from '../models/types';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
+import { getPrimaryProjectImageSource } from '../utils/projectMap';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 function countTrackedVolunteers(project: Project) {
@@ -69,7 +71,7 @@ export default function PartnerProjectsScreen({ route }: any) {
 
     try {
       const [snapshot, allVolunteerTimeLogs] = await Promise.all([
-        getProjectsScreenSnapshot(user, ['projects', 'partnerApplications']),
+        getProjectsScreenSnapshot(user, ['projects', 'partnerApplications'], false, false /* images not needed for partner list */),
         getAllVolunteerTimeLogs(),
       ]);
       setProjects(snapshot.projects || []);
@@ -290,6 +292,10 @@ export default function PartnerProjectsScreen({ route }: any) {
           <View style={styles.boxList}>
             {projectMetrics.map(({ project, linkedEvents, volunteerJoinCount, verifiedAttendanceCount, activeEventCount }) => {
               const projectStatus = getProjectDisplayStatus(project);
+              const projectParent = project.parentProjectId
+                ? projects.find(candidate => candidate.id === project.parentProjectId)
+                : undefined;
+              const projectImageSource = getPrimaryProjectImageSource(project, projectParent);
 
               return (
                 <TouchableOpacity
@@ -298,6 +304,11 @@ export default function PartnerProjectsScreen({ route }: any) {
                   activeOpacity={0.9}
                   onPress={() => setSelectedProjectId(project.id)}
                 >
+                  {projectImageSource ? (
+                    <Image source={projectImageSource} style={styles.projectBoxImage} resizeMode="cover" />
+                  ) : (
+                    <View style={styles.projectBoxImagePlaceholder} />
+                  )}
                   <View style={styles.projectBoxTopRow}>
                     <View style={styles.projectBoxCopy}>
                       <Text style={styles.projectBoxTitle} numberOfLines={1}>
@@ -393,6 +404,20 @@ export default function PartnerProjectsScreen({ route }: any) {
                   nestedScrollEnabled
                   keyboardShouldPersistTaps="handled"
                 >
+                  {(() => {
+                    const projectParent = selectedProjectMetrics.project.parentProjectId
+                      ? projects.find(candidate => candidate.id === selectedProjectMetrics.project.parentProjectId)
+                      : undefined;
+                    const projectImageSource = getPrimaryProjectImageSource(
+                      selectedProjectMetrics.project,
+                      projectParent,
+                    );
+                    return projectImageSource ? (
+                      <Image source={projectImageSource} style={styles.modalProjectImage} resizeMode="cover" />
+                    ) : (
+                      <View style={styles.modalProjectImagePlaceholder} />
+                    );
+                  })()}
                   <View style={styles.modalMetricRow}>
                     <View style={styles.modalMetricCard}>
                       <Text style={styles.modalMetricValue}>{selectedProjectMetrics.linkedEvents.length}</Text>
@@ -446,6 +471,10 @@ export default function PartnerProjectsScreen({ route }: any) {
                   ) : (
                     selectedProjectMetrics.linkedEvents.map(event => {
                       const eventStatus = getProjectDisplayStatus(event);
+                      const parentProject = event.parentProjectId
+                        ? projects.find(candidate => candidate.id === event.parentProjectId)
+                        : selectedProjectMetrics.project;
+                      const eventImageSource = getPrimaryProjectImageSource(event, parentProject);
                       const eventVolunteerCount = countTrackedVolunteers(event);
                       const eventVerifiedAttendanceCount = volunteerTimeLogs.filter(
                         log => log.projectId === event.id && Boolean(log.attendanceCheckedAt)
@@ -453,6 +482,11 @@ export default function PartnerProjectsScreen({ route }: any) {
 
                       return (
                         <View key={event.id} style={styles.eventItem}>
+                          {eventImageSource ? (
+                            <Image source={eventImageSource} style={styles.eventItemImage} resizeMode="cover" />
+                          ) : (
+                            <View style={styles.eventItemImagePlaceholder} />
+                          )}
                           <View style={styles.eventItemTopRow}>
                             <View style={styles.eventItemCopy}>
                               <Text style={styles.eventItemTitle}>{event.title}</Text>
@@ -662,6 +696,20 @@ const styles = StyleSheet.create({
     borderColor: '#dbe7dc',
     padding: 12,
   },
+  projectBoxImage: {
+    width: '100%',
+    height: 118,
+    borderRadius: 12,
+    marginBottom: 12,
+    backgroundColor: '#e5e7eb',
+  },
+  projectBoxImagePlaceholder: {
+    width: '100%',
+    height: 118,
+    borderRadius: 12,
+    marginBottom: 12,
+    backgroundColor: '#e5e7eb',
+  },
   projectBoxTopRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -824,6 +872,20 @@ const styles = StyleSheet.create({
   modalContentScrollContent: {
     paddingBottom: 16,
   },
+  modalProjectImage: {
+    width: '100%',
+    height: 138,
+    borderRadius: 14,
+    marginBottom: 12,
+    backgroundColor: '#e5e7eb',
+  },
+  modalProjectImagePlaceholder: {
+    width: '100%',
+    height: 138,
+    borderRadius: 14,
+    marginBottom: 12,
+    backgroundColor: '#e5e7eb',
+  },
   projectDetailPanel: {
     marginTop: 12,
     borderTopWidth: 1,
@@ -874,6 +936,20 @@ const styles = StyleSheet.create({
     borderColor: '#dbe7dc',
     padding: 12,
     marginTop: 6,
+  },
+  eventItemImage: {
+    width: '100%',
+    height: 92,
+    borderRadius: 11,
+    marginBottom: 10,
+    backgroundColor: '#e5e7eb',
+  },
+  eventItemImagePlaceholder: {
+    width: '100%',
+    height: 92,
+    borderRadius: 11,
+    marginBottom: 10,
+    backgroundColor: '#e5e7eb',
   },
   eventItemTopRow: {
     flexDirection: 'row',

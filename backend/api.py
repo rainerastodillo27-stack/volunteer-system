@@ -6,10 +6,12 @@ import threading
 import time
 import secrets
 import smtplib
+import socket
 import traceback
 import re
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import formataddr
 from datetime import datetime, timezone, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -20,6 +22,11 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
+try:
+    import dns.resolver as dns_resolver
+except ImportError:  # pragma: no cover - optional locally; required in deployment
+    dns_resolver = None
 
 from .app_storage_seed import (
     HOT_STORAGE_TABLES,
@@ -39,7 +46,7 @@ from .db import (
     init_postgres_pool,
     _is_retryable_connection_error,
 )
-from .field_rules import normalize_comparable_phone
+from .field_rules import is_valid_email, normalize_comparable_phone
 from .image_compression import compress_base64_image, get_image_size_kb
 from .password_utils import hash_password, is_bcrypt_hash, verify_password
 from .relational_mirror import (
@@ -104,6 +111,11 @@ class TTLCache:
 _projects_snapshot_cache = TTLCache(ttl_seconds=300)
 _projects_snapshot_lock = threading.Lock()
 _storage_collection_cache = TTLCache(ttl_seconds=120)
+# Direct-message writes clear this cache and are also pushed over WebSocket, so
+# a longer read TTL removes repeated database work without delaying new data.
+_message_query_cache = TTLCache(ttl_seconds=30)
+_message_query_locks: dict[str, threading.Lock] = {}
+_message_query_locks_guard = threading.Lock()
 _message_storage_ready = False
 _message_storage_lock = threading.Lock()
 NON_CACHEABLE_COLLECTION_KEYS = {"programTracks", "programs"}
@@ -118,6 +130,16 @@ _DEFAULT_SNAPSHOT_FIELDS = {
     "partnerApplications",
     "volunteerJoinRecords",
 }
+
+
+def _get_message_query_lock(cache_key: str) -> threading.Lock:
+    """Return a per-query lock so identical slow reads never pile up."""
+    with _message_query_locks_guard:
+        lock = _message_query_locks.get(cache_key)
+        if lock is None:
+            lock = threading.Lock()
+            _message_query_locks[cache_key] = lock
+        return lock
 
 
 def _stable_short_join_record_id(project_id: str, volunteer_id: str) -> str:
@@ -143,6 +165,7 @@ class StoragePayload(BaseModel):
 # Request payload for batch storage reads.
 class StorageBatchPayload(BaseModel):
     keys: list[str]
+    include_images: bool = False
 
 
 # Request payload for email, username alias, or phone login.
@@ -174,6 +197,14 @@ class RejectionEmailPayload(BaseModel):
     recipientName: str = "Volunteer"
     rejectionReason: str
     role: str = "volunteer"
+
+
+# Request payload for sending account approval notification emails.
+class ApprovalEmailPayload(BaseModel):
+    email: str
+    name: str = "Volunteer"
+    role: str = "volunteer"
+    approvedByName: str = "the admin team"
 
 
 # Request payload for direct project joins.
@@ -393,20 +424,40 @@ def _send_email_message(
     text_body: str,
     html_body: str | None = None,
 ) -> None:
-    sender_email = os.getenv("OTP_GMAIL_SENDER", "").strip()
-    app_password = os.getenv("OTP_GMAIL_APP_PASSWORD", "").strip()
-    recipient = str(recipient_email or "").strip()
+    recipient = str(recipient_email or "").strip().lower()
 
-    if not recipient:
-        raise ValueError("Recipient email is required.")
+    if not recipient or not is_valid_email(recipient):
+        raise ValueError("A valid recipient email address is required.")
+
+    # Keep the existing OTP_* names as a backwards-compatible fallback while
+    # allowing notification credentials to be separated later.
+    sender_email = (
+        os.getenv("NOTIFICATION_GMAIL_SENDER", "").strip()
+        or os.getenv("OTP_GMAIL_SENDER", "").strip()
+    )
+    app_password = (
+        os.getenv("NOTIFICATION_GMAIL_APP_PASSWORD", "").strip()
+        or os.getenv("OTP_GMAIL_APP_PASSWORD", "").strip()
+    )
 
     if not sender_email or not app_password:
         print(f"[EMAIL-DEV] Email sender not configured. Would send to {recipient}: {subject}\n{text_body}")
         return
 
+    if not is_valid_email(sender_email):
+        raise ValueError("The configured notification sender email is invalid.")
+
+    # Gmail may accept a message and only bounce it much later when the
+    # recipient domain has no usable mail route. Catch that common
+    # configuration/data error before handing the message to SMTP.
+    validate_recipient_domain = os.getenv("NOTIFICATION_VALIDATE_RECIPIENT_DOMAIN", "true").strip().lower()
+    if validate_recipient_domain not in {"0", "false", "no", "off"}:
+        _validate_recipient_email_domain(recipient)
+
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = sender_email
+    sender_name = os.getenv("NOTIFICATION_SENDER_NAME", "NVC Connect").strip() or "NVC Connect"
+    msg["From"] = formataddr((sender_name, sender_email))
     msg["To"] = recipient
     msg.attach(MIMEText(text_body, "plain"))
     if html_body:
@@ -414,7 +465,43 @@ def _send_email_message(
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(sender_email, app_password)
-        server.sendmail(sender_email, recipient, msg.as_string())
+        server.sendmail(sender_email, [recipient], msg.as_string())
+
+
+def _validate_recipient_email_domain(recipient: str) -> None:
+    domain = recipient.rsplit("@", 1)[1]
+
+    if dns_resolver is not None:
+        try:
+            mx_answers = dns_resolver.resolve(domain, "MX")
+            mx_hosts = [str(answer.exchange).rstrip(".").strip() for answer in mx_answers]
+            if any(host and host not in {"~", "."} for host in mx_hosts):
+                return
+            if mx_hosts:
+                raise ValueError(
+                    f"Recipient email domain '{domain}' has no usable mail exchanger. "
+                    "Check the email address before retrying."
+                )
+        except dns_resolver.NXDOMAIN as error:
+            raise ValueError(
+                f"Recipient email domain '{domain}' does not exist. "
+                "Check the email address before retrying."
+            ) from error
+        except dns_resolver.NoAnswer:
+            # Some domains rely on the RFC fallback to their A/AAAA address.
+            pass
+        except (dns_resolver.NoNameservers, dns_resolver.LifetimeTimeout):
+            # Let the address fallback below decide whether the domain exists
+            # when the configured DNS resolver is temporarily unavailable.
+            pass
+
+    try:
+        socket.getaddrinfo(domain, None)
+    except socket.gaierror as error:
+        raise ValueError(
+            f"Recipient email domain '{domain}' could not be resolved. "
+            "Check the email address before retrying."
+        ) from error
 
 
 def _send_rejection_email(
@@ -478,6 +565,43 @@ def _send_rejection_email(
         <p style="color: #94a3b8; font-size: 11px; margin: 0;">
           This is an automated notification from NVC Connect.
         </p>
+      </div>
+    </div>
+    """
+
+    _send_email_message(recipient_email, subject, text_body, html_body)
+
+
+def _send_approval_email(
+    recipient_email: str,
+    recipient_name: str,
+    role: str,
+    approved_by_name: str,
+) -> None:
+    name = str(recipient_name or "Volunteer").strip() or "Volunteer"
+    approver = str(approved_by_name or "the admin team").strip() or "the admin team"
+    role_label = "partner organization" if role == "partner" else "volunteer"
+    subject = f"Your NVC Connect {role_label} account has been approved"
+
+    text_body = (
+        f"Dear {name},\n\n"
+        f"Good news! Your NVC Connect {role_label} account has been approved by {approver}.\n\n"
+        "You can now sign in and access the features available for your account.\n\n"
+        "Warm regards,\n"
+        "Negrense Volunteers for Change Foundation\n"
+    )
+
+    html_body = f"""
+    <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:28px;background:#f8fafc;border-radius:12px;">
+      <div style="background:#166534;padding:22px;border-radius:10px 10px 0 0;">
+        <h1 style="color:#ffffff;margin:0;font-size:21px;">NVC Connect</h1>
+        <p style="color:#bbf7d0;margin:6px 0 0;font-size:13px;">Account approval</p>
+      </div>
+      <div style="background:#ffffff;padding:24px;border-radius:0 0 10px 10px;">
+        <p style="color:#334155;">Dear <strong>{name}</strong>,</p>
+        <p style="color:#334155;line-height:1.6;">Your {role_label} account has been approved by <strong>{approver}</strong>.</p>
+        <p style="color:#334155;line-height:1.6;">You can now sign in to NVC Connect and start using your account.</p>
+        <p style="color:#64748b;font-size:13px;margin-top:24px;">Warm regards,<br/><strong>Negrense Volunteers for Change Foundation</strong></p>
       </div>
     </div>
     """
@@ -910,12 +1034,23 @@ class ConnectionManager:
     # Sends one event payload to all active sockets for a user.
     async def send_user_event(self, user_id: str, payload: dict[str, Any]) -> None:
         sockets = list(self._connections.get(user_id, set()))
-        stale: list[WebSocket] = []
-        for socket in sockets:
+        if not sockets:
+            return
+
+        async def send_to_socket(socket: WebSocket) -> WebSocket | None:
             try:
-                await asyncio.wait_for(socket.send_json(payload), timeout=5)
+                await asyncio.wait_for(socket.send_json(payload), timeout=3)
             except Exception:
-                stale.append(socket)
+                return socket
+            return None
+
+        # Send to all web/mobile tabs at once. A stale tab must not delay the
+        # live update for an active conversation in another client.
+        stale = [
+            socket
+            for socket in await asyncio.gather(*(send_to_socket(socket) for socket in sockets))
+            if socket is not None
+        ]
         for socket in stale:
             self.disconnect(user_id, socket)
 
@@ -923,8 +1058,7 @@ class ConnectionManager:
     async def broadcast_message_event(self, message: dict[str, Any]) -> None:
         payload = {"type": "message.changed", "message": message}
         recipients = {message["senderId"], message["recipientId"]}
-        for user_id in recipients:
-            await self.send_user_event(user_id, payload)
+        await asyncio.gather(*(self.send_user_event(user_id, payload) for user_id in recipients))
 
     # Broadcasts a project-group message to all eligible project chat participants.
     async def broadcast_project_group_message_event(
@@ -934,8 +1068,7 @@ class ConnectionManager:
         with get_connection() as connection:
             recipients = _get_project_chat_participant_user_ids(connection, project_id)
         recipients.add(message["senderId"])
-        for user_id in recipients:
-            await self.send_user_event(user_id, payload)
+        await asyncio.gather(*(self.send_user_event(user_id, payload) for user_id in recipients))
 
     # Broadcasts a shared-storage change notification to all listeners.
     async def broadcast_storage_event(self, keys: list[str]) -> None:
@@ -944,13 +1077,21 @@ class ConnectionManager:
 
         payload = {"type": "storage.changed", "keys": keys}
         sockets = list(self._storage_connections)
-        stale: list[WebSocket] = []
+        if not sockets:
+            return
 
-        for socket in sockets:
+        async def send_to_socket(socket: WebSocket) -> WebSocket | None:
             try:
-                await asyncio.wait_for(socket.send_json(payload), timeout=5)
+                await asyncio.wait_for(socket.send_json(payload), timeout=3)
             except Exception:
-                stale.append(socket)
+                return socket
+            return None
+
+        stale = [
+            socket
+            for socket in await asyncio.gather(*(send_to_socket(socket) for socket in sockets))
+            if socket is not None
+        ]
 
         for socket in stale:
             self.disconnect_storage(socket)
@@ -980,7 +1121,7 @@ def ensure_message_storage() -> None:
             cursor.execute(
                 """
                 create table if not exists public.messages (
-                  id text primary key,
+                  messages_id text primary key,
                   sender_id text not null,
                   recipient_id text not null,
                   project_id text,
@@ -1009,6 +1150,18 @@ def ensure_message_storage() -> None:
             )
             cursor.execute(
                 "create index if not exists messages_read_recipient_idx on public.messages (recipient_id, read) where read = false"
+            )
+            # These indexes match the two independent branches used by the
+            # inbox and conversation reads.  They avoid a full table scan for
+            # the common `sender OR recipient` pattern.
+            cursor.execute(
+                "create index if not exists messages_sender_recent_idx on public.messages (sender_id, timestamp desc, messages_id desc)"
+            )
+            cursor.execute(
+                "create index if not exists messages_recipient_recent_idx on public.messages (recipient_id, timestamp desc, messages_id desc)"
+            )
+            cursor.execute(
+                "create index if not exists messages_pair_recent_idx on public.messages (sender_id, recipient_id, timestamp desc, messages_id desc)"
             )
         connection.commit()
 
@@ -1099,26 +1252,31 @@ def _sanitize_proposal_content_payload(content: Any) -> str:
             return raw_content
         
         modified = False
+
+        # New proposal images are compressed before persistence.  Keep those
+        # compact data URIs so web and mobile can preview/download them, while
+        # still preventing legacy multi-megabyte attachments from making every
+        # message response slow.
+        def sanitize_attachment(attachment: Any) -> Any:
+            nonlocal modified
+            if not isinstance(attachment, dict):
+                return attachment
+            attachment_url = attachment.get("url")
+            if (
+                isinstance(attachment_url, str)
+                and attachment_url.startswith("data:")
+                and len(attachment_url) > 100_000
+            ):
+                modified = True
+                return {**attachment, "url": "[IMAGE_ATTACHMENT]"}
+            return attachment
+
         if "attachments" in data and isinstance(data["attachments"], list):
-            sanitized_att = []
-            for att in data["attachments"]:
-                if isinstance(att, dict) and isinstance(att.get("url"), str) and att["url"].startswith("data:"):
-                    sanitized_att.append({**att, "url": "[IMAGE_ATTACHMENT]"})
-                    modified = True
-                else:
-                    sanitized_att.append(att)
-            data["attachments"] = sanitized_att
+            data["attachments"] = [sanitize_attachment(att) for att in data["attachments"]]
 
         details = data.get("proposalDetails")
         if isinstance(details, dict) and "attachments" in details and isinstance(details["attachments"], list):
-            sanitized_att = []
-            for att in details["attachments"]:
-                if isinstance(att, dict) and isinstance(att.get("url"), str) and att["url"].startswith("data:"):
-                    sanitized_att.append({**att, "url": "[IMAGE_ATTACHMENT]"})
-                    modified = True
-                else:
-                    sanitized_att.append(att)
-            details["attachments"] = sanitized_att
+            details["attachments"] = [sanitize_attachment(att) for att in details["attachments"]]
             data["proposalDetails"] = details
 
         if modified:
@@ -1734,12 +1892,22 @@ def _invalidate_collection_cache(keys: list[str] | set[str] | tuple[str, ...] | 
         return
     for key in keys:
         _storage_collection_cache.delete(_collection_cache_key(str(key)))
+        _storage_collection_cache.delete(f"collection:media:{key}:0")
+        _storage_collection_cache.delete(f"collection:media:{key}:1")
+        _storage_collection_cache.delete(f"collection:{key}:images:0")
+        _storage_collection_cache.delete(f"collection:{key}:images:1")
+    if "messages" in keys:
+        _message_query_cache.clear()
     # Invalidate admin dashboard cache whenever any of its constituent keys change.
     if any(k in _ADMIN_DASHBOARD_KEYS for k in keys):
         _admin_dashboard_cache.delete(_ADMIN_DASHBOARD_CACHE_KEY)
 
 
-def _get_cached_collection(connection: Any, key: str) -> Any:
+def _get_cached_collection(
+    connection: Any,
+    key: str,
+    include_images: bool = True,
+) -> Any:
     if key in NON_CACHEABLE_COLLECTION_KEYS:
         if is_hot_storage_key(key):
             if key == "volunteerTimeLogs":
@@ -1749,14 +1917,18 @@ def _get_cached_collection(connection: Any, key: str) -> Any:
             return _get_special_storage_collection(connection, key)
         return None
 
-    cache_key = _collection_cache_key(key)
+    cache_key = (
+        f"collection:{key}:images:{1 if include_images else 0}"
+        if key == "volunteerTimeLogs"
+        else _collection_cache_key(key)
+    )
     cached = _storage_collection_cache.get(cache_key)
     if cached is not None:
         return cached
 
     if is_hot_storage_key(key):
         if key == "volunteerTimeLogs":
-            value = _get_admin_dashboard_collection(connection, key)
+            value = _get_admin_dashboard_collection(connection, key, include_images=include_images)
         else:
             value = get_postgres_hot_storage_collection(connection, key)
     elif key in SPECIAL_STORAGE_KEYS:
@@ -1822,11 +1994,17 @@ def _get_partner_application_parent_repair_records(connection: Any) -> list[dict
     ]
 
 
-def _get_admin_dashboard_collection(connection: Any, key: str) -> Any:
+def _get_admin_dashboard_collection(
+    connection: Any,
+    key: str,
+    include_images: bool = True,
+) -> Any:
     from psycopg.rows import dict_row
 
     if key in {"projects", "events", "programs"}:
-        return _get_media_light_collection(connection, key)
+        # The dashboard list does not render full-size media. Keep its payload
+        # small; detail screens request the real uploaded image separately.
+        return _get_cached_media_light_collection(connection, key, include_images=False)
 
     if key == "volunteerTimeLogs":
         pk_column = _primary_key_column(key)
@@ -1834,9 +2012,10 @@ def _get_admin_dashboard_collection(connection: Any, key: str) -> Any:
             cursor.execute(
                 f"""
                 select {pk_column} as id, volunteer_id, project_id, time_in, time_out, note,
-                       attendance_photo, attendance_confirmed_at, attendance_checked_at,
+                       {"attendance_photo" if include_images else "null::text as attendance_photo"},
+                       attendance_confirmed_at, attendance_checked_at,
                        attendance_checked_by, attendance_checked_by_name,
-                       completion_photo, completion_report
+                       {"completion_photo" if include_images else "null::text as completion_photo"}, completion_report
                 from volunteer_time_logs
                 order by {pk_column} asc
                 """
@@ -1954,13 +2133,28 @@ def _get_admin_dashboard_collection(connection: Any, key: str) -> Any:
     return _get_cached_collection(connection, key)
 
 
-def _get_media_light_collection(connection: Any, key: str) -> list[dict[str, Any]]:
+def _compress_image_data_uri(value: Any) -> Any:
+    if not isinstance(value, str) or len(value) <= 80_000:
+        return value
+
+    prefix = ""
+    body = value
+    if "," in value and value[:50].lower().startswith("data:"):
+        prefix, body = value.split(",", 1)
+        prefix = f"{prefix},"
+
+    compressed = compress_base64_image(body, max_size_bytes=60_000, max_width=800)
+    return f"{prefix}{compressed}" if compressed else value
+
+
+def _get_media_light_collection(connection: Any, key: str, include_images: bool = True) -> list[dict[str, Any]]:
     from psycopg.rows import dict_row
 
     spec = TABLE_SPECS[key]
     column_names = [column_name for column_name, _ in spec["columns"]]
     select_columns = [
-        "null::text as image_url" if column_name == "image_url" else column_name
+        ("null::text as image_url" if not include_images else column_name)
+        if column_name == "image_url" else column_name
         for column_name in column_names
     ]
     pk_column = _primary_key_column(key)
@@ -1975,7 +2169,26 @@ def _get_media_light_collection(connection: Any, key: str) -> list[dict[str, Any
         )
         rows = cursor.fetchall()
 
-    return [_row_to_item(key, row) for row in rows]
+    items = [_row_to_item(key, row) for row in rows]
+    if include_images:
+        for item in items:
+            item["imageUrl"] = _compress_image_data_uri(item.get("imageUrl"))
+    return items
+
+
+def _get_cached_media_light_collection(
+    connection: Any,
+    key: str,
+    include_images: bool = True,
+) -> list[dict[str, Any]]:
+    cache_key = f"collection:media:{key}:{1 if include_images else 0}"
+    cached = _storage_collection_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    value = _get_media_light_collection(connection, key, include_images=include_images)
+    _storage_collection_cache.set(cache_key, value)
+    return value
 
 
 # Fetches a single hot-storage row by item id.
@@ -2013,6 +2226,67 @@ def _postgres_get_hot_items_by_field(
 # Inserts or updates one hot-storage item row.
 def _postgres_upsert_hot_item(connection: Any, key: str, item: dict[str, Any]) -> dict[str, Any]:
     try:
+        # Automatic compression of oversized images on ingest
+        if key in {"projects", "events", "programs"} and isinstance(item.get("imageUrl"), str):
+            url = item["imageUrl"]
+            if len(url) > 80_000:
+                prefix = ""
+                if "," in url and ("data:image" in url[:50] or "data:application" in url[:50]):
+                    prefix, b64 = url.split(",", 1)
+                    prefix += ","
+                else:
+                    b64 = url
+                compressed = compress_base64_image(b64, max_size_bytes=60_000, max_width=800)
+                if compressed:
+                    item = dict(item)
+                    item["imageUrl"] = f"{prefix}{compressed}" if prefix else compressed
+        elif key == "partnerProjectApplications" and isinstance(item.get("proposalDetails"), dict):
+            details = item["proposalDetails"]
+            attachments = details.get("attachments")
+            if isinstance(attachments, list):
+                new_attachments = []
+                changed = False
+                for att in attachments:
+                    if isinstance(att, dict):
+                        att_url = att.get("url") or att.get("uri") or att.get("data")
+                        if isinstance(att_url, str) and len(att_url) > 80_000:
+                            prefix = ""
+                            if "," in att_url and ("data:image" in att_url[:50] or "data:application" in att_url[:50]):
+                                prefix, b64 = att_url.split(",", 1)
+                                prefix += ","
+                            else:
+                                b64 = att_url
+                            comp = compress_base64_image(b64, max_size_bytes=60_000, max_width=800)
+                            if comp:
+                                new_att = dict(att)
+                                if "url" in new_att: new_att["url"] = f"{prefix}{comp}" if prefix else comp
+                                elif "uri" in new_att: new_att["uri"] = f"{prefix}{comp}" if prefix else comp
+                                elif "data" in new_att: new_att["data"] = f"{prefix}{comp}" if prefix else comp
+                                new_attachments.append(new_att)
+                                changed = True
+                            else:
+                                new_attachments.append(att)
+                        else:
+                            new_attachments.append(att)
+                    elif isinstance(att, str) and len(att) > 80_000:
+                        prefix = ""
+                        if "," in att and ("data:image" in att[:50] or "data:application" in att[:50]):
+                            prefix, b64 = att.split(",", 1)
+                            prefix += ","
+                        else:
+                            b64 = att
+                        comp = compress_base64_image(b64, max_size_bytes=60_000, max_width=800)
+                        if comp:
+                            new_attachments.append(f"{prefix}{comp}" if prefix else comp)
+                            changed = True
+                        else:
+                            new_attachments.append(att)
+                    else:
+                        new_attachments.append(att)
+                if changed:
+                    item = dict(item)
+                    item["proposalDetails"] = dict(details, attachments=new_attachments)
+
         result = upsert_relational_item(connection, key, item)
         _invalidate_collection_cache([key])
         # Only clear snapshot cache for keys that affect the snapshot
@@ -2423,6 +2697,7 @@ def _build_projects_snapshot(
     user_id: str | None,
     role: str | None,
     requested_fields: set[str] | None = None,
+    include_images: bool = True,
 ) -> dict[str, Any]:
     import sys
     import time as _time
@@ -2449,13 +2724,17 @@ def _build_projects_snapshot(
     # CORE LOAD: Only fetch the collections requested by the screen.
     if include_projects or include_join_records:
         try:
-            raw_projects = _get_media_light_collection(connection, "projects")
+            raw_projects = _get_cached_media_light_collection(
+                connection, "projects", include_images=include_images
+            )
         except Exception as e:
             print(f"[ERROR] Failed to fetch projects: {type(e).__name__}: {e}", flush=True)
             raw_projects = []
         
         try:
-            raw_events = _get_media_light_collection(connection, "events")
+            raw_events = _get_cached_media_light_collection(
+                connection, "events", include_images=include_images
+            )
         except Exception as e:
             print(f"[ERROR] Failed to fetch events: {type(e).__name__}: {e}", flush=True)
             raw_events = []
@@ -2470,7 +2749,9 @@ def _build_projects_snapshot(
     # Fetch programs table if needed for projects, program rows, or programTrack compatibility.
     if include_projects or include_programs or include_program_tracks:
         try:
-            raw_programs_table = _get_media_light_collection(connection, "programs") or []
+            raw_programs_table = _get_cached_media_light_collection(
+                connection, "programs", include_images=include_images
+            ) or []
         except Exception as e:
             print(f"[ERROR] Failed to fetch programs: {type(e).__name__}: {e}", flush=True)
             raw_programs_table = []
@@ -2783,7 +3064,7 @@ def startup() -> None:
 
         # Ensure message tables and indexes exist at startup
         try:
-            ensure_message_storage()
+            ensure_message_storage_once()
             print("[OK] Message storage indexes ensured.")
         except Exception as error:
             print(f"[WARN] Message storage ensure skipped: {error}")
@@ -2848,17 +3129,24 @@ def startup() -> None:
     def _warm_projects_snapshot_cache() -> None:
         try:
             with get_connection() as connection:
-                full_snapshot = _build_projects_snapshot(connection, None, None, None)
-                _projects_snapshot_cache.set("snapshot:None:None:*", full_snapshot)
+                full_snapshot = _build_projects_snapshot(connection, None, None, None, True)
+                _projects_snapshot_cache.set("snapshot:images-v4:None:None:*:1", full_snapshot)
                 _projects_snapshot_cache.set(
-                    "snapshot:None:None:projects",
-                    _build_projects_snapshot(connection, None, None, {"projects"}),
+                    "snapshot:images-v4:None:None:projects:0",
+                    _build_projects_snapshot(connection, None, None, {"projects"}, False),
+                )
+                lightweight_snapshot = _build_projects_snapshot(
+                    connection,
+                    None,
+                    None,
+                    {"projects", "statusUpdates"},
+                    False,
                 )
                 _projects_snapshot_cache.set(
-                    "snapshot:None:None:projects,statusUpdates",
+                    "snapshot:images-v4:None:None:projects,statusUpdates:0",
                     {
-                        "projects": full_snapshot.get("projects", []),
-                        "statusUpdates": full_snapshot.get("statusUpdates", []),
+                        "projects": lightweight_snapshot.get("projects", []),
+                        "statusUpdates": lightweight_snapshot.get("statusUpdates", []),
                         "volunteerProfile": None,
                         "volunteerMatches": [],
                         "timeLogs": [],
@@ -2872,7 +3160,11 @@ def startup() -> None:
                 items: dict[str, Any] = {}
                 for key in _ADMIN_DASHBOARD_KEYS:
                     try:
-                        items[key] = _get_admin_dashboard_collection(connection, key)
+                        items[key] = _get_admin_dashboard_collection(
+                            connection,
+                            key,
+                            include_images=False,
+                        )
                     except Exception:
                         items[key] = []
                 _admin_dashboard_cache.set(_ADMIN_DASHBOARD_CACHE_KEY, {"items": items})
@@ -3050,6 +3342,61 @@ def _resolve_admin_message_user_id(connection: Any, preferred_user_id: str | Non
 _PROPOSAL_CARD_PREFIX = "___PROPOSAL_CARD___:"
 
 
+async def _create_proposal_submission_message(
+    application: dict[str, Any],
+    sender_id: str,
+) -> None:
+    """Persist and publish a proposal card without blocking the submit response."""
+    def persist_message() -> dict[str, Any]:
+        ensure_message_storage_once()
+        from uuid import uuid4
+
+        proposal_message_id = f"msg-proposal-{uuid4()}"
+        proposal_timestamp = datetime.now(timezone.utc).isoformat()
+        proposal_content = f"{_PROPOSAL_CARD_PREFIX}{json.dumps(application)}"
+
+        with get_connection() as connection:
+            admin_id = _resolve_admin_message_user_id(connection)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO public.messages (
+                      messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        proposal_message_id,
+                        sender_id,
+                        admin_id,
+                        None,
+                        proposal_content,
+                        proposal_timestamp,
+                        False,
+                        json.dumps([]),
+                    ),
+                )
+            connection.commit()
+
+        return {
+            "id": proposal_message_id,
+            "senderId": sender_id,
+            "recipientId": admin_id,
+            "projectId": None,
+            "content": proposal_content,
+            "timestamp": proposal_timestamp,
+            "read": False,
+            "attachments": [],
+        }
+
+    try:
+        message_data = await asyncio.to_thread(persist_message)
+        _invalidate_collection_cache(["messages"])
+        await connection_manager.broadcast_message_event(message_data)
+    except Exception as error:
+        print(f"[ERROR] Error creating proposal message: {error}")
+
+
 def _proposal_card_payload(content: Any) -> dict[str, Any] | None:
     raw_content = str(content or "")
     if not raw_content.startswith(_PROPOSAL_CARD_PREFIX):
@@ -3163,7 +3510,7 @@ def _reconcile_partner_proposal_submission_cards(
                 reconciled_card["approvedProjectTitle"] = review_card["approvedProjectTitle"]
 
             cursor.execute(
-                "update public.messages set content = %s where id = %s",
+                "update public.messages set content = %s where messages_id = %s",
                 (
                     f"{_PROPOSAL_CARD_PREFIX}{json.dumps(reconciled_card)}",
                     submission_row["messages_id"],
@@ -3578,18 +3925,30 @@ def send_rejection_email_endpoint(payload: RejectionEmailPayload) -> dict[str, A
         return {"success": False, "message": f"Email sending failed: {str(e)}"}
 
 
+@app.post("/auth/approval-email")
+# API endpoint for sending an account approval notification email.
+def send_approval_email_endpoint(payload: ApprovalEmailPayload) -> dict[str, Any]:
+    try:
+        _send_approval_email(
+            recipient_email=payload.email,
+            recipient_name=payload.name,
+            role=payload.role,
+            approved_by_name=payload.approvedByName,
+        )
+        return {"success": True, "message": "Approval email sent successfully."}
+    except Exception as error:
+        print(f"[APPROVAL-EMAIL-ERROR] Failed to send approval email: {error}")
+        return {"success": False, "message": f"Email sending failed: {str(error)}"}
+
+
 @app.post("/auth/users/{user_id}/approve")
 # API endpoint for admin to approve a pending user account and linked records.
 async def approve_user(user_id: str, payload: UserApprovalPayload, admin_id: str) -> dict[str, Any]:
     with get_connection() as connection:
-        users = get_postgres_hot_storage_collection(connection, "users")
-        user_index = next(
-            (index for index, candidate in enumerate(users) if str(candidate.get("id") or "") == user_id),
-            -1,
-        )
-        if user_index < 0:
+        user = _postgres_get_hot_item_by_id(connection, "users", user_id)
+        if user is None:
             raise HTTPException(status_code=404, detail="User not found.")
-        user = dict(users[user_index])
+        user = dict(user)
 
         approved_at = datetime.now(timezone.utc).isoformat()
 
@@ -3599,16 +3958,16 @@ async def approve_user(user_id: str, payload: UserApprovalPayload, admin_id: str
             user["approvedAt"] = approved_at
             # Remove rejection reason if it was previously rejected
             user.pop("rejectionReason", None)
-            users[user_index] = user
-            replace_postgres_hot_storage_collection(connection, "users", users)
+            _postgres_upsert_hot_item(connection, "users", user)
             changed_keys = ["users"]
 
             if user.get("role") == "volunteer":
-                # Find linked volunteer and update it
-                volunteers = get_postgres_hot_storage_collection(connection, "volunteers")
                 normalized_user_email = str(user.get("email") or "").strip().lower()
                 normalized_user_phone = _normalize_comparable_phone(user.get("phone"))
-                for volunteer in volunteers:
+                linked_volunteers = _postgres_get_hot_items_by_field(connection, "volunteers", "userId", user_id)
+                if not linked_volunteers:
+                    linked_volunteers = get_postgres_hot_storage_collection(connection, "volunteers")
+                for volunteer in linked_volunteers:
                     if (
                         str(volunteer.get("userId") or "") == user_id
                         or (
@@ -3624,14 +3983,17 @@ async def approve_user(user_id: str, payload: UserApprovalPayload, admin_id: str
                         volunteer["reviewedBy"] = admin_id
                         volunteer["reviewedAt"] = approved_at
                         volunteer["credentialsUnlockedAt"] = approved_at
-                replace_postgres_hot_storage_collection(connection, "volunteers", volunteers)
-                changed_keys.append("volunteers")
+                        _postgres_upsert_hot_item(connection, "volunteers", volunteer)
+                if linked_volunteers:
+                    changed_keys.append("volunteers")
 
             if user.get("role") == "partner":
-                partners = get_postgres_hot_storage_collection(connection, "partners")
                 normalized_user_email = str(user.get("email") or "").strip().lower()
                 normalized_user_phone = _normalize_comparable_phone(user.get("phone"))
-                for partner in partners:
+                linked_partners = _postgres_get_hot_items_by_field(connection, "partners", "ownerUserId", user_id)
+                if not linked_partners:
+                    linked_partners = get_postgres_hot_storage_collection(connection, "partners")
+                for partner in linked_partners:
                     if (
                         str(partner.get("ownerUserId") or "") == user_id
                         or (
@@ -3647,8 +4009,9 @@ async def approve_user(user_id: str, payload: UserApprovalPayload, admin_id: str
                         partner["validatedBy"] = admin_id
                         partner["validatedAt"] = approved_at
                         partner["credentialsUnlockedAt"] = approved_at
-                replace_postgres_hot_storage_collection(connection, "partners", partners)
-                changed_keys.append("partners")
+                        _postgres_upsert_hot_item(connection, "partners", partner)
+                if linked_partners:
+                    changed_keys.append("partners")
 
             from uuid import uuid4
             notification = {
@@ -3688,28 +4051,26 @@ async def approve_user(user_id: str, payload: UserApprovalPayload, admin_id: str
             changed_keys.append("messages")
             _invalidate_collection_cache(changed_keys)
             _projects_snapshot_cache.clear()
-            await connection_manager.broadcast_storage_event(changed_keys)
+            asyncio.create_task(connection_manager.broadcast_storage_event(changed_keys))
 
             return {"user": user, "message": "User account and linked records approved successfully."}
         elif payload.status == "rejected":
             user_email = str(user.get("email") or "").strip()
             user_name = str(user.get("name") or "Volunteer").strip()
             rejection_reason = payload.rejectionReason or "Application did not meet requirements."
-            if user_email:
-                try:
-                    _send_rejection_email(
-                        recipient_email=user_email,
-                        recipient_name=user_name,
-                        rejection_reason=rejection_reason,
-                        role=str(user.get("role") or "volunteer"),
-                    )
-                except Exception as email_err:
-                    print(f"[REJECTION-EMAIL-ERROR] Error sending rejection email in approve_user: {email_err}")
             changed_keys = _delete_user_account_records(connection, user_id)
             connection.commit()
             _invalidate_collection_cache(changed_keys)
             _projects_snapshot_cache.clear()
-            await connection_manager.broadcast_storage_event(changed_keys)
+            asyncio.create_task(connection_manager.broadcast_storage_event(changed_keys))
+            if user_email:
+                asyncio.create_task(asyncio.to_thread(
+                    _send_rejection_email,
+                    recipient_email=user_email,
+                    recipient_name=user_name,
+                    rejection_reason=rejection_reason,
+                    role=str(user.get("role") or "volunteer"),
+                ))
             return {
                 "deletedUserId": user_id,
                 "message": payload.rejectionReason or "User account rejected and email sent.",
@@ -3945,8 +4306,13 @@ async def delete_user_account(user_id: str) -> dict[str, Any]:
 
     _invalidate_collection_cache(changed_keys)
     _projects_snapshot_cache.clear()
-    await connection_manager.broadcast_storage_event(changed_keys)
-    return {"status": "ok", "deletedUserId": user_id}
+    asyncio.create_task(connection_manager.broadcast_storage_event(changed_keys))
+    return {
+        "status": "ok",
+        "deletedUserId": user_id,
+        # Let the caller invalidate only collections that actually changed.
+        "changedKeys": changed_keys,
+    }
 
 
 @app.get("/validation/dswd-accreditation/{accreditation_no}")
@@ -3992,6 +4358,7 @@ def get_projects_snapshot(
     fields: str | None = None,
     limit: int | None = None,
     offset: int = 0,
+    include_images: bool = True,
 ) -> dict[str, Any]:
     """Return the project snapshot used by web and native project screens."""
     try:
@@ -4001,7 +4368,7 @@ def get_projects_snapshot(
 
         # Build a stable cache key from the request parameters
         fields_key = ",".join(sorted(requested_fields)) if requested_fields else "*"
-        cache_key = f"snapshot:{user_id}:{role}:{fields_key}"
+        cache_key = f"snapshot:images-v4:{user_id}:{role}:{fields_key}:{1 if include_images else 0}"
 
         # Check the snapshot cache first (avoids DB round-trips on warm requests)
         cached_snapshot = _projects_snapshot_cache.get(cache_key)
@@ -4009,7 +4376,13 @@ def get_projects_snapshot(
             snapshot = cached_snapshot
         else:
             with get_connection() as connection:
-                snapshot = _build_projects_snapshot(connection, user_id, role, requested_fields)
+                snapshot = _build_projects_snapshot(
+                    connection,
+                    user_id,
+                    role,
+                    requested_fields,
+                    include_images,
+                )
             _projects_snapshot_cache.set(cache_key, snapshot)
 
         # Apply pagination to projects if limit is specified
@@ -4166,7 +4539,7 @@ async def start_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogStartP
         }
         _postgres_upsert_hot_item(connection, "volunteerTimeLogs", new_log)
         connection.commit()
-    await connection_manager.broadcast_storage_event(["volunteerTimeLogs"])
+    asyncio.create_task(connection_manager.broadcast_storage_event(["volunteerTimeLogs"]))
     return {"log": new_log}
 
 
@@ -4185,7 +4558,8 @@ async def set_volunteer_attendance_check(log_id: str, payload: VolunteerTimeLogA
             if checked_by_user is None:
                 raise HTTPException(status_code=404, detail="Field officer account not found.")
             checked_by_volunteer = _postgres_get_volunteer_by_user_id(connection, checked_by_user_id)
-            if not _user_is_field_officer_for_event(
+            is_admin_user = str(checked_by_user.get("role") or "").strip().lower() == "admin"
+            if not is_admin_user and not _user_is_field_officer_for_event(
                 connection,
                 checked_by_user_id,
                 str(log.get("projectId") or "").strip(),
@@ -4208,7 +4582,7 @@ async def set_volunteer_attendance_check(log_id: str, payload: VolunteerTimeLogA
         }
         _postgres_upsert_hot_item(connection, "volunteerTimeLogs", updated_log)
         connection.commit()
-    await connection_manager.broadcast_storage_event(["volunteerTimeLogs"])
+    asyncio.create_task(connection_manager.broadcast_storage_event(["volunteerTimeLogs"]))
     return {"log": updated_log}
 
 
@@ -4263,7 +4637,9 @@ async def end_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogEndPaylo
         _postgres_upsert_hot_item(connection, "volunteerTimeLogs", updated_log)
         volunteer = _postgres_add_logged_hours_to_volunteer(connection, volunteer_id, updated_log)
         connection.commit()
-    await connection_manager.broadcast_storage_event(["volunteerTimeLogs", "volunteers"])
+    asyncio.create_task(
+        connection_manager.broadcast_storage_event(["volunteerTimeLogs", "volunteers"])
+    )
     return {"log": updated_log, "volunteerProfile": volunteer}
 
 
@@ -4312,146 +4688,67 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
                 raise HTTPException(status_code=404, detail="Project not found.")
             target_project = project
 
-        # Find any existing application for this partner+module combination.
-        # Match by exact projectId first, then fall back to matching by program module
-        # prefix so resubmissions after rejection always update the same record instead
-        # of creating a duplicate.
-        all_partner_applications = _postgres_get_partner_project_applications_by_user(
-            connection,
-            payload.partnerUserId,
-        )
+        # New submissions are always independent, even when they target the
+        # same program.  Only an explicit rejected-proposal revision updates an
+        # existing application.  This avoids an expensive scan of every prior
+        # proposal and lets a partner submit another proposal whenever needed.
+        incoming_details = payload.proposalDetails if isinstance(payload.proposalDetails, dict) else {}
+        previous_application_id = str(incoming_details.get("previousApplicationId") or "").strip()
+        if previous_application_id:
+            existing_application = _postgres_get_hot_item_by_id(
+                connection,
+                "partnerProjectApplications",
+                previous_application_id,
+            )
+            if existing_application is not None:
+                owner_id = str(existing_application.get("partnerUserId") or "").strip()
+                if owner_id and owner_id != str(payload.partnerUserId or "").strip():
+                    raise HTTPException(status_code=403, detail="You cannot revise another partner's proposal.")
 
-        def _application_matches_module(app: dict[str, Any]) -> bool:
-            app_project_id = str(app.get("projectId") or "")
-            # Exact match on the timestamped ID the frontend may have stored
-            if app_project_id == requested_project_id:
-                return True
-            # Match by program module prefix: "program:<module>::<ts>" starts with "program:<module>"
-            if requested_program_module:
-                module_prefix = f"program:{requested_program_module}"
-                if app_project_id.startswith(module_prefix):
-                    return True
-                # Also check proposalDetails.requestedProgramModule
-                details = app.get("proposalDetails") or {}
-                if isinstance(details, dict):
-                    stored_module = str(details.get("requestedProgramModule") or "").strip()
-                    if stored_module and stored_module == requested_program_module:
-                        return True
-            return False
-
-        # Prefer the most recent matching application
-        matching_applications = [a for a in all_partner_applications if _application_matches_module(a)]
-        existing_application = (
-            sorted(matching_applications, key=lambda a: str(a.get("requestedAt") or ""), reverse=True)[0]
-            if matching_applications
-            else None
-        )
-        if existing_application is not None:
-            existing_status = str(existing_application.get("status") or "").strip()
-            if existing_status == "Rejected":
-                try:
-                    previous_revision_number = int(existing_application.get("revisionNumber") or 0)
-                except (TypeError, ValueError):
-                    previous_revision_number = 0
-                resubmitted_at = datetime.now(timezone.utc).isoformat()
-                refreshed_application = {
-                    **existing_application,
-                    "projectId": str(existing_application.get("projectId") or proposal_project_id),
-                    "partnerUserId": payload.partnerUserId,
-                    "partnerName": payload.partnerName,
-                    "partnerEmail": payload.partnerEmail,
-                    "proposalDetails": _normalize_partner_proposal_details(
-                        payload.proposalDetails,
-                        requested_program_module,
-                        target_project,
-                    ),
-                    "status": "Pending",
-                    "requestedAt": resubmitted_at,
-                    "resubmittedAt": resubmitted_at,
-                    "revisionNumber": previous_revision_number + 1,
-                    "reviewedAt": None if existing_status == "Rejected" else existing_application.get("reviewedAt"),
-                    "reviewedBy": None if existing_status == "Rejected" else existing_application.get("reviewedBy"),
-                    "reviewNotes": None,
-                }
-                _postgres_upsert_hot_item(connection, "partnerProjectApplications", refreshed_application)
-                connection.commit()
-                asyncio.create_task(connection_manager.broadcast_storage_event(["partnerProjectApplications"]))
-                
-                # Create a proposal message card for the resubmission
-                try:
-                    proposal_message_id = f"msg-proposal-{int(datetime.now(timezone.utc).timestamp() * 1000)}"
-                    proposal_content = f'___PROPOSAL_CARD___:{json.dumps(refreshed_application)}'
-                    proposal_timestamp = datetime.now(timezone.utc).isoformat()
-                    
-                    print("[PROPOSAL] Creating resubmission message card:")
-                    print(f"  - Message ID: {proposal_message_id}")
-                    print(f"  - Partner ID: {payload.partnerUserId}")
-                    print(f"  - Revision Number: {refreshed_application.get('revisionNumber')}")
-                    
-                    from .db import get_connection as db_get_connection
-                    with db_get_connection() as msg_connection:
-                        admin_id = _resolve_admin_message_user_id(msg_connection)
-                        print(f"  - Admin ID: {admin_id}")
-                        with msg_connection.cursor() as cursor:
-                            cursor.execute(
-                                """
-                                INSERT INTO public.messages (
-                                  messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
-                                )
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                                """,
-                                (
-                                    proposal_message_id,
-                                    payload.partnerUserId,
-                                    admin_id,
-                                    None,
-                                    proposal_content,
-                                    proposal_timestamp,
-                                    False,
-                                    json.dumps([]),
-                                ),
-                            )
-                        msg_connection.commit()
-                    _invalidate_collection_cache(["messages"])
-                    
-                    # Broadcast the new message
-                    message_data = {
-                        "id": proposal_message_id,
-                        "senderId": payload.partnerUserId,
-                        "recipientId": admin_id,
-                        "projectId": None,
-                        "content": proposal_content,
-                        "timestamp": proposal_timestamp,
-                        "read": False,
-                        "attachments": [],
+                existing_status = str(existing_application.get("status") or "").strip()
+                if existing_status == "Rejected":
+                    try:
+                        previous_revision_number = int(existing_application.get("revisionNumber") or 0)
+                    except (TypeError, ValueError):
+                        previous_revision_number = 0
+                    resubmitted_at = datetime.now(timezone.utc).isoformat()
+                    refreshed_application = {
+                        **existing_application,
+                        "projectId": str(existing_application.get("projectId") or proposal_project_id),
+                        "partnerUserId": payload.partnerUserId,
+                        "partnerName": payload.partnerName,
+                        "partnerEmail": payload.partnerEmail,
+                        "proposalDetails": _normalize_partner_proposal_details(
+                            payload.proposalDetails,
+                            requested_program_module,
+                            target_project,
+                        ),
+                        "status": "Pending",
+                        "requestedAt": resubmitted_at,
+                        "resubmittedAt": resubmitted_at,
+                        "revisionNumber": previous_revision_number + 1,
+                        "reviewedAt": None,
+                        "reviewedBy": None,
+                        "reviewNotes": None,
                     }
-                    asyncio.create_task(connection_manager.broadcast_message_event(message_data))
-                    print("[OK] Resubmission message card created and broadcast successfully")
-                except Exception as e:
-                    print(f"[ERROR] Error creating proposal resubmission message: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    # Don't fail the entire request if message creation fails, but log it clearly
-                    pass
-                
-                return {"application": refreshed_application}
-
-            if existing_status == "Pending":
-                raise HTTPException(
-                    status_code=409,
-                    detail="This proposal is already pending admin review and cannot be resubmitted.",
-                )
-
-            if existing_status == "Approved":
-                raise HTTPException(
-                    status_code=409,
-                    detail="This proposal has already been approved and cannot be revised or resubmitted.",
-                )
-
-            return {"application": existing_application}
+                    # Keep the response and the background proposal card on the
+                    # same compressed attachment payload stored in the database.
+                    refreshed_application = _postgres_upsert_hot_item(
+                        connection,
+                        "partnerProjectApplications",
+                        refreshed_application,
+                    )
+                    connection.commit()
+                    _invalidate_collection_cache(["partnerProjectApplications"])
+                    _projects_snapshot_cache.clear()
+                    asyncio.create_task(connection_manager.broadcast_storage_event(["partnerProjectApplications"]))
+                    asyncio.create_task(
+                        _create_proposal_submission_message(refreshed_application, payload.partnerUserId)
+                    )
+                    return {"application": refreshed_application}
 
         application = {
-            "id": f"partner-application-{int(datetime.now(timezone.utc).timestamp() * 1000)}",
+            "id": f"partner-application-{int(datetime.now(timezone.utc).timestamp() * 1000)}-{secrets.token_hex(4)}",
             "projectId": proposal_project_id,
             "partnerUserId": payload.partnerUserId,
             "partnerName": payload.partnerName,
@@ -4465,68 +4762,23 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
             "requestedAt": datetime.now(timezone.utc).isoformat(),
             "revisionNumber": 0,
         }
-        _postgres_upsert_hot_item(connection, "partnerProjectApplications", application)
+        # Use the normalized stored record below.  Previously the async card
+        # writer received the original photo data and duplicated large images
+        # into the messages table.
+        application = _postgres_upsert_hot_item(
+            connection,
+            "partnerProjectApplications",
+            application,
+        )
         connection.commit()
+
+    _invalidate_collection_cache(["partnerProjectApplications"])
+    _projects_snapshot_cache.clear()
     
-    # Create a proposal message card to send to admin's direct message thread
     asyncio.create_task(connection_manager.broadcast_storage_event(["partnerProjectApplications"]))
-    
-    # Send proposal card message to admin
-    try:
-        proposal_message_id = f"msg-proposal-{int(datetime.now(timezone.utc).timestamp() * 1000)}"
-        proposal_content = f'___PROPOSAL_CARD___:{json.dumps(application)}'
-        proposal_timestamp = datetime.now(timezone.utc).isoformat()
-        
-        print("[PROPOSAL] Creating initial proposal submission message card:")
-        print(f"  - Message ID: {proposal_message_id}")
-        print(f"  - Partner ID: {payload.partnerUserId}")
-        print(f"  - Application ID: {application.get('id')}")
-        
-        from .db import get_connection as db_get_connection
-        with db_get_connection() as msg_connection:
-            admin_id = _resolve_admin_message_user_id(msg_connection)
-            print(f"  - Admin ID: {admin_id}")
-            with msg_connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    INSERT INTO public.messages (
-                      messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        proposal_message_id,
-                        payload.partnerUserId,
-                        admin_id,
-                        None,
-                        proposal_content,
-                        proposal_timestamp,
-                        False,
-                        json.dumps([]),
-                    ),
-                )
-            msg_connection.commit()
-        _invalidate_collection_cache(["messages"])
-        
-        # Broadcast the new message
-        message_data = {
-            "id": proposal_message_id,
-            "senderId": payload.partnerUserId,
-            "recipientId": admin_id,
-            "projectId": None,
-            "content": proposal_content,
-            "timestamp": proposal_timestamp,
-            "read": False,
-            "attachments": [],
-        }
-        asyncio.create_task(connection_manager.broadcast_message_event(message_data))
-        print("[OK] Initial proposal message card created and broadcast successfully")
-    except Exception as e:
-        print(f"[ERROR] Error creating proposal message: {e}")
-        import traceback
-        traceback.print_exc()
-        # Don't fail the entire request if message creation fails
-        pass
+    asyncio.create_task(
+        _create_proposal_submission_message(application, payload.partnerUserId)
+    )
     
     return {"application": application}
 
@@ -4545,7 +4797,9 @@ async def update_partner_project_application_details(
 
     now_iso = datetime.now(timezone.utc).isoformat()
     broadcast_keys = ["partnerProjectApplications"]
+    changed_message_events: list[dict[str, Any]] = []
     ensure_message_storage_once()
+    from psycopg.rows import dict_row
 
     with get_connection() as connection:
         application = _postgres_get_hot_item_by_id(connection, "partnerProjectApplications", application_id)
@@ -4585,13 +4839,25 @@ async def update_partner_project_application_details(
 
         # Keep the current submission card in sync for every participant. Review
         # cards remain historical snapshots and are intentionally left unchanged.
-        with connection.cursor() as cursor:
+        # Proposal submission cards always originate from the partner. Filter
+        # by that indexed participant first instead of scanning every saved
+        # message just to find this application's card.
+        with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
-                "select messages_id, content from public.messages where content like %s",
-                ("___PROPOSAL_CARD___:%",),
+                """
+                select messages_id, sender_id, recipient_id, project_id, content,
+                       timestamp, read, attachments
+                from public.messages
+                where sender_id = %s
+                  and content like '___PROPOSAL_CARD___:%%'
+                order by timestamp desc, messages_id desc
+                """,
+                (str(application.get("partnerUserId") or ""),),
             )
             proposal_messages = cursor.fetchall()
-            for message_id, content in proposal_messages:
+            for proposal_message in proposal_messages:
+                message_id = str(proposal_message.get("messages_id") or "")
+                content = proposal_message.get("content")
                 if not isinstance(content, str) or not content.startswith("___PROPOSAL_CARD___:"):
                     continue
                 try:
@@ -4613,14 +4879,26 @@ async def update_partner_project_application_details(
                     "updatedBy": updated_by,
                 }
                 cursor.execute(
-                    "update public.messages set content = %s where messages_id = %s",
+                    """
+                    update public.messages
+                    set content = %s
+                    where messages_id = %s
+                    returning messages_id, sender_id, recipient_id, project_id,
+                              content, timestamp, read, attachments
+                    """,
                     (f'___PROPOSAL_CARD___:{json.dumps(updated_card)}', message_id),
                 )
-                broadcast_keys.append("messages")
+                updated_message = cursor.fetchone()
+                if updated_message is not None:
+                    changed_message_events.append(serialize_message_row(updated_message))
+                    broadcast_keys.append("messages")
 
         connection.commit()
 
+    _invalidate_collection_cache(broadcast_keys)
     asyncio.create_task(connection_manager.broadcast_storage_event(broadcast_keys))
+    for changed_message in changed_message_events:
+        asyncio.create_task(connection_manager.broadcast_message_event(changed_message))
     return {"application": updated_application}
 
 
@@ -4644,6 +4922,7 @@ async def review_partner_project_application(
     generated_project: dict[str, Any] | None = None
     review_message_data: dict[str, Any] | None = None
     ensure_message_storage_once()
+    from psycopg.rows import dict_row
     with get_connection() as connection:
         application = _postgres_get_hot_item_by_id(connection, "partnerProjectApplications", application_id)
         if application is None:
@@ -4817,7 +5096,7 @@ async def review_partner_project_application(
             if next_status == "Approved" and generated_project is not None:
                 returned_card["approvedProjectTitle"] = str(generated_project.get("title") or "")
                 returned_card["approvedProjectId"] = next_project_id
-            with connection.cursor() as cursor:
+            with connection.cursor(row_factory=dict_row) as cursor:
                 cursor.execute(
                     """
                     insert into public.messages (
@@ -4825,6 +5104,8 @@ async def review_partner_project_application(
                     )
                     values (%s, %s, %s, %s, %s, %s, %s, %s)
                     on conflict (messages_id) do nothing
+                    returning messages_id, sender_id, recipient_id, project_id,
+                              content, timestamp, read, attachments
                     """,
                     (
                         message_id,
@@ -4837,16 +5118,13 @@ async def review_partner_project_application(
                         "[]",
                     ),
                 )
-            review_message_data = {
-                "id": message_id,
-                "senderId": message_sender_id,
-                "recipientId": message_recipient_id,
-                "projectId": None,
-                "content": f"___PROPOSAL_CARD___:{json.dumps(returned_card)}",
-                "timestamp": reviewed_at,
-                "read": False,
-                "attachments": [],
-            }
+                review_message_row = cursor.fetchone()
+
+            # Use the canonical serialized database row for WebSocket and
+            # response delivery. It applies image-size safeguards before the
+            # card reaches a slower mobile client.
+            if review_message_row is not None:
+                review_message_data = serialize_message_row(review_message_row)
             # DO NOT reconcile submission cards - keep them separate for conversation history
             # _reconcile_partner_proposal_submission_cards(connection, application_id)
 
@@ -4854,12 +5132,25 @@ async def review_partner_project_application(
         _invalidate_collection_cache(broadcast_keys)
         _projects_snapshot_cache.clear()
 
-    asyncio.create_task(connection_manager.broadcast_storage_event(broadcast_keys))
+    # Deliver the card itself first. A storage notification is only a backup
+    # for surrounding lists; the direct-message event renders the result now.
     if review_message_data is not None:
-        asyncio.create_task(connection_manager.broadcast_message_event(review_message_data))
+        try:
+            await asyncio.wait_for(
+                connection_manager.broadcast_message_event(review_message_data),
+                timeout=1,
+            )
+        except asyncio.TimeoutError:
+            # Do not let an unresponsive old tab slow the review action. The
+            # reconnecting client will receive the event on the retry path.
+            asyncio.create_task(connection_manager.broadcast_message_event(review_message_data))
+
+    asyncio.create_task(connection_manager.broadcast_storage_event(broadcast_keys))
     response: dict[str, Any] = {"application": updated_application}
     if generated_project is not None:
         response["project"] = generated_project
+    if review_message_data is not None:
+        response["reviewMessage"] = review_message_data
     return response
 
 
@@ -4975,7 +5266,9 @@ async def join_project(project_id: str, payload: ProjectJoinPayload) -> dict[str
 
         connection.commit()
 
-    await connection_manager.broadcast_storage_event([project_storage_key, "volunteerProjectJoins", "volunteers"])
+    asyncio.create_task(
+        connection_manager.broadcast_storage_event([project_storage_key, "volunteerProjectJoins", "volunteers"])
+    )
     return {"project": updated_project, "volunteerProfile": volunteer_profile}
 
 
@@ -5066,175 +5359,278 @@ async def remove_volunteer_from_project(project_id: str, volunteer_id: str) -> d
 
 @app.get("/messages")
 # API endpoint that returns all direct messages for one user.
-def get_messages(user_id: str, limit: int = 500) -> dict[str, list[dict[str, Any]]]:
+def get_messages(
+    user_id: str,
+    limit: int = 120,
+    compact: bool = False,
+) -> dict[str, list[dict[str, Any]]]:
     import time
-    request_start = time.time()
     ensure_message_storage_once()
-    from psycopg.rows import dict_row
+    limit_val = max(1, min(int(limit), 100 if compact else 120))
+    cache_key = f"messages:{user_id}:{limit_val}:{'compact' if compact else 'full'}"
+    cached = _message_query_cache.get(cache_key)
+    if cached is not None:
+        return cached
 
-    with get_connection() as connection:
-        current_user = _get_user_by_id(user_id, connection)
-        current_role = str(current_user.get("role") or "") if current_user else ""
-        
-        query_start = time.time()
-        with connection.cursor(row_factory=dict_row) as cursor:
-            cursor.execute(
-                """
-                select messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
-                from public.messages
-                where sender_id = %s or recipient_id = %s
-                order by timestamp desc, messages_id desc
-                limit %s
-                """,
-                (user_id, user_id, limit),
-            )
-            rows = cursor.fetchall()
-        query_time = time.time() - query_start
+    # Multiple browser tabs and the former polling fallback can request this
+    # exact inbox at once.  One query populates the cache; the rest reuse it.
+    with _get_message_query_lock(cache_key):
+        cached = _message_query_cache.get(cache_key)
+        if cached is not None:
+            return cached
 
-        if current_role and rows:
-            # Batch-fetch all other-user IDs in one query instead of N+1 lookups
-            batch_start = time.time()
-            other_user_ids = list({
-                (row["recipient_id"] if row["sender_id"] == user_id else row["sender_id"])
-                for row in rows
-            })
+        request_start = time.time()
+        from psycopg.rows import dict_row
+
+        # The compact inbox powers the account/contact list.  Proposal cards
+        # may include an image, so return a tiny valid card marker instead of
+        # repeatedly transferring the entire proposal payload for every chat.
+        content_expression = (
+            "case when content like '___PROPOSAL_CARD___:%%' "
+            "then '___PROPOSAL_CARD___:{\"compact\":true}' "
+            "else left(content, 280) end as content"
+            if compact
+            else "content"
+        )
+        attachments_expression = "'[]'::text" if compact else "attachments"
+
+        with get_connection() as connection:
+            current_user = _get_user_by_id(user_id, connection)
+            current_role = str(current_user.get("role") or "") if current_user else ""
+
+            query_start = time.time()
             with connection.cursor(row_factory=dict_row) as cursor:
+                # UNION ALL lets Postgres use the sender and recipient indexes
+                # independently instead of scanning the full messages table for
+                # an `OR` condition.
                 cursor.execute(
-                    "SELECT users_id AS id, role FROM users WHERE users_id = ANY(%s)",
-                    (other_user_ids,),
+                    f"""
+                    select messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                    from (
+                      select messages_id, sender_id, recipient_id, project_id, {content_expression}, timestamp, read,
+                             {attachments_expression} as attachments
+                      from public.messages
+                      where sender_id = %s
+                      union all
+                      select messages_id, sender_id, recipient_id, project_id, {content_expression}, timestamp, read,
+                             {attachments_expression} as attachments
+                      from public.messages
+                      where recipient_id = %s
+                    ) as user_messages
+                    order by timestamp desc, messages_id desc
+                    limit %s
+                    """,
+                    (user_id, user_id, limit_val),
                 )
-                role_by_id = {r["id"]: str(r["role"] or "") for r in cursor.fetchall()}
-            canonical_admin_id = _resolve_admin_message_user_id(connection)
-            if canonical_admin_id:
-                role_by_id[canonical_admin_id] = "admin"
-                for row in rows:
-                    content = str(row.get("content") or "")
-                    if not content.startswith("___PROPOSAL_CARD___:"):
-                        continue
-                    other_user_id = (
-                        row["recipient_id"] if row["sender_id"] == user_id else row["sender_id"]
-                    )
-                    if role_by_id.get(other_user_id, ""):
-                        continue
-                    if row["recipient_id"] == user_id:
-                        row["sender_id"] = canonical_admin_id
-                    elif row["sender_id"] == user_id:
-                        row["recipient_id"] = canonical_admin_id
-            batch_time = time.time() - batch_start
+                rows = cursor.fetchall()
+            query_time = time.time() - query_start
 
-            filter_start = time.time()
-            rows = [
-                row for row in rows
-                if _is_direct_message_pair_allowed(
-                    current_role,
-                    role_by_id.get(
-                        row["recipient_id"] if row["sender_id"] == user_id else row["sender_id"],
-                        ""
+            if current_role and rows:
+                # Batch-fetch all other-user IDs in one query instead of N+1 lookups.
+                batch_start = time.time()
+                other_user_ids = list({
+                    (row["recipient_id"] if row["sender_id"] == user_id else row["sender_id"])
+                    for row in rows
+                })
+                with connection.cursor(row_factory=dict_row) as cursor:
+                    cursor.execute(
+                        "SELECT users_id AS id, role FROM users WHERE users_id = ANY(%s)",
+                        (other_user_ids,),
                     )
+                    role_by_id = {r["id"]: str(r["role"] or "") for r in cursor.fetchall()}
+                canonical_admin_id = _resolve_admin_message_user_id(connection)
+                if canonical_admin_id:
+                    role_by_id[canonical_admin_id] = "admin"
+                    for row in rows:
+                        content = str(row.get("content") or "")
+                        if not content.startswith("___PROPOSAL_CARD___:"):
+                            continue
+                        other_user_id = (
+                            row["recipient_id"] if row["sender_id"] == user_id else row["sender_id"]
+                        )
+                        if role_by_id.get(other_user_id, ""):
+                            continue
+                        if row["recipient_id"] == user_id:
+                            row["sender_id"] = canonical_admin_id
+                        elif row["sender_id"] == user_id:
+                            row["recipient_id"] = canonical_admin_id
+                batch_time = time.time() - batch_start
+
+                filter_start = time.time()
+                rows = [
+                    row for row in rows
+                    if _is_direct_message_pair_allowed(
+                        current_role,
+                        role_by_id.get(
+                            row["recipient_id"] if row["sender_id"] == user_id else row["sender_id"],
+                            ""
+                        )
+                    )
+                ]
+                filter_time = time.time() - filter_start
+                total_time = time.time() - request_start
+                if total_time > 2.0:
+                    print(
+                        f"[PERF] /messages ({'compact' if compact else 'full'}) for {user_id}: "
+                        f"query={query_time:.1f}s, batch={batch_time:.1f}s, "
+                        f"filter={filter_time:.1f}s, total={total_time:.1f}s, found {len(rows)} messages"
+                    )
+            elif time.time() - request_start > 2.0:
+                print(
+                    f"[PERF] /messages ({'compact' if compact else 'full'}) for {user_id}: "
+                    f"query={query_time:.1f}s, total={time.time() - request_start:.1f}s, found {len(rows)} messages"
                 )
-            ]
-            filter_time = time.time() - filter_start
-            
-            total_time = time.time() - request_start
-            if total_time > 2.0:
-                print(f"[PERF] /messages for {user_id}: query={query_time:.1f}s, batch={batch_time:.1f}s, filter={filter_time:.1f}s, total={total_time:.1f}s, found {len(rows)} messages")
-        else:
-            total_time = time.time() - request_start
-            if total_time > 2.0:
-                print(f"[PERF] /messages for {user_id}: query={query_time:.1f}s, total={total_time:.1f}s, found {len(rows)} messages")
-                
-    return {"messages": [serialize_message_row(row) for row in rows]}
+
+        result = {"messages": [serialize_message_row(row) for row in rows]}
+        _message_query_cache.set(cache_key, result)
+        return result
 
 
 @app.get("/messages/unread")
 def get_unread_messages(user_id: str, limit: int = 100) -> dict[str, list[dict[str, Any]]]:
     ensure_message_storage_once()
-    from psycopg.rows import dict_row
+    limit_val = max(1, min(int(limit), 100))
+    cache_key = f"messages:unread:{user_id}:{limit_val}"
+    cached = _message_query_cache.get(cache_key)
+    if cached is not None:
+        return cached
 
-    with get_connection() as connection:
-        with connection.cursor(row_factory=dict_row) as cursor:
-            cursor.execute(
-                """
-                select messages_id,
-                       sender_id,
-                       recipient_id,
-                       project_id,
-                       left(content, 1000) as content,
-                       timestamp,
-                       read,
-                       '[]'::text as attachments
-                from public.messages
-                where recipient_id = %s and read = false
-                order by timestamp desc, messages_id desc
-                limit %s
-                """,
-                (user_id, limit),
-            )
-            rows = cursor.fetchall()
+    with _get_message_query_lock(cache_key):
+        cached = _message_query_cache.get(cache_key)
+        if cached is not None:
+            return cached
 
-    return {"messages": [serialize_message_row(row) for row in rows]}
+        from psycopg.rows import dict_row
+
+        with get_connection() as connection:
+            with connection.cursor(row_factory=dict_row) as cursor:
+                cursor.execute(
+                    """
+                    select messages_id,
+                           sender_id,
+                           recipient_id,
+                           project_id,
+                           left(content, 1000) as content,
+                           timestamp,
+                           read,
+                           '[]'::text as attachments
+                    from public.messages
+                    where recipient_id = %s and read = false
+                    order by timestamp desc, messages_id desc
+                    limit %s
+                    """,
+                    (user_id, limit_val),
+                )
+                rows = cursor.fetchall()
+
+        result = {"messages": [serialize_message_row(row) for row in rows]}
+        _message_query_cache.set(cache_key, result)
+        return result
 
 
 @app.get("/messages/conversation")
 # API endpoint that returns the direct-message history between two users.
-def get_conversation(user1: str, user2: str, limit: int = 500) -> dict[str, list[dict[str, Any]]]:
+def get_conversation(user1: str, user2: str, limit: int = 120) -> dict[str, list[dict[str, Any]]]:
     import time
-    request_start = time.time()
     ensure_message_storage_once()
-    from psycopg.rows import dict_row
+    limit_val = max(1, min(int(limit), 120))
+    cache_key = f"conversation:{min(user1, user2)}:{max(user1, user2)}:{limit_val}"
+    cached = _message_query_cache.get(cache_key)
+    if cached is not None:
+        return cached
 
-    with get_connection() as connection:
-        _assert_direct_message_access(connection, user1, user2)
-        canonical_admin_id = _resolve_admin_message_user_id(connection)
-        
-        partner_user_id = ""
-        if user1 == canonical_admin_id:
-            partner_user_id = user2
-        elif user2 == canonical_admin_id:
-            partner_user_id = user1
+    with _get_message_query_lock(cache_key):
+        cached = _message_query_cache.get(cache_key)
+        if cached is not None:
+            return cached
 
-        limit_val = max(1, min(limit, 10000))
-        query_start = time.time()
-        with connection.cursor(row_factory=dict_row) as cursor:
-            if partner_user_id:
-                cursor.execute(
-                    """
-                    select messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
-                    from public.messages
-                    where (sender_id = %s and recipient_id = %s)
-                       or (sender_id = %s and recipient_id = %s)
-                       or (recipient_id = %s and content like '___PROPOSAL_CARD___:%%')
-                       or (sender_id = %s and content like '___PROPOSAL_CARD___:%%')
-                    order by timestamp asc, messages_id asc
-                    limit %s
-                    """,
-                    (user1, user2, user2, user1, partner_user_id, partner_user_id, limit_val),
+        request_start = time.time()
+        from psycopg.rows import dict_row
+
+        with get_connection() as connection:
+            _assert_direct_message_access(connection, user1, user2)
+            canonical_admin_id = _resolve_admin_message_user_id(connection)
+
+            partner_user_id = ""
+            if user1 == canonical_admin_id:
+                partner_user_id = user2
+            elif user2 == canonical_admin_id:
+                partner_user_id = user1
+
+            query_start = time.time()
+            with connection.cursor(row_factory=dict_row) as cursor:
+                if partner_user_id:
+                    # Each branch can use a narrow participant index.  The old
+                    # four-way OR made Postgres inspect every large proposal
+                    # card just to find messages for one partner.
+                    cursor.execute(
+                        """
+                        with candidate_messages as (
+                          select messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                          from public.messages
+                          where sender_id = %s and recipient_id = %s
+                          union all
+                          select messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                          from public.messages
+                          where sender_id = %s and recipient_id = %s
+                          union all
+                          select messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                          from public.messages
+                          where recipient_id = %s and content like '___PROPOSAL_CARD___:%%'
+                          union all
+                          select messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                          from public.messages
+                          where sender_id = %s and content like '___PROPOSAL_CARD___:%%'
+                        ),
+                        deduplicated_messages as (
+                          select distinct on (messages_id)
+                            messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                          from candidate_messages
+                          order by messages_id, timestamp desc
+                        )
+                        select messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                        from deduplicated_messages
+                        order by timestamp asc, messages_id asc
+                        limit %s
+                        """,
+                        (user1, user2, user2, user1, partner_user_id, partner_user_id, limit_val),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        select messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                        from (
+                          select messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                          from public.messages
+                          where sender_id = %s and recipient_id = %s
+                          union all
+                          select messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                          from public.messages
+                          where sender_id = %s and recipient_id = %s
+                        ) as conversation_messages
+                        order by timestamp asc, messages_id asc
+                        limit %s
+                        """,
+                        (user1, user2, user2, user1, limit_val),
+                    )
+                rows = cursor.fetchall()
+                if canonical_admin_id and partner_user_id:
+                    for row in rows:
+                        if row["recipient_id"] == partner_user_id and row["sender_id"] != partner_user_id:
+                            row["sender_id"] = canonical_admin_id
+                        elif row["sender_id"] == partner_user_id and row["recipient_id"] != partner_user_id:
+                            row["recipient_id"] = canonical_admin_id
+            query_time = time.time() - query_start
+            total_time = time.time() - request_start
+            if total_time > 2.0:
+                print(
+                    f"[PERF] /messages/conversation between {user1} and {user2}: "
+                    f"query={query_time:.1f}s, total={total_time:.1f}s, found {len(rows)} messages"
                 )
-            else:
-                cursor.execute(
-                    """
-                    select messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
-                    from public.messages
-                    where (sender_id = %s and recipient_id = %s)
-                       or (sender_id = %s and recipient_id = %s)
-                    order by timestamp asc, messages_id asc
-                    limit %s
-                    """,
-                    (user1, user2, user2, user1, limit_val),
-                )
-            rows = cursor.fetchall()
-            if canonical_admin_id and partner_user_id:
-                for row in rows:
-                    if row["recipient_id"] == partner_user_id and row["sender_id"] != partner_user_id:
-                        row["sender_id"] = canonical_admin_id
-                    elif row["sender_id"] == partner_user_id and row["recipient_id"] != partner_user_id:
-                        row["recipient_id"] = canonical_admin_id
-        query_time = time.time() - query_start
-        total_time = time.time() - request_start
-        if total_time > 2.0:
-            print(f"[PERF] /messages/conversation between {user1} and {user2}: query={query_time:.1f}s, total={total_time:.1f}s, found {len(rows)} messages")
-            
-    return {"messages": [serialize_message_row(row) for row in rows]}
+
+        result = {"messages": [serialize_message_row(row) for row in rows]}
+        _message_query_cache.set(cache_key, result)
+        return result
 
 @app.get("/projects/{project_id}/group-messages")
 # API endpoint that returns project group chat messages for an authorized user.
@@ -5512,19 +5908,33 @@ async def storage_websocket(websocket: WebSocket) -> None:
 
 @app.get("/storage/{key}")
 # API endpoint that reads one storage key from app storage or hot storage.
-def get_storage_item(key: str) -> dict[str, Any]:
+def get_storage_item(key: str, include_images: bool = True) -> dict[str, Any]:
     _require_postgres()
     if not is_hot_storage_key(key) and key not in SPECIAL_STORAGE_KEYS:
         return {"key": key, "value": None}
     try:
         with get_connection() as connection:
-            return {"key": key, "value": _get_cached_collection(connection, key)}
+            if key in {"projects", "events", "programs"}:
+                value = _get_cached_media_light_collection(
+                    connection, key, include_images=include_images
+                )
+            else:
+                value = _get_cached_collection(connection, key, include_images=include_images)
+            return {"key": key, "value": value}
     except Exception as error:
         print(f"[ERROR] Failed to get storage key '{key}': {type(error).__name__}: {error}")
         # Return empty list/object instead of 500 error to keep UI responsive
         if key in COLLECTION_KEYS:
             return {"key": key, "value": []}
         return {"key": key, "value": {}}
+
+
+@app.post("/admin/cache/clear")
+def clear_backend_caches() -> dict[str, str]:
+    _projects_snapshot_cache.clear()
+    _storage_collection_cache.clear()
+    _admin_dashboard_cache.clear()
+    return {"status": "ok", "message": "All backend caches cleared"}
 
 
 @app.delete("/program-tracks/{track_id:path}")
@@ -5536,12 +5946,11 @@ async def delete_program_track(track_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Program track id is required.")
     normalized_track_key = normalized_track_id.lower()
 
-    def delete_rows_by_known_id_columns(
+    def get_existing_column(
         connection: Any,
         table_name: str,
         possible_columns: list[str],
-    ) -> int:
-        deleted_count = 0
+    ) -> str | None:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -5553,171 +5962,138 @@ async def delete_program_track(track_id: str) -> dict[str, Any]:
                 """,
                 (table_name, possible_columns),
             )
-            existing_columns = [str(row[0]) for row in cursor.fetchall()]
-            for column_name in existing_columns:
-                cursor.execute(
-                    f"delete from {table_name} where lower(trim(coalesce({column_name}::text, ''))) = %s",
-                    (normalized_track_key,),
-                )
-                deleted_count += cursor.rowcount or 0
-        return deleted_count
+            existing_columns = {str(row[0]) for row in cursor.fetchall()}
+        return next((column for column in possible_columns if column in existing_columns), None)
 
-    def belongs_to_program(item: dict[str, Any]) -> bool:
-        values = [
-            item.get("id"),
-            item.get("parentProjectId"),
-            item.get("parent_project_id"),
-            item.get("program_id"),
-            item.get("programModule"),
-            item.get("category"),
-        ]
-        return any(str(value or "").strip().lower() == normalized_track_key for value in values)
+    def select_program_related_ids(
+        connection: Any,
+        table_name: str,
+        possible_id_columns: list[str],
+        include_parent_ids: set[str] | None = None,
+    ) -> set[str]:
+        id_column = get_existing_column(connection, table_name, possible_id_columns)
+        if not id_column:
+            return set()
 
-    def has_related_project_id(item: dict[str, Any], related_ids: set[str]) -> bool:
-        related_id_keys = {related_id.lower() for related_id in related_ids}
-        project_id = str(item.get("projectId") or item.get("project_id") or "").strip()
-        project_id_key = project_id.lower()
-        return (
-            project_id in related_ids
-            or project_id_key in related_id_keys
-            or project_id_key.startswith(f"program:{normalized_track_key}")
-        )
-    
-    with get_connection() as connection:
-        deleted_catalog_count = delete_rows_by_known_id_columns(
-            connection, "programs", ["programs_id", "id"]
-        )
-        programs = get_postgres_hot_storage_collection(connection, "programs")
-        projects = get_postgres_hot_storage_collection(connection, "projects")
-        events = get_postgres_hot_storage_collection(connection, "events")
-
-        # For programs table: only match by exact ID (not by category/programModule)
-        # This prevents deleting all programs when one is deleted
-        filtered_programs = [
-            program for program in programs
-            if str(program.get("id") or "").strip().lower() != normalized_track_key
-        ]
-        deleted_project_ids = {
-            str(project.get("id") or "").strip()
-            for project in projects
-            if belongs_to_program(project)
+        parent_ids = {
+            str(value or '').strip().lower()
+            for value in (include_parent_ids or set())
+            if str(value or '').strip()
         }
-        deleted_project_id_keys = {
-            project_id.lower()
-            for project_id in deleted_project_ids
-            if project_id
-        }
-        filtered_projects = [
-            project for project in projects
-            if str(project.get("id") or "").strip() not in deleted_project_ids
-        ]
-        deleted_event_ids = {
-            str(event.get("id") or "").strip()
-            for event in events
-            if (
-                belongs_to_program(event)
-                or str(event.get("parentProjectId") or "").strip().lower() in deleted_project_id_keys
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                select {id_column}
+                from {table_name}
+                where lower(trim(coalesce({id_column}::text, ''))) = %s
+                   or lower(trim(coalesce(program_id::text, ''))) = %s
+                   or lower(trim(coalesce(program_module::text, ''))) = %s
+                   or lower(trim(coalesce(category::text, ''))) = %s
+                   or lower(trim(coalesce(parent_project_id::text, ''))) = %s
+                """,
+                (
+                    normalized_track_key,
+                    normalized_track_key,
+                    normalized_track_key,
+                    normalized_track_key,
+                    normalized_track_key,
+                ),
             )
-        }
-        related_project_ids = {
-            item_id for item_id in [*deleted_project_ids, *deleted_event_ids] if item_id
-        }
-        related_project_ids.add(f"program:{normalized_track_id}")
-        filtered_events = [
-            event for event in events
-            if str(event.get("id") or "").strip() not in deleted_event_ids
-        ]
-        
-        changed_keys = [
-            "programTracks",
-            "programs",
-            "projects",
-            "events",
-            "statusUpdates",
-            "partnerProjectApplications",
-            "partnerReports",
-            "publishedImpactReports",
-            "volunteerProjectJoins",
-            "volunteerMatches",
-            "volunteerTimeLogs",
-        ]
-
-        if (
-            len(filtered_programs) == len(programs)
-            and len(filtered_projects) == len(projects)
-            and len(filtered_events) == len(events)
-        ):
-            if deleted_catalog_count > 0:
-                connection.commit()
-                changed_keys = ["programTracks", "programs"]
-                _invalidate_collection_cache(changed_keys)
-                _projects_snapshot_cache.clear()
-                _storage_collection_cache.clear()
-                await connection_manager.broadcast_storage_event(changed_keys)
-                return {
-                    "status": "ok",
-                    "deletedTrackId": normalized_track_id,
-                    "deletedProjectCount": 0,
-                    "deletedEventCount": 0,
-                }
-
-            _invalidate_collection_cache(changed_keys)
-            _projects_snapshot_cache.clear()
-            _storage_collection_cache.clear()
-            return {
-                "status": "ok",
-                "deletedTrackId": normalized_track_id,
-                "deletedProjectCount": 0,
-                "deletedEventCount": 0,
-                "alreadyDeleted": True,
+            related_ids = {
+                str(row[0]).strip()
+                for row in cursor.fetchall()
+                if row[0] is not None and str(row[0]).strip()
             }
 
-        changed_keys = []
-        if len(filtered_programs) != len(programs):
-            replace_postgres_hot_storage_collection(connection, "programs", filtered_programs)
-            changed_keys.extend(["programs", "programTracks"])
-        if len(filtered_projects) != len(projects):
-            replace_postgres_hot_storage_collection(connection, "projects", filtered_projects)
-            changed_keys.append("projects")
-        if len(filtered_events) != len(events):
-            replace_postgres_hot_storage_collection(connection, "events", filtered_events)
-            changed_keys.append("events")
+        if not parent_ids:
+            return related_ids
 
-        if related_project_ids:
-            for key in [
-                "statusUpdates",
-                "partnerProjectApplications",
-                "partnerReports",
-                "publishedImpactReports",
-                "volunteerProjectJoins",
-                "volunteerMatches",
-                "volunteerTimeLogs",
-            ]:
-                items = get_postgres_hot_storage_collection(connection, key)
-                filtered_items = [
-                    item for item in items
-                    if not has_related_project_id(item, related_project_ids)
-                ]
-                if len(filtered_items) != len(items):
-                    replace_postgres_hot_storage_collection(connection, key, filtered_items)
-                    changed_keys.append(key)
-            for changed_key in _cascade_delete_project_references(connection, related_project_ids):
-                if changed_key not in changed_keys:
-                    changed_keys.append(changed_key)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                select {id_column}
+                from {table_name}
+                where lower(trim(coalesce(parent_project_id::text, ''))) = any(%s)
+                """,
+                (list(parent_ids),),
+            )
+            related_ids.update(
+                str(row[0]).strip()
+                for row in cursor.fetchall()
+                if row[0] is not None and str(row[0]).strip()
+            )
+        return related_ids
 
-        final_deleted_catalog_count = delete_rows_by_known_id_columns(
-            connection, "programs", ["programs_id", "id"]
+    with get_connection() as connection:
+        deleted_project_ids = select_program_related_ids(
+            connection,
+            "projects",
+            ["projects_id", "id"],
         )
-        if final_deleted_catalog_count > 0:
-            for catalog_key in ["programTracks", "programs"]:
-                if catalog_key not in changed_keys:
-                    changed_keys.append(catalog_key)
+        deleted_event_ids = select_program_related_ids(
+            connection,
+            "events",
+            ["events_id", "id"],
+            include_parent_ids=deleted_project_ids,
+        )
+        related_project_ids = {
+            item_id
+            for item_id in [*deleted_project_ids, *deleted_event_ids, normalized_track_id]
+            if item_id
+        }
+        related_project_ids.add(f"program:{normalized_track_id}")
+
+        changed_keys = ["programTracks", "programs"]
+        if deleted_project_ids:
+            changed_keys.append("projects")
+        if deleted_event_ids:
+            changed_keys.append("events")
+        for changed_key in _cascade_delete_project_references(connection, related_project_ids):
+            if changed_key not in changed_keys:
+                changed_keys.append(changed_key)
+
+        # Applications and published impact reports share relational tables with
+        # their normal collections. Invalidate both views when the cascade hits
+        # the underlying rows.
+        if "partnerReports" in changed_keys and "publishedImpactReports" not in changed_keys:
+            changed_keys.append("publishedImpactReports")
+
+        deleted_catalog_count = 0
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                select column_name
+                from information_schema.columns
+                where table_schema = 'public'
+                  and table_name = 'programs'
+                  and column_name = any(%s)
+                """,
+                (["programs_id", "id"],),
+            )
+            catalog_id_columns = [str(row[0]) for row in cursor.fetchall()]
+            for column_name in catalog_id_columns:
+                cursor.execute(
+                    f"delete from programs where lower(trim(coalesce({column_name}::text, ''))) = %s",
+                    (normalized_track_key,),
+                )
+                deleted_catalog_count += cursor.rowcount or 0
 
         connection.commit()
-    
+
+    changed_keys = list(dict.fromkeys(changed_keys))
     _invalidate_collection_cache(changed_keys)
     _projects_snapshot_cache.clear()
-    await connection_manager.broadcast_storage_event(changed_keys)
+    _storage_collection_cache.clear()
+    if not deleted_catalog_count and not deleted_project_ids and not deleted_event_ids:
+        return {
+            "status": "ok",
+            "deletedTrackId": normalized_track_id,
+            "deletedProjectCount": 0,
+            "deletedEventCount": 0,
+            "alreadyDeleted": True,
+        }
+    # Broadcast after the response path; deletion itself is already committed.
+    asyncio.create_task(connection_manager.broadcast_storage_event(changed_keys))
     return {
         "status": "ok",
         "deletedTrackId": normalized_track_id,
@@ -5745,7 +6121,16 @@ def get_storage_items_batch(payload: StorageBatchPayload) -> dict[str, dict[str,
                 fetch_start = time.time()
                 with get_connection() as connection:
                     conn_time = time.time() - fetch_start
-                    value = _get_cached_collection(connection, key)
+                    if key in {"projects", "events", "programs"}:
+                        value = _get_cached_media_light_collection(
+                            connection, key, include_images=payload.include_images
+                        )
+                    else:
+                        value = _get_cached_collection(
+                            connection,
+                            key,
+                            include_images=payload.include_images,
+                        )
                     query_time = time.time() - fetch_start - conn_time
                     if conn_time > 1.0 or query_time > 1.0:
                         print(f"[PERF] Key '{key}': connection={conn_time:.1f}s, query={query_time:.1f}s")
@@ -5756,7 +6141,9 @@ def get_storage_items_batch(payload: StorageBatchPayload) -> dict[str, dict[str,
 
         # Use ThreadPoolExecutor to parallelize database queries
         # Limit to number of keys to avoid excessive connections
-        max_workers = min(len(keys), 5)
+        # Keep one batch within the pool while allowing the second wave of
+        # collections to start quickly on a cold cache.
+        max_workers = min(len(keys), 8)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(_fetch_collection, key): key for key in keys}
             for future in as_completed(futures):
@@ -5789,13 +6176,10 @@ _ADMIN_DASHBOARD_KEYS = [
     "partners",
     "volunteers",
     "statusUpdates",
-    "adminPlanningCalendars",
     "volunteerMatches",
-    "volunteerTimeLogs",
     "volunteerProjectJoins",
     "partnerProjectApplications",
     "partnerReports",
-    "publishedImpactReports",
 ]
 
 # Cache key for the admin dashboard snapshot.
@@ -5820,12 +6204,18 @@ def get_admin_dashboard_snapshot() -> dict[str, Any]:
         def _fetch_admin_key(key: str) -> tuple[str, Any]:
             try:
                 with get_connection() as connection:
-                    return key, _get_admin_dashboard_collection(connection, key)
+                    return key, _get_admin_dashboard_collection(
+                        connection,
+                        key,
+                        include_images=False,
+                    )
             except Exception as e:
                 print(f"[WARN] admin dashboard: failed to fetch '{key}': {type(e).__name__}: {e}")
                 return key, []
 
-        max_workers = min(len(_ADMIN_DASHBOARD_KEYS), 6)
+        # The pool supports ten connections; fetching the dashboard in up to
+        # ten parallel reads avoids the multi-wave delay on a cold start.
+        max_workers = min(len(_ADMIN_DASHBOARD_KEYS), 10)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(_fetch_admin_key, key): key for key in _ADMIN_DASHBOARD_KEYS}
             for future in as_completed(futures):
@@ -5882,6 +6272,52 @@ def _validate_internal_task_assignment_limits(items: list[Any]) -> None:
                     f"Task '{task_title}' allows at most {int(parsed_limit)} volunteer"
                     f"{'s' if int(parsed_limit) != 1 else ''} to be assigned."
                 )
+
+
+# Updates one relational storage record without reading and replacing the full collection.
+# This is used by high-frequency actions such as approvals, task assignment, and
+# project/event edits. The existing collection endpoint remains available for
+# bulk imports and backwards compatibility.
+@app.put("/storage/{key}/items/{item_id}")
+async def put_storage_item_by_id(
+    key: str,
+    item_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    _require_postgres()
+    if not is_hot_storage_key(key):
+        raise HTTPException(status_code=400, detail=f"Unsupported storage key '{key}'.")
+
+    normalized_item_id = str(item_id or "").strip()
+    if not normalized_item_id:
+        raise HTTPException(status_code=400, detail="Item id is required.")
+
+    item = dict(payload or {})
+    payload_item_id = str(item.get("id") or "").strip()
+    if payload_item_id and payload_item_id != normalized_item_id:
+        raise HTTPException(status_code=400, detail="Item id does not match the route.")
+    item["id"] = normalized_item_id
+
+    if key in {"projects", "events"}:
+        try:
+            _validate_internal_task_assignment_limits([item])
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    try:
+        with get_connection() as connection:
+            saved_item = _postgres_upsert_hot_item(connection, key, item)
+            connection.commit()
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"Storage item write failed: {error}") from error
+
+    _invalidate_collection_cache([key])
+    if key in {"projects", "events", "programs", "volunteers", "volunteerMatches", "volunteerProjectJoins", "partnerProjectApplications"}:
+        _projects_snapshot_cache.clear()
+    asyncio.create_task(connection_manager.broadcast_storage_event([key]))
+    return {"status": "ok", "item": saved_item, "changedKeys": [key]}
 
 
 @app.put("/storage/{key}")
@@ -6025,7 +6461,7 @@ async def delete_project_record(project_id: str) -> dict[str, Any]:
         _invalidate_collection_cache(changed_keys)
         _projects_snapshot_cache.clear()
         _storage_collection_cache.clear()
-        await connection_manager.broadcast_storage_event(changed_keys)
+        asyncio.create_task(connection_manager.broadcast_storage_event(changed_keys))
 
     return {
         "status": "ok",
@@ -6078,7 +6514,7 @@ async def delete_event_record(event_id: str) -> dict[str, Any]:
         _invalidate_collection_cache(changed_keys)
         _projects_snapshot_cache.clear()
         _storage_collection_cache.clear()
-        await connection_manager.broadcast_storage_event(changed_keys)
+        asyncio.create_task(connection_manager.broadcast_storage_event(changed_keys))
 
     return {
         "status": "ok",
