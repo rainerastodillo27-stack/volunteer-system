@@ -60,6 +60,7 @@
     "db:consolidate": "node ./scripts/run-python.js -m backend.consolidate_redundant_tables --apply",
     "db:dictionary": "node ./scripts/run-python.js -m backend.generate_data_dictionary && node ./scripts/render-data-dictionary-pdf.js",
     "deploy:vps": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-vps.ps1",
+    "deploy:env": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-env.ps1",
     "deploy:bundle": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/create-deployment-bundle.ps1",
     "build:apk": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/build-apk.ps1"
   },
