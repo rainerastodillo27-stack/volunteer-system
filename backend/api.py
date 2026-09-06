@@ -2231,9 +2231,33 @@ def _postgres_get_hot_items_by_field(
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
+# Prevents public storage writes from creating a new administrator or
+# promoting a non-admin account. Existing administrator profile edits remain
+# supported; new administrator accounts must be provisioned from the terminal.
+def _require_terminal_admin_provisioning(connection: Any, key: str, item: dict[str, Any]) -> None:
+    if key != "users" or str(item.get("role") or "").strip().lower() != "admin":
+        return
+
+    item_id = str(item.get("id") or "").strip()
+    existing_role = None
+    if item_id:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "select role from public.users where users_id = %s",
+                (item_id,),
+            )
+            existing_row = cursor.fetchone()
+        existing_role = str(existing_row[0] or "").strip().lower() if existing_row else None
+
+    if existing_role != "admin":
+        raise ValueError("Admin accounts can only be created from the backend terminal.")
+
+
 # Inserts or updates one hot-storage item row.
 def _postgres_upsert_hot_item(connection: Any, key: str, item: dict[str, Any]) -> dict[str, Any]:
     try:
+        _require_terminal_admin_provisioning(connection, key, item)
+
         # Automatic compression of oversized images on ingest
         if key in {"projects", "events", "programs"} and isinstance(item.get("imageUrl"), str):
             url = item["imageUrl"]
@@ -6453,6 +6477,11 @@ async def _put_storage_item_once(key: str, payload: StoragePayload) -> dict[str,
         changed_keys = [key]
         with get_connection() as connection:
             try:
+                if key == "users":
+                    for item in payload.value:
+                        if isinstance(item, dict):
+                            _require_terminal_admin_provisioning(connection, key, item)
+
                 removed_project_ids: set[str] = set()
                 if key in {"projects", "programs", "events"}:
                     current_items = get_postgres_hot_storage_collection(connection, key)

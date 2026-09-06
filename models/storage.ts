@@ -2865,6 +2865,10 @@ export async function createUserAccount(input: {
     }>;
   };
 }): Promise<User> {
+  if (String(input.role) === 'admin') {
+    throw new Error('Admin accounts can only be created from the backend terminal.');
+  }
+
   const normalizedEmail = input.email?.trim().toLowerCase();
   const normalizedName = input.name.trim();
   const normalizedPassword = input.password?.trim() || '';

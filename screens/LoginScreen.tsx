@@ -874,13 +874,13 @@ export default function LoginScreen() {
   };
 
   const openSignupModal = () => {
-    resetSignupForm();
+    // Administrator accounts are provisioned from the backend terminal only.
     if (isWeb) {
-      setSignupRole("admin");
-      setSignupUserType("Adult");
-      setSignupStep("details");
+      return;
     }
-    if (!isWeb && selectedMobileRole) {
+
+    resetSignupForm();
+    if (selectedMobileRole) {
       setSignupRole(selectedMobileRole);
       setSignupUserType(selectedMobileRole === "partner" ? "Adult" : "Student");
       setSignupStep("details");
@@ -1267,6 +1267,13 @@ export default function LoginScreen() {
   // Validates and creates a new volunteer or partner account.
   const handleSignup = async () => {
     setSignupValidationError(null);
+
+    if (String(signupRole) === "admin") {
+      const errorMsg = "Admin accounts can only be created from the backend terminal.";
+      setSignupValidationError(errorMsg);
+      Alert.alert("Admin Registration Disabled", errorMsg);
+      return;
+    }
 
     if (!signupName.trim() || !signupPassword.trim()) {
       const errorMsg = "Name and password are required.";
@@ -2105,9 +2112,6 @@ export default function LoginScreen() {
                   onError={handleGoogleLoginError}
                 />
 
-                <TouchableOpacity onPress={openSignupModal}>
-                  <Text style={styles.signupText}>Sign up as Admin</Text>
-                </TouchableOpacity>
               </>
             )}
           </View>
