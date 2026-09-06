@@ -1,10 +1,20 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useIdTokenAuthRequest } from "expo-auth-session/providers/google";
+import Constants from "expo-constants";
 
-const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || "";
-const GOOGLE_ANDROID_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || "";
-const GOOGLE_IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || "";
+const expoExtra = (Constants.expoConfig?.extra || {}) as {
+  googleWebClientId?: string;
+  googleAndroidClientId?: string;
+  googleIosClientId?: string;
+};
+
+const GOOGLE_WEB_CLIENT_ID =
+  process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || expoExtra.googleWebClientId || "";
+const GOOGLE_ANDROID_CLIENT_ID =
+  process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || expoExtra.googleAndroidClientId || "";
+const GOOGLE_IOS_CLIENT_ID =
+  process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || expoExtra.googleIosClientId || "";
 
 function getGoogleClientId(): string {
   if (Platform.OS === "android") return GOOGLE_ANDROID_CLIENT_ID;
@@ -47,10 +57,20 @@ function GoogleButton({ disabled, busy, label = "Sign in with Google", onPress }
   );
 }
 
+function generateWebNonce(length = 16): string {
+  const chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+  let result = "";
+  for (let i = 0; i < length; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+}
+
 function ConfiguredGoogleSignInButton({ disabled, onError, onToken }: GoogleSignInButtonProps) {
   const [busy, setBusy] = useState(false);
   const handledTokenRef = useRef<string | null>(null);
   const handledResponseRef = useRef<unknown>(null);
+  const nonceRef = useRef<string>(generateWebNonce());
   const clientId = getGoogleClientId();
   const [request, response, promptAsync] = useIdTokenAuthRequest({
     clientId,
@@ -58,6 +78,9 @@ function ConfiguredGoogleSignInButton({ disabled, onError, onToken }: GoogleSign
     androidClientId: GOOGLE_ANDROID_CLIENT_ID,
     iosClientId: GOOGLE_IOS_CLIENT_ID,
     selectAccount: true,
+    extraParams: {
+      nonce: nonceRef.current,
+    },
   });
 
   useEffect(() => {
@@ -91,10 +114,13 @@ function ConfiguredGoogleSignInButton({ disabled, onError, onToken }: GoogleSign
   }, [onError, onToken, response]);
 
   const handlePress = async () => {
-    if (!request) return;
     setBusy(true);
     try {
-      await promptAsync();
+      if (promptAsync) {
+        await promptAsync();
+      } else {
+        throw new Error("Google Sign-In is initializing. Please try again.");
+      }
     } catch (error) {
       setBusy(false);
       onError(error);
@@ -104,7 +130,7 @@ function ConfiguredGoogleSignInButton({ disabled, onError, onToken }: GoogleSign
   return (
     <GoogleButton
       busy={busy}
-      disabled={disabled || !request}
+      disabled={disabled}
       onPress={handlePress}
     />
   );

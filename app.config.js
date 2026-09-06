@@ -94,6 +94,10 @@ function ensureBackendStarted() {
 // Fallback LAN IP for cloud builds where .env is not available.
 // Update this whenever your PC's Wi-Fi IP changes before rebuilding the APK.
 const HARDCODED_LAN_IP = '192.168.0.106';
+// OAuth client IDs are public identifiers and are safe to bundle in the app.
+// Never place an OAuth client secret here.
+const DEFAULT_GOOGLE_WEB_CLIENT_ID =
+  '163385365479-jaeg90dmalfqvjrkmbc0pigdaocof652.apps.googleusercontent.com';
 
 module.exports = () => {
   loadLocalEnv(__dirname);
@@ -115,6 +119,10 @@ module.exports = () => {
     process.env.GOOGLE_MAPS_WEB_API_KEY ||
     process.env.GOOGLE_MAPS_API_KEY ||
     '';
+  const googleWebClientId =
+    process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || DEFAULT_GOOGLE_WEB_CLIENT_ID;
+  const googleAndroidClientId = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || '';
+  const googleIosClientId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || '';
 
   return {
     expo: {
@@ -154,6 +162,9 @@ module.exports = () => {
         mobileGoogleMapsApiKey,
         androidGoogleMapsApiKey: mobileGoogleMapsApiKey,
         webGoogleMapsApiKey,
+        googleWebClientId,
+        googleAndroidClientId,
+        googleIosClientId,
         eas: {
           projectId: '5fe09f19-4371-4c48-af29-d0cebd1dcb94',
         },
