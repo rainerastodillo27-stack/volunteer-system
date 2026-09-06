@@ -17,6 +17,6 @@ const firebaseConfig = {
 };
 
 // Prevent duplicate app initialization (e.g. hot-reload)
-const app: FirebaseApp = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+export const app: FirebaseApp = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
 export const db: Firestore = getFirestore(app);

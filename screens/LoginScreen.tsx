@@ -58,10 +58,10 @@ import {
   getAllProjects,
   getAllUsers,
   getApiBaseUrl,
-  getStorageItemFast,
   getUserByEmailOrPhone,
   validateDswdAccreditationNo,
   loginWithCredentials,
+  loginWithGoogle,
   saveAppSettings,
   setRuntimeBackendUrl,
   subscribeToStorageChanges,
@@ -69,6 +69,7 @@ import {
 import { showError, showInfo } from "../utils/errorHandler";
 import { useAuth } from "../contexts/AuthContext";
 import AppLogo from "../components/AppLogo";
+import GoogleSignInButton from "../components/GoogleSignInButton";
 import InlineLoadError from "../components/InlineLoadError";
 import {
   AdvocacyFocus,
@@ -266,10 +267,6 @@ function getLoginFailureDisplay(error: unknown): {
   };
 }
 
-function getMobileRoleLabel(role: MobileEntryRole): string {
-  return role === "partner" ? "Partner Organization" : "Volunteer";
-}
-
 function getMobileRoleLoginTitle(role: MobileEntryRole): string {
   return role === "partner"
     ? "Partner Organization Sign In"
@@ -358,7 +355,6 @@ export default function LoginScreen() {
   const [backendMessage, setBackendMessage] = useState(
     "Checking backend connection...",
   );
-  const [savedAccounts, setSavedAccounts] = useState<User[]>([]);
   const [selectedMobileRole, setSelectedMobileRole] =
     useState<MobileEntryRole | null>(null);
   const [showYearPicker, setShowYearPicker] = useState(false);
@@ -620,76 +616,6 @@ export default function LoginScreen() {
     };
   }, []);
 
-  useEffect(() => {
-    const applyVisibleSavedAccounts = (users: User[]) => {
-      const uniqueUsers = Array.from(
-        users
-          .reduce((map, user) => {
-            if (!map.has(user.id)) {
-              map.set(user.id, user);
-            }
-            return map;
-          }, new Map<string, User>())
-          .values(),
-      );
-
-      const visibleUsers = uniqueUsers
-        // Never show legacy demo shortcuts that were removed from the live database.
-        .filter(
-          (user) =>
-            !["volunteer-1", "partner-user-1", "partner-user-2"].includes(
-              String(user.id || ""),
-            ),
-        )
-        .filter((user) =>
-          isWeb ? user.role === "admin" : user.role !== "admin",
-        )
-        .filter(
-          (user) => user.role === "admin" || user.approvalStatus !== "pending",
-        )
-        .filter(
-          (user) => user.role === "admin" || user.approvalStatus !== "rejected",
-        )
-        .sort(
-          (a, b) =>
-            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-        );
-      if (mountedRef.current) {
-        setSavedAccounts(visibleUsers);
-      }
-    };
-
-    // Loads stored accounts so users can quickly reuse credentials from this device.
-    const loadSavedAccounts = async () => {
-      try {
-        const cachedUsers = (await getStorageItemFast<User[]>("users")) || [];
-        applyVisibleSavedAccounts(cachedUsers);
-
-        if (backendStatus !== "online") {
-          return;
-        }
-
-        const users = await getAllUsers();
-        applyVisibleSavedAccounts(users);
-      } catch (error) {
-        if (mountedRef.current) {
-          setSavedAccounts([]);
-        }
-      }
-    };
-
-    void loadSavedAccounts();
-    if (backendStatus !== "online") {
-      return undefined;
-    }
-
-    const unsubscribe = subscribeToStorageChanges(["users"], () => {
-      void loadSavedAccounts();
-    });
-
-    return unsubscribe;
-  }, [backendStatus, isWeb]);
-
   // Authenticates the user with an email, email username, or phone identifier and password.
   const performLogin = async (
     rawIdentifier: string,
@@ -826,6 +752,98 @@ export default function LoginScreen() {
 
   const handleLogin = async () => {
     await performLogin(identifier, password);
+  };
+
+  // Completes Google authentication only after the backend confirms that the
+  // verified Google email belongs to a registered NVC account.
+  const handleGoogleLogin = async (idToken: string) => {
+    const showGoogleLoginError = (title: string, message: string) => {
+      setLoginError({ title, message });
+      showError(new Error(message), {
+        fallbackTitle: title,
+        fallbackMessage: message,
+      });
+    };
+
+    setLoginError(null);
+    if (!isWeb && !selectedMobileRole) {
+      showGoogleLoginError(
+        "Select Account Type",
+        "Choose Volunteer or Partner Organization before signing in with Google.",
+      );
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const user = await loginWithGoogle(idToken);
+      if (!user) {
+        showGoogleLoginError(
+          "Google Sign-In Failed",
+          "The backend did not return a registered account for this Google email.",
+        );
+        return;
+      }
+
+      if (!isWeb && user.role === "admin") {
+        showGoogleLoginError(
+          "Access Restricted",
+          "Admin accounts can only log in on the web portal.",
+        );
+        return;
+      }
+
+      if (!isWeb && selectedMobileRole && user.role !== selectedMobileRole) {
+        showGoogleLoginError(
+          "Role Mismatch",
+          getMobileRoleMismatchMessage(selectedMobileRole, user.role),
+        );
+        return;
+      }
+
+      if (isWeb && user.role !== "admin") {
+        showGoogleLoginError(
+          "Access Restricted",
+          "Volunteer and partner accounts can only log in on mobile.",
+        );
+        return;
+      }
+
+      await login(user);
+      setBackendStatus("online");
+      setBackendMessage(`Backend connected to Postgres: ${getApiBaseUrl()}`);
+      setLoginError(null);
+      setIdentifier("");
+      setPassword("");
+    } catch (error: any) {
+      const message = getRequestErrorMessage(
+        error,
+        "Unable to sign in with Google. Please try again.",
+        { backendUrl: getApiBaseUrl() },
+      );
+      const normalizedMessage = message.toLowerCase();
+      const title = normalizedMessage.includes("not registered")
+        ? "Google Email Not Registered"
+        : normalizedMessage.includes("pending") || normalizedMessage.includes("approved")
+          ? "Login Unavailable"
+          : getRequestErrorTitle(error, "Google Sign-In Failed");
+      showGoogleLoginError(title, message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGoogleLoginError = (error: unknown) => {
+    const message = getRequestErrorMessage(
+      error,
+      "Google sign-in is not available right now. Please try again.",
+      { backendUrl: getApiBaseUrl() },
+    );
+    setLoginError({ title: "Google Sign-In Failed", message });
+    showError(error instanceof Error ? error : new Error(message), {
+      fallbackTitle: "Google Sign-In Failed",
+      fallbackMessage: message,
+    });
   };
 
   // Clears all signup fields after registration or when the modal is closed.
@@ -1487,36 +1505,6 @@ export default function LoginScreen() {
     }
   };
 
-  // Prefills a saved account without exposing or locally verifying its password.
-  const handleUseSavedAccount = (account: User) => {
-    const nextIdentifier = account.email || account.phone || "";
-    if (!nextIdentifier) {
-      Alert.alert(
-        "Login Unavailable",
-        "This saved account does not have an email or phone number.",
-      );
-      return;
-    }
-
-    setLoginError(null);
-    setIdentifier(nextIdentifier);
-    setPassword("");
-    if (!isWeb && account.role !== "admin") {
-      setSelectedMobileRole(account.role);
-    }
-    setLoginError({
-      title: "Password required",
-      message: "Enter this account's password to continue.",
-    });
-  };
-
-  const visibleSavedAccounts =
-    isWeb || !selectedMobileRole
-      ? savedAccounts
-      : savedAccounts.filter((account) => account.role === selectedMobileRole);
-  const selectedMobileRoleLabel = selectedMobileRole
-    ? getMobileRoleLabel(selectedMobileRole)
-    : "";
   const selectedMobileRoleTitle = selectedMobileRole
     ? getMobileRoleLoginTitle(selectedMobileRole)
     : "";
@@ -2026,6 +2014,17 @@ export default function LoginScreen() {
                       <Text style={styles.loginSubmitButtonText}>Log in</Text>
                     )}
                   </TouchableOpacity>
+
+                  <View style={styles.googleDivider}>
+                    <View style={styles.googleDividerLine} />
+                    <Text style={styles.googleDividerText}>OR</Text>
+                    <View style={styles.googleDividerLine} />
+                  </View>
+                  <GoogleSignInButton
+                    disabled={loading || backendStatus !== "online"}
+                    onToken={handleGoogleLogin}
+                    onError={handleGoogleLoginError}
+                  />
                 </View>
 
                 {/* Bottom link: Don't have an account? Create one */}
@@ -2036,44 +2035,6 @@ export default function LoginScreen() {
                   </TouchableOpacity>
                 </View>
 
-                {visibleSavedAccounts.length > 0 && (
-                  <View style={styles.demoSection}>
-                    <Text style={styles.demoTitle}>
-                      {`Saved ${selectedMobileRoleLabel} Accounts:`}
-                    </Text>
-                    {visibleSavedAccounts.map((account) => (
-                      <TouchableOpacity
-                        key={account.id}
-                        style={[
-                          styles.savedAccountCard,
-                          loading && styles.accountCardDisabled,
-                        ]}
-                        onPress={() => {
-                          void handleUseSavedAccount(account);
-                        }}
-                        activeOpacity={0.85}
-                        disabled={loading}
-                      >
-                        <View style={styles.savedAccountHeader}>
-                          <Text style={styles.savedAccountName}>
-                            {account.name}
-                          </Text>
-                          <Text style={styles.savedAccountRole}>
-                            {account.role}
-                          </Text>
-                        </View>
-                        <Text style={styles.savedAccountCredential}>
-                          {account.email ||
-                            account.phone ||
-                            "No login identifier"}
-                        </Text>
-                        <Text style={styles.savedAccountHint}>
-                          Tap to use this account, then enter its password
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                )}
               </View>
             ) : (
               <>
@@ -2128,47 +2089,21 @@ export default function LoginScreen() {
                     <ActivityIndicator color="#fff" />
                   ) : (
                     <Text style={styles.buttonText}>
-                      {isWeb && !identifier && !password ? "Quick Sign In" : "Log In"}
+                      Log In
                     </Text>
                   )}
                 </TouchableOpacity>
 
-                {visibleSavedAccounts.length > 0 && (
-                  <View style={styles.demoSection}>
-                    <Text style={styles.demoTitle}>Saved Admin Accounts:</Text>
-                    {visibleSavedAccounts.map((account) => (
-                      <TouchableOpacity
-                        key={account.id}
-                        style={[
-                          styles.savedAccountCard,
-                          loading && styles.accountCardDisabled,
-                        ]}
-                        onPress={() => {
-                          void handleUseSavedAccount(account);
-                        }}
-                        activeOpacity={0.85}
-                        disabled={loading}
-                      >
-                        <View style={styles.savedAccountHeader}>
-                          <Text style={styles.savedAccountName}>
-                            {account.name}
-                          </Text>
-                          <Text style={styles.savedAccountRole}>
-                            {account.role}
-                          </Text>
-                        </View>
-                        <Text style={styles.savedAccountCredential}>
-                          {account.email ||
-                            account.phone ||
-                            "No login identifier"}
-                        </Text>
-                        <Text style={styles.savedAccountHint}>
-                          Tap to use this account, then enter its password
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                )}
+                <View style={styles.googleDivider}>
+                  <View style={styles.googleDividerLine} />
+                  <Text style={styles.googleDividerText}>OR</Text>
+                  <View style={styles.googleDividerLine} />
+                </View>
+                <GoogleSignInButton
+                  disabled={loading || backendStatus !== "online"}
+                  onToken={handleGoogleLogin}
+                  onError={handleGoogleLoginError}
+                />
 
                 <TouchableOpacity onPress={openSignupModal}>
                   <Text style={styles.signupText}>Sign up as Admin</Text>
@@ -4186,6 +4121,23 @@ const styles = StyleSheet.create({
     marginTop: 16,
     minHeight: 48,
   },
+  googleDivider: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginTop: 16,
+  },
+  googleDividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: "#e2e8f0",
+  },
+  googleDividerText: {
+    color: "#94a3b8",
+    fontSize: 11,
+    fontWeight: "800",
+    fontFamily: "Nunito",
+  },
   buttonDisabled: {
     backgroundColor: "#999",
     opacity: 0.6,
@@ -4194,41 +4146,6 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 18,
     fontWeight: "bold",
-  },
-  demoSection: {
-    backgroundColor: "#fff",
-    borderRadius: 8,
-    padding: 16,
-    marginTop: 20,
-    marginBottom: 16,
-    borderLeftWidth: 4,
-    borderLeftColor: "#4CAF50",
-  },
-  demoTitle: {
-    fontSize: 14,
-    fontWeight: "bold",
-    color: "#333",
-    marginBottom: 12,
-  },
-  demoItem: {
-    marginBottom: 12,
-  },
-  demoLabel: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: "#666",
-    marginBottom: 4,
-  },
-  demoEmail: {
-    fontSize: 13,
-    color: "#333",
-    fontFamily: "Nunito",
-    marginBottom: 2,
-  },
-  demoPassword: {
-    fontSize: 13,
-    color: "#333",
-    fontFamily: "Nunito",
   },
   mobileOnlyCard: {
     backgroundColor: "#f8fafc",
@@ -4277,49 +4194,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 20,
     color: "#475569",
-  },
-  savedAccountCard: {
-    backgroundColor: "#f8fafc",
-    borderColor: "#e2e8f0",
-    borderWidth: 1,
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 10,
-  },
-  accountCardDisabled: {
-    opacity: 0.65,
-  },
-  savedAccountHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    flexWrap: "wrap",
-    gap: 12,
-    marginBottom: 6,
-  },
-  savedAccountName: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: "700",
-    color: "#0f172a",
-  },
-  savedAccountRole: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: "#166534",
-    textTransform: "uppercase",
-    alignSelf: "flex-start",
-  },
-  savedAccountCredential: {
-    fontSize: 13,
-    color: "#334155",
-    fontFamily: "Nunito",
-    marginBottom: 2,
-  },
-  savedAccountHint: {
-    marginTop: 6,
-    fontSize: 12,
-    color: "#64748b",
   },
   signupText: {
     color: "#4CAF50",

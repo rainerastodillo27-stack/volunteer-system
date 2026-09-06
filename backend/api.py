@@ -9,6 +9,9 @@ import smtplib
 import socket
 import traceback
 import re
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr
@@ -172,6 +175,11 @@ class StorageBatchPayload(BaseModel):
 class AuthLoginPayload(BaseModel):
     identifier: str
     password: str
+
+
+# Request payload for Google OAuth login.
+class GoogleAuthPayload(BaseModel):
+    idToken: str
 
 
 # Request payload to send a registration OTP.
@@ -3257,6 +3265,59 @@ def _get_identifier_error_message(identifier: str) -> str:
     return "User not found"
 
 
+# Verifies a Google ID token through Google's token introspection endpoint.
+def _verify_google_id_token(id_token: str) -> dict[str, Any]:
+    normalized_token = str(id_token or "").strip()
+    if not normalized_token:
+        raise HTTPException(status_code=401, detail="Google sign-in did not return a valid identity token.")
+
+    token_info_url = "https://oauth2.googleapis.com/tokeninfo?" + urlencode({"id_token": normalized_token})
+    request = Request(
+        token_info_url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "NVC-Connect/1.0",
+        },
+    )
+
+    try:
+        with urlopen(request, timeout=10) as response:
+            token_info = json.loads(response.read().decode("utf-8"))
+    except (HTTPError, URLError, TimeoutError, ValueError, json.JSONDecodeError) as error:
+        print(f"[WARN] Google ID token verification failed: {type(error).__name__}: {error}")
+        raise HTTPException(status_code=401, detail="Google sign-in could not be verified. Please try again.") from error
+
+    if not isinstance(token_info, dict):
+        raise HTTPException(status_code=401, detail="Google sign-in could not be verified. Please try again.")
+
+    issuer = str(token_info.get("iss") or "").strip()
+    if issuer not in {"accounts.google.com", "https://accounts.google.com"}:
+        raise HTTPException(status_code=401, detail="Google sign-in could not be verified. Please try again.")
+
+    email = str(token_info.get("email") or "").strip().lower()
+    email_verified = str(token_info.get("email_verified") or "").strip().lower() == "true"
+    if not email or not email_verified:
+        raise HTTPException(status_code=401, detail="Your Google email must be verified before signing in.")
+
+    try:
+        expires_at = int(str(token_info.get("exp") or "0"))
+    except (TypeError, ValueError):
+        expires_at = 0
+    if expires_at <= int(time.time()):
+        raise HTTPException(status_code=401, detail="Your Google sign-in session has expired. Please try again.")
+
+    configured_client_ids = {
+        value.strip()
+        for value in str(os.getenv("GOOGLE_OAUTH_CLIENT_IDS") or "").split(",")
+        if value.strip()
+    }
+    token_audience = str(token_info.get("aud") or "").strip()
+    if configured_client_ids and token_audience not in configured_client_ids:
+        raise HTTPException(status_code=401, detail="This Google sign-in client is not authorized for NVC Connect.")
+
+    return token_info
+
+
 # Finds a user by email, email username alias, or normalized phone identifier.
 def _get_user_by_identifier(identifier: str, connection: Any | None = None) -> dict[str, Any] | None:
     normalized_identifier = identifier.strip().lower()
@@ -3907,6 +3968,41 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
     public_user = dict(user)
     public_user.pop("password", None)
     return {"user": public_user, "message": "Login successful"}
+
+
+@app.post("/auth/google")
+# Authenticates only Google emails that already belong to registered accounts.
+def auth_google(payload: GoogleAuthPayload) -> dict[str, Any]:
+    token_info = _verify_google_id_token(payload.idToken)
+    email = str(token_info.get("email") or "").strip().lower()
+
+    try:
+        with get_connection() as connection:
+            user = _get_user_by_identifier(email, connection)
+            if user is None:
+                raise HTTPException(
+                    status_code=403,
+                    detail="This Google email is not registered in NVC Connect. Please register first.",
+                )
+
+            block_reason = (
+                _get_volunteer_login_block_reason(connection, user)
+                or _get_partner_login_block_reason(connection, user)
+            )
+            if block_reason:
+                raise HTTPException(status_code=403, detail=block_reason)
+    except HTTPException:
+        raise
+    except Exception as error:
+        print(f"[WARN] Google account lookup failed: {type(error).__name__}: {error}")
+        raise HTTPException(
+            status_code=503,
+            detail="Database unavailable while checking your Google account. Please try again.",
+        ) from error
+
+    public_user = dict(user)
+    public_user.pop("password", None)
+    return {"user": public_user, "message": "Google login successful"}
 
 
 @app.post("/auth/send-rejection-email")

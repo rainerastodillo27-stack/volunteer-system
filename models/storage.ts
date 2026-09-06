@@ -3146,6 +3146,24 @@ export async function loginWithCredentials(
   }
 }
 
+// Authenticates a user with a Google ID token that is verified by the backend.
+export async function loginWithGoogle(idToken: string): Promise<User | null> {
+  const normalizedToken = idToken.trim();
+  if (!normalizedToken) {
+    throw new Error('Google sign-in did not return a valid identity token.');
+  }
+
+  const payload = await requestApiJson<{ user?: User | null }>('/auth/google', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ idToken: normalizedToken }),
+  });
+
+  return payload.user || null;
+}
+
 // Returns all user accounts from shared storage.
 export async function getAllUsers(): Promise<User[]> {
   return (await getStorageItemFast<User[]>(STORAGE_KEYS.USERS)) || [];
