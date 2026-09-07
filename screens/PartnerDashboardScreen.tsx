@@ -22,14 +22,11 @@ import {
 
   TouchableOpacity,
 
-  useWindowDimensions,
-
   View,
 
   type ImageStyle,
 
 } from 'react-native';
-import * as AuthSession from 'expo-auth-session';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { MaterialIcons } from '@expo/vector-icons';
@@ -43,20 +40,11 @@ import { useFocusEffect } from '@react-navigation/native';
 
 import InlineLoadError from '../components/InlineLoadError';
 
-import ProjectTimelineCalendarCard from '../components/ProjectTimelineCalendarCard';
 import LogoutConfirmationModal from '../components/LogoutConfirmationModal';
-import {
-  assertGoogleCalendarAccountMatchesUser,
-  getGoogleAuthConfig,
-  sendGoogleCalendarSyncEmail,
-  syncProjectsToGoogleCalendar,
-} from '../utils/googleCalendarSync';
 
 import { useAuth } from '../contexts/AuthContext';
 
 import {
-
-  getDashboardTimelineSnapshot,
 
   getPartnerDashboardSnapshot,
 
@@ -73,10 +61,6 @@ import {
 } from '../models/storage';
 
 import {
-
-  AdminPlanningCalendar,
-
-  AdminPlanningItem,
 
   AdvocacyFocus,
 
@@ -465,8 +449,6 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
   const { user, logout } = useAuth();
   const [showLogoutModal, setShowLogoutModal] = useState(false);
-  const { width: viewportWidth } = useWindowDimensions();
-  const isCompactCalendarHeader = viewportWidth < 420;
 
   const [loading, setLoading] = useState(true);
 
@@ -502,10 +484,6 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
   const [activeProposalProgramId, setActiveProposalProgramId] = useState<string | null>(null);
 
-  const [planningCalendars, setPlanningCalendars] = useState<AdminPlanningCalendar[]>([]);
-
-  const [planningItems, setPlanningItems] = useState<AdminPlanningItem[]>([]);
-
   const [availableProposalSkills, setAvailableProposalSkills] = useState<string[]>(
 
     mergeSkillOptions(TASK_SKILL_OPTIONS, DEFAULT_VOLUNTEER_SKILL_OPTIONS)
@@ -527,13 +505,6 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
   const [proposalDatePickerMode, setProposalDatePickerMode] = useState<'startDate' | 'endDate'>('startDate');
 
   const [selectedProposalDate, setSelectedProposalDate] = useState(new Date());
-  const [calendarSyncing, setCalendarSyncing] = useState(false);
-  const [calendarStatusFilter, setCalendarStatusFilter] = useState<string | null>(null);
-  const googleAuthConfig = useMemo(() => getGoogleAuthConfig(user?.email), [user?.email]);
-  const [googleAuthRequest, , promptGoogleAuth] = AuthSession.useAuthRequest(
-    googleAuthConfig.request,
-    googleAuthConfig.discovery
-  );
 
 
 
@@ -579,13 +550,7 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
 
 
-      const [snapshot, timelineSnapshot] = await Promise.all([
-
-        getPartnerDashboardSnapshot(),
-
-        getDashboardTimelineSnapshot(),
-
-      ]);
+      const snapshot = await getPartnerDashboardSnapshot();
 
       const ownedPartners = snapshot.partners.filter(isOwnedByCurrentPartner);
 
@@ -604,10 +569,6 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
           .sort((a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime())
 
       );
-
-      setPlanningCalendars(timelineSnapshot.planningCalendars);
-
-      setPlanningItems(timelineSnapshot.planningItems);
 
       setLoadError(null);
 
@@ -814,78 +775,6 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
     [attendingProjects]
 
   );
-
-  const handleSyncPartnerCalendar = React.useCallback(async () => {
-    if (!user?.id) {
-      Alert.alert('Login Required', 'Please sign in before syncing your calendar.');
-      return;
-    }
-
-    const approvedProjects = attendingProjects.filter(project => !project.isEvent);
-    if (approvedProjects.length === 0) {
-      Alert.alert(
-        'No Approved Projects',
-        'Only projects approved by the admin for your partner account can be synced.'
-      );
-      return;
-    }
-
-    setCalendarSyncing(true);
-    try {
-      if (!googleAuthRequest) {
-        throw new Error('Google sign-in is still initializing. Try again in a moment.');
-      }
-
-      const authResult = await promptGoogleAuth();
-      const accessToken = authResult.type === 'success' ? authResult.authentication?.accessToken : undefined;
-      if (!accessToken) {
-        throw new Error('Google Calendar permission was not granted.');
-      }
-
-      await assertGoogleCalendarAccountMatchesUser(accessToken, user.email);
-
-      const result = await syncProjectsToGoogleCalendar(accessToken, approvedProjects);
-      if (!result.success && result.synced === 0) {
-        throw new Error(result.errors[0] || 'Google Calendar sync failed.');
-      }
-
-      await sendGoogleCalendarSyncEmail({
-        recipientEmail: user.email,
-        userName: user.name,
-        syncedCount: result.synced,
-        role: 'partner',
-      });
-
-      Alert.alert(
-        'Calendar Synced',
-        `${result.synced} approved project${result.synced === 1 ? '' : 's'} added or updated in your Google Calendar.`
-      );
-    } catch (error) {
-      Alert.alert('Sync Failed', getRequestErrorMessage(error, 'Unable to sync your Google Calendar.'));
-    } finally {
-      setCalendarSyncing(false);
-    }
-  }, [attendingProjects, googleAuthRequest, promptGoogleAuth, user]);
-
-
-
-  const activeProjects = useMemo(
-
-    () => projects.filter(project => getDisplayProjectStatus(project) !== 'Cancelled'),
-
-    [projects]
-
-  );
-
-  const timelineProjectIds = useMemo(
-
-    () => (attendingProjects.length ? attendingProjects.map(project => project.id) : undefined),
-
-    [attendingProjects]
-
-  );
-
-
 
   const openReportForm = (projectId: string) => {
 
@@ -1714,88 +1603,6 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
       ) : null}
 
-
-      <View style={styles.partnerCalendarSection}>
-        <View
-          style={[
-            styles.partnerCalendarHeader,
-            isCompactCalendarHeader && styles.partnerCalendarHeaderCompact,
-          ]}
-        >
-          <View style={styles.partnerCalendarHeaderCopy}>
-            <Text style={styles.partnerCalendarTitle}>Partner Project Calendar</Text>
-            <Text style={styles.partnerCalendarSubtitle}>
-              {timelineProjectIds?.length
-                ? 'Your approved proposals aligned with admin planning calendar.'
-                : 'Review shared project schedule and admin planning dates.'}
-            </Text>
-          </View>
-          <TouchableOpacity
-            onPress={() => void handleSyncPartnerCalendar()}
-            disabled={calendarSyncing}
-            style={[
-              styles.partnerCalendarSyncButton,
-              isCompactCalendarHeader && styles.partnerCalendarSyncButtonCompact,
-              calendarSyncing && styles.partnerCalendarSyncButtonDisabled,
-            ]}
-          >
-            {calendarSyncing ? (
-              <ActivityIndicator size={12} color="#16a34a" />
-            ) : (
-              <MaterialIcons name="sync" size={14} color="#16a34a" />
-            )}
-            <Text style={styles.partnerCalendarSyncButtonText}>
-              {calendarSyncing ? 'Syncing...' : 'Sync Calendar'}
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-      <ProjectTimelineCalendarCard
-
-        title="Partner Project Calendar"
-
-        subtitle={
-
-          timelineProjectIds?.length
-
-            ? 'Your approved project proposals are aligned with the admin planning calendar.'
-
-            : 'Review the shared project schedule and admin planning dates in one timeline.'
-
-        }
-
-        projects={projects}
-
-        planningCalendars={planningCalendars}
-
-        planningItems={planningItems}
-
-        hideSecondCalendar
-
-        projectFilterIds={timelineProjectIds}
-        statusFilter={calendarStatusFilter}
-        setStatusFilter={setCalendarStatusFilter}
-
-        accentColor="#166534"
-
-        emptyText="No partner timeline items yet."
-
-        onOpenProject={projectId =>
-
-          navigateToAvailableRoute(navigation, 'Programs', {
-
-            projectId,
-
-          })
-
-        }
-
-      />
-      </View>
-
-
-
-
       <View style={styles.section}>
 
         <View style={styles.sectionHeaderRow}>
@@ -1865,11 +1672,8 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
                   <Text style={styles.cardTitle}>{project.title}</Text>
 
                   <Text style={styles.cardMeta}>
-
-                    {(project.programModule || project.category)} â€¢ {getDisplayProjectStatus(project)}
-
+                    {(project.programModule || project.category)} - {getDisplayProjectStatus(project)}
                   </Text>
-
                 </View>
 
                 <View
@@ -1953,11 +1757,11 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
                   <Text style={styles.cardTitle}>{partner.name}</Text>
 
                   <Text style={styles.cardMeta}>
-
-                    {partner.sectorType} â€¢ DSWD {partner.dswdAccreditationNo || 'Pending'}
-
+                    {partner.sectorType}
+                    {partner.sectorType === 'NGO'
+                      ? ` - DSWD ${partner.dswdAccreditationNo || 'Pending'}`
+                      : ''}
                   </Text>
-
                 </View>
 
                 <View
@@ -1979,11 +1783,9 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
               </View>
 
               <Text style={styles.cardText}>
-
-                Verification: {partner.verificationStatus || 'Pending'}{partner.credentialsUnlockedAt ? ' â€¢ Login unlocked' : ' â€¢ Login locked'}
-
+                Verification: {partner.verificationStatus || 'Pending'}
+                {partner.credentialsUnlockedAt ? ' - Login unlocked' : ' - Login locked'}
               </Text>
-
             </View>
 
           ))
@@ -2896,116 +2698,6 @@ const styles = StyleSheet.create({
 
   },
 
-  partnerCalendarSection: {
-
-    marginBottom: 4,
-
-  },
-
-  partnerCalendarHeader: {
-
-    flexDirection: 'row',
-
-    alignItems: 'flex-start',
-
-    justifyContent: 'space-between',
-
-    gap: 10,
-
-    marginBottom: 10,
-
-    paddingHorizontal: 4,
-
-  },
-
-  partnerCalendarHeaderCompact: {
-
-    flexDirection: 'column',
-
-    alignItems: 'stretch',
-
-    gap: 8,
-
-  },
-
-  partnerCalendarHeaderCopy: {
-
-    flex: 1,
-
-    minWidth: 0,
-
-  },
-
-  partnerCalendarTitle: {
-
-    fontSize: 16,
-
-    fontWeight: '700',
-
-    color: '#166534',
-
-  },
-
-  partnerCalendarSubtitle: {
-
-    fontSize: 12,
-
-    color: '#64748b',
-
-    lineHeight: 17,
-
-    marginTop: 2,
-
-  },
-
-  partnerCalendarSyncButton: {
-
-    minHeight: 32,
-
-    flexDirection: 'row',
-
-    alignItems: 'center',
-
-    justifyContent: 'center',
-
-    gap: 5,
-
-    backgroundColor: '#f0fdf4',
-
-    borderWidth: 1,
-
-    borderColor: '#bbf7d0',
-
-    borderRadius: 20,
-
-    paddingVertical: 6,
-
-    paddingHorizontal: 12,
-
-  },
-
-  partnerCalendarSyncButtonCompact: {
-
-    alignSelf: 'flex-end',
-
-  },
-
-  partnerCalendarSyncButtonDisabled: {
-
-    opacity: 0.65,
-
-  },
-
-  partnerCalendarSyncButtonText: {
-
-    fontSize: 12,
-
-    fontWeight: '600',
-
-    color: '#16a34a',
-
-  },
-
   section: {
 
     marginTop: 16,
@@ -3059,6 +2751,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
 
     borderRadius: 16,
+
+    borderWidth: 1,
+
+    borderColor: '#94a3b8',
 
     padding: 16,
 

@@ -258,6 +258,21 @@ type ChatMessage = Message | ProjectGroupMessage;
 
 const parsedProposalCardCache = new Map<string, any>();
 
+// The original admin account is retained in storage for audit references, but
+// it is no longer a messaging contact. Its messages are migrated server-side
+// to the current NVC Administrator account.
+function isRetiredNvcAdminAccount(candidate: User): boolean {
+  if (candidate.role !== 'admin') return false;
+  const normalizedName = String(candidate.name || '').trim().toLowerCase();
+  const normalizedEmail = String(candidate.email || '').trim().toLowerCase();
+  return (
+    normalizedName === 'nvc' ||
+    normalizedName === 'nvc admin account' ||
+    normalizedEmail === 'nvc@gmail.com' ||
+    normalizedEmail === 'admin@nvc.org'
+  );
+}
+
 function parseProposalCardContent(content?: string): any | null {
   if (!content || !content.startsWith(PROPOSAL_PREFIX)) {
     return null;
@@ -891,7 +906,9 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
     try {
       const users = await getAllUsers();
-      const others = users.filter(candidate => candidate.id !== messageUserId);
+      const others = users.filter(
+        candidate => candidate.id !== messageUserId && !isRetiredNvcAdminAccount(candidate)
+      );
       const allowedDirectUsers = user.role === 'volunteer' || user.role === 'partner'
         ? others.filter(candidate => candidate.role === 'admin')
         : others;
@@ -992,7 +1009,9 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
 
 
-      const others = users.filter(u => u.id !== messageUserId);
+      const others = users.filter(
+        candidate => candidate.id !== messageUserId && !isRetiredNvcAdminAccount(candidate)
+      );
 
       const allowedDirectUsers = user.role === 'volunteer' || user.role === 'partner'
 
@@ -1006,7 +1025,9 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       const volunteerProfileId = snapshot.volunteerProfile?.id;
 
-      const adminUsers = users.filter(candidate => candidate.role === 'admin');
+      const adminUsers = users.filter(
+        candidate => candidate.role === 'admin' && !isRetiredNvcAdminAccount(candidate)
+      );
 
 
 
@@ -1298,6 +1319,18 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         convMap.set(otherId, entry);
 
       });
+
+      // Keep the current administrator available as a first-contact option
+      // even before the user has sent or received a message.
+      if (user.role !== 'admin') {
+        const currentAdmin = allowedDirectUsers.find(candidate => candidate.role === 'admin');
+        if (currentAdmin && !convMap.has(currentAdmin.id)) {
+          convMap.set(currentAdmin.id, {
+            user: currentAdmin,
+            unreadCount: 0,
+          });
+        }
+      }
 
 
 
@@ -2998,26 +3031,6 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         {activeSection === 'messages' && (
 
           <>
-
-            <Text style={styles.listSectionLabel}>General</Text>
-
-            {renderSidebarItem('admin-nvc', 'Admin NVC', 'System support and updates', false, () => {
-
-              const admin = allUsers.find(u => u.role === 'admin');
-
-              if (admin) {
-
-                setSelectedUser(admin); setSelectedProjectChat(null); setSelectedProposalApplication(null); setProposalIntent(null); setView('detail');
-
-              } else {
-
-                Alert.alert('Notice', 'Admin contact not available in this session.');
-
-              }
-
-            }, { icon: 'verified-user', color: '#0369a1' })}
-
-
 
             <Text style={styles.listSectionLabel}>Conversations</Text>
 
@@ -4881,6 +4894,25 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                 value={messageText}
 
                 onChangeText={setMessageText}
+
+                onSubmitEditing={() => {
+                  void handleSendMessage();
+                }}
+
+                onKeyPress={(event: any) => {
+                  if (
+                    Platform.OS === 'web' &&
+                    event.nativeEvent.key === 'Enter' &&
+                    !event.nativeEvent.shiftKey
+                  ) {
+                    event.preventDefault?.();
+                    void handleSendMessage();
+                  }
+                }}
+
+                blurOnSubmit
+
+                returnKeyType="send"
 
                 multiline
 

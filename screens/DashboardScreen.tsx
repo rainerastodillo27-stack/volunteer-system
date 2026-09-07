@@ -976,8 +976,21 @@ export default function DashboardScreen({ navigation }: any) {
 
   // 1. Volunteer Engagement calculations for Donut
   const totalVolunteers = volunteersData.length || 1;
-  const openVolunteersCount = volunteersData.filter(v => v.engagementStatus === 'Open to Volunteer').length;
-  const busyVolunteersCount = volunteersData.filter(v => v.engagementStatus === 'Busy').length;
+  const busyVolunteerIdentifiers = new Set(
+    volunteerJoinRecordsData
+      .filter(record => (record.participationStatus || 'Active') === 'Active')
+      .filter(record => projectsData.find(project => project.id === record.projectId)?.isEvent)
+      .flatMap(record => [record.volunteerId, record.volunteerUserId])
+      .map(value => String(value || '').trim())
+      .filter(Boolean)
+  );
+  const isVolunteerBusy = (volunteer: Volunteer) =>
+    [volunteer.id, volunteer.userId]
+      .map(value => String(value || '').trim())
+      .filter(Boolean)
+      .some(identifier => busyVolunteerIdentifiers.has(identifier));
+  const openVolunteersCount = volunteersData.filter(volunteer => !isVolunteerBusy(volunteer)).length;
+  const busyVolunteersCount = volunteersData.filter(isVolunteerBusy).length;
   const pendingVolunteersCount = volunteersData.filter(v => v.registrationStatus === 'Pending').length;
   
   // 2. Project Category count calculations

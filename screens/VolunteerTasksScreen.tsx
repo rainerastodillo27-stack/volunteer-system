@@ -652,6 +652,28 @@ export default function VolunteerTasksScreen({ navigation }: any) {
     );
   }, [loadVolunteerTasksCoalesced]);
 
+  // Refresh an already-open web tab when the user returns from the admin tab.
+  // Browser tab switching does not always trigger navigation focus, so this
+  // also covers a missed realtime storage event.
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const refreshWhenVisible = () => {
+      if (!document.hidden) {
+        void loadVolunteerTasksCoalesced();
+      }
+    };
+
+    window.addEventListener('focus', refreshWhenVisible);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => {
+      window.removeEventListener('focus', refreshWhenVisible);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
+  }, [loadVolunteerTasksCoalesced]);
+
   useEffect(() => {
     return () => {
       if (attendanceNoticeTimerRef.current) {
@@ -768,7 +790,11 @@ export default function VolunteerTasksScreen({ navigation }: any) {
         project =>
           project.isEvent &&
           (project.internalTasks || []).some(
-            task => task.isFieldOfficer && isVolunteerAssignedToTask(task, volunteerProfile.id)
+            task => task.isFieldOfficer && isVolunteerAssignedToTask(
+              task,
+              volunteerProfile.id,
+              volunteerProfile.userId
+            )
           )
       )
       .sort((left, right) => new Date(left.startDate).getTime() - new Date(right.startDate).getTime());
@@ -795,7 +821,11 @@ export default function VolunteerTasksScreen({ navigation }: any) {
     }
 
     return (selectedEventProject.internalTasks || []).some(
-      task => task.isFieldOfficer && isVolunteerAssignedToTask(task, volunteerProfile.id)
+      task => task.isFieldOfficer && isVolunteerAssignedToTask(
+        task,
+        volunteerProfile.id,
+        volunteerProfile.userId
+      )
     );
   }, [selectedEventProject, volunteerProfile]);
 
@@ -930,7 +960,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
     try {
       setActionLoadingKey(loadingKey);
       const isFieldOfficerForEvent = (eventProject.internalTasks || []).some(
-        task => task.isFieldOfficer && isVolunteerAssignedToTask(task, volunteerProfile.id)
+        task => task.isFieldOfficer && isVolunteerAssignedToTask(task, volunteerProfile.id, volunteerProfile.userId)
       );
 
       if (!isFieldOfficerForEvent) {
@@ -939,15 +969,30 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       }
 
       const assignableVolunteers = eventProject.volunteers
-        .map(joinedVolunteerId => allVolunteers.find(volunteer => volunteer.id === joinedVolunteerId) || null)
+        .map(joinedVolunteerId =>
+          allVolunteers.find(
+            volunteer => volunteer.id === joinedVolunteerId || volunteer.userId === joinedVolunteerId
+          ) || null
+        )
         .filter((volunteer): volunteer is Volunteer => volunteer !== null);
       const assignedVolunteer = volunteerId
-        ? assignableVolunteers.find(volunteer => volunteer.id === volunteerId) || null
+        ? assignableVolunteers.find(
+            volunteer => volunteer.id === volunteerId || volunteer.userId === volunteerId
+          ) || null
         : null;
       const currentTask = (eventProject.internalTasks || []).find(task => task.id === taskId) || null;
-      const currentAssignedVolunteerIds = currentTask ? getTaskAssignedVolunteerIds(currentTask) : [];
+      const currentAssignedVolunteerIds = currentTask
+        ? getTaskAssignedVolunteerIds(currentTask)
+        : [];
+      const targetVolunteerIdentifiers = new Set(
+        [volunteerId, assignedVolunteer?.id, assignedVolunteer?.userId]
+          .map(value => String(value || '').trim())
+          .filter(Boolean)
+      );
       const isAlreadyAssigned = Boolean(
-        volunteerId && currentTask && currentAssignedVolunteerIds.includes(volunteerId)
+        volunteerId &&
+        currentTask &&
+        currentAssignedVolunteerIds.some(id => targetVolunteerIdentifiers.has(id))
       );
 
       if (
@@ -967,20 +1012,25 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       const nextAssignedVolunteerIds = !volunteerId
         ? []
         : mode === 'remove'
-        ? currentAssignedVolunteerIds.filter(id => id !== volunteerId)
+        ? currentAssignedVolunteerIds.filter(id => !targetVolunteerIdentifiers.has(id))
         : isAlreadyAssigned
         ? currentAssignedVolunteerIds
-        : [...currentAssignedVolunteerIds, volunteerId];
+        : [...currentAssignedVolunteerIds, assignedVolunteer?.id || volunteerId];
       const nextAssignedVolunteers = nextAssignedVolunteerIds
-        .map(id => assignableVolunteers.find(volunteer => volunteer.id === id) || null)
+        .map(
+          id =>
+            assignableVolunteers.find(
+              volunteer => volunteer.id === id || volunteer.userId === id
+            ) || null
+        )
         .filter((volunteer): volunteer is Volunteer => volunteer !== null);
       const nextAssignedVolunteerNames = nextAssignedVolunteers.map(volunteer => volunteer.name);
       const removedVolunteer =
         mode === 'remove' && volunteerId
-          ? assignableVolunteers.find(volunteer => volunteer.id === volunteerId) || null
+          ? assignedVolunteer
           : null;
       const shouldNotifyAssignedVolunteer = Boolean(
-        assignedVolunteer && volunteerId && mode === 'assign' && !currentAssignedVolunteerIds.includes(volunteerId)
+        assignedVolunteer && volunteerId && mode === 'assign' && !isAlreadyAssigned
       );
 
       const updatedTasks = (eventProject.internalTasks || []).map(task => {

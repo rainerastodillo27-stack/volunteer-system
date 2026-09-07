@@ -4,6 +4,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import type { SubmittedReport } from '../screens/ReportsScreen';
 import type { Project, VolunteerTimeLog, Volunteer } from '../models/types';
 import { isImageMediaUri } from '../utils/media';
+import { buildTextPdf, downloadPdfFile } from '../utils/pdfDownload';
 
 interface Props {
   reports: SubmittedReport[];
@@ -77,6 +78,33 @@ function reportHasAttachment(report: SubmittedReport): boolean {
 
 function isAttendanceReport(report: SubmittedReport): boolean {
   return String(report.id || '').startsWith('timelog-');
+}
+
+function buildBatchReportContent(
+  reports: SubmittedReport[],
+  projectById: Map<string, Project>,
+): string {
+  return reports.map((report, index) => {
+    const project = report.projectId ? projectById.get(report.projectId) : undefined;
+    const activityTitle = project?.title || report.projectTitle || report.category || 'Unlinked activity';
+    const attachments = [
+      ...(report.attachments || []).map(attachment => attachment.type),
+      ...(report.mediaFile ? ['media'] : []),
+    ];
+
+    return [
+      `Report ${index + 1}`,
+      `Title: ${report.title || 'Untitled report'}`,
+      `Event/Project: ${activityTitle}`,
+      `Submitted by: ${report.submitterName || 'Unknown user'}`,
+      `Role: ${report.submitterRole || 'Unknown'}`,
+      `Report type: ${report.reportType || 'Unknown'}`,
+      `Date: ${new Date(report.submittedAt).toLocaleString()}`,
+      `Status: ${report.status || 'Unknown'}`,
+      `Attachments: ${attachments.length ? attachments.join(', ') : 'None'}`,
+      `Description: ${report.description || 'No description provided.'}`,
+    ].join('\n');
+  }).join('\n\n');
 }
 
 export default function AllReportsView({ reports, projects, volunteerTimeLogs = [], volunteers = [], onViewReport, onUploadReport, reportType = 'all' }: Props) {
@@ -261,6 +289,24 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
       ? 'No Attachments'
       : 'Filter';
 
+  const handleBatchDownload = (
+    items: SubmittedReport[],
+    title: string,
+    filenamePrefix: string,
+  ) => {
+    if (!items.length) {
+      Alert.alert('No Reports', 'There are no reports available to download.');
+      return;
+    }
+
+    const dateKey = new Date().toISOString().slice(0, 10);
+    void downloadPdfFile(
+      `${filenamePrefix}-${dateKey}`,
+      buildTextPdf(title, buildBatchReportContent(items, projectById)),
+      'Unable to save the batch report on this device.',
+    );
+  };
+
   const selectAttachmentFilter = (nextFilter: typeof attachmentFilter) => {
     setAttachmentFilter(nextFilter);
     setShowFilter(false);
@@ -428,6 +474,23 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
                   ? `${selectedEventFolder.title} • ${tableReports.length} report${tableReports.length === 1 ? '' : 's'}`
                   : `${folders.length} folders • ${eventReports.length} reports`}
               </Text>
+              <TouchableOpacity
+                style={[styles.batchDownloadButton, !tableReports.length && styles.batchDownloadButtonDisabled]}
+                onPress={() =>
+                  handleBatchDownload(
+                    tableReports,
+                    reportType === 'partner' ? 'Project Reports' : 'Task and Field Reports',
+                    reportType === 'partner' ? 'project-reports' : 'task-field-reports',
+                  )
+                }
+                disabled={!tableReports.length}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Batch download task and field reports"
+              >
+                <MaterialIcons name="file-download" size={15} color="#fff" />
+                <Text style={styles.batchDownloadButtonText}>Batch Download</Text>
+              </TouchableOpacity>
               {selectedEventFolder ? (
                 <TouchableOpacity
                   style={styles.clearFolderButton}
@@ -517,6 +580,23 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
                   ? `${selectedEventFolder.title} • ${visibleAttendanceReports.length} report${visibleAttendanceReports.length === 1 ? '' : 's'}`
                   : `${visibleAttendanceReports.length} report${visibleAttendanceReports.length === 1 ? '' : 's'}`}
               </Text>
+              <TouchableOpacity
+                style={[styles.batchDownloadButton, !visibleAttendanceReports.length && styles.batchDownloadButtonDisabled]}
+                onPress={() =>
+                  handleBatchDownload(
+                    visibleAttendanceReports,
+                    'Attendance Reports',
+                    'attendance-reports',
+                  )
+                }
+                disabled={!visibleAttendanceReports.length}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Batch download attendance reports"
+              >
+                <MaterialIcons name="file-download" size={15} color="#fff" />
+                <Text style={styles.batchDownloadButtonText}>Batch Download</Text>
+              </TouchableOpacity>
               <MaterialIcons name="keyboard-arrow-up" size={20} color="#5B564C" />
             </View>
           </View>
@@ -832,6 +912,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    flexWrap: 'wrap',
     paddingHorizontal: 16,
     paddingVertical: 14,
     backgroundColor: '#FFFBF5',
@@ -839,7 +920,7 @@ const styles = StyleSheet.create({
     borderBottomColor: '#F3E8D9',
     gap: 12,
   },
-  sectionHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
+  sectionHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1, minWidth: 0 },
   sectionIconBox: {
     width: 36,
     height: 36,
@@ -850,8 +931,25 @@ const styles = StyleSheet.create({
   },
   sectionTitle: { fontSize: 14, fontWeight: '800', color: '#1F2937' },
   sectionSubtitle: { fontSize: 11, color: '#6B7280', marginTop: 2 },
-  sectionHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  sectionHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', flexShrink: 1 },
   sectionMeta: { fontSize: 11, color: '#6B7280', fontWeight: '600' },
+  batchDownloadButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    borderRadius: 7,
+    backgroundColor: '#166534',
+  },
+  batchDownloadButtonDisabled: {
+    opacity: 0.45,
+  },
+  batchDownloadButtonText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#fff',
+  },
   clearFolderButton: {
     paddingHorizontal: 8,
     paddingVertical: 4,

@@ -50,6 +50,14 @@ function formatDateRange(startDate: string, endDate: string) {
   return startLabel === endLabel ? startLabel : `${startLabel} - ${endLabel}`;
 }
 
+function getProposalImageSource(application?: PartnerProjectApplication) {
+  const imageAttachment = application?.proposalDetails?.attachments?.find(
+    attachment => attachment.type === 'image' && Boolean(attachment.url?.trim())
+  );
+  const imageUri = imageAttachment?.url?.trim();
+  return imageUri ? { uri: imageUri } : undefined;
+}
+
 export default function PartnerProjectsScreen({ route }: any) {
   const { user } = useAuth();
   const navigation = useNavigation<any>();
@@ -71,7 +79,7 @@ export default function PartnerProjectsScreen({ route }: any) {
 
     try {
       const [snapshot, allVolunteerTimeLogs] = await Promise.all([
-        getProjectsScreenSnapshot(user, ['projects', 'partnerApplications'], false, false /* images not needed for partner list */),
+        getProjectsScreenSnapshot(user, ['projects', 'partnerApplications'], false, true),
         getAllVolunteerTimeLogs(),
       ]);
       setProjects(snapshot.projects || []);
@@ -288,14 +296,19 @@ export default function PartnerProjectsScreen({ route }: any) {
         </View>
       ) : (
         <>
-          <Text style={styles.availableProgramHeader}>Available Program</Text>
+          <Text style={styles.availableProgramHeader}>Approved Proposal Projects</Text>
           <View style={styles.boxList}>
             {projectMetrics.map(({ project, linkedEvents, volunteerJoinCount, verifiedAttendanceCount, activeEventCount }) => {
               const projectStatus = getProjectDisplayStatus(project);
               const projectParent = project.parentProjectId
                 ? projects.find(candidate => candidate.id === project.parentProjectId)
                 : undefined;
-              const projectImageSource = getPrimaryProjectImageSource(project, projectParent);
+              const approvedApplication = partnerApplications.find(
+                application => application.status === 'Approved' && application.projectId === project.id
+              );
+              const projectImageSource =
+                getPrimaryProjectImageSource(project, projectParent) ||
+                getProposalImageSource(approvedApplication);
 
               return (
                 <TouchableOpacity
@@ -408,10 +421,16 @@ export default function PartnerProjectsScreen({ route }: any) {
                     const projectParent = selectedProjectMetrics.project.parentProjectId
                       ? projects.find(candidate => candidate.id === selectedProjectMetrics.project.parentProjectId)
                       : undefined;
-                    const projectImageSource = getPrimaryProjectImageSource(
-                      selectedProjectMetrics.project,
-                      projectParent,
+                    const approvedApplication = partnerApplications.find(
+                      application =>
+                        application.status === 'Approved' &&
+                        application.projectId === selectedProjectMetrics.project.id
                     );
+                    const projectImageSource =
+                      getPrimaryProjectImageSource(
+                        selectedProjectMetrics.project,
+                        projectParent,
+                      ) || getProposalImageSource(approvedApplication);
                     return projectImageSource ? (
                       <Image source={projectImageSource} style={styles.modalProjectImage} resizeMode="cover" />
                     ) : (

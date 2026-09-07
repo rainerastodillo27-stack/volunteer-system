@@ -151,7 +151,10 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   // Loads all volunteer profiles and keeps the selected volunteer in sync.
   const loadVolunteers = async () => {
     try {
-      const allVolunteers = await getAllVolunteers();
+      // Volunteer applications can be created from another screen/device.
+      // Bypass the fast cache so a newly registered volunteer is visible here
+      // immediately instead of waiting for the cache TTL to expire.
+      const allVolunteers = await getAllVolunteers({ forceRefresh: true });
       setVolunteers(allVolunteers);
       setLoadError(null);
       setSelectedVolunteer(currentSelectedVolunteer => {
@@ -599,6 +602,25 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     );
   };
 
+  // Derive the displayed availability from actual event membership so stale
+  // profile values cannot keep an unjoined volunteer marked as Busy.
+  const getAutomaticEngagementStatus = (volunteer: Volunteer): Volunteer['engagementStatus'] => {
+    const identifiers = new Set(
+      [volunteer.id, volunteer.userId]
+        .map(value => String(value || '').trim())
+        .filter(Boolean)
+    );
+    const joinedAnEvent = projects.some(
+      project =>
+        project.isEvent &&
+        (
+          (project.volunteers || []).some(id => identifiers.has(String(id || '').trim())) ||
+          (project.joinedUserIds || []).some(id => identifiers.has(String(id || '').trim()))
+        )
+    );
+    return joinedAnEvent ? 'Busy' : 'Open to Volunteer';
+  };
+
   if (view === 'detail' && selectedVolunteer) {
     const matchedProjects = getMatchedProjects();
     const pendingProjects = getPendingProjects();
@@ -647,6 +669,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     const completedEventsCount = completedProjects.filter(projectEntry => Boolean(projectEntry.isEvent)).length;
 
     const isApplicationPending = selectedVolunteer.registrationStatus === 'Pending';
+    const selectedVolunteerEngagementStatus = getAutomaticEngagementStatus(selectedVolunteer);
     const membershipSheet = selectedUser?.volunteerMembershipSheet;
     const pillarsOfInterest = selectedUser?.pillarsOfInterest || [];
     const userType: UserType | undefined = selectedUser?.userType;
@@ -797,7 +820,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                       { label: 'Gender', value: membershipSheet?.gender || selectedVolunteer.gender || '-' },
                       { label: 'Date of Birth', value: membershipSheet?.dateOfBirth || selectedVolunteer.dateOfBirth || '-' },
                       { label: 'Civil Status', value: membershipSheet?.civilStatus || selectedVolunteer.civilStatus || '-' },
-                      { label: 'Volunteer Status', value: selectedVolunteer.engagementStatus || '-' },
+                      { label: 'Volunteer Status', value: selectedVolunteerEngagementStatus },
                       { label: 'Available on', value: availableDaysLabel },
                     ].map(field => (
                       <View key={field.label} style={styles.applicationFieldRow}>
@@ -985,7 +1008,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                       </View>
                     ) : (
                       <View style={[styles.registrationBadge, styles.registrationBadgeApproved]}>
-                        <Text style={styles.registrationBadgeText}>{selectedVolunteer.engagementStatus || 'Approved'}</Text>
+                        <Text style={styles.registrationBadgeText}>{selectedVolunteerEngagementStatus}</Text>
                       </View>
                     )}
                   </View>
@@ -1062,7 +1085,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                       { label: 'Gender', value: membershipSheet?.gender || selectedVolunteer.gender || '-' },
                       { label: 'Date of Birth', value: membershipSheet?.dateOfBirth || selectedVolunteer.dateOfBirth || '-' },
                       { label: 'Civil Status', value: membershipSheet?.civilStatus || selectedVolunteer.civilStatus || '-' },
-                      { label: 'Volunteer Status', value: selectedVolunteer.engagementStatus || '-' },
+                      { label: 'Volunteer Status', value: selectedVolunteerEngagementStatus },
                       { label: 'Available on', value: availableDaysLabel },
                     ].map(field => (
                       <View key={field.label} style={styles.applicationFieldRow}>
@@ -1867,12 +1890,12 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                 <Text
                   style={[
                     styles.volunteerCardStatus,
-                    volunteer.engagementStatus === 'Busy'
+                    getAutomaticEngagementStatus(volunteer) === 'Busy'
                       ? styles.volunteerCardStatusBusy
                       : styles.volunteerCardStatusOpen,
                   ]}
                 >
-                  {volunteer.engagementStatus}
+                  {getAutomaticEngagementStatus(volunteer)}
                 </Text>
               )}
             </View>

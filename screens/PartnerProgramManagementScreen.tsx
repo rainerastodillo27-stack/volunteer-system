@@ -1,6 +1,7 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import ModernTheme from '../utils/modernTheme';
 import {
+  Alert,
   ActivityIndicator,
   Image,
   Modal,
@@ -13,6 +14,7 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+import * as AuthSession from 'expo-auth-session';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
@@ -26,6 +28,13 @@ import ProjectTimelineCalendarCard from '../components/ProjectTimelineCalendarCa
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getPrimaryProjectImageSource } from '../utils/projectMap';
 import { isAbortLikeError } from '../utils/requestErrors';
+import {
+  assertGoogleCalendarAccountMatchesUser,
+  getGoogleAuthConfig,
+  sendGoogleCalendarSyncEmail,
+  syncProjectsToGoogleCalendar,
+} from '../utils/googleCalendarSync';
+import { getRequestErrorMessage } from '../utils/requestErrors';
 
 type ProgramCardConfig = {
   id: string;
@@ -86,6 +95,13 @@ export default function PartnerProgramManagementScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [detailModalProject, setDetailModalProject] = useState<Project | null>(null);
+  const [calendarSyncing, setCalendarSyncing] = useState(false);
+  const [calendarSyncMessage, setCalendarSyncMessage] = useState<string | null>(null);
+  const googleAuthConfig = useMemo(() => getGoogleAuthConfig(user?.email), [user?.email]);
+  const [googleAuthRequest, , promptGoogleAuth] = AuthSession.useAuthRequest(
+    googleAuthConfig.request,
+    googleAuthConfig.discovery
+  );
 
   const loadData = useCallback(async (showRefresh = false) => {
     if (!user) {
@@ -222,6 +238,70 @@ export default function PartnerProgramManagementScreen() {
     [partnerApplications]
   );
 
+  const approvedProjects = useMemo(() => {
+    const approvedProjectIds = new Set(
+      partnerApplications
+        .filter(application => application.status === 'Approved')
+        .map(application => application.projectId)
+    );
+    return allProjects.filter(
+      project => !project.isEvent && approvedProjectIds.has(project.id)
+    );
+  }, [allProjects, partnerApplications]);
+
+  const handleSyncProgramCalendar = useCallback(async () => {
+    if (!user?.id) {
+      Alert.alert('Login Required', 'Please sign in before syncing your calendar.');
+      return;
+    }
+
+    if (approvedProjects.length === 0) {
+      Alert.alert(
+        'No Approved Projects',
+        'Only projects approved by the admin for your partner account can be synced.'
+      );
+      return;
+    }
+
+    setCalendarSyncMessage(null);
+    setCalendarSyncing(true);
+    try {
+      if (!googleAuthRequest) {
+        throw new Error('Google sign-in is still initializing. Try again in a moment.');
+      }
+
+      const authResult = await promptGoogleAuth();
+      const accessToken = authResult.type === 'success' ? authResult.authentication?.accessToken : undefined;
+      if (!accessToken) {
+        throw new Error('Google Calendar permission was not granted.');
+      }
+
+      await assertGoogleCalendarAccountMatchesUser(accessToken, user.email);
+
+      const result = await syncProjectsToGoogleCalendar(accessToken, approvedProjects);
+      if (!result.success && result.synced === 0) {
+        throw new Error(result.errors[0] || 'Google Calendar sync failed.');
+      }
+
+      await sendGoogleCalendarSyncEmail({
+        recipientEmail: user.email,
+        userName: user.name,
+        syncedCount: result.synced,
+        role: 'partner',
+      });
+
+      const confirmationMessage = result.failed > 0
+        ? `${result.synced} approved project${result.synced === 1 ? '' : 's'} synced. ${result.failed} could not be synced.`
+        : `${result.synced} approved project${result.synced === 1 ? '' : 's'} added or updated in your Google Calendar.`;
+      setCalendarSyncMessage(confirmationMessage);
+      Alert.alert('Calendar Sync Complete', confirmationMessage);
+    } catch (error) {
+      Alert.alert('Sync Failed', getRequestErrorMessage(error, 'Unable to sync your Google Calendar.'));
+    } finally {
+      setCalendarSyncing(false);
+    }
+  }, [approvedProjects, googleAuthRequest, promptGoogleAuth, user]);
+
   const handleOpenProposal = (card: ProgramCardConfig) => {
     navigation.navigate('Messages', {
       newProposalModule: card.module,
@@ -354,7 +434,29 @@ export default function PartnerProgramManagementScreen() {
 
       {allProjects.length > 0 ? (
         <>
-          <Text style={styles.calendarSectionHeader}>Project & Event Timeline Calendar</Text>
+          <View style={styles.calendarSectionHeaderRow}>
+            <Text style={styles.calendarSectionHeader}>Project & Event Timeline Calendar</Text>
+            <TouchableOpacity
+              onPress={() => void handleSyncProgramCalendar()}
+              disabled={calendarSyncing}
+              style={[styles.calendarSyncButton, calendarSyncing && styles.calendarSyncButtonDisabled]}
+            >
+              {calendarSyncing ? (
+                <ActivityIndicator size={13} color="#166534" />
+              ) : (
+                <MaterialIcons name="sync" size={15} color="#166534" />
+              )}
+              <Text style={styles.calendarSyncButtonText}>
+                {calendarSyncing ? 'Syncing...' : 'Sync Calendar'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+          {calendarSyncMessage ? (
+            <View style={styles.calendarSyncConfirmation}>
+              <MaterialIcons name="check-circle" size={16} color="#166534" />
+              <Text style={styles.calendarSyncConfirmationText}>{calendarSyncMessage}</Text>
+            </View>
+          ) : null}
           <ProjectTimelineCalendarCard
             title="Program Calendar"
             subtitle="Review projects, scheduled events, and milestones."
@@ -566,7 +668,57 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   proposalButtonText: { fontSize: 12, fontWeight: '800', color: '#ffffff' },
-  calendarSectionHeader: { fontSize: 12, fontWeight: '900', color: '#166534', textTransform: 'uppercase', letterSpacing: 0.7 },
+  calendarSectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  calendarSectionHeader: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '900',
+    color: '#166534',
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
+  },
+  calendarSyncButton: {
+    minHeight: 36,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#86efac',
+    backgroundColor: '#f0fdf4',
+  },
+  calendarSyncButtonDisabled: {
+    opacity: 0.65,
+  },
+  calendarSyncButtonText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#166534',
+  },
+  calendarSyncConfirmation: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    marginTop: 8,
+    padding: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#86efac',
+    backgroundColor: '#f0fdf4',
+  },
+  calendarSyncConfirmationText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#166534',
+  },
   modalOverlay: {
     flex: 1,
     alignItems: 'center',

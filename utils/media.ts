@@ -56,15 +56,20 @@ export function isImageMediaUri(value?: string | null): boolean {
     return false;
   }
 
-  return (
-    value.startsWith('data:image/') ||
-    value.startsWith('file:') ||
-    value.startsWith('content:') ||
-    value.startsWith('ph:') ||
-    IMAGE_FILE_PATTERN.test(value) ||
-    value.startsWith('https://') ||
-    value.startsWith('http://')
-  );
+  const normalizedValue = value.trim();
+  if (normalizedValue.startsWith('data:')) {
+    return normalizedValue.startsWith('data:image/');
+  }
+
+  if (/^(file:|content:|ph:|https?:)/i.test(normalizedValue)) {
+    const pathWithoutQuery = normalizedValue.split(/[?#]/)[0] || normalizedValue;
+    // URI schemes do not identify the media type by themselves. Preserve
+    // extensionless image URLs, but do not render PDFs or other files as images.
+    const hasFileExtension = /\.[a-z0-9]{1,8}$/i.test(pathWithoutQuery);
+    return !hasFileExtension || IMAGE_FILE_PATTERN.test(pathWithoutQuery);
+  }
+
+  return IMAGE_FILE_PATTERN.test(normalizedValue);
 }
 
 // Flattens attachment values into a unique list of URIs.

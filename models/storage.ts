@@ -180,6 +180,11 @@ let sharedStorageHeartbeat: ReturnType<typeof setInterval> | null = null;
 let sharedStorageReconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let sharedStoragePendingChangeTimer: ReturnType<typeof setTimeout> | null = null;
 const sharedStoragePendingChangedKeys = new Set<string>();
+const CROSS_TAB_STORAGE_CHANNEL_NAME = 'volcre:storage-changes';
+const CROSS_TAB_STORAGE_EVENT_KEY = 'volcre:storage-change-event';
+const CROSS_TAB_SOURCE_ID = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+let crossTabStorageChannel: BroadcastChannel | null = null;
+let crossTabStorageListenersInitialized = false;
 
 function hasStorageChangeSubscribers(): boolean {
   return storageChangeSubscribers.size > 0;
@@ -234,6 +239,8 @@ async function flushStorageSubscriberNotification(subscriber: StorageChangeSubsc
 }
 
 function notifyStorageChanged(changedKeys: string[]) {
+  broadcastStorageChangeToOtherTabs(changedKeys);
+
   for (const subscriber of storageChangeSubscribers.values()) {
     if (!changedKeys.some(key => subscriber.watchedKeys.has(key))) {
       continue;
@@ -260,6 +267,109 @@ function queueSharedStorageChangedKeys(changedKeys: string[]) {
       sharedStoragePendingChangeTimer = null;
       flushSharedStorageChangedKeys();
     }, STORAGE_CHANGE_DEBOUNCE_MS);
+  }
+}
+
+function handleExternalStorageChange(changedKeys: string[]) {
+  const normalizedKeys = Array.from(new Set(changedKeys.filter(Boolean)));
+  if (normalizedKeys.length === 0) {
+    return;
+  }
+
+  const hasInterestedSubscriber = Array.from(storageChangeSubscribers.values()).some(
+    subscriber => normalizedKeys.some(key => subscriber.watchedKeys.has(key))
+  );
+
+  if (!hasInterestedSubscriber) {
+    return;
+  }
+
+  invalidateSharedStorageCache(normalizedKeys);
+  queueSharedStorageChangedKeys(normalizedKeys);
+}
+
+function handleCrossTabStoragePayload(payload: unknown) {
+  if (!payload || typeof payload !== 'object') {
+    return;
+  }
+
+  const event = payload as {
+    type?: unknown;
+    keys?: unknown;
+    source?: unknown;
+  };
+  if (event.type !== 'storage.changed' || event.source === CROSS_TAB_SOURCE_ID) {
+    return;
+  }
+
+  const changedKeys = Array.isArray(event.keys)
+    ? event.keys.filter((key): key is string => typeof key === 'string')
+    : [];
+  handleExternalStorageChange(changedKeys);
+}
+
+function ensureCrossTabStorageListeners() {
+  if (crossTabStorageListenersInitialized || typeof window === 'undefined') {
+    return;
+  }
+
+  crossTabStorageListenersInitialized = true;
+
+  try {
+    if (typeof BroadcastChannel !== 'undefined') {
+      crossTabStorageChannel = new BroadcastChannel(CROSS_TAB_STORAGE_CHANNEL_NAME);
+      crossTabStorageChannel.onmessage = event => {
+        handleCrossTabStoragePayload(event.data);
+      };
+    }
+  } catch {
+    crossTabStorageChannel = null;
+  }
+
+  // BroadcastChannel is supported by current browsers. Keep the storage event
+  // as a fallback for older browsers and restricted/private browsing modes.
+  if (!crossTabStorageChannel) {
+    window.addEventListener('storage', event => {
+      if (event.key !== CROSS_TAB_STORAGE_EVENT_KEY || !event.newValue) {
+        return;
+      }
+      try {
+        handleCrossTabStoragePayload(JSON.parse(event.newValue));
+      } catch {
+        // Ignore malformed cross-tab notifications.
+      }
+    });
+  }
+}
+
+function broadcastStorageChangeToOtherTabs(changedKeys: string[]) {
+  const normalizedKeys = Array.from(new Set(changedKeys.filter(Boolean)));
+  if (normalizedKeys.length === 0 || typeof window === 'undefined') {
+    return;
+  }
+
+  ensureCrossTabStorageListeners();
+  const payload = {
+    type: 'storage.changed',
+    keys: normalizedKeys,
+    source: CROSS_TAB_SOURCE_ID,
+    timestamp: Date.now(),
+  };
+
+  if (crossTabStorageChannel) {
+    try {
+      crossTabStorageChannel.postMessage(payload);
+      return;
+    } catch {
+      // Fall through to the storage-event transport if the channel closes.
+      crossTabStorageChannel = null;
+    }
+  }
+
+  try {
+    window.localStorage.setItem(CROSS_TAB_STORAGE_EVENT_KEY, JSON.stringify(payload));
+  } catch {
+    // Cross-tab sync is best effort; the websocket remains the primary path.
   }
 }
 
@@ -326,16 +436,7 @@ function connectSharedStorageSocket() {
         return;
       }
 
-      const hasInterestedSubscriber = Array.from(storageChangeSubscribers.values()).some(
-        subscriber => changedKeys.some(key => subscriber.watchedKeys.has(key))
-      );
-
-      if (!hasInterestedSubscriber) {
-        return;
-      }
-
-      invalidateSharedStorageCache(changedKeys);
-      queueSharedStorageChangedKeys(changedKeys);
+      handleExternalStorageChange(changedKeys);
     } catch (error) {
       console.error('Error parsing storage event:', error);
     }
@@ -1408,6 +1509,10 @@ function invalidateSharedStorageCache(keys?: string[]): void {
     sharedStorageCacheTimestamps.delete(key);
     if (!isLocalOnlyStorageKey(key)) {
       memoryStorageCache.delete(key);
+      // getStorageItemFast reads the persisted browser cache before asking
+      // the backend. Remove it as well so an invalidated project/event cannot
+      // reappear after a tab switch or screen refresh.
+      void deleteLocalStorageItem(key);
     }
   }
   projectsSnapshotCache.clear();
@@ -1448,10 +1553,12 @@ export async function getStorageItemFast<T>(key: string, includeImages: boolean 
     const cached = await getLocalStorageItem<T>(key);
     const cachedAt = sharedStorageCacheTimestamps.get(key);
 
-    // If we have cached data, return it immediately and refresh in background
-    if (cached !== null) {
+    // If we have a timestamped cache, return it immediately and refresh in
+    // the background when stale. An invalidated cache has no timestamp and
+    // must fetch the authoritative backend value first.
+    if (cached !== null && cachedAt !== undefined) {
       // Trigger background refresh if cache is stale
-      if (cachedAt === undefined || Date.now() - cachedAt > SHARED_STORAGE_CACHE_TTL_MS) {
+      if (Date.now() - cachedAt > SHARED_STORAGE_CACHE_TTL_MS) {
         triggerBackgroundStorageRefresh([key]);
       }
       return cached;
@@ -2182,6 +2289,7 @@ export async function setStorageItem<T>(key: string, value: T): Promise<void> {
       }
     }
     projectsSnapshotCache.clear();
+    broadcastStorageChangeToOtherTabs([key]);
   } catch (error) {
     if (key === STORAGE_KEYS.USERS) {
       // Never fall back to storing a plaintext credential on the device.
@@ -2191,6 +2299,7 @@ export async function setStorageItem<T>(key: string, value: T): Promise<void> {
       await setLocalStorageItem(key, value);
       setSharedStorageCacheValue(key, value);
       projectsSnapshotCache.clear();
+      broadcastStorageChangeToOtherTabs([key]);
       queueSharedStorageChangedKeys([key]);
       return;
     }
@@ -2840,6 +2949,7 @@ export async function createUserAccount(input: {
     sectorType: PartnerSectorType;
     dswdAccreditationNo?: string;
     secRegistrationNo?: string;
+    registrationDocuments?: string[];
     advocacyFocus: AdvocacyFocus[];
   };
   volunteerMembershipSheet?: {
@@ -2902,6 +3012,7 @@ export async function createUserAccount(input: {
     input.role === 'partner' &&
     (!input.partnerRegistration ||
       !input.partnerRegistration.organizationName.trim() ||
+      !input.partnerRegistration.registrationDocuments?.some(document => document.trim()) ||
       input.partnerRegistration.advocacyFocus.length === 0)
   ) {
     throw new Error('Complete the organization application details before submitting.');
@@ -2992,8 +3103,14 @@ export async function createUserAccount(input: {
         description: `${input.partnerRegistration.advocacyFocus.join(', ')} partnership application`,
         category: getCategoryFromAdvocacyFocus(input.partnerRegistration.advocacyFocus),
         sectorType: input.partnerRegistration.sectorType,
-        dswdAccreditationNo: input.partnerRegistration.dswdAccreditationNo?.trim().toUpperCase() || '',
+        dswdAccreditationNo:
+          input.partnerRegistration.sectorType === 'NGO'
+            ? input.partnerRegistration.dswdAccreditationNo?.trim().toUpperCase() || ''
+            : '',
         secRegistrationNo: input.partnerRegistration.secRegistrationNo?.trim().toUpperCase() || '',
+        registrationDocuments: (input.partnerRegistration.registrationDocuments || [])
+          .map(document => document.trim())
+          .filter(Boolean),
         advocacyFocus: input.partnerRegistration.advocacyFocus,
         contactEmail: createdUser.email,
         contactPhone: createdUser.phone,
@@ -4033,7 +4150,16 @@ export async function saveVolunteer(volunteer: Volunteer): Promise<void> {
     STORAGE_KEYS.VOLUNTEERS,
     normalizedVolunteer
   );
+  const hadVolunteerCollectionCache = Array.isArray(
+    memoryStorageCache.get(STORAGE_KEYS.VOLUNTEERS)
+  );
   upsertCachedStorageRecord(STORAGE_KEYS.VOLUNTEERS, savedVolunteer);
+  if (!hadVolunteerCollectionCache) {
+    // Do not leave an older persisted list in place when this is the first
+    // volunteer write in the current client session. The next read must fetch
+    // the authoritative collection so new applications appear in management.
+    void deleteLocalStorageItem(STORAGE_KEYS.VOLUNTEERS);
+  }
   notifyStorageChanged([STORAGE_KEYS.VOLUNTEERS]);
 }
 
@@ -4045,10 +4171,17 @@ export async function getVolunteer(id: string): Promise<Volunteer | null> {
 }
 
 // Returns all volunteer profiles from shared storage.
-export async function getAllVolunteers(): Promise<Volunteer[]> {
-  return ((await getStorageItemFast<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS)) || []).map(
-    normalizeVolunteerRecord
-  );
+export async function getAllVolunteers(options?: { forceRefresh?: boolean }): Promise<Volunteer[]> {
+  if (options?.forceRefresh) {
+    // Force the management screen to bypass any stale in-memory snapshot.
+    // getStorageItem will then fetch the authoritative collection.
+    invalidateSharedStorageCache([STORAGE_KEYS.VOLUNTEERS]);
+  }
+
+  const volunteers = options?.forceRefresh
+    ? await getStorageItem<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS)
+    : await getStorageItemFast<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS);
+  return (volunteers || []).map(normalizeVolunteerRecord);
 }
 
 // Looks up the volunteer profile linked to a specific user account.
@@ -4609,6 +4742,7 @@ export function subscribeToStorageChanges(
     isNotifying: false,
   });
 
+  ensureCrossTabStorageListeners();
   connectSharedStorageSocket();
 
   return () => {
@@ -4883,8 +5017,8 @@ export async function assignVolunteerToProject(
   await Promise.all([
     attachVolunteerToProject(projectId, volunteerId),
     ensureVolunteerProjectJoinRecord(projectId, volunteerId, 'AdminMatch'),
-    syncVolunteerEngagementStatus(volunteerId),
   ]);
+  await syncVolunteerEngagementStatus(volunteerId);
 
   void notifyVolunteerAboutProjectMatchDecision(
     projectId,
@@ -5019,6 +5153,15 @@ export async function reconcileApprovedVolunteerEventMemberships(): Promise<void
 
   if (nextRecords.length !== existingRecords.length) {
     await setStorageItem(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS, nextRecords);
+    const volunteerIdsToSync = Array.from(
+      new Set(
+        nextRecords
+          .filter(record => (record.participationStatus || 'Active') === 'Active')
+          .map(record => record.volunteerId)
+          .filter(Boolean)
+      )
+    );
+    await Promise.all(volunteerIdsToSync.map(volunteerId => syncVolunteerEngagementStatus(volunteerId)));
   }
 }
 
@@ -5039,6 +5182,11 @@ export async function leaveVolunteerEventGroup(projectId: string, userId: string
       joinedUserIds: (project.joinedUserIds || []).filter(id => id !== userId),
       updatedAt: new Date().toISOString(),
     });
+  }
+
+  const volunteer = await getVolunteerByUserId(userId);
+  if (volunteer?.id) {
+    await syncVolunteerEngagementStatus(volunteer.id);
   }
 }
 
@@ -5872,24 +6020,17 @@ async function syncVolunteerEngagementStatus(volunteerId: string): Promise<void>
   const volunteer = await getVolunteer(volunteerId);
   if (!volunteer) return;
 
-  const [matches, joinRecords] = await Promise.all([
-    getVolunteerProjectMatches(volunteerId),
-    getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS),
-  ]);
-
-  const activeEventMatchFlags = await Promise.all(
-    matches
-      .filter(match => match.status === 'Matched')
-      .map(async match => {
-        const project = await getProject(match.projectId);
-        return Boolean(project?.isEvent);
-      })
+  const joinRecords = await getStorageItem<VolunteerProjectJoinRecord[]>(
+    STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS
   );
-  const hasActiveMatch = activeEventMatchFlags.some(Boolean);
 
   const activeParticipationFlags = await Promise.all(
     (joinRecords || [])
-      .filter(record => record.volunteerId === volunteerId)
+      .filter(
+        record =>
+          record.volunteerId === volunteerId ||
+          (!!volunteer.userId && record.volunteerUserId === volunteer.userId)
+      )
       .map(async record => {
         if ((record.participationStatus || 'Active') !== 'Active') {
           return false;
@@ -5901,7 +6042,7 @@ async function syncVolunteerEngagementStatus(volunteerId: string): Promise<void>
   );
   const hasActiveParticipation = activeParticipationFlags.some(Boolean);
 
-  const nextStatus = hasActiveMatch || hasActiveParticipation ? 'Busy' : 'Open to Volunteer';
+  const nextStatus = hasActiveParticipation ? 'Busy' : 'Open to Volunteer';
 
   if (volunteer.engagementStatus !== nextStatus) {
     await saveVolunteer({

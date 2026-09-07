@@ -1,16 +1,22 @@
 import os
+import base64
+import binascii
 import json
 import asyncio
+import io
 import math
+import shutil
 import threading
 import time
 import secrets
 import smtplib
 import socket
+import subprocess
+import tempfile
 import traceback
 import re
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, unquote_to_bytes
 from urllib.request import Request, urlopen
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -449,8 +455,19 @@ def _send_email_message(
     )
 
     if not sender_email or not app_password:
-        print(f"[EMAIL-DEV] Email sender not configured. Would send to {recipient}: {subject}\n{text_body}")
-        return
+        allow_dev_fallback = os.getenv("EMAIL_ALLOW_DEV_FALLBACK", "false").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if allow_dev_fallback:
+            print(f"[EMAIL-DEV] Email sender not configured. Would send to {recipient}: {subject}")
+            return
+        raise RuntimeError(
+            "Gmail email delivery is not configured on the backend. "
+            "Set OTP_GMAIL_SENDER and OTP_GMAIL_APP_PASSWORD, then restart the backend."
+        )
 
     if not is_valid_email(sender_email):
         raise ValueError("The configured notification sender email is invalid.")
@@ -473,7 +490,9 @@ def _send_email_message(
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(sender_email, app_password)
-        server.sendmail(sender_email, [recipient], msg.as_string())
+        rejected_recipients = server.sendmail(sender_email, [recipient], msg.as_string())
+        if rejected_recipients:
+            raise RuntimeError("Gmail rejected the recipient address.")
 
 
 def _validate_recipient_email_domain(recipient: str) -> None:
@@ -1182,6 +1201,7 @@ def ensure_message_storage_once() -> None:
         if _message_storage_ready:
             return
         ensure_message_storage()
+        _migrate_legacy_admin_messages()
         _message_storage_ready = True
 
 
@@ -1629,6 +1649,9 @@ def _remove_volunteer_assignments_from_project(
 ) -> tuple[dict[str, Any], bool]:
     remove_volunteer_ids = {str(value or "").strip() for value in volunteer_ids if str(value or "").strip()}
     remove_user_ids = {str(value or "").strip() for value in volunteer_user_ids if str(value or "").strip()}
+    # Tasks may have been saved with either the volunteer profile id or the
+    # linked user id.  Removing a volunteer must clear both forms everywhere.
+    remove_assignment_ids = remove_volunteer_ids | remove_user_ids
 
     volunteers = list(project.get("volunteers") or [])
     joined_user_ids = list(project.get("joinedUserIds") or [])
@@ -1655,7 +1678,7 @@ def _remove_volunteer_assignments_from_project(
         next_task = dict(task)
 
         assigned_volunteer_id = str(next_task.get("assignedVolunteerId") or "").strip()
-        if assigned_volunteer_id and assigned_volunteer_id in remove_volunteer_ids:
+        if assigned_volunteer_id and assigned_volunteer_id in remove_assignment_ids:
             next_task.pop("assignedVolunteerId", None)
             next_task.pop("assignedVolunteerName", None)
             task_changed = True
@@ -1664,7 +1687,7 @@ def _remove_volunteer_assignments_from_project(
         next_assigned_volunteer_ids = [
             assigned_id
             for assigned_id in assigned_volunteer_ids
-            if str(assigned_id or "").strip() not in remove_volunteer_ids
+            if str(assigned_id or "").strip() not in remove_assignment_ids
         ]
         if len(next_assigned_volunteer_ids) != len(assigned_volunteer_ids):
             next_task["assignedVolunteerIds"] = next_assigned_volunteer_ids
@@ -1672,9 +1695,17 @@ def _remove_volunteer_assignments_from_project(
             next_task["assignedVolunteerNames"] = [
                 assigned_names[index]
                 for index, assigned_id in enumerate(assigned_volunteer_ids)
-                if str(assigned_id or "").strip() not in remove_volunteer_ids and index < len(assigned_names)
+                if str(assigned_id or "").strip() not in remove_assignment_ids and index < len(assigned_names)
             ]
             task_changed = True
+
+        # Keep the legacy singular fields aligned with the remaining array
+        # assignment. This matters when the removed volunteer was the first
+        # assignee but other volunteers are still on the task.
+        if task_changed and not next_task.get("assignedVolunteerId") and next_assigned_volunteer_ids:
+            next_task["assignedVolunteerId"] = next_assigned_volunteer_ids[0]
+            remaining_names = list(next_task.get("assignedVolunteerNames") or [])
+            next_task["assignedVolunteerName"] = remaining_names[0] if remaining_names else None
 
         if task_changed and not next_task.get("assignedVolunteerId") and not next_task.get("assignedVolunteerIds"):
             next_task["status"] = "Unassigned"
@@ -2253,10 +2284,114 @@ def _require_terminal_admin_provisioning(connection: Any, key: str, item: dict[s
         raise ValueError("Admin accounts can only be created from the backend terminal.")
 
 
+_MAX_MEDIA_SCAN_BYTES = 15 * 1024 * 1024
+_CLAMAV_SCAN_TIMEOUT_SECONDS = 20
+_EXECUTABLE_MEDIA_SIGNATURES = (
+    (b"MZ", "Windows executable"),
+    (b"\x7fELF", "ELF executable"),
+    (b"#!", "script"),
+)
+
+
+def _iter_data_uri_media(value: Any, path: str = "upload"):
+    """Yield data-URI uploads nested anywhere inside a storage item."""
+    if isinstance(value, dict):
+        for field_name, nested_value in value.items():
+            yield from _iter_data_uri_media(nested_value, f"{path}.{field_name}")
+    elif isinstance(value, list):
+        for index, nested_value in enumerate(value):
+            yield from _iter_data_uri_media(nested_value, f"{path}[{index}]")
+    elif isinstance(value, str) and value.lstrip().lower().startswith("data:"):
+        yield value.strip(), path
+
+
+def _security_scan_data_uri(value: str, label: str) -> None:
+    """Validate an uploaded data URI and run ClamAV when it is installed."""
+    if len(value) > _MAX_MEDIA_SCAN_BYTES * 2:
+        raise ValueError(f"The uploaded {label} is too large to scan safely.")
+
+    match = re.match(r"^data:([^,]+),(.*)$", value, flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        raise ValueError(f"The uploaded {label} could not be read by the security scanner.")
+
+    metadata = match.group(1)
+    encoded_payload = match.group(2)
+    mime_type = metadata.split(";", 1)[0].strip().lower()
+    try:
+        if "base64" in metadata.lower().split(";"):
+            payload = base64.b64decode(encoded_payload, validate=True)
+        else:
+            payload = unquote_to_bytes(encoded_payload)
+    except (binascii.Error, ValueError, TypeError) as error:
+        raise ValueError(f"The uploaded {label} could not be read by the security scanner.") from error
+
+    if len(payload) > _MAX_MEDIA_SCAN_BYTES:
+        raise ValueError(f"The uploaded {label} is too large to scan safely.")
+
+    for signature, signature_name in _EXECUTABLE_MEDIA_SIGNATURES:
+        if payload.startswith(signature):
+            raise ValueError(f"The uploaded {label} was rejected because it is an unsafe {signature_name}.")
+
+    if mime_type.startswith("image/"):
+        try:
+            from PIL import Image
+
+            with Image.open(io.BytesIO(payload)) as image:
+                image.verify()
+        except Exception as error:
+            raise ValueError(f"The uploaded {label} is not a valid image file.") from error
+
+    clamscan_path = shutil.which("clamscan")
+    require_clamav = os.getenv("MEDIA_SCAN_REQUIRE_CLAMAV", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if not clamscan_path:
+        if require_clamav:
+            raise ValueError("The virus scanner is not available. Please contact the administrator.")
+        return
+
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(prefix="nvc-upload-", suffix=".bin", delete=False) as temporary_file:
+            temporary_file.write(payload)
+            temporary_path = temporary_file.name
+
+        result = subprocess.run(
+            [clamscan_path, "--no-summary", temporary_path],
+            capture_output=True,
+            text=True,
+            timeout=_CLAMAV_SCAN_TIMEOUT_SECONDS,
+            check=False,
+        )
+        if result.returncode == 1:
+            raise ValueError(f"The uploaded {label} was rejected by the virus scanner.")
+        if result.returncode != 0:
+            raise ValueError("The virus scanner could not complete the upload check.")
+    except subprocess.TimeoutExpired as error:
+        raise ValueError("The virus scanner timed out while checking the upload.") from error
+    finally:
+        if temporary_path:
+            try:
+                os.unlink(temporary_path)
+            except OSError:
+                pass
+
+
+def _scan_storage_item_media(key: str, item: dict[str, Any]) -> None:
+    """Scan all embedded data-URI media before a storage item is persisted."""
+    for media_value, path in _iter_data_uri_media(item, key):
+        label = path.replace(".", " ").replace("[", " ").replace("]", "")
+        _security_scan_data_uri(media_value, label)
+
+
 # Inserts or updates one hot-storage item row.
 def _postgres_upsert_hot_item(connection: Any, key: str, item: dict[str, Any]) -> dict[str, Any]:
     try:
         _require_terminal_admin_provisioning(connection, key, item)
+        _scan_storage_item_media(key, item)
 
         # Automatic compression of oversized images on ingest
         if key in {"projects", "events", "programs"} and isinstance(item.get("imageUrl"), str):
@@ -2570,21 +2705,26 @@ def _postgres_sync_volunteer_engagement_status(
     if volunteer is None:
         return None
 
-    matches = _postgres_get_hot_items_by_field(connection, "volunteerMatches", "volunteerId", volunteer_id)
-    join_records = _postgres_get_hot_items_by_field(connection, "volunteerProjectJoins", "volunteerId", volunteer_id)
+    volunteer_user_id = str(volunteer.get("userId") or "").strip()
+    volunteer_identifiers = {str(volunteer_id).strip()}
+    if volunteer_user_id:
+        volunteer_identifiers.add(volunteer_user_id)
+    join_records = [
+        record
+        for record in get_postgres_hot_storage_collection(connection, "volunteerProjectJoins")
+        if str(record.get("volunteerId") or "").strip() in volunteer_identifiers
+        or str(record.get("volunteerUserId") or "").strip() in volunteer_identifiers
+    ]
 
-    has_active_match = any(
-        match.get("status") in {"Matched", "Requested"}
-        and bool((_postgres_get_project_like_item_by_id(connection, str(match.get("projectId") or ""))[0] or {}).get("isEvent"))
-        for match in matches
-    )
     has_active_participation = any(
         (record.get("participationStatus") or "Active") == "Active"
         and bool((_postgres_get_project_like_item_by_id(connection, str(record.get("projectId") or ""))[0] or {}).get("isEvent"))
         for record in join_records
     )
 
-    next_status = "Busy" if has_active_match or has_active_participation else "Open to Volunteer"
+    # A request or match is not an event membership.  Busy is reserved for a
+    # volunteer with an active joined-event record.
+    next_status = "Busy" if has_active_participation else "Open to Volunteer"
     if volunteer.get("engagementStatus") == next_status:
         return volunteer
 
@@ -3410,8 +3550,13 @@ def _resolve_admin_message_user_id(connection: Any, preferred_user_id: str | Non
             from users
             where role = 'admin'
             order by
-              case when lower(coalesce(email, '')) = 'nvc@gmail.com' then 0 else 1 end,
-              created_at asc nulls last,
+              case
+                when lower(trim(coalesce(name, ''))) = 'nvc administrator' then 0
+                when lower(trim(coalesce(name, ''))) not in ('nvc', 'nvc admin account')
+                  and lower(trim(coalesce(email, ''))) not in ('nvc@gmail.com', 'admin@nvc.org') then 1
+                else 2
+              end,
+              created_at desc nulls last,
               users_id asc
             limit 1
             """
@@ -3422,6 +3567,64 @@ def _resolve_admin_message_user_id(connection: Any, preferred_user_id: str | Non
         return str(row[0])
 
     return preferred_id or "user-1788285740560"
+
+
+def _migrate_legacy_admin_messages() -> None:
+    """Move messages from the retired NVC admin identity to NVC Administrator.
+
+    The old account remains available for historical audit references, but it
+    must no longer create a separate direct-message conversation. This update
+    is idempotent and runs once when direct-message storage is initialized.
+    """
+    with get_connection() as connection:
+        canonical_admin_id = _resolve_admin_message_user_id(connection)
+        if not canonical_admin_id:
+            return
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                select users_id
+                from users
+                where role = 'admin'
+                  and users_id <> %s
+                  and (
+                    lower(trim(coalesce(name, ''))) in ('nvc', 'nvc admin account')
+                    or lower(trim(coalesce(email, ''))) in ('nvc@gmail.com', 'admin@nvc.org')
+                  )
+                """,
+                (canonical_admin_id,),
+            )
+            legacy_admin_ids = [str(row[0]) for row in cursor.fetchall() if row and row[0]]
+            if not legacy_admin_ids:
+                return
+
+            cursor.execute(
+                """
+                update public.messages
+                set sender_id = %s
+                where sender_id = any(%s)
+                """,
+                (canonical_admin_id, legacy_admin_ids),
+            )
+            moved_from_sender = cursor.rowcount
+            cursor.execute(
+                """
+                update public.messages
+                set recipient_id = %s
+                where recipient_id = any(%s)
+                """,
+                (canonical_admin_id, legacy_admin_ids),
+            )
+            moved_from_recipient = cursor.rowcount
+        connection.commit()
+
+    _message_query_cache.clear()
+    if moved_from_sender or moved_from_recipient:
+        print(
+            f"[MESSAGES] Migrated {moved_from_sender + moved_from_recipient} "
+            f"legacy NVC admin message participant reference(s) to {canonical_admin_id}."
+        )
 
 
 _PROPOSAL_CARD_PREFIX = "___PROPOSAL_CARD___:"
@@ -3619,6 +3822,90 @@ def _save_user_to_storage(user: dict[str, Any], connection: Any) -> None:
     _require_postgres()
     _postgres_upsert_hot_item(connection, "users", user)
     connection.commit()
+
+
+def _ensure_volunteer_profile_for_user(connection: Any, user: dict[str, Any]) -> bool:
+    """Ensure every volunteer account has a pending/approved management profile."""
+    if str(user.get("role") or "").strip().lower() != "volunteer":
+        return False
+
+    user_id = str(user.get("id") or "").strip()
+    if not user_id:
+        return False
+
+    email = str(user.get("email") or "").strip().lower()
+    phone = _normalize_comparable_phone(user.get("phone"))
+    volunteers = get_postgres_hot_storage_collection(connection, "volunteers")
+    linked_volunteer = next(
+        (
+            volunteer
+            for volunteer in volunteers
+            if str(volunteer.get("userId") or "").strip() == user_id
+            or (
+                email
+                and str(volunteer.get("email") or "").strip().lower() == email
+            )
+            or (
+                phone
+                and _normalize_comparable_phone(volunteer.get("phone")) == phone
+            )
+        ),
+        None,
+    )
+
+    if linked_volunteer is not None:
+        # Link legacy profiles that were previously matched only by email or
+        # phone, so Volunteer Management can always find the account by user id.
+        if str(linked_volunteer.get("userId") or "").strip() != user_id:
+            linked_volunteer = {
+                **linked_volunteer,
+                "userId": user_id,
+                "name": str(user.get("name") or linked_volunteer.get("name") or "").strip(),
+                "email": email or linked_volunteer.get("email") or "",
+                "phone": user.get("phone") or linked_volunteer.get("phone") or "",
+            }
+            _postgres_upsert_hot_item(connection, "volunteers", linked_volunteer)
+            return True
+        return False
+
+    created_at = str(user.get("createdAt") or datetime.now(timezone.utc).isoformat())
+    approval_status = str(user.get("approvalStatus") or "").strip().lower()
+    volunteer_profile = {
+        "id": f"volunteer-{user_id}",
+        "userId": user_id,
+        "name": str(user.get("name") or "").strip(),
+        "email": email,
+        "phone": user.get("phone") or "",
+        "skills": [],
+        "skillsDescription": "",
+        "availability": {
+            "daysPerWeek": 0,
+            "hoursPerWeek": 0,
+            "availableDays": [],
+        },
+        "pastProjects": [],
+        "totalHoursContributed": 0,
+        "rating": 0,
+        "engagementStatus": "Open to Volunteer",
+        "background": "",
+        "gender": "",
+        "dateOfBirth": "",
+        "civilStatus": "",
+        "homeAddress": "",
+        "homeAddressRegion": "",
+        "homeAddressCityMunicipality": "",
+        "homeAddressBarangay": "",
+        "occupation": "",
+        "workplaceOrSchool": "",
+        "collegeCourse": "",
+        "certificationsOrTrainings": "",
+        "videoBriefingUrl": "",
+        "affiliations": [],
+        "registrationStatus": "Pending" if approval_status == "pending" else "Approved",
+        "createdAt": created_at,
+    }
+    _postgres_upsert_hot_item(connection, "volunteers", volunteer_profile)
+    return True
 
 
 def _normalize_comparable_phone(value: Any) -> str:
@@ -3880,15 +4167,21 @@ def auth_registration_otp_send(payload: RegistrationOtpSendPayload) -> dict[str,
     try:
         _send_registration_otp_email(email, otp)
     except Exception as smtp_error:
-        print(f"[REGISTRATION-OTP] SMTP unavailable ({smtp_error}); returning dev_otp for local development/testing.")
-        return {
-            "message": "Verification code sent (Development Mode).",
-            "email": email,
-            "dev_otp": otp,
-            "expires_in": REGISTRATION_OTP_TTL_SECONDS,
-        }
+        with _registration_otp_store_lock:
+            stored = _registration_otp_store.get(email)
+            if stored and stored.get("otp") == otp:
+                del _registration_otp_store[email]
+        print(f"[REGISTRATION-OTP] SMTP unavailable ({smtp_error}).")
+        raise HTTPException(
+            status_code=503,
+            detail="We could not send the verification code to that email address. Please try again.",
+        ) from smtp_error
 
-    return {"message": "Verification code sent. Check your inbox.", "email": email, "dev_otp": otp, "expires_in": REGISTRATION_OTP_TTL_SECONDS}
+    return {
+        "message": "Verification code sent. Check your email inbox.",
+        "email": email,
+        "expires_in": REGISTRATION_OTP_TTL_SECONDS,
+    }
 
 
 @app.post("/auth/registration-otp/verify")
@@ -4554,6 +4847,12 @@ def get_volunteer_by_user(user_id: str) -> dict[str, Any]:
     _require_postgres()
     with get_connection() as connection:
         volunteer = _postgres_get_volunteer_by_user_id(connection, user_id)
+        if volunteer is not None:
+            volunteer = _postgres_sync_volunteer_engagement_status(
+                connection,
+                str(volunteer.get("id") or "").strip(),
+            ) or volunteer
+            connection.commit()
     return {"volunteer": volunteer}
 
 
@@ -5404,8 +5703,17 @@ async def remove_volunteer_from_project(project_id: str, volunteer_id: str) -> d
             raise HTTPException(status_code=400, detail="Can only remove volunteers from events.")
 
         volunteer = _postgres_get_hot_item_by_id(connection, "volunteers", volunteer_id)
+        if volunteer is None:
+            # Older clients may send the linked account id instead of the
+            # volunteer profile id. Resolve it before cleaning task aliases,
+            # join records, and the derived engagement status.
+            volunteer = _postgres_get_volunteer_by_user_id(connection, volunteer_id)
 
-        volunteer_ids_to_remove = {volunteer_id}
+        volunteer_ids_to_remove = {
+            str(value or "").strip()
+            for value in (volunteer_id, volunteer.get("id") if volunteer else None)
+            if str(value or "").strip()
+        }
         volunteer_user_ids_to_remove: set[str] = set()
         if volunteer is not None:
             volunteer_user_id = str(volunteer.get("userId") or "").strip()
@@ -6427,17 +6735,33 @@ async def put_storage_item_by_id(
     try:
         with get_connection() as connection:
             saved_item = _postgres_upsert_hot_item(connection, key, item)
+            changed_keys = [key]
+            if key == "users" and _ensure_volunteer_profile_for_user(connection, item):
+                changed_keys.append("volunteers")
             connection.commit()
     except HTTPException:
         raise
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:
         raise HTTPException(status_code=500, detail=f"Storage item write failed: {error}") from error
 
-    _invalidate_collection_cache([key])
-    if key in {"projects", "events", "programs", "volunteers", "volunteerMatches", "volunteerProjectJoins", "partnerProjectApplications"}:
+    _invalidate_collection_cache(changed_keys)
+    if any(
+        changed_key in {
+            "projects",
+            "events",
+            "programs",
+            "volunteers",
+            "volunteerMatches",
+            "volunteerProjectJoins",
+            "partnerProjectApplications",
+        }
+        for changed_key in changed_keys
+    ):
         _projects_snapshot_cache.clear()
-    asyncio.create_task(connection_manager.broadcast_storage_event([key]))
-    return {"status": "ok", "item": saved_item, "changedKeys": [key]}
+    asyncio.create_task(connection_manager.broadcast_storage_event(changed_keys))
+    return {"status": "ok", "item": saved_item, "changedKeys": changed_keys}
 
 
 @app.put("/storage/{key}")
@@ -6468,6 +6792,13 @@ async def _put_storage_item_once(key: str, payload: StoragePayload) -> dict[str,
         if not isinstance(payload.value, list):
             raise HTTPException(status_code=400, detail=f"Storage key '{key}' expects a list payload.")
 
+        try:
+            for item in payload.value:
+                if isinstance(item, dict):
+                    _scan_storage_item_media(key, item)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
         if key in {"projects", "events"}:
             try:
                 _validate_internal_task_assignment_limits(payload.value)
@@ -6497,7 +6828,29 @@ async def _put_storage_item_once(key: str, payload: StoragePayload) -> dict[str,
                     }
                     removed_project_ids = current_ids - next_ids
 
+                volunteer_identifiers_to_sync: set[str] = set()
+                if key == "volunteerProjectJoins":
+                    current_join_records = get_postgres_hot_storage_collection(
+                        connection,
+                        "volunteerProjectJoins",
+                    )
+                    for record in [*current_join_records, *payload.value]:
+                        if not isinstance(record, dict):
+                            continue
+                        for field_name in ("volunteerId", "volunteerUserId"):
+                            identifier = str(record.get(field_name) or "").strip()
+                            if identifier:
+                                volunteer_identifiers_to_sync.add(identifier)
+
                 replace_postgres_hot_storage_collection(connection, key, payload.value)
+                if key == "users":
+                    for item in payload.value:
+                        if (
+                            isinstance(item, dict)
+                            and _ensure_volunteer_profile_for_user(connection, item)
+                            and "volunteers" not in changed_keys
+                        ):
+                            changed_keys.append("volunteers")
                 if removed_project_ids:
                     changed_keys.extend(
                         changed_key
@@ -6527,6 +6880,24 @@ async def _put_storage_item_once(key: str, payload: StoragePayload) -> dict[str,
                             ["events_id", "id"],
                             removed_project_ids,
                         )
+                if volunteer_identifiers_to_sync:
+                    for identifier in volunteer_identifiers_to_sync:
+                        volunteer = _postgres_get_hot_item_by_id(connection, "volunteers", identifier)
+                        if volunteer is None:
+                            volunteer = _postgres_get_volunteer_by_user_id(connection, identifier)
+                        if volunteer is None:
+                            continue
+                        previous_status = volunteer.get("engagementStatus")
+                        updated_volunteer = _postgres_sync_volunteer_engagement_status(
+                            connection,
+                            str(volunteer.get("id") or "").strip(),
+                        )
+                        if (
+                            updated_volunteer is not None
+                            and updated_volunteer.get("engagementStatus") != previous_status
+                            and "volunteers" not in changed_keys
+                        ):
+                            changed_keys.append("volunteers")
                 connection.commit()
             except Exception as e:
                 # Log full traceback for debugging storage write failures

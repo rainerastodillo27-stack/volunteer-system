@@ -9,7 +9,6 @@ import {
   Platform,
   Modal,
   TextInput,
-  Switch,
   Image,
   type ImageStyle,
 } from 'react-native';
@@ -86,7 +85,6 @@ export default function ProfileScreen() {
   const [pillarsDraft, setPillarsDraft] = useState<NVCSector[]>([]);
   const [skillsDraft, setSkillsDraft] = useState<string[]>([]);
   const [showSkillsModal, setShowSkillsModal] = useState(false);
-  const [isBusyDraft, setIsBusyDraft] = useState(false);
   const [profilePhotoDraft, setProfilePhotoDraft] = useState('');
   const [photoTimestamp, setPhotoTimestamp] = useState(Date.now());
   const [genderDraft, setGenderDraft] = useState('');
@@ -229,7 +227,6 @@ export default function ProfileScreen() {
     setUserTypeDraft(user.userType || 'Adult');
     setPillarsDraft(user.pillarsOfInterest || []);
     setSkillsDraft(volunteerProfile?.skills || []);
-    setIsBusyDraft(volunteerProfile?.engagementStatus === 'Busy');
     setProfilePhotoDraft(user.profilePhoto || '');
     setGenderDraft(volunteerProfile?.gender || user?.volunteerMembershipSheet?.gender || '');
     setDateOfBirthDraft(volunteerProfile?.dateOfBirth || user?.volunteerMembershipSheet?.dateOfBirth || '');
@@ -493,7 +490,9 @@ export default function ProfileScreen() {
           pastProjects: baseVolunteerProfile.pastProjects || [],
           totalHoursContributed: baseVolunteerProfile.totalHoursContributed || 0,
           rating: baseVolunteerProfile.rating || 0,
-          engagementStatus: isBusyDraft ? 'Busy' : 'Open to Volunteer',
+          // Engagement status is derived from active event participation and
+          // must not be changed by editing the profile.
+          engagementStatus: baseVolunteerProfile.engagementStatus || 'Open to Volunteer',
           background: '',
           createdAt: baseVolunteerProfile.createdAt || new Date().toISOString(),
           gender: genderDraft,
@@ -830,7 +829,7 @@ export default function ProfileScreen() {
                   <Text style={styles.statLabelUpper}>STATUS</Text>
                   <View style={styles.statusIndicatorRow}>
                     <View style={[styles.statusDot, volunteerProfile?.engagementStatus === 'Busy' ? styles.statusDotBusy : styles.statusDotOpen]} />
-                    <Text style={styles.statusText}>{volunteerProfile?.engagementStatus === 'Busy' ? 'Busy' : 'Active'}</Text>
+                    <Text style={styles.statusText}>{volunteerProfile?.engagementStatus || 'Open to Volunteer'}</Text>
                   </View>
                 </View>
                 <Text style={styles.statCountText}>{completedEvents.length}</Text>
@@ -1632,20 +1631,11 @@ export default function ProfileScreen() {
                   editable={!saveLoading}
                 />
 
-                <View style={styles.switchRow}>
-                  <View style={styles.switchTextBlock}>
-                    <Text style={styles.fieldLabel}>Availability Status</Text>
-                    <Text style={styles.switchHint}>
-                      Turn this on if you want your status to appear as busy.
-                    </Text>
-                  </View>
-                  <Switch
-                    value={isBusyDraft}
-                    onValueChange={setIsBusyDraft}
-                    disabled={saveLoading}
-                    trackColor={{ false: '#bbf7d0', true: '#fecaca' }}
-                    thumbColor={isBusyDraft ? '#dc2626' : '#16a34a'}
-                  />
+                <View style={styles.switchTextBlock}>
+                  <Text style={styles.fieldLabel}>Availability Status</Text>
+                  <Text style={styles.switchHint}>
+                    This status is automatic: you are Busy while joined to an event and Open to Volunteer when you have no active event.
+                  </Text>
                 </View>
               </>
             )}

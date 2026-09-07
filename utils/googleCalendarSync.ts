@@ -26,7 +26,8 @@ WebBrowser.maybeCompleteAuthSession();
  */
 export const GOOGLE_CLIENT_ID =
   process.env.EXPO_PUBLIC_GOOGLE_OAUTH_CLIENT_ID ||
-  '761439905958-24ag4ap26ec46m9va2lakpprat6p5gd6.apps.googleusercontent.com';
+  process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ||
+  '163385365479-jaeg90dmalfqvjrkmbc0pigdaocof652.apps.googleusercontent.com';
 
 const GOOGLE_CALENDAR_API = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
 

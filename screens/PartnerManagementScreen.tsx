@@ -36,6 +36,7 @@ import { getProjectDisplayStatus } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 import { navigateToAvailableRoute } from '../utils/navigation';
 import { formatProjectLocation } from '../utils/locationFormat';
+import { getAttachmentLabel, isImageMediaUri, openAttachmentUri } from '../utils/media';
 
 const sectorOptions: PartnerSectorType[] = ['NGO', 'Hospital', 'Institution', 'Private'];
 const advocacyOptions: AdvocacyFocus[] = [];
@@ -223,10 +224,10 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
     }
   };
 
-  const openPartnerReview = (partner: Partner, mode: 'revision' | 'rejection') => {
+  const openPartnerReview = (partner: Partner) => {
     setReviewTarget(partner);
     setReviewTargetType('partner');
-    setReviewMode(mode);
+    setReviewMode('rejection');
   };
 
   const openProposalReview = (proposal: PartnerProjectApplication, mode: 'revision' | 'rejection') => {
@@ -258,10 +259,7 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
     try {
       if (targetType === 'partner') {
         const partnerTarget = target as Partner;
-        const rejectionReason =
-          mode === 'revision'
-            ? 'Returned for revision by administrator.'
-            : 'Partner registration rejected by administrator.';
+        const rejectionReason = 'Partner registration rejected by administrator.';
         const updatedPartner: Partner = {
           ...partnerTarget,
           status: 'Rejected',
@@ -281,11 +279,7 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
           user?.id || 'admin',
           rejectionReason
         );
-        setActionNotice(
-          mode === 'revision'
-            ? `Sent "${partnerTarget.name}" back for revision.`
-            : `Totally rejected "${partnerTarget.name}".`
-        );
+        setActionNotice(`Rejected "${partnerTarget.name}".`);
       } else {
         const proposalTarget = target as PartnerProjectApplication;
         const reviewNotes =
@@ -315,7 +309,7 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
         setActionNotice(
           mode === 'revision'
             ? `Sent proposal "${title}" back for revision.`
-            : `Totally rejected proposal "${title}".`
+            : `Rejected proposal "${title}".`
         );
       }
 
@@ -618,20 +612,12 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
               </View>
               <View style={styles.detailPendingActions}>
                 <TouchableOpacity
-                  style={styles.appRejectButton}
-                  onPress={() => openPartnerReview(selectedPartner, 'revision')}
-                  disabled={!!approvingPartnerId}
-                >
-                  <MaterialIcons name="replay" size={16} color="#dc2626" />
-                  <Text style={styles.appRejectButtonText}>For Revise</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
                   style={[styles.appRejectButton, styles.appRejectButtonHard]}
-                  onPress={() => openPartnerReview(selectedPartner, 'rejection')}
+                  onPress={() => openPartnerReview(selectedPartner)}
                   disabled={!!approvingPartnerId}
                 >
                   <MaterialIcons name="block" size={16} color="#b91c1c" />
-                  <Text style={styles.appRejectButtonText}>Totally Reject</Text>
+                  <Text style={styles.appRejectButtonText}>Reject</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.appApproveButton, approvingPartnerId === selectedPartner.id && { opacity: 0.7 }]}
@@ -663,6 +649,29 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
                   <Text style={styles.partnerMeta}>
                     SEC: {selectedPartner.secRegistrationNo}
                   </Text>
+                ) : null}
+                {selectedPartner.registrationDocuments?.[0] ? (
+                  <TouchableOpacity
+                    style={styles.attachmentLink}
+                    onPress={() =>
+                      void openAttachmentUri(selectedPartner.registrationDocuments![0]).catch(
+                        (error: any) =>
+                          Alert.alert(
+                            'Attachment Preview Failed',
+                            error?.message || 'Unable to open the submitted valid ID.',
+                          ),
+                      )
+                    }
+                  >
+                    <MaterialIcons
+                      name={isImageMediaUri(selectedPartner.registrationDocuments[0]) ? 'image' : 'insert-drive-file'}
+                      size={16}
+                      color="#2563eb"
+                    />
+                    <Text style={styles.attachmentLinkText} numberOfLines={1}>
+                      View Valid ID ({getAttachmentLabel(selectedPartner.registrationDocuments[0])})
+                    </Text>
+                  </TouchableOpacity>
                 ) : null}
                 <Text style={styles.partnerMeta}>
                   {selectedPartner.status === 'Approved'
@@ -1344,7 +1353,7 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
                       disabled={Boolean(reviewActionLoadingId)}
                     >
                       <MaterialIcons name="block" size={16} color="#b91c1c" />
-                      <Text style={styles.appRejectButtonText}>Totally Reject</Text>
+                      <Text style={styles.appRejectButtonText}>Reject</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity
@@ -1409,6 +1418,29 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
                           <Text style={styles.appDetailValue}>{partner.secRegistrationNo}</Text>
                         </View>
                       ) : null}
+                      {partner.registrationDocuments?.[0] ? (
+                        <TouchableOpacity
+                          style={styles.attachmentLink}
+                          onPress={() =>
+                            void openAttachmentUri(partner.registrationDocuments![0]).catch(
+                              (error: any) =>
+                                Alert.alert(
+                                  'Attachment Preview Failed',
+                                  error?.message || 'Unable to open the submitted valid ID.',
+                                ),
+                            )
+                          }
+                        >
+                          <MaterialIcons
+                            name={isImageMediaUri(partner.registrationDocuments[0]) ? 'image' : 'insert-drive-file'}
+                            size={16}
+                            color="#2563eb"
+                          />
+                          <Text style={styles.attachmentLinkText} numberOfLines={1}>
+                            View Valid ID ({getAttachmentLabel(partner.registrationDocuments[0])})
+                          </Text>
+                        </TouchableOpacity>
+                      ) : null}
                       {partner.contactEmail ? (
                         <View style={styles.appDetailRow}>
                           <Text style={styles.appDetailLabel}>Email:</Text>
@@ -1451,21 +1483,12 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
                       </TouchableOpacity>
 
                       <TouchableOpacity
-                        style={[styles.appRejectButton, (approvingPartnerId || reviewActionLoadingId) && { opacity: 0.55 }]}
-                        onPress={() => openPartnerReview(partner, 'revision')}
-                        disabled={Boolean(approvingPartnerId || reviewActionLoadingId)}
-                      >
-                        <MaterialIcons name="replay" size={16} color="#dc2626" />
-                        <Text style={styles.appRejectButtonText}>For Revise</Text>
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
                         style={[styles.appRejectButton, styles.appRejectButtonHard, (approvingPartnerId || reviewActionLoadingId) && { opacity: 0.55 }]}
-                        onPress={() => openPartnerReview(partner, 'rejection')}
+                        onPress={() => openPartnerReview(partner)}
                         disabled={Boolean(approvingPartnerId || reviewActionLoadingId)}
                       >
                         <MaterialIcons name="block" size={16} color="#b91c1c" />
-                        <Text style={styles.appRejectButtonText}>Totally Reject</Text>
+                        <Text style={styles.appRejectButtonText}>Reject</Text>
                       </TouchableOpacity>
 
                       <TouchableOpacity
@@ -1557,7 +1580,7 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
         <View style={styles.reviewModalBackdrop}>
           <View style={styles.reviewModalCard}>
             <Text style={styles.reviewModalTitle}>
-              {reviewMode === 'revision' ? 'Send Back For Revise' : 'Totally Reject'}
+              {reviewMode === 'revision' ? 'Send Back For Revise' : 'Reject'}
             </Text>
             <Text style={styles.reviewModalBody}>
               {reviewTargetType === 'partner'
@@ -1585,7 +1608,7 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
                 <Text style={styles.reviewModalConfirmText}>
                   {reviewActionLoadingId
                     ? (reviewMode === 'revision' ? 'Sending...' : 'Rejecting...')
-                    : (reviewMode === 'revision' ? 'Send Back' : 'Reject Now')}
+                    : (reviewMode === 'revision' ? 'Send Back' : 'Reject')}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -1751,6 +1774,18 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#64748b',
     lineHeight: 18,
+  },
+  attachmentLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 4,
+  },
+  attachmentLinkText: {
+    color: '#2563eb',
+    fontSize: 12,
+    fontWeight: '700',
+    flexShrink: 1,
   },
   statsGrid: {
     flexDirection: 'row',

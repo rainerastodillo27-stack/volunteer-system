@@ -59,7 +59,6 @@ import {
   getAllUsers,
   getApiBaseUrl,
   getUserByEmailOrPhone,
-  validateDswdAccreditationNo,
   loginWithCredentials,
   loginWithGoogle,
   saveAppSettings,
@@ -89,7 +88,7 @@ import {
   getRequestErrorTitle,
   isAbortLikeError,
 } from "../utils/requestErrors";
-import { isImageMediaUri, pickImageFromDevice } from "../utils/media";
+import { pickImageFromDevice } from "../utils/media";
 import {
   getBarangaysByCity,
   getCitiesByRegion,
@@ -126,6 +125,7 @@ type SignupPartnerApplicationState = {
   sectorType: PartnerSectorType;
   dswdAccreditationNo: string;
   secRegistrationNo: string;
+  validIdDocument: string;
   advocacyFocus: AdvocacyFocus[];
 };
 
@@ -189,6 +189,7 @@ function createEmptySignupPartnerApplication(): SignupPartnerApplicationState {
     sectorType: "NGO",
     dswdAccreditationNo: "",
     secRegistrationNo: "",
+    validIdDocument: "",
     advocacyFocus: [],
   };
 }
@@ -975,39 +976,37 @@ export default function LoginScreen() {
     setSignupVolunteerSheet((current) => ({ ...current, [key]: value }));
   };
 
-  const handlePickVolunteerCertificate = async () => {
+  const handleSignupImageUpload = async (
+    onSelected: (value: string) => void,
+    title: string,
+  ) => {
     try {
       const selectedImage = await pickImageFromDevice();
-      if (!selectedImage) {
-        return;
+      if (selectedImage) {
+        onSelected(selectedImage);
       }
-
-      updateSignupVolunteerSheet("certificationsOrTrainings", selectedImage);
     } catch (error: any) {
-      Alert.alert(
-        "Certificate Upload Failed",
-        error?.message ||
-        "Unable to open the photo library for certificate upload.",
-      );
+      Alert.alert(title, error?.message || "Unable to open the photo library.");
     }
   };
 
-  const handlePickValidIdPhoto = async () => {
-    try {
-      const selectedImage = await pickImageFromDevice();
-      if (!selectedImage) {
-        return;
-      }
+  const handlePickVolunteerCertificate = () =>
+    handleSignupImageUpload(
+      (value) => updateSignupVolunteerSheet("certificationsOrTrainings", value),
+      "Certificate Upload Failed",
+    );
 
-      updateSignupVolunteerSheet("validIdPhoto", selectedImage);
-    } catch (error: any) {
-      Alert.alert(
-        "ID Upload Failed",
-        error?.message ||
-        "Unable to open the photo library for ID upload.",
-      );
-    }
-  };
+  const handlePickValidIdPhoto = () =>
+    handleSignupImageUpload(
+      (value) => updateSignupVolunteerSheet("validIdPhoto", value),
+      "ID Upload Failed",
+    );
+
+  const handlePickPartnerValidIdPhoto = () =>
+    handleSignupImageUpload(
+      (value) => updateSignupPartnerApplication("validIdDocument", value),
+      "ID Upload Failed",
+    );
 
   const handleAddCustomVolunteerSkill = () => {
     const normalizedSkill = customVolunteerSkill.trim();
@@ -1154,15 +1153,23 @@ export default function LoginScreen() {
         throw new Error(payload.detail || "Unable to send verification code.");
       }
 
+      // Older deployed backends returned the OTP in development mode instead
+      // of sending an email. Never show or accept that response as delivery.
+      if (payload.dev_otp || /development mode/i.test(payload.message || "")) {
+        throw new Error(
+          "The backend is still in development email mode. Please restart the backend with Gmail OTP settings and try again.",
+        );
+      }
+
       setSignupEmailForOtp(email);
-      setSignupOtpCode(payload.dev_otp || "");
+      // Never copy the OTP into the form or expose it in an alert. The code
+      // must be read from the user's email inbox and entered manually.
+      setSignupOtpCode("");
       setOtpSecondsLeft(payload.expires_in || 300);
       setSignupOtpPhase("sent");
       Alert.alert(
         "Verification Code Sent",
-        payload.dev_otp
-          ? `Your verification code is: ${payload.dev_otp}\n\nValid for 5 minutes.`
-          : payload.message || "Check your email inbox for the 6-digit code (valid for 5 minutes)."
+        payload.message || "Check your email inbox for the 6-digit code (valid for 5 minutes)."
       );
     } catch (error) {
       const errMsg = getRequestErrorMessage(error, "Unable to send verification code.", {
@@ -1356,6 +1363,13 @@ export default function LoginScreen() {
         return;
       }
 
+      if (!signupPartnerApplication.validIdDocument.trim()) {
+        const errorMsg = "Upload a valid government-issued ID.";
+        setSignupValidationError(errorMsg);
+        Alert.alert("Validation Error", errorMsg);
+        return;
+      }
+
       if (signupPartnerApplication.advocacyFocus.length === 0) {
         const errorMsg = "Select at least one advocacy focus.";
         setSignupValidationError(errorMsg);
@@ -1417,9 +1431,14 @@ export default function LoginScreen() {
               stakeholderName: signupName.trim(),
               sectorType: signupPartnerApplication.sectorType,
               dswdAccreditationNo:
-                signupPartnerApplication.dswdAccreditationNo?.trim() || "",
+                signupPartnerApplication.sectorType === "NGO"
+                  ? signupPartnerApplication.dswdAccreditationNo?.trim() || ""
+                  : "",
               secRegistrationNo:
-                signupPartnerApplication.secRegistrationNo?.trim() || "",
+                signupPartnerApplication.sectorType === "NGO"
+                  ? signupPartnerApplication.secRegistrationNo?.trim() || ""
+                  : "",
+              registrationDocuments: [signupPartnerApplication.validIdDocument.trim()],
               advocacyFocus: signupPartnerApplication.advocacyFocus,
             }
             : undefined,
@@ -2354,9 +2373,13 @@ export default function LoginScreen() {
                                   signupPartnerApplication.sectorType === sector &&
                                   styles.pillarChipActive,
                                 ]}
-                                onPress={() =>
-                                  updateSignupPartnerApplication("sectorType", sector)
-                                }
+                                onPress={() => {
+                                  updateSignupPartnerApplication("sectorType", sector);
+                                  if (sector !== "NGO") {
+                                    updateSignupPartnerApplication("dswdAccreditationNo", "");
+                                    updateSignupPartnerApplication("secRegistrationNo", "");
+                                  }
+                                }}
                                 disabled={signupLoading}
                               >
                                 <Text
@@ -2372,27 +2395,67 @@ export default function LoginScreen() {
                             ))}
                           </View>
 
-                          <TextInput
-                            style={styles.input}
-                            placeholder="SEC Registration No. (Optional)"
-                            placeholderTextColor="#999"
-                            value={signupPartnerApplication.secRegistrationNo}
-                            onChangeText={(value) =>
-                              updateSignupPartnerApplication("secRegistrationNo", value)
-                            }
-                            editable={!signupLoading}
-                          />
+                          {signupPartnerApplication.sectorType === "NGO" ? (
+                            <>
+                              <TextInput
+                                style={styles.input}
+                                placeholder="SEC Registration No. (Optional)"
+                                placeholderTextColor="#999"
+                                value={signupPartnerApplication.secRegistrationNo}
+                                onChangeText={(value) =>
+                                  updateSignupPartnerApplication("secRegistrationNo", value)
+                                }
+                                editable={!signupLoading}
+                              />
+                              <TextInput
+                                style={styles.input}
+                                placeholder="DSWD Accreditation No. (Optional)"
+                                placeholderTextColor="#999"
+                                value={signupPartnerApplication.dswdAccreditationNo}
+                                onChangeText={(value) =>
+                                  updateSignupPartnerApplication("dswdAccreditationNo", value)
+                                }
+                                editable={!signupLoading}
+                              />
+                            </>
+                          ) : null}
 
-                          <TextInput
-                            style={styles.input}
-                            placeholder="DSWD Accreditation No. (Optional)"
-                            placeholderTextColor="#999"
-                            value={signupPartnerApplication.dswdAccreditationNo}
-                            onChangeText={(value) =>
-                              updateSignupPartnerApplication("dswdAccreditationNo", value)
-                            }
-                            editable={!signupLoading}
-                          />
+                          <Text style={styles.modalSectionLabel}>
+                            Valid ID (Required)
+                          </Text>
+                          {signupPartnerApplication.validIdDocument ? (
+                            <View style={styles.certificatePreviewCard}>
+                              <Image
+                                source={{ uri: signupPartnerApplication.validIdDocument }}
+                                style={styles.certificatePreviewImage}
+                                resizeMode="cover"
+                              />
+                              <View style={styles.certificatePreviewFooter}>
+                                <Text style={styles.certificatePreviewLabel}>Uploaded ID</Text>
+                                <TouchableOpacity
+                                  onPress={() =>
+                                    updateSignupPartnerApplication("validIdDocument", "")
+                                  }
+                                  disabled={signupLoading}
+                                >
+                                  <Text style={styles.certificateRemoveText}>Remove</Text>
+                                </TouchableOpacity>
+                              </View>
+                            </View>
+                          ) : (
+                            <View style={styles.uploadActionsRow}>
+                              <TouchableOpacity
+                                style={styles.uploadButton}
+                                onPress={handlePickPartnerValidIdPhoto}
+                                disabled={signupLoading}
+                              >
+                                <Text style={styles.uploadButtonText}>Upload Valid ID Image</Text>
+                              </TouchableOpacity>
+                            </View>
+                          )}
+                          <Text style={styles.certificateHelperText}>
+                            Please upload a clear image of a government-issued Valid ID for partner verification.
+                          </Text>
 
                           <Text style={styles.modalSectionSubLabel}>
                             Advocacy Focus (Select at least one)
@@ -2883,10 +2946,7 @@ export default function LoginScreen() {
                                 resizeMode="cover"
                               />
                               <View style={styles.certificatePreviewFooter}>
-                                <Text
-                                  style={styles.certificatePreviewLabel}
-                                  numberOfLines={1}
-                                >
+                                <Text style={styles.certificatePreviewLabel}>
                                   Uploaded Certificate
                                 </Text>
                                 <TouchableOpacity
@@ -2911,9 +2971,7 @@ export default function LoginScreen() {
                                 onPress={handlePickVolunteerCertificate}
                                 disabled={signupLoading}
                               >
-                                <Text style={styles.uploadButtonText}>
-                                  Upload Certificate Image
-                                </Text>
+                                <Text style={styles.uploadButtonText}>Upload Certificate Image</Text>
                               </TouchableOpacity>
                             </View>
                           )}
@@ -2936,12 +2994,7 @@ export default function LoginScreen() {
                                 resizeMode="cover"
                               />
                               <View style={styles.certificatePreviewFooter}>
-                                <Text
-                                  style={styles.certificatePreviewLabel}
-                                  numberOfLines={1}
-                                >
-                                  Uploaded ID
-                                </Text>
+                                <Text style={styles.certificatePreviewLabel}>Uploaded ID</Text>
                                 <TouchableOpacity
                                   onPress={() =>
                                     updateSignupVolunteerSheet(
@@ -2964,9 +3017,7 @@ export default function LoginScreen() {
                                 onPress={handlePickValidIdPhoto}
                                 disabled={signupLoading}
                               >
-                                <Text style={styles.uploadButtonText}>
-                                  Upload Valid ID Image
-                                </Text>
+                                <Text style={styles.uploadButtonText}>Upload Valid ID Image</Text>
                               </TouchableOpacity>
                             </View>
                           )}
@@ -4341,9 +4392,17 @@ const styles = StyleSheet.create({
   affiliationRow: {
     flexDirection: "row",
     gap: 10,
+    width: "100%",
+    minWidth: 0,
   },
   affiliationInput: {
-    flex: 1,
+    flexGrow: 1,
+    flexShrink: 1,
+    flexBasis: 0,
+    width: 0,
+    minWidth: 0,
+    paddingHorizontal: 10,
+    fontSize: 14,
   },
   commitmentCard: {
     backgroundColor: "#f8fafc",
@@ -4831,14 +4890,19 @@ const styles = StyleSheet.create({
   yearPickerOverlay: {
     flex: 1,
     backgroundColor: "rgba(0, 0, 0, 0.5)",
-    justifyContent: "flex-end",
-    paddingBottom: 40,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 20,
   },
   yearPickerModal: {
     backgroundColor: "#fff",
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    maxHeight: "70%",
+    width: "100%",
+    maxWidth: 520,
+    height: "82%",
+    maxHeight: 620,
+    minHeight: 280,
+    borderRadius: 20,
     paddingTop: 16,
     paddingBottom: 16,
   },
@@ -4857,6 +4921,8 @@ const styles = StyleSheet.create({
     color: "#1e293b",
   },
   yearPickerList: {
+    flex: 1,
+    minHeight: 0,
     paddingHorizontal: 20,
     marginVertical: 16,
   },

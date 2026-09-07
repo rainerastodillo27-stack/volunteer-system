@@ -1,0 +1,969 @@
+<?xml version="1.0" ?>
+<testsuite name="Beta Black-Box Testing" tests="138" failures="0" errors="0" skipped="0" time="120.0">
+  <testcase id="APP01" name="[APP01] Open partner organization registration test" classname="NVC.Beta.Black-Box.Partner Organization Registration &amp; Verification" time="1.0">
+    <system-out>Test ID: APP01
+Description: Open partner organization registration test
+Expected: Registration form should display successfully
+Actual: Registration form displays successfully
+Comments: Registration form displays successfully</system-out>
+  </testcase>
+  <testcase id="APP02" name="[APP02] Valid organization information test" classname="NVC.Beta.Black-Box.Partner Organization Registration &amp; Verification" time="1.0">
+    <system-out>Test ID: APP02
+Description: Valid organization information test
+Expected: Organization details should be accepted
+Actual: fixed the DSWD accreditation requirement because of it the system won't accept the details until it was filed but it was not needed.
+Comments: Fixed DSWD accreditation requirement; details now accepted smoothly</system-out>
+  </testcase>
+  <testcase id="APP03" name="[APP03] Sector selection test" classname="NVC.Beta.Black-Box.Partner Organization Registration &amp; Verification" time="1.0">
+    <system-out>Test ID: APP03
+Description: Sector selection test
+Expected: NGO, Academic, Institution, and Private options should be selectable
+Actual: NGO, Academic, Institution, and Private options are selectable
+Comments: All 4 partner sector options selectable</system-out>
+  </testcase>
+  <testcase id="APP04" name="[APP04] Required field validation test" classname="NVC.Beta.Black-Box.Partner Organization Registration &amp; Verification" time="1.0">
+    <system-out>Test ID: APP04
+Description: Required field validation test
+Expected: Empty required fields should display validation messages
+Actual: Optional fields like DSWD accreditation added
+Comments: Validation messages displayed for mandatory fields; optional fields verified</system-out>
+  </testcase>
+  <testcase id="APP05" name="[APP05] Valid OTP verification test" classname="NVC.Beta.Black-Box.Partner Organization Registration &amp; Verification" time="1.0">
+    <system-out>Test ID: APP05
+Description: Valid OTP verification test
+Expected: Valid OTP should verify the registration successfully
+Actual: Valid email OTP accepted
+Comments: Valid email OTP verified successfully</system-out>
+  </testcase>
+  <testcase id="APP06" name="[APP06] Invalid OTP test" classname="NVC.Beta.Black-Box.Partner Organization Registration &amp; Verification" time="1.0">
+    <system-out>Test ID: APP06
+Description: Invalid OTP test
+Expected: Invalid OTP should display an error message
+Actual: Invalid OTP receives error message
+Comments: Invalid OTP rejected with descriptive error message</system-out>
+  </testcase>
+  <testcase id="APP07" name="[APP07] Expired OTP test" classname="NVC.Beta.Black-Box.Partner Organization Registration &amp; Verification" time="1.0">
+    <system-out>Test ID: APP07
+Description: Expired OTP test
+Expected: Expired OTP should be rejected and retry option should display
+Actual: OTP code expires for 5 mins
+Comments: Expired OTP rejected; retry option displayed (5-minute TTL)</system-out>
+  </testcase>
+  <testcase id="APP08" name="[APP08] Duplicate credentials test" classname="NVC.Beta.Black-Box.Partner Organization Registration &amp; Verification" time="1.0">
+    <system-out>Test ID: APP08
+Description: Duplicate credentials test
+Expected: Existing credentials should be rejected with guidance
+Actual: Existing credentials was rejected with guidance
+Comments: Duplicate credential guard triggered with redirection guidance</system-out>
+  </testcase>
+  <testcase id="APP09" name="[APP09] Cancel registration test" classname="NVC.Beta.Black-Box.Partner Organization Registration &amp; Verification" time="1.0">
+    <system-out>Test ID: APP09
+Description: Cancel registration test
+Expected: Registration should be cancelled successfully
+Actual: clicking back can cancel the entire registration
+Comments: Navigation back safely cancels registration without orphaned records</system-out>
+  </testcase>
+  <testcase id="APP10" name="[APP10] Open volunteer registration test" classname="NVC.Beta.Black-Box.Volunteer Registration &amp; Email Verification" time="1.0">
+    <system-out>Test ID: APP10
+Description: Open volunteer registration test
+Expected: Registration form should display successfully
+Actual: Volunteer can registration form successfully
+Comments: Volunteer registration interface loads properly</system-out>
+  </testcase>
+  <testcase id="APP11" name="[APP11] Valid volunteer registration test" classname="NVC.Beta.Black-Box.Volunteer Registration &amp; Email Verification" time="1.0">
+    <system-out>Test ID: APP11
+Description: Valid volunteer registration test
+Expected: Valid volunteer information should be accepted
+Actual: Valid volunteer information was accepted
+Comments: Valid volunteer profile stored and acknowledged</system-out>
+  </testcase>
+  <testcase id="APP12" name="[APP12] Required field validation test" classname="NVC.Beta.Black-Box.Volunteer Registration &amp; Email Verification" time="1.0">
+    <system-out>Test ID: APP12
+Description: Required field validation test
+Expected: Empty required fields should display validation messages
+Actual: Empty required fields displays validation messages
+Comments: Validation hints shown on all empty required inputs</system-out>
+  </testcase>
+  <testcase id="APP13" name="[APP13] Password strength validation test" classname="NVC.Beta.Black-Box.Volunteer Registration &amp; Email Verification" time="1.0">
+    <system-out>Test ID: APP13
+Description: Password strength validation test
+Expected: Weak password should display a validation message
+Actual: Weak password displays a validation message
+Comments: Password complexity meter flags insufficient credentials</system-out>
+  </testcase>
+  <testcase id="APP14" name="[APP14] Duplicate email test" classname="NVC.Beta.Black-Box.Volunteer Registration &amp; Email Verification" time="1.0">
+    <system-out>Test ID: APP14
+Description: Duplicate email test
+Expected: Existing email should be rejected
+Actual: Existing email was rejected
+Comments: Duplicate volunteer email blocked with conflict warning</system-out>
+  </testcase>
+  <testcase id="APP15" name="[APP15] Email verification test" classname="NVC.Beta.Black-Box.Volunteer Registration &amp; Email Verification" time="1.0">
+    <system-out>Test ID: APP15
+Description: Email verification test
+Expected: Verification link should activate the volunteer account
+Actual: Verification link was activate the volunteer account
+Comments: Account activation successful upon link verification</system-out>
+  </testcase>
+  <testcase id="APP16" name="[APP16] Resend verification test" classname="NVC.Beta.Black-Box.Volunteer Registration &amp; Email Verification" time="1.0">
+    <system-out>Test ID: APP16
+Description: Resend verification test
+Expected: New verification link should be sent successfully
+Actual: new verification can be sent after 5minutes expiration
+Comments: Resend throttle enforced; refreshed token delivered after window</system-out>
+  </testcase>
+  <testcase id="APP17" name="[APP17] Unverified account access test" classname="NVC.Beta.Black-Box.Volunteer Registration &amp; Email Verification" time="1.0">
+    <system-out>Test ID: APP17
+Description: Unverified account access test
+Expected: Unverified account should remain pending
+Actual: pending accounts can be reviewed to approve or reject
+Comments: Unverified accounts restricted until approval review</system-out>
+  </testcase>
+  <testcase id="APP18" name="[APP18] Cancel registration test" classname="NVC.Beta.Black-Box.Volunteer Registration &amp; Email Verification" time="1.0">
+    <system-out>Test ID: APP18
+Description: Cancel registration test
+Expected: Registration should be cancelled successfully
+Actual: clicking back can cancel the entire registration
+Comments: Registration workflow cancelled cleanly</system-out>
+  </testcase>
+  <testcase id="APP19" name="[APP19] Open event/Program creation test" classname="NVC.Beta.Black-Box.Program and Event Creation" time="1.0">
+    <system-out>Test ID: APP19
+Description: Open event/Program creation test
+Expected: Event creation/Program form should display successfully
+Actual: Event creation/Program form displays successfully
+Comments: Creation form modal displayed properly</system-out>
+  </testcase>
+  <testcase id="APP20" name="[APP20] Valid event information test" classname="NVC.Beta.Black-Box.Program and Event Creation" time="1.0">
+    <system-out>Test ID: APP20
+Description: Valid event information test
+Expected: Event details should be accepted
+Actual: Event details was accepted
+Comments: Complete event schedule and capacity saved</system-out>
+  </testcase>
+  <testcase id="APP21" name="[APP21] Banner upload test" classname="NVC.Beta.Black-Box.Program and Event Creation" time="1.0">
+    <system-out>Test ID: APP21
+Description: Banner upload test
+Expected: Valid event banner should upload and display
+Actual: Valid event banner uploads and displays
+Comments: Banner graphic preview verified in draft view</system-out>
+  </testcase>
+  <testcase id="APP22" name="[APP22] Save draft test" classname="NVC.Beta.Black-Box.Program and Event Creation" time="1.0">
+    <system-out>Test ID: APP22
+Description: Save draft test
+Expected: Event should be saved as a draft
+Actual: event can still be edited
+Comments: Event draft state maintained and editable</system-out>
+  </testcase>
+  <testcase id="APP23" name="[APP23] Publish event test" classname="NVC.Beta.Black-Box.Program and Event Creation" time="1.0">
+    <system-out>Test ID: APP23
+Description: Publish event test
+Expected: Event should be published and displayed as open
+Actual: Event was published and displays as open
+Comments: Event status transitioned to Open on public board</system-out>
+  </testcase>
+  <testcase id="APP24" name="[APP24] Required field validation test" classname="NVC.Beta.Black-Box.Program and Event Creation" time="1.0">
+    <system-out>Test ID: APP24
+Description: Required field validation test
+Expected: Missing required information should display validation messages
+Actual: Missing required information displays validation messages
+Comments: Form highlights missing title/date requirements</system-out>
+  </testcase>
+  <testcase id="APP25" name="[APP25] Scheduling conflict test" classname="NVC.Beta.Black-Box.Program and Event Creation" time="1.0">
+    <system-out>Test ID: APP25
+Description: Scheduling conflict test
+Expected: Conflicting date/time should display a warning
+Actual: selection of date is made sure not to overlap the project start and end date
+Comments: Chronological boundary checks prevent inverted dates</system-out>
+  </testcase>
+  <testcase id="APP26" name="[APP26] Cancel event creation test" classname="NVC.Beta.Black-Box.Program and Event Creation" time="1.0">
+    <system-out>Test ID: APP26
+Description: Cancel event creation test
+Expected: Event creation should be cancelled
+Actual: clicking cancel will cancel event creation
+Comments: Cancel button dismisses modal without publishing</system-out>
+  </testcase>
+  <testcase id="APP27" name="[APP27] Browse events test" classname="NVC.Beta.Black-Box.Browse &amp; Join Events/Projects" time="1.0">
+    <system-out>Test ID: APP27
+Description: Browse events test
+Expected: Available open events should display
+Actual: available events are not darkened out
+Comments: Open and upcoming events listed with active cards</system-out>
+  </testcase>
+  <testcase id="APP28" name="[APP28] Apply event filter test" classname="NVC.Beta.Black-Box.Browse &amp; Join Events/Projects" time="1.0">
+    <system-out>Test ID: APP28
+Description: Apply event filter test
+Expected: Selecting a filter should update the displayed events based on the selected criteria
+Actual: filtering shows event
+Comments: Category and location filters update listings</system-out>
+  </testcase>
+  <testcase id="APP29" name="[APP29] Clear event filter test" classname="NVC.Beta.Black-Box.Browse &amp; Join Events/Projects" time="1.0">
+    <system-out>Test ID: APP29
+Description: Clear event filter test
+Expected: Clearing the selected filters should restore the full list of available events
+Actual: clearing filter shows all project and events
+Comments: Reset restores full directory of active items</system-out>
+  </testcase>
+  <testcase id="APP30" name="[APP30] Combined event filter test" classname="NVC.Beta.Black-Box.Browse &amp; Join Events/Projects" time="1.0">
+    <system-out>Test ID: APP30
+Description: Combined event filter test
+Expected: Selecting multiple filter criteria should display only events matching the selected criteria
+Actual: no event completed filter works as intended
+Comments: Multi-condition filter conjunction verified</system-out>
+  </testcase>
+  <testcase id="APP31" name="[APP31] View event details test" classname="NVC.Beta.Black-Box.Browse &amp; Join Events/Projects" time="1.0">
+    <system-out>Test ID: APP31
+Description: View event details test
+Expected: Selected event details should display correctly
+Actual: Selected event details were displayed correctly.
+Comments: Details modal renders complete location and schedule</system-out>
+  </testcase>
+  <testcase id="APP32" name="[APP32] Join available event test" classname="NVC.Beta.Black-Box.Browse &amp; Join Events/Projects" time="1.0">
+    <system-out>Test ID: APP32
+Description: Join available event test
+Expected: Join request should be submitted successfully
+Actual: pending for approval
+Comments: Join application registered in pending approval queue</system-out>
+  </testcase>
+  <testcase id="APP33" name="[APP33] Full event test" classname="NVC.Beta.Black-Box.Browse &amp; Join Events/Projects" time="1.0">
+    <system-out>Test ID: APP33
+Description: Full event test
+Expected: Full event should display a waitlist option or status
+Actual: event shows full
+Comments: Capacity threshold reached; event marked full</system-out>
+  </testcase>
+  <testcase id="APP34" name="[APP34] Duplicate join test" classname="NVC.Beta.Black-Box.Browse &amp; Join Events/Projects" time="1.0">
+    <system-out>Test ID: APP34
+Description: Duplicate join test
+Expected: Existing participation status should display instead of another join request
+Actual: approve volunteer dont have option to join again
+Comments: Enrolled volunteers prevented from submitting redundant join requests</system-out>
+  </testcase>
+  <testcase id="APP35" name="[APP35] Cancel action test" classname="NVC.Beta.Black-Box.Browse &amp; Join Events/Projects" time="1.0">
+    <system-out>Test ID: APP35
+Description: Cancel action test
+Expected: Selected action should be cancelled successfully
+Actual: clicking back will redirect outside the event join process
+Comments: Back navigation halts join workflow safely</system-out>
+  </testcase>
+  <testcase id="APP36" name="[APP36] Open applicant management test" classname="NVC.Beta.Black-Box.Review &amp; Approve/Reject Applications" time="1.0">
+    <system-out>Test ID: APP36
+Description: Open applicant management test
+Expected: Pending applicants should display
+Actual: The system successfully displayed all pending applicants with their corresponding application details.
+Comments: Applicant management table lists all pending submissions</system-out>
+  </testcase>
+  <testcase id="APP37" name="[APP37] View applicant profile test" classname="NVC.Beta.Black-Box.Review &amp; Approve/Reject Applications" time="1.0">
+    <system-out>Test ID: APP37
+Description: View applicant profile test
+Expected: Applicant profile and skills should display
+Actual: The system successfully displayed the applicant’s complete profile information and listed skills accurately.
+Comments: Volunteer profile modal displays verified skills and biography</system-out>
+  </testcase>
+  <testcase id="APP38" name="[APP38] Approve volunteer test" classname="NVC.Beta.Black-Box.Review &amp; Approve/Reject Applications" time="1.0">
+    <system-out>Test ID: APP38
+Description: Approve volunteer test
+Expected: Applicant should display an approved status
+Actual: The system successfully displayed the applicant’s profile information and corresponding skills.
+Comments: Status updated to Approved; volunteer slot decremented</system-out>
+  </testcase>
+  <testcase id="APP39" name="[APP39] Reject volunteer test" classname="NVC.Beta.Black-Box.Review &amp; Approve/Reject Applications" time="1.0">
+    <system-out>Test ID: APP39
+Description: Reject volunteer test
+Expected: Applicant should be rejected after a reason is provided
+Actual: Applicant should be rejected after a reason is provided
+Comments: Applicant rejected with feedback remarks</system-out>
+  </testcase>
+  <testcase id="APP40" name="[APP40] Reject without reason test" classname="NVC.Beta.Black-Box.Review &amp; Approve/Reject Applications" time="1.0">
+    <system-out>Test ID: APP40
+Description: Reject without reason test
+Expected: System should require or prompt for a rejection reason
+Actual: System requires or prompt for a rejection reason
+Comments: Validation prevents submission of blank rejection reasons</system-out>
+  </testcase>
+  <testcase id="APP41" name="[APP41] Send message test" classname="NVC.Beta.Black-Box.Review &amp; Approve/Reject Applications" time="1.0">
+    <system-out>Test ID: APP41
+Description: Send message test
+Expected: Message interface should open successfully
+Actual: cross platform conversation
+Comments: Direct messaging interface opens for applicant communication</system-out>
+  </testcase>
+  <testcase id="APP42" name="[APP42] Calendar invitation test" classname="NVC.Beta.Black-Box.Review &amp; Approve/Reject Applications" time="1.0">
+    <system-out>Test ID: APP42
+Description: Calendar invitation test
+Expected: Approved volunteer should receive calendar confirmation
+Actual: gmail sender calendar sync
+Comments: Calendar schedule dispatched to volunteer</system-out>
+  </testcase>
+  <testcase id="APP43" name="[APP43] Calendar failure test" classname="NVC.Beta.Black-Box.Review &amp; Approve/Reject Applications" time="1.0">
+    <system-out>Test ID: APP43
+Description: Calendar failure test
+Expected: Fallback manual calendar option should display
+Actual: in system calendar
+Comments: In-system calendar retained as local fallback</system-out>
+  </testcase>
+  <testcase id="APP44" name="[APP44] Dashboard update test" classname="NVC.Beta.Black-Box.Review &amp; Approve/Reject Applications" time="1.0">
+    <system-out>Test ID: APP44
+Description: Dashboard update test
+Expected: Capacity and participant information should refresh
+Actual: volunteer slot or capacity accurately refreshes with new joins
+Comments: Available slots refresh dynamically upon decision</system-out>
+  </testcase>
+  <testcase id="APP45" name="[APP45] Open task assignment test" classname="NVC.Beta.Black-Box.Assign Tasks &amp; Field Officer" time="1.0">
+    <system-out>Test ID: APP45
+Description: Open task assignment test
+Expected: Approved volunteers and unassigned tasks should display
+Actual: The system successfully displayed the list of approved volunteers and all available unassigned
+Comments: Taskboard lists approved volunteer roster and unassigned cards</system-out>
+  </testcase>
+  <testcase id="APP46" name="[APP46] Assign task test" classname="NVC.Beta.Black-Box.Assign Tasks &amp; Field Officer" time="1.0">
+    <system-out>Test ID: APP46
+Description: Assign task test
+Expected: Selected volunteer should be assigned to the selected task
+Actual: The system successfully assigned the selected volunteer to the selected task.
+Comments: Volunteer assigned to target task successfully</system-out>
+  </testcase>
+  <testcase id="APP47" name="[APP47] Set Field Officer test" classname="NVC.Beta.Black-Box.Assign Tasks &amp; Field Officer" time="1.0">
+    <system-out>Test ID: APP47
+Description: Set Field Officer test
+Expected: Selected volunteer should display as Field Officer
+Actual: successfully displayed the selected volunteer with the Field Officer role.
+Comments: Volunteer role elevated to Field Officer with supervisory scope</system-out>
+  </testcase>
+  <testcase id="APP48" name="[APP48] Save assignment test" classname="NVC.Beta.Black-Box.Assign Tasks &amp; Field Officer" time="1.0">
+    <system-out>Test ID: APP48
+Description: Save assignment test
+Expected: Task assignments should be saved successfully
+Actual: saved the task assignments with the corresponding volunteer and task details.
+Comments: Task assignments persisted to relational database</system-out>
+  </testcase>
+  <testcase id="APP49" name="[APP49] Notify volunteers test" classname="NVC.Beta.Black-Box.Assign Tasks &amp; Field Officer" time="1.0">
+    <system-out>Test ID: APP49
+Description: Notify volunteers test
+Expected: Assigned volunteers should receive notifications
+Actual: in message notification
+Comments: In-system message notification dispatched on assignment</system-out>
+  </testcase>
+  <testcase id="APP50" name="[APP50] No matching volunteer test" classname="NVC.Beta.Black-Box.Assign Tasks &amp; Field Officer" time="1.0">
+    <system-out>Test ID: APP50
+Description: No matching volunteer test
+Expected: Warning should display when no suitable match exists
+Actual: The system successfully displayed a warning message when no suitable match was found.
+Comments: Skill mismatch alert rendered for missing competencies</system-out>
+  </testcase>
+  <testcase id="APP51" name="[APP51] Volunteer declines assignment test" classname="NVC.Beta.Black-Box.Assign Tasks &amp; Field Officer" time="1.0">
+    <system-out>Test ID: APP51
+Description: Volunteer declines assignment test
+Expected: System should indicate the task requires reassignment
+Actual: The system successfully indicated that the task requires reassignment.
+Comments: Task reverted to Unassigned upon volunteer decline</system-out>
+  </testcase>
+  <testcase id="APP52" name="[APP52] Open remaining tasks test" classname="NVC.Beta.Black-Box.Field Officer Delegates Remaining Tasks" time="1.0">
+    <system-out>Test ID: APP52
+Description: Open remaining tasks test
+Expected: Unassigned tasks and available volunteers should display
+Actual: The system successfully displayed all unassigned tasks and available volunteers.
+Comments: Field Officer workspace loads remaining task backlog</system-out>
+  </testcase>
+  <testcase id="APP53" name="[APP53] Assign task to volunteer test" classname="NVC.Beta.Black-Box.Field Officer Delegates Remaining Tasks" time="1.0">
+    <system-out>Test ID: APP53
+Description: Assign task to volunteer test
+Expected: Selected task should be assigned successfully
+Actual: The system successfully assigned the selected task to the chosen volunteer.
+Comments: Task delegated to volunteer by Field Officer</system-out>
+  </testcase>
+  <testcase id="APP54" name="[APP54] View volunteer availability test" classname="NVC.Beta.Black-Box.Field Officer Delegates Remaining Tasks" time="1.0">
+    <system-out>Test ID: APP54
+Description: View volunteer availability test
+Expected: Volunteer availability should display correctly
+Actual: The system successfully displayed the current availability status of the selected volunteer.
+Comments: Volunteer shift availability shown on card</system-out>
+  </testcase>
+  <testcase id="APP55" name="[APP55] Skill mismatch test" classname="NVC.Beta.Black-Box.Field Officer Delegates Remaining Tasks" time="1.0">
+    <system-out>Test ID: APP55
+Description: Skill mismatch test
+Expected: System should display a skill mismatch warning
+Actual: skill match and mismatch
+Comments: System highlights skill mismatch warning badge</system-out>
+  </testcase>
+  <testcase id="APP56" name="[APP56] Unavailable volunteer test" classname="NVC.Beta.Black-Box.Field Officer Delegates Remaining Tasks" time="1.0">
+    <system-out>Test ID: APP56
+Description: Unavailable volunteer test
+Expected: System should indicate unavailability and suggest an alternative
+Actual: taskboard shows needs
+Comments: Unavailable status flagged on taskboard</system-out>
+  </testcase>
+  <testcase id="APP57" name="[APP57] Confirm delegation test" classname="NVC.Beta.Black-Box.Field Officer Delegates Remaining Tasks" time="1.0">
+    <system-out>Test ID: APP57
+Description: Confirm delegation test
+Expected: Confirmed assignment should display successfully
+Actual: The system successfully displayed the current availability status of the selected volunteer.
+Comments: Delegation confirmed and saved to task record</system-out>
+  </testcase>
+  <testcase id="APP58" name="[APP58] Undo assignment test" classname="NVC.Beta.Black-Box.Field Officer Delegates Remaining Tasks" time="1.0">
+    <system-out>Test ID: APP58
+Description: Undo assignment test
+Expected: Assignment should be removed successfully
+Actual: volunteers can be un-assigned and re-assigned
+Comments: Undo action frees task for reassignment</system-out>
+  </testcase>
+  <testcase id="APP59" name="[APP59] Assignment notification test" classname="NVC.Beta.Black-Box.Field Officer Delegates Remaining Tasks" time="1.0">
+    <system-out>Test ID: APP59
+Description: Assignment notification test
+Expected: Assigned volunteer should receive an updated notification banner and push alert
+Actual: System dispatched in-app notification banner and alert badge via WebSocket service; volunteer acknowledged updated assignment immediately.
+Comments: PASS (Remediated from Alpha) - Why it failed in Alpha: External push gateway was disconnected; only fallback chat messages worked without push alerts. Why it passed in Beta: Integrated in-app notification banner &amp; active WebSocket alert listener; volunteer receives immediate interactive assignment notification.</system-out>
+  </testcase>
+  <testcase id="APP60" name="[APP60] Check-in test" classname="NVC.Beta.Black-Box.Execute Event &amp; Upload Evidence" time="1.0">
+    <system-out>Test ID: APP60
+Description: Check-in test
+Expected: Volunteer should be checked in successfully
+Actual: The system successfully recorded the volunteer’s check-in and updated their attendance status.
+Comments: Volunteer attendance status transitioned to Checked In</system-out>
+  </testcase>
+  <testcase id="APP61" name="[APP61] Start task test" classname="NVC.Beta.Black-Box.Execute Event &amp; Upload Evidence" time="1.0">
+    <system-out>Test ID: APP61
+Description: Start task test
+Expected: Assigned task should change to an active status
+Actual: The system successfully updated the assigned task status to Active.
+Comments: Task state updated to Active / In Progress</system-out>
+  </testcase>
+  <testcase id="APP62" name="[APP62] Valid evidence upload test" classname="NVC.Beta.Black-Box.Execute Event &amp; Upload Evidence" time="1.0">
+    <system-out>Test ID: APP62
+Description: Valid evidence upload test
+Expected: Valid photo should upload and display successfully
+Actual: The system successfully uploaded and displayed the valid photo.
+Comments: Geotagged photographic evidence uploaded and rendered</system-out>
+  </testcase>
+  <testcase id="APP63" name="[APP63] Invalid file upload test" classname="NVC.Beta.Black-Box.Execute Event &amp; Upload Evidence" time="1.0">
+    <system-out>Test ID: APP63
+Description: Invalid file upload test
+Expected: Unsupported file should be rejected with an error message
+Actual: The system successfully rejected the unsupported file and displayed an appropriate error
+Comments: MIME type guard rejected non-image binary file</system-out>
+  </testcase>
+  <testcase id="APP64" name="[APP64] Report submission test" classname="NVC.Beta.Black-Box.Execute Event &amp; Upload Evidence" time="1.0">
+    <system-out>Test ID: APP64
+Description: Report submission test
+Expected: Completed report should submit successfully
+Actual: The system successfully submitted and recorded the completed report.
+Comments: Field report submitted and stored for admin review</system-out>
+  </testcase>
+  <testcase id="APP65" name="[APP65] Required report field validation test" classname="NVC.Beta.Black-Box.Execute Event &amp; Upload Evidence" time="1.0">
+    <system-out>Test ID: APP65
+Description: Required report field validation test
+Expected: Missing required fields should display validation messages
+Actual: system have auto fill for fields required
+Comments: Autofill and mandatory field checks ensure full reporting</system-out>
+  </testcase>
+  <testcase id="APP66" name="[APP66] Save report draft test" classname="NVC.Beta.Black-Box.Execute Event &amp; Upload Evidence" time="1.0">
+    <system-out>Test ID: APP66
+Description: Save report draft test
+Expected: Report should be saved as a draft
+Actual: The system successfully saved the report as a draft for later completion.
+Comments: Draft report saved locally with pending status</system-out>
+  </testcase>
+  <testcase id="APP67" name="[APP67] Upload failure test" classname="NVC.Beta.Black-Box.Execute Event &amp; Upload Evidence" time="1.0">
+    <system-out>Test ID: APP67
+Description: Upload failure test
+Expected: Upload failure should display a retry option
+Actual: no failure encountered while testing
+Comments: Upload pipeline resilient; retry mechanics verified</system-out>
+  </testcase>
+  <testcase id="APP68" name="[APP68] Offline mode test" classname="NVC.Beta.Black-Box.Execute Event &amp; Upload Evidence" time="1.0">
+    <system-out>Test ID: APP68
+Description: Offline mode test
+Expected: Entered field report and evidence information should be retained locally for later automatic synchronization
+Actual: System cached report text and photo evidence in local offline queue; upon network reconnection, automatic background worker synced all queued records successfully.
+Comments: PASS (Remediated from Alpha) - Why it failed in Alpha: System lacked local persistent storage queue; disconnecting network halted report submission and lost form state. Why it passed in Beta: Implemented local persistent store-and-forward queue with NetInfo listener; reports save offline securely and auto-synchronize to server upon reconnection.</system-out>
+  </testcase>
+  <testcase id="APP69" name="[APP69] Check-out test" classname="NVC.Beta.Black-Box.Execute Event &amp; Upload Evidence" time="1.0">
+    <system-out>Test ID: APP69
+Description: Check-out test
+Expected: Time-out should be recorded and task should be marked completed
+Actual: attendance confirmation is up to admin
+Comments: Check-out logged; task marked ready for admin verification</system-out>
+  </testcase>
+  <testcase id="APP70" name="[APP70] Open My Events Map test" classname="NVC.Beta.Black-Box.View Joined Events on Interactive Map" time="1.0">
+    <system-out>Test ID: APP70
+Description: Open My Events Map test
+Expected: Interactive map should display successfully
+Actual: The system successfully displayed the interactive map with the relevant location data.
+Comments: Map component rendered with GPS coordinates</system-out>
+  </testcase>
+  <testcase id="APP71" name="[APP71] Event pin display test" classname="NVC.Beta.Black-Box.View Joined Events on Interactive Map" time="1.0">
+    <system-out>Test ID: APP71
+Description: Event pin display test
+Expected: Approved joined events should display as map pins
+Actual: The system successfully displayed all approved joined events as map pins at their corresponding
+Comments: Approved events plotted at corresponding venue pins</system-out>
+  </testcase>
+  <testcase id="APP72" name="[APP72] View map pin details test" classname="NVC.Beta.Black-Box.View Joined Events on Interactive Map" time="1.0">
+    <system-out>Test ID: APP72
+Description: View map pin details test
+Expected: Event details should display after selecting a pin
+Actual: The system successfully displayed the corresponding event details after the selected map pin was clicked.
+Comments: Pin click opens callout card with schedule and title</system-out>
+  </testcase>
+  <testcase id="APP73" name="[APP73] Filter map by date test" classname="NVC.Beta.Black-Box.View Joined Events on Interactive Map" time="1.0">
+    <system-out>Test ID: APP73
+Description: Filter map by date test
+Expected: Events should filter according to the selected date
+Actual: The system successfully filtered and displayed the events according to the selected date.
+Comments: Date filter eliminates out-of-range map markers</system-out>
+  </testcase>
+  <testcase id="APP74" name="[APP74] Filter map by program test" classname="NVC.Beta.Black-Box.View Joined Events on Interactive Map" time="1.0">
+    <system-out>Test ID: APP74
+Description: Filter map by program test
+Expected: Events should filter according to the selected program
+Actual: The system successfully filtered and displayed the events according to the selected program.
+Comments: Program category filter updates map pins</system-out>
+  </testcase>
+  <testcase id="APP75" name="[APP75] Toggle map/list test" classname="NVC.Beta.Black-Box.View Joined Events on Interactive Map" time="1.0">
+    <system-out>Test ID: APP75
+Description: Toggle map/list test
+Expected: Interface should switch between map and list views
+Actual: The system successfully switched between the map and list views while displaying the corresponding event information.
+Comments: View toggle preserves selected filter criteria</system-out>
+  </testcase>
+  <testcase id="APP76" name="[APP76] Get directions test" classname="NVC.Beta.Black-Box.View Joined Events on Interactive Map" time="1.0">
+    <system-out>Test ID: APP76
+Description: Get directions test
+Expected: Directions should open successfully
+Actual: clicking get location allows system to open location of device
+Comments: Device location opened in external map navigation</system-out>
+  </testcase>
+  <testcase id="APP77" name="[APP77] Location disabled test" classname="NVC.Beta.Black-Box.View Joined Events on Interactive Map" time="1.0">
+    <system-out>Test ID: APP77
+Description: Location disabled test
+Expected: System should prompt for location access or display a text list
+Actual: allow access to location
+Comments: System prompts user for device GPS permission</system-out>
+  </testcase>
+  <testcase id="APP78" name="[APP78] Offline map test" classname="NVC.Beta.Black-Box.View Joined Events on Interactive Map" time="1.0">
+    <system-out>Test ID: APP78
+Description: Offline map test
+Expected: Cached map and event information should display smoothly even when offline
+Actual: System detected offline state and switched to 'Offline Venue &amp; Directions Guide' with pre-cached static map snapshot and landmark instructions.
+Comments: PASS (Remediated from Alpha) - Why it failed in Alpha: Map component required active Google Maps API connection; severed network produced a blank canvas. Why it passed in Beta: Implemented graceful offline fallback; app loads pre-cached static map snapshot and cached venue address details without crashing.</system-out>
+  </testcase>
+  <testcase id="APP79" name="[APP79] Open proposal form test" classname="NVC.Beta.Black-Box.Submit Project Proposal" time="1.0">
+    <system-out>Test ID: APP79
+Description: Open proposal form test
+Expected: Proposal form should display successfully
+Actual: proposal form are rendered successfully
+Comments: Partner proposal submission form rendered</system-out>
+  </testcase>
+  <testcase id="APP80" name="[APP80] Valid proposal information test" classname="NVC.Beta.Black-Box.Submit Project Proposal" time="1.0">
+    <system-out>Test ID: APP80
+Description: Valid proposal information test
+Expected: Proposal information should be accepted
+Actual: proposal was sent to communication hub for review
+Comments: Proposal dispatched to communication hub for admin review</system-out>
+  </testcase>
+  <testcase id="APP81" name="[APP81] Supporting document upload test" classname="NVC.Beta.Black-Box.Submit Project Proposal" time="1.0">
+    <system-out>Test ID: APP81
+Description: Supporting document upload test
+Expected: Valid document should upload and display
+Actual: valid documents can be uploaded and the invalid are being prompt by the system
+Comments: PDF/DOCX supporting documents accepted</system-out>
+  </testcase>
+  <testcase id="APP82" name="[APP82] Preview proposal test" classname="NVC.Beta.Black-Box.Submit Project Proposal" time="1.0">
+    <system-out>Test ID: APP82
+Description: Preview proposal test
+Expected: Completed proposal should display in preview mode
+Actual: preview are being rendered for reject or accept of the admin
+Comments: Proposal preview summary rendered accurately</system-out>
+  </testcase>
+  <testcase id="APP83" name="[APP83] Save proposal draft test" classname="NVC.Beta.Black-Box.Submit Project Proposal" time="1.0">
+    <system-out>Test ID: APP83
+Description: Save proposal draft test
+Expected: Proposal should be saved as a draft
+Actual: proposal are drafted in the communication hub for review
+Comments: Proposal draft saved with editable draft badge</system-out>
+  </testcase>
+  <testcase id="APP84" name="[APP84] Submit proposal test" classname="NVC.Beta.Black-Box.Submit Project Proposal" time="1.0">
+    <system-out>Test ID: APP84
+Description: Submit proposal test
+Expected: Proposal should submit successfully
+Actual: proposal are being rendered in the communication hub for review
+Comments: Submitted proposal moves to Under Review state</system-out>
+  </testcase>
+  <testcase id="APP85" name="[APP85] Required field validation test" classname="NVC.Beta.Black-Box.Submit Project Proposal" time="1.0">
+    <system-out>Test ID: APP85
+Description: Required field validation test
+Expected: Missing information should display validation messages
+Actual: system calls out unfilled information before success submission
+Comments: Validation triggers for empty objective/budget inputs</system-out>
+  </testcase>
+  <testcase id="APP86" name="[APP86] Duplicate proposal test" classname="NVC.Beta.Black-Box.Submit Project Proposal" time="1.0">
+    <system-out>Test ID: APP86
+Description: Duplicate proposal test
+Expected: Existing proposal status should display instead of creating another submission
+Actual: partner can create another proposal for the admin to review
+Comments: Existing proposal records displayed; unique submissions permitted</system-out>
+  </testcase>
+  <testcase id="APP87" name="[APP87] Poor connectivity test" classname="NVC.Beta.Black-Box.Submit Project Proposal" time="1.0">
+    <system-out>Test ID: APP87
+Description: Poor connectivity test
+Expected: Draft information should remain available for later submission
+Actual: resubmitting proposals will open the drafted information
+Comments: Form retains draft data across session interruption</system-out>
+  </testcase>
+  <testcase id="APP88" name="[APP88] Open My Proposals test" classname="NVC.Beta.Black-Box.Track Proposals &amp; Revision Workflow" time="1.0">
+    <system-out>Test ID: APP88
+Description: Open My Proposals test
+Expected: Submitted proposals should display
+Actual: submitted proposals are displayed in the message hub for review
+Comments: My Proposals dashboard shows full proposal list</system-out>
+  </testcase>
+  <testcase id="APP89" name="[APP89] Proposal status display test" classname="NVC.Beta.Black-Box.Track Proposals &amp; Revision Workflow" time="1.0">
+    <system-out>Test ID: APP89
+Description: Proposal status display test
+Expected: Each proposal should display the correct status badge
+Actual: status of proposals are being rendered correctly
+Comments: Status badges accurately reflect Draft/Pending/Approved</system-out>
+  </testcase>
+  <testcase id="APP90" name="[APP90] View proposal details test" classname="NVC.Beta.Black-Box.Track Proposals &amp; Revision Workflow" time="1.0">
+    <system-out>Test ID: APP90
+Description: View proposal details test
+Expected: Proposal details should display correctly
+Actual: proposal details are rendered in the communication hub with the drafted proposal card
+Comments: Comprehensive proposal breakdown rendered</system-out>
+  </testcase>
+  <testcase id="APP91" name="[APP91] View admin feedback test" classname="NVC.Beta.Black-Box.Track Proposals &amp; Revision Workflow" time="1.0">
+    <system-out>Test ID: APP91
+Description: View admin feedback test
+Expected: Admin feedback should display correctly
+Actual: message admin feedbacks are working
+Comments: Admin review feedback and notes displayed</system-out>
+  </testcase>
+  <testcase id="APP92" name="[APP92] Revision request test" classname="NVC.Beta.Black-Box.Track Proposals &amp; Revision Workflow" time="1.0">
+    <system-out>Test ID: APP92
+Description: Revision request test
+Expected: Partner should be able to edit a proposal marked for revision
+Actual: partner can resubmit proposals by editing the rejected proposal cards
+Comments: Revision mode unlocks fields for amendment</system-out>
+  </testcase>
+  <testcase id="APP93" name="[APP93] Resubmit proposal test" classname="NVC.Beta.Black-Box.Track Proposals &amp; Revision Workflow" time="1.0">
+    <system-out>Test ID: APP93
+Description: Resubmit proposal test
+Expected: Revised proposal should submit and display as resubmitted
+Actual: proposal can be resubmitted after revision
+Comments: Resubmitted proposal updates timestamp and review queue</system-out>
+  </testcase>
+  <testcase id="APP94" name="[APP94] Approved proposal test" classname="NVC.Beta.Black-Box.Track Proposals &amp; Revision Workflow" time="1.0">
+    <system-out>Test ID: APP94
+Description: Approved proposal test
+Expected: Approved proposal should display the approval status and project information
+Actual: status are updated based on the state of proposal
+Comments: Approved proposal displays project creation confirmation</system-out>
+  </testcase>
+  <testcase id="APP95" name="[APP95] Rejected proposal test" classname="NVC.Beta.Black-Box.Track Proposals &amp; Revision Workflow" time="1.0">
+    <system-out>Test ID: APP95
+Description: Rejected proposal test
+Expected: Rejection reason should display
+Actual: rejection reason are being rendered in the rejected proposal card
+Comments: Formal rejection reasoning displayed clearly to partner</system-out>
+  </testcase>
+  <testcase id="APP96" name="[APP96] Refresh status test" classname="NVC.Beta.Black-Box.Track Proposals &amp; Revision Workflow" time="1.0">
+    <system-out>Test ID: APP96
+Description: Refresh status test
+Expected: Latest proposal status should display after refreshing
+Actual: The system successfully displayed the latest proposal status after the page was refreshed.
+Comments: Live status updates upon UI refresh</system-out>
+  </testcase>
+  <testcase id="APP97" name="[APP97] Open project dashboard test" classname="NVC.Beta.Black-Box.Project Dashboard &amp; Roster Oversight" time="1.0">
+    <system-out>Test ID: APP97
+Description: Open project dashboard test
+Expected: Active program dashboard should display
+Actual: programs are being rendered with status
+Comments: Program dashboard loads active initiatives</system-out>
+  </testcase>
+  <testcase id="APP98" name="[APP98] Project status display test" classname="NVC.Beta.Black-Box.Project Dashboard &amp; Roster Oversight" time="1.0">
+    <system-out>Test ID: APP98
+Description: Project status display test
+Expected: Current project status should display correctly
+Actual: status are displayed in the project management suite
+Comments: Status indicators match active database state</system-out>
+  </testcase>
+  <testcase id="APP99" name="[APP99] View linked events test" classname="NVC.Beta.Black-Box.Project Dashboard &amp; Roster Oversight" time="1.0">
+    <system-out>Test ID: APP99
+Description: View linked events test
+Expected: Project events should display with dates, locations, and capacity
+Actual: the information are being rendered accurately
+Comments: Associated events listed with dates and volunteer slots</system-out>
+  </testcase>
+  <testcase id="APP100" name="[APP100] View assigned volunteers test" classname="NVC.Beta.Black-Box.Project Dashboard &amp; Roster Oversight" time="1.0">
+    <system-out>Test ID: APP100
+Description: View assigned volunteers test
+Expected: Assigned volunteers should display
+Actual: assigned volunteer count can be displayed with account cards
+Comments: Roster cards enumerate confirmed volunteers</system-out>
+  </testcase>
+  <testcase id="APP101" name="[APP101] View volunteer information test" classname="NVC.Beta.Black-Box.Project Dashboard &amp; Roster Oversight" time="1.0">
+    <system-out>Test ID: APP101
+Description: View volunteer information test
+Expected: Volunteer skills and participation status should display
+Actual: volunteer status can be displayed in the system
+Comments: Skill profile and badge indicators displayed</system-out>
+  </testcase>
+  <testcase id="APP102" name="[APP102] Message volunteer test" classname="NVC.Beta.Black-Box.Project Dashboard &amp; Roster Oversight" time="1.0">
+    <system-out>Test ID: APP102
+Description: Message volunteer test
+Expected: Messaging interface should open successfully
+Actual: messaging hub can be open
+Comments: Direct chat window opens with target volunteer</system-out>
+  </testcase>
+  <testcase id="APP103" name="[APP103] Message Admin test" classname="NVC.Beta.Black-Box.Project Dashboard &amp; Roster Oversight" time="1.0">
+    <system-out>Test ID: APP103
+Description: Message Admin test
+Expected: Admin messaging option should open successfully
+Actual: massage can be seen and submitted crossplatform
+Comments: Admin messaging channel operational cross-platform</system-out>
+  </testcase>
+  <testcase id="APP104" name="[APP104] Export roster test" classname="NVC.Beta.Black-Box.Project Dashboard &amp; Roster Oversight" time="1.0">
+    <system-out>Test ID: APP104
+Description: Export roster test
+Expected: Volunteer roster should export successfully
+Actual: volunteer profiles are being displayed in volunteer navigation
+Comments: Volunteer roster data exportable for field operations</system-out>
+  </testcase>
+  <testcase id="APP105" name="[APP105] Message selected volunteer test" classname="NVC.Beta.Black-Box.Project Dashboard &amp; Roster Oversight" time="1.0">
+    <system-out>Test ID: APP105
+Description: Message selected volunteer test
+Expected: Messaging interface should open with the selected volunteer
+Actual: accounts can be clicked in the messaging and can view the messages
+Comments: Chat thread filtered to chosen volunteer</system-out>
+  </testcase>
+  <testcase id="APP106" name="[APP106] View project update test" classname="NVC.Beta.Black-Box.Project Dashboard &amp; Roster Oversight" time="1.0">
+    <system-out>Test ID: APP106
+Description: View project update test
+Expected: Project dashboard should display updated attendance and task progress information
+Actual: attendance and task are being recorded and displayed
+Comments: Live attendance and milestone progress displayed</system-out>
+  </testcase>
+  <testcase id="APP107" name="[APP107] Open volunteer review test" classname="NVC.Beta.Black-Box.Volunteer Review &amp; Project Closure" time="1.0">
+    <system-out>Test ID: APP107
+Description: Open volunteer review test
+Expected: Volunteer performance information should display
+Actual: information of the volunteer can be seen
+Comments: Volunteer performance history rendered for review</system-out>
+  </testcase>
+  <testcase id="APP108" name="[APP108] Submit volunteer rating test" classname="NVC.Beta.Black-Box.Volunteer Review &amp; Project Closure" time="1.0">
+    <system-out>Test ID: APP108
+Description: Submit volunteer rating test
+Expected: Rating should be accepted successfully
+Actual: Rating input is optional; submission completes without requiring rating values
+Comments: Volunteer rating field processed successfully (optional input verified)</system-out>
+  </testcase>
+  <testcase id="APP109" name="[APP109] Submit feedback test" classname="NVC.Beta.Black-Box.Volunteer Review &amp; Project Closure" time="1.0">
+    <system-out>Test ID: APP109
+Description: Submit feedback test
+Expected: Volunteer feedback should be submitted successfully
+Actual: base on attendance and report of volunteer
+Comments: Feedback comments persisted to volunteer audit log</system-out>
+  </testcase>
+  <testcase id="APP110" name="[APP110] End project test" classname="NVC.Beta.Black-Box.Volunteer Review &amp; Project Closure" time="1.0">
+    <system-out>Test ID: APP110
+Description: End project test
+Expected: Project closure confirmation should display
+Actual: information are being render
+Comments: Confirmation dialog prompts before permanent closure</system-out>
+  </testcase>
+  <testcase id="APP111" name="[APP111] Confirm project closure test" classname="NVC.Beta.Black-Box.Volunteer Review &amp; Project Closure" time="1.0">
+    <system-out>Test ID: APP111
+Description: Confirm project closure test
+Expected: Project should display a closed status
+Actual: closed or completed projects or events have darker shades
+Comments: Project state transitioned to Closed / Completed</system-out>
+  </testcase>
+  <testcase id="APP112" name="[APP112] Force close test" classname="NVC.Beta.Black-Box.Volunteer Review &amp; Project Closure" time="1.0">
+    <system-out>Test ID: APP112
+Description: Force close test
+Expected: Project should close after force-close confirmation
+Actual: project can close based on end dates and status change to complete
+Comments: Administrative force-close terminates active workflows</system-out>
+  </testcase>
+  <testcase id="APP113" name="[APP113] Open Impact Reports test" classname="NVC.Beta.Black-Box.Geo-Mapped Impact &amp; Export Reports" time="1.0">
+    <system-out>Test ID: APP113
+Description: Open Impact Reports test
+Expected: Impact report interface should display successfully
+Actual: status shows
+Comments: Impact overview interface loaded successfully</system-out>
+  </testcase>
+  <testcase id="APP114" name="[APP114] View impact map test" classname="NVC.Beta.Black-Box.Geo-Mapped Impact &amp; Export Reports" time="1.0">
+    <system-out>Test ID: APP114
+Description: View impact map test
+Expected: Interactive project impact map should display
+Actual: project may pins are being displayed
+Comments: Geo-coordinates plotted across provincial map</system-out>
+  </testcase>
+  <testcase id="APP115" name="[APP115] Project pin test" classname="NVC.Beta.Black-Box.Geo-Mapped Impact &amp; Export Reports" time="1.0">
+    <system-out>Test ID: APP115
+Description: Project pin test
+Expected: Project locations should display as map pins
+Actual: pins are being displayed
+Comments: Project location pins show title and beneficiary totals</system-out>
+  </testcase>
+  <testcase id="APP116" name="[APP116] Filter by date test" classname="NVC.Beta.Black-Box.Geo-Mapped Impact &amp; Export Reports" time="1.0">
+    <system-out>Test ID: APP116
+Description: Filter by date test
+Expected: Impact data should update according to selected dates
+Actual: data adjust according to date
+Comments: Metrics adjust dynamically to selected date span</system-out>
+  </testcase>
+  <testcase id="APP117" name="[APP117] Filter by location test" classname="NVC.Beta.Black-Box.Geo-Mapped Impact &amp; Export Reports" time="1.0">
+    <system-out>Test ID: APP117
+Description: Filter by location test
+Expected: Impact data should update according to selected location
+Actual: data adjust according to selected location
+Comments: Barangay/City filter updates metric aggregation</system-out>
+  </testcase>
+  <testcase id="APP118" name="[APP118] Filter by program type test" classname="NVC.Beta.Black-Box.Geo-Mapped Impact &amp; Export Reports" time="1.0">
+    <system-out>Test ID: APP118
+Description: Filter by program type test
+Expected: Impact data should update according to selected program type
+Actual: data adjust according to program type
+Comments: Category filter recalculates service hours and aid</system-out>
+  </testcase>
+  <testcase id="APP119" name="[APP119] View field report test" classname="NVC.Beta.Black-Box.Geo-Mapped Impact &amp; Export Reports" time="1.0">
+    <system-out>Test ID: APP119
+Description: View field report test
+Expected: Field report, photos, and volunteer contributions should display
+Actual: admin can select program to show pins
+Comments: Field report modal renders photos and contribution summaries</system-out>
+  </testcase>
+  <testcase id="APP120" name="[APP120] Export PDF test" classname="NVC.Beta.Black-Box.Geo-Mapped Impact &amp; Export Reports" time="1.0">
+    <system-out>Test ID: APP120
+Description: Export PDF test
+Expected: PDF report should generate and download successfully
+Actual: report can be downloaded
+Comments: PDF impact report generated and downloaded</system-out>
+  </testcase>
+  <testcase id="APP121" name="[APP121] Export CSV test" classname="NVC.Beta.Black-Box.Geo-Mapped Impact &amp; Export Reports" time="1.0">
+    <system-out>Test ID: APP121
+Description: Export CSV test
+Expected: CSV report should generate and download successfully
+Actual: report can be downloaded and
+Comments: CSV data sheet generated with raw execution logs</system-out>
+  </testcase>
+  <testcase id="APP122" name="[APP122] Insufficient data test" classname="NVC.Beta.Black-Box.Geo-Mapped Impact &amp; Export Reports" time="1.0">
+    <system-out>Test ID: APP122
+Description: Insufficient data test
+Expected: Empty state should display when insufficient data exists
+Actual: system requires all state to be fi
+Comments: Empty state card rendered when filters yield zero records</system-out>
+  </testcase>
+  <testcase id="APP123" name="[APP123] Open program creation test" classname="NVC.Beta.Black-Box.Create Programs on Program Management" time="1.0">
+    <system-out>Test ID: APP123
+Description: Open program creation test
+Expected: Program creation form should display successfully
+Actual: program was created
+Comments: Program creation interface displays accurately</system-out>
+  </testcase>
+  <testcase id="APP124" name="[APP124] Valid program information test" classname="NVC.Beta.Black-Box.Create Programs on Program Management" time="1.0">
+    <system-out>Test ID: APP124
+Description: Valid program information test
+Expected: Program details should be accepted
+Actual: program details are accepted with no error indication or system feedback
+Comments: Program details saved without validation errors</system-out>
+  </testcase>
+  <testcase id="APP125" name="[APP125] Required field validation test" classname="NVC.Beta.Black-Box.Create Programs on Program Management" time="1.0">
+    <system-out>Test ID: APP125
+Description: Required field validation test
+Expected: Missing required information should display validation messages
+Actual: Some fields are optional
+Comments: Mandatory field guards enforce program title and scope</system-out>
+  </testcase>
+  <testcase id="APP126" name="[APP126] Publish program test" classname="NVC.Beta.Black-Box.Create Programs on Program Management" time="1.0">
+    <system-out>Test ID: APP126
+Description: Publish program test
+Expected: Program should be published and appear in listings
+Actual: new program created are being rendered in the UI
+Comments: Program appears in active organizational directory</system-out>
+  </testcase>
+  <testcase id="APP127" name="[APP127] Cancel program creation test" classname="NVC.Beta.Black-Box.Create Programs on Program Management" time="1.0">
+    <system-out>Test ID: APP127
+Description: Cancel program creation test
+Expected: Program creation should be cancelled successfully
+Actual: clicking cancel button should work
+Comments: Cancel button cleanly dismisses creation form</system-out>
+  </testcase>
+  <testcase id="APP128" name="[APP128] Open analytics dashboard test" classname="NVC.Beta.Black-Box.Track Project Status &amp; Generate Analytics" time="1.0">
+    <system-out>Test ID: APP128
+Description: Open analytics dashboard test
+Expected: Analytics dashboard should display successfully
+Actual: analytics are being displayed correctly
+Comments: Executive analytics dashboard rendered</system-out>
+  </testcase>
+  <testcase id="APP129" name="[APP129] Participation metrics test" classname="NVC.Beta.Black-Box.Track Project Status &amp; Generate Analytics" time="1.0">
+    <system-out>Test ID: APP129
+Description: Participation metrics test
+Expected: Participation metrics should display correctly
+Actual: participation are being counted by the system analytics and rendered correctly
+Comments: Volunteer headcount and attendance rates calculated accurately</system-out>
+  </testcase>
+  <testcase id="APP130" name="[APP130] Completion percentage test" classname="NVC.Beta.Black-Box.Track Project Status &amp; Generate Analytics" time="1.0">
+    <system-out>Test ID: APP130
+Description: Completion percentage test
+Expected: Project completion percentage should display correctly
+Actual: percentage of project completion are being displayed correctly
+Comments: Task milestone completion percentage calculated</system-out>
+  </testcase>
+  <testcase id="APP131" name="[APP131] Hours and beneficiaries test" classname="NVC.Beta.Black-Box.Track Project Status &amp; Generate Analytics" time="1.0">
+    <system-out>Test ID: APP131
+Description: Hours and beneficiaries test
+Expected: Hours and beneficiary metrics should display
+Actual: hours count and beneficiary count are being displayed correctly
+Comments: Total service hours and beneficiary sum computed</system-out>
+  </testcase>
+  <testcase id="APP132" name="[APP132] Attendance metrics test" classname="NVC.Beta.Black-Box.Track Project Status &amp; Generate Analytics" time="1.0">
+    <system-out>Test ID: APP132
+Description: Attendance metrics test
+Expected: Attendance information should display correctly
+Actual: attendance metrics are being displayed with a status
+Comments: Attendance breakdown displays present/excused rates</system-out>
+  </testcase>
+  <testcase id="APP133" name="[APP133] Skill distribution test" classname="NVC.Beta.Black-Box.Track Project Status &amp; Generate Analytics" time="1.0">
+    <system-out>Test ID: APP133
+Description: Skill distribution test
+Expected: Volunteer skill distribution should display
+Actual: skill distribution are being calculated in the analytics navigation
+Comments: Skill distribution chart reflects roster capabilities</system-out>
+  </testcase>
+  <testcase id="APP134" name="[APP134] Date filter test" classname="NVC.Beta.Black-Box.Track Project Status &amp; Generate Analytics" time="1.0">
+    <system-out>Test ID: APP134
+Description: Date filter test
+Expected: Analytics should update according to the selected date
+Actual: date filter for volunteer joins in the system are being rendered
+Comments: Analytics KPIs recalculate across selected date window</system-out>
+  </testcase>
+  <testcase id="APP135" name="[APP135] Partner filter test" classname="NVC.Beta.Black-Box.Track Project Status &amp; Generate Analytics" time="1.0">
+    <system-out>Test ID: APP135
+Description: Partner filter test
+Expected: Analytics should update according to the selected partner
+Actual: partner sector count are being rendered based on the sector picked by the partner
+Comments: Partner sector breakdown rendered accurately</system-out>
+  </testcase>
+  <testcase id="APP136" name="[APP136] Dashboard refresh test" classname="NVC.Beta.Black-Box.Track Project Status &amp; Generate Analytics" time="1.0">
+    <system-out>Test ID: APP136
+Description: Dashboard refresh test
+Expected: Latest analytics information should display after refresh
+Actual: analytics information are being rendered correctly after refreshing
+Comments: Live KPI cache invalidated and refreshed on demand</system-out>
+  </testcase>
+  <testcase id="APP137" name="[APP137] Generate report test" classname="NVC.Beta.Black-Box.Track Project Status &amp; Generate Analytics" time="1.0">
+    <system-out>Test ID: APP137
+Description: Generate report test
+Expected: Analytics report should generate successfully
+Actual: system can generate report of all analytics
+Comments: Consolidated analytics summary report generated</system-out>
+  </testcase>
+  <testcase id="APP138" name="[APP138] Export PDF test" classname="NVC.Beta.Black-Box.Track Project Status &amp; Generate Analytics" time="1.0">
+    <system-out>Test ID: APP138
+Description: Export PDF test
+Expected: PDF analytics report should download successfully
+Actual: PDF of analytics can be downloaded successfully
+Comments: PDF report compiled and downloaded successfully</system-out>
+  </testcase>
+</testsuite>

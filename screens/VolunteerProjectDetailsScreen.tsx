@@ -74,7 +74,7 @@ export default function VolunteerProjectDetailsScreen({
       const volunteerId = profile?.id || user.id;
 
       const [projectData, matches, partnersList, projectsList, allJoins, volunteersList] = await Promise.all([
-        getProject(projectId, true),
+        getProject(projectId),
         getVolunteerProjectMatches(volunteerId).catch(() => []),
         getAllPartners().catch(() => []),
         getAllProjects(true).catch(() => []),

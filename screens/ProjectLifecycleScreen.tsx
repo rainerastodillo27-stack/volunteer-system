@@ -6006,12 +6006,18 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   const handleRemoveVolunteerFromEventTask = async (eventProject: Project, taskId: string, volunteerId: string) => {
     const targetVolunteer = volunteers.find(volunteer => volunteer.id === volunteerId || volunteer.userId === volunteerId) || null;
+    const targetVolunteerIdentifiers = new Set(
+      [volunteerId, targetVolunteer?.id, targetVolunteer?.userId]
+        .map(value => String(value || '').trim())
+        .filter(Boolean)
+    );
     const originalTask = (eventProject.internalTasks || []).find(t => t.id === taskId);
 
     const updatedTasks = (eventProject.internalTasks || []).map(task => {
       if (task.id !== taskId) return task;
 
-      const nextAssignedIds = getTaskAssignedVolunteerIds(task).filter(id => id !== volunteerId);
+      const nextAssignedIds = getTaskAssignedVolunteerIds(task, volunteers)
+        .filter(id => !targetVolunteerIdentifiers.has(id));
 
       return {
         ...task,
@@ -9625,17 +9631,31 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       onConfirm: async () => {
         setIsRemovingVolunteerId(volunteerId);
         try {
-          const existingIds = getTaskAssignedVolunteerIds(task);
-          const nextIds = existingIds.filter(id => id !== volunteerId);
+          const targetVolunteer = volunteers.find(volunteer =>
+            volunteer.id === volunteerId || volunteer.userId === volunteerId
+          );
+          const targetVolunteerIdentifiers = new Set(
+            [volunteerId, targetVolunteer?.id, targetVolunteer?.userId]
+              .map(value => String(value || '').trim())
+              .filter(Boolean)
+          );
+          const existingIds = getTaskAssignedVolunteerIds(task, volunteers);
+          const nextIds = existingIds.filter(id => !targetVolunteerIdentifiers.has(id));
           const assignable = getAssignableVolunteerOptions(currentSelectedProject);
-          const nextVolunteers = assignable.filter(v => nextIds.includes(v.id));
+          const nextVolunteerNames = nextIds
+            .map(id =>
+              volunteers.find(v => v.id === id || v.userId === id)?.name ||
+              assignable.find(v => v.id === id)?.name ||
+              ''
+            )
+            .filter(Boolean);
 
           const updatedTask: ProjectInternalTask = {
             ...task,
             assignedVolunteerId: nextIds[0] || undefined,
-            assignedVolunteerName: nextVolunteers[0]?.name || undefined,
+            assignedVolunteerName: nextVolunteerNames[0] || undefined,
             assignedVolunteerIds: nextIds.length > 0 ? nextIds : undefined,
-            assignedVolunteerNames: nextVolunteers.length > 0 ? nextVolunteers.map(v => v.name) : undefined,
+            assignedVolunteerNames: nextVolunteerNames.length > 0 ? nextVolunteerNames : undefined,
             status: nextIds.length > 0 ? 'Assigned' : 'Unassigned',
           };
 
@@ -9651,7 +9671,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           );
           setSelectedProject({ ...currentSelectedProject, internalTasks: updatedTasks });
 
-          const targetVol = volunteers.find(v => v.id === volunteerId || v.userId === volunteerId);
+          const targetVol = targetVolunteer;
           if (targetVol) {
             try {
               await notifyVolunteerAboutTaskUnassignment({
@@ -19095,9 +19115,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
           if (selectedTask) {
 
-            const assignedVolunteerIds = getTaskAssignedVolunteerIds(selectedTask);
+            const assignedVolunteerIds = getTaskAssignedVolunteerIds(selectedTask, volunteers);
 
-            const alreadyAssigned = assignedVolunteerIds.includes(volunteerId);
+            const selectedVolunteer = volunteers.find(volunteer =>
+              volunteer.id === volunteerId || volunteer.userId === volunteerId
+            );
+            const alreadyAssigned = assignedVolunteerIds.some(id =>
+              id === volunteerId || id === selectedVolunteer?.id || id === selectedVolunteer?.userId
+            );
 
             const taskVolunteerLimit = getTaskVolunteerLimit(selectedTask);
 
@@ -19198,37 +19223,37 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         let tasksUpdated = false;
 
+        const targetVolunteer = volunteers.find(volunteer =>
+          volunteer.id === volunteerId || volunteer.userId === volunteerId
+        );
+        const targetVolunteerIdentifiers = new Set(
+          [volunteerId, targetVolunteer?.id, targetVolunteer?.userId]
+            .map(value => String(value || '').trim())
+            .filter(Boolean)
+        );
 
 
         eventTasks.forEach(task => {
+          const currentAssignedIds = getTaskAssignedVolunteerIds(task, volunteers);
+          const nextAssignedIds = currentAssignedIds.filter(
+            id => !targetVolunteerIdentifiers.has(id)
+          );
+          if (nextAssignedIds.length === currentAssignedIds.length) return;
 
-          if (task.assignedVolunteerId === volunteerId) {
-
-            task.assignedVolunteerId = undefined;
-
-            task.assignedVolunteerName = undefined;
-
-            task.status = 'Unassigned';
-
-            tasksUpdated = true;
-
-          }
-
-          if (Array.isArray(task.assignedVolunteerIds) && task.assignedVolunteerIds.includes(volunteerId)) {
-
-            task.assignedVolunteerIds = task.assignedVolunteerIds.filter(id => id !== volunteerId);
-
-            task.assignedVolunteerNames = (task.assignedVolunteerNames || []).filter(name => name !== user?.name);
-
-            if (task.assignedVolunteerIds.length === 0) {
-
-              task.status = 'Unassigned';
-
-            }
-
-            tasksUpdated = true;
-
-          }
+          const currentAssignedNames = Array.isArray(task.assignedVolunteerNames)
+            ? task.assignedVolunteerNames
+            : [];
+          const nextAssignedNames = currentAssignedIds
+            .map((id, index) =>
+              targetVolunteerIdentifiers.has(id) ? '' : currentAssignedNames[index] || ''
+            )
+            .filter(Boolean);
+          task.assignedVolunteerIds = nextAssignedIds.length ? nextAssignedIds : undefined;
+          task.assignedVolunteerNames = nextAssignedNames.length ? nextAssignedNames : undefined;
+          task.assignedVolunteerId = nextAssignedIds[0] || undefined;
+          task.assignedVolunteerName = nextAssignedNames[0] || undefined;
+          task.status = nextAssignedIds.length ? task.status : 'Unassigned';
+          tasksUpdated = true;
 
         });
 
@@ -19238,7 +19263,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
           const selectedTask = eventTasks.find(t => t.title === taskTitle);
 
-          const volunteerName = volunteers.find(v => v.id === volunteerId)?.name || 'Volunteer';
+          const volunteerName = targetVolunteer?.name || 'Volunteer';
 
           if (selectedTask) {
 
