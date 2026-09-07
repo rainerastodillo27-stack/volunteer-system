@@ -713,8 +713,12 @@ export default function ProjectTimelineCalendarCard({
           <View style={styles.eventTableContainer}>
             <Text style={styles.eventTableTitle}>Event List</Text>
 
-            <ScrollView horizontal showsHorizontalScrollIndicator>
-            <View style={{ minWidth: isMobile ? 640 : '100%' }}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator
+              contentContainerStyle={styles.eventTableScrollContent}
+            >
+            <View style={[styles.eventTableContent, isMobile && styles.eventTableContentMobile]}>
             <View style={styles.tableHeader}>
               <Text style={[styles.tableHeaderCell, { flex: 1.5 }]}>Time</Text>
               <Text style={[styles.tableHeaderCell, { flex: 2 }]}>Event</Text>
@@ -1130,6 +1134,17 @@ const styles = StyleSheet.create({
     color: '#1e293b',
     marginBottom: 14,
   },
+  eventTableScrollContent: {
+    flexGrow: 1,
+  },
+  eventTableContent: {
+    width: '100%',
+    flexGrow: 1,
+  },
+  eventTableContentMobile: {
+    width: 640,
+    flexGrow: 0,
+  },
   tableHeader: {
     flexDirection: 'row',
     backgroundColor: '#f0fdf4',
@@ -1142,6 +1157,8 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     color: '#166534',
+    minWidth: 0,
+    paddingHorizontal: 8,
   },
   tableRow: {
     flexDirection: 'row',
@@ -1154,6 +1171,8 @@ const styles = StyleSheet.create({
   tableCell: {
     fontSize: 13,
     color: '#334155',
+    minWidth: 0,
+    paddingHorizontal: 8,
   },
   actionButton: {
     width: 30,
