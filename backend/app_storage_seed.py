@@ -159,8 +159,13 @@ def ensure_postgres_hot_storage_tables(connection: Any) -> None:
 
 
 # Reads one hot-storage collection from its dedicated relational table.
-def get_postgres_hot_storage_collection(connection: Any, key: str) -> list[Any]:
-    return get_relational_collection(connection, key)
+def get_postgres_hot_storage_collection(
+    connection: Any,
+    key: str,
+    *,
+    include_images: bool = True,
+) -> list[Any]:
+    return get_relational_collection(connection, key, include_images=include_images)
 
 
 def _table_exists(connection: Any, table_name: str) -> bool:
@@ -535,4 +540,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -28,10 +28,11 @@ import {
   subscribeToMessages,
   requestVolunteerProjectJoin,
 } from '../models/storage';
-import type { Project, Volunteer, VolunteerTimeLog, AdminPlanningItem, ProgramTrack, VolunteerProjectMatch } from '../models/types';
+import type { Project, Volunteer, VolunteerProjectJoinRecord, VolunteerTimeLog, AdminPlanningItem, ProgramTrack, VolunteerProjectMatch } from '../models/types';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage } from '../utils/requestErrors';
 import { debounce } from '../utils/navigation';
+import { getVolunteerEventParticipationSummary } from '../utils/volunteerEventParticipation';
 import { openAddGoogleCalendarEvent, fetchGoogleCalendarEvents, getStoredCalendarConfig } from '../utils/calendarSync';
 import {
   GOOGLE_CALENDAR_WEB_URL,
@@ -165,6 +166,7 @@ export default function VolunteerDashboardScreen() {
   const [loading, setLoading] = useState(true);
   const [projects, setProjects] = useState<Project[]>([]);
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
+  const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
   const [timeLogs, setTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const [unreadMessages, setUnreadMessages] = useState(0);
@@ -246,24 +248,7 @@ export default function VolunteerDashboardScreen() {
       return;
     }
 
-    const volunteerId = volunteerProfile?.id || '';
-    const matchedProjectIds = new Set(
-      volunteerMatches
-        .filter(m => m.status === 'Matched' || m.status === 'Requested')
-        .map(m => m.projectId)
-    );
-    const joinedEvents = projects.filter(project => {
-      if (!project.isEvent) {
-        return false;
-      }
-
-      return (
-        matchedProjectIds.has(project.id) ||
-        (project.joinedUserIds || []).includes(user.id) ||
-        (volunteerId ? (project.volunteers || []).includes(volunteerId) : false) ||
-        (volunteerProfile?.pastProjects || []).includes(project.id)
-      );
-    });
+    const joinedEvents = eventParticipation.joinedEvents;
 
     if (joinedEvents.length === 0) {
       Alert.alert(
@@ -353,6 +338,7 @@ export default function VolunteerDashboardScreen() {
 
       setProjects(projectSnapshot.projects || []);
       setVolunteerProfile(projectSnapshot.volunteerProfile);
+      setVolunteerJoinRecords(projectSnapshot.volunteerJoinRecords || []);
       setVolunteerMatches(projectSnapshot.volunteerMatches || []);
       setTimeLogs(projectSnapshot.timeLogs || []);
 
@@ -436,43 +422,18 @@ export default function VolunteerDashboardScreen() {
     });
   }, [user?.id, loadDashboardData]);
 
-  // Joined Events calculation
-  const joinedEventsCount = useMemo(() => {
-    console.log('[DASHBOARD] Calculating joined events count...');
-    console.log('[DASHBOARD] volunteerMatches:', volunteerMatches);
-    console.log('[DASHBOARD] projects:', projects.length);
-    console.log('[DASHBOARD] volunteerProfile:', volunteerProfile?.id);
-    console.log('[DASHBOARD] user:', user?.id);
-    
-    const matchedProjectIds = new Set(
-      volunteerMatches
-        .filter(m => m.status === 'Matched' || m.status === 'Requested')
-        .map(m => m.projectId)
-    );
-    console.log('[DASHBOARD] matchedProjectIds:', Array.from(matchedProjectIds));
-    
-    const volunteerId = volunteerProfile?.id || '';
-    const userId = user?.id || '';
-
-    const joinedEvents = projects.filter(project => {
-      const isEvt = Boolean(project.isEvent || (project.id && project.id.startsWith('event-')));
-      if (!isEvt) return false;
-
-      const isMatched =
-        matchedProjectIds.has(project.id) ||
-        matchedProjectIds.has(project.id.replace('event-', ''));
-      const isJoinedByUser = Boolean(userId && project.joinedUserIds?.includes(userId));
-      const isJoinedByVol = Boolean(volunteerId && project.volunteers?.includes(volunteerId));
-      const isPastProj = Boolean(volunteerProfile?.pastProjects?.includes(project.id));
-
-      console.log(`[DASHBOARD] Event ${project.title}:`, { isMatched, isJoinedByUser, isJoinedByVol, isPastProj });
-
-      return isMatched || isJoinedByUser || isJoinedByVol || isPastProj;
-    });
-    
-    console.log('[DASHBOARD] Joined events count:', joinedEvents.length);
-    return joinedEvents.length;
-  }, [projects, user?.id, volunteerProfile, volunteerMatches]);
+  const eventParticipation = useMemo(
+    () =>
+      getVolunteerEventParticipationSummary({
+        projects,
+        volunteer: volunteerProfile,
+        joinRecords: volunteerJoinRecords,
+        matches: volunteerMatches,
+        timeLogs,
+      }),
+    [projects, volunteerProfile, volunteerJoinRecords, volunteerMatches, timeLogs]
+  );
+  const joinedEventsCount = eventParticipation.joinedEvents.length;
 
   // Calendar setup
   const year = currentDate.getFullYear();
@@ -583,22 +544,7 @@ export default function VolunteerDashboardScreen() {
   }, [projects]);
 
   const isProjectJoined = (project: Project) => {
-    const matchedProjectIds = new Set(
-      volunteerMatches
-        .filter(m => m.status === 'Matched' || m.status === 'Requested')
-        .map(m => m.projectId)
-    );
-    const volunteerId = volunteerProfile?.id || '';
-    const userId = user?.id || '';
-
-    const isMatched =
-      matchedProjectIds.has(project.id) ||
-      matchedProjectIds.has(project.id.replace('event-', ''));
-    const isJoinedByUser = Boolean(userId && project.joinedUserIds?.includes(userId));
-    const isJoinedByVol = Boolean(volunteerId && project.volunteers?.includes(volunteerId));
-    const isPastProj = Boolean(volunteerProfile?.pastProjects?.includes(project.id));
-
-    return isMatched || isJoinedByUser || isJoinedByVol || isPastProj;
+    return eventParticipation.joinedEvents.some(joinedEvent => joinedEvent.id === project.id);
   };
 
   const handleJoinProject = async (project: Project) => {

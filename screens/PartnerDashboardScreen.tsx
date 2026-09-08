@@ -47,6 +47,7 @@ import { useAuth } from '../contexts/AuthContext';
 import {
 
   getPartnerDashboardSnapshot,
+  REALTIME_STORAGE_CHANGE_OPTIONS,
 
   submitPartnerProgramProposal,
 
@@ -614,17 +615,19 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
           'projects',
 
+          'events',
+
+          'programs',
+
           'partnerProjectApplications',
 
           'adminPlanningCalendars',
 
         ],
 
-        () => {
+        () => loadDashboardData(),
 
-          void loadDashboardData();
-
-        }
+        REALTIME_STORAGE_CHANGE_OPTIONS
 
       );
 

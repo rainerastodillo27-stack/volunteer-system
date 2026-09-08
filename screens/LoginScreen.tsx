@@ -1434,10 +1434,7 @@ export default function LoginScreen() {
                 signupPartnerApplication.sectorType === "NGO"
                   ? signupPartnerApplication.dswdAccreditationNo?.trim() || ""
                   : "",
-              secRegistrationNo:
-                signupPartnerApplication.sectorType === "NGO"
-                  ? signupPartnerApplication.secRegistrationNo?.trim() || ""
-                  : "",
+              secRegistrationNo: signupPartnerApplication.secRegistrationNo?.trim() || "",
               registrationDocuments: [signupPartnerApplication.validIdDocument.trim()],
               advocacyFocus: signupPartnerApplication.advocacyFocus,
             }
@@ -2377,7 +2374,6 @@ export default function LoginScreen() {
                                   updateSignupPartnerApplication("sectorType", sector);
                                   if (sector !== "NGO") {
                                     updateSignupPartnerApplication("dswdAccreditationNo", "");
-                                    updateSignupPartnerApplication("secRegistrationNo", "");
                                   }
                                 }}
                                 disabled={signupLoading}
@@ -2395,18 +2391,19 @@ export default function LoginScreen() {
                             ))}
                           </View>
 
+                          <TextInput
+                            style={styles.input}
+                            placeholder="SEC Registration No. (Optional)"
+                            placeholderTextColor="#999"
+                            value={signupPartnerApplication.secRegistrationNo}
+                            onChangeText={(value) =>
+                              updateSignupPartnerApplication("secRegistrationNo", value)
+                            }
+                            editable={!signupLoading}
+                          />
+
                           {signupPartnerApplication.sectorType === "NGO" ? (
                             <>
-                              <TextInput
-                                style={styles.input}
-                                placeholder="SEC Registration No. (Optional)"
-                                placeholderTextColor="#999"
-                                value={signupPartnerApplication.secRegistrationNo}
-                                onChangeText={(value) =>
-                                  updateSignupPartnerApplication("secRegistrationNo", value)
-                                }
-                                editable={!signupLoading}
-                              />
                               <TextInput
                                 style={styles.input}
                                 placeholder="DSWD Accreditation No. (Optional)"

@@ -17,6 +17,7 @@ import * as Sharing from 'expo-sharing';
 import DownloadPreviewModal from './DownloadPreviewModal';
 import type { SubmittedReport } from '../screens/ReportsScreen';
 import type { Project, Volunteer } from '../models/types';
+import { buildTablePdf } from '../utils/pdfDownload';
 
 interface AdminReportsDashboardProps {
   reports: SubmittedReport[];
@@ -139,22 +140,6 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;');
 }
 
-function escapePdfText(value: string): string {
-  return value
-    .replace(/[^\x20-\x7E]/g, '?')
-    .replace(/\\/g, '\\\\')
-    .replace(/\(/g, '\\(')
-    .replace(/\)/g, '\\)');
-}
-
-function truncateText(value: string, maxLength: number): string {
-  if (value.length <= maxLength) {
-    return value;
-  }
-
-  return `${value.slice(0, Math.max(0, maxLength - 3))}...`;
-}
-
 function formatReportTypeLabel(type: string): string {
   return type.replace(/_/g, ' ');
 }
@@ -217,72 +202,25 @@ async function downloadFile(
 }
 
 function buildReportsPdf(rows: ReportTableRow[], title: string): string {
-  const lines = [
-    title,
-    `Generated: ${new Date().toLocaleString()}`,
-    `Reports: ${rows.length}`,
-    '',
-    'Title | Submitter | Role | Type | Event | Status | Submitted',
-    ...rows.map(row =>
-      [
-        truncateText(row.title, 28),
-        truncateText(row.submitter, 18),
-        truncateText(row.role, 16),
-        truncateText(row.type, 18),
-        truncateText(row.event, 24),
-        row.status,
-        row.submittedAt,
-      ].join(' | ')
-    ),
-  ];
-  const objects: string[] = [];
-  const pageObjects: number[] = [];
-  const rowsPerPage = 34;
-
-  objects.push('<< /Type /Catalog /Pages 2 0 R >>');
-  objects.push('<< /Type /Pages /Kids [] /Count 0 >>');
-  objects.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
-
-  for (let pageStart = 0; pageStart < lines.length; pageStart += rowsPerPage) {
-    const pageLines = lines.slice(pageStart, pageStart + rowsPerPage);
-    const stream = [
-      'BT',
-      '/F1 9 Tf',
-      '40 800 Td',
-      ...pageLines.flatMap((line, index) => [
-        index === 0 ? '' : '0 -20 Td',
-        `(${escapePdfText(line)}) Tj`,
-      ]),
-      'ET',
-    ]
-      .filter(Boolean)
-      .join('\n');
-    const contentObjectNumber = objects.length + 2;
-    const pageObjectNumber = objects.length + 1;
-    pageObjects.push(pageObjectNumber);
-    objects.push(
-      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentObjectNumber} 0 R >>`
-    );
-    objects.push(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
-  }
-
-  objects[1] = `<< /Type /Pages /Kids [${pageObjects.map(objectNumber => `${objectNumber} 0 R`).join(' ')}] /Count ${pageObjects.length} >>`;
-
-  let pdf = '%PDF-1.4\n';
-  const offsets = [0];
-  objects.forEach((object, index) => {
-    offsets.push(pdf.length);
-    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  return buildTablePdf(title, {
+    subtitle: `${rows.length} report${rows.length === 1 ? '' : 's'} - Generated ${new Date().toLocaleString()}`,
+    tables: [
+      {
+        title: 'Event Reports',
+        columns: [
+          { key: 'title', label: 'Title', width: 1.55 },
+          { key: 'submitter', label: 'Submitter', width: 1.05 },
+          { key: 'role', label: 'Role', width: 0.95 },
+          { key: 'type', label: 'Type', width: 1.05 },
+          { key: 'event', label: 'Event', width: 1.45 },
+          { key: 'status', label: 'Status', width: 0.8 },
+          { key: 'submittedAt', label: 'Submitted', width: 1 },
+        ],
+        rows,
+        emptyMessage: 'No report records match this event selection.',
+      },
+    ],
   });
-  const xrefOffset = pdf.length;
-  pdf += `xref\n0 ${objects.length + 1}\n`;
-  pdf += '0000000000 65535 f \n';
-  offsets.slice(1).forEach(offset => {
-    pdf += `${String(offset).padStart(10, '0')} 00000 n \n`;
-  });
-  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
-
-  return pdf;
 }
 
 function groupReportsByAccount(reports: SubmittedReport[]): AccountReportGroup[] {

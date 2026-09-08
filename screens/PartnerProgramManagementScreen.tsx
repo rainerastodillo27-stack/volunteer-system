@@ -21,6 +21,7 @@ import { useAuth } from '../contexts/AuthContext';
 import {
   getProgramModuleFromProposalProjectId,
   getPartnerDashboardSnapshot,
+  REALTIME_STORAGE_CHANGE_OPTIONS,
   subscribeToStorageChanges,
 } from '../models/storage';
 import { AdvocacyFocus, AdminPlanningCalendar, AdminPlanningItem, PartnerProjectApplication, Project } from '../models/types';
@@ -139,9 +140,11 @@ export default function PartnerProgramManagementScreen() {
   useFocusEffect(
     useCallback(() => {
       void loadData();
-      return subscribeToStorageChanges(['projects', 'programs', 'partnerProjectApplications'], () => {
-        void loadData();
-      });
+      return subscribeToStorageChanges(
+        ['projects', 'events', 'programs', 'partnerProjectApplications'],
+        () => loadData(),
+        REALTIME_STORAGE_CHANGE_OPTIONS
+      );
     }, [loadData])
   );
 

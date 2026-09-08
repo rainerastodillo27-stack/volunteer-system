@@ -88,6 +88,7 @@ CREATE TABLE public.partners (
   partners_id text NOT NULL,
   owner_user_id text,
   name text NOT NULL,
+  stakeholder_name text,
   description text,
   category text,
   sector_type text,

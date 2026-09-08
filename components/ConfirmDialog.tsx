@@ -1,5 +1,5 @@
-import React from 'react';
-import { ActivityIndicator, View, Text, StyleSheet, TouchableOpacity, Modal, Platform } from 'react-native';
+import React, { forwardRef, useImperativeHandle, useRef, useState } from 'react';
+import { ActivityIndicator, View, Text, TextInput, StyleSheet, TouchableOpacity, Modal, Platform } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 
 interface ConfirmDialogProps {
@@ -14,8 +14,22 @@ interface ConfirmDialogProps {
   confirmColor?: string;
   icon?: keyof typeof MaterialIcons.glyphMap;
   iconColor?: string;
+  animationType?: 'none' | 'slide' | 'fade';
+  inputValue?: string;
+  inputPlaceholder?: string;
+  onInputChange?: (value: string) => void;
   onConfirm: () => void;
   onCancel: () => void;
+}
+
+export type ConfirmDialogOptions = Omit<ConfirmDialogProps, 'visible' | 'loading' | 'onConfirm' | 'onCancel'> & {
+  onConfirm: () => void | Promise<void>;
+};
+
+export interface ConfirmDialogHandle {
+  show: (options: ConfirmDialogOptions) => void;
+  confirm: () => Promise<void>;
+  cancel: () => void;
 }
 
 export default function ConfirmDialog({
@@ -30,6 +44,10 @@ export default function ConfirmDialog({
   confirmColor = '#DC2626',
   icon = 'delete-outline',
   iconColor = '#DC2626',
+  animationType = 'fade',
+  inputValue,
+  inputPlaceholder,
+  onInputChange,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
@@ -41,7 +59,7 @@ export default function ConfirmDialog({
     <Modal
       visible={visible}
       transparent
-      animationType="fade"
+      animationType={animationType}
       onRequestClose={loading ? undefined : onCancel}
     >
       <View style={styles.overlay}>
@@ -56,6 +74,17 @@ export default function ConfirmDialog({
 
           {/* Message */}
           <Text style={styles.message}>{message}</Text>
+
+          {inputValue !== undefined ? (
+            <TextInput
+              value={inputValue}
+              placeholder={inputPlaceholder}
+              onChangeText={onInputChange}
+              autoFocus
+              style={styles.input}
+              placeholderTextColor="#94a3b8"
+            />
+          ) : null}
 
           {/* Buttons */}
           <View style={styles.buttonContainer}>
@@ -91,6 +120,74 @@ export default function ConfirmDialog({
     </Modal>
   );
 }
+
+/**
+ * Keeps confirmation state outside large screens so showing the dialog does
+ * not require rendering the entire screen tree first.
+ */
+export const ConfirmDialogHost = forwardRef<ConfirmDialogHandle>(function ConfirmDialogHost(_props, ref) {
+  const [dialogState, setDialogState] = useState<(
+    ConfirmDialogOptions & { visible: boolean; loading: boolean }
+  ) | null>(null);
+  const dialogIdRef = useRef(0);
+
+  const show = (options: ConfirmDialogOptions) => {
+    dialogIdRef.current += 1;
+    setDialogState({ ...options, visible: true, loading: false });
+  };
+
+  const cancel = () => {
+    setDialogState(current => (current?.loading ? current : null));
+  };
+
+  const confirm = async () => {
+    const current = dialogState;
+    if (!current || current.loading) {
+      return;
+    }
+
+    const dialogId = dialogIdRef.current;
+    setDialogState(previous => previous ? { ...previous, loading: true } : previous);
+
+    try {
+      await current.onConfirm();
+    } finally {
+      // An error handler may open a replacement dialog. Do not close that
+      // replacement when the original confirmation finishes.
+      if (dialogIdRef.current === dialogId) {
+        setDialogState(null);
+      }
+    }
+  };
+
+  useImperativeHandle(ref, () => ({ show, confirm, cancel }), [dialogState]);
+
+  if (!dialogState) {
+    return null;
+  }
+
+  return (
+    <ConfirmDialog
+      visible={dialogState.visible}
+      loading={dialogState.loading}
+      title={dialogState.title}
+      message={dialogState.message}
+      confirmText={dialogState.confirmText}
+      loadingText={dialogState.loadingText}
+      cancelText={dialogState.cancelText}
+      hideCancel={dialogState.hideCancel}
+      confirmColor={dialogState.confirmColor}
+      icon={dialogState.icon}
+      iconColor={dialogState.iconColor}
+      animationType={dialogState.animationType ?? 'none'}
+      inputValue={dialogState.inputValue}
+      inputPlaceholder={dialogState.inputPlaceholder}
+      onInputChange={dialogState.onInputChange}
+      onConfirm={confirm}
+      onCancel={cancel}
+    />
+  );
+});
 
 const styles = StyleSheet.create({
   overlay: {
@@ -142,6 +239,17 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 20,
     marginBottom: 24,
+  },
+  input: {
+    width: '100%',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 16,
+    color: '#1e293b',
+    marginBottom: 16,
   },
   buttonContainer: {
     flexDirection: 'row',

@@ -531,7 +531,7 @@ export default function ProposalMessageTemplate({ application, onEdit, onSubmit,
           </View>
         ) : <View />}
 
-        {isAdmin && application.status === 'Pending' ? (
+        {isAdmin && visibleStatus === 'pending' && !reviewActionsDisabled ? (
           <View style={{ flexDirection: 'row', gap: 8 }}>
             <TouchableOpacity
               style={[styles.submitBtn, { backgroundColor: '#fff', borderWidth: 1, borderColor: '#E2E8F0' }, reviewActionsDisabled && styles.disabledAction]}

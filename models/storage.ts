@@ -87,6 +87,23 @@ export function getRuntimeBackendUrl(): string | null {
 
 const memoryStorageCache = new Map<string, unknown>();
 const sharedStorageCacheTimestamps = new Map<string, number>();
+// Collection reads are lightweight by default. Keep track of whether a
+// cached media-bearing collection really includes its documents so a detail
+// preview never receives a list cache with the files stripped out.
+const sharedStorageCacheImageModes = new Map<string, boolean>();
+const MEDIA_STORAGE_KEYS = new Set([
+  STORAGE_KEYS.USERS,
+  STORAGE_KEYS.PARTNERS,
+  STORAGE_KEYS.VOLUNTEERS,
+  STORAGE_KEYS.PROJECTS,
+  STORAGE_KEYS.PROGRAMS,
+  STORAGE_KEYS.EVENTS,
+  STORAGE_KEYS.PROGRAM_TRACKS,
+  STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
+  STORAGE_KEYS.PROJECT_GROUP_MESSAGES,
+  STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
+  STORAGE_KEYS.PARTNER_REPORTS,
+]);
 // Shared reads should fail fast enough to keep the UI responsive when the
 // backend is slow or unavailable.
 const REMOTE_STORAGE_TIMEOUT_MS = 15000;
@@ -165,6 +182,16 @@ function schedulePersistedWrite(key: string, task: () => Promise<void>): void {
   }, PERSISTED_CACHE_WRITE_DEBOUNCE_MS);
   PERSISTED_CACHE_PENDING_WRITES.set(key, timer);
 }
+export interface StorageChangeSubscriptionOptions {
+  debounceMs?: number;
+  cooldownMs?: number;
+}
+
+export const REALTIME_STORAGE_CHANGE_OPTIONS: StorageChangeSubscriptionOptions = {
+  debounceMs: 0,
+  cooldownMs: 0,
+};
+
 type StorageChangeEvent = { type: string; keys: string[] };
 type StorageChangeSubscriber = {
   watchedKeys: Set<string>;
@@ -172,6 +199,8 @@ type StorageChangeSubscriber = {
   pendingKeys: Set<string>;
   notifyTimer: ReturnType<typeof setTimeout> | null;
   isNotifying: boolean;
+  debounceMs: number;
+  cooldownMs: number;
 };
 const storageChangeSubscribers = new Map<number, StorageChangeSubscriber>();
 let nextStorageSubscriberId = 1;
@@ -207,7 +236,7 @@ function queueStorageSubscriberNotification(
   subscriber.notifyTimer = setTimeout(() => {
     subscriber.notifyTimer = null;
     void flushStorageSubscriberNotification(subscriber);
-  }, STORAGE_CHANGE_DEBOUNCE_MS);
+  }, subscriber.debounceMs);
 }
 
 async function flushStorageSubscriberNotification(subscriber: StorageChangeSubscriber) {
@@ -223,9 +252,9 @@ async function flushStorageSubscriberNotification(subscriber: StorageChangeSubsc
     const callbackResult = subscriber.onChange({ type: 'storage.changed', keys: changedKeys });
     if (callbackResult && typeof (callbackResult as Promise<void>).then === 'function') {
       await callbackResult;
-    } else {
+    } else if (subscriber.cooldownMs > 0) {
       await new Promise<void>(resolve => {
-        setTimeout(resolve, STORAGE_CHANGE_CALLBACK_COOLDOWN_MS);
+        setTimeout(resolve, subscriber.cooldownMs);
       });
     }
   } catch (error) {
@@ -1071,7 +1100,7 @@ async function waitForApiReady(): Promise<void> {
   }
 }
 
-async function fetchRemoteStorageItem<T>(key: string, includeImages: boolean = true): Promise<T | null> {
+async function fetchRemoteStorageItem<T>(key: string, includeImages: boolean = false): Promise<T | null> {
   const requestKey = `${key}:${includeImages ? 'images' : 'no-images'}`;
   const existingRequest = inFlightStorageItemRequests.get(requestKey);
   if (existingRequest) {
@@ -1079,7 +1108,7 @@ async function fetchRemoteStorageItem<T>(key: string, includeImages: boolean = t
   }
 
   const request = (async () => {
-    const url = `/storage/${encodeURIComponent(key)}${!includeImages ? '?include_images=false' : ''}`;
+    const url = `/storage/${encodeURIComponent(key)}?include_images=${includeImages ? 'true' : 'false'}`;
     const response = await fetchApiResponse(url);
     const payload = (await response.json()) as { value: T | null };
     return payload.value ?? null;
@@ -1096,7 +1125,8 @@ async function fetchRemoteStorageItem<T>(key: string, includeImages: boolean = t
 }
 
 async function fetchRemoteStorageItemsUncached(
-  keys: string[]
+  keys: string[],
+  includeImages = false,
 ): Promise<Record<string, unknown | null>> {
   // Optimization: If fetching the exact admin dashboard key set, use the dedicated endpoint
   // which fetches all keys in a single DB connection instead of a thread pool.
@@ -1119,6 +1149,7 @@ async function fetchRemoteStorageItemsUncached(
   const sortedKeys = [...keys].sort();
   const sortedAdminKeys = [...adminDashboardKeys].sort();
   const isAdminDashboardRequest =
+    !includeImages &&
     sortedKeys.length === sortedAdminKeys.length &&
     sortedKeys.every((key, index) => key === sortedAdminKeys[index]);
 
@@ -1138,7 +1169,7 @@ async function fetchRemoteStorageItemsUncached(
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ keys }),
+    body: JSON.stringify({ keys, include_images: includeImages }),
   });
   const payload = (await response.json()) as { items?: Record<string, unknown | null> };
   return payload.items || {};
@@ -1147,15 +1178,16 @@ async function fetchRemoteStorageItemsUncached(
 // Coalesce simultaneous requests for the same collection set. Multiple mounted
 // screens can request the same data during startup; one backend query is enough.
 async function fetchRemoteStorageItems(
-  keys: string[]
+  keys: string[],
+  includeImages = false,
 ): Promise<Record<string, unknown | null>> {
-  const requestKey = [...new Set(keys)].sort().join('|');
+  const requestKey = `${includeImages ? 'images' : 'no-images'}:${[...new Set(keys)].sort().join('|')}`;
   const existingRequest = inFlightStorageBatchRequests.get(requestKey);
   if (existingRequest) {
     return existingRequest;
   }
 
-  const request = fetchRemoteStorageItemsUncached(keys);
+  const request = fetchRemoteStorageItemsUncached(keys, includeImages);
   inFlightStorageBatchRequests.set(requestKey, request);
   try {
     return await request;
@@ -1429,8 +1461,13 @@ function isLocalOnlyStorageKey(key: string): boolean {
 }
 
 function getFreshSharedStorageCacheValue<T>(
-  key: string
+  key: string,
+  includeImages = false,
 ): { hit: boolean; value: T | null } {
+  if (includeImages && MEDIA_STORAGE_KEYS.has(key) && sharedStorageCacheImageModes.get(key) !== true) {
+    return { hit: false, value: null };
+  }
+
   const cachedAt = sharedStorageCacheTimestamps.get(key);
   if (cachedAt === undefined) {
     return { hit: false, value: null };
@@ -1448,10 +1485,17 @@ function getFreshSharedStorageCacheValue<T>(
   };
 }
 
-function setSharedStorageCacheValue<T>(key: string, value: T | null): void {
+function setSharedStorageCacheValue<T>(
+  key: string,
+  value: T | null,
+  includeImages = false,
+): void {
   const safeValue = sanitizeStorageCacheValue(key, value);
   memoryStorageCache.set(key, safeValue);
   sharedStorageCacheTimestamps.set(key, Date.now());
+  if (MEDIA_STORAGE_KEYS.has(key)) {
+    sharedStorageCacheImageModes.set(key, includeImages);
+  }
 
   // Asynchronously persist to local cache (AsyncStorage on native, localStorage on web)
   // so future app launches hit local storage in <50ms.
@@ -1480,6 +1524,16 @@ async function saveRemoteStorageRecord<T extends { id: string }>(
   return payload.item || record;
 }
 
+async function getRemoteStorageRecord<T extends { id: string }>(
+  key: string,
+  id: string,
+): Promise<T | null> {
+  const payload = await requestApiJson<{ item?: T | null }>(
+    `/storage/${encodeURIComponent(key)}/items/${encodeURIComponent(id)}`,
+  );
+  return payload.item || null;
+}
+
 // Replaces or appends a record only when a complete collection is already cached.
 // If it is not cached, the realtime subscriber will fetch the authoritative list.
 function upsertCachedStorageRecord<T extends { id: string }>(key: string, record: T): void {
@@ -1501,12 +1555,14 @@ function upsertCachedStorageRecord<T extends { id: string }>(key: string, record
 function invalidateSharedStorageCache(keys?: string[]): void {
   if (!keys) {
     sharedStorageCacheTimestamps.clear();
+    sharedStorageCacheImageModes.clear();
     projectsSnapshotCache.clear();
     return;
   }
 
   for (const key of keys) {
     sharedStorageCacheTimestamps.delete(key);
+    sharedStorageCacheImageModes.delete(key);
     if (!isLocalOnlyStorageKey(key)) {
       memoryStorageCache.delete(key);
       // getStorageItemFast reads the persisted browser cache before asking
@@ -1523,7 +1579,7 @@ export function clearStorageCache(keys?: string[]): void {
   invalidateSharedStorageCache(keys);
 }
 
-function triggerBackgroundStorageRefresh(keys: string[]): void {
+function triggerBackgroundStorageRefresh(keys: string[], includeImages = false): void {
   if (keys.length === 0) {
     return;
   }
@@ -1534,10 +1590,10 @@ function triggerBackgroundStorageRefresh(keys: string[]): void {
       if (sharedKeys.length === 0) {
         return;
       }
-      const remoteResults = await fetchRemoteStorageItems(sharedKeys);
+      const remoteResults = await fetchRemoteStorageItems(sharedKeys, includeImages);
       for (const key of sharedKeys) {
         const value = remoteResults[key] ?? null;
-        setSharedStorageCacheValue(key, value);
+        setSharedStorageCacheValue(key, value, includeImages);
       }
       queueSharedStorageChangedKeys(sharedKeys);
     } catch {
@@ -1547,7 +1603,7 @@ function triggerBackgroundStorageRefresh(keys: string[]): void {
 }
 
 // Returns cached data immediately (if available) and refreshes in the background.
-export async function getStorageItemFast<T>(key: string, includeImages: boolean = true): Promise<T | null> {
+export async function getStorageItemFast<T>(key: string, includeImages: boolean = false): Promise<T | null> {
   try {
     // OPTIMIZED: Return cached data immediately on both Web and Mobile
     const cached = await getLocalStorageItem<T>(key);
@@ -1556,10 +1612,12 @@ export async function getStorageItemFast<T>(key: string, includeImages: boolean 
     // If we have a timestamped cache, return it immediately and refresh in
     // the background when stale. An invalidated cache has no timestamp and
     // must fetch the authoritative backend value first.
-    if (cached !== null && cachedAt !== undefined) {
+    const cacheSupportsRequestedMedia =
+      !includeImages || !MEDIA_STORAGE_KEYS.has(key) || sharedStorageCacheImageModes.get(key) === true;
+    if (cached !== null && cachedAt !== undefined && cacheSupportsRequestedMedia) {
       // Trigger background refresh if cache is stale
       if (Date.now() - cachedAt > SHARED_STORAGE_CACHE_TTL_MS) {
-        triggerBackgroundStorageRefresh([key]);
+        triggerBackgroundStorageRefresh([key], includeImages);
       }
       return cached;
     }
@@ -1570,7 +1628,9 @@ export async function getStorageItemFast<T>(key: string, includeImages: boolean 
   } catch {
     // On error, try to return cached data even if stale
     const cached = await getLocalStorageItem<T>(key);
-    if (cached !== null) {
+    const cacheSupportsRequestedMedia =
+      !includeImages || !MEDIA_STORAGE_KEYS.has(key) || sharedStorageCacheImageModes.get(key) === true;
+    if (cached !== null && cacheSupportsRequestedMedia) {
       return cached;
     }
     return getStorageItem<T>(key, includeImages);
@@ -1776,7 +1836,7 @@ function isExpectedRemoteStorageError(error: unknown): boolean {
 
 // Generic storage functions
 // Reads one storage value from the backend or local cache.
-export async function getStorageItem<T>(key: string, includeImages: boolean = true): Promise<T | null> {
+export async function getStorageItem<T>(key: string, includeImages: boolean = false): Promise<T | null> {
   if (isLocalOnlyStorageKey(key)) {
     try {
       return await getLocalStorageItem<T>(key);
@@ -1789,17 +1849,17 @@ export async function getStorageItem<T>(key: string, includeImages: boolean = tr
   try {
     if (getPlatformOS() === 'web') {
       const remoteValue = await fetchRemoteStorageItem<T>(key, includeImages);
-      setSharedStorageCacheValue(key, remoteValue);
+      setSharedStorageCacheValue(key, remoteValue, includeImages);
       return remoteValue;
     }
 
-    const cachedValue = getFreshSharedStorageCacheValue<T>(key);
+    const cachedValue = getFreshSharedStorageCacheValue<T>(key, includeImages);
     if (cachedValue.hit) {
       return cachedValue.value;
     }
 
     const remoteValue = await fetchRemoteStorageItem<T>(key, includeImages);
-    setSharedStorageCacheValue(key, remoteValue);
+    setSharedStorageCacheValue(key, remoteValue, includeImages);
     return remoteValue;
   } catch (error) {
     // Abort/timeouts can happen during concurrent startup fetches and should not
@@ -1851,7 +1911,7 @@ export async function getStorageItems(
     const missingSharedKeys: string[] = [];
 
     for (const key of sharedKeys) {
-      const cachedValue = getFreshSharedStorageCacheValue(key);
+      const cachedValue = getFreshSharedStorageCacheValue(key, false);
       if (cachedValue.hit) {
         results[key] = cachedValue.value;
       } else {
@@ -2199,7 +2259,7 @@ export async function getProjectsScreenSnapshot(
   user?: Pick<User, 'id' | 'role'> | null,
   fields?: string[],
   forceRefresh: boolean = false,
-  includeImages: boolean = true
+  includeImages: boolean = false
 ): Promise<ProjectsScreenSnapshot> {
   const params = new URLSearchParams();
   if (user?.id) {
@@ -3045,6 +3105,7 @@ export async function createUserAccount(input: {
     pillarsOfInterest: input.pillarsOfInterest,
     approvalStatus: input.role === 'admin' ? 'approved' : 'pending',
     createdAt,
+    volunteerMembershipSheet: input.volunteerMembershipSheet,
   };
 
   await saveUser(createdUser);
@@ -3081,6 +3142,7 @@ export async function createUserAccount(input: {
         collegeCourse: input.volunteerMembershipSheet?.collegeCourse || '',
         certificationsOrTrainings:
           input.volunteerMembershipSheet?.certificationsOrTrainings || '',
+        validIdPhoto: input.volunteerMembershipSheet?.validIdPhoto || '',
         hobbiesAndInterests: input.volunteerMembershipSheet?.hobbiesAndInterests || '',
         specialSkills: input.volunteerMembershipSheet?.specialSkills || '',
         videoBriefingUrl: input.volunteerMembershipSheet?.videoBriefingUrl || '',
@@ -3625,21 +3687,32 @@ export async function savePartner(partner: Partner): Promise<void> {
 
 // Looks up a single partner organization by id.
 export async function getPartner(id: string): Promise<Partner | null> {
-  const partners = (await getStorageItemFast<Partner[]>(STORAGE_KEYS.PARTNERS)) || [];
-  const partner = partners.find(p => p.id === id) || null;
+  let partner: Partner | null = null;
+  try {
+    partner = await getRemoteStorageRecord<Partner>(STORAGE_KEYS.PARTNERS, id);
+  } catch {
+    const partners = (await getStorageItemFast<Partner[]>(STORAGE_KEYS.PARTNERS, true)) || [];
+    partner = partners.find(p => p.id === id) || null;
+  }
   return partner ? normalizePartnerRecord(partner) : null;
 }
 
 // Returns partner organizations owned by a specific partner account.
 export async function getPartnersByOwnerUserId(ownerUserId: string): Promise<Partner[]> {
   const partners = await getAllPartners();
-  return partners.filter(partner => partner.ownerUserId === ownerUserId);
+  const ownedPartners = partners.filter(partner => partner.ownerUserId === ownerUserId);
+  return Promise.all(
+    ownedPartners.map(async partner => (await getPartner(partner.id)) || partner),
+  );
 }
 
 // Returns all partner organization records.
-export async function getAllPartners(): Promise<Partner[]> {
+export async function getAllPartners(options?: { includeImages?: boolean }): Promise<Partner[]> {
   await ensurePartnerOwnershipLinks();
-  const partners = (await getStorageItemFast<Partner[]>(STORAGE_KEYS.PARTNERS)) || [];
+  const partners = (await getStorageItemFast<Partner[]>(
+    STORAGE_KEYS.PARTNERS,
+    options?.includeImages === true,
+  )) || [];
   return partners
     .map(normalizePartnerRecord)
     .filter(p => !p.contactEmail?.toLowerCase().includes('eduindia.org'));
@@ -4069,12 +4142,21 @@ export async function deleteEvent(eventId: string): Promise<void> {
 
 // Looks up a single project by id.
 export async function getProject(id: string): Promise<Project | null> {
-  const projects = await getAllProjects();
-  return projects.find(p => p.id === id) || null;
+  try {
+    const payload = await requestApiJson<{ item?: Project | null }>(
+      `/project-records/${encodeURIComponent(id)}`,
+    );
+    return payload.item ? normalizeProjectRecord(payload.item) : null;
+  } catch {
+    // Keep compatibility with an older backend while avoiding this path on
+    // the current API, where one-record detail reads are supported.
+    const projects = await getAllProjects(true);
+    return projects.find(p => p.id === id) || null;
+  }
 }
 
 // Returns all projects and events from shared storage.
-export async function getAllProjects(includeImages: boolean = true): Promise<Project[]> {
+export async function getAllProjects(includeImages: boolean = false): Promise<Project[]> {
   const [programs, projects, events] = await Promise.all([
     getStorageItemFast<Project[]>(STORAGE_KEYS.PROGRAMS, includeImages),
     getStorageItemFast<Project[]>(STORAGE_KEYS.PROJECTS, includeImages),
@@ -4137,7 +4219,7 @@ function normalizeVolunteerRecord(volunteer: Volunteer): Volunteer {
 }
 
 // Inserts or updates a volunteer profile record.
-export async function saveVolunteer(volunteer: Volunteer): Promise<void> {
+export async function saveVolunteer(volunteer: Volunteer): Promise<Volunteer> {
   if (volunteer.email?.trim() && !isValidEmailAddress(volunteer.email.trim().toLowerCase())) {
     throw new Error('Please enter a valid volunteer email address.');
   }
@@ -4161,26 +4243,36 @@ export async function saveVolunteer(volunteer: Volunteer): Promise<void> {
     void deleteLocalStorageItem(STORAGE_KEYS.VOLUNTEERS);
   }
   notifyStorageChanged([STORAGE_KEYS.VOLUNTEERS]);
+  return savedVolunteer;
 }
 
 // Looks up a single volunteer profile by id.
 export async function getVolunteer(id: string): Promise<Volunteer | null> {
-  const volunteers = (await getStorageItemFast<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS)) || [];
-  const volunteer = volunteers.find(v => v.id === id) || null;
+  let volunteer: Volunteer | null = null;
+  try {
+    volunteer = await getRemoteStorageRecord<Volunteer>(STORAGE_KEYS.VOLUNTEERS, id);
+  } catch {
+    const volunteers = (await getStorageItemFast<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS, true)) || [];
+    volunteer = volunteers.find(v => v.id === id) || null;
+  }
   return volunteer ? normalizeVolunteerRecord(volunteer) : null;
 }
 
 // Returns all volunteer profiles from shared storage.
-export async function getAllVolunteers(options?: { forceRefresh?: boolean }): Promise<Volunteer[]> {
+export async function getAllVolunteers(options?: {
+  forceRefresh?: boolean;
+  includeImages?: boolean;
+}): Promise<Volunteer[]> {
   if (options?.forceRefresh) {
     // Force the management screen to bypass any stale in-memory snapshot.
     // getStorageItem will then fetch the authoritative collection.
     invalidateSharedStorageCache([STORAGE_KEYS.VOLUNTEERS]);
   }
 
+  const includeImages = options?.includeImages === true;
   const volunteers = options?.forceRefresh
-    ? await getStorageItem<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS)
-    : await getStorageItemFast<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS);
+    ? await getStorageItem<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS, includeImages)
+    : await getStorageItemFast<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS, includeImages);
   return (volunteers || []).map(normalizeVolunteerRecord);
 }
 
@@ -4728,7 +4820,8 @@ export function subscribeToMessages(
 // Opens a realtime websocket subscription for shared storage changes.
 export function subscribeToStorageChanges(
   keys: string[],
-  onChange: (event: { type: string; keys: string[] }) => void
+  onChange: (event: { type: string; keys: string[] }) => void | Promise<void>,
+  options: StorageChangeSubscriptionOptions = {}
 ): () => void {
   const watchedKeys = new Set(keys);
   const subscriberId = nextStorageSubscriberId;
@@ -4740,6 +4833,8 @@ export function subscribeToStorageChanges(
     pendingKeys: new Set<string>(),
     notifyTimer: null,
     isNotifying: false,
+    debounceMs: Math.max(0, Math.floor(options.debounceMs ?? STORAGE_CHANGE_DEBOUNCE_MS)),
+    cooldownMs: Math.max(0, Math.floor(options.cooldownMs ?? STORAGE_CHANGE_CALLBACK_COOLDOWN_MS)),
   });
 
   ensureCrossTabStorageListeners();
@@ -5904,6 +5999,7 @@ export async function clearAllStorage(): Promise<void> {
       console.error('Error clearing remote storage:', error);
     }
     sharedStorageCacheTimestamps.clear();
+    sharedStorageCacheImageModes.clear();
     memoryStorageCache.clear();
     projectsSnapshotCache.clear();
     messagesForUserCache.clear();

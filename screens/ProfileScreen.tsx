@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import ModernTheme from '../utils/modernTheme';
 import {
   View,
@@ -10,6 +10,7 @@ import {
   Modal,
   TextInput,
   Image,
+  ActivityIndicator,
   type ImageStyle,
 } from 'react-native';
 import { Text } from '../components/Text';
@@ -21,6 +22,7 @@ import LogoutConfirmationModal from '../components/LogoutConfirmationModal';
 import { useAuth } from '../contexts/AuthContext';
 import {
   getAllProjects,
+  getAllVolunteerProjectJoinRecords,
   getAllUsers,
   getPartnersByOwnerUserId,
   getVolunteerRecognitionStatus,
@@ -33,33 +35,42 @@ import {
   subscribeToStorageChanges,
 } from '../models/storage';
 import { VolunteerRecognitionStatus } from '../models/storage';
-import { NVCSector, Partner, Project, User, UserType, Volunteer, VolunteerTimeLog, VolunteerAffiliation, PartnerSectorType, AdvocacyFocus } from '../models/types';
-import { getAttachmentLabel, isImageMediaUri, openAttachmentUri, pickImageFromDevice } from '../utils/media';
+import { NVCSector, Partner, Project, User, UserType, Volunteer, VolunteerProjectJoinRecord, VolunteerTimeLog, VolunteerAffiliation, PartnerSectorType, AdvocacyFocus } from '../models/types';
+import { getAttachmentLabel, isImageMediaUri, pickImageFromDevice } from '../utils/media';
 import { getRequestErrorMessage, getRequestErrorTitle, isAbortLikeError } from '../utils/requestErrors';
-import { getProjectDisplayStatus } from '../utils/projectStatus';
 import { TASK_SKILL_OPTIONS } from '../utils/skills';
 import VolunteerImpactMap from '../components/VolunteerImpactMap';
+import { getVolunteerEventParticipationSummary } from '../utils/volunteerEventParticipation';
+import DocumentPreviewModal from '../components/DocumentPreviewModal';
+import { ConfirmDialogHandle, ConfirmDialogHost } from '../components/ConfirmDialog';
 
 const USER_TYPES: UserType[] = ['Student', 'Adult', 'Senior'];
 const PILLAR_OPTIONS: NVCSector[] = [];
 const SAVE_SYNC_RETRY_COUNT = 3;
 const SAVE_SYNC_RETRY_DELAY_MS = 250;
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
-function getEndOfDay(value?: string): Date | null {
-  if (!value) return null;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  date.setHours(23, 59, 59, 999);
-  return date;
+function getPartnerValidIdDocument(partner?: Partner | null): string {
+  return (partner?.registrationDocuments || [])
+    .map(document => document?.trim())
+    .find(Boolean) || '';
 }
 
-function getStartOfDay(value?: string): Date | null {
-  if (!value) return null;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  date.setHours(0, 0, 0, 0);
-  return date;
+function replacePartnerValidIdDocument(partner: Partner, replacement: string): string[] {
+  const normalizedReplacement = replacement.trim();
+  const existingDocuments = (partner.registrationDocuments || [])
+    .map(document => document?.trim())
+    .filter(Boolean);
+
+  if (!normalizedReplacement) {
+    return existingDocuments;
+  }
+
+  // The first registration document is the partner's valid ID. Preserve any
+  // additional registration documents while replacing only that ID.
+  return [
+    normalizedReplacement,
+    ...existingDocuments.slice(1).filter(document => document !== normalizedReplacement),
+  ];
 }
 
 // Displays the signed-in user's profile, volunteer recognition, and edit form.
@@ -68,6 +79,7 @@ export default function ProfileScreen() {
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
   const [partnerProfiles, setPartnerProfiles] = useState<Partner[]>([]);
+  const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const [volunteerTimeLogs, setVolunteerTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const [recognitionStatus, setRecognitionStatus] = useState<VolunteerRecognitionStatus>({
     joinedProgramCount: 0,
@@ -75,7 +87,9 @@ export default function ProfileScreen() {
   });
   const [projects, setProjects] = useState<Project[]>([]);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [documentPreview, setDocumentPreview] = useState<{ title: string; uri: string } | null>(null);
   const [saveLoading, setSaveLoading] = useState(false);
+  const confirmDialogRef = useRef<ConfirmDialogHandle>(null);
   const [nameDraft, setNameDraft] = useState('');
   const [emailDraft, setEmailDraft] = useState('');
   const [phoneDraft, setPhoneDraft] = useState('');
@@ -95,19 +109,25 @@ export default function ProfileScreen() {
   const [workplaceOrSchoolDraft, setWorkplaceOrSchoolDraft] = useState('');
   const [collegeCourseDraft, setCollegeCourseDraft] = useState('');
   const [certificationsOrTrainingsDraft, setCertificationsOrTrainingsDraft] = useState('');
+  const [validIdPhotoDraft, setValidIdPhotoDraft] = useState('');
   const [hobbiesAndInterestsDraft, setHobbiesAndInterestsDraft] = useState('');
   const [affiliationsDraft, setAffiliationsDraft] = useState<VolunteerAffiliation[]>([]);
   const [orgNameDraft, setOrgNameDraft] = useState('');
   const [dswdAccreditationNoDraft, setDswdAccreditationNoDraft] = useState('');
+  const [secRegistrationNoDraft, setSecRegistrationNoDraft] = useState('');
   const [sectorTypeDraft, setSectorTypeDraft] = useState<PartnerSectorType>('NGO');
   const [stakeholderNameDraft, setStakeholderNameDraft] = useState('');
   const [advocacyFocusDraft, setAdvocacyFocusDraft] = useState<AdvocacyFocus[]>([]);
   const [addressDraft, setAddressDraft] = useState('');
+  const [partnerValidIdDocumentDraft, setPartnerValidIdDocumentDraft] = useState('');
+  const membershipValidIdPhoto = user?.volunteerMembershipSheet?.validIdPhoto?.trim() || '';
+  const membershipCertificate = user?.volunteerMembershipSheet?.certificationsOrTrainings?.trim() || '';
 
   // Loads the volunteer profile plus recognition details for volunteer accounts.
   const loadVolunteerProfile = useCallback(async () => {
     if (user?.role !== 'volunteer' || !user.id) {
       setVolunteerProfile(null);
+      setVolunteerJoinRecords([]);
       setVolunteerTimeLogs([]);
       setRecognitionStatus({
         joinedProgramCount: 0,
@@ -118,19 +138,62 @@ export default function ProfileScreen() {
 
     try {
       const profile = await getVolunteerByUserId(user.id);
-      setVolunteerProfile(profile);
-      if (profile?.id) {
-        const timeLogs = await getVolunteerTimeLogs(profile.id);
+      // Older app sessions can still hold a document in the signed-in account
+      // while its linked profile has not received it yet.  Copy it once to the
+      // profile so the document becomes visible to admins on every device.
+      const needsDocumentSync = Boolean(
+        profile &&
+          ((membershipValidIdPhoto && membershipValidIdPhoto !== (profile.validIdPhoto || '').trim()) ||
+            (membershipCertificate &&
+              membershipCertificate !== (profile.certificationsOrTrainings || '').trim()))
+      );
+      const synchronizedProfile = profile && needsDocumentSync
+        ? {
+            ...profile,
+            ...(membershipValidIdPhoto ? { validIdPhoto: membershipValidIdPhoto } : {}),
+            ...(membershipCertificate ? { certificationsOrTrainings: membershipCertificate } : {}),
+          }
+        : profile;
+
+      if (needsDocumentSync && synchronizedProfile) {
+        // This must finish before the profile is considered loaded. Otherwise
+        // the volunteer can see a local document while Admin still reads the
+        // older canonical volunteer row without the document.
+        const persistedProfile = await saveVolunteer(synchronizedProfile);
+        if (
+          membershipValidIdPhoto &&
+          !(persistedProfile.validIdPhoto || '').trim()
+        ) {
+          throw new Error('The valid ID photo could not be synchronized. Please try saving your profile again.');
+        }
+        setVolunteerProfile(persistedProfile);
+      } else {
+        setVolunteerProfile(synchronizedProfile);
+      }
+
+      if (synchronizedProfile?.id) {
+        const [timeLogs, allJoinRecords] = await Promise.all([
+          getVolunteerTimeLogs(synchronizedProfile.id),
+          getAllVolunteerProjectJoinRecords(),
+        ]);
         setVolunteerTimeLogs(timeLogs);
+        setVolunteerJoinRecords(
+          allJoinRecords.filter(
+            record =>
+              record.volunteerId === synchronizedProfile.id ||
+              record.volunteerUserId === user.id
+          )
+        );
         setRecognitionStatus({ joinedProgramCount: 0, isTopVolunteer: false });
         // defer heavier recognition check
         setTimeout(async () => {
           try {
-            const recognition = await getVolunteerRecognitionStatus(profile.id);
+            const recognition = await getVolunteerRecognitionStatus(synchronizedProfile.id);
             setRecognitionStatus(recognition);
           } catch {}
         }, 50);
       } else {
+        setVolunteerJoinRecords([]);
         setVolunteerTimeLogs([]);
         setRecognitionStatus({
           joinedProgramCount: 0,
@@ -149,7 +212,7 @@ export default function ProfileScreen() {
         message: getRequestErrorMessage(error, 'Failed to load your volunteer profile.'),
       });
     }
-  }, [user?.id, user?.role]);
+  }, [membershipCertificate, membershipValidIdPhoto, user?.id, user?.role]);
 
   // Loads the signed-in partner's organization application records.
   const loadPartnerProfiles = useCallback(async () => {
@@ -203,7 +266,7 @@ export default function ProfileScreen() {
       void loadPartnerProfiles();
       void loadProjectTitles();
       return subscribeToStorageChanges(
-        ['volunteers', 'partners', 'projects', 'volunteerProjectJoins'],
+        ['volunteers', 'partners', 'projects', 'events', 'volunteerProjectJoins', 'volunteerTimeLogs'],
         () => {
           void loadVolunteerProfile();
           void loadPartnerProfiles();
@@ -236,16 +299,19 @@ export default function ProfileScreen() {
     setWorkplaceOrSchoolDraft(volunteerProfile?.workplaceOrSchool || user?.volunteerMembershipSheet?.workplaceOrSchool || '');
     setCollegeCourseDraft(volunteerProfile?.collegeCourse || user?.volunteerMembershipSheet?.collegeCourse || '');
     setCertificationsOrTrainingsDraft(volunteerProfile?.certificationsOrTrainings || user?.volunteerMembershipSheet?.certificationsOrTrainings || '');
+    setValidIdPhotoDraft(volunteerProfile?.validIdPhoto || user?.volunteerMembershipSheet?.validIdPhoto || '');
     setHobbiesAndInterestsDraft(volunteerProfile?.hobbiesAndInterests || user?.volunteerMembershipSheet?.hobbiesAndInterests || '');
     setAffiliationsDraft(volunteerProfile?.affiliations || []);
 
     const primaryPartner = partnerProfiles[0] || null;
     setOrgNameDraft(primaryPartner?.name || '');
     setDswdAccreditationNoDraft(primaryPartner?.dswdAccreditationNo || '');
+    setSecRegistrationNoDraft(primaryPartner?.secRegistrationNo || '');
     setSectorTypeDraft(primaryPartner?.sectorType || 'NGO');
     setStakeholderNameDraft(primaryPartner?.stakeholderName || '');
     setAdvocacyFocusDraft(primaryPartner?.advocacyFocus || []);
     setAddressDraft(primaryPartner?.address || '');
+    setPartnerValidIdDocumentDraft(getPartnerValidIdDocument(primaryPartner));
   }, [user, volunteerProfile, partnerProfiles]);
 
   useEffect(() => {
@@ -322,6 +388,38 @@ export default function ProfileScreen() {
     }
   };
 
+  const handlePickVolunteerValidId = async () => {
+    try {
+      const selectedImage = await pickImageFromDevice();
+      if (!selectedImage) {
+        return;
+      }
+      setValidIdPhotoDraft(selectedImage);
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to select a valid ID photo.')
+      );
+    }
+  };
+
+  // Uses the native image picker, so the same upload and replacement flow is
+  // available in the mobile partner profile editor as it is for volunteers.
+  const handlePickPartnerValidId = async () => {
+    try {
+      const selectedImage = await pickImageFromDevice();
+      if (!selectedImage) {
+        return;
+      }
+      setPartnerValidIdDocumentDraft(selectedImage);
+    } catch (error) {
+      Alert.alert(
+        getRequestErrorTitle(error),
+        getRequestErrorMessage(error, 'Failed to select a valid ID photo.')
+      );
+    }
+  };
+
   // Removes the profile picture from the current draft.
   const handleRemoveProfilePhoto = () => {
     setProfilePhotoDraft('');
@@ -349,8 +447,8 @@ export default function ProfileScreen() {
     throw new Error('Your profile updates did not sync yet. Please try saving again.');
   };
 
-  // Saves the edited user and volunteer profile data.
-  const handleSaveProfile = async () => {
+  // Saves the edited user and volunteer profile data after confirmation.
+  const performSaveProfile = async () => {
     console.log('[ProfileScreen] handleSaveProfile called');
     
     if (!user) {
@@ -438,6 +536,7 @@ export default function ProfileScreen() {
               workplaceOrSchool: workplaceOrSchoolDraft,
               collegeCourse: collegeCourseDraft,
               certificationsOrTrainings: certificationsOrTrainingsDraft,
+              validIdPhoto: validIdPhotoDraft,
               hobbiesAndInterests: hobbiesAndInterestsDraft,
               specialSkills: skillsDraft.join(', '),
             }
@@ -503,21 +602,27 @@ export default function ProfileScreen() {
           workplaceOrSchool: workplaceOrSchoolDraft,
           collegeCourse: collegeCourseDraft,
           certificationsOrTrainings: certificationsOrTrainingsDraft,
+          validIdPhoto: validIdPhotoDraft,
           hobbiesAndInterests: hobbiesAndInterestsDraft,
           affiliations: affiliationsDraft,
         };
 
-        await saveVolunteer(updatedVolunteerProfile);
-        setVolunteerProfile(updatedVolunteerProfile);
+        const persistedVolunteerProfile = await saveVolunteer(updatedVolunteerProfile);
+        if (validIdPhotoDraft.trim() && !persistedVolunteerProfile.validIdPhoto?.trim()) {
+          throw new Error('The valid ID photo could not be synchronized. Please try saving your profile again.');
+        }
+        setVolunteerProfile(persistedVolunteerProfile);
       }
 
       if (user.role === 'partner' && partnerProfiles.length > 0) {
+        const primaryPartnerId = partnerProfiles[0]?.id;
         const updatedPartnerProfiles = await Promise.all(
           partnerProfiles.map(async partnerProfile => {
             const updatedPartnerProfile: Partner = {
               ...partnerProfile,
               name: orgNameDraft.trim(),
               dswdAccreditationNo: dswdAccreditationNoDraft.trim(),
+              secRegistrationNo: secRegistrationNoDraft.trim(),
               sectorType: sectorTypeDraft,
               stakeholderName: stakeholderNameDraft.trim(),
               advocacyFocus: advocacyFocusDraft,
@@ -525,6 +630,10 @@ export default function ProfileScreen() {
               ownerUserId: user.id,
               contactEmail: normalizedEmail || undefined,
               contactPhone: normalizedPhone || undefined,
+              registrationDocuments:
+                partnerProfile.id === primaryPartnerId
+                  ? replacePartnerValidIdDocument(partnerProfile, partnerValidIdDocumentDraft)
+                  : partnerProfile.registrationDocuments,
             };
             await savePartner(updatedPartnerProfile);
             return updatedPartnerProfile;
@@ -570,6 +679,58 @@ export default function ProfileScreen() {
     }
   };
 
+  // Shows a fast, app-owned confirmation before updating either profile type.
+  const handleSaveProfile = () => {
+    if (saveLoading || !user) {
+      return;
+    }
+
+    const normalizedName = nameDraft.trim();
+    const normalizedEmail = emailDraft.trim().toLowerCase();
+    const normalizedPhone = phoneDraft.trim();
+
+    if (newPasswordDraft.trim() && newPasswordDraft !== confirmPasswordDraft) {
+      Alert.alert('Validation Error', 'New passwords do not match.');
+      return;
+    }
+
+    if (newPasswordDraft.trim().length > 0 && newPasswordDraft.trim().length < 6) {
+      Alert.alert('Validation Error', 'Password must be at least 6 characters long.');
+      return;
+    }
+
+    if (!normalizedName) {
+      Alert.alert('Validation Error', 'Name is required.');
+      return;
+    }
+
+    if (!normalizedEmail && !normalizedPhone) {
+      Alert.alert('Validation Error', 'Please provide an email or phone number.');
+      return;
+    }
+
+    if (normalizedEmail && !normalizedEmail.includes('@')) {
+      Alert.alert('Validation Error', 'Please enter a valid email address.');
+      return;
+    }
+
+    const isPartner = user.role === 'partner';
+    confirmDialogRef.current?.show({
+      title: isPartner ? 'Save partner profile changes?' : 'Save volunteer profile changes?',
+      message: isPartner
+        ? 'Your account, organization details, and valid ID photo updates will be saved.'
+        : 'Your account, volunteer registration, and document updates will be saved.',
+      confirmText: 'Save Changes',
+      loadingText: 'Saving…',
+      cancelText: 'Keep Editing',
+      confirmColor: '#15803d',
+      icon: 'save',
+      iconColor: '#15803d',
+      animationType: 'none',
+      onConfirm: performSaveProfile,
+    });
+  };
+
   const initials = (user?.name || 'U')
     .split(' ')
     .map(part => part.charAt(0))
@@ -581,54 +742,19 @@ export default function ProfileScreen() {
   const primaryPartnerProfile = partnerProfiles[0] || null;
   const profilePhotoUri = isImageMediaUri(user?.profilePhoto) ? user?.profilePhoto : null;
   const draftProfilePhotoUri = isImageMediaUri(profilePhotoDraft) ? profilePhotoDraft : null;
+  const volunteerValidIdPhoto = volunteerProfile?.validIdPhoto || user?.volunteerMembershipSheet?.validIdPhoto || '';
   
   // Use timestamp for cache busting - forces re-render when photo changes
   const photoKey = profilePhotoUri ? `photo-${photoTimestamp}` : 'no-photo';
   const draftPhotoKey = draftProfilePhotoUri ? `draft-${draftProfilePhotoUri.substring(0, 50)}` : 'no-draft-photo';
-  const joinedEventProjects = projects.filter(project => {
-    if (!project.isEvent) return false;
-    
-    const isJoinedByUser = (project.joinedUserIds || []).includes(user?.id || '');
-    const isJoinedByVolunteer = volunteerProfile ? project.volunteers.includes(volunteerProfile.id) : false;
-    const isAssignedToTask = (project.internalTasks || []).some(
-      task => task.assignedVolunteerId === volunteerProfile?.id
-    );
-    
-    return isJoinedByUser || isJoinedByVolunteer || isAssignedToTask;
+  const eventParticipation = getVolunteerEventParticipationSummary({
+    projects,
+    volunteer: volunteerProfile,
+    joinRecords: volunteerJoinRecords,
+    timeLogs: volunteerTimeLogs,
   });
-  const completedEvents = joinedEventProjects
-    .filter(project => getProjectDisplayStatus(project) === 'Completed')
-    .filter(project => {
-      const completedLogs = volunteerTimeLogs
-        .filter(log => log.projectId === project.id && Boolean(log.timeIn) && Boolean(log.timeOut))
-        .sort(
-          (left, right) =>
-            new Date(right.timeOut || right.timeIn).getTime() -
-            new Date(left.timeOut || left.timeIn).getTime()
-        );
-
-      if (completedLogs.length === 0) {
-        return false;
-      }
-
-      const latestCompletedLog = completedLogs[0];
-      const eventEndDay = getEndOfDay(project.endDate || project.startDate);
-      const lastAttendanceDay = getStartOfDay(latestCompletedLog.timeOut || latestCompletedLog.timeIn);
-
-      if (!eventEndDay || !lastAttendanceDay) {
-        return false;
-      }
-
-      const eventEndStartDay = new Date(eventEndDay);
-      eventEndStartDay.setHours(0, 0, 0, 0);
-
-      const absentDaysBeforeEventFinished = Math.max(
-        0,
-        Math.floor((eventEndStartDay.getTime() - lastAttendanceDay.getTime()) / MS_PER_DAY)
-      );
-
-      return absentDaysBeforeEventFinished < 7;
-    })
+  const joinedEventProjects = eventParticipation.joinedEvents;
+  const completedEvents = [...eventParticipation.completedEvents]
     .sort(
       (left, right) =>
         new Date(right.endDate || right.startDate).getTime() -
@@ -656,7 +782,7 @@ export default function ProfileScreen() {
       ? [
           {
             label: 'Events Joined',
-            value: String(new Set(volunteerTimeLogs.map(log => log.projectId)).size),
+            value: String(joinedEventProjects.length),
           },
         ]
       : []),
@@ -935,21 +1061,46 @@ export default function ProfileScreen() {
                     </Text>
                     {isImageMediaUri(volunteerProfile.certificationsOrTrainings || user?.volunteerMembershipSheet?.certificationsOrTrainings) ? (
                       <TouchableOpacity
-                        onPress={async () => {
-                          try {
-                            await openAttachmentUri((volunteerProfile.certificationsOrTrainings || user?.volunteerMembershipSheet?.certificationsOrTrainings) || '');
-                          } catch (error: any) {
-                            Alert.alert(
-                              'Unable to Open Certificate',
-                              error?.message || 'Certificate attachment could not be opened.',
-                            );
-                          }
-                        }}
+                        onPress={() => setDocumentPreview({
+                          title: 'Certificate / Training Preview',
+                          uri: (volunteerProfile.certificationsOrTrainings || user?.volunteerMembershipSheet?.certificationsOrTrainings || '').trim(),
+                        })}
                         style={styles.attachmentIconButton}
+                        accessibilityRole="button"
+                        accessibilityLabel="Preview certificate or training"
                       >
                         <MaterialIcons name="visibility" size={16} color="#166534" />
                       </TouchableOpacity>
                     ) : null}
+                  </View>
+                ) : (
+                  <Text style={styles.regValue}>Not provided</Text>
+                )}
+              </View>
+            </View>
+
+            <View style={styles.regItem}>
+              <View style={styles.regIconWrap}>
+                <MaterialIcons name="badge" size={18} color="#166534" />
+              </View>
+              <View style={styles.regTextWrap}>
+                <Text style={styles.regLabel}>VALID ID PHOTO</Text>
+                {volunteerValidIdPhoto ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                    <Text style={[styles.regValue, { flex: 1 }]} numberOfLines={1}>
+                      {getAttachmentLabel(volunteerValidIdPhoto)}
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => setDocumentPreview({
+                        title: 'Valid ID Preview',
+                        uri: volunteerValidIdPhoto.trim(),
+                      })}
+                      style={styles.attachmentIconButton}
+                      accessibilityRole="button"
+                      accessibilityLabel="Preview valid ID photo"
+                    >
+                      <MaterialIcons name="visibility" size={16} color="#166534" />
+                    </TouchableOpacity>
                   </View>
                 ) : (
                   <Text style={styles.regValue}>Not provided</Text>
@@ -1093,6 +1244,7 @@ export default function ProfileScreen() {
                 },
               ]}
               initialMapStyleKey="volunteer-view"
+              lockedVolunteerId={volunteerProfile.id}
               title="Personal Impact Map"
               subtitle="Pinned places where you joined or completed volunteer work."
             />
@@ -1126,6 +1278,7 @@ export default function ProfileScreen() {
                 const statusStr = [partnerProfile.status, partnerProfile.verificationStatus]
                   .filter(Boolean)
                   .join(' / ');
+                const partnerDocument = getPartnerValidIdDocument(partnerProfile);
                   
                 const locationStr = partnerProfile.address ||
                   [partnerProfile.cityMunicipality, partnerProfile.province, partnerProfile.region]
@@ -1165,6 +1318,45 @@ export default function ProfileScreen() {
                       <View style={styles.partnerGridTextWrap}>
                         <Text style={styles.partnerGridLabel}>DSWD Accreditation No.</Text>
                         <Text style={styles.partnerGridValue}>{partnerProfile.dswdAccreditationNo || 'Not provided'}</Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.partnerGridItem}>
+                      <View style={styles.partnerGridIconWrap}>
+                        <MaterialIcons name="verified-user" size={20} color="#166534" />
+                      </View>
+                      <View style={styles.partnerGridTextWrap}>
+                        <Text style={styles.partnerGridLabel}>SEC Registration No.</Text>
+                        <Text style={styles.partnerGridValue}>{partnerProfile.secRegistrationNo || 'Not provided'}</Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.partnerGridItem}>
+                      <View style={styles.partnerGridIconWrap}>
+                        <MaterialIcons name="badge" size={20} color="#166534" />
+                      </View>
+                      <View style={styles.partnerGridTextWrap}>
+                        <Text style={styles.partnerGridLabel}>VALID ID PHOTO</Text>
+                        {partnerDocument ? (
+                          <View style={styles.partnerDocumentRow}>
+                            <Text style={[styles.partnerGridValue, { flex: 1 }]} numberOfLines={1}>
+                              {getAttachmentLabel(partnerDocument)}
+                            </Text>
+                            <TouchableOpacity
+                              onPress={() => setDocumentPreview({
+                                title: 'Partner Valid ID Preview',
+                                uri: partnerDocument,
+                              })}
+                              style={styles.attachmentIconButton}
+                              accessibilityRole="button"
+                              accessibilityLabel="Preview partner valid ID"
+                            >
+                              <MaterialIcons name="visibility" size={16} color="#166534" />
+                            </TouchableOpacity>
+                          </View>
+                        ) : (
+                          <Text style={styles.partnerGridValue}>Not provided</Text>
+                        )}
                       </View>
                     </View>
 
@@ -1240,16 +1432,6 @@ export default function ProfileScreen() {
 
                     <View style={styles.partnerGridItem}>
                       <View style={styles.partnerGridIconWrap}>
-                        <MaterialIcons name="badge" size={20} color="#166534" />
-                      </View>
-                      <View style={styles.partnerGridTextWrap}>
-                        <Text style={styles.partnerGridLabel}>Stakeholder Name</Text>
-                        <Text style={styles.partnerGridValue}>{partnerProfile.stakeholderName || 'Not provided'}</Text>
-                      </View>
-                    </View>
-
-                    <View style={styles.partnerGridItem}>
-                      <View style={styles.partnerGridIconWrap}>
                         <MaterialIcons name="public" size={20} color="#166534" />
                       </View>
                       <View style={styles.partnerGridTextWrap}>
@@ -1283,15 +1465,35 @@ export default function ProfileScreen() {
       />
 
       {/* Edit Profile Modal */}
-      <Modal visible={showEditModal} animationType="slide" onRequestClose={handleCancelEdit}>
+      <Modal
+        visible={showEditModal}
+        animationType="slide"
+        onRequestClose={() => {
+          if (!saveLoading) {
+            handleCancelEdit();
+          }
+        }}
+      >
         <View style={styles.modalContainer}>
           <View style={styles.modalHeader}>
             <TouchableOpacity onPress={handleCancelEdit} disabled={saveLoading}>
               <Text style={styles.modalCancel}>Cancel</Text>
             </TouchableOpacity>
             <Text style={styles.modalTitle}>Edit Profile</Text>
-            <TouchableOpacity onPress={handleSaveProfile} disabled={saveLoading}>
-              <Text style={styles.modalSave}>Save</Text>
+            <TouchableOpacity
+              onPress={handleSaveProfile}
+              disabled={saveLoading}
+              accessibilityRole="button"
+              accessibilityLabel={saveLoading ? 'Saving profile' : 'Save profile changes'}
+            >
+              {saveLoading ? (
+                <View style={styles.modalSaveLoadingAction}>
+                  <ActivityIndicator size="small" color="#15803d" />
+                  <Text style={styles.modalSave}>Saving…</Text>
+                </View>
+              ) : (
+                <Text style={styles.modalSave}>Save</Text>
+              )}
             </TouchableOpacity>
           </View>
 
@@ -1424,6 +1626,60 @@ export default function ProfileScreen() {
                     />
                   </>
                 )}
+
+                <Text style={styles.fieldLabel}>SEC Registration No. (Optional)</Text>
+                <TextInput
+                  style={styles.input}
+                  value={secRegistrationNoDraft}
+                  onChangeText={setSecRegistrationNoDraft}
+                  placeholder="SEC Registration No."
+                  editable={!saveLoading}
+                />
+
+                <Text style={styles.fieldLabel}>Valid ID Photo</Text>
+                <Text style={styles.sectionHint}>
+                  Upload a clear government-issued ID. This is available to authorized administrators as preview only.
+                </Text>
+                <View style={styles.certificateActionsRow}>
+                  <TouchableOpacity
+                    style={[styles.photoButton, styles.certificatePrimaryButton, saveLoading && { opacity: 0.6 }]}
+                    onPress={handlePickPartnerValidId}
+                    disabled={saveLoading}
+                    accessibilityRole="button"
+                    accessibilityLabel={partnerValidIdDocumentDraft ? 'Replace partner valid ID photo' : 'Upload partner valid ID photo'}
+                  >
+                    <Text style={styles.photoButtonText}>
+                      {partnerValidIdDocumentDraft ? 'Replace Valid ID Photo' : 'Upload Valid ID Photo'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+                {partnerValidIdDocumentDraft && isImageMediaUri(partnerValidIdDocumentDraft) ? (
+                  <View style={styles.certificatePreviewCard}>
+                    <View style={styles.certificatePreviewTopRow}>
+                      <Image
+                        source={{ uri: partnerValidIdDocumentDraft }}
+                        style={styles.certificatePreviewThumb as any}
+                      />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.certificatePreviewLabel} numberOfLines={1}>
+                          {getAttachmentLabel(partnerValidIdDocumentDraft)}
+                        </Text>
+                        <TouchableOpacity
+                          onPress={() => setDocumentPreview({
+                            title: 'Partner Valid ID Preview',
+                            uri: partnerValidIdDocumentDraft.trim(),
+                          })}
+                          disabled={saveLoading}
+                          style={{ alignSelf: 'flex-start', marginTop: 8 }}
+                          accessibilityRole="button"
+                          accessibilityLabel="Preview partner valid ID"
+                        >
+                          <Text style={styles.certificatePreviewLink}>Preview</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  </View>
+                ) : null}
 
                 <Text style={styles.fieldLabel}>Stakeholder Name</Text>
                 <TextInput
@@ -1564,16 +1820,10 @@ export default function ProfileScreen() {
                             {getAttachmentLabel(certificationsOrTrainingsDraft)}
                           </Text>
                           <TouchableOpacity
-                            onPress={async () => {
-                              try {
-                                await openAttachmentUri(certificationsOrTrainingsDraft);
-                              } catch (error: any) {
-                                Alert.alert(
-                                  'Unable to Open Certificate',
-                                  error?.message || 'Certificate attachment could not be opened.',
-                                );
-                              }
-                            }}
+                            onPress={() => setDocumentPreview({
+                              title: 'Certificate / Training Preview',
+                              uri: certificationsOrTrainingsDraft.trim(),
+                            })}
                             disabled={saveLoading}
                             style={{ alignSelf: 'flex-start', marginTop: 8 }}
                           >
@@ -1591,6 +1841,44 @@ export default function ProfileScreen() {
                       editable={!saveLoading}
                     />
                   )
+                ) : null}
+
+                <Text style={styles.fieldLabel}>Valid ID Photo</Text>
+                <View style={styles.certificateActionsRow}>
+                  <TouchableOpacity
+                    style={[styles.photoButton, styles.certificatePrimaryButton, saveLoading && { opacity: 0.6 }]}
+                    onPress={handlePickVolunteerValidId}
+                    disabled={saveLoading}
+                  >
+                    <Text style={styles.photoButtonText}>
+                      {validIdPhotoDraft ? 'Replace Valid ID Photo' : 'Upload Valid ID Photo'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+                {validIdPhotoDraft && isImageMediaUri(validIdPhotoDraft) ? (
+                  <View style={styles.certificatePreviewCard}>
+                    <View style={styles.certificatePreviewTopRow}>
+                      <Image
+                        source={{ uri: validIdPhotoDraft }}
+                        style={styles.certificatePreviewThumb as any}
+                      />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.certificatePreviewLabel}>
+                          {getAttachmentLabel(validIdPhotoDraft)}
+                        </Text>
+                        <TouchableOpacity
+                          onPress={() => setDocumentPreview({
+                            title: 'Valid ID Preview',
+                            uri: validIdPhotoDraft.trim(),
+                          })}
+                          disabled={saveLoading}
+                          style={{ alignSelf: 'flex-start', marginTop: 8 }}
+                        >
+                          <Text style={styles.certificatePreviewLink}>View</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  </View>
                 ) : null}
 
                 <Text style={styles.fieldLabel}>Affiliation (Primary Organization)</Text>
@@ -1665,6 +1953,17 @@ export default function ProfileScreen() {
               autoCapitalize="none"
             />
           </ScrollView>
+          {saveLoading ? (
+            <View style={styles.profileSavingOverlay} accessibilityLiveRegion="polite">
+              <View style={styles.profileSavingCard}>
+                <ActivityIndicator size="large" color="#15803d" />
+                <Text style={styles.profileSavingTitle}>Saving profile…</Text>
+                <Text style={styles.profileSavingMessage}>
+                  Please wait while your changes are securely updated.
+                </Text>
+              </View>
+            </View>
+          ) : null}
         </View>
       </Modal>
 
@@ -1710,6 +2009,13 @@ export default function ProfileScreen() {
           </ScrollView>
         </View>
       </Modal>
+      <DocumentPreviewModal
+        visible={Boolean(documentPreview)}
+        title={documentPreview?.title}
+        uri={documentPreview?.uri}
+        onClose={() => setDocumentPreview(null)}
+      />
+      <ConfirmDialogHost ref={confirmDialogRef} />
     </ScrollView>
   );
 }
@@ -2234,9 +2540,53 @@ const styles = StyleSheet.create({
     fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '800',
   },
+  modalSaveLoadingAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
   modalBody: {
     padding: 16,
     paddingBottom: 40,
+  },
+  profileSavingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(248, 250, 252, 0.88)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+    zIndex: 10,
+  },
+  profileSavingCard: {
+    width: '100%',
+    maxWidth: 340,
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    paddingHorizontal: 24,
+    paddingVertical: 28,
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.14,
+    shadowRadius: 16,
+    elevation: 5,
+  },
+  profileSavingTitle: {
+    marginTop: 14,
+    color: '#14532d',
+    fontSize: 18,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
+    fontWeight: '800',
+  },
+  profileSavingMessage: {
+    marginTop: 8,
+    color: '#475569',
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: 'center',
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
   },
   modalLabel: {
     fontSize: 14,
@@ -2532,6 +2882,12 @@ const styles = StyleSheet.create({
   },
   partnerGridTextWrap: {
     flex: 1,
+  },
+  partnerDocumentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 2,
   },
   partnerGridLabel: {
     fontSize: 10,

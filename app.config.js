@@ -131,6 +131,11 @@ module.exports = () => {
       owner: '09092233654',
       version: '1.0.0',
       orientation: 'portrait',
+      splash: {
+        image: './assets/nvc-logo.png',
+        resizeMode: 'contain',
+        backgroundColor: '#f0fdf4',
+      },
       assetBundlePatterns: ['**/*'],
       ios: {
         supportsTablet: true,

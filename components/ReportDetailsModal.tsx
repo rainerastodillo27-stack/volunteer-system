@@ -19,7 +19,7 @@ import {
   isImageMediaUri,
   openAttachmentUri,
 } from '../utils/media';
-import { buildTextPdf, downloadPdfFile } from '../utils/pdfDownload';
+import { buildTablePdf, downloadPdfFile } from '../utils/pdfDownload';
 
 interface ReportDetailsModalProps {
   visible: boolean;
@@ -71,7 +71,7 @@ export default function ReportDetailsModal({
   const handleDownloadReport = () => {
     void downloadPdfFile(
       `${report.title}-${formatDateForFilename(report.submittedAt)}.pdf`,
-      buildTextPdf(report.title, buildReportDownloadContent(report))
+      buildReportDownloadPdf(report)
     );
   };
 
@@ -303,45 +303,72 @@ export default function ReportDetailsModal({
   );
 }
 
-function buildReportDownloadContent(report: SubmittedReport): string {
-  const metricLines = Object.entries(report.metrics)
+function buildReportDownloadPdf(report: SubmittedReport): string {
+  const metricRows = Object.entries(report.metrics)
     .filter(([key, value]) => {
-    // Keep legacy beneficiary data stored, but omit it from the downloaded
-    // report summary along with the other hidden metric.
-    if (key === 'volunteerHours' || key === 'beneficiariesServed') return false;
+      // Keep legacy beneficiary data stored, but omit it from the downloaded
+      // report summary along with the other hidden metric.
+      if (key === 'volunteerHours' || key === 'beneficiariesServed') return false;
       return value !== undefined && value !== null;
     })
-    .map(([key, value]) => `${formatMetricKey(key)}: ${value}`);
-  const feedbackLines = [
-    report.collaborationFeedback
-      ? `How Was the Collaboration?: ${report.collaborationFeedback}`
-      : null,
-    report.volunteerPraise ? `Praise for the Volunteers: ${report.volunteerPraise}` : null,
-    report.gratitudeNote ? `Thank You Note: ${report.gratitudeNote}` : null,
-  ].filter(Boolean) as string[];
-
-  return [
-    `Title: ${report.title}`,
-    `Submitted By: ${report.submitterName}`,
-    `Role: ${report.submitterRole}`,
-    `Status: ${report.status}`,
-    `Submitted At: ${formatDisplayDateTime(report.submittedAt, 'Unknown date')}`,
-    `Report Type: ${formatReportType(report.reportType)}`,
-    report.projectTitle
-      ? `${report.projectKind === 'event' ? 'Event' : 'Project'}: ${report.projectTitle}`
-      : null,
-    '',
-    'Description',
-    report.description || 'No description provided.',
-    feedbackLines.length ? '' : null,
-    feedbackLines.length ? 'Partner Feedback' : null,
-    feedbackLines.length ? feedbackLines.join('\n') : null,
-    '',
-    'Metrics',
-    metricLines.length ? metricLines.join('\n') : 'No metrics captured.',
+    .map(([key, value]) => ({ metric: formatMetricKey(key), value }));
+  const feedbackRows = [
+    ['How was the collaboration?', report.collaborationFeedback],
+    ['Praise for the volunteers', report.volunteerPraise],
+    ['Thank you note', report.gratitudeNote],
+    ['Approval notes', report.approvalNotes],
   ]
-    .filter(Boolean)
-    .join('\n');
+    .filter(([, value]) => Boolean(value))
+    .map(([field, value]) => ({ field, value }));
+
+  return buildTablePdf(report.title || 'Report', {
+    subtitle: `Submitted ${formatDisplayDateTime(report.submittedAt, 'Unknown date')}`,
+    orientation: 'portrait',
+    tables: [
+      {
+        title: 'Report Details',
+        columns: [
+          { key: 'field', label: 'Field', width: 1 },
+          { key: 'value', label: 'Value', width: 2.8 },
+        ],
+        rows: [
+          { field: 'Title', value: report.title || 'Untitled report' },
+          { field: 'Submitted by', value: report.submitterName || 'Unknown user' },
+          { field: 'Role', value: report.submitterRole || 'Unknown' },
+          { field: 'Status', value: report.status || 'Unknown' },
+          { field: 'Report type', value: formatReportType(report.reportType) },
+          {
+            field: report.projectKind === 'event' ? 'Event' : 'Project',
+            value: report.projectTitle || 'No linked activity',
+          },
+          { field: 'Attachments', value: (report.attachments || []).length + (report.mediaFile ? 1 : 0) },
+        ],
+      },
+      {
+        title: 'Description',
+        columns: [{ key: 'description', label: 'Report narrative', width: 1, maxLines: 12 }],
+        rows: [{ description: report.description || 'No description provided.' }],
+      },
+      {
+        title: 'Metrics',
+        columns: [
+          { key: 'metric', label: 'Metric', width: 1.4 },
+          { key: 'value', label: 'Value', width: 1 },
+        ],
+        rows: metricRows,
+        emptyMessage: 'No metrics captured.',
+      },
+      {
+        title: 'Feedback and Notes',
+        columns: [
+          { key: 'field', label: 'Field', width: 1 },
+          { key: 'value', label: 'Value', width: 2.8 },
+        ],
+        rows: feedbackRows,
+        emptyMessage: 'No additional feedback or notes.',
+      },
+    ],
+  });
 }
 
 function parseValidDate(value?: string): Date | null {
@@ -376,6 +403,7 @@ function formatReportType(type: string): string {
     Medical: 'Medical Report',
     Logistics: 'Logistics Report',
     field_report: 'Field Report',
+    attendance_report: 'Attendance Report',
     volunteer_engagement: 'Volunteer Engagement',
     program_impact: 'Program Impact',
     event_performance: 'Event Performance',
@@ -394,6 +422,7 @@ function formatMetricKey(key: string): string {
     beneficiariesServed: 'Beneficiaries Served',
     tasksCompleted: 'Tasks Completed',
     attendanceDays: 'Days Timed In',
+    attendanceHours: 'Attendance Hours',
     eventsCount: 'Events Count',
     geofenceCompliance: 'Geofence Compliance',
     dataStorageVolume: 'Data Storage Volume',

@@ -2,7 +2,7 @@ import "./platformInit";
 import React, { useEffect } from 'react';
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { NavigationContainer } from "@react-navigation/native";
-import { Platform, View, ActivityIndicator } from "react-native";
+import { Alert, Platform, View, ActivityIndicator } from "react-native";
 import { AuthProvider } from "./contexts/AuthContext";
 import { GlobalDataProvider, useGlobalData } from "./contexts/GlobalDataContext";
 import StackNavigator from "./navigation/StackNavigator";
@@ -13,6 +13,28 @@ import { navigationRef } from './navigation/navigationRef';
 import { useNunitoFont } from './utils/fonts';
 import * as ExpSplashScreen from 'expo-splash-screen';
 import * as WebBrowser from 'expo-web-browser';
+import SystemAlertHost, { showSystemAlert, showSystemPrompt } from './components/SystemAlertModal';
+
+// React Native Web implements Alert.alert with the blocking browser
+// window.alert API. Route the existing app-wide calls to our non-blocking,
+// app-owned modal instead. The host queues calls until the root is mounted.
+try {
+  (Alert as any).alert = showSystemAlert;
+  (Alert as any).prompt = showSystemPrompt;
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    const browserWindow = window as Window & { __nvcSystemAlertPatched?: boolean };
+    if (!browserWindow.__nvcSystemAlertPatched) {
+      browserWindow.alert = (message?: string) => {
+        const text = String(message ?? '');
+        const [title, ...messageParts] = text.split('\n\n');
+        showSystemAlert(title || 'Notice', messageParts.join('\n\n'));
+      };
+      browserWindow.__nvcSystemAlertPatched = true;
+    }
+  }
+} catch {
+  // Keep startup resilient on platforms that expose Alert as read-only.
+}
 
 // Must be called at the root level so Google OAuth redirects are caught globally
 WebBrowser.maybeCompleteAuthSession();
@@ -43,6 +65,23 @@ if (typeof document !== "undefined") {
   // Apply Nunito globally to the body for web
   document.body.style.fontFamily =
     'Nunito, sans-serif';
+
+  // React Native Web's Text primitive includes a `System` font shorthand in
+  // its own style. Keep every app text node and form control on Nunito while
+  // leaving icon spans free to retain their icon font families.
+  const globalFontStyle = document.createElement('style');
+  globalFontStyle.textContent = `
+    html, body, #root,
+    body div,
+    body input,
+    body textarea,
+    body button,
+    body select,
+    body option {
+      font-family: 'Nunito', sans-serif !important;
+    }
+  `;
+  document.head.appendChild(globalFontStyle);
 
   // When running in ?mode=mobile, inject a <style> tag that constrains the
   // entire app AND all modal portals to a phone-sized frame.  React Native
@@ -92,7 +131,7 @@ if (typeof document !== "undefined") {
       /* The direct child of the portal (the modal wrapper) is also kept
          click-through, but we constrain it to the phone frame and center
          it perfectly over the main app. */
-      body > div:not(#root):has([role="dialog"]) > div {
+      body > div:not(#root) > div {
         pointer-events: none !important;
         position: fixed !important;
         width: 430px !important;
@@ -104,6 +143,40 @@ if (typeof document !== "undefined") {
         transform: translate(-50%, -50%) !important;
         border-radius: 24px !important;
         overflow: hidden !important;
+      }
+
+      /* React Native Web places the actual modal content several levels
+         below the portal wrapper. The role=dialog element has its own
+         full-viewport fixed styles when active, so constrain it too.
+         Without this rule an edit form expands across the desktop browser
+         even when the app is running in mobile mode. */
+      body > div:not(#root):has([role="dialog"]) [role="dialog"] {
+        pointer-events: auto !important;
+        position: fixed !important;
+        width: 430px !important;
+        max-width: 100vw !important;
+        height: 100% !important;
+        max-height: 932px !important;
+        left: 50% !important;
+        top: 50% !important;
+        right: auto !important;
+        bottom: auto !important;
+        transform: translate(-50%, -50%) !important;
+        border-radius: 24px !important;
+        overflow: hidden !important;
+      }
+
+      /* ModalContent and its inner container both add full-screen fixed
+         styles. These selectors also cover inactive modals, which no longer
+         expose role=dialog while a confirmation modal is on top. */
+      body > div:not(#root) > div > div > div,
+      body > div:not(#root) > div > div > div > div {
+        position: relative !important;
+        width: 100% !important;
+        height: 100% !important;
+        max-width: 100% !important;
+        max-height: 100% !important;
+        inset: auto !important;
       }
 
       /* Enable pointer events normally for descendants of active dialogs. */
@@ -175,6 +248,7 @@ export default function App() {
     <SafeAreaProvider>
       <AuthProvider>
         <GlobalDataProvider>
+          <SystemAlertHost />
           <ErrorBoundary>
             <AppContent />
           </ErrorBoundary>

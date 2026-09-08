@@ -31,6 +31,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from starlette.middleware.gzip import GZipMiddleware
 
 try:
     import dns.resolver as dns_resolver
@@ -89,6 +90,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Compress JSON responses before they leave the API. This reduces client/API
+# transfer for large dashboards and reports; media is still excluded from
+# lightweight reads below so compression is only the final safety net.
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
 
 # Simple TTL-based cache for query results to improve performance
 class TTLCache:
@@ -128,6 +133,61 @@ _message_query_locks_guard = threading.Lock()
 _message_storage_ready = False
 _message_storage_lock = threading.Lock()
 NON_CACHEABLE_COLLECTION_KEYS = {"programTracks", "programs"}
+# These fields can contain base64 images or large attachment payloads. They
+# are not needed by collection/list screens and are fetched only by an
+# explicit include_images=true detail/preview request.
+LIGHTWEIGHT_MEDIA_FIELDS: dict[str, set[str]] = {
+    "users": {
+        "profilePhoto",
+        "validIdPhoto",
+        "certificationsOrTrainings",
+        "registrationDocuments",
+    },
+    "volunteers": {
+        "validIdPhoto",
+        "certificationsOrTrainings",
+        "videoBriefingUrl",
+    },
+    "partners": {"registrationDocuments"},
+    "projects": {"imageUrl", "attachments"},
+    "events": {"imageUrl", "attachments"},
+    "programs": {"imageUrl", "attachments"},
+    "programTracks": {"imageUrl"},
+    "volunteerTimeLogs": {"attendancePhoto", "completionPhoto"},
+    "projectGroupMessages": {"attachments"},
+    "partnerProjectApplications": {"attachments"},
+    "partnerReports": {"attachments", "mediaFile"},
+    "publishedImpactReports": {"attachments", "mediaFile"},
+}
+
+
+def _strip_lightweight_media(key: str, value: Any) -> Any:
+    """Remove large media fields from ordinary collection responses.
+
+    The scrubber walks nested JSON because documents are commonly stored in
+    user membership sheets and proposalDetails rather than at the top level.
+    It preserves the field shape with None/[] so existing UI fallbacks remain
+    safe and explicit full-media reads can use the same response schema.
+    """
+    fields = LIGHTWEIGHT_MEDIA_FIELDS.get(key)
+    if not fields:
+        return value
+
+    def scrub(node: Any) -> Any:
+        if isinstance(node, list):
+            return [scrub(item) for item in node]
+        if not isinstance(node, dict):
+            return node
+
+        result: dict[str, Any] = {}
+        for field_name, field_value in node.items():
+            if field_name in fields:
+                result[field_name] = [] if isinstance(field_value, list) else None
+            else:
+                result[field_name] = scrub(field_value)
+        return result
+
+    return scrub(value)
 _DEFAULT_SNAPSHOT_FIELDS = {
     "projects",
     "programs",
@@ -1950,17 +2010,27 @@ def _get_cached_collection(
     if key in NON_CACHEABLE_COLLECTION_KEYS:
         if is_hot_storage_key(key):
             if key == "volunteerTimeLogs":
-                return _get_admin_dashboard_collection(connection, key)
-            return get_postgres_hot_storage_collection(connection, key)
+                value = _get_admin_dashboard_collection(
+                    connection,
+                    key,
+                    include_images=include_images,
+                )
+            else:
+                value = get_postgres_hot_storage_collection(
+                    connection,
+                    key,
+                    include_images=include_images,
+                )
+            return value if include_images else _strip_lightweight_media(key, value)
         if key in SPECIAL_STORAGE_KEYS:
-            return _get_special_storage_collection(connection, key)
+            value = _get_special_storage_collection(connection, key)
+            return value if include_images else _strip_lightweight_media(key, value)
         return None
 
-    cache_key = (
-        f"collection:{key}:images:{1 if include_images else 0}"
-        if key == "volunteerTimeLogs"
-        else _collection_cache_key(key)
-    )
+    # Keep image-bearing and lightweight responses in separate caches. A full
+    # detail read must never populate the cache used by list screens, and a
+    # lightweight read must never be returned to an explicit preview request.
+    cache_key = f"collection:{key}:images:{1 if include_images else 0}"
     cached = _storage_collection_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -1969,12 +2039,18 @@ def _get_cached_collection(
         if key == "volunteerTimeLogs":
             value = _get_admin_dashboard_collection(connection, key, include_images=include_images)
         else:
-            value = get_postgres_hot_storage_collection(connection, key)
+            value = get_postgres_hot_storage_collection(
+                connection,
+                key,
+                include_images=include_images,
+            )
     elif key in SPECIAL_STORAGE_KEYS:
         value = _get_special_storage_collection(connection, key)
     else:
         value = None
 
+    if not include_images:
+        value = _strip_lightweight_media(key, value)
     _storage_collection_cache.set(cache_key, value)
     return value
 
@@ -2169,7 +2245,7 @@ def _get_admin_dashboard_collection(
                 for row in cursor.fetchall()
             ]
 
-    return _get_cached_collection(connection, key)
+    return _get_cached_collection(connection, key, include_images=include_images)
 
 
 def _compress_image_data_uri(value: Any) -> Any:
@@ -2237,6 +2313,7 @@ def _postgres_get_hot_item_by_id(
     item_id: str,
     *,
     include_password: bool = False,
+    for_update: bool = False,
 ) -> dict[str, Any] | None:
     try:
         return get_relational_item_by_id(
@@ -2244,6 +2321,7 @@ def _postgres_get_hot_item_by_id(
             key,
             item_id,
             include_password=include_password,
+            for_update=for_update,
         )
     except KeyError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -2477,6 +2555,10 @@ def _postgres_get_project_like_item_by_id(
     event = _postgres_get_hot_item_by_id(connection, "events", item_id)
     if event is not None:
         return event, "events"
+
+    program = _postgres_get_hot_item_by_id(connection, "programs", item_id)
+    if program is not None:
+        return program, "programs"
 
     return None, None
 
@@ -2869,7 +2951,7 @@ def _build_projects_snapshot(
     user_id: str | None,
     role: str | None,
     requested_fields: set[str] | None = None,
-    include_images: bool = True,
+    include_images: bool = False,
 ) -> dict[str, Any]:
     import sys
     import time as _time
@@ -3833,6 +3915,38 @@ def _ensure_volunteer_profile_for_user(connection: Any, user: dict[str, Any]) ->
     if not user_id:
         return False
 
+    # Volunteer registration details are shown from the linked volunteer
+    # profile in Volunteer Management.  User rows deliberately do not retain
+    # the full membership sheet, so copy any supplied member-owned fields to
+    # that profile whenever the account is saved.  This also repairs profiles
+    # created before document fields (such as a valid ID photo) existed.
+    membership_sheet = user.get("volunteerMembershipSheet")
+    membership_fields = (
+        "gender",
+        "dateOfBirth",
+        "civilStatus",
+        "homeAddress",
+        "homeAddressRegion",
+        "homeAddressCityMunicipality",
+        "homeAddressBarangay",
+        "occupation",
+        "workplaceOrSchool",
+        "collegeCourse",
+        "certificationsOrTrainings",
+        "validIdPhoto",
+        "hobbiesAndInterests",
+        "specialSkills",
+        "skills",
+        "affiliations",
+    )
+    membership_updates = {
+        field: membership_sheet[field]
+        for field in membership_fields
+        if isinstance(membership_sheet, dict)
+        and field in membership_sheet
+        and membership_sheet[field] is not None
+    }
+
     email = str(user.get("email") or "").strip().lower()
     phone = _normalize_comparable_phone(user.get("phone"))
     volunteers = get_postgres_hot_storage_collection(connection, "volunteers")
@@ -3856,15 +3970,26 @@ def _ensure_volunteer_profile_for_user(connection: Any, user: dict[str, Any]) ->
     if linked_volunteer is not None:
         # Link legacy profiles that were previously matched only by email or
         # phone, so Volunteer Management can always find the account by user id.
+        updated_volunteer = dict(linked_volunteer)
+        has_changes = False
         if str(linked_volunteer.get("userId") or "").strip() != user_id:
-            linked_volunteer = {
-                **linked_volunteer,
-                "userId": user_id,
-                "name": str(user.get("name") or linked_volunteer.get("name") or "").strip(),
-                "email": email or linked_volunteer.get("email") or "",
-                "phone": user.get("phone") or linked_volunteer.get("phone") or "",
-            }
-            _postgres_upsert_hot_item(connection, "volunteers", linked_volunteer)
+            updated_volunteer.update(
+                {
+                    "userId": user_id,
+                    "name": str(user.get("name") or linked_volunteer.get("name") or "").strip(),
+                    "email": email or linked_volunteer.get("email") or "",
+                    "phone": user.get("phone") or linked_volunteer.get("phone") or "",
+                }
+            )
+            has_changes = True
+
+        for field, value in membership_updates.items():
+            if updated_volunteer.get(field) != value:
+                updated_volunteer[field] = value
+                has_changes = True
+
+        if has_changes:
+            _postgres_upsert_hot_item(connection, "volunteers", updated_volunteer)
             return True
         return False
 
@@ -3899,11 +4024,13 @@ def _ensure_volunteer_profile_for_user(connection: Any, user: dict[str, Any]) ->
         "workplaceOrSchool": "",
         "collegeCourse": "",
         "certificationsOrTrainings": "",
+        "validIdPhoto": "",
         "videoBriefingUrl": "",
         "affiliations": [],
         "registrationStatus": "Pending" if approval_status == "pending" else "Approved",
         "createdAt": created_at,
     }
+    volunteer_profile.update(membership_updates)
     _postgres_upsert_hot_item(connection, "volunteers", volunteer_profile)
     return True
 
@@ -4771,7 +4898,7 @@ def get_projects_snapshot(
     fields: str | None = None,
     limit: int | None = None,
     offset: int = 0,
-    include_images: bool = True,
+    include_images: bool = False,
 ) -> dict[str, Any]:
     """Return the project snapshot used by web and native project screens."""
     try:
@@ -5221,7 +5348,12 @@ async def update_partner_project_application_details(
     from psycopg.rows import dict_row
 
     with get_connection() as connection:
-        application = _postgres_get_hot_item_by_id(connection, "partnerProjectApplications", application_id)
+        application = _postgres_get_hot_item_by_id(
+            connection,
+            "partnerProjectApplications",
+            application_id,
+            for_update=True,
+        )
         if application is None:
             raise HTTPException(status_code=404, detail="Application not found.")
 
@@ -5343,9 +5475,21 @@ async def review_partner_project_application(
     ensure_message_storage_once()
     from psycopg.rows import dict_row
     with get_connection() as connection:
-        application = _postgres_get_hot_item_by_id(connection, "partnerProjectApplications", application_id)
+        application = _postgres_get_hot_item_by_id(
+            connection,
+            "partnerProjectApplications",
+            application_id,
+            for_update=True,
+        )
         if application is None:
             raise HTTPException(status_code=404, detail="Application not found.")
+
+        current_status = str(application.get("status") or "Pending").strip()
+        if current_status != "Pending":
+            raise HTTPException(
+                status_code=409,
+                detail=f"This proposal has already been {current_status.lower()} and cannot be reviewed again.",
+            )
 
         next_project_id = str(application.get("projectId") or "")
         raw_proposal_details = application.get("proposalDetails")
@@ -6336,7 +6480,7 @@ async def storage_websocket(websocket: WebSocket) -> None:
 
 @app.get("/storage/{key}")
 # API endpoint that reads one storage key from app storage or hot storage.
-def get_storage_item(key: str, include_images: bool = True) -> dict[str, Any]:
+def get_storage_item(key: str, include_images: bool = False) -> dict[str, Any]:
     _require_postgres()
     if not is_hot_storage_key(key) and key not in SPECIAL_STORAGE_KEYS:
         return {"key": key, "value": None}
@@ -6706,6 +6850,44 @@ def _validate_internal_task_assignment_limits(items: list[Any]) -> None:
 # This is used by high-frequency actions such as approvals, task assignment, and
 # project/event edits. The existing collection endpoint remains available for
 # bulk imports and backwards compatibility.
+@app.get("/project-records/{item_id}")
+def get_project_record_by_id(item_id: str) -> dict[str, Any]:
+    """Read one project, event, or program without loading all media collections."""
+    _require_postgres()
+    normalized_item_id = str(item_id or "").strip()
+    if not normalized_item_id:
+        raise HTTPException(status_code=400, detail="Project id is required.")
+
+    with get_connection() as connection:
+        item, key = _postgres_get_project_like_item_by_id(connection, normalized_item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Project record not found.")
+    return {"key": key, "item": item}
+
+
+@app.get("/storage/{key}/items/{item_id}")
+def get_storage_item_by_id(key: str, item_id: str) -> dict[str, Any]:
+    """Read one full relational record for an explicit detail/preview view."""
+    _require_postgres()
+    if not is_hot_storage_key(key):
+        raise HTTPException(status_code=400, detail=f"Unsupported storage key '{key}'.")
+
+    normalized_item_id = str(item_id or "").strip()
+    if not normalized_item_id:
+        raise HTTPException(status_code=400, detail="Item id is required.")
+
+    try:
+        with get_connection() as connection:
+            item = _postgres_get_hot_item_by_id(connection, key, normalized_item_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Storage item not found.")
+        return {"key": key, "item": item}
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"Storage item read failed: {error}") from error
+
+
 @app.put("/storage/{key}/items/{item_id}")
 async def put_storage_item_by_id(
     key: str,

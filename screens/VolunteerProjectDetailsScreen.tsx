@@ -77,7 +77,9 @@ export default function VolunteerProjectDetailsScreen({
         getProject(projectId),
         getVolunteerProjectMatches(volunteerId).catch(() => []),
         getAllPartners().catch(() => []),
-        getAllProjects(true).catch(() => []),
+        // The selected project is loaded by getProject; this list is only for
+        // resolving its parent and does not need uploaded images.
+        getAllProjects(false).catch(() => []),
         getAllVolunteerProjectJoinRecords().catch(() => []),
         getAllVolunteers().catch(() => []),
       ]);

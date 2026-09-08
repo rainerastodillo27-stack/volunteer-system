@@ -8,7 +8,6 @@ import {
   Modal,
   TextInput,
   ScrollView,
-  Image,
   Platform,
   ActivityIndicator,
 } from 'react-native';
@@ -17,13 +16,16 @@ import { useFocusEffect } from '@react-navigation/native';
 import { format } from 'date-fns';
 import InlineLoadError from '../components/InlineLoadError';
 import ConfirmDialog from '../components/ConfirmDialog';
+import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import { useAuth } from '../contexts/AuthContext';
 import {
   deleteUser,
   getAllPartners,
+  getPartner,
   getAllUsers,
   getAllVolunteers,
+  getVolunteerByUserId,
   saveUser,
   savePartner,
   saveVolunteer,
@@ -36,7 +38,7 @@ import {
   rejectUser,
 } from '../models/storage';
 import { NVCSector, Partner, User, UserRole, UserType, Volunteer } from '../models/types';
-import { getAttachmentLabel, isImageMediaUri, openAttachmentUri } from '../utils/media';
+import { getAttachmentLabel } from '../utils/media';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 const roleOptions: UserRole[] = ['admin', 'partner', 'volunteer'];
@@ -69,6 +71,9 @@ export default function UserManagementScreen() {
   const [pillarsDraft, setPillarsDraft] = useState<NVCSector[]>([]);
 
   const [reviewTarget, setReviewTarget] = useState<{ type: 'user'; record: User } | null>(null);
+  const [reviewVolunteer, setReviewVolunteer] = useState<Volunteer | null>(null);
+  const [reviewPartner, setReviewPartner] = useState<Partner | null>(null);
+  const [documentPreview, setDocumentPreview] = useState<{ title: string; uri: string } | null>(null);
   const [accountSearch, setAccountSearch] = useState('');
   const [accountFilter, setAccountFilter] = useState<'all' | UserRole>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'pending'>('all');
@@ -321,11 +326,30 @@ export default function UserManagementScreen() {
 
   const openUserReview = (targetUser: User) => {
     setReviewTarget({ type: 'user', record: targetUser });
+    setReviewVolunteer(null);
+    setReviewPartner(null);
     setShowActionMenuUser(null);
+
+    // Keep list reads lightweight, then fetch only the selected account's
+    // document-bearing profile for the admin preview.
+    if (targetUser.role === 'volunteer') {
+      void getVolunteerByUserId(targetUser.id)
+        .then(profile => setReviewVolunteer(profile))
+        .catch(() => null);
+    } else if (targetUser.role === 'partner') {
+      const linkedPartner = getLinkedPartnerForUser(targetUser);
+      if (linkedPartner?.id) {
+        void getPartner(linkedPartner.id)
+          .then(profile => setReviewPartner(profile))
+          .catch(() => null);
+      }
+    }
   };
 
   const closeReviewModal = () => {
     setReviewTarget(null);
+    setReviewVolunteer(null);
+    setReviewPartner(null);
   };
 
   const getLinkedPartnerForUser = (targetUser: User) =>
@@ -973,7 +997,7 @@ export default function UserManagementScreen() {
 
                 <View style={styles.reviewDetailRow}>
                   <Text style={styles.reviewDetailLabel}>Organization</Text>
-                  <Text style={styles.reviewDetailValue}>{getLinkedPartnerForUser(reviewTarget.record)?.name || (reviewTarget.record.role === 'admin' ? 'NVC' : '—')}</Text>
+                  <Text style={styles.reviewDetailValue}>{(reviewPartner || getLinkedPartnerForUser(reviewTarget.record))?.name || (reviewTarget.record.role === 'admin' ? 'NVC' : '—')}</Text>
                 </View>
 
                 <View style={styles.reviewDetailRow}>
@@ -983,10 +1007,20 @@ export default function UserManagementScreen() {
 
               </View>
 
-              {reviewTarget.record.role === 'volunteer' && getLinkedVolunteerForUser(reviewTarget.record) ? (() => {
-                const volunteerProfile = getLinkedVolunteerForUser(reviewTarget.record)!;
+              {reviewTarget.record.role === 'volunteer' && (reviewVolunteer || getLinkedVolunteerForUser(reviewTarget.record)) ? (() => {
+                const volunteerProfile = reviewVolunteer || getLinkedVolunteerForUser(reviewTarget.record)!;
                 const registration = (reviewTarget.record as any).volunteerRegistration || {};
-                const validIdPhoto = registration.validIdPhoto || (volunteerProfile as any).validIdPhoto;
+                const certificateUri = (
+                  volunteerProfile.certificationsOrTrainings ||
+                  reviewTarget.record.volunteerMembershipSheet?.certificationsOrTrainings ||
+                  ''
+                ).trim();
+                const validIdPhoto = (
+                  volunteerProfile.validIdPhoto ||
+                  reviewTarget.record.volunteerMembershipSheet?.validIdPhoto ||
+                  registration.validIdPhoto ||
+                  ''
+                ).trim();
                 return (
                   <View style={styles.reviewDetailsSection}>
                     <Text style={styles.reviewSectionTitle}>Volunteer Profile Details</Text>
@@ -998,7 +1032,6 @@ export default function UserManagementScreen() {
                       ['Occupation', volunteerProfile.occupation],
                       ['Workplace / School', volunteerProfile.workplaceOrSchool],
                       ['College Course', volunteerProfile.collegeCourse],
-                      ['Certifications / Trainings', volunteerProfile.certificationsOrTrainings],
                       ['Hobbies & Interests', volunteerProfile.hobbiesAndInterests],
                       ['Special Skills', volunteerProfile.specialSkills],
                     ].map(([label, value]) => (
@@ -1007,6 +1040,44 @@ export default function UserManagementScreen() {
                         <Text style={styles.reviewDetailValue}>{value || 'Not provided'}</Text>
                       </View>
                     ))}
+                    <View style={styles.reviewDetailRow}>
+                      <Text style={styles.reviewDetailLabel}>Certifications / Trainings</Text>
+                      {certificateUri ? (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 }}>
+                          <TouchableOpacity
+                            onPress={() => setDocumentPreview({ title: 'Certificate / Training Preview', uri: certificateUri })}
+                            accessibilityLabel="View certification or training"
+                            style={styles.reviewDocumentButton}
+                          >
+                            <MaterialIcons name="visibility" size={16} color="#166534" />
+                          </TouchableOpacity>
+                          <Text style={styles.reviewDetailValue} numberOfLines={1}>
+                            {getAttachmentLabel(certificateUri)}
+                          </Text>
+                        </View>
+                      ) : (
+                        <Text style={styles.reviewDetailValue}>Not provided</Text>
+                      )}
+                    </View>
+                    <View style={styles.reviewDetailRow}>
+                      <Text style={styles.reviewDetailLabel}>Valid ID Photo</Text>
+                      {validIdPhoto ? (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 }}>
+                          <TouchableOpacity
+                            onPress={() => setDocumentPreview({ title: 'Valid ID Preview', uri: validIdPhoto })}
+                            accessibilityLabel="View valid ID photo"
+                            style={styles.reviewDocumentButton}
+                          >
+                            <MaterialIcons name="visibility" size={16} color="#166534" />
+                          </TouchableOpacity>
+                          <Text style={styles.reviewDetailValue} numberOfLines={1}>
+                            {getAttachmentLabel(validIdPhoto)}
+                          </Text>
+                        </View>
+                      ) : (
+                        <Text style={styles.reviewDetailValue}>Not provided</Text>
+                      )}
+                    </View>
                     {volunteerProfile.skills?.length ? (
                       <View style={styles.reviewDetailRow}>
                         <Text style={styles.reviewDetailLabel}>Skills</Text>
@@ -1031,21 +1102,14 @@ export default function UserManagementScreen() {
                         </View>
                       </View>
                     ) : null}
-                    {validIdPhoto ? (
-                      <View style={styles.reviewMediaBlock}>
-                        <Text style={styles.reviewDetailLabel}>Valid ID Photo</Text>
-                        <TouchableOpacity onPress={() => void openAttachmentUri(validIdPhoto)}>
-                          <Image source={{ uri: validIdPhoto }} style={styles.reviewDocumentImage} resizeMode="contain" />
-                          <Text style={styles.reviewAttachmentLink}>View full image</Text>
-                        </TouchableOpacity>
-                      </View>
-                    ) : null}
                   </View>
                 );
               })() : null}
 
-              {reviewTarget.record.role === 'partner' && getLinkedPartnerForUser(reviewTarget.record) ? (() => {
-                const partnerProfile = getLinkedPartnerForUser(reviewTarget.record)!;
+              {reviewTarget.record.role === 'partner' && (reviewPartner || getLinkedPartnerForUser(reviewTarget.record)) ? (() => {
+                const partnerProfile = reviewPartner || getLinkedPartnerForUser(reviewTarget.record)!;
+                const validIdDocument = (partnerProfile.registrationDocuments || []).find(Boolean) || '';
+                const additionalDocuments = (partnerProfile.registrationDocuments || []).slice(1);
                 return (
                   <View style={styles.reviewDetailsSection}>
                     <Text style={styles.reviewSectionTitle}>Partner Application Details</Text>
@@ -1074,11 +1138,34 @@ export default function UserManagementScreen() {
                         </View>
                       </View>
                     ) : null}
-                    {partnerProfile.registrationDocuments?.length ? (
+                    <View style={styles.reviewDetailRow}>
+                      <Text style={styles.reviewDetailLabel}>Valid ID Photo</Text>
+                      {validIdDocument ? (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 }}>
+                          <TouchableOpacity
+                            onPress={() => setDocumentPreview({ title: 'Partner Valid ID Preview', uri: validIdDocument })}
+                            accessibilityLabel="View partner valid ID photo"
+                            style={styles.reviewDocumentButton}
+                          >
+                            <MaterialIcons name="visibility" size={16} color="#166534" />
+                          </TouchableOpacity>
+                          <Text style={styles.reviewDetailValue} numberOfLines={1}>
+                            {getAttachmentLabel(validIdDocument)}
+                          </Text>
+                        </View>
+                      ) : (
+                        <Text style={styles.reviewDetailValue}>Not provided</Text>
+                      )}
+                    </View>
+                    {additionalDocuments.length ? (
                       <View style={styles.reviewMediaBlock}>
-                        <Text style={styles.reviewDetailLabel}>Submitted Documents</Text>
-                        {partnerProfile.registrationDocuments.map((documentUri, index) => (
-                          <TouchableOpacity key={`${documentUri}-${index}`} style={styles.reviewDocumentRow} onPress={() => void openAttachmentUri(documentUri)}>
+                        <Text style={styles.reviewDetailLabel}>Additional Submitted Documents</Text>
+                        {additionalDocuments.map((documentUri, index) => (
+                          <TouchableOpacity
+                            key={`${documentUri}-${index}`}
+                            style={styles.reviewDocumentRow}
+                            onPress={() => setDocumentPreview({ title: 'Submitted Document Preview', uri: documentUri })}
+                          >
                             <MaterialIcons name="description" size={17} color="#166534" />
                             <Text style={styles.reviewAttachmentLink} numberOfLines={1}>{getAttachmentLabel(documentUri)}</Text>
                           </TouchableOpacity>
@@ -1092,6 +1179,13 @@ export default function UserManagementScreen() {
           </View>
         )}
       </Modal>
+
+      <DocumentPreviewModal
+        visible={Boolean(documentPreview)}
+        title={documentPreview?.title}
+        uri={documentPreview?.uri}
+        onClose={() => setDocumentPreview(null)}
+      />
 
       <ConfirmDialog
         visible={dialogState.visible}
@@ -1896,11 +1990,12 @@ const styles = StyleSheet.create({
     marginTop: 12,
     gap: 8,
   },
-  reviewDocumentImage: {
-    width: '100%',
-    height: 210,
-    borderRadius: 10,
-    backgroundColor: '#f1f5f9',
+  reviewDocumentButton: {
+    padding: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#f8fafc',
   },
   reviewDocumentRow: {
     flexDirection: 'row',

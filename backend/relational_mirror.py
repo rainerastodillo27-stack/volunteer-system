@@ -94,6 +94,7 @@ RELATIONAL_TABLE_DDL = [
       id text primary key,
       owner_user_id text,
       name text not null,
+      stakeholder_name text,
       description text,
       category text,
       sector_type text,
@@ -115,6 +116,7 @@ RELATIONAL_TABLE_DDL = [
     """,
     "create index if not exists partners_owner_user_id_idx on partners (owner_user_id)",
     "create index if not exists partners_dswd_accreditation_no_idx on partners (dswd_accreditation_no)",
+    "alter table partners add column if not exists stakeholder_name text",
     "alter table partners add column if not exists sec_registration_no text",
     f"""
         create table if not exists volunteers (
@@ -142,6 +144,7 @@ RELATIONAL_TABLE_DDL = [
             workplace_or_school text,
             college_course text,
             certifications_or_trainings text,
+            valid_id_photo text,
             video_briefing_url text,
             affiliations text not null default {JSON_ARRAY},
             registration_status text,
@@ -163,6 +166,7 @@ RELATIONAL_TABLE_DDL = [
     "alter table volunteers add column if not exists home_address_region text",
     "alter table volunteers add column if not exists home_address_city_municipality text",
     "alter table volunteers add column if not exists home_address_barangay text",
+    "alter table volunteers add column if not exists valid_id_photo text",
     "alter table volunteers add column if not exists video_briefing_url text",
     f"""
     create table if not exists skills (
@@ -607,6 +611,7 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("id", False),
             ("owner_user_id", False),
             ("name", False),
+            ("stakeholder_name", False),
             ("description", False),
             ("category", False),
             ("sector_type", False),
@@ -653,6 +658,7 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("workplace_or_school", False),
             ("college_course", False),
             ("certifications_or_trainings", False),
+            ("valid_id_photo", False),
             
             ("video_briefing_url", False),
             ("affiliations", False),
@@ -920,6 +926,24 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
         ],
     },
 }
+
+# Columns that can contain base64 images or large attachment JSON. Lightweight
+# reads replace them in SQL so the bytes do not leave Postgres at all.
+LIGHTWEIGHT_MEDIA_COLUMNS: dict[str, set[str]] = {
+    "projects": {"image_url"},
+    "programs": {"image_url"},
+    "events": {"image_url"},
+    "partners": {"registration_documents"},
+    "volunteers": {
+        "certifications_or_trainings",
+        "valid_id_photo",
+        "video_briefing_url",
+    },
+    "volunteerTimeLogs": {"attendance_photo", "completion_photo"},
+    "partnerReports": {"attachments", "media_file"},
+    "publishedImpactReports": {"attachments", "media_file"},
+}
+
 
 FIELD_NAME_MAPS: dict[str, dict[str, str]] = {
     "projects": {
@@ -1288,6 +1312,7 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("id"),
             item.get("ownerUserId"),
             item.get("name") or "",
+            item.get("stakeholderName"),
             item.get("description"),
             item.get("category"),
             item.get("sectorType"),
@@ -1333,6 +1358,7 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("workplaceOrSchool"),
             item.get("collegeCourse"),
             item.get("certificationsOrTrainings"),
+            item.get("validIdPhoto"),
             
             item.get("videoBriefingUrl"),
             _json_dump(item.get("affiliations"), []),
@@ -1639,6 +1665,7 @@ def _row_to_item(
             "id": row_id,
             "ownerUserId": row["owner_user_id"],
             "name": row["name"],
+            "stakeholderName": row["stakeholder_name"],
             "description": row["description"],
             "category": row["category"],
             "sectorType": row["sector_type"],
@@ -1684,6 +1711,7 @@ def _row_to_item(
             "workplaceOrSchool": row.get("workplace_or_school"),
             "collegeCourse": row.get("college_course"),
             "certificationsOrTrainings": row.get("certifications_or_trainings"),
+            "validIdPhoto": row.get("valid_id_photo"),
             "videoBriefingUrl": row.get("video_briefing_url"),
             "affiliations": _json_load(row.get("affiliations"), []),
             "registrationStatus": row.get("registration_status"),
@@ -2213,7 +2241,39 @@ def sync_all_relational_mirror_tables(connection: Any, collections: dict[str, li
         sync_relational_mirror_collection(connection, key, items if isinstance(items, list) else [])
 
 
-def get_relational_collection(connection: Any, key: str) -> list[dict[str, Any]]:
+def _relational_select_expressions(
+    key: str,
+    column_names: list[str],
+    *,
+    include_images: bool,
+) -> list[str]:
+    if include_images:
+        return list(column_names)
+
+    media_columns = LIGHTWEIGHT_MEDIA_COLUMNS.get(key, set())
+    expressions: list[str] = []
+    for column_name in column_names:
+        if column_name in media_columns:
+            expressions.append(f"null::text as {column_name}")
+        elif key == "partnerProjectApplications" and column_name == "proposal_details":
+            # Proposal metadata is needed by list/review cards, but uploaded
+            # proposal attachments are not. Remove that JSON member in SQL.
+            expressions.append(
+                "case when proposal_details is null or btrim(proposal_details) = '' "
+                "then '{}' else (proposal_details::jsonb - 'attachments')::text end "
+                "as proposal_details"
+            )
+        else:
+            expressions.append(column_name)
+    return expressions
+
+
+def get_relational_collection(
+    connection: Any,
+    key: str,
+    *,
+    include_images: bool = True,
+) -> list[dict[str, Any]]:
     spec = TABLE_SPECS.get(key)
     if not spec:
         raise KeyError(f"Unsupported relational mirror key: {key}")
@@ -2222,6 +2282,11 @@ def get_relational_collection(connection: Any, key: str) -> list[dict[str, Any]]
     from psycopg.errors import UndefinedColumn, UndefinedTable
 
     column_names = [column_name for column_name, _ in spec["columns"]]
+    select_expressions = _relational_select_expressions(
+        key,
+        column_names,
+        include_images=include_images,
+    )
     filter_clause = _row_filter_clause(key)
     
     with connection.cursor(row_factory=dict_row) as cursor:
@@ -2230,7 +2295,7 @@ def get_relational_collection(connection: Any, key: str) -> list[dict[str, Any]]
             cursor.execute("SET statement_timeout = '30s'")
         except Exception:
             pass  # If timeout setting fails, continue with default
-        query = f"select {', '.join(column_names)} from {spec['table']}"
+        query = f"select {', '.join(select_expressions)} from {spec['table']}"
         if filter_clause:
             query += f" where {filter_clause}"
         query += f" order by {_primary_key_column(key)} asc"
@@ -2265,7 +2330,7 @@ def get_relational_collection(connection: Any, key: str) -> list[dict[str, Any]]
                             connection.rollback()
                         except Exception:
                             pass
-                        alt_column_names = list(column_names)
+                        alt_column_names = list(select_expressions)
                         alt_pk = 'id'
                         alt_column_names[0] = alt_pk
                         alt_query = f"select {', '.join(alt_column_names)} from {spec['table']}"
@@ -2319,6 +2384,7 @@ def get_relational_item_by_id(
     item_id: str,
     *,
     include_password: bool = False,
+    for_update: bool = False,
 ) -> dict[str, Any] | None:
     spec = TABLE_SPECS.get(key)
     if not spec:
@@ -2333,6 +2399,8 @@ def get_relational_item_by_id(
         query = f"select {', '.join(column_names)} from {spec['table']} where {_primary_key_column(key)} = %s"
         if filter_clause:
             query += f" and {filter_clause}"
+        if for_update:
+            query += " for update"
         try:
             cursor.execute(query, (item_id,))
         except (UndefinedColumn, UndefinedTable):

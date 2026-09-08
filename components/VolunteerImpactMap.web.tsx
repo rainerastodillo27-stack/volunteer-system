@@ -91,6 +91,7 @@ type VolunteerImpactMapProps = {
   dashboardVariant?: boolean;
   volunteerAccounts?: MapAccountOption[];
   partnerAccounts?: MapAccountOption[];
+  lockedVolunteerId?: string;
   onVolunteerPress?: (volunteerId: string) => void;
   onPartnerPress?: (partnerId: string) => void;
 };
@@ -231,6 +232,7 @@ export default function VolunteerImpactMap({
   dashboardVariant = false,
   volunteerAccounts,
   partnerAccounts,
+  lockedVolunteerId,
   onVolunteerPress,
   onPartnerPress,
 }: VolunteerImpactMapProps) {
@@ -272,12 +274,23 @@ export default function VolunteerImpactMap({
   const markerHoveringRef = useRef(false);
   const openInfoWindowProjectIdRef = useRef<string | null>(null);
   const webGoogleMapsApiKey = getWebGoogleMapsApiKey();
+  const activeMapStyleKey: MapStylePresetKey = lockedVolunteerId ? 'volunteer-view' : selectedMapStyleKey;
   const selectedMapStyle =
-    MAP_STYLE_PRESETS.find(preset => preset.key === selectedMapStyleKey) || MAP_STYLE_PRESETS[1];
+    MAP_STYLE_PRESETS.find(preset => preset.key === activeMapStyleKey) || MAP_STYLE_PRESETS[1];
 
   useEffect(() => {
     setSelectedMapStyleKey(initialMapStyleKey);
   }, [initialMapStyleKey]);
+
+  // A volunteer's profile map must never switch to another account or a
+  // system-wide mode, even while the shared map component is refreshing.
+  useEffect(() => {
+    if (!lockedVolunteerId) return;
+    setSelectedMapStyleKey('volunteer-view');
+    setSelectedVolunteerId(lockedVolunteerId);
+    setShowMapStyleMenu(false);
+    setShowAccountMenu(false);
+  }, [lockedVolunteerId]);
 
   useEffect(() => {
     setSelectedVolunteerId(current =>
@@ -296,23 +309,27 @@ export default function VolunteerImpactMap({
   }, [partnerOptions]);
 
   const currentAccountOptions =
-    selectedMapStyleKey === 'volunteer-view'
+    activeMapStyleKey === 'volunteer-view'
       ? volunteerOptions
-      : selectedMapStyleKey === 'partner-view'
+      : activeMapStyleKey === 'partner-view'
       ? partnerOptions
       : [];
 
   const selectedAccountOption =
-    selectedMapStyleKey === 'volunteer-view'
+    lockedVolunteerId
+      ? volunteerOptions.find(option => option.id === lockedVolunteerId) || null
+      : activeMapStyleKey === 'volunteer-view'
       ? volunteerOptions.find(option => option.id === selectedVolunteerId) || volunteerOptions[0] || null
-      : selectedMapStyleKey === 'partner-view'
+      : activeMapStyleKey === 'partner-view'
       ? partnerOptions.find(option => option.id === selectedPartnerId) || partnerOptions[0] || null
       : null;
 
   const scopedProjects =
-    selectedMapStyleKey === 'admin-overview'
+    lockedVolunteerId
+      ? volunteerOptions.find(option => option.id === lockedVolunteerId)?.mappedProjects || []
+      : activeMapStyleKey === 'admin-overview'
       ? mappedProjects
-      : selectedMapStyleKey === 'volunteer-view'
+      : activeMapStyleKey === 'volunteer-view'
       ? hasVolunteerScope
         ? selectedAccountOption?.mappedProjects || []
         : mappedEvents
@@ -656,21 +673,23 @@ export default function VolunteerImpactMap({
   ]);
 
   const hasAnyMapData =
-    mappedProjects.length > 0 || volunteerOptions.length > 0 || partnerOptions.length > 0;
+    lockedVolunteerId
+      ? volunteerOptions.length > 0
+      : mappedProjects.length > 0 || volunteerOptions.length > 0 || partnerOptions.length > 0;
 
   if (!hasAnyMapData) {
     return null;
   }
 
   const emptyStateMessage = getMapEmptyStateMessage(
-    selectedMapStyleKey,
+    activeMapStyleKey,
     currentAccountOptions,
     selectedAccountOption
   );
-  const showAccountPicker = selectedMapStyleKey !== 'admin-overview' && currentAccountOptions.length > 0;
-  const selectedAccountLabel = getAccountPickerLabel(selectedMapStyleKey, selectedAccountOption);
-  const accountPickerTitle = getAccountPickerTitle(selectedMapStyleKey);
-  const accountIconName = getAccountIconName(selectedMapStyleKey);
+  const showAccountPicker = !lockedVolunteerId && activeMapStyleKey !== 'admin-overview' && currentAccountOptions.length > 0;
+  const selectedAccountLabel = getAccountPickerLabel(activeMapStyleKey, selectedAccountOption);
+  const accountPickerTitle = getAccountPickerTitle(activeMapStyleKey);
+  const accountIconName = getAccountIconName(activeMapStyleKey);
 
   const statusLegend = [
     { label: 'In Progress', color: '#5b9b57' }, { label: 'Planned', color: '#5f8fdc' },
@@ -680,7 +699,7 @@ export default function VolunteerImpactMap({
 
   return (
     <View style={styles.section}>
-      {dashboardVariant ? (
+      {dashboardVariant && !lockedVolunteerId ? (
         <View style={styles.dashboardTabs}>
           <TouchableOpacity
             style={[
@@ -845,6 +864,7 @@ export default function VolunteerImpactMap({
             </TouchableOpacity>
           ) : null}
 
+          {!lockedVolunteerId ? (
           <TouchableOpacity
             style={[
               styles.mapStyleButton,
@@ -862,6 +882,7 @@ export default function VolunteerImpactMap({
             </Text>
             <MaterialIcons name="keyboard-arrow-down" size={22} color={dashboardVariant ? '#334155' : selectedMapStyle.accentColor} />
           </TouchableOpacity>
+          ) : null}
         </View>
       </View>
 
@@ -878,7 +899,7 @@ export default function VolunteerImpactMap({
         <MapHost ref={mapElementRef} style={styles.mapHost} />
         {dashboardVariant ? (
           <View style={styles.mapLegend}>
-            <Text style={styles.legendTitle}>{getMapLegendTitle(selectedMapStyleKey)}</Text>
+            <Text style={styles.legendTitle}>{getMapLegendTitle(activeMapStyleKey)}</Text>
             {statusLegend.map(status => <TouchableOpacity key={status.label} style={[styles.legendRow, selectedStatus === status.label && styles.legendRowActive]} onPress={() => setSelectedStatus(current => current === status.label ? null : status.label)}>
               <MaterialIcons name="location-on" size={16} color={status.color} />
               <Text style={styles.legendLabel}>{status.label}</Text>
@@ -886,7 +907,7 @@ export default function VolunteerImpactMap({
             </TouchableOpacity>)}
             <View style={styles.legendDivider} />
             <Text style={styles.legendTotalLabel}>
-              {getMapLegendTotalLabel(selectedMapStyleKey, displayProjects.length)}
+              {getMapLegendTotalLabel(activeMapStyleKey, displayProjects.length)}
             </Text>
             <Text style={styles.legendTotal}>{displayProjects.length}</Text>
             <TouchableOpacity onPress={() => {
@@ -894,7 +915,7 @@ export default function VolunteerImpactMap({
               setSelectedLocation(null);
             }}>
               <Text style={styles.legendFootnote}>
-                {getMapLegendFootnote(selectedMapStyleKey, selectedStatus, selectedLocation)}
+                {getMapLegendFootnote(activeMapStyleKey, selectedStatus, selectedLocation)}
               </Text>
             </TouchableOpacity>
           </View>
@@ -941,7 +962,7 @@ export default function VolunteerImpactMap({
           <View style={styles.mapStyleMenu}>
             <Text style={styles.mapStyleMenuTitle}>Choose map mode</Text>
             {MAP_STYLE_PRESETS.map(preset => {
-              const isActive = preset.key === selectedMapStyleKey;
+              const isActive = preset.key === activeMapStyleKey;
 
               return (
                 <TouchableOpacity
@@ -986,7 +1007,7 @@ export default function VolunteerImpactMap({
                     key={option.id}
                     style={[styles.mapStyleMenuItem, isActive && styles.mapStyleMenuItemActive]}
                     onPress={() => {
-                      if (selectedMapStyleKey === 'volunteer-view') {
+                      if (activeMapStyleKey === 'volunteer-view') {
                         setSelectedVolunteerId(option.id);
                       } else {
                         setSelectedPartnerId(option.id);
@@ -997,7 +1018,7 @@ export default function VolunteerImpactMap({
                     <View style={styles.mapStyleMenuItemTextWrap}>
                       <Text style={styles.mapStyleMenuItemTitle}>{option.label}</Text>
                       <Text style={styles.mapStyleMenuItemDescription}>
-                        {getMappedCountLabel(selectedMapStyleKey, option.projectCount)}
+                        {getMappedCountLabel(activeMapStyleKey, option.projectCount)}
                       </Text>
                     </View>
                     {isActive ? <MaterialIcons name="check" size={20} color="#2563eb" /> : null}

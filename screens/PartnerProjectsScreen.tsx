@@ -16,25 +16,99 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import {
+  getAllVolunteerProjectJoinRecords,
   getAllVolunteerTimeLogs,
   getProjectsScreenSnapshot,
+  REALTIME_STORAGE_CHANGE_OPTIONS,
   subscribeToStorageChanges,
 } from '../models/storage';
-import { PartnerProjectApplication, Project, VolunteerTimeLog } from '../models/types';
+import { PartnerProjectApplication, Project, VolunteerProjectJoinRecord, VolunteerTimeLog } from '../models/types';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getPrimaryProjectImageSource } from '../utils/projectMap';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
-function countTrackedVolunteers(project: Project) {
-  const joinedUserCount = new Set(project.joinedUserIds || []).size;
-  const assignedVolunteerCount = new Set(project.volunteers || []).size;
-  const taskedVolunteerCount = new Set(
-    (project.internalTasks || [])
-      .map(task => task.assignedVolunteerId)
-      .filter((value): value is string => Boolean(value))
-  ).size;
+function normalizeProjectReference(value: unknown): string {
+  return String(value || '').trim().toLowerCase();
+}
 
-  return Math.max(joinedUserCount, assignedVolunteerCount, taskedVolunteerCount);
+function isEventLinkedToProject(
+  event: Project,
+  project: Project,
+  availableProjects: Project[]
+): boolean {
+  const parentReference = normalizeProjectReference(event.parentProjectId);
+  if (!parentReference) {
+    return false;
+  }
+
+  const parentProjects = availableProjects.filter(candidate => !candidate.isEvent);
+  // IDs are canonical and always take priority. Title matching exists only for
+  // historic event rows that stored the parent title instead of its ID.
+  const idMatch = parentProjects.find(
+    candidate => normalizeProjectReference(candidate.id) === parentReference
+  );
+  if (idMatch) {
+    return normalizeProjectReference(idMatch.id) === normalizeProjectReference(project.id);
+  }
+
+  const titleMatches = parentProjects.filter(
+    candidate => normalizeProjectReference(candidate.title) === parentReference
+  );
+  return (
+    titleMatches.length === 1 &&
+    normalizeProjectReference(titleMatches[0].id) === normalizeProjectReference(project.id)
+  );
+}
+
+/**
+ * Counts actual event join records. The event arrays are only a legacy
+ * fallback for older records that predate volunteerProjectJoins.
+ */
+function getEventVolunteerJoinCount(
+  event: Project,
+  joinRecords: VolunteerProjectJoinRecord[]
+): number {
+  const eventId = normalizeProjectReference(event.id);
+  if (!eventId) {
+    return 0;
+  }
+
+  const aliases = new Map<string, string>();
+  const joinedVolunteerKeys = new Set<string>();
+  const addAlias = (alias: unknown, canonical: string) => {
+    const normalized = normalizeProjectReference(alias);
+    if (normalized) {
+      aliases.set(normalized, canonical);
+    }
+  };
+  const addVolunteer = (value: unknown) => {
+    const normalized = normalizeProjectReference(value);
+    if (normalized) {
+      joinedVolunteerKeys.add(aliases.get(normalized) || normalized);
+    }
+  };
+
+  joinRecords
+    .filter(record => normalizeProjectReference(record.projectId) === eventId)
+    .forEach(record => {
+      const canonical =
+        normalizeProjectReference(record.volunteerUserId) ||
+        normalizeProjectReference(record.volunteerId) ||
+        normalizeProjectReference(record.id);
+      if (!canonical) {
+        return;
+      }
+
+      addAlias(record.volunteerUserId, canonical);
+      addAlias(record.volunteerId, canonical);
+      joinedVolunteerKeys.add(canonical);
+    });
+
+  // Keep older events accurate until their historic join rows are migrated.
+  (event.joinedUserIds || []).forEach(addVolunteer);
+  (event.volunteers || []).forEach(addVolunteer);
+
+  return joinedVolunteerKeys.size;
 }
 
 function formatDateRange(startDate: string, endDate: string) {
@@ -64,6 +138,7 @@ export default function PartnerProjectsScreen({ route }: any) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [partnerApplications, setPartnerApplications] = useState<PartnerProjectApplication[]>([]);
   const [volunteerTimeLogs, setVolunteerTimeLogs] = useState<VolunteerTimeLog[]>([]);
+  const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -73,18 +148,23 @@ export default function PartnerProjectsScreen({ route }: any) {
     if (!user) {
       setProjects([]);
       setPartnerApplications([]);
+      setVolunteerTimeLogs([]);
+      setVolunteerJoinRecords([]);
+      setLoadError(null);
       setLoading(false);
       return;
     }
 
     try {
-      const [snapshot, allVolunteerTimeLogs] = await Promise.all([
+      const [snapshot, allVolunteerTimeLogs, allVolunteerJoinRecords] = await Promise.all([
         getProjectsScreenSnapshot(user, ['projects', 'partnerApplications'], false, true),
         getAllVolunteerTimeLogs(),
+        getAllVolunteerProjectJoinRecords(),
       ]);
       setProjects(snapshot.projects || []);
       setPartnerApplications(snapshot.partnerApplications || []);
       setVolunteerTimeLogs(allVolunteerTimeLogs || []);
+      setVolunteerJoinRecords(allVolunteerJoinRecords || []);
       setLoadError(null);
     } catch (error) {
       setLoadError({
@@ -100,17 +180,21 @@ export default function PartnerProjectsScreen({ route }: any) {
   useFocusEffect(
     useCallback(() => {
       void loadData();
-      return subscribeToStorageChanges(['projects', 'events', 'partnerProjectApplications'], () => {
-        void loadData();
-      });
+      return subscribeToStorageChanges(
+        ['projects', 'events', 'partnerProjectApplications', 'volunteerProjectJoins'],
+        () => loadData(),
+        REALTIME_STORAGE_CHANGE_OPTIONS
+      );
     }, [loadData])
   );
 
   useFocusEffect(
     useCallback(() => {
-      return subscribeToStorageChanges(['volunteerTimeLogs'], () => {
-        void loadData();
-      });
+      return subscribeToStorageChanges(
+        ['volunteerTimeLogs'],
+        () => loadData(),
+        REALTIME_STORAGE_CHANGE_OPTIONS
+      );
     }, [loadData])
   );
 
@@ -124,7 +208,7 @@ export default function PartnerProjectsScreen({ route }: any) {
               Boolean(application.projectId) &&
               !String(application.projectId).startsWith('program:')
           )
-          .map(application => application.projectId)
+          .map(application => normalizeProjectReference(application.projectId))
       ),
     [partnerApplications]
   );
@@ -132,7 +216,10 @@ export default function PartnerProjectsScreen({ route }: any) {
   const trackedProjects = useMemo(
     () =>
       projects
-        .filter(project => !project.isEvent && approvedProjectIds.has(project.id))
+        .filter(
+          project =>
+            !project.isEvent && approvedProjectIds.has(normalizeProjectReference(project.id))
+        )
         .sort(
           (left, right) =>
             new Date(right.updatedAt || right.createdAt).getTime() -
@@ -145,26 +232,22 @@ export default function PartnerProjectsScreen({ route }: any) {
     () =>
       trackedProjects.map(project => {
         const linkedEvents = projects
-          .filter(event => event.isEvent && event.parentProjectId === project.id)
+          .filter(event => event.isEvent && isEventLinkedToProject(event, project, projects))
           .sort(
             (left, right) =>
               new Date(left.startDate).getTime() - new Date(right.startDate).getTime()
           );
+        const linkedEventIds = new Set(linkedEvents.map(event => event.id));
         const volunteerJoinCount = linkedEvents.reduce(
-          (sum, event) => sum + countTrackedVolunteers(event),
+          (sum, event) => sum + getEventVolunteerJoinCount(event, volunteerJoinRecords),
           0
         );
-        const verifiedAttendanceCount = linkedEvents.reduce(
-          (sum, event) =>
-            sum +
-            volunteerTimeLogs.filter(
-              log => log.projectId === event.id && Boolean(log.attendanceCheckedAt)
-            ).length,
-          0
-        );
+        const verifiedAttendanceCount = volunteerTimeLogs.filter(
+          log => linkedEventIds.has(log.projectId) && Boolean(log.attendanceCheckedAt)
+        ).length;
         const activeEventCount = linkedEvents.filter(event => {
           const status = getProjectDisplayStatus(event);
-          return status !== 'Completed' && status !== 'Cancelled';
+          return status === 'In Progress';
         }).length;
 
         return {
@@ -175,7 +258,7 @@ export default function PartnerProjectsScreen({ route }: any) {
           activeEventCount,
         };
       }),
-    [projects, trackedProjects, volunteerTimeLogs]
+    [projects, trackedProjects, volunteerJoinRecords, volunteerTimeLogs]
   );
 
   const summary = useMemo(() => {
@@ -187,7 +270,7 @@ export default function PartnerProjectsScreen({ route }: any) {
     );
     const activeProjects = projectMetrics.filter(entry => {
       const status = getProjectDisplayStatus(entry.project);
-      return status !== 'Completed' && status !== 'Cancelled';
+      return status === 'In Progress';
     }).length;
 
     return {
@@ -304,7 +387,10 @@ export default function PartnerProjectsScreen({ route }: any) {
                 ? projects.find(candidate => candidate.id === project.parentProjectId)
                 : undefined;
               const approvedApplication = partnerApplications.find(
-                application => application.status === 'Approved' && application.projectId === project.id
+                application =>
+                  application.status === 'Approved' &&
+                  normalizeProjectReference(application.projectId) ===
+                    normalizeProjectReference(project.id)
               );
               const projectImageSource =
                 getPrimaryProjectImageSource(project, projectParent) ||
@@ -424,7 +510,8 @@ export default function PartnerProjectsScreen({ route }: any) {
                     const approvedApplication = partnerApplications.find(
                       application =>
                         application.status === 'Approved' &&
-                        application.projectId === selectedProjectMetrics.project.id
+                        normalizeProjectReference(application.projectId) ===
+                          normalizeProjectReference(selectedProjectMetrics.project.id)
                     );
                     const projectImageSource =
                       getPrimaryProjectImageSource(
@@ -490,11 +577,12 @@ export default function PartnerProjectsScreen({ route }: any) {
                   ) : (
                     selectedProjectMetrics.linkedEvents.map(event => {
                       const eventStatus = getProjectDisplayStatus(event);
-                      const parentProject = event.parentProjectId
-                        ? projects.find(candidate => candidate.id === event.parentProjectId)
-                        : selectedProjectMetrics.project;
+                      const parentProject = selectedProjectMetrics.project;
                       const eventImageSource = getPrimaryProjectImageSource(event, parentProject);
-                      const eventVolunteerCount = countTrackedVolunteers(event);
+                      const eventVolunteerCount = getEventVolunteerJoinCount(
+                        event,
+                        volunteerJoinRecords
+                      );
                       const eventVerifiedAttendanceCount = volunteerTimeLogs.filter(
                         log => log.projectId === event.id && Boolean(log.attendanceCheckedAt)
                       ).length;

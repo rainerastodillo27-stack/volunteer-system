@@ -49,6 +49,8 @@ export interface SubmittedReport {
     volunteerHours?: number;
     volunteerEventJoins?: number;
     verifiedAttendance?: number;
+    attendanceDays?: number;
+    attendanceHours?: number;
     activeVolunteers?: number;
     beneficiariesServed?: number;
     tasksCompleted?: number;

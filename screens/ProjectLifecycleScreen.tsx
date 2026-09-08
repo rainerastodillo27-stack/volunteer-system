@@ -54,8 +54,9 @@ import ProjectTimelineCalendarCard from '../components/ProjectTimelineCalendarCa
 import { useFocusEffect } from '@react-navigation/native';
 
 import InlineLoadError from '../components/InlineLoadError';
-import ConfirmDialog from '../components/ConfirmDialog';
-import { useConfirmDialog } from '../hooks/useConfirmDialog';
+import { ConfirmDialogHandle, ConfirmDialogHost, ConfirmDialogOptions } from '../components/ConfirmDialog';
+import { showSystemPrompt } from '../components/SystemAlertModal';
+import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import { TASK_SKILL_OPTIONS } from '../utils/skills';
 import { getActiveProjectGroupJoinCount } from '../utils/projectVolunteers';
 
@@ -3497,8 +3498,27 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   // hero actions overflow on the partner/admin mobile layouts.
   const isDesktop = width >= 1100;
 
-  // Confirmation dialog hook
-  const { dialogState, showConfirm, handleConfirm, handleCancel } = useConfirmDialog();
+  // Keep confirmation state outside this very large screen. On web the
+  // isolated host avoids a browser-blocking confirm and an expensive screen
+  // rerender; native platforms use the platform confirmation UI.
+  const confirmDialogRef = React.useRef<ConfirmDialogHandle>(null);
+  const showConfirm = React.useCallback((options: ConfirmDialogOptions) => {
+    if (Platform.OS !== 'web') {
+      const buttons: any[] = [];
+      if (options.cancelText) {
+        buttons.push({ text: options.cancelText, style: 'cancel' });
+      }
+      buttons.push({
+        text: options.confirmText || 'OK',
+        style: options.confirmColor?.toLowerCase() === '#dc2626' ? 'destructive' : 'default',
+        onPress: () => void options.onConfirm(),
+      });
+      Alert.alert(options.title, options.message, buttons);
+      return;
+    }
+
+    confirmDialogRef.current?.show({ ...options, animationType: 'none' });
+  }, []);
 
   const listScrollViewRef = React.useRef<ScrollView | null>(null);
 
@@ -3555,6 +3575,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
 
   const [previewImageModalVisible, setPreviewImageModalVisible] = useState(false);
+
+  const [documentPreview, setDocumentPreview] = useState<{ title: string; uri: string } | null>(null);
 
   const [previewAttendanceLog, setPreviewAttendanceLog] = useState<VolunteerTimeLog | null>(null);
 
@@ -4379,53 +4401,40 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   const handleDeleteProject = (project: Project) => {
 
-    Alert.alert(
+    showConfirm({
+      title: project.isEvent ? 'Delete Event' : 'Delete Project',
+      message: `Delete "${project.title}"? This cannot be undone.`,
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      confirmColor: '#DC2626',
+      icon: 'delete-outline',
+      iconColor: '#DC2626',
+      loadingText: 'Deleting...',
+      onConfirm: async () => {
+        try {
+          setProjects(currentProjects => currentProjects.filter(item => item.id !== project.id));
+          setSelectedProject(currentProject => currentProject?.id === project.id ? null : currentProject);
 
-      'Delete Project',
-
-      `Are you sure you want to delete "${project.title}"?`,
-
-      [
-
-        { text: 'Cancel', style: 'cancel' as const },
-
-        {
-
-          text: 'Delete',
-
-          style: 'destructive' as const,
-
-          onPress: async () => {
-
-            try {
-
-              setProjects(currentProjects => currentProjects.filter(item => item.id !== project.id));
-              setSelectedProject(currentProject => currentProject?.id === project.id ? null : currentProject);
-
-              if (project.isEvent) {
-
-                await deleteEvent(project.id);
-
-              } else {
-
-                await deleteProject(project.id);
-
-              }
-
-            } catch (err) {
-
-              void loadProjects();
-              Alert.alert('Error', 'Failed to delete project.');
-
-            }
-
+          if (project.isEvent) {
+            await deleteEvent(project.id);
+          } else {
+            await deleteProject(project.id);
           }
-
+        } catch (err) {
+          void loadProjects();
+          showConfirm({
+            title: 'Error',
+            message: 'Failed to delete project.',
+            confirmText: 'OK',
+            cancelText: '',
+            confirmColor: '#166534',
+            icon: 'error-outline',
+            iconColor: '#DC2626',
+            onConfirm: () => {},
+          });
         }
-
-      ]
-
-    );
+      },
+    });
 
   };
 
@@ -6165,7 +6174,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
         showTaskSaveNotice(`Event "${event.title}" was deleted successfully.`, 1200);
-        Alert.alert('Deleted', `Event "${event.title}" was deleted successfully.`);
 
       } catch (error) {
 
@@ -8871,7 +8879,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         }
 
-        Alert.alert('Deleted', project.isEvent ? 'Event removed.' : 'Project removed.');
+        showTaskSaveNotice(project.isEvent ? 'Event removed.' : 'Project removed.', 1200);
 
       } catch (error) {
 
@@ -8879,13 +8887,16 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         await loadProjects();
 
-        Alert.alert(
-
-          getRequestErrorTitle(error),
-
-          getRequestErrorMessage(error, 'Failed to delete project.')
-
-        );
+        showConfirm({
+          title: getRequestErrorTitle(error),
+          message: getRequestErrorMessage(error, 'Failed to delete project.'),
+          confirmText: 'OK',
+          cancelText: '',
+          confirmColor: '#166534',
+          icon: 'error-outline',
+          iconColor: '#DC2626',
+          onConfirm: () => {},
+        });
 
       }
 
@@ -13194,7 +13205,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                           {[
 
-                            { name: 'Valid ID', uri: '' },
+                            { name: 'Valid ID', uri: selectedVolunteer?.validIdPhoto || '' },
 
                             ...(selectedVolunteer?.certificationsOrTrainings ? [{ name: 'Training Certificate', uri: selectedVolunteer.certificationsOrTrainings }] : [])
 
@@ -13214,25 +13225,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                                 <TouchableOpacity
 
-                                  onPress={async () => {
-
-                                    try {
-
-                                      await openAttachmentUri(doc.uri);
-
-                                    } catch (error: any) {
-
-                                      Alert.alert(
-
-                                        'Document View Failed',
-
-                                        error?.message || 'Unable to open document.',
-
-                                      );
-
-                                    }
-
-                                  }}
+                                  onPress={() => setDocumentPreview({
+                                    title: `${doc.name} Preview`,
+                                    uri: doc.uri,
+                                  })}
 
                                   style={{ padding: 6, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8 }}
 
@@ -16012,7 +16008,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       onPress={() => {
 
-                        Alert.prompt(
+                        showSystemPrompt(
 
                           'Add Custom Skill',
 
@@ -21799,20 +21795,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         </ScrollView>
 
-        <ConfirmDialog
-          visible={dialogState.visible}
-          loading={dialogState.loading}
-          title={dialogState.title}
-          message={dialogState.message}
-          confirmText={dialogState.confirmText}
-          loadingText={dialogState.loadingText}
-          cancelText={dialogState.cancelText}
-          confirmColor={dialogState.confirmColor}
-          icon={dialogState.icon as any}
-          iconColor={dialogState.iconColor}
-          onConfirm={handleConfirm}
-          onCancel={handleCancel}
-        />
+        <ConfirmDialogHost ref={confirmDialogRef} />
       </View>
     );
 
@@ -22943,6 +22926,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         {renderDatePickerModal()}
 
         {renderVolunteerApplicationsModal()}
+
+        <ConfirmDialogHost ref={confirmDialogRef} />
 
       </View>
 
@@ -24436,20 +24421,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       {renderVolunteerApplicationsModal()}
 
-      <ConfirmDialog
-        visible={dialogState.visible}
-        loading={dialogState.loading}
-        title={dialogState.title}
-        message={dialogState.message}
-        confirmText={dialogState.confirmText}
-        loadingText={dialogState.loadingText}
-        cancelText={dialogState.cancelText}
-        confirmColor={dialogState.confirmColor}
-        icon={dialogState.icon as any}
-        iconColor={dialogState.iconColor}
-        onConfirm={handleConfirm}
-        onCancel={handleCancel}
+      <DocumentPreviewModal
+        visible={Boolean(documentPreview)}
+        title={documentPreview?.title}
+        uri={documentPreview?.uri}
+        onClose={() => setDocumentPreview(null)}
       />
+
+      <ConfirmDialogHost ref={confirmDialogRef} />
 
     </View>
 

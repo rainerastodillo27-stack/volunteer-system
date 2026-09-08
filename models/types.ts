@@ -51,6 +51,7 @@ export interface User {
     sectorType: PartnerSectorType;
     dswdAccreditationNo: string;
     secRegistrationNo?: string;
+    registrationDocuments?: string[];
     region: string;
     province: string;
     cityMunicipality: string;
@@ -276,6 +277,7 @@ export interface Volunteer {
   workplaceOrSchool?: string;
   collegeCourse?: string;
   certificationsOrTrainings?: string;
+  validIdPhoto?: string;
   hobbiesAndInterests?: string;
   specialSkills?: string;
   videoBriefingUrl?: string;

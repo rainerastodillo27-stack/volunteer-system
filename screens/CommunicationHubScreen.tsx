@@ -35,6 +35,7 @@ import {
 import { MaterialIcons, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useConfirmDialog } from '../hooks/useConfirmDialog';
+import { showSystemAlert } from '../components/SystemAlertModal';
 
 import { Picker } from '@react-native-picker/picker';
 
@@ -61,6 +62,8 @@ import {
   deleteProjectGroupChat,
 
   getAllPartnerProjectApplications,
+
+  getPartnerProjectApplicationsByUser,
 
   getAllUsers,
 
@@ -952,11 +955,15 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         // conversation fetches its own full cards/attachments on demand.
         skipMessages ? Promise.resolve([] as Message[]) : getMessageSummariesForUser(messageUserId),
 
-        activeSection !== 'proposals'
+        user.role === 'partner'
 
-          ? Promise.resolve([] as PartnerProjectApplication[])
+          ? getPartnerProjectApplicationsByUser(user.id)
 
-          : getAllPartnerProjectApplications(),
+          : user.role === 'admin' || activeSection === 'proposals'
+
+            ? getAllPartnerProjectApplications()
+
+            : Promise.resolve([] as PartnerProjectApplication[]),
 
       ]);
 
@@ -2695,30 +2702,15 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
 
 
-      // Show success alert after reload
-
+      // Show the app-owned success modal immediately. Do not wait for the
+      // background reload or a timeout before giving the user feedback.
       if (status === 'Approved') {
-
         const title = app.proposalDetails?.proposedTitle || 'Untitled';
-
-        setTimeout(() => {
-
-          if (Platform.OS === 'web') {
-
-            if (typeof window !== 'undefined') {
-
-              window.alert(`✅ Proposal Approved!\n\n"${title}" has been approved and a new project has been created in the Program Management Suite.`);
-
-            }
-
-          } else {
-
-            Alert.alert('Proposal Approved! ✅', `"${title}" has been approved and a new project has been created in the Program Management Suite.`, [{ text: 'OK' }]);
-
-          }
-
-        }, 200);
-
+        showSystemAlert(
+          'Proposal Approved! ✅',
+          `"${title}" has been approved and a new project has been created in the Program Management Suite.`,
+          [{ text: 'OK' }],
+        );
       }
 
     } catch (e) {
@@ -2728,6 +2720,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       setSelectedProposalApplication(previousSelectedProposalApplication);
 
       setView(isWide ? 'detail' : 'sidebar');
+
+      // A second admin tab may have reviewed this application first. Re-read
+      // the canonical record so an old pending card cannot remain actionable.
+      void loadData(true).catch(() => null);
 
       Alert.alert('Error', 'Failed to complete review.');
 
@@ -4416,6 +4412,27 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
               // Deduplicate proposal cards with same status/timestamp (prevents duplicates)
               // Each status change (Pending → Rejected → Approved) is a separate card
               const filteredMessages = dedupeProposalReviewCards(messages);
+              const latestReviewStatusByApplicationId = new Map<string, PartnerProjectApplication['status']>();
+              const latestReviewTimestampByApplicationId = new Map<string, number>();
+              filteredMessages.forEach(reviewMessage => {
+                if (!reviewMessage.id.startsWith('review-card-')) return;
+                const reviewApplication = parseProposalCardContent(reviewMessage.content);
+                const reviewApplicationId = String(
+                  reviewApplication?.applicationId || reviewApplication?.id || ''
+                ).trim();
+                if (!reviewApplicationId) return;
+                const reviewStatus = reviewApplication?.status;
+                if (reviewStatus === 'Approved' || reviewStatus === 'Rejected' || reviewStatus === 'Pending') {
+                  const reviewTimestamp = new Date(
+                    reviewApplication?.reviewedAt || reviewMessage.timestamp
+                  ).getTime();
+                  const previousTimestamp = latestReviewTimestampByApplicationId.get(reviewApplicationId) || 0;
+                  if (reviewTimestamp >= previousTimestamp) {
+                    latestReviewStatusByApplicationId.set(reviewApplicationId, reviewStatus);
+                    latestReviewTimestampByApplicationId.set(reviewApplicationId, reviewTimestamp);
+                  }
+                }
+              });
 
               return filteredMessages.map((m, i) => {
 
@@ -4436,14 +4453,19 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                 )?.application;
                 const isReviewCard = m.id.startsWith('review-card-');
                 const isSubmissionCard = m.id.startsWith('msg-proposal-');
+                const liveStatus = !isReviewCard
+                  ? liveApplication?.status || latestReviewStatusByApplicationId.get(messageApplicationId)
+                  : undefined;
                 const liveStatusOverride =
-                  !isReviewCard && liveApplication && liveApplication.status !== application.status
-                    ? liveApplication.status
+                  !isReviewCard && liveStatus && liveStatus !== application.status
+                    ? liveStatus
                     : undefined;
                 const cardApplication =
-                  application.status === 'Pending' && liveApplication?.status === 'Pending'
+                  !isReviewCard && liveApplication && liveApplication.status === 'Pending'
                     ? liveApplication
-                    : application;
+                    : liveStatus && liveStatus !== application.status
+                      ? { ...application, status: liveStatus }
+                      : application;
                 
                 // Handle both nested (proposalDetails) and flat (legacy) formats
                 const proposalDetails = cardApplication.proposalDetails || {};

@@ -23,6 +23,46 @@ try {
 // Make Platform globally available  
 (globalThis as any).Platform = PlatformModule;
 
+// React Native Web gives every Text element a default `System` font style,
+// which wins over the body's inherited font. Patch the shared primitives
+// before the rest of the app imports its screens so every existing
+// `Text`/`TextInput` usage uses the bundled Nunito family automatically.
+try {
+  const RN = require('react-native');
+  const React = require('react');
+  const globalFontFamily = RN.Platform?.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito';
+
+  const patchFontPrimitive = (name: 'Text' | 'TextInput') => {
+    const original = RN[name];
+    if (!original || original.__nvcNunitoPatched) return;
+
+    const PatchedPrimitive = React.forwardRef((props: any, ref: any) =>
+      React.createElement(original, {
+        ...props,
+        ref,
+        style: [props.style, { fontFamily: globalFontFamily }],
+      })
+    );
+    PatchedPrimitive.displayName = `NVC${name}`;
+    PatchedPrimitive.__nvcNunitoPatched = true;
+
+    try {
+      RN[name] = PatchedPrimitive;
+    } catch {
+      Object.defineProperty(RN, name, {
+        configurable: true,
+        value: PatchedPrimitive,
+      });
+    }
+  };
+
+  patchFontPrimitive('Text');
+  patchFontPrimitive('TextInput');
+} catch {
+  // Keep startup resilient if a platform exposes React Native primitives as
+  // read-only exports. Web CSS and explicit screen styles still apply.
+}
+
 // Detect ?mode=mobile on web at the very start of the bundle lifecycle.
 const isMobileModeOnWeb = (() => {
   if (PlatformModule.OS !== 'web') return false;

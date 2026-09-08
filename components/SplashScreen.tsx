@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Animated, ActivityIndicator } from 'react-native';
-import { MaterialIcons } from '@expo/vector-icons';
+import { View, Text, StyleSheet, Animated, ActivityIndicator, Image } from 'react-native';
+import logoImage from '../assets/nvc-logo.png';
 
 type SplashScreenProps = {
   progress: number;
@@ -54,15 +54,13 @@ export default function SplashScreen({ progress, message }: SplashScreenProps) {
           },
         ]}
       >
-        {/* Logo */}
+        {/* NVC logo */}
         <View style={styles.logoContainer}>
-          <View style={styles.logoCircle}>
-            <MaterialIcons name="volunteer-activism" size={64} color="#16a34a" />
-          </View>
+          <Image source={logoImage} style={styles.logo} resizeMode="contain" />
         </View>
 
         {/* App Name */}
-        <Text style={styles.title}>NVC Volunteer System</Text>
+        <Text style={styles.title}>NVC</Text>
         <Text style={styles.subtitle}>Negrense Volunteers for Change</Text>
 
         {/* Progress Bar */}
@@ -110,20 +108,11 @@ const styles = StyleSheet.create({
     maxWidth: 400,
   },
   logoContainer: {
-    marginBottom: 32,
+    marginBottom: 24,
   },
-  logoCircle: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: '#ffffff',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#16a34a',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.15,
-    shadowRadius: 20,
-    elevation: 10,
+  logo: {
+    width: 220,
+    height: 124,
   },
   title: {
     fontSize: 28,

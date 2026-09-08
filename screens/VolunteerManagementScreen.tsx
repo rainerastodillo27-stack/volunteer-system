@@ -15,13 +15,14 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
-import { Volunteer, Project, VolunteerProjectMatch, VolunteerTimeLog, User, UserType, NVCSector, VolunteerAffiliation } from '../models/types';
+import { Volunteer, Project, VolunteerProjectJoinRecord, VolunteerProjectMatch, VolunteerTimeLog, User, UserType, NVCSector, VolunteerAffiliation } from '../models/types';
 import {
   assignVolunteerToProject,
   getAllVolunteers,
   getAllProjects,
-  getVolunteerCompletedProjectIds,
+  getAllVolunteerProjectJoinRecords,
   getAllVolunteerTimeLogs,
+  getVolunteerByUserId,
   getVolunteerProjectMatches,
   saveVolunteer,
   getStorageItem,
@@ -35,14 +36,59 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../contexts/AuthContext';
 import InlineLoadError from '../components/InlineLoadError';
 import UserAccountDetailsModal from '../components/UserAccountDetailsModal';
+import DocumentPreviewModal from '../components/DocumentPreviewModal';
+import { ConfirmDialogHandle, ConfirmDialogHost, ConfirmDialogOptions } from '../components/ConfirmDialog';
 import { getProjectDisplayStatus } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
-import { getAttachmentLabel, isImageMediaUri, openAttachmentUri } from '../utils/media';
+import { getAttachmentLabel, isImageMediaUri } from '../utils/media';
+import { getVolunteerEventParticipationSummary } from '../utils/volunteerEventParticipation';
+
+type VolunteerDocumentField = 'validIdPhoto' | 'certificationsOrTrainings';
+
+function getVolunteerDocumentUri(
+  volunteer: Volunteer | null | undefined,
+  account: User | null | undefined,
+  field: VolunteerDocumentField,
+): string {
+  // Direct volunteer profiles are canonical. The account fallbacks keep older
+  // in-memory registrations viewable while the profile is being synchronized.
+  const legacyAccount = account as (User & {
+    validIdPhoto?: string;
+    certificationsOrTrainings?: string;
+  }) | null | undefined;
+  const accountDocument = field === 'validIdPhoto'
+    ? legacyAccount?.validIdPhoto
+    : legacyAccount?.certificationsOrTrainings;
+  const membershipDocument = field === 'validIdPhoto'
+    ? account?.volunteerMembershipSheet?.validIdPhoto
+    : account?.volunteerMembershipSheet?.certificationsOrTrainings;
+
+  return [volunteer?.[field], membershipDocument, accountDocument]
+    .find(value => typeof value === 'string' && value.trim())
+    ?.trim() || '';
+}
 
 // Lets admins inspect volunteers, update availability, and assign projects.
 export default function VolunteerManagementScreen({ navigation, route }: any) {
   const { user, isAdmin } = useAuth();
   const insets = useSafeAreaInsets();
+  const confirmDialogRef = useRef<ConfirmDialogHandle>(null);
+
+  const showSystemConfirm = (options: ConfirmDialogOptions) => {
+    if (Platform.OS !== 'web') {
+      Alert.alert(options.title, options.message, [
+        { text: options.cancelText || 'Cancel', style: 'cancel' },
+        {
+          text: options.confirmText || 'Confirm',
+          style: options.confirmColor?.toLowerCase() === '#dc2626' ? 'destructive' : 'default',
+          onPress: () => void options.onConfirm(),
+        },
+      ]);
+      return;
+    }
+
+    confirmDialogRef.current?.show({ ...options, animationType: 'none' });
+  };
 
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
@@ -52,11 +98,13 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   const [view, setView] = useState<'list' | 'detail'>(hasInitialVolunteerId ? 'detail' : 'list');
   const [selectedVolunteer, setSelectedVolunteer] = useState<Volunteer | null>(null);
   const selectedVolunteerIdRef = useRef<string | null>(null);
-  const [selectedVolunteerCompletedProjectIds, setSelectedVolunteerCompletedProjectIds] = useState<string[]>([]);
+  const selectedVolunteerRecordRef = useRef<Volunteer | null>(null);
+  const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
   const [volunteerTimeLogs, setVolunteerTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const [showAvailabilityModal, setShowAvailabilityModal] = useState(false);
   const [showAccountDetailsModal, setShowAccountDetailsModal] = useState(false);
+  const [documentPreview, setDocumentPreview] = useState<{ title: string; uri: string } | null>(null);
   const [daysPerWeek, setDaysPerWeek] = useState('3');
   const [hoursPerWeek, setHoursPerWeek] = useState('12');
   const [availableDays, setAvailableDays] = useState<string[]>(['Monday', 'Wednesday', 'Saturday']);
@@ -120,8 +168,11 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
 
     // Select the volunteer and load their details
     selectedVolunteerIdRef.current = targetVolunteer.id;
+    selectedVolunteerRecordRef.current = targetVolunteer;
     setSelectedVolunteer(targetVolunteer);
     setSelectedUser(null);
+    setVolunteerMatches([]);
+    setVolunteerJoinRecords([]);
     void loadSelectedVolunteerDetails(targetVolunteer.id, targetVolunteer.userId);
     setView('detail');
     // Clear the param after processing
@@ -134,7 +185,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     }
 
     return subscribeToStorageChanges(
-      ['volunteers', 'users', 'projects', 'volunteerMatches', 'volunteerProjectJoins', 'volunteerTimeLogs'],
+      ['volunteers', 'users', 'projects', 'events', 'volunteerMatches', 'volunteerProjectJoins', 'volunteerTimeLogs'],
       () => {
         void loadVolunteers();
         void loadProjects();
@@ -203,30 +254,52 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     }
   };
 
-  // Loads match history, completed projects, and linked user account for the selected volunteer.
+  // Loads direct participation records, match history, and the linked account for the selected volunteer.
   const loadSelectedVolunteerDetails = async (volunteerId: string, linkedUserId?: string) => {
+    if (linkedUserId) {
+      // The list is intentionally light and can be momentarily stale after a
+      // volunteer uploads a document. Refresh this single profile in parallel
+      // so the admin sees its valid-ID preview as soon as it is stored.
+      void getVolunteerByUserId(linkedUserId)
+        .then(freshVolunteer => {
+          if (!freshVolunteer || selectedVolunteerIdRef.current !== volunteerId) {
+            return;
+          }
+
+          selectedVolunteerRecordRef.current = freshVolunteer;
+          setSelectedVolunteer(freshVolunteer);
+          setVolunteers(current =>
+            current.map(volunteer =>
+              volunteer.id === freshVolunteer.id ? freshVolunteer : volunteer
+            )
+          );
+        })
+        .catch(() => {
+          // The current list record remains usable if the targeted refresh is unavailable.
+        });
+    }
+
     try {
-      const matches = await getVolunteerProjectMatches(volunteerId);
+      const [matches, joinRecords] = await Promise.all([
+        getVolunteerProjectMatches(volunteerId),
+        getAllVolunteerProjectJoinRecords(),
+      ]);
       if (selectedVolunteerIdRef.current === volunteerId) {
         setVolunteerMatches(matches);
+        setVolunteerJoinRecords(
+          joinRecords.filter(
+            record =>
+              record.volunteerId === volunteerId ||
+              (Boolean(linkedUserId) && record.volunteerUserId === linkedUserId)
+          )
+        );
       }
     } catch (err) {
       if (selectedVolunteerIdRef.current === volunteerId) {
         setVolunteerMatches([]);
+        setVolunteerJoinRecords([]);
       }
     }
-
-    if (selectedVolunteerIdRef.current === volunteerId) {
-      setSelectedVolunteerCompletedProjectIds([]);
-    }
-    setTimeout(async () => {
-      try {
-        const completedProjectIds = await getVolunteerCompletedProjectIds(volunteerId);
-        if (selectedVolunteerIdRef.current === volunteerId) {
-          setSelectedVolunteerCompletedProjectIds(completedProjectIds);
-        }
-      } catch {}
-    }, 50);
 
     try {
       if (linkedUserId) {
@@ -237,6 +310,51 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
         const linkedUser = (users || []).find(account => account.id === linkedUserId) || null;
         if (selectedVolunteerIdRef.current === volunteerId) {
           setSelectedUser(linkedUser);
+          // Repair a legacy profile immediately when the linked account still
+          // has document data. This makes the preview control available in the
+          // same detail view and persists it for all admin devices.
+          if (linkedUser) {
+            const currentVolunteer = selectedVolunteerRecordRef.current;
+            if (currentVolunteer?.id !== volunteerId) {
+              return;
+            }
+
+            const validIdPhoto = getVolunteerDocumentUri(
+              currentVolunteer,
+              linkedUser,
+              'validIdPhoto',
+            );
+            const certificationsOrTrainings = getVolunteerDocumentUri(
+              currentVolunteer,
+              linkedUser,
+              'certificationsOrTrainings',
+            );
+            const needsDocumentRepair =
+              (validIdPhoto && validIdPhoto !== (currentVolunteer.validIdPhoto || '').trim()) ||
+              (certificationsOrTrainings &&
+                certificationsOrTrainings !== (currentVolunteer.certificationsOrTrainings || '').trim());
+
+            if (!needsDocumentRepair) {
+              return;
+            }
+
+            const repairedVolunteer: Volunteer = {
+              ...currentVolunteer,
+              ...(validIdPhoto ? { validIdPhoto } : {}),
+              ...(certificationsOrTrainings ? { certificationsOrTrainings } : {}),
+            };
+            selectedVolunteerRecordRef.current = repairedVolunteer;
+            setSelectedVolunteer(repairedVolunteer);
+            setVolunteers(current =>
+              current.map(volunteer =>
+                volunteer.id === repairedVolunteer.id ? repairedVolunteer : volunteer
+              )
+            );
+            void saveVolunteer(repairedVolunteer).catch(() => {
+              // The preview still works from the linked account even when a
+              // legacy-record repair cannot be written right away.
+            });
+          }
         }
       } else if (selectedVolunteerIdRef.current === volunteerId) {
         setSelectedUser(null);
@@ -256,8 +374,11 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     }
 
     selectedVolunteerIdRef.current = volunteer.id;
+    selectedVolunteerRecordRef.current = volunteer;
     setSelectedVolunteer(volunteer);
     setSelectedUser(null);
+    setVolunteerMatches([]);
+    setVolunteerJoinRecords([]);
     void loadSelectedVolunteerDetails(volunteer.id, volunteer.userId);
     setView('detail');
   };
@@ -570,106 +691,63 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     );
   }
 
-  // Returns in-progress projects already matched to the selected volunteer.
-  const getMatchedProjects = () => {
-    return projects.filter(p =>
-      p.isEvent &&
-      getProjectDisplayStatus(p) === 'In Progress' &&
-      volunteerMatches.find(m => m.projectId === p.id && m.status === 'Matched')
-    );
-  };
+  // Derive displayed availability from actual participation, not an old profile
+  // flag or a pending match. Finished events no longer keep a volunteer Busy.
+  const getAutomaticEngagementStatus = (
+    volunteer: Volunteer,
+    joinRecords: VolunteerProjectJoinRecord[] = [],
+    timeLogs: VolunteerTimeLog[] = volunteerTimeLogs
+  ): Volunteer['engagementStatus'] => {
+    const participation = getVolunteerEventParticipationSummary({
+      projects,
+      volunteer,
+      joinRecords,
+      timeLogs,
+    });
+    const hasCurrentParticipation = participation.joinedEvents.some(project => {
+      const status = getProjectDisplayStatus(project);
+      return status === 'Planning' || status === 'In Progress';
+    });
 
-  // Returns in-progress projects still waiting for match approval.
-  const getPendingProjects = () => {
-    return projects.filter(p =>
-      p.isEvent &&
-      getProjectDisplayStatus(p) === 'In Progress' &&
-      volunteerMatches.find(m => m.projectId === p.id && m.status === 'Requested')
-    );
-  };
-
-  // Returns in-progress projects that can still accept this volunteer.
-  const getAvailableProjects = () => {
-    return projects.filter(
-      p =>
-        p.isEvent &&
-        getProjectDisplayStatus(p) === 'In Progress' &&
-        !volunteerMatches.find(
-          m =>
-            m.projectId === p.id &&
-            (m.status === 'Matched' || m.status === 'Requested' || m.status === 'Completed')
-        )
-    );
-  };
-
-  // Derive the displayed availability from actual event membership so stale
-  // profile values cannot keep an unjoined volunteer marked as Busy.
-  const getAutomaticEngagementStatus = (volunteer: Volunteer): Volunteer['engagementStatus'] => {
-    const identifiers = new Set(
-      [volunteer.id, volunteer.userId]
-        .map(value => String(value || '').trim())
-        .filter(Boolean)
-    );
-    const joinedAnEvent = projects.some(
-      project =>
-        project.isEvent &&
-        (
-          (project.volunteers || []).some(id => identifiers.has(String(id || '').trim())) ||
-          (project.joinedUserIds || []).some(id => identifiers.has(String(id || '').trim()))
-        )
-    );
-    return joinedAnEvent ? 'Busy' : 'Open to Volunteer';
+    return hasCurrentParticipation ? 'Busy' : 'Open to Volunteer';
   };
 
   if (view === 'detail' && selectedVolunteer) {
-    const matchedProjects = getMatchedProjects();
-    const pendingProjects = getPendingProjects();
-    const availableProjects = getAvailableProjects();
+    const selectedVolunteerTimeLogs = volunteerTimeLogs
+      .filter(log => log.volunteerId === selectedVolunteer.id)
+      .sort((a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime());
+    const participation = getVolunteerEventParticipationSummary({
+      projects,
+      volunteer: selectedVolunteer,
+      joinRecords: volunteerJoinRecords,
+      matches: volunteerMatches,
+      timeLogs: selectedVolunteerTimeLogs,
+    });
+    const availableProjects = participation.availableEvents;
+    const eventsJoinedCount = participation.joinedEvents.length;
+    const photoReportsCount = selectedVolunteerTimeLogs.filter(log =>
+      Boolean(log.attendancePhoto || log.completionPhoto || log.completionReport)
+    ).length;
+    const completedEventsCount = participation.completedEvents.length;
+    const completedEventIds = new Set(participation.completedEvents.map(project => project.id));
     const matchRecords = volunteerMatches.map(match => {
       const project = projects.find(projectEntry => projectEntry.id === match.projectId);
       return {
         ...match,
+        // Keep the match list aligned with the completed-event count even for
+        // older rows that were never explicitly switched from Matched.
+        status: completedEventIds.has(match.projectId) ? 'Completed' as const : match.status,
         projectTitle: project?.title || 'Project',
         projectCategory: project?.category || 'Volunteer activity',
       };
     });
-    const selectedVolunteerTimeLogs = volunteerTimeLogs
-      .filter(log => log.volunteerId === selectedVolunteer.id)
-      .sort((a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime());
-    
-    // Count unique events joined from time logs, join records, and matches
-    const eventsFromTimeLogs = new Set(selectedVolunteerTimeLogs.map(log => log.projectId));
-    const eventsFromMatches = new Set(
-      volunteerMatches
-        .filter(match => match.status === 'Matched' || match.status === 'Completed')
-        .map(match => match.projectId)
-    );
-    const joinedProjects = projects.filter(
-      p =>
-        p.isEvent &&
-        ((p.joinedUserIds || []).includes(selectedVolunteer.userId) ||
-          (p.volunteers || []).includes(selectedVolunteer.id))
-    );
-    const eventsFromJoined = new Set(joinedProjects.map(p => p.id));
-    const allUniqueEvents = new Set([...eventsFromTimeLogs, ...eventsFromMatches, ...eventsFromJoined]);
-    const eventsJoinedCount = allUniqueEvents.size;
-    const photoReportsCount = selectedVolunteerTimeLogs.filter(log =>
-      Boolean(log.attendancePhoto || log.completionPhoto || log.completionReport)
-    ).length;
-    
-    const completedProjects = selectedVolunteerCompletedProjectIds.map(projectId => {
-      const project = projects.find(projectEntry => projectEntry.id === projectId);
-      return {
-        id: projectId,
-        title: project?.title || projectId,
-        category: project?.category,
-        isEvent: project?.isEvent,
-      };
-    });
-    const completedEventsCount = completedProjects.filter(projectEntry => Boolean(projectEntry.isEvent)).length;
 
     const isApplicationPending = selectedVolunteer.registrationStatus === 'Pending';
-    const selectedVolunteerEngagementStatus = getAutomaticEngagementStatus(selectedVolunteer);
+    const selectedVolunteerEngagementStatus = getAutomaticEngagementStatus(
+      selectedVolunteer,
+      volunteerJoinRecords,
+      selectedVolunteerTimeLogs
+    );
     const membershipSheet = selectedUser?.volunteerMembershipSheet;
     const pillarsOfInterest = selectedUser?.pillarsOfInterest || [];
     const userType: UserType | undefined = selectedUser?.userType;
@@ -677,7 +755,16 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     const profileEmail = (selectedUser?.email || selectedVolunteer.email || '').trim().toLowerCase();
     const profilePhone = (selectedUser?.phone || selectedVolunteer.phone || '').trim();
     const profileSkills = membershipSheet?.skills?.length ? membershipSheet.skills : selectedVolunteer.skills;
-    const certificateUri = (membershipSheet?.certificationsOrTrainings || selectedVolunteer.certificationsOrTrainings || '').trim();
+    const certificateUri = getVolunteerDocumentUri(
+      selectedVolunteer,
+      selectedUser,
+      'certificationsOrTrainings',
+    );
+    const validIdPhoto = getVolunteerDocumentUri(
+      selectedVolunteer,
+      selectedUser,
+      'validIdPhoto',
+    );
     const availableDaysLabel = selectedVolunteer.availability?.availableDays?.length
       ? selectedVolunteer.availability.availableDays.join(', ')
       : '-';
@@ -688,6 +775,13 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
           visible={showAccountDetailsModal}
           onClose={() => setShowAccountDetailsModal(false)}
           user={selectedUser}
+          volunteer={selectedVolunteer}
+        />
+        <DocumentPreviewModal
+          visible={Boolean(documentPreview)}
+          title={documentPreview?.title}
+          uri={documentPreview?.uri}
+          onClose={() => setDocumentPreview(null)}
         />
         <View style={[styles.header, { paddingTop: insets.top, height: 56 + insets.top }]}>
           <TouchableOpacity onPress={() => setView('list')}>
@@ -736,22 +830,16 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                       (isApproving || isRejecting) && { opacity: 0.75 },
                     ]}
                     disabled={isApproving || isRejecting}
-                    onPress={() => {
-                      if (Platform.OS === 'web') {
-                        const ok = window.confirm('Approve this volunteer application?');
-                        if (!ok) return;
-                        void handleApproveVolunteer();
-                      } else {
-                        Alert.alert(
-                          'Approve Application',
-                          'Approve this volunteer application?',
-                          [
-                            { text: 'Cancel', style: 'cancel' },
-                            { text: 'Approve', style: 'default', onPress: () => void handleApproveVolunteer() },
-                          ]
-                        );
-                      }
-                    }}
+                    onPress={() => showSystemConfirm({
+                      title: 'Approve Application',
+                      message: 'Approve this volunteer application?',
+                      confirmText: 'Approve',
+                      cancelText: 'Cancel',
+                      confirmColor: '#166534',
+                      icon: 'check-circle',
+                      iconColor: '#166534',
+                      onConfirm: () => void handleApproveVolunteer(),
+                    })}
                   >
                     {isApproving ? (
                       <ActivityIndicator size="small" color="#fff" />
@@ -883,27 +971,32 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
                         {certificateUri && isImageMediaUri(certificateUri) ? (
                           <TouchableOpacity
-                            onPress={async () => {
-                              try {
-                                await openAttachmentUri(certificateUri);
-                              } catch (error: any) {
-                                Alert.alert(
-                                  'Unable to Open Certificate',
-                                  error?.message || 'Certificate attachment could not be opened.',
-                                );
-                              }
-                            }}
+                            onPress={() => setDocumentPreview({ title: 'Certificate / Training Preview', uri: certificateUri })}
                             style={{ padding: 6, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8 }}
                           >
                             <MaterialIcons name="visibility" size={16} color="#166534" />
                           </TouchableOpacity>
                         ) : null}
                         <Text style={styles.applicationFieldValue}>
-                          {certificateUri
-                            ? isImageMediaUri(certificateUri)
-                              ? getAttachmentLabel(certificateUri)
-                              : certificateUri
-                            : '-'}
+                          {certificateUri ? getAttachmentLabel(certificateUri) : '-'}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.applicationFieldRow}>
+                      <Text style={[styles.applicationFieldLabel, { flex: 1 }]}>Valid ID Photo</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                        {validIdPhoto ? (
+                          <TouchableOpacity
+                            onPress={() => setDocumentPreview({ title: 'Valid ID Preview', uri: validIdPhoto })}
+                            accessibilityLabel="View valid ID photo"
+                            style={{ padding: 6, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8 }}
+                          >
+                            <MaterialIcons name="visibility" size={16} color="#166534" />
+                          </TouchableOpacity>
+                        ) : null}
+                        <Text style={styles.applicationFieldValue}>
+                          {validIdPhoto ? getAttachmentLabel(validIdPhoto) : '-'}
                         </Text>
                       </View>
                     </View>
@@ -1149,27 +1242,32 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
                         {certificateUri && isImageMediaUri(certificateUri) ? (
                           <TouchableOpacity
-                            onPress={async () => {
-                              try {
-                                await openAttachmentUri(certificateUri);
-                              } catch (error: any) {
-                                Alert.alert(
-                                  'Unable to Open Certificate',
-                                  error?.message || 'Certificate attachment could not be opened.',
-                                );
-                              }
-                            }}
+                            onPress={() => setDocumentPreview({ title: 'Certificate / Training Preview', uri: certificateUri })}
                             style={{ padding: 6, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8 }}
                           >
                             <MaterialIcons name="visibility" size={16} color="#166534" />
                           </TouchableOpacity>
                         ) : null}
                         <Text style={styles.applicationFieldValue}>
-                          {certificateUri
-                            ? isImageMediaUri(certificateUri)
-                              ? getAttachmentLabel(certificateUri)
-                              : certificateUri
-                            : '-'}
+                          {certificateUri ? getAttachmentLabel(certificateUri) : '-'}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.applicationFieldRow}>
+                      <Text style={[styles.applicationFieldLabel, { flex: 1 }]}>Valid ID Photo</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                        {validIdPhoto ? (
+                          <TouchableOpacity
+                            onPress={() => setDocumentPreview({ title: 'Valid ID Preview', uri: validIdPhoto })}
+                            accessibilityLabel="View valid ID photo"
+                            style={{ padding: 6, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8 }}
+                          >
+                            <MaterialIcons name="visibility" size={16} color="#166534" />
+                          </TouchableOpacity>
+                        ) : null}
+                        <Text style={styles.applicationFieldValue}>
+                          {validIdPhoto ? getAttachmentLabel(validIdPhoto) : '-'}
                         </Text>
                       </View>
                     </View>
@@ -1542,6 +1640,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
           </View>
         </Modal>
       </ScrollView>
+      <ConfirmDialogHost ref={confirmDialogRef} />
     </View>
     );
   }
@@ -1858,16 +1957,6 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.volunteerCardName}>{volunteer.name}</Text>
-              <View style={styles.volunteerCardMeta}>
-                <MaterialIcons name="schedule" size={12} color="#666" />
-                <Text style={styles.volunteerCardMetaText}>
-                  {volunteer.availability.hoursPerWeek}h/week
-                </Text>
-                <MaterialIcons name="star" size={12} color="#FFA500" />
-                <Text style={styles.volunteerCardMetaText}>
-                  {volunteer.rating}
-                </Text>
-              </View>
               {(volunteer.registrationStatus && volunteer.registrationStatus !== 'Approved') ? (
                 <View
                   style={[
@@ -1905,6 +1994,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
         scrollEnabled={true}
         contentContainerStyle={styles.listContent}
       />
+      <ConfirmDialogHost ref={confirmDialogRef} />
     </View>
   );
 }
@@ -2426,18 +2516,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: '#333',
-    fontFamily: 'Nunito',
-  },
-  volunteerCardMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 4,
-  },
-  volunteerCardMetaText: {
-    fontSize: 11,
-    color: '#666',
-    marginRight: 8,
     fontFamily: 'Nunito',
   },
   volunteerCardStatus: {

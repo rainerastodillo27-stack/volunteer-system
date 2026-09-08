@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView, Image, Platform, Linking, Alert, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView, Image, Platform, Alert, useWindowDimensions } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import type { SubmittedReport } from '../screens/ReportsScreen';
 import type { Project, VolunteerTimeLog, Volunteer } from '../models/types';
 import { isImageMediaUri } from '../utils/media';
-import { buildTextPdf, downloadPdfFile } from '../utils/pdfDownload';
+import { buildTablePdf, downloadPdfFile } from '../utils/pdfDownload';
+import { getAttendanceReportMetrics } from '../utils/attendanceReportMetrics';
 
 interface Props {
   reports: SubmittedReport[];
@@ -80,31 +81,166 @@ function isAttendanceReport(report: SubmittedReport): boolean {
   return String(report.id || '').startsWith('timelog-');
 }
 
-function buildBatchReportContent(
-  reports: SubmittedReport[],
+function formatReportDateTime(value?: string): string {
+  const date = value ? new Date(value) : null;
+  return date && !Number.isNaN(date.getTime()) ? date.toLocaleString() : 'Unknown date';
+}
+
+function formatMetricLabel(key: string): string {
+  return key
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .replace(/^./, character => character.toUpperCase());
+}
+
+function getReportActivityTitle(report: SubmittedReport, projectById: Map<string, Project>): string {
+  const project = report.projectId ? projectById.get(report.projectId) : undefined;
+  return project?.title || report.projectTitle || report.category || 'Unlinked activity';
+}
+
+function getReportAttachmentSummary(report: SubmittedReport): string {
+  const attachmentTypes = [
+    ...(report.attachments || []).map(attachment => attachment.type || 'attachment'),
+    ...(report.mediaFile ? ['media'] : []),
+  ];
+  return attachmentTypes.length ? Array.from(new Set(attachmentTypes)).join(', ') : 'None';
+}
+
+function buildSingleReportPdf(
+  report: SubmittedReport,
   projectById: Map<string, Project>,
 ): string {
-  return reports.map((report, index) => {
-    const project = report.projectId ? projectById.get(report.projectId) : undefined;
-    const activityTitle = project?.title || report.projectTitle || report.category || 'Unlinked activity';
-    const attachments = [
-      ...(report.attachments || []).map(attachment => attachment.type),
-      ...(report.mediaFile ? ['media'] : []),
-    ];
+  const metricRows = Object.entries(report.metrics || {}).map(([metric, value]) => ({
+    metric: formatMetricLabel(metric),
+    value,
+  }));
+  const feedbackRows = [
+    ['Collaboration feedback', report.collaborationFeedback],
+    ['Volunteer praise', report.volunteerPraise],
+    ['Gratitude note', report.gratitudeNote],
+    ['Approval notes', report.approvalNotes],
+  ]
+    .filter(([, value]) => Boolean(value))
+    .map(([field, value]) => ({ field, value }));
 
-    return [
-      `Report ${index + 1}`,
-      `Title: ${report.title || 'Untitled report'}`,
-      `Event/Project: ${activityTitle}`,
-      `Submitted by: ${report.submitterName || 'Unknown user'}`,
-      `Role: ${report.submitterRole || 'Unknown'}`,
-      `Report type: ${report.reportType || 'Unknown'}`,
-      `Date: ${new Date(report.submittedAt).toLocaleString()}`,
-      `Status: ${report.status || 'Unknown'}`,
-      `Attachments: ${attachments.length ? attachments.join(', ') : 'None'}`,
-      `Description: ${report.description || 'No description provided.'}`,
-    ].join('\n');
-  }).join('\n\n');
+  return buildTablePdf(report.title || 'Report', {
+    subtitle: `Generated report export - ${formatReportDateTime(report.submittedAt)}`,
+    orientation: 'portrait',
+    tables: [
+      {
+        title: 'Report Details',
+        columns: [
+          { key: 'field', label: 'Field', width: 1 },
+          { key: 'value', label: 'Value', width: 2.8 },
+        ],
+        rows: [
+          { field: 'Title', value: report.title || 'Untitled report' },
+          { field: 'Event / Project', value: getReportActivityTitle(report, projectById) },
+          { field: 'Submitted by', value: report.submitterName || 'Unknown user' },
+          { field: 'Role', value: report.submitterRole || 'Unknown' },
+          { field: 'Report type', value: report.reportType || 'Unknown' },
+          { field: 'Status', value: report.status || 'Unknown' },
+          { field: 'Submitted', value: formatReportDateTime(report.submittedAt) },
+          { field: 'Attachments', value: getReportAttachmentSummary(report) },
+        ],
+      },
+      {
+        title: 'Description',
+        columns: [{ key: 'description', label: 'Report narrative', width: 1, maxLines: 12 }],
+        rows: [{ description: report.description || 'No description provided.' }],
+      },
+      {
+        title: 'Metrics',
+        columns: [
+          { key: 'metric', label: 'Metric', width: 1.3 },
+          { key: 'value', label: 'Value', width: 1 },
+        ],
+        rows: metricRows,
+        emptyMessage: 'No metrics captured for this report.',
+      },
+      {
+        title: 'Feedback and Notes',
+        columns: [
+          { key: 'field', label: 'Field', width: 1 },
+          { key: 'value', label: 'Value', width: 2.8 },
+        ],
+        rows: feedbackRows,
+        emptyMessage: 'No additional feedback or notes.',
+      },
+    ],
+  });
+}
+
+function buildBatchReportPdf(
+  reports: SubmittedReport[],
+  projectById: Map<string, Project>,
+  title: string,
+): string {
+  const summaryRows = reports.map((report, index) => ({
+    number: index + 1,
+    title: report.title || 'Untitled report',
+    activity: getReportActivityTitle(report, projectById),
+    submitter: report.submitterName || 'Unknown user',
+    role: report.submitterRole || 'Unknown',
+    type: report.reportType || 'Unknown',
+    status: report.status || 'Unknown',
+    submitted: formatReportDateTime(report.submittedAt),
+    attachments: getReportAttachmentSummary(report),
+  }));
+  const descriptionRows = reports.map((report, index) => ({
+    number: index + 1,
+    report: report.title || 'Untitled report',
+    description: report.description || 'No description provided.',
+  }));
+  const metricRows = reports.flatMap((report, index) =>
+    Object.entries(report.metrics || {}).map(([metric, value]) => ({
+      number: index + 1,
+      report: report.title || 'Untitled report',
+      metric: formatMetricLabel(metric),
+      value,
+    }))
+  );
+
+  return buildTablePdf(title, {
+    subtitle: `${reports.length} report${reports.length === 1 ? '' : 's'} - Generated ${new Date().toLocaleString()}`,
+    tables: [
+      {
+        title: 'Report Index',
+        columns: [
+          { key: 'number', label: '#', width: 0.35 },
+          { key: 'title', label: 'Report', width: 1.35 },
+          { key: 'activity', label: 'Event / Project', width: 1.35 },
+          { key: 'submitter', label: 'Submitted By', width: 1.05 },
+          { key: 'role', label: 'Role', width: 0.72 },
+          { key: 'type', label: 'Type', width: 0.82 },
+          { key: 'status', label: 'Status', width: 0.7 },
+          { key: 'submitted', label: 'Submitted', width: 1.05 },
+          { key: 'attachments', label: 'Attachments', width: 0.85 },
+        ],
+        rows: summaryRows,
+      },
+      {
+        title: 'Report Narratives',
+        columns: [
+          { key: 'number', label: '#', width: 0.35 },
+          { key: 'report', label: 'Report', width: 1.15 },
+          { key: 'description', label: 'Description', width: 3.5, maxLines: 12 },
+        ],
+        rows: descriptionRows,
+      },
+      {
+        title: 'Reported Metrics',
+        columns: [
+          { key: 'number', label: '#', width: 0.35 },
+          { key: 'report', label: 'Report', width: 1.4 },
+          { key: 'metric', label: 'Metric', width: 1.4 },
+          { key: 'value', label: 'Value', width: 0.8 },
+        ],
+        rows: metricRows,
+        emptyMessage: 'No metrics were captured in this batch.',
+      },
+    ],
+  });
 }
 
 export default function AllReportsView({ reports, projects, volunteerTimeLogs = [], volunteers = [], onViewReport, onUploadReport, reportType = 'all' }: Props) {
@@ -139,14 +275,14 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
         submittedBy: (log as any).volunteerId || volunteer?.userId || '',
         submitterName: volunteerName,
         submitterRole: 'volunteer' as const,
-        reportType: 'field_report' as any,
+        reportType: 'attendance_report',
         title: verified ? `Verified Attendance - ${proj?.title || 'Event'}` : `Attendance Photo - ${proj?.title || 'Event'}`,
         description: verified ? `Verified by ${(log as any).attendanceCheckedByName || 'Field Officer'} on ${new Date((log as any).attendanceCheckedAt).toLocaleDateString()}` : `Attendance submitted on ${new Date(log.timeIn || '').toLocaleDateString()}`,
         projectId: log.projectId,
         projectTitle: proj?.title || 'Attendance',
         projectKind: 'event' as const,
         category: proj?.category,
-        metrics: {},
+        metrics: getAttendanceReportMetrics(log),
         attachments: [{ url: photo, type: 'image' as const, description: 'Attendance Photo' }],
         mediaFile: photo,
         status: verified ? 'Approved' as const : 'Submitted' as const,
@@ -302,8 +438,20 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
     const dateKey = new Date().toISOString().slice(0, 10);
     void downloadPdfFile(
       `${filenamePrefix}-${dateKey}`,
-      buildTextPdf(title, buildBatchReportContent(items, projectById)),
+      buildBatchReportPdf(items, projectById, title),
       'Unable to save the batch report on this device.',
+    );
+  };
+
+  const handleReportDownload = (report: SubmittedReport) => {
+    const submittedDate = new Date(report.submittedAt || '');
+    const dateKey = (Number.isNaN(submittedDate.getTime()) ? new Date() : submittedDate)
+      .toISOString()
+      .slice(0, 10);
+    void downloadPdfFile(
+      `${report.title || 'report'}-${dateKey}`,
+      buildSingleReportPdf(report, projectById),
+      'Unable to save this report on this device.',
     );
   };
 
@@ -353,12 +501,10 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
         </View>
         <View style={[styles.td, { flex: 0.6, flexDirection: 'row', justifyContent: 'flex-end', gap: 12, alignItems: 'center' }]}>
           <TouchableOpacity
-            onPress={() => {
-              const url = rep.attachments?.[0]?.url || rep.mediaFile;
-              if (url) Linking.openURL(url).catch(() => Alert.alert('Unable to open file'));
-              else onViewReport(rep);
-            }}
+            onPress={() => handleReportDownload(rep)}
             activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel={`Download ${rep.title || 'report'} as a table PDF`}
           >
             <MaterialIcons name="file-download" size={20} color="#64748b" />
           </TouchableOpacity>
@@ -735,12 +881,10 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
                 </View>
                 <View style={[styles.td, { flex: 0.6, flexDirection: 'row', justifyContent: 'flex-end', gap: 12, alignItems: 'center' }]}>
                   <TouchableOpacity
-                    onPress={() => {
-                      const url = rep.attachments?.[0]?.url || rep.mediaFile;
-                      if (url) Linking.openURL(url).catch(() => Alert.alert('Unable to open file'));
-                      else onViewReport(rep);
-                    }}
+                    onPress={() => handleReportDownload(rep)}
                     activeOpacity={0.7}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Download ${rep.title || 'report'} as a table PDF`}
                   >
                     <MaterialIcons name="file-download" size={20} color="#64748b" />
                   </TouchableOpacity>

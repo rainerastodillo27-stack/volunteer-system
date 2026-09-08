@@ -258,6 +258,7 @@ type VolunteerImpactMapProps = {
   dashboardVariant?: boolean;
   volunteerAccounts?: MapAccountOption[];
   partnerAccounts?: MapAccountOption[];
+  lockedVolunteerId?: string;
   onVolunteerPress?: (volunteerId: string) => void;
   onPartnerPress?: (partnerId: string) => void;
 };
@@ -355,6 +356,7 @@ export default function VolunteerImpactMap({
   initialMapStyleKey = 'volunteer-view',
   volunteerAccounts,
   partnerAccounts,
+  lockedVolunteerId,
   onVolunteerPress,
   onPartnerPress,
 }: VolunteerImpactMapProps) {
@@ -389,6 +391,16 @@ export default function VolunteerImpactMap({
     setSelectedMapStyleKey(initialMapStyleKey);
   }, [initialMapStyleKey]);
 
+  // The profile map is intentionally scoped to its signed-in volunteer. Do not
+  // allow its shared-map controls to reveal another account or a system view.
+  useEffect(() => {
+    if (!lockedVolunteerId) return;
+    setSelectedMapStyleKey('volunteer-view');
+    setSelectedVolunteerId(lockedVolunteerId);
+    setShowMapStyleMenu(false);
+    setShowAccountMenu(false);
+  }, [lockedVolunteerId]);
+
   useEffect(() => {
     setSelectedVolunteerId(current =>
       current && volunteerOptions.some(option => option.id === current)
@@ -405,28 +417,35 @@ export default function VolunteerImpactMap({
     );
   }, [partnerOptions]);
 
+  const activeMapStyleKey: MapStylePresetKey = lockedVolunteerId ? 'volunteer-view' : selectedMapStyleKey;
   const selectedMapStyle =
-    MAP_STYLE_PRESETS.find(preset => preset.key === selectedMapStyleKey) || MAP_STYLE_PRESETS[1];
+    MAP_STYLE_PRESETS.find(preset => preset.key === activeMapStyleKey) || MAP_STYLE_PRESETS[1];
   const currentAccountOptions =
-    selectedMapStyleKey === 'volunteer-view'
+    activeMapStyleKey === 'volunteer-view'
       ? volunteerOptions
-      : selectedMapStyleKey === 'partner-view'
+      : activeMapStyleKey === 'partner-view'
       ? partnerOptions
       : [];
   const selectedAccountOption = useMemo(() =>
-    selectedMapStyleKey === 'volunteer-view'
+    lockedVolunteerId
+      ? volunteerOptions.find(option => option.id === lockedVolunteerId) || null
+      : activeMapStyleKey === 'volunteer-view'
       ? volunteerOptions.find(option => option.id === selectedVolunteerId) || volunteerOptions[0] || null
-      : selectedMapStyleKey === 'partner-view'
+      : activeMapStyleKey === 'partner-view'
       ? partnerOptions.find(option => option.id === selectedPartnerId) || partnerOptions[0] || null
       : null,
-    [selectedMapStyleKey, selectedVolunteerId, selectedPartnerId, volunteerOptions, partnerOptions]
+    [activeMapStyleKey, lockedVolunteerId, selectedVolunteerId, selectedPartnerId, volunteerOptions, partnerOptions]
   );
   const displayProjects = useMemo(() => {
-    if (selectedMapStyleKey === 'admin-overview') {
+    if (lockedVolunteerId) {
+      return volunteerOptions.find(option => option.id === lockedVolunteerId)?.mappedProjects || [];
+    }
+
+    if (activeMapStyleKey === 'admin-overview') {
       return mappedProjects;
     }
 
-    if (selectedMapStyleKey === 'volunteer-view') {
+    if (activeMapStyleKey === 'volunteer-view') {
       if (hasVolunteerScope) {
         const selectedVolunteer = volunteerOptions.find(option => option.id === selectedVolunteerId);
         return selectedVolunteer?.mappedProjects || [];
@@ -434,7 +453,7 @@ export default function VolunteerImpactMap({
       return mappedEvents;
     }
 
-    if (selectedMapStyleKey === 'partner-view') {
+    if (activeMapStyleKey === 'partner-view') {
       if (hasPartnerScope) {
         const selectedPartner = partnerOptions.find(option => option.id === selectedPartnerId);
         return selectedPartner?.mappedProjects || [];
@@ -443,9 +462,11 @@ export default function VolunteerImpactMap({
     }
 
     return mappedProjects;
-  }, [selectedMapStyleKey, hasVolunteerScope, hasPartnerScope, selectedVolunteerId, selectedPartnerId, volunteerOptions, partnerOptions, mappedProjects, mappedEvents]);
+  }, [activeMapStyleKey, lockedVolunteerId, hasVolunteerScope, hasPartnerScope, selectedVolunteerId, selectedPartnerId, volunteerOptions, partnerOptions, mappedProjects, mappedEvents]);
   const hasAnyMapData =
-    mappedProjects.length > 0 || volunteerOptions.length > 0 || partnerOptions.length > 0;
+    lockedVolunteerId
+      ? volunteerOptions.length > 0
+      : mappedProjects.length > 0 || volunteerOptions.length > 0 || partnerOptions.length > 0;
 
   useEffect(() => {
     setSelectedProject(displayProjects[0] || null);
@@ -470,12 +491,12 @@ export default function VolunteerImpactMap({
     return null;
   }
 
-  const showAccountPicker = selectedMapStyleKey !== 'admin-overview' && currentAccountOptions.length > 0;
-  const selectedAccountLabel = getAccountPickerLabel(selectedMapStyleKey, selectedAccountOption);
-  const accountPickerTitle = getAccountPickerTitle(selectedMapStyleKey);
-  const accountIconName = getAccountIconName(selectedMapStyleKey);
+  const showAccountPicker = !lockedVolunteerId && activeMapStyleKey !== 'admin-overview' && currentAccountOptions.length > 0;
+  const selectedAccountLabel = getAccountPickerLabel(activeMapStyleKey, selectedAccountOption);
+  const accountPickerTitle = getAccountPickerTitle(activeMapStyleKey);
+  const accountIconName = getAccountIconName(activeMapStyleKey);
   const emptyStateMessage = getMapEmptyStateMessage(
-    selectedMapStyleKey,
+    activeMapStyleKey,
     currentAccountOptions,
     selectedAccountOption
   );
@@ -522,6 +543,7 @@ export default function VolunteerImpactMap({
             </TouchableOpacity>
           ) : null}
 
+          {!lockedVolunteerId ? (
           <TouchableOpacity
             style={[
               styles.controlButton,
@@ -538,6 +560,7 @@ export default function VolunteerImpactMap({
             </Text>
             <MaterialIcons name="keyboard-arrow-down" size={22} color={selectedMapStyle.accentColor} />
           </TouchableOpacity>
+          ) : null}
         </View>
       </View>
 
@@ -575,7 +598,7 @@ export default function VolunteerImpactMap({
         <View style={styles.selectionSummary}>
           <Text style={styles.selectionSummaryTitle}>{selectedAccountOption.label}</Text>
           <Text style={styles.selectionSummaryText}>
-            {getMappedCountLabel(selectedMapStyleKey, selectedAccountOption.projectCount)}
+            {getMappedCountLabel(activeMapStyleKey, selectedAccountOption.projectCount)}
           </Text>
         </View>
       ) : null}
@@ -605,7 +628,7 @@ export default function VolunteerImpactMap({
             <Text style={styles.menuTitle}>Choose map mode</Text>
             <ScrollView style={styles.menuList} showsVerticalScrollIndicator={false}>
               {MAP_STYLE_PRESETS.map(preset => {
-                const isActive = preset.key === selectedMapStyleKey;
+                const isActive = preset.key === activeMapStyleKey;
 
                 return (
                   <TouchableOpacity
@@ -651,7 +674,7 @@ export default function VolunteerImpactMap({
                     key={option.id}
                     style={[styles.menuItem, isActive && styles.menuItemActive]}
                     onPress={() => {
-                      if (selectedMapStyleKey === 'volunteer-view') {
+                      if (activeMapStyleKey === 'volunteer-view') {
                         setSelectedVolunteerId(option.id);
                       } else {
                         setSelectedPartnerId(option.id);
@@ -662,7 +685,7 @@ export default function VolunteerImpactMap({
                     <View style={styles.menuItemTextWrap}>
                       <Text style={styles.menuItemTitle}>{option.label}</Text>
                       <Text style={styles.menuItemDescription}>
-                        {getMappedCountLabel(selectedMapStyleKey, option.projectCount)}
+                        {getMappedCountLabel(activeMapStyleKey, option.projectCount)}
                       </Text>
                     </View>
                     {isActive ? <MaterialIcons name="check" size={20} color="#2563eb" /> : null}

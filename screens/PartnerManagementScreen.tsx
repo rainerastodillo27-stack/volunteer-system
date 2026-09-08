@@ -16,12 +16,14 @@ import { format } from 'date-fns';
 import {
   Partner,
   Project,
+  User,
   PartnerSectorType,
   AdvocacyFocus,
   PartnerProjectApplication,
 } from '../models/types';
 import {
   getAllPartners,
+  getAllUsers,
   getAllProjects,
   savePartner,
   reviewPartnerRegistration,
@@ -32,14 +34,15 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../contexts/AuthContext';
 import InlineLoadError from '../components/InlineLoadError';
+import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import { getProjectDisplayStatus } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 import { navigateToAvailableRoute } from '../utils/navigation';
 import { formatProjectLocation } from '../utils/locationFormat';
-import { getAttachmentLabel, isImageMediaUri, openAttachmentUri } from '../utils/media';
+import { getAttachmentLabel } from '../utils/media';
 
 const sectorOptions: PartnerSectorType[] = ['NGO', 'Hospital', 'Institution', 'Private'];
-const advocacyOptions: AdvocacyFocus[] = [];
+const advocacyOptions: AdvocacyFocus[] = ['Nutrition', 'Education', 'Livelihood', 'Disaster'];
 
 function formatPartnerDate(value?: string, fallback = 'Date not set'): string {
   const date = new Date(value || '');
@@ -63,6 +66,85 @@ function getPartnerAdvocacyFocus(partner: Partner): AdvocacyFocus[] {
   return Array.isArray(partner.advocacyFocus) ? partner.advocacyFocus : [];
 }
 
+function getPartnerAccountFallback(partner: Partner, partnerUsers: User[]): User | undefined {
+  if (partner.ownerUserId) {
+    const linkedAccount = partnerUsers.find(account => account.id === partner.ownerUserId);
+    if (linkedAccount) {
+      return linkedAccount;
+    }
+  }
+
+  const email = partner.contactEmail?.trim().toLowerCase();
+  if (email) {
+    const matchingEmailAccount = partnerUsers.find(
+      account => account.email?.trim().toLowerCase() === email,
+    );
+    if (matchingEmailAccount) {
+      return matchingEmailAccount;
+    }
+  }
+
+  const phone = partner.contactPhone?.trim();
+  return phone
+    ? partnerUsers.find(account => account.phone?.trim() === phone)
+    : undefined;
+}
+
+function normalizePartnerDocumentUris(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((document): document is string => typeof document === 'string')
+      .map(document => document.trim())
+      .filter(Boolean)
+    : [];
+}
+
+function getPartnerValidIdDocument(partner?: Partner | null): string {
+  return normalizePartnerDocumentUris(partner?.registrationDocuments).find(Boolean) || '';
+}
+
+function getPartnerRegistrationDocuments(partner: Partner, account?: User): string[] {
+  const directDocuments = normalizePartnerDocumentUris(partner.registrationDocuments);
+  if (directDocuments.length > 0) {
+    return directDocuments;
+  }
+
+  // Some older browser sessions still carry the submitted document inside the
+  // partner-registration payload. Prefer the canonical partner row, but make
+  // the document immediately reviewable while that legacy record is repaired.
+  const legacyRegistration = account?.partnerRegistration;
+  return normalizePartnerDocumentUris(legacyRegistration?.registrationDocuments);
+}
+
+// Older partner rows predate stakeholderName.  Hydrate their display values
+// from the owner account without writing generated values back to storage.
+function hydratePartnerRegistration(partner: Partner, partnerUsers: User[]): Partner {
+  const account = getPartnerAccountFallback(partner, partnerUsers);
+  return {
+    ...partner,
+    stakeholderName: partner.stakeholderName?.trim() || account?.name?.trim() || undefined,
+    contactEmail: partner.contactEmail?.trim() || account?.email?.trim() || undefined,
+    contactPhone: partner.contactPhone?.trim() || account?.phone?.trim() || undefined,
+    registrationDocuments: getPartnerRegistrationDocuments(partner, account),
+  };
+}
+
+function getMeaningfulPartnerDescription(partner: Partner): string {
+  const description = partner.description?.trim() || '';
+  if (!description) {
+    return '';
+  }
+
+  const advocacyFocus = getPartnerAdvocacyFocus(partner);
+  const generatedDescriptions = [
+    advocacyFocus.length ? `${advocacyFocus.join(', ')} partnership application` : '',
+    partner.category ? `${partner.category} partnership application` : '',
+  ]
+    .filter(Boolean)
+    .map(value => value.toLowerCase());
+
+  return generatedDescriptions.includes(description.toLowerCase()) ? '' : description;
+}
+
 function getProjectVolunteerCount(project: Project): number {
   return Array.isArray(project.volunteers) ? project.volunteers.length : 0;
 }
@@ -84,18 +166,19 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
   const [activeTab, setActiveTab] = useState<'approved' | 'pending' | 'all' | 'projects' | 'approvedProposals'>('approved');
   const [pendingFilter, setPendingFilter] = useState<'all' | 'registrations' | 'proposals'>('all');
   const [selectedPartner, setSelectedPartner] = useState<Partner | null>(null);
+  const [documentPreview, setDocumentPreview] = useState<{ title: string; uri: string } | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const [reviewTarget, setReviewTarget] = useState<Partner | PartnerProjectApplication | null>(null);
   const [reviewTargetType, setReviewTargetType] = useState<'partner' | 'proposal' | null>(null);
   const [reviewMode, setReviewMode] = useState<'revision' | 'rejection' | null>(null);
   const [nameDraft, setNameDraft] = useState('');
-  const [descriptionDraft, setDescriptionDraft] = useState('');
+  const [stakeholderNameDraft, setStakeholderNameDraft] = useState('');
   const [sectorTypeDraft, setSectorTypeDraft] = useState<PartnerSectorType>('NGO');
   const [dswdAccreditationNoDraft, setDswdAccreditationNoDraft] = useState('');
+  const [secRegistrationNoDraft, setSecRegistrationNoDraft] = useState('');
   const [advocacyFocusDraft, setAdvocacyFocusDraft] = useState<AdvocacyFocus[]>([]);
   const [contactEmailDraft, setContactEmailDraft] = useState('');
   const [contactPhoneDraft, setContactPhoneDraft] = useState('');
-  const [addressDraft, setAddressDraft] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [sectorFilter, setSectorFilter] = useState<PartnerSectorType | 'All'>('All');
   const [showSectorFilterDropdown, setShowSectorFilterDropdown] = useState(false);
@@ -162,11 +245,18 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
   // Loads all partner profiles and applications.
   const loadPartners = async () => {
     try {
-      const allPartners = await getAllPartners();
+      const [allPartnerRecords, allApps, allUsers] = await Promise.all([
+        getAllPartners(),
+        getAllPartnerProjectApplications(),
+        getAllUsers(),
+      ]);
+      const partnerUsers = allUsers.filter(account => account.role === 'partner');
+      const allPartners = allPartnerRecords.map(partner =>
+        hydratePartnerRegistration(partner, partnerUsers),
+      );
       setAllPartnersList(allPartners);
       const approvedPartners = allPartners.filter(partner => partner.status === 'Approved');
       setPartners(approvedPartners);
-      const allApps = await getAllPartnerProjectApplications();
       setApplications(allApps);
       setLoadError(null);
       setSelectedPartner(currentSelectedPartner => {
@@ -320,6 +410,7 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
       setAllPartnersList(previousAllPartners);
       setPartners(previousApprovedPartners);
       setApplications(previousApplications);
+      void loadPartners();
       Alert.alert('Error', error instanceof Error ? error.message : 'Failed to perform review action.');
     } finally {
       setReviewActionLoadingId(null);
@@ -355,6 +446,7 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
       }
     } catch (error) {
       setApplications(previousApplications);
+      void loadPartners();
       Alert.alert('Error', error instanceof Error ? error.message : 'Failed to approve proposal.');
     } finally {
       setReviewActionLoadingId(null);
@@ -395,13 +487,13 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
   const openEditModal = (partner: Partner) => {
     setSelectedPartner(partner);
     setNameDraft(partner.name);
-    setDescriptionDraft(partner.description || '');
+    setStakeholderNameDraft(partner.stakeholderName || '');
     setSectorTypeDraft(partner.sectorType);
     setDswdAccreditationNoDraft(partner.dswdAccreditationNo);
+    setSecRegistrationNoDraft(partner.secRegistrationNo || '');
     setAdvocacyFocusDraft(getPartnerAdvocacyFocus(partner));
     setContactEmailDraft(partner.contactEmail || '');
     setContactPhoneDraft(partner.contactPhone || '');
-    setAddressDraft(partner.address || '');
     setShowEditModal(true);
   };
 
@@ -425,13 +517,14 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
       const updatedPartner: Partner = {
         ...selectedPartner,
         name: nameDraft.trim(),
-        description: descriptionDraft.trim() || undefined,
+        stakeholderName: stakeholderNameDraft.trim() || undefined,
         sectorType: sectorTypeDraft,
-        dswdAccreditationNo: dswdAccreditationNoDraft.trim(),
+        dswdAccreditationNo:
+          sectorTypeDraft === 'NGO' ? dswdAccreditationNoDraft.trim() : '',
+        secRegistrationNo: secRegistrationNoDraft.trim(),
         advocacyFocus: advocacyFocusDraft,
         contactEmail: contactEmailDraft.trim() || undefined,
         contactPhone: contactPhoneDraft.trim() || undefined,
-        address: addressDraft.trim() || undefined,
       };
       setPartners(currentPartners =>
         currentPartners.map(partner => (partner.id === updatedPartner.id ? updatedPartner : partner))
@@ -500,7 +593,7 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
     const normalizedSearch = searchTerm.trim().toLowerCase();
     return [...displayList]
       .filter(partner => sectorFilter === 'All' || partner.sectorType === sectorFilter)
-      .filter(partner => !normalizedSearch || [partner.name, partner.sectorType, partner.dswdAccreditationNo, partner.secRegistrationNo, ...getPartnerAdvocacyFocus(partner)]
+      .filter(partner => !normalizedSearch || [partner.name, partner.stakeholderName, partner.sectorType, partner.dswdAccreditationNo, partner.secRegistrationNo, partner.contactEmail, partner.contactPhone, ...getPartnerAdvocacyFocus(partner)]
         .join(' ').toLowerCase().includes(normalizedSearch))
       .sort((left, right) => {
         if (activeTab === 'pending') {
@@ -575,9 +668,17 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
 
   if (view === 'detail' && selectedPartner) {
     const partnerProjects = getPartnerProjects();
+    const partnerAdvocacyFocus = getPartnerAdvocacyFocus(selectedPartner);
+    const validIdDocument = getPartnerValidIdDocument(selectedPartner);
 
     return (
       <View style={[styles.container, { paddingTop: insets.top }]}>
+        <DocumentPreviewModal
+          visible={Boolean(documentPreview)}
+          title={documentPreview?.title}
+          uri={documentPreview?.uri}
+          onClose={() => setDocumentPreview(null)}
+        />
         <View style={styles.header}>
           <TouchableOpacity onPress={handleCloseDetail}>
             <MaterialIcons name="arrow-back" size={24} color="#333" />
@@ -639,40 +740,6 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
             <View style={styles.partnerHeader}>
               <View style={styles.partnerInfo}>
                 <Text style={styles.partnerName}>{selectedPartner.name}</Text>
-                <Text style={styles.partnerSector}>{selectedPartner.sectorType}</Text>
-                {selectedPartner.dswdAccreditationNo ? (
-                  <Text style={styles.partnerMeta}>
-                    DSWD: {selectedPartner.dswdAccreditationNo}
-                  </Text>
-                ) : null}
-                {selectedPartner.secRegistrationNo ? (
-                  <Text style={styles.partnerMeta}>
-                    SEC: {selectedPartner.secRegistrationNo}
-                  </Text>
-                ) : null}
-                {selectedPartner.registrationDocuments?.[0] ? (
-                  <TouchableOpacity
-                    style={styles.attachmentLink}
-                    onPress={() =>
-                      void openAttachmentUri(selectedPartner.registrationDocuments![0]).catch(
-                        (error: any) =>
-                          Alert.alert(
-                            'Attachment Preview Failed',
-                            error?.message || 'Unable to open the submitted valid ID.',
-                          ),
-                      )
-                    }
-                  >
-                    <MaterialIcons
-                      name={isImageMediaUri(selectedPartner.registrationDocuments[0]) ? 'image' : 'insert-drive-file'}
-                      size={16}
-                      color="#2563eb"
-                    />
-                    <Text style={styles.attachmentLinkText} numberOfLines={1}>
-                      View Valid ID ({getAttachmentLabel(selectedPartner.registrationDocuments[0])})
-                    </Text>
-                  </TouchableOpacity>
-                ) : null}
                 <Text style={styles.partnerMeta}>
                   {selectedPartner.status === 'Approved'
                     ? `Approved ${formatPartnerDate(selectedPartner.validatedAt || selectedPartner.createdAt)}`
@@ -704,45 +771,84 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
             </View>
           </View>
 
-          {selectedPartner.description ? (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Description</Text>
-              <Text style={styles.descriptionText}>{selectedPartner.description}</Text>
-            </View>
-          ) : null}
-
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Contact Information</Text>
-            <View style={styles.contactInfo}>
-              {selectedPartner.contactEmail ? (
-                <View style={styles.infoRow}>
-                  <Text style={styles.infoLabel}>Email:</Text>
-                  <Text style={styles.infoValue}>{selectedPartner.contactEmail}</Text>
+            <Text style={styles.sectionTitle}>Registration Details</Text>
+            <View style={styles.registrationInfo}>
+              <View style={styles.registrationRow}>
+                <Text style={styles.registrationLabel}>Organization Name</Text>
+                <Text style={styles.registrationValue}>{selectedPartner.name}</Text>
+              </View>
+              <View style={styles.registrationRow}>
+                <Text style={styles.registrationLabel}>Contact Person</Text>
+                <Text style={styles.registrationValue}>
+                  {selectedPartner.stakeholderName || 'Not provided'}
+                </Text>
+              </View>
+              <View style={styles.registrationRow}>
+                <Text style={styles.registrationLabel}>Sector Type</Text>
+                <Text style={styles.registrationValue}>{selectedPartner.sectorType}</Text>
+              </View>
+              <View style={styles.registrationRow}>
+                <Text style={styles.registrationLabel}>SEC Registration No.</Text>
+                <Text style={styles.registrationValue}>
+                  {selectedPartner.secRegistrationNo || 'Not provided (optional)'}
+                </Text>
+              </View>
+              <View style={styles.registrationRow}>
+                <Text style={styles.registrationLabel}>DSWD Accreditation No.</Text>
+                <Text style={styles.registrationValue}>
+                  {selectedPartner.sectorType === 'NGO'
+                    ? selectedPartner.dswdAccreditationNo || 'Not provided (optional)'
+                    : 'Not applicable to this sector'}
+                </Text>
+              </View>
+              <View style={styles.registrationRow}>
+                <Text style={styles.registrationLabel}>Valid ID Photo</Text>
+                {validIdDocument ? (
+                  <TouchableOpacity
+                    style={styles.registrationDocumentLink}
+                    onPress={() => setDocumentPreview({
+                      title: 'Partner Valid ID Preview',
+                      uri: validIdDocument,
+                    })}
+                    accessibilityRole="button"
+                    accessibilityLabel="Preview partner valid ID"
+                  >
+                    <MaterialIcons name="visibility" size={17} color="#2563eb" />
+                    <Text style={styles.registrationDocumentLinkText} numberOfLines={1}>
+                      Preview valid ID ({getAttachmentLabel(validIdDocument)})
+                    </Text>
+                  </TouchableOpacity>
+                ) : (
+                  <Text style={styles.registrationValue}>Not provided</Text>
+                )}
+              </View>
+              <View style={styles.registrationRow}>
+                <Text style={styles.registrationLabel}>Advocacy Focus</Text>
+                <View style={[styles.registrationValue, styles.focusContainer]}>
+                  {partnerAdvocacyFocus.length > 0 ? (
+                    partnerAdvocacyFocus.map(focus => (
+                      <View key={focus} style={styles.focusTag}>
+                        <Text style={styles.focusTagText}>{focus}</Text>
+                      </View>
+                    ))
+                  ) : (
+                    <Text style={styles.registrationValue}>Not provided</Text>
+                  )}
                 </View>
-              ) : null}
-              {selectedPartner.contactPhone ? (
-                <View style={styles.infoRow}>
-                  <Text style={styles.infoLabel}>Phone:</Text>
-                  <Text style={styles.infoValue}>{selectedPartner.contactPhone}</Text>
-                </View>
-              ) : null}
-              {selectedPartner.address ? (
-                <View style={styles.infoRow}>
-                  <Text style={styles.infoLabel}>Address:</Text>
-                  <Text style={styles.infoValue}>{selectedPartner.address}</Text>
-                </View>
-              ) : null}
-            </View>
-          </View>
-
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Advocacy Focus</Text>
-            <View style={styles.focusContainer}>
-              {getPartnerAdvocacyFocus(selectedPartner).map(focus => (
-                <View key={focus} style={styles.focusTag}>
-                  <Text style={styles.focusTagText}>{focus}</Text>
-                </View>
-              ))}
+              </View>
+              <View style={styles.registrationRow}>
+                <Text style={styles.registrationLabel}>Account Email</Text>
+                <Text style={styles.registrationValue}>
+                  {selectedPartner.contactEmail || 'Not provided'}
+                </Text>
+              </View>
+              <View style={styles.registrationRowLast}>
+                <Text style={styles.registrationLabel}>Mobile Number</Text>
+                <Text style={styles.registrationValue}>
+                  {selectedPartner.contactPhone || 'Not provided'}
+                </Text>
+              </View>
             </View>
           </View>
 
@@ -786,17 +892,24 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
                   onChangeText={setNameDraft}
                 />
                 <TextInput
-                  style={[styles.input, styles.textArea]}
-                  placeholder="Description"
-                  multiline
-                  value={descriptionDraft}
-                  onChangeText={setDescriptionDraft}
+                  style={styles.input}
+                  placeholder="Contact Person Full Name"
+                  value={stakeholderNameDraft}
+                  onChangeText={setStakeholderNameDraft}
                 />
+                {sectorTypeDraft === 'NGO' ? (
+                  <TextInput
+                    style={styles.input}
+                    placeholder="DSWD Accreditation No. (Optional)"
+                    value={dswdAccreditationNoDraft}
+                    onChangeText={setDswdAccreditationNoDraft}
+                  />
+                ) : null}
                 <TextInput
                   style={styles.input}
-                  placeholder="DSWD Accreditation No"
-                  value={dswdAccreditationNoDraft}
-                  onChangeText={setDswdAccreditationNoDraft}
+                  placeholder="SEC Registration No. (Optional)"
+                  value={secRegistrationNoDraft}
+                  onChangeText={setSecRegistrationNoDraft}
                 />
                 <TextInput
                   style={styles.input}
@@ -813,13 +926,6 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
                   value={contactPhoneDraft}
                   onChangeText={setContactPhoneDraft}
                 />
-                <TextInput
-                  style={styles.input}
-                  placeholder="Address"
-                  value={addressDraft}
-                  onChangeText={setAddressDraft}
-                />
-
                 <Text style={styles.fieldLabel}>Sector Type</Text>
                 <View style={styles.optionsGrid}>
                   {sectorOptions.map(sector => (
@@ -1380,6 +1486,7 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
               ).length;
               const isPending = partner.status === 'Pending';
               const isRejected = partner.status === 'Rejected';
+              const registrationDescription = getMeaningfulPartnerDescription(partner);
 
               if (isPending) {
                 return (
@@ -1406,6 +1513,10 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
                     </View>
 
                     <View style={styles.applicationDetailsBox}>
+                      <View style={styles.appDetailRow}>
+                        <Text style={styles.appDetailLabel}>Contact Person:</Text>
+                        <Text style={styles.appDetailValue}>{partner.stakeholderName || 'Not provided'}</Text>
+                      </View>
                       {partner.dswdAccreditationNo ? (
                         <View style={styles.appDetailRow}>
                           <Text style={styles.appDetailLabel}>DSWD Accr. No:</Text>
@@ -1418,26 +1529,21 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
                           <Text style={styles.appDetailValue}>{partner.secRegistrationNo}</Text>
                         </View>
                       ) : null}
-                      {partner.registrationDocuments?.[0] ? (
+                      {getPartnerValidIdDocument(partner) ? (
                         <TouchableOpacity
                           style={styles.attachmentLink}
-                          onPress={() =>
-                            void openAttachmentUri(partner.registrationDocuments![0]).catch(
-                              (error: any) =>
-                                Alert.alert(
-                                  'Attachment Preview Failed',
-                                  error?.message || 'Unable to open the submitted valid ID.',
-                                ),
-                            )
-                          }
+                          onPress={() => setDocumentPreview({
+                            title: 'Partner Valid ID Preview',
+                            uri: getPartnerValidIdDocument(partner),
+                          })}
                         >
                           <MaterialIcons
-                            name={isImageMediaUri(partner.registrationDocuments[0]) ? 'image' : 'insert-drive-file'}
+                            name="visibility"
                             size={16}
                             color="#2563eb"
                           />
                           <Text style={styles.attachmentLinkText} numberOfLines={1}>
-                            View Valid ID ({getAttachmentLabel(partner.registrationDocuments[0])})
+                            Preview Valid ID ({getAttachmentLabel(getPartnerValidIdDocument(partner))})
                           </Text>
                         </TouchableOpacity>
                       ) : null}
@@ -1467,9 +1573,9 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
                       )}
                     </View>
 
-                    {partner.description ? (
+                    {registrationDescription ? (
                       <Text style={styles.applicationDescription} numberOfLines={2}>
-                        {partner.description}
+                        {registrationDescription}
                       </Text>
                     ) : null}
 
@@ -1615,6 +1721,12 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
           </View>
         </View>
       </Modal>
+      <DocumentPreviewModal
+        visible={Boolean(documentPreview)}
+        title={documentPreview?.title}
+        uri={documentPreview?.uri}
+        onClose={() => setDocumentPreview(null)}
+      />
     </View>
   );
 }
@@ -1764,12 +1876,6 @@ const styles = StyleSheet.create({
     color: '#0f172a',
     marginBottom: 4,
   },
-  partnerSector: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#166534',
-    marginBottom: 4,
-  },
   partnerMeta: {
     fontSize: 12,
     color: '#64748b',
@@ -1824,28 +1930,48 @@ const styles = StyleSheet.create({
     color: '#0f172a',
     marginBottom: 8,
   },
-  descriptionText: {
-    fontSize: 13,
-    color: '#374151',
-    lineHeight: 20,
+  registrationInfo: {
+    borderTopWidth: 1,
+    borderTopColor: '#f1f5f9',
   },
-  contactInfo: {
-    gap: 6,
-  },
-  infoRow: {
+  registrationRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
+    gap: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
   },
-  infoLabel: {
+  registrationRowLast: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    paddingTop: 10,
+  },
+  registrationLabel: {
     fontSize: 12,
     fontWeight: '600',
     color: '#475569',
-    width: 80,
+    lineHeight: 18,
+    width: 150,
   },
-  infoValue: {
+  registrationValue: {
     fontSize: 12,
     color: '#0f172a',
+    lineHeight: 18,
     flex: 1,
+  },
+  registrationDocumentLink: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  registrationDocumentLinkText: {
+    color: '#2563eb',
+    fontSize: 12,
+    fontWeight: '700',
+    flexShrink: 1,
   },
   focusContainer: {
     flexDirection: 'row',
@@ -1932,10 +2058,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#0f172a',
     marginBottom: 12,
-  },
-  textArea: {
-    height: 80,
-    textAlignVertical: 'top',
   },
   fieldLabel: {
     fontSize: 12,
