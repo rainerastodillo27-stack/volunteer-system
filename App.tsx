@@ -67,12 +67,11 @@ if (typeof document !== "undefined") {
     'Nunito, sans-serif';
 
   // React Native Web's Text primitive includes a `System` font shorthand in
-  // its own style. Keep every app text node and form control on Nunito while
-  // leaving icon spans free to retain their icon font families.
+  // its own style. Text/TextInput are patched in platformInit.ts so Nunito is
+  // the default while explicit icon font families remain intact.
   const globalFontStyle = document.createElement('style');
   globalFontStyle.textContent = `
     html, body, #root,
-    body div,
     body input,
     body textarea,
     body button,

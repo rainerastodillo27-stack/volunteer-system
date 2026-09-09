@@ -40,7 +40,10 @@ try {
       React.createElement(original, {
         ...props,
         ref,
-        style: [props.style, { fontFamily: globalFontFamily }],
+        // Keep Nunito as the default, but preserve explicit font families
+        // supplied by components such as @expo/vector-icons. Icon fonts are
+        // passed through this shared Text primitive and must remain last.
+        style: [{ fontFamily: globalFontFamily }, props.style],
       })
     );
     PatchedPrimitive.displayName = `NVC${name}`;
