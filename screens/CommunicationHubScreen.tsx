@@ -360,6 +360,30 @@ function dedupeProposalReviewCards(messagesToDedupe: ChatMessage[]): ChatMessage
 function mergeChatMessageLists<T extends ChatMessage>(...messageGroups: T[][]): T[] {
   const byId = new Map<string, T>();
   const byMessageSignature = new Map<string, T>();
+
+  const getMessageAttachments = (message: ChatMessage): string[] => (
+    Array.isArray(message.attachments)
+      ? message.attachments.filter((attachment): attachment is string => (
+        typeof attachment === 'string' && attachment.trim().length > 0
+      ))
+      : []
+  );
+
+  const mergeMessageRecords = (existing: T, incoming: T, preferIncoming: boolean): T => {
+    const existingAttachments = getMessageAttachments(existing);
+    const incomingAttachments = getMessageAttachments(incoming);
+    const preferredRecord = preferIncoming ? incoming : existing;
+    const secondaryRecord = preferIncoming ? existing : incoming;
+
+    return {
+      ...secondaryRecord,
+      ...preferredRecord,
+      // A Firestore/compact response can contain the same message with an
+      // empty attachment list. Preserve any attachment from the richer record.
+      attachments: Array.from(new Set([...existingAttachments, ...incomingAttachments])),
+    } as T;
+  };
+
   messageGroups.flat().forEach(message => {
     const messageWithOptionalTargets = message as ChatMessage & {
       recipientId?: string;
@@ -376,15 +400,31 @@ function mergeChatMessageLists<T extends ChatMessage>(...messageGroups: T[][]): 
       message.content || '',
       timestampBucket,
     ].join('|');
+
+    const existingMessageWithSameId = byId.get(message.id);
+    if (existingMessageWithSameId) {
+      byId.set(message.id, mergeMessageRecords(existingMessageWithSameId, message, true));
+      byMessageSignature.set(messageSignature, byId.get(message.id)!);
+      return;
+    }
+
     const existingSimilarMessage = byMessageSignature.get(messageSignature);
     if (existingSimilarMessage) {
       const preferCurrentMessage =
         message.id.startsWith('msg-') && !existingSimilarMessage.id.startsWith('msg-');
-      if (preferCurrentMessage) {
+
+      const mergedMessage = mergeMessageRecords(
+        existingSimilarMessage,
+        message,
+        preferCurrentMessage,
+      );
+
+      if (mergedMessage.id !== existingSimilarMessage.id) {
         byId.delete(existingSimilarMessage.id);
-        byId.set(message.id, message);
-        byMessageSignature.set(messageSignature, message);
       }
+
+      byId.set(mergedMessage.id, mergedMessage);
+      byMessageSignature.set(messageSignature, mergedMessage);
       return;
     }
 
@@ -4674,6 +4714,11 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
 
               const messageAttachments = m.attachments || [];
+              const isAttachmentPlaceholder = (
+                messageAttachments.length > 0 &&
+                typeof m.content === 'string' &&
+                m.content.trim().toLowerCase() === 'attachment'
+              );
 
 
 
@@ -4683,7 +4728,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                   <View style={[styles.bubble, isOwn ? styles.bubbleOwn : styles.bubbleOther]}>
 
-                    {m.content ? (
+                    {m.content && !isAttachmentPlaceholder ? (
 
                       <Text style={[styles.bubbleText, isOwn && styles.bubbleTextOwn]}>{m.content}</Text>
 
