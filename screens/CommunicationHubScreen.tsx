@@ -65,7 +65,7 @@ import {
 
   getPartnerProjectApplicationsByUser,
 
-  getAllUsers,
+  getMessageUsers,
 
   getConversation,
 
@@ -97,6 +97,8 @@ import {
   subscribeToMessages,
 
 } from '../models/storage';
+
+import type { MessageTypingEvent, MessageTypingPayload } from '../models/storage';
 
 import {
 
@@ -220,6 +222,8 @@ type ProjectChatMember = {
 
   name: string;
 
+  profilePhoto?: string;
+
   role: 'Admin' | 'Partner' | 'Volunteer';
 
   detail?: string;
@@ -258,6 +262,28 @@ type ProposalChatItem = {
 
 
 type ChatMessage = Message | ProjectGroupMessage;
+
+type ChatSender = Pick<User, 'id' | 'name' | 'profilePhoto'>;
+
+type ActiveTypingTarget = {
+  key: string;
+  target: MessageTypingPayload;
+  lastSentAt: number;
+};
+
+function getTypingIndicatorKey(event: Pick<MessageTypingEvent, 'senderId' | 'recipientId' | 'projectId'>): string {
+  const conversationKey = event.projectId
+    ? `group:${event.projectId}`
+    : `direct:${event.recipientId || ''}`;
+  return `${conversationKey}:${event.senderId}`;
+}
+
+function getUserInitials(name?: string): string {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+}
 
 const parsedProposalCardCache = new Map<string, any>();
 
@@ -720,6 +746,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   const [messageText, setMessageText] = useState('');
 
+  const [typingUsers, setTypingUsers] = useState<MessageTypingEvent[]>([]);
+
   const [pendingAttachments, setPendingAttachments] = useState<string[]>([]);
 
   const [searchText, setSearchText] = useState('');
@@ -777,6 +805,14 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   const allUsersRef = useRef<User[]>([]);
 
+  const sendTypingRef = useRef<((payload: MessageTypingPayload) => void) | null>(null);
+
+  const activeTypingTargetRef = useRef<ActiveTypingTarget | null>(null);
+
+  const typingStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const typingIndicatorTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+
 
 
   const [proposalForm, setProposalForm] = useState<ProposalFormState>(() =>
@@ -826,6 +862,115 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     };
   }, [user?.email, user?.id, user?.phone, user?.role]);
 
+  const removeTypingIndicator = useCallback((key: string) => {
+    const timer = typingIndicatorTimersRef.current.get(key);
+    if (timer) {
+      clearTimeout(timer);
+      typingIndicatorTimersRef.current.delete(key);
+    }
+    setTypingUsers(current => current.filter(event => getTypingIndicatorKey(event) !== key));
+  }, []);
+
+  const handleTypingEvent = useCallback((event: MessageTypingEvent) => {
+    if (!messageUserId || event.senderId === messageUserId) {
+      return;
+    }
+
+    const isSelectedDirectConversation = Boolean(
+      !event.projectId &&
+      event.recipientId === messageUserId &&
+      selectedUserRef.current?.id === event.senderId
+    );
+    const isSelectedGroupConversation = Boolean(
+      event.projectId &&
+      selectedProjectChatRef.current?.project.id === event.projectId
+    );
+    if (!isSelectedDirectConversation && !isSelectedGroupConversation) {
+      return;
+    }
+
+    const key = getTypingIndicatorKey(event);
+    removeTypingIndicator(key);
+    if (!event.isTyping) {
+      return;
+    }
+
+    setTypingUsers(current => (
+      current.some(existing => getTypingIndicatorKey(existing) === key)
+        ? current
+        : [...current, event]
+    ));
+    typingIndicatorTimersRef.current.set(
+      key,
+      setTimeout(() => removeTypingIndicator(key), 3000),
+    );
+  }, [messageUserId, removeTypingIndicator]);
+
+  const getTypingTarget = useCallback((): MessageTypingPayload | null => {
+    if (selectedUser?.id) {
+      return { recipientId: selectedUser.id, isTyping: true };
+    }
+    if (selectedProjectChat?.project.id) {
+      return { projectId: selectedProjectChat.project.id, isTyping: true };
+    }
+    return null;
+  }, [selectedProjectChat?.project.id, selectedUser?.id]);
+
+  const stopTyping = useCallback(() => {
+    if (typingStopTimerRef.current) {
+      clearTimeout(typingStopTimerRef.current);
+      typingStopTimerRef.current = null;
+    }
+
+    const activeTarget = activeTypingTargetRef.current;
+    if (activeTarget) {
+      sendTypingRef.current?.({ ...activeTarget.target, isTyping: false });
+      activeTypingTargetRef.current = null;
+    }
+  }, []);
+
+  const notifyTyping = useCallback((value: string) => {
+    if (!value.trim()) {
+      stopTyping();
+      return;
+    }
+
+    const target = getTypingTarget();
+    if (!target) {
+      return;
+    }
+
+    const key = getTypingIndicatorKey({ senderId: messageUserId, ...target });
+    const now = Date.now();
+    let activeTarget = activeTypingTargetRef.current;
+
+    // End the previous conversation's indicator if the composer was reused
+    // while the user changed conversations.
+    if (activeTarget && activeTarget.key !== key) {
+      sendTypingRef.current?.({ ...activeTarget.target, isTyping: false });
+      activeTarget = null;
+    }
+
+    if (!activeTarget || now - activeTarget.lastSentAt >= 900) {
+      sendTypingRef.current?.({ ...target, isTyping: true });
+      activeTarget = { key, target, lastSentAt: now };
+      activeTypingTargetRef.current = activeTarget;
+    }
+
+    if (typingStopTimerRef.current) {
+      clearTimeout(typingStopTimerRef.current);
+    }
+    typingStopTimerRef.current = setTimeout(stopTyping, 1600);
+  }, [getTypingTarget, messageUserId, stopTyping]);
+
+  // Clear indicators and notify the previous target when the open chat changes.
+  useEffect(() => {
+    setTypingUsers([]);
+    typingIndicatorTimersRef.current.forEach(timer => clearTimeout(timer));
+    typingIndicatorTimersRef.current.clear();
+    return () => stopTyping();
+  }, [selectedProjectChat?.project.id, selectedUser?.id, stopTyping]);
+
 
 
   useEffect(() => {
@@ -844,7 +989,12 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
     if (!messageUserId) return undefined;
 
-    return subscribeToMessages(messageUserId, event => {
+    const messageSubscription = subscribeToMessages(messageUserId, event => {
+      if (event.type === 'typing') {
+        handleTypingEvent(event);
+        return;
+      }
+
       if (event.type === 'project-group-message.changed') {
         invalidateMessageCache(undefined, undefined, event.message.projectId);
         if (selectedProjectChatRef.current?.project.id === event.message.projectId) {
@@ -927,7 +1077,14 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       invalidateMessageCache(messageUserId, selectedUserRef.current?.id);
       setMessageRealtimeVersion(current => current + 1);
     });
-  }, [messageUserId, user]);
+
+    sendTypingRef.current = messageSubscription.sendTyping;
+
+    return () => {
+      messageSubscription();
+      sendTypingRef.current = null;
+    };
+  }, [handleTypingEvent, messageUserId, user]);
 
   const availableSections: SidebarSection[] = isVolunteer
 
@@ -948,7 +1105,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     if (!user || !messageUserId) return;
 
     try {
-      const users = await getAllUsers();
+      const users = await getMessageUsers();
       const others = users.filter(
         candidate => candidate.id !== messageUserId && !isRetiredNvcAdminAccount(candidate)
       );
@@ -987,7 +1144,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       const [usersResult, snapshotResult, storedMessagesResult, partnerApplicationsResult] = await Promise.allSettled([
 
-        getAllUsers(),
+        getMessageUsers(),
 
         snapshotRequest,
 
@@ -1160,6 +1317,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                 name: admin.name || 'Admin',
 
+                profilePhoto: admin.profilePhoto,
+
                 role: 'Admin',
 
                 detail: admin.email,
@@ -1187,6 +1346,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                 id: joinedUser.id,
 
                 name: joinedUser.name || 'Volunteer',
+
+                profilePhoto: joinedUser.profilePhoto,
 
                 role: 'Volunteer',
 
@@ -1229,6 +1390,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                   id: application.partnerUserId,
 
                   name: application.partnerName || partnerUser?.name || 'Partner Account',
+
+                  profilePhoto: partnerUser?.profilePhoto,
 
                   role: 'Partner',
 
@@ -2354,6 +2517,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
     if (!user || !senderId || (!trimmedMessage && pendingAttachments.length === 0) || isSending) return;
 
+    stopTyping();
     setIsSending(true);
 
     const msg = {
@@ -2866,6 +3030,52 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   const pendingProposalCount = pendingProposalChats.length;
 
+  const getChatSender = useCallback((senderId: string): ChatSender => {
+    if (senderId === messageUserId || senderId === user?.id) {
+      return {
+        id: senderId,
+        name: user?.name || 'You',
+        profilePhoto: user?.profilePhoto,
+      };
+    }
+
+    const selectedConversationUser = selectedUser?.id === senderId ? selectedUser : null;
+    const knownUser = selectedConversationUser || allUsers.find(candidate => candidate.id === senderId);
+    if (knownUser) {
+      return knownUser;
+    }
+
+    const projectMember = selectedProjectChat?.members.find(member => member.id === senderId);
+    if (projectMember) {
+      return projectMember;
+    }
+
+    return { id: senderId, name: 'NVC Member' };
+  }, [allUsers, messageUserId, selectedProjectChat?.members, selectedUser, user]);
+
+  const renderMessageSenderIdentity = (senderId: string, showIdentity: boolean) => {
+    if (!showIdentity) {
+      return null;
+    }
+
+    const sender = getChatSender(senderId);
+    const profilePhoto = sender.profilePhoto?.trim();
+    return (
+      <View style={styles.messageSenderIdentity}>
+        <View style={styles.messageSenderAvatar}>
+          {profilePhoto && isImageMediaUri(profilePhoto) ? (
+            <Image source={{ uri: profilePhoto }} style={styles.messageSenderAvatarImage} />
+          ) : (
+            <Text style={styles.messageSenderAvatarText}>{getUserInitials(sender.name)}</Text>
+          )}
+        </View>
+        <Text style={styles.messageSenderName} numberOfLines={1}>
+          {sender.name}
+        </Text>
+      </View>
+    );
+  };
+
 
 
   const renderSidebarItem = (
@@ -2898,7 +3108,9 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       <View style={[styles.sidebarAvatar, { backgroundColor: options?.color || '#166534' }]}>
 
-        {options?.icon ? (
+        {options?.avatar && isImageMediaUri(options.avatar) ? (
+          <Image source={{ uri: options.avatar }} style={styles.sidebarAvatarImage} />
+        ) : options?.icon ? (
 
           <MaterialIcons name={options.icon as any} size={20} color="#fff" />
 
@@ -3084,7 +3296,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                 () => { setSelectedUser(c.user); setSelectedProjectChat(null); setSelectedProposalApplication(null); setProposalIntent(null); setView('detail'); },
 
-                { badge: c.unreadCount }
+                { badge: c.unreadCount, avatar: c.user.profilePhoto }
 
               ))
 
@@ -3185,6 +3397,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                       : '#f59e0b',
 
                   badge: p.application.status === 'Pending' ? 1 : (p.application.status === 'Rejected' ? 1 : undefined),
+                  avatar: allUsers.find(candidate => candidate.id === p.application.partnerUserId)?.profilePhoto,
 
                 }
 
@@ -3224,7 +3437,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                 selectedUser?.id === u.id,
 
-                () => { setSelectedUser(u); setSelectedProjectChat(null); setSelectedProposalApplication(null); setProposalIntent(null); setView('detail'); }
+                () => { setSelectedUser(u); setSelectedProjectChat(null); setSelectedProposalApplication(null); setProposalIntent(null); setView('detail'); },
+                { avatar: u.profilePhoto }
 
               ))
 
@@ -4247,6 +4461,16 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       : 'Event GC';
 
+    const typingNames = Array.from(new Set(
+      typingUsers.map(event => getChatSender(event.senderId).name)
+    ));
+    const typingLabel = typingNames.length === 1
+      ? `${typingNames[0]} is typing...`
+      : typingNames.length > 1
+        ? `${typingNames.slice(0, 2).join(' and ')} are typing...`
+        : '';
+    const headerProfilePhoto = selectedUser?.profilePhoto?.trim();
+
 
 
     return (
@@ -4269,7 +4493,11 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
             <View style={styles.headerAvatar}>
 
-              <Text style={styles.headerAvatarText}>{title?.[0].toUpperCase()}</Text>
+              {headerProfilePhoto && isImageMediaUri(headerProfilePhoto) ? (
+                <Image source={{ uri: headerProfilePhoto }} style={styles.headerAvatarImage} />
+              ) : (
+                <Text style={styles.headerAvatarText}>{getUserInitials(title)}</Text>
+              )}
 
             </View>
 
@@ -4480,6 +4708,11 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
               const isProposal = m.content.startsWith(PROPOSAL_PREFIX);
 
+              const senderIdentity = renderMessageSenderIdentity(
+                m.senderId,
+                Boolean(selectedProjectChat) || !isOwn,
+              );
+
 
 
               if (isProposal) {
@@ -4606,6 +4839,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                   <View key={`proposal-${m.id}-${i}`} style={[styles.messageRow, isOwn ? styles.messageRowOwn : styles.messageRowOther, styles.proposalMessageRow]}>
 
+                    {senderIdentity}
+
                     <ProposalMessageTemplate
                       application={templateApplication}
                       isAdmin={user?.role === 'admin'}
@@ -4726,6 +4961,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                 <View key={`msg-${m.id}-${i}`} style={[styles.messageRow, isOwn ? styles.messageRowOwn : styles.messageRowOther]}>
 
+                  {senderIdentity}
+
                   <View style={[styles.bubble, isOwn ? styles.bubbleOwn : styles.bubbleOther]}>
 
                     {m.content && !isAttachmentPlaceholder ? (
@@ -4827,6 +5064,17 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
           )}
 
         </ScrollView>
+
+        {typingLabel ? (
+          <View style={styles.typingIndicator} accessibilityLiveRegion="polite">
+            <View style={styles.typingDots}>
+              <View style={styles.typingDot} />
+              <View style={styles.typingDot} />
+              <View style={styles.typingDot} />
+            </View>
+            <Text style={styles.typingIndicatorText}>{typingLabel}</Text>
+          </View>
+        ) : null}
 
 
 
@@ -4960,7 +5208,12 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                 value={messageText}
 
-                onChangeText={setMessageText}
+                onChangeText={value => {
+                  setMessageText(value);
+                  notifyTyping(value);
+                }}
+
+                onBlur={stopTyping}
 
                 onSubmitEditing={() => {
                   void handleSendMessage();
@@ -5653,11 +5906,13 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                     >
 
-                      <Text style={styles.memberAvatarText}>
-
-                        {member.name.charAt(0).toUpperCase()}
-
-                      </Text>
+                      {member.profilePhoto && isImageMediaUri(member.profilePhoto) ? (
+                        <Image source={{ uri: member.profilePhoto }} style={styles.memberAvatarImage} />
+                      ) : (
+                        <Text style={styles.memberAvatarText}>
+                          {getUserInitials(member.name)}
+                        </Text>
+                      )}
 
                     </View>
 
@@ -6272,6 +6527,8 @@ const styles = StyleSheet.create({
 
   sidebarAvatarText: { color: '#fff', fontWeight: '800', fontSize: 13 },
 
+  sidebarAvatarImage: { width: '100%', height: '100%', borderRadius: 10 },
+
   sidebarItemInfo: { flex: 1 },
 
   sidebarItemHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
@@ -6319,6 +6576,8 @@ const styles = StyleSheet.create({
   headerInfo: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
 
   headerAvatar: { width: 38, height: 38, borderRadius: 12, backgroundColor: '#166534', alignItems: 'center', justifyContent: 'center' },
+
+  headerAvatarImage: { width: '100%', height: '100%', borderRadius: 12 },
 
   headerAvatarText: { color: '#fff', fontWeight: '800', fontSize: 16 },
 
@@ -6566,6 +6825,16 @@ const styles = StyleSheet.create({
 
   },
 
+  memberAvatarImage: {
+
+    width: '100%',
+
+    height: '100%',
+
+    borderRadius: 14,
+
+  },
+
   memberAvatarText: {
 
     fontSize: 14,
@@ -6801,6 +7070,16 @@ const styles = StyleSheet.create({
 
   messageRowOther: { alignSelf: 'flex-start' },
 
+  messageSenderIdentity: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2, maxWidth: 220 },
+
+  messageSenderAvatar: { width: 22, height: 22, borderRadius: 11, backgroundColor: '#166534', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+
+  messageSenderAvatarImage: { width: '100%', height: '100%' },
+
+  messageSenderAvatarText: { color: '#ffffff', fontSize: 9, fontWeight: '900' },
+
+  messageSenderName: { color: '#64748b', fontSize: 10, fontWeight: '800', flexShrink: 1 },
+
   bubble: { padding: 8, borderRadius: 12 },
 
   bubbleOwn: { backgroundColor: '#166534', borderBottomRightRadius: 3 },
@@ -6886,6 +7165,14 @@ const styles = StyleSheet.create({
   messageAttachmentNameOwn: { color: '#ffffff' },
 
   messageTime: { fontSize: 9, color: '#94a3b8', fontWeight: '600' },
+
+  typingIndicator: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 14, paddingVertical: 6, minHeight: 28 },
+
+  typingDots: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 7, paddingVertical: 6, borderRadius: 12, backgroundColor: '#f1f5f9' },
+
+  typingDot: { width: 4, height: 4, borderRadius: 2, backgroundColor: '#64748b' },
+
+  typingIndicatorText: { color: '#64748b', fontSize: 11, fontWeight: '700' },
 
   emptyChat: { padding: 20, alignItems: 'center' },
 

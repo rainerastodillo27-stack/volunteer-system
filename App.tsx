@@ -1,9 +1,9 @@
 import "./platformInit";
 import React, { useEffect } from 'react';
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { NavigationContainer } from "@react-navigation/native";
+import { NavigationContainer, type InitialState } from "@react-navigation/native";
 import { Alert, Platform, View, ActivityIndicator } from "react-native";
-import { AuthProvider } from "./contexts/AuthContext";
+import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { GlobalDataProvider, useGlobalData } from "./contexts/GlobalDataContext";
 import StackNavigator from "./navigation/StackNavigator";
 import ErrorBoundary from './components/ErrorBoundary';
@@ -14,6 +14,11 @@ import { useNunitoFont } from './utils/fonts';
 import * as ExpSplashScreen from 'expo-splash-screen';
 import * as WebBrowser from 'expo-web-browser';
 import SystemAlertHost, { showSystemAlert, showSystemPrompt } from './components/SystemAlertModal';
+import {
+  clearPersistedNavigationState,
+  getPersistedNavigationState,
+  savePersistedNavigationState,
+} from './utils/navigationPersistence';
 
 // React Native Web implements Alert.alert with the blocking browser
 // window.alert API. Route the existing app-wide calls to our non-blocking,
@@ -190,7 +195,63 @@ if (typeof document !== "undefined") {
 // Inner component that uses global data to show splash screen
 function AppContent() {
   const { isLoading, loadingProgress, isInitialized } = useGlobalData();
+  const { user, loading: authLoading } = useAuth();
   const [forceShowApp, setForceShowApp] = React.useState(false);
+  const [initialNavigationState, setInitialNavigationState] = React.useState<InitialState | undefined>();
+  const [navigationStateReady, setNavigationStateReady] = React.useState(false);
+  const [navigationStateOwner, setNavigationStateOwner] = React.useState<string | null>(null);
+  const lastAuthenticatedUserRef = React.useRef<typeof user>(null);
+  const currentNavigationStateOwner = user ? `${user.role}:${user.id}` : 'logged-out';
+
+  // NavigationContainer only consumes initialState on its first mount. Load
+  // the account-specific state after auth restoration and mount navigation
+  // once so refresh can restore nested tabs/details as well as the root stack.
+  React.useEffect(() => {
+    if (authLoading) {
+      return;
+    }
+
+    let cancelled = false;
+    setNavigationStateReady(false);
+
+    const restoreNavigationState = async () => {
+      if (!user) {
+        setInitialNavigationState(undefined);
+        setNavigationStateOwner('logged-out');
+        if (!cancelled) {
+          setNavigationStateReady(true);
+        }
+        return;
+      }
+
+      const savedState = await getPersistedNavigationState(user);
+      if (cancelled) {
+        return;
+      }
+
+      setInitialNavigationState(savedState as InitialState | undefined);
+      setNavigationStateReady(true);
+      setNavigationStateOwner(`${user.role}:${user.id}`);
+      lastAuthenticatedUserRef.current = user;
+    };
+
+    void restoreNavigationState();
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, user?.id, user?.role]);
+
+  // An explicit logout should not reopen the old authenticated screen after
+  // the next login. The session itself is cleared by AuthContext.
+  React.useEffect(() => {
+    if (authLoading || user || !lastAuthenticatedUserRef.current) {
+      return;
+    }
+
+    const previousUser = lastAuthenticatedUserRef.current;
+    lastAuthenticatedUserRef.current = null;
+    void clearPersistedNavigationState(previousUser);
+  }, [authLoading, user]);
 
   // Fallback: force show app after 10 seconds if still loading
   React.useEffect(() => {
@@ -205,7 +266,10 @@ function AppContent() {
   }, [isLoading, isInitialized]);
 
   // Show splash screen during initial data load (unless forced)
-  if ((isLoading || !isInitialized) && !forceShowApp) {
+  const isNavigationStateReadyForCurrentUser =
+    navigationStateReady && navigationStateOwner === currentNavigationStateOwner;
+
+  if ((isLoading || !isInitialized || authLoading || !isNavigationStateReadyForCurrentUser) && !forceShowApp) {
     return (
       <SplashScreen 
         progress={loadingProgress}
@@ -216,7 +280,19 @@ function AppContent() {
 
   return (
     <View style={{ flex: 1 }}>
-      <NavigationContainer ref={navigationRef}>
+      <NavigationContainer
+        ref={navigationRef}
+        initialState={initialNavigationState}
+        onStateChange={state => {
+          // Never save the Login route during logout. Otherwise a navigation
+          // update that races the logout effect could restore stale state.
+          if (!user || !state) {
+            return;
+          }
+          lastAuthenticatedUserRef.current = user;
+          void savePersistedNavigationState(user, state);
+        }}
+      >
         <StackNavigator />
       </NavigationContainer>
       <InAppNotificationBanner />

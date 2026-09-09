@@ -118,25 +118,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Restore persistent session on mobile for faster startup.
-    // We only clear sessions on web (non-mobile-mode) to maintain a predictable
-    // entry point for admin tools. In ?mode=mobile, allow session restore.
-    const platform = getPlatformOS();
-    
-    if (platform === 'web' && getIsWeb()) {
-      setUser(null);
-      setLoading(false);
-      void saveCurrentUser(null).catch(() => null);
-      return;
-    }
-
-    // On mobile, try to restore the last active session.
+    // Restore the persistent session on every supported platform. A browser
+    // refresh should behave like reopening the app, not like logging out.
     const restoreSession = async () => {
       try {
         const savedUser = await getCurrentUser();
-        if (savedUser) {
+        // The normal web app is the admin experience. If a volunteer or
+        // partner session was saved by mobile mode, do not carry it into the
+        // normal web app where that role is intentionally restricted.
+        const canRestoreSavedUser =
+          !getIsWeb() || savedUser?.role === 'admin';
+
+        if (savedUser && canRestoreSavedUser) {
           setUser(savedUser);
           void prefetchForUser(savedUser).catch(() => null);
+        } else if (savedUser) {
+          await saveCurrentUser(null);
         }
       } catch (error) {
         console.error('[App] Failed to restore session:', error);
@@ -168,9 +165,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       setUser(userData);
-      void saveCurrentUser(userData).catch((error) => {
-        console.error('Error persisting current user:', error);
-      });
+      // Finish the local write before reporting login complete so an
+      // immediate browser refresh cannot race the session persistence.
+      await saveCurrentUser(userData);
       void prefetchForUser(userData).catch(() => null);
     } catch (error) {
       console.error('Error during login:', error);

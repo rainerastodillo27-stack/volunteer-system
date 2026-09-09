@@ -62,6 +62,10 @@ const STORAGE_KEYS = {
 };
 
 const WEB_MESSAGE_SYNC_KEY = 'volcre:messages:updatedAt';
+// Authentication is local to this browser/device. Keep a dedicated session
+// record in addition to the general cache so a browser refresh never depends
+// on shared-cache invalidation or its debounce queue.
+const WEB_AUTH_SESSION_KEY = 'volcre:auth-session:v1';
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   notificationsEnabled: true,
   autoRefreshEnabled: true,
@@ -1401,15 +1405,33 @@ void (async () => {
   } catch { }
 })();
 
-async function setLocalStorageItem<T>(key: string, value: T): Promise<void> {
+async function setLocalStorageItem<T>(
+  key: string,
+  value: T,
+  options: { immediate?: boolean } = {},
+): Promise<void> {
   const safeValue = sanitizeStorageCacheValue(key, value);
   memoryStorageCache.set(key, safeValue);
 
   const serialized = JSON.stringify(safeValue);
   const ts = String(Date.now());
 
+  if (options.immediate) {
+    const existing = PERSISTED_CACHE_PENDING_WRITES.get(key);
+    if (existing) {
+      clearTimeout(existing);
+      PERSISTED_CACHE_PENDING_WRITES.delete(key);
+    }
+  }
+
   // Web: localStorage
   if (typeof window !== 'undefined' && window.localStorage) {
+    if (options.immediate) {
+      window.localStorage.setItem(getPersistedCacheKey(key), serialized);
+      window.localStorage.setItem(getPersistedCacheTimestampKey(key), ts);
+      return;
+    }
+
     schedulePersistedWrite(key, async () => {
       window.localStorage.setItem(getPersistedCacheKey(key), serialized);
       window.localStorage.setItem(getPersistedCacheTimestampKey(key), ts);
@@ -1418,6 +1440,14 @@ async function setLocalStorageItem<T>(key: string, value: T): Promise<void> {
   }
 
   // Native: AsyncStorage
+  if (options.immediate) {
+    await AsyncStorage.multiSet([
+      [getPersistedCacheKey(key), serialized],
+      [getPersistedCacheTimestampKey(key), ts],
+    ]);
+    return;
+  }
+
   schedulePersistedWrite(key, async () => {
     await AsyncStorage.multiSet([
       [getPersistedCacheKey(key), serialized],
@@ -3352,6 +3382,18 @@ export async function getAllUsers(): Promise<User[]> {
   return (await getStorageItemFast<User[]>(STORAGE_KEYS.USERS)) || [];
 }
 
+// Returns the small user directory used by messaging. Unlike the general
+// users collection, this includes only identity fields and a compressed
+// profile photo, never IDs or registration documents.
+export async function getMessageUsers(): Promise<User[]> {
+  try {
+    const payload = await requestApiJson<{ users?: User[] }>('/users/directory');
+    return payload.users || [];
+  } catch {
+    return getAllUsers();
+  }
+}
+
 // Deletes a user account and related volunteer data when necessary.
 export async function deleteUser(userId: string): Promise<void> {
   await requestApiJson(`/auth/users/${encodeURIComponent(userId)}`, {
@@ -3379,8 +3421,23 @@ export async function deleteUser(userId: string): Promise<void> {
 
 // Persists the currently signed-in user in local-only storage.
 export async function setCurrentUser(user: User | null): Promise<void> {
+  // On web, write the auth record synchronously before updating the general
+  // cache. This is the source of truth used by the next page load.
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      if (user) {
+        window.localStorage.setItem(WEB_AUTH_SESSION_KEY, JSON.stringify(user));
+      } else {
+        window.localStorage.removeItem(WEB_AUTH_SESSION_KEY);
+      }
+    } catch {
+      // Fall back to the existing storage path below if browser storage is
+      // unavailable or temporarily full.
+    }
+  }
+
   if (user) {
-    await setLocalStorageItem(STORAGE_KEYS.CURRENT_USER, user);
+    await setLocalStorageItem(STORAGE_KEYS.CURRENT_USER, user, { immediate: true });
   } else {
     await deleteLocalStorageItem(STORAGE_KEYS.CURRENT_USER);
   }
@@ -3388,7 +3445,52 @@ export async function setCurrentUser(user: User | null): Promise<void> {
 
 // Restores the currently signed-in user from local-only storage.
 export async function getCurrentUser(): Promise<User | null> {
-  return (await getLocalStorageItem<User>(STORAGE_KEYS.CURRENT_USER)) || null;
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const rawSession = window.localStorage.getItem(WEB_AUTH_SESSION_KEY);
+      if (rawSession) {
+        const sessionUser = normalizeStoredUser(JSON.parse(rawSession) as User);
+        if (sessionUser) {
+          // Migrate the dedicated session into the legacy cache key so other
+        // app code and older builds can continue to see the active account.
+          await setLocalStorageItem(STORAGE_KEYS.CURRENT_USER, sessionUser, { immediate: true });
+        }
+        return sessionUser;
+      }
+    } catch {
+      // Ignore malformed browser data and open the login screen safely.
+    }
+  }
+
+  const cachedUser = normalizeStoredUser(
+    await getLocalStorageItem<User>(STORAGE_KEYS.CURRENT_USER),
+  );
+  if (cachedUser && typeof window !== 'undefined' && window.localStorage) {
+    try {
+      // Migrate sessions written by the previous cache-only implementation.
+      window.localStorage.setItem(WEB_AUTH_SESSION_KEY, JSON.stringify(cachedUser));
+    } catch {
+      // Ignore unavailable browser storage; the cache record is still usable.
+    }
+  }
+  return cachedUser;
+}
+
+function normalizeStoredUser(user: User | null): User | null {
+  if (!user || typeof user !== 'object' || !String(user.id || '').trim()) {
+    return null;
+  }
+
+  const normalizedRole = String(user.role || '').trim().toLowerCase();
+  if (!['admin', 'volunteer', 'partner'].includes(normalizedRole)) {
+    return null;
+  }
+
+  return {
+    ...user,
+    id: String(user.id).trim(),
+    role: normalizedRole as UserRole,
+  };
 }
 
 function userMatchesLinkedRecord(
@@ -4741,18 +4843,35 @@ export async function markMessageAsRead(messageId: string): Promise<void> {
 
 export type MessageSubscriptionEvent =
   | { type: 'message.changed'; message: Message }
-  | { type: 'project-group-message.changed'; message: ProjectGroupMessage };
+  | { type: 'project-group-message.changed'; message: ProjectGroupMessage }
+  | MessageTypingEvent;
+
+export type MessageTypingPayload = {
+  recipientId?: string;
+  projectId?: string;
+  isTyping: boolean;
+};
+
+export type MessageTypingEvent = MessageTypingPayload & {
+  type: 'typing';
+  senderId: string;
+};
+
+export type MessageSubscription = (() => void) & {
+  sendTyping: (payload: MessageTypingPayload) => void;
+};
 
 // Opens a realtime websocket subscription for direct and project chat updates.
 export function subscribeToMessages(
   userId: string,
   onChange: (event: MessageSubscriptionEvent) => void,
   onConnected?: () => void
-): () => void {
+): MessageSubscription {
 
   let socket: WebSocket | null = null;
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let pendingTyping: MessageTypingPayload | null = null;
   let closed = false;
 
   const cleanupSocket = () => {
@@ -4780,6 +4899,10 @@ export function subscribeToMessages(
           socket.send('ping');
         }
       }, 25000);
+      if (pendingTyping && socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'typing', ...pendingTyping }));
+        pendingTyping = null;
+      }
       // Let an open chat immediately reconcile anything that changed while a
       // mobile device or browser tab was reconnecting.
       onConnected?.();
@@ -4808,13 +4931,30 @@ export function subscribeToMessages(
 
   connect();
 
-  return () => {
+  const unsubscribe = () => {
     closed = true;
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
     }
     cleanupSocket();
   };
+
+  const sendTyping = (payload: MessageTypingPayload) => {
+    if (!payload.recipientId && !payload.projectId) {
+      return;
+    }
+    if (socket?.readyState !== WebSocket.OPEN) {
+      // Preserve the latest active state until the socket finishes connecting.
+      // A stop event cancels a queued start so a late connection cannot show a
+      // stale typing indicator.
+      pendingTyping = payload.isTyping ? payload : null;
+      return;
+    }
+
+    socket.send(JSON.stringify({ type: 'typing', ...payload }));
+  };
+
+  return Object.assign(unsubscribe, { sendTyping });
 }
 
 // Opens a realtime websocket subscription for shared storage changes.

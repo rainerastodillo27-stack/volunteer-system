@@ -128,6 +128,11 @@ _storage_collection_cache = TTLCache(ttl_seconds=120)
 # Direct-message writes clear this cache and are also pushed over WebSocket, so
 # a longer read TTL removes repeated database work without delaying new data.
 _message_query_cache = TTLCache(ttl_seconds=30)
+# Typing is a transient event and can arrive several times while one person is
+# composing a message. Reusing a recently validated conversation prevents a
+# database connection from being opened for every keystroke.
+_typing_direct_access_cache = TTLCache(ttl_seconds=60)
+_typing_group_recipients_cache = TTLCache(ttl_seconds=30)
 _message_query_locks: dict[str, threading.Lock] = {}
 _message_query_locks_guard = threading.Lock()
 _message_storage_ready = False
@@ -1147,6 +1152,47 @@ class ConnectionManager:
         recipients = {message["senderId"], message["recipientId"]}
         await asyncio.gather(*(self.send_user_event(user_id, payload) for user_id in recipients))
 
+    # Relays a transient typing state without writing it to message storage.
+    async def broadcast_typing_event(
+        self,
+        sender_id: str,
+        recipient_id: str | None = None,
+        project_id: str | None = None,
+        is_typing: bool = False,
+    ) -> None:
+        sender_id = str(sender_id or '').strip()
+        recipient_id = str(recipient_id or '').strip()
+        project_id = str(project_id or '').strip()
+        if not sender_id or (not recipient_id and not project_id):
+            return
+
+        if project_id:
+            group_access_key = f"{project_id}:{sender_id}"
+            cached_recipients = _typing_group_recipients_cache.get(group_access_key)
+            if cached_recipients is not None:
+                recipients = set(cached_recipients)
+            else:
+                with get_connection() as connection:
+                    _assert_project_group_chat_access(connection, project_id, sender_id)
+                    recipients = _get_project_chat_participant_user_ids(connection, project_id)
+                _typing_group_recipients_cache.set(group_access_key, set(recipients))
+            recipients.discard(sender_id)
+        else:
+            direct_access_key = f"{sender_id}:{recipient_id}"
+            if _typing_direct_access_cache.get(direct_access_key) is None:
+                with get_connection() as connection:
+                    _assert_direct_message_access(connection, sender_id, recipient_id)
+            recipients = {recipient_id}
+
+        payload = {
+            "type": "typing",
+            "senderId": sender_id,
+            "recipientId": recipient_id or None,
+            "projectId": project_id or None,
+            "isTyping": bool(is_typing),
+        }
+        await asyncio.gather(*(self.send_user_event(user_id, payload) for user_id in recipients))
+
     # Broadcasts a project-group message to all eligible project chat participants.
     async def broadcast_project_group_message_event(
         self, project_id: str, message: dict[str, Any]
@@ -1882,6 +1928,14 @@ def _assert_direct_message_access(
             detail="Volunteer direct messages are limited to admin contacts.",
         )
 
+    _typing_direct_access_cache.set(
+        f"{sender_id}:{recipient_id}",
+        True,
+    )
+    _typing_direct_access_cache.set(
+        f"{recipient_id}:{sender_id}",
+        True,
+    )
     return sender_user, recipient_user
 
 
@@ -4126,6 +4180,32 @@ def lookup_user(identifier: str) -> dict[str, Any]:
         user = dict(user)
         user.pop("password", None)
     return {"user": user}
+
+
+@app.get("/users/directory")
+# API endpoint used by messaging to resolve sender names and profile photos.
+def get_user_directory() -> dict[str, list[dict[str, Any]]]:
+    _require_postgres()
+    with get_connection() as connection:
+        users = get_postgres_hot_storage_collection(
+            connection,
+            "users",
+            include_images=True,
+        )
+
+    directory = [
+        {
+            "id": user.get("id"),
+            "name": user.get("name") or "NVC Member",
+            "email": user.get("email"),
+            "phone": user.get("phone"),
+            "role": user.get("role"),
+            "profilePhoto": _compress_image_data_uri(user.get("profilePhoto")),
+        }
+        for user in users
+        if isinstance(user, dict) and str(user.get("id") or "").strip()
+    ]
+    return {"users": directory}
 
 
 # Demo accounts for offline/development mode
@@ -6458,7 +6538,30 @@ async def messages_websocket(websocket: WebSocket, user_id: str) -> None:
     await connection_manager.connect(user_id, websocket)
     try:
         while True:
-            await websocket.receive_text()
+            raw_message = await websocket.receive_text()
+            if raw_message == 'ping':
+                continue
+
+            try:
+                payload = json.loads(raw_message)
+            except (TypeError, ValueError):
+                continue
+
+            if not isinstance(payload, dict) or payload.get('type') != 'typing':
+                continue
+
+            try:
+                await connection_manager.broadcast_typing_event(
+                    sender_id=user_id,
+                    recipient_id=payload.get('recipientId'),
+                    project_id=payload.get('projectId'),
+                    is_typing=bool(payload.get('isTyping')),
+                )
+            except HTTPException:
+                # Ignore typing events for conversations the account cannot access.
+                continue
+            except Exception as error:
+                print(f"[WARN] Typing indicator relay failed: {error}")
     except WebSocketDisconnect:
         connection_manager.disconnect(user_id, websocket)
     except Exception:
