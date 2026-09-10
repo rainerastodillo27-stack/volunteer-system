@@ -2550,7 +2550,11 @@ const styles = StyleSheet.create({
     paddingBottom: 40,
   },
   profileSavingOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
     backgroundColor: 'rgba(248, 250, 252, 0.88)',
     alignItems: 'center',
     justifyContent: 'center',

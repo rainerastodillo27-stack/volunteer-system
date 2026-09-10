@@ -131,11 +131,6 @@ module.exports = () => {
       owner: '09092233654',
       version: '1.0.0',
       orientation: 'portrait',
-      splash: {
-        image: './assets/nvc-logo.png',
-        resizeMode: 'contain',
-        backgroundColor: '#f0fdf4',
-      },
       assetBundlePatterns: ['**/*'],
       ios: {
         supportsTablet: true,
@@ -148,7 +143,6 @@ module.exports = () => {
       android: {
         package: 'com.volcre.nvcconnect',
         versionCode: 1,
-        usesCleartextTraffic: true,
         adaptiveIcon: {
           backgroundColor: '#ffffff',
         },
@@ -174,7 +168,35 @@ module.exports = () => {
           projectId: '5fe09f19-4371-4c48-af29-d0cebd1dcb94',
         },
       },
-      plugins: ['expo-font', 'expo-web-browser'],
+      plugins: [
+        'expo-font',
+        'expo-web-browser',
+        [
+          'expo-image-picker',
+          {
+            photosPermission:
+              'Allow NVC to access your photos so partners and volunteers can upload real project images.',
+          },
+        ],
+        '@react-native-community/datetimepicker',
+        'expo-sharing',
+        [
+          'expo-splash-screen',
+          {
+            image: './assets/nvc-logo.png',
+            resizeMode: 'contain',
+            backgroundColor: '#f0fdf4',
+          },
+        ],
+        [
+          'expo-build-properties',
+          {
+            android: {
+              usesCleartextTraffic: true,
+            },
+          },
+        ],
+      ],
     },
   };
 };
