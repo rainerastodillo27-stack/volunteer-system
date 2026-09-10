@@ -398,7 +398,7 @@ class ReportSubmitPayload(BaseModel):
 REPORT_MEDIA_FILE_MAX_LENGTH = 500
 APP_TIMEZONE = ZoneInfo("Asia/Manila")
 REMINDER_LEAD_DAYS = 3
-REMINDER_CHECK_INTERVAL_SECONDS = 3600
+REMINDER_CHECK_INTERVAL_SECONDS = 900  # 15 minutes – ensures even 30-minute reminder windows are caught
 _reminder_scheduler_started = False
 _reminder_scheduler_lock = threading.Lock()
 
@@ -775,7 +775,11 @@ def _event_reminder_setting_is_due(event: dict[str, Any], setting: dict[str, Any
     local_now = now.astimezone(APP_TIMEZONE)
     local_start = start_date.astimezone(APP_TIMEZONE)
     send_at = local_start - lead_delta
-    return send_at <= local_now < local_start
+    # Allow a grace window equal to the check interval so the scheduler never
+    # misses a reminder just because it ran slightly late or the lead time is
+    # shorter than the check interval (e.g. 30-minute reminder with hourly check).
+    grace_window = timedelta(seconds=REMINDER_CHECK_INTERVAL_SECONDS)
+    return send_at <= local_now < (local_start + grace_window)
 
 
 def _get_reminder_type(setting: dict[str, Any]) -> str:
@@ -3539,6 +3543,100 @@ def db_health(force: bool = False):
 @app.post("/admin/reminders/run")
 def run_reminders_now() -> dict[str, Any]:
     return run_event_reminder_check()
+
+
+@app.get("/admin/reminders/diagnose")
+def diagnose_reminders() -> dict[str, Any]:
+    """Returns diagnostic info about upcoming events and their reminder state."""
+    _require_postgres()
+    now = datetime.now(timezone.utc)
+    results: list[dict[str, Any]] = []
+    with get_connection() as connection:
+        _ensure_reminder_tables(connection)
+        upcoming_items = [
+            item for item in (
+                get_postgres_hot_storage_collection(connection, "events") +
+                get_postgres_hot_storage_collection(connection, "projects")
+            )
+            if isinstance(item, dict)
+            and str(item.get("status") or "") not in {"Completed", "Cancelled"}
+        ]
+        volunteers = get_postgres_hot_storage_collection(connection, "volunteers")
+        users = get_postgres_hot_storage_collection(connection, "users")
+        join_records = get_postgres_hot_storage_collection(connection, "volunteerProjectJoins")
+        users_by_id = {str(u.get("id") or ""): u for u in users if isinstance(u, dict)}
+        volunteers_by_id = {str(v.get("id") or ""): v for v in volunteers if isinstance(v, dict)}
+        volunteers_by_user_id = {
+            str(v.get("userId") or ""): v
+            for v in volunteers
+            if isinstance(v, dict) and str(v.get("userId") or "").strip()
+        }
+        with connection.cursor() as cursor:
+            for event in upcoming_items:
+                event_id = str(event.get("id") or "").strip()
+                joined_volunteer_ids: set[str] = {str(v or "").strip() for v in (event.get("volunteers") or []) if str(v or "").strip()}
+                joined_user_ids: set[str] = {str(v or "").strip() for v in (event.get("joinedUserIds") or []) if str(v or "").strip()}
+                for record in join_records:
+                    if not isinstance(record, dict) or str(record.get("projectId") or "").strip() != event_id:
+                        continue
+                    vid = str(record.get("volunteerId") or "").strip()
+                    vuid = str(record.get("volunteerUserId") or "").strip()
+                    if vid:
+                        joined_volunteer_ids.add(vid)
+                    if vuid:
+                        joined_user_ids.add(vuid)
+                event_volunteers = [volunteers_by_id[vid] for vid in joined_volunteer_ids if vid in volunteers_by_id]
+                event_volunteers.extend(
+                    volunteers_by_user_id[uid]
+                    for uid in joined_user_ids
+                    if uid in volunteers_by_user_id and volunteers_by_user_id[uid] not in event_volunteers
+                )
+                settings = _get_event_email_reminder_settings(event)
+                setting_diagnostics: list[dict[str, Any]] = []
+                for setting in settings:
+                    is_due = _event_reminder_setting_is_due(event, setting, now)
+                    lead_delta = _notification_lead_delta(setting)
+                    start_date = _parse_iso_datetime(event.get("startDate"))
+                    send_at_str = (start_date - lead_delta).isoformat() if start_date and lead_delta else None
+                    entry: dict[str, Any] = {
+                        "type": setting.get("type"),
+                        "value": setting.get("value"),
+                        "unit": setting.get("unit"),
+                        "is_due": is_due,
+                        "send_at": send_at_str,
+                        "now_utc": now.isoformat(),
+                        "volunteers": [],
+                    }
+                    if is_due:
+                        for volunteer in event_volunteers:
+                            volunteer_id = str(volunteer.get("id") or "").strip()
+                            recipient_email = _get_reminder_email_for_volunteer(volunteer, users_by_id)
+                            reminder_type = _get_reminder_type(setting)
+                            reminder_id = f"{reminder_type}:{event_id}:{volunteer_id}"
+                            cursor.execute(
+                                "select reminder_id from public.event_email_reminders where reminder_id = %s",
+                                (reminder_id,),
+                            )
+                            already_sent = cursor.fetchone() is not None
+                            entry["volunteers"].append({
+                                "volunteer_id": volunteer_id,
+                                "email": recipient_email,
+                                "reminder_id": reminder_id,
+                                "already_sent": already_sent,
+                            })
+                    setting_diagnostics.append(entry)
+                results.append({
+                    "event_id": event_id,
+                    "title": event.get("title"),
+                    "status": event.get("status"),
+                    "startDate": event.get("startDate"),
+                    "isEvent": event.get("isEvent"),
+                    "notification_settings_raw": event.get("notificationSettings"),
+                    "volunteer_count": len(event_volunteers),
+                    "settings": setting_diagnostics,
+                })
+    return {"now_utc": now.isoformat(), "events": results}
+
 
 
 # Returns the email username part when an identifier is not a full email or phone.

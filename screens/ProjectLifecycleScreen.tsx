@@ -35,11 +35,11 @@ import {
 
   useWindowDimensions,
 
-  Linking,
-
 } from 'react-native';
 
 import { Picker } from '@react-native-picker/picker';
+
+import LocationMapPicker from '../components/LocationMapPicker';
 
 import { MaterialIcons } from '@expo/vector-icons';
 
@@ -142,6 +142,8 @@ import {
   saveProgram,
 
   saveProject,
+
+  saveVolunteerTimeLog,
 
   saveStatusUpdate,
 
@@ -787,6 +789,27 @@ type ProjectTimeLogEntry = VolunteerTimeLog & {
   volunteerEmail: string;
 
 };
+
+function normalizeVolunteerIdentifier(value: unknown): string {
+  return String(value || '').trim();
+}
+
+function getVolunteerIdentityIdentifiers(
+  volunteer: { id?: string | null; userId?: string | null } | string | null | undefined
+): Set<string> {
+  const values = typeof volunteer === 'string'
+    ? [volunteer]
+    : [volunteer?.id, volunteer?.userId];
+
+  return new Set(values.map(normalizeVolunteerIdentifier).filter(Boolean));
+}
+
+function doesTimeLogBelongToVolunteer(
+  log: Pick<VolunteerTimeLog, 'volunteerId'>,
+  volunteer: { id?: string | null; userId?: string | null } | string | null | undefined
+): boolean {
+  return getVolunteerIdentityIdentifiers(volunteer).has(normalizeVolunteerIdentifier(log.volunteerId));
+}
 
 
 
@@ -2197,19 +2220,19 @@ interface InlineProjectFormProps {
 
   handleProjectCityChange: (val: string) => void;
 
-  projectBarangayCode: string;
+  projectBarangayCode?: string;
 
-  handleProjectBarangayChange: (val: string) => void;
+  handleProjectBarangayChange?: (val: string) => void;
 
-  projectPlaceVenue: string;
+  projectPlaceVenue?: string;
 
-  setProjectPlaceVenue: (val: string) => void;
+  setProjectPlaceVenue?: (val: string) => void;
 
   PHRegions: any[];
 
   projectLocationCities: any[];
 
-  projectLocationBarangays: any[];
+  projectLocationBarangays?: any[];
 
   handlePickProjectImage: () => void;
 
@@ -2313,147 +2336,9 @@ const InlineProjectForm = React.memo(({
 
   const selectedLocationCity = projectLocationCities.find(c => c.code === projectCityCode);
 
-  const selectedLocationBarangay = projectLocationBarangays.find(b => b.code === projectBarangayCode);
 
 
-
-  const mapPickerRef = React.useRef<HTMLDivElement | null>(null);
-
-  const mapInstanceRef = React.useRef<any>(null);
-
-  const markerRef = React.useRef<any>(null);
-
-
-
-  React.useEffect(() => {
-
-    if (Platform.OS !== 'web' || !mapPickerRef.current) return;
-
-
-
-    let cancelled = false;
-
-
-
-    const initMapPicker = async () => {
-
-      try {
-
-        const apiKey = process.env.GOOGLE_MAPS_WEB_API_KEY || process.env.VITE_GOOGLE_MAPS_WEB_API_KEY || '';
-
-        const googleMaps = await loadGoogleMaps(apiKey);
-
-        if (cancelled || !mapPickerRef.current) return;
-
-
-
-        const defaultLat = parseFloat(projectDraft.latitude) || 12.8797;
-
-        const defaultLng = parseFloat(projectDraft.longitude) || 121.7740;
-
-
-
-        const centerPos = { lat: defaultLat, lng: defaultLng };
-
-
-
-        if (!mapInstanceRef.current) {
-
-          mapInstanceRef.current = new googleMaps.maps.Map(mapPickerRef.current, {
-
-            center: centerPos,
-
-            zoom: projectDraft.latitude ? 15 : 6,
-
-            mapTypeControl: false,
-
-            streetViewControl: false,
-
-            fullscreenControl: false,
-
-            zoomControl: true,
-
-          });
-
-
-
-          markerRef.current = new googleMaps.maps.Marker({
-
-            position: centerPos,
-
-            map: mapInstanceRef.current,
-
-            draggable: true,
-
-            title: 'Drag to adjust project location',
-
-          } as any);
-
-
-
-          mapInstanceRef.current.addListener('click', (e: any) => {
-
-            const clickedPos = e.latLng;
-
-            markerRef.current.setPosition(clickedPos);
-
-            handleMarkerPositionChange(clickedPos.lat(), clickedPos.lng());
-
-          });
-
-
-
-          markerRef.current.addListener('dragend', () => {
-
-            const newPos = markerRef.current.getPosition();
-
-            handleMarkerPositionChange(newPos.lat(), newPos.lng());
-
-          });
-
-        } else {
-
-          const currentMarkerPos = markerRef.current.getPosition();
-
-          if (Math.abs(currentMarkerPos.lat() - defaultLat) > 0.0001 || Math.abs(currentMarkerPos.lng() - defaultLng) > 0.0001) {
-
-            const newPos = { lat: defaultLat, lng: defaultLng };
-
-            markerRef.current.setPosition(newPos);
-
-            mapInstanceRef.current.setCenter(newPos);
-
-            if (projectDraft.latitude) {
-
-              mapInstanceRef.current.setZoom(15);
-
-            }
-
-          }
-
-        }
-
-      } catch (err) {
-
-        console.warn('Failed to load Google Maps for picker:', err);
-
-      }
-
-    };
-
-
-
-    initMapPicker();
-
-
-
-    return () => {
-
-      cancelled = true;
-
-    };
-
-  }, [projectDraft.latitude, projectDraft.longitude]);
+  
 
 
 
@@ -2679,11 +2564,7 @@ const InlineProjectForm = React.memo(({
 
 
 
-  const previewLocationText = [
-
-    projectPlaceVenue,
-
-    selectedLocationBarangay?.name,
+  const previewLocationText = projectDraft.address || [
 
     selectedLocationCity?.displayName,
 
@@ -3073,143 +2954,25 @@ const InlineProjectForm = React.memo(({
 
 
 
-          <FieldRow isDesktop={isDesktop}>
-
-            <FieldContainer label="Barangay" required>
-
-              <View style={pickerContainerStyle}>
-
-                <Picker
-
-                  selectedValue={projectBarangayCode}
-
-                  onValueChange={(itemValue: string) => handleProjectBarangayChange(itemValue)}
-
-                  enabled={projectCityCode !== ''}
-
-                  style={pickerStyle}
-
-                >
-
-                  <Picker.Item label="Select barangay" value="" />
-
-                  {projectLocationBarangays.map(barangay => (
-
-                    <Picker.Item key={barangay.code} label={barangay.name} value={barangay.code} />
-
-                  ))}
-
-                </Picker>
-
-              </View>
-
-            </FieldContainer>
-
-            <FieldContainer label="Venue / Exact Address" required>
-
-              <TextInput
-
-                style={inputStyle}
-
-                placeholder="e.g., Barangay Hall, Purok 3"
-
-                placeholderTextColor="#94a3b8"
-
-                value={projectPlaceVenue}
-
-                onChangeText={setProjectPlaceVenue}
-
-              />
-
-            </FieldContainer>
-
-          </FieldRow>
-
-
-
-          <FieldRow isDesktop={isDesktop}>
-
-            <FieldContainer label="Google Maps Location (Optional)">
-
-              <View style={{ flexDirection: 'row', gap: 8 }}>
-
-                <TextInput
-
-                  style={[inputStyle, { flex: 1 }]}
-
-                  placeholder="Search location on map"
-
-                  placeholderTextColor="#94a3b8"
-
-                  value={projectDraft.address}
-
-                  onChangeText={value => handleProjectDraftChange('address', value)}
-
-                />
-
-                <TouchableOpacity
-
-                  onPress={() => {
-
-                    if (projectDraft.address) {
-
-                      handleSearchMapLocation(projectDraft.address);
-
-                    } else {
-
-                      Alert.alert('Address Required', 'Please enter a search query in the field first.');
-
-                    }
-
-                  }}
-
-                  style={{
-
-                    flexDirection: 'row',
-
-                    alignItems: 'center',
-
-                    backgroundColor: '#f1f5f9',
-
-                    borderWidth: 1,
-
-                    borderColor: '#cbd5e1',
-
-                    borderRadius: 8,
-
-                    paddingHorizontal: 12,
-
-                    gap: 4,
-
-                    height: 42,
-
-                  }}
-
-                >
-
-                  <MaterialIcons name="search" size={14} color="#475569" />
-
-                  <Text style={{ fontSize: 12, fontWeight: '700', color: '#475569' }}>Search</Text>
-
-                </TouchableOpacity>
-
-              </View>
-
-            </FieldContainer>
-
-          </FieldRow>
-
-
-
-          {Platform.OS === 'web' && (
-
-            <View style={{ height: 260, borderRadius: 10, borderWidth: 1, borderColor: '#cbd5e1', overflow: 'hidden', marginBottom: 12 }}>
-
-              <div ref={mapPickerRef} style={{ width: '100%', height: '100%' }} />
-
-            </View>
-
-          )}
+          <View style={{ marginTop: 6, marginBottom: 8 }}>
+            <LocationMapPicker
+              latitude={projectDraft.latitude}
+              longitude={projectDraft.longitude}
+              address={projectDraft.address}
+              label="Project Location on Google Maps"
+              hint="Click anywhere on the map or drag the pin to set the project's exact location."
+              height={280}
+              isDesktop={isDesktop}
+              onLocationChange={({ latitude, longitude, address }) => {
+                handleProjectDraftChange('latitude', String(latitude));
+                handleProjectDraftChange('longitude', String(longitude));
+                if (address) {
+                  handleProjectDraftChange('address', address);
+                  applyProjectLocationSelectionFromAddress(address);
+                }
+              }}
+            />
+          </View>
 
 
 
@@ -3846,7 +3609,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     setEventGuestsSeeList(true);
 
-    setEventNotifications([{ type: 'Notification', value: '30', unit: 'minutes' }]);
+    setEventNotifications([{ type: 'Email', value: '30', unit: 'minutes' }]);
 
 
 
@@ -4017,7 +3780,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   const [eventNotifications, setEventNotifications] = useState<EventNotificationSetting[]>([
 
-    { type: 'Notification', value: '30', unit: 'minutes' }
+    { type: 'Email', value: '30', unit: 'minutes' }
 
   ]);
 
@@ -4057,7 +3820,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       ...current,
 
-      { type: 'Notification', value: '30', unit: 'minutes' },
+      { type: 'Email', value: '30', unit: 'minutes' },
 
     ]);
 
@@ -5674,7 +5437,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     setEventGuestsSeeList(true);
 
-    setEventNotifications([{ type: 'Notification', value: '30', unit: 'minutes' }]);
+    setEventNotifications([{ type: 'Email', value: '30', unit: 'minutes' }]);
 
 
 
@@ -5850,7 +5613,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
             }))
 
-          : [{ type: 'Notification' as 'Notification', value: '30', unit: 'minutes' as 'minutes' }]
+          : [{ type: 'Email' as 'Email', value: '30', unit: 'minutes' as 'minutes' }]
 
       );
 
@@ -5986,6 +5749,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       setProjects(current => current.map(project =>
         project.id === eventProject.id ? updatedEvent : project
       ));
+      showTaskSaveNotice(`${volunteer.name} was assigned to "${targetTask.title}".`, 1800);
       const fullVolunteer = volunteers.find(candidate =>
         candidate.id === volunteer.id || candidate.userId === volunteer.id ||
         (volunteer.userId && (candidate.id === volunteer.userId || candidate.userId === volunteer.userId))
@@ -6300,218 +6064,181 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   };
 
-
-
-  // Helper: Auto-updates latitude/longitude when address is set from location selection
-
-  const updateLocationCoordinatesFromAddress = async (address: string) => {
-
+  // Helper: Auto-updates latitude/longitude when address is set from location selection.
+  // Accurately resolves Philippine barangay, city, and province coordinates.
+  const updateLocationCoordinatesFromAddress = async (address: string, preferExact = false) => {
     if (!address) {
-
       handleProjectDraftChange('latitude', '');
-
       handleProjectDraftChange('longitude', '');
-
       return;
-
     }
 
+    // Great-circle distance helper (km)
+    const distanceKm = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
+      const R = 6371;
+      const dLat = ((lat2 - lat1) * Math.PI) / 180;
+      const dLng = ((lng2 - lng1) * Math.PI) / 180;
+      const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos((lat1 * Math.PI) / 180) *
+          Math.cos((lat2 * Math.PI) / 180) *
+          Math.sin(dLng / 2) *
+          Math.sin(dLng / 2);
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    };
 
+    // Clean address components:
+    // Strip parenthetical region codes (e.g. "(NIR)", "(BARMM)", "(CAR)")
+    const cleanAddress = address.replace(/\s*\([^)\s]{1,10}\)/g, '').trim();
+    const rawParts = cleanAddress.split(',').map(p => p.trim()).filter(Boolean);
 
-    // 1. First try synchronous city-level local lookup (no province fallback yet)
+    // Look up selected city / province metadata if available from state
+    const currentCity = projectLocationCities.find(c => c.code === projectCityCode);
+    const currentBarangay = projectLocationBarangays.find(b => b.code === projectBarangayCode);
 
-    const coordinates = inferCoordinatesFromPlace(address, [], false);
+    // Get city center coordinates from local database (guaranteed accurate anchor)
+    const cityCandidates = [
+      currentCity?.displayName,
+      currentCity?.name,
+      ...(rawParts.length >= 2 ? [rawParts[rawParts.length - 2]] : []),
+      cleanAddress,
+    ].filter(Boolean) as string[];
 
-    if (coordinates) {
-
-      handleProjectDraftChange('latitude', String(coordinates.latitude));
-
-      handleProjectDraftChange('longitude', String(coordinates.longitude));
-
-      return;
-
+    let localCoords: { latitude: number; longitude: number } | null = null;
+    for (const cand of cityCandidates) {
+      localCoords = inferCoordinatesFromPlace(cand, [], false);
+      if (localCoords) break;
+    }
+    if (!localCoords) {
+      localCoords = inferCoordinatesFromPlace(cleanAddress, [], true);
     }
 
+    // Identify barangay and city components for high-precision geocoding
+    const barangayName = currentBarangay?.name || (rawParts.length >= 3 ? rawParts[0] : '');
+    const cityRaw = currentCity?.displayName || (rawParts.length >= 2 ? rawParts[rawParts.length >= 3 ? 1 : 0] : '');
+    const cleanCity = cityRaw.replace(/^City of\s+/i, '').replace(/\s+City$/i, '').trim();
+    const provinceName = currentCity?.provinceName || '';
 
+    // If no barangay is selected and we already have city-level coordinates:
+    // Apply city center immediately! (Avoids Nominatim returning roads with city in their name)
+    if (!barangayName && localCoords && !preferExact) {
+      handleProjectDraftChange('latitude', String(localCoords.latitude));
+      handleProjectDraftChange('longitude', String(localCoords.longitude));
+      return;
+    }
 
-    // 2. If city is not found locally, fetch accurate coordinates using live geocoding API
+    // Maximum distance from known city center (25 km is safe for any barangay within a city)
+    const MAX_BARANGAY_DISTANCE_KM = 25;
+
+    // Queries to try, ordered from most specific Philippine address to broader
+    const exactQueries = Array.from(new Set([
+      // 1. Specific Barangay + City + Province
+      ...(barangayName && cleanCity && provinceName ? [`${barangayName}, ${cleanCity}, ${provinceName}, Philippines`] : []),
+      // 2. Specific Barangay + City
+      ...(barangayName && cleanCity ? [`${barangayName}, ${cleanCity}, Philippines`] : []),
+      // 3. Clean full address + Philippines
+      `${cleanAddress}, Philippines`,
+      cleanAddress,
+      // 4. City + Province (drop barangay)
+      ...(cleanCity && provinceName ? [`${cleanCity}, ${provinceName}, Philippines`] : []),
+      ...(cleanCity ? [`${cleanCity}, Philippines`] : []),
+    ])).filter(Boolean);
 
     try {
-
-      const response = await fetch(
-
-        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1`,
-
-        {
-
-          headers: {
-
-            'User-Agent': 'NVC-Connect-Volunteer-System/1.0',
-
-          },
-
-        }
-
-      );
-
-      const data = await response.json();
-
-      if (data && data.length > 0) {
-
-        handleProjectDraftChange('latitude', String(data[0].lat));
-
-        handleProjectDraftChange('longitude', String(data[0].lon));
-
-        return;
-
-      }
-
-
-
-      // Try geocoding with a slightly shorter query (e.g. drop barangay if present) if full address fails
-
-      const parts = address.split(',').map(p => p.trim());
-
-      if (parts.length > 2) {
-
-        const shorterQuery = parts.slice(1).join(', '); // drop barangay, keep city + region
-
-        const fallbackResponse = await fetch(
-
-          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(shorterQuery)}&format=json&limit=1`,
-
-          {
-
-            headers: {
-
-              'User-Agent': 'NVC-Connect-Volunteer-System/1.0',
-
-            },
-
-          }
-
-        );
-
-        const fallbackData = await fallbackResponse.json();
-
-        if (fallbackData && fallbackData.length > 0) {
-
-          handleProjectDraftChange('latitude', String(fallbackData[0].lat));
-
-          handleProjectDraftChange('longitude', String(fallbackData[0].lon));
-
-          return;
-
-        }
-
-      }
-
-    } catch (error) {
-
-      console.warn('[Geocoder] Live geocoding request failed, falling back to local database:', error);
-
-    }
-
-
-
-    // 3. Last resort: fall back to local province center coordinates
-
-    const provinceCoords = inferCoordinatesFromPlace(address, [], true);
-
-    if (provinceCoords) {
-
-      handleProjectDraftChange('latitude', String(provinceCoords.latitude));
-
-      handleProjectDraftChange('longitude', String(provinceCoords.longitude));
-
-    }
-
-  };
-
-
-
-  const handleSearchMapLocation = async (query: string) => {
-
-    if (!query) {
-
-      Alert.alert('Address Required', 'Please enter a search query in the field first.');
-
-      return;
-
-    }
-
-    try {
-
-      const response = await fetch(
-
-        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`,
-
-        {
-
-          headers: {
-
-            'User-Agent': 'NVC-Connect-Volunteer-System/1.0',
-
-          },
-
-        }
-
-      );
-
-      const data = await response.json();
-
-      if (data && data.length > 0) {
-
-        const resolvedAddress = data[0].display_name;
-
-        handleProjectDraftChange('address', resolvedAddress);
-
-        handleProjectDraftChange('latitude', String(data[0].lat));
-
-        handleProjectDraftChange('longitude', String(data[0].lon));
-
-
-
-        const parsed = parsePhilippineAddressSelection(resolvedAddress);
-
-        if (parsed.regionCode) {
-
-          setProjectRegionCode(parsed.regionCode);
-
-          const cities = getCitiesByRegion(parsed.regionCode);
-
-          setProjectLocationCities(cities);
-
-          if (parsed.cityCode) {
-
-            setProjectCityCode(parsed.cityCode);
-
-            const barangays = getBarangaysByCity(parsed.cityCode);
-
-            setProjectLocationBarangays(barangays);
-
-            if (parsed.barangayCode) {
-
-              setProjectBarangayCode(parsed.barangayCode);
-
+      // 1. Try Google Maps Geocoder if loaded
+      const googleMaps = typeof window !== 'undefined' ? (window as any).google?.maps : null;
+      if (googleMaps?.Geocoder) {
+        for (const query of exactQueries) {
+          try {
+            const geocodeOptions: any = {
+              address: query,
+              componentRestrictions: { country: 'PH' },
+            };
+            if (localCoords) {
+              const delta = 0.25; // ~27 km bounding box
+              geocodeOptions.bounds = {
+                south: localCoords.latitude - delta,
+                west: localCoords.longitude - delta,
+                north: localCoords.latitude + delta,
+                east: localCoords.longitude + delta,
+              };
             }
 
+            const geocoder = new googleMaps.Geocoder();
+            const result = await new Promise<any>((resolve, reject) => {
+              geocoder.geocode(geocodeOptions, (results: any[], status: string) => {
+                if (status === 'OK' && results?.[0]?.geometry?.location) {
+                  resolve(results[0]);
+                } else {
+                  reject(new Error(status));
+                }
+              });
+            });
+
+            const loc = result.geometry.location;
+            const resLat = loc.lat();
+            const resLng = loc.lng();
+
+            // Sanity check: must be within reasonable distance of city center if city is known
+            if (localCoords && distanceKm(localCoords.latitude, localCoords.longitude, resLat, resLng) > MAX_BARANGAY_DISTANCE_KM) {
+              continue;
+            }
+
+            handleProjectDraftChange('latitude', String(resLat));
+            handleProjectDraftChange('longitude', String(resLng));
+            return;
+          } catch {
+            // Try next query
           }
-
         }
-
-      } else {
-
-        Alert.alert('Location Not Found', 'Could not locate this place on map. Please try a different query.');
-
       }
 
+      // 2. Try OpenStreetMap Nominatim
+      for (const query of exactQueries) {
+        try {
+          const response = await fetch(
+            `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`,
+            {
+              headers: {
+                'User-Agent': 'NVC-Connect-Volunteer-System/1.0',
+              },
+            }
+          );
+          const data = await response.json();
+          if (data && data.length > 0 && data[0].lat && data[0].lon) {
+            const resLat = parseFloat(data[0].lat);
+            const resLng = parseFloat(data[0].lon);
+
+            // Sanity check: must be within reasonable distance of city center
+            if (localCoords && distanceKm(localCoords.latitude, localCoords.longitude, resLat, resLng) > MAX_BARANGAY_DISTANCE_KM) {
+              continue;
+            }
+
+            handleProjectDraftChange('latitude', String(resLat));
+            handleProjectDraftChange('longitude', String(resLng));
+            return;
+          }
+        } catch {
+          // Try next query
+        }
+      }
     } catch (error) {
-
-      Alert.alert('Search Error', 'Unable to reach the mapping service.');
-
+      console.warn('[Geocoder] Live geocoding request failed:', error);
     }
 
+    // 3. Fallback to known local city / province coordinates if live geocoding failed or was rejected
+    if (localCoords) {
+      handleProjectDraftChange('latitude', String(localCoords.latitude));
+      handleProjectDraftChange('longitude', String(localCoords.longitude));
+    }
+  };
+
+  const handleSearchMapLocation = async (query: string) => {
+    if (!query) {
+      Alert.alert('Address Required', 'Please enter a search query in the field first.');
+      return;
+    }
+    await updateLocationCoordinatesFromAddress(query, true);
   };
 
 
@@ -6702,7 +6429,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       handleProjectDraftChange('address', newAddress);
 
-      updateLocationCoordinatesFromAddress(newAddress);
+      updateLocationCoordinatesFromAddress(
+        [newAddress, projectPlaceVenue.trim()].filter(Boolean).join(', '),
+        true,
+      );
 
       return;
 
@@ -6722,7 +6452,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     handleProjectDraftChange('address', newAddress);
 
-    updateLocationCoordinatesFromAddress(newAddress);
+    updateLocationCoordinatesFromAddress(
+      [newAddress, projectPlaceVenue.trim()].filter(Boolean).join(', '),
+      true,
+    );
 
   };
 
@@ -7521,7 +7254,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       projectDraft.isEvent && !effectiveProjectBarangayCode ? 'barangay' : '',
 
-      !projectPlaceVenue.trim() ? 'place' : '',
+      projectDraft.isEvent && !projectPlaceVenue.trim() ? 'place' : '',
 
     ].filter(Boolean);
 
@@ -7664,11 +7397,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     );
 
-    const resolvedAddress = projectPlaceVenue.trim()
-
-      ? [projectPlaceVenue.trim(), structuredAddress].filter(Boolean).join(', ')
-
-      : (structuredAddress || projectDraft.address.trim());
+    const resolvedAddress = projectDraft.isEvent
+      ? (projectPlaceVenue.trim()
+          ? [projectPlaceVenue.trim(), structuredAddress].filter(Boolean).join(', ')
+          : (structuredAddress || projectDraft.address.trim()))
+      : (projectDraft.address.trim() || structuredAddress || projectPlaceVenue.trim() || '');
 
     const hasStructuredPhilippineAddress =
 
@@ -7680,14 +7413,21 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
+    const hasDraftCoords = Boolean(
+      projectDraft.latitude &&
+      projectDraft.longitude &&
+      !isNaN(parseFloat(projectDraft.latitude)) &&
+      !isNaN(parseFloat(projectDraft.longitude))
+    );
+    const draftCoords = hasDraftCoords
+      ? { latitude: parseFloat(projectDraft.latitude), longitude: parseFloat(projectDraft.longitude) }
+      : null;
+
     const resolvedCoordinates =
-
       (hasManualCoordinates
-
         ? { latitude: parsedLatitude, longitude: parsedLongitude }
-
         : null) ||
-
+      draftCoords ||
       inferCoordinatesFromPlace(resolvedAddress, projects) ||
 
       (existingProject
@@ -7706,7 +7446,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     if (!resolvedCoordinates) {
 
-      failProjectSaveValidation('Enter a recognizable barangay, city, municipality, or venue so the map can place this program.');
+      failProjectSaveValidation(projectDraft.isEvent ? 'Enter a recognizable barangay, city, municipality, or venue so the map can place this event.' : 'Enter a recognizable city, municipality, or venue so the map can place this project.');
 
       return;
 
@@ -7792,7 +7532,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         city: selectedLocationCity?.displayName,
 
-        barangay: selectedLocationBarangay?.name,
+        barangay: projectDraft.isEvent ? selectedLocationBarangay?.name : undefined,
 
       },
 
@@ -7800,7 +7540,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       locationCity: selectedLocationCity?.displayName,
 
-      locationBarangay: selectedLocationBarangay?.name,
+      locationBarangay: projectDraft.isEvent ? selectedLocationBarangay?.name : undefined,
 
       locationVenue: projectDraft.isEvent ? projectPlaceVenue.trim() : undefined,
 
@@ -8020,17 +7760,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         );
 
-        if (savedProject.isEvent) {
 
-          const googleUrl = getGoogleCalendarEventUrl(projectToSave);
-
-          Linking.openURL(googleUrl).catch(err => {
-
-            console.error('Failed to open Google Calendar link:', err);
-
-          });
-
-        }
 
         Alert.alert(successTitle, successMessage);
 
@@ -8039,14 +7769,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         closeProjectModal();
 
         showTaskSaveNotice('Event created. The new event was saved and is now visible in the live project flow.');
-
-        const googleUrl = getGoogleCalendarEventUrl(projectToSave);
-
-        Linking.openURL(googleUrl).catch(err => {
-
-          console.error('Failed to open Google Calendar link:', err);
-
-        });
 
         Alert.alert('Event Created', 'Event was created and saved successfully.', [
 
@@ -10474,6 +10196,29 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
+        {/* Event Location on Google Maps */}
+        <View style={{ marginTop: 6, marginBottom: 4 }}>
+          <LocationMapPicker
+            latitude={projectDraft.latitude}
+            longitude={projectDraft.longitude}
+            address={[projectDraft.address, projectPlaceVenue.trim()].filter(Boolean).join(', ')}
+            label="Event Location on Google Maps"
+            hint="Click or drag the pin to set the exact event location."
+            height={200}
+            isDesktop={isDesktop}
+            onLocationChange={({ latitude, longitude, address }) => {
+              handleProjectDraftChange('latitude', String(latitude));
+              handleProjectDraftChange('longitude', String(longitude));
+              if (address) {
+                handleProjectDraftChange('address', address);
+                if (!projectPlaceVenue.trim()) {
+                  setProjectPlaceVenue(address);
+                }
+              }
+            }}
+          />
+        </View>
+
         {/* Volunteer Requirements (Quick Form) */}
 
         <View style={{ gap: 2, marginTop: 4 }}>
@@ -11276,6 +11021,22 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 >
 
+                  {/* Event cover photo banner */}
+                  {(() => {
+                    const evtParent = projects.find(p => p.id === event.parentProjectId);
+                    const evtImg = getPrimaryProjectImageSource(event, evtParent);
+                    return evtImg ? (
+                      <Image
+                        source={evtImg}
+                        style={styles.eventBoxCoverImage}
+                        resizeMode="cover"
+                      />
+                    ) : null;
+                  })()}
+
+                  {/* Event card body */}
+                  <View style={{ padding: 10, gap: 6 }}>
+
                   <View style={styles.eventBoxTopRow}>
 
                     <View style={styles.eventBoxIcon}>
@@ -11403,6 +11164,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                     </View>
 
                   )}
+
+                  </View>
 
                 </TouchableOpacity>
 
@@ -14214,7 +13977,28 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                     </View>
 
-
+                    {/* Event Location on Google Maps */}
+                    <View style={{ marginTop: 10 }}>
+                      <LocationMapPicker
+                        latitude={projectDraft.latitude}
+                        longitude={projectDraft.longitude}
+                        address={[projectDraft.address, projectPlaceVenue.trim()].filter(Boolean).join(', ')}
+                        label="Event Location on Google Maps"
+                        hint="Click anywhere on the map or drag the pin to set the exact event location."
+                        height={240}
+                        isDesktop={isDesktop}
+                        onLocationChange={({ latitude, longitude, address }) => {
+                          handleProjectDraftChange('latitude', String(latitude));
+                          handleProjectDraftChange('longitude', String(longitude));
+                          if (address) {
+                            handleProjectDraftChange('address', address);
+                            if (!projectPlaceVenue.trim()) {
+                              setProjectPlaceVenue(address);
+                            }
+                          }
+                        }}
+                      />
+                    </View>
 
                     {renderCoverImageUpload('Event Photo (Optional)')}
 
@@ -18544,7 +18328,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       .map(log => {
 
-        const volunteer = volunteers.find(entry => entry.id === log.volunteerId);
+        const volunteer = volunteers.find(entry =>
+          getVolunteerIdentityIdentifiers(entry).has(normalizeVolunteerIdentifier(log.volunteerId))
+        );
 
         return {
 
@@ -18612,7 +18398,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       .map(volunteerEntry => {
 
-        const volunteerLogs = projectTimeLogEntries.filter(log => log.volunteerId === volunteerEntry.id);
+        const volunteerLogs = projectTimeLogEntries.filter(log =>
+          doesTimeLogBelongToVolunteer(log, volunteerEntry)
+        );
 
         const selectedDateLogs = volunteerLogs
 
@@ -19003,11 +18791,18 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         const todayKey = getAttendanceWindowKey(activeSelectedProject.startDate, currentDate.toISOString());
 
+        const selectedVolunteer = getProjectVolunteerEntries(activeSelectedProject).find(entry =>
+          getVolunteerIdentityIdentifiers(entry).has(normalizeVolunteerIdentifier(volunteerId))
+        ) || volunteers.find(entry =>
+          getVolunteerIdentityIdentifiers(entry).has(normalizeVolunteerIdentifier(volunteerId))
+        );
+        const volunteerIdentity = selectedVolunteer || volunteerId;
+
         const allLogs = await getStorageItem<VolunteerTimeLog[]>('volunteerTimeLogs') || [];
 
         const todayLogIndex = allLogs.findIndex(log => 
 
-          log.volunteerId === volunteerId && 
+          doesTimeLogBelongToVolunteer(log, volunteerIdentity) &&
 
           log.projectId === activeSelectedProject.id && 
 
@@ -19061,7 +18856,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
               id: `log-${Date.now()}-${volunteerId}`,
 
-              volunteerId,
+              volunteerId: selectedVolunteer?.id || volunteerId,
 
               projectId: activeSelectedProject.id,
 
@@ -19139,11 +18934,18 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         const todayKey = getAttendanceWindowKey(activeSelectedProject.startDate, currentDate.toISOString());
 
+        const selectedVolunteer = getProjectVolunteerEntries(activeSelectedProject).find(entry =>
+          getVolunteerIdentityIdentifiers(entry).has(normalizeVolunteerIdentifier(volunteerId))
+        ) || volunteers.find(entry =>
+          getVolunteerIdentityIdentifiers(entry).has(normalizeVolunteerIdentifier(volunteerId))
+        );
+        const volunteerIdentity = selectedVolunteer || volunteerId;
+
         const allLogs = await getStorageItem<VolunteerTimeLog[]>('volunteerTimeLogs') || [];
 
         const todayLogIndex = allLogs.findIndex(log => 
 
-          log.volunteerId === volunteerId && 
+          doesTimeLogBelongToVolunteer(log, volunteerIdentity) &&
 
           log.projectId === activeSelectedProject.id && 
 
@@ -19165,7 +18967,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
             id: `log-${Date.now()}-${volunteerId}`,
 
-            volunteerId,
+            volunteerId: selectedVolunteer?.id || volunteerId,
 
             projectId: activeSelectedProject.id,
 
@@ -19322,6 +19124,59 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       }
     };
 
+    const handleAdminMarkAttendance = async (
+      volunteer: ProjectVolunteerEntry,
+      project: Project,
+      attendanceDateKey: string,
+      existingLog: VolunteerTimeLog | null,
+    ) => {
+      if (!isAdmin || !user) return;
+
+      const actionKey = `admin-attendance-${project.id}-${volunteer.id}-${attendanceDateKey}`;
+      if (attendanceCheckInFlightLogId === actionKey) return;
+
+      try {
+        setAttendanceCheckInFlightLogId(actionKey);
+
+        if (existingLog) {
+          await setVolunteerAttendanceChecked(existingLog.id, true, user.id);
+        } else {
+          const selectedDateParts = attendanceDateKey.split('-').map(Number);
+          const projectStart = new Date(project.startDate);
+          const selectedDate = new Date(
+            selectedDateParts[0] || new Date().getFullYear(),
+            (selectedDateParts[1] || new Date().getMonth() + 1) - 1,
+            selectedDateParts[2] || new Date().getDate(),
+            Number.isNaN(projectStart.getTime()) ? 9 : projectStart.getHours(),
+            Number.isNaN(projectStart.getTime()) ? 0 : projectStart.getMinutes(),
+            0,
+            0,
+          );
+          const timestamp = selectedDate.toISOString();
+          const markedAt = new Date().toISOString();
+
+          await saveVolunteerTimeLog({
+            id: `admin-attendance-${project.id}-${volunteer.id}-${attendanceDateKey}`,
+            volunteerId: volunteer.id,
+            projectId: project.id,
+            timeIn: timestamp,
+            timeOut: timestamp,
+            attendanceConfirmedAt: timestamp,
+            attendanceCheckedAt: markedAt,
+            attendanceCheckedBy: user.id,
+            attendanceCheckedByName: user.name || 'Admin',
+          });
+        }
+
+        await loadVolunteerTimeLogs();
+        Alert.alert('Attendance marked', `${volunteer.name}'s attendance is marked for ${attendanceDateKey}.`);
+      } catch (error: any) {
+        Alert.alert('Error', error?.message || 'Failed to mark attendance.');
+      } finally {
+        setAttendanceCheckInFlightLogId(null);
+      }
+    };
+
 
 
     const handleExportAttendanceReport = () => {
@@ -19332,7 +19187,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       const rows = eventVolunteers.map(volunteer => {
 
-        const volunteerLogs = volunteerTimeLogs.filter(log => log.volunteerId === volunteer.id && log.projectId === activeSelectedProject.id);
+        const volunteerLogs = volunteerTimeLogs.filter(log =>
+          log.projectId === activeSelectedProject.id &&
+          doesTimeLogBelongToVolunteer(log, volunteer)
+        );
 
         const todayLog = volunteerLogs.find(
           log => getAttendanceWindowKey(activeSelectedProject.startDate, log.attendanceConfirmedAt || log.timeIn) === resolvedAttendanceDateKey
@@ -19509,6 +19367,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       const volunteersNeeded = projectVolunteerSummary.needed;
 
+      const eventIsClosed = ['Completed', 'Cancelled'].includes(getProjectDisplayStatus(project));
+
     const taskRows = Array.isArray(project.internalTasks) ? [...project.internalTasks] : [];
 
     const taskCount = taskRows.length;
@@ -19554,7 +19414,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-        const volunteerLogs = volunteerTimeLogs.filter(log => log.volunteerId === volunteer.id && log.projectId === project.id);
+        const volunteerLogs = volunteerTimeLogs.filter(log =>
+          log.projectId === project.id &&
+          doesTimeLogBelongToVolunteer(log, volunteer)
+        );
 
         const todayLog = volunteerLogs.find(
           log => getAttendanceWindowKey(project.startDate, log.attendanceConfirmedAt || log.timeIn) === resolvedAttendanceDateKey
@@ -20120,6 +19983,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
               <TouchableOpacity
 
+                disabled={eventIsClosed}
+
                 onPress={() => {
 
                   setEditingTaskId(null);
@@ -20136,13 +20001,15 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   alignItems: 'center',
 
-                  backgroundColor: '#166534',
+                  backgroundColor: eventIsClosed ? '#94a3b8' : '#166534',
 
                   borderRadius: 10,
 
                   paddingHorizontal: 14,
 
                   paddingVertical: 10,
+
+                  opacity: eventIsClosed ? 0.7 : 1,
 
                 }}
 
@@ -20362,7 +20229,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       gap: 12,
 
-                      opacity: isCurrentlyDeleting ? 0.5 : 1,
+                      opacity: eventIsClosed || isCurrentlyDeleting ? 0.5 : 1,
 
                       zIndex: activeActionTaskId === task.id ? 50 : 1,
 
@@ -20498,7 +20365,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       <View style={{ width: 60, alignItems: 'center', justifyContent: 'center' }} {...({} as any)}>
 
-                         <TouchableOpacity onPress={() => setActiveActionTaskId(activeActionTaskId === task.id ? null : task.id)} style={{ padding: 4 }}>
+                         <TouchableOpacity
+                           disabled={eventIsClosed}
+                           onPress={() => setActiveActionTaskId(activeActionTaskId === task.id ? null : task.id)}
+                           style={{ padding: 4, opacity: eventIsClosed ? 0.45 : 1 }}
+                         >
 
                             <MaterialIcons name="more-vert" size={20} color="#64748b" />
 
@@ -20524,12 +20395,24 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
           {(() => {
 
-            const allAssignedIds = new Set(taskCards.flatMap(t => getTaskAssignedVolunteerIds(t, volunteers)));
+            // Quick assign should include every active joined volunteer who
+            // can still be placed on at least one open task. A volunteer may
+            // already be assigned to another task and still be eligible for
+            // this task, so do not remove them from the list globally.
+            const quickAssignVolunteers = assignableVolunteers.filter(volunteer => {
+              const volunteerIdentifiers = new Set(
+                [volunteer.id, volunteer.userId]
+                  .map(value => String(value || '').trim())
+                  .filter(Boolean)
+              );
 
-            // Check both v.id and v.userId so dual-ID volunteers (vol-... / user-...) are correctly detected as assigned
-            const unassignedVolunteers = assignableVolunteers.filter(v =>
-              !allAssignedIds.has(v.id) && !allAssignedIds.has(v.userId ?? '')
-            );
+              return taskCards.some(task => {
+                const assignedIds = getTaskAssignedVolunteerIds(task, volunteers);
+                const taskHasRoom = assignedIds.length < getTaskVolunteerLimit(task);
+                const alreadyAssignedToTask = assignedIds.some(id => volunteerIdentifiers.has(id));
+                return taskHasRoom && !alreadyAssignedToTask;
+              });
+            });
 
             
 
@@ -20556,17 +20439,17 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                 <View style={{ backgroundColor: '#f8fafc', padding: 16, borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0' }}>
 
                   <Text style={{ fontSize: 12, fontWeight: '800', color: '#0f172a', textTransform: 'uppercase', marginBottom: 16 }}>
-                    QUICK ASSIGN VOLUNTEERS ({unassignedVolunteers.length})
+                    QUICK ASSIGN VOLUNTEERS ({quickAssignVolunteers.length})
                   </Text>
 
-                  {unassignedVolunteers.length === 0 ? (
+                  {quickAssignVolunteers.length === 0 ? (
 
-                    <Text style={{ fontSize: 13, color: '#64748b' }}>All joined volunteers are currently assigned to tasks.</Text>
+                    <Text style={{ fontSize: 13, color: '#64748b' }}>No joined volunteers can be assigned to an open task.</Text>
 
                   ) : (
 
                     <View>
-                      {unassignedVolunteers.map((uv, uvIndex) => {
+                      {quickAssignVolunteers.map((uv, uvIndex) => {
                         const fullVol = volunteers.find(v => v.id === uv.id || v.userId === uv.id);
                         const uvSkills: string[] = (fullVol?.skills || []).filter(Boolean);
                         const assignedToTaskCount = taskCards.filter(t =>
@@ -20580,7 +20463,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                         });
                         const selectedTaskId = unassignedTaskSelections[uv.id] || '';
                         const isAssigning = Boolean(quickAssignLoadingId && quickAssignLoadingId.endsWith(`:${uv.id}`));
-                        const canAssign = Boolean(selectedTaskId) && availableTasks.some(t => t.id === selectedTaskId);
+                        const canAssign = !eventIsClosed && Boolean(selectedTaskId) && availableTasks.some(t => t.id === selectedTaskId);
 
                         return (
                           <View
@@ -20626,7 +20509,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                                     setUnassignedTaskSelections(prev => ({ ...prev, [uv.id]: String(val || '') }));
                                   }}
                                   style={{ height: 38 }}
-                                  enabled={availableTasks.length > 0 && quickAssignLoadingId === null}
+                                  enabled={!eventIsClosed && availableTasks.length > 0 && quickAssignLoadingId === null}
                                 >
                                   <Picker.Item label="Select task" value="" />
                                   {availableTasks.map(t => (
@@ -20642,7 +20525,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                                     setUnassignedTaskSelections(prev => ({ ...prev, [uv.id]: '' }));
                                   }
                                 }}
-                                disabled={!canAssign || quickAssignLoadingId !== null}
+                                disabled={eventIsClosed || !canAssign || quickAssignLoadingId !== null}
                                 style={{
                                   backgroundColor: canAssign ? '#166534' : '#e2e8f0',
                                   paddingHorizontal: 14,
@@ -21139,6 +21022,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 <Text style={{ flex: 1.2, fontSize: 12, fontWeight: '700', color: '#64748b', textTransform: 'uppercase' }}>
 
+                  Marked
+
+                </Text>
+
+                <Text style={{ flex: 1.2, fontSize: 12, fontWeight: '700', color: '#64748b', textTransform: 'uppercase' }}>
+
                   Time
 
                 </Text>
@@ -21252,6 +21141,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                     const isChecked = activeLog && Boolean(activeLog.attendanceCheckedAt);
                     const isCheckingAttendance =
                       activeLog && attendanceCheckInFlightLogId === activeLog.id;
+                    const adminAttendanceActionKey =
+                      `admin-attendance-${activeSelectedProject.id}-${volunteer.id}-${resolvedAttendanceDateKey}`;
+                    const isAdminMarkingAttendance =
+                      attendanceCheckInFlightLogId === adminAttendanceActionKey;
+                    const attendanceMarkStatus = isChecked ? 'Marked' : 'Not marked';
+                    const attendanceMarkBadgeColor = isChecked ? '#dcfce7' : '#fef3c7';
+                    const attendanceMarkTextColor = isChecked ? '#166534' : '#92400e';
 
                     return (
 
@@ -21312,6 +21208,48 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                             <Text style={{ fontSize: 12, fontWeight: '700', color: textColor }}>{attendanceStatus}</Text>
 
                           </View>
+
+                        </View>
+
+                        <View style={{ flex: 1.2, alignItems: 'flex-start' }}>
+
+                          <View style={{ backgroundColor: attendanceMarkBadgeColor, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 }}>
+
+                            <Text style={{ fontSize: 12, fontWeight: '700', color: attendanceMarkTextColor }}>
+                              {attendanceMarkStatus}
+                            </Text>
+
+                          </View>
+
+                          {isAdmin && !isChecked ? (
+                            <TouchableOpacity
+                              accessibilityRole="button"
+                              accessibilityLabel={`Mark attendance for ${volunteer.name}`}
+                              onPress={() => activeLog
+                                ? void handleToggleAttendanceCheck(activeLog, true)
+                                : void handleAdminMarkAttendance(
+                                  volunteer,
+                                  activeSelectedProject,
+                                  resolvedAttendanceDateKey,
+                                  null,
+                                )}
+                              disabled={Boolean(isCheckingAttendance) || isAdminMarkingAttendance}
+                              style={{
+                                marginTop: 6,
+                                paddingHorizontal: 8,
+                                paddingVertical: 5,
+                                borderRadius: 7,
+                                backgroundColor: '#166534',
+                                opacity: isCheckingAttendance || isAdminMarkingAttendance ? 0.65 : 1,
+                              }}
+                            >
+                              {isAdminMarkingAttendance ? (
+                                <ActivityIndicator size="small" color="#ffffff" />
+                              ) : (
+                                <MaterialIcons name="event-available" size={16} color="#ffffff" />
+                              )}
+                            </TouchableOpacity>
+                          ) : null}
 
                         </View>
 
@@ -22374,17 +22312,38 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       const eventVolunteers = getProjectVolunteerEntries(event);
 
+                      const eventImgSource = getPrimaryProjectImageSource(event, activeSelectedProject);
+
                       return (
 
                         <View key={event.id} style={premiumDetailsStyles.eventItem}>
 
-                          <View style={premiumDetailsStyles.dateBadge}>
-
-                            <Text style={premiumDetailsStyles.dateBadgeMonth}>{dateParts.month}</Text>
-
-                            <Text style={premiumDetailsStyles.dateBadgeDay}>{dateParts.day}</Text>
-
-                          </View>
+                          {/* Photo thumbnail or plain date badge */}
+                          {eventImgSource ? (
+                            <View style={premiumDetailsStyles.eventThumb}>
+                              <Image
+                                source={eventImgSource}
+                                style={[
+                                  StyleSheet.absoluteFill,
+                                  { borderRadius: 10 },
+                                ]}
+                                resizeMode="cover"
+                              />
+                              <View style={[
+                                StyleSheet.absoluteFill,
+                                { borderRadius: 10, backgroundColor: 'rgba(0,0,0,0.28)' },
+                              ]} />
+                              <View style={premiumDetailsStyles.dateBadgeOnPhoto}>
+                                <Text style={[premiumDetailsStyles.dateBadgeMonth, { color: '#fff' }]}>{dateParts.month}</Text>
+                                <Text style={[premiumDetailsStyles.dateBadgeDay, { color: '#fff' }]}>{dateParts.day}</Text>
+                              </View>
+                            </View>
+                          ) : (
+                            <View style={premiumDetailsStyles.dateBadge}>
+                              <Text style={premiumDetailsStyles.dateBadgeMonth}>{dateParts.month}</Text>
+                              <Text style={premiumDetailsStyles.dateBadgeDay}>{dateParts.day}</Text>
+                            </View>
+                          )}
 
 
 
@@ -23220,11 +23179,17 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                           <View style={styles.programCardImageContainer}>
 
-                            <View style={styles.programCardImagePlaceholder}>
-
-                              <MaterialIcons name={section.icon} size={32} color={section.accent} />
-
-                            </View>
+                            {track?.imageUrl ? (
+                              <Image
+                                source={{ uri: track.imageUrl }}
+                                style={styles.programCardImage}
+                                resizeMode="cover"
+                              />
+                            ) : (
+                              <View style={[styles.programCardImagePlaceholder, { backgroundColor: section.surface || '#f1f5f9' }]}>
+                                <MaterialIcons name={section.icon} size={40} color={section.accent} />
+                              </View>
+                            )}
 
                             <View style={styles.programCardBadge}>
 
@@ -30570,7 +30535,7 @@ const styles = StyleSheet.create({
 
     backgroundColor: '#ffffff',
 
-    padding: 10,
+    overflow: 'hidden',
 
     gap: 6,
 
@@ -30583,6 +30548,16 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
 
     elevation: 1,
+
+  },
+
+  eventBoxCoverImage: {
+
+    width: '100%',
+
+    height: 90,
+
+    resizeMode: 'cover',
 
   },
 
@@ -37694,6 +37669,36 @@ const premiumDetailsStyles = StyleSheet.create({
     alignItems: 'center',
 
     justifyContent: 'center',
+
+  },
+
+  dateBadgeOnPhoto: {
+
+    alignItems: 'center',
+
+    justifyContent: 'center',
+
+    flex: 1,
+
+  },
+
+  eventThumb: {
+
+    width: 72,
+
+    height: 72,
+
+    borderRadius: 10,
+
+    overflow: 'hidden',
+
+    position: 'relative',
+
+    alignItems: 'center',
+
+    justifyContent: 'center',
+
+    backgroundColor: '#e2e8f0',
 
   },
 
