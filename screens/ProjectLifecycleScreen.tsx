@@ -21856,13 +21856,16 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               {activeProjectImageSource ? (
                 <Image
                   source={activeProjectImageSource}
-                  style={[StyleSheet.absoluteFillObject, { borderRadius: 16 }]}
+                  style={[
+                    StyleSheet.absoluteFill,
+                    { borderRadius: 16 },
+                  ]}
                   resizeMode="cover"
                 />
               ) : (
                 <View
                   style={[
-                    StyleSheet.absoluteFillObject,
+                    StyleSheet.absoluteFill,
                     { borderRadius: 16, backgroundColor: '#dfe8e1' },
                   ]}
                 />
@@ -37273,7 +37276,15 @@ const premiumDetailsStyles = StyleSheet.create({
 
   heroOverlay: {
 
-    ...StyleSheet.absoluteFillObject,
+    position: 'absolute',
+
+    top: 0,
+
+    right: 0,
+
+    bottom: 0,
+
+    left: 0,
 
     backgroundColor: 'rgba(15, 23, 42, 0.65)',
 

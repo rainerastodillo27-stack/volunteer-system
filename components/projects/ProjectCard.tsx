@@ -164,7 +164,11 @@ const styles = StyleSheet.create({
     height: '100%',
   },
   imageOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
     padding: 16,
     justifyContent: 'flex-start',
     alignItems: 'flex-end',
