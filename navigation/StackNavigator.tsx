@@ -21,7 +21,7 @@ const LazyTabNavigator = (props: Record<string, unknown>) => {
   return <TabNavigator {...props} />;
 };
 
-// Returns true only when running in a browser WITHOUT ?mode=mobile
+// Returns true only when running in a browser WITH ?mode=mobile.
 function getIsMobileMode(): boolean {
   if (Platform.OS !== 'web') return false;
   try {
@@ -41,7 +41,7 @@ export default function StackNavigator() {
   const startupLoggedRef = useRef(false);
   const showBlockingStartupLoader = loading && Platform.OS === 'web';
 
-  // If mobile mode is active and the logged-in user is an admin, force logout.
+  // Admin accounts remain restricted to the normal web portal in mobile mode.
   const isMobileMode = getIsMobileMode();
   const isAdminInMobileMode = isMobileMode && user?.role === 'admin';
 
@@ -70,6 +70,8 @@ export default function StackNavigator() {
     }
   }, [loading]);
 
+  const effectiveUser = isAdminInMobileMode ? null : user;
+
   if (showBlockingStartupLoader) {
     return (
       <View style={styles.loadingScreen}>
@@ -84,8 +86,6 @@ export default function StackNavigator() {
   }
 
   // In mobile mode, admin accounts must not pass through — treat as logged out.
-  const effectiveUser = isAdminInMobileMode ? null : user;
-
   return (
     <Stack.Navigator
       screenOptions={{
