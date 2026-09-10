@@ -13,6 +13,7 @@ import {
   ActivityIndicator,
   Image,
   TextInput,
+  useWindowDimensions,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import Svg, { Circle, Path, G } from 'react-native-svg';
@@ -134,7 +135,7 @@ interface VolunteerReportsDashboardProps {
   projects: Project[];
   volunteerTimeLogs?: VolunteerTimeLog[];
   volunteerJoinRecords?: VolunteerProjectJoinRecord[];
-  onUploadReport: () => void;
+  onUploadReport?: () => void;
   onViewReport: (report: SubmittedReport) => void;
   loading: boolean;
   onRefresh: () => void;
@@ -170,30 +171,13 @@ export function VolunteerReportsDashboard({
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
 
   const visibleReports = useMemo(
-    () => {
-      const seenVolunteerSubmissions = new Set<string>();
-
-      return [...reports]
+    () =>
+      [...reports]
         .filter(report => report.status !== 'Rejected')
         .sort(
           (left, right) =>
             new Date(right.submittedAt).getTime() - new Date(left.submittedAt).getTime()
-        )
-        .filter(report => {
-          if (report.submitterRole !== 'volunteer') {
-            return true;
-          }
-
-          const submitterKey = report.submittedBy || report.submitterName || report.id;
-          const submissionKey = `${report.projectId || 'unlinked'}::${submitterKey}`;
-          if (seenVolunteerSubmissions.has(submissionKey)) {
-            return false;
-          }
-
-          seenVolunteerSubmissions.add(submissionKey);
-          return true;
-        });
-    },
+        ),
     [reports]
   );
   const eventCount = useMemo(
@@ -223,28 +207,58 @@ export function VolunteerReportsDashboard({
   const realEventJoins = new Set([...volunteerJoinRecords.map(r => (r as any).projectId), ...volunteerTimeLogs.map(l => (l as any).projectId).filter(Boolean)]).size;
   const realReportsSubmitted = visibleReports.length;
   const allVolunteerAccountsForAdmin = useMemo(() => {
+    const normalizeIdentifier = (value: unknown) => String(value || '').trim();
+    const identifierToCanonical = new Map<string, string>();
+    const volunteerByCanonical = new Map<string, Volunteer>();
+
+    volunteers.forEach(volunteer => {
+      const canonical = normalizeIdentifier(volunteer.id) || normalizeIdentifier(volunteer.userId);
+      if (!canonical) {
+        return;
+      }
+
+      volunteerByCanonical.set(canonical, volunteer);
+      [volunteer.id, volunteer.userId].forEach(identifier => {
+        const normalized = normalizeIdentifier(identifier);
+        if (normalized) {
+          identifierToCanonical.set(normalized, canonical);
+        }
+      });
+    });
+
+    const canonicalize = (value: unknown, fallback: string) => {
+      const normalized = normalizeIdentifier(value);
+      return (normalized && identifierToCanonical.get(normalized)) || normalized || fallback;
+    };
+    const resolveName = (value: unknown, fallback?: string) => {
+      const canonical = canonicalize(value, '');
+      return volunteerByCanonical.get(canonical)?.name || fallback || 'Volunteer';
+    };
     const map = new Map<string, { key: string; name: string; joins: Set<string>; reports: number }>();
     volunteerJoinRecords.forEach((r:any) => {
-      const key = r.volunteerId || r.volunteerUserId || r.volunteerName || 'vol';
-      if (!map.has(key)) map.set(key, { key, name: r.volunteerName || 'Volunteer', joins: new Set(), reports: 0 });
+      const rawIdentifier = r.volunteerId || r.volunteerUserId;
+      const key = canonicalize(rawIdentifier, `join:${r.id || r.volunteerName || 'vol'}`);
+      if (!map.has(key)) map.set(key, { key, name: resolveName(rawIdentifier, r.volunteerName), joins: new Set(), reports: 0 });
       if (r.projectId) map.get(key)!.joins.add(r.projectId);
     });
     volunteerTimeLogs.forEach((l:any) => {
-      const key = l.volunteerId || 'vol';
-      const join = volunteerJoinRecords.find((r:any) => r.volunteerId === l.volunteerId);
-      const name = join?.volunteerName || 'Volunteer';
+      const key = canonicalize(l.volunteerId, `log:${l.id || 'vol'}`);
+      const join = volunteerJoinRecords.find((r:any) =>
+        canonicalize(r.volunteerId || r.volunteerUserId, `join:${r.id || r.volunteerName || 'vol'}`) === key
+      );
+      const name = resolveName(l.volunteerId, join?.volunteerName);
       if (!map.has(key)) map.set(key, { key, name, joins: new Set(), reports: 0 });
       if (l.projectId) map.get(key)!.joins.add(l.projectId);
     });
     visibleReports.forEach(r => {
-      const key = r.submittedBy || r.submitterName;
-      if (!map.has(key)) map.set(key, { key, name: r.submitterName, joins: new Set(), reports: 0 });
+      const key = canonicalize(r.submittedBy, `report:${r.id}`);
+      if (!map.has(key)) map.set(key, { key, name: resolveName(r.submittedBy, r.submitterName), joins: new Set(), reports: 0 });
       const entry = map.get(key)!;
       entry.reports += 1;
       if (r.projectId) entry.joins.add(r.projectId);
     });
     return Array.from(map.values()).map(v => ({ key: v.key, name: v.name, eventJoins: v.joins.size, reports: v.reports }));
-  }, [volunteerJoinRecords, volunteerTimeLogs, visibleReports]);
+  }, [volunteers, volunteerJoinRecords, volunteerTimeLogs, visibleReports]);
 
   const eventFolders = useMemo(() => {
     const eventIds = new Set<string>([
@@ -410,7 +424,7 @@ export function VolunteerReportsDashboard({
               <Text style={styles.title}>My Event Reports</Text>
               <Text style={styles.subtitle}>Submit and manage reports for your completed volunteer activities.</Text>
             </View>
-            <TouchableOpacity style={styles.uploadButton} onPress={onUploadReport} activeOpacity={0.8}>
+            <TouchableOpacity style={styles.uploadButton} onPress={() => onUploadReport?.()} activeOpacity={0.8}>
               <MaterialIcons name="add" size={18} color="#fff" style={{ marginRight: 4 }} />
               <Text style={styles.uploadButtonText}>New Report</Text>
             </TouchableOpacity>
@@ -673,6 +687,8 @@ export function PartnerReportsDashboard({
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
 
   const { user } = useAuth();
+  const { width: viewportWidth } = useWindowDimensions();
+  const isCompactLayout = viewportWidth < 700;
 
   // Helper for generating 3-month quarterly windows
   const availableQuarters = useMemo(() => {
@@ -761,29 +777,72 @@ export function PartnerReportsDashboard({
     };
   }, [availableQuarters, selectedQuarterKey]);
 
-  // Partner's own submitted reports
-  const ownReports = useMemo(
-    () =>
-      reports
-        .filter(r => r.submitterRole === 'partner' && r.status !== 'Rejected')
-        .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()),
-    [reports]
+  // The partner view is a project-level report hub. It includes the
+  // partner's report plus every volunteer report linked to the approved
+  // project or one of its events for the selected quarter.
+  const quarterReports = useMemo(() => {
+    return reports
+      .filter(r => r.status !== 'Rejected')
+      .filter(r => {
+        const date = new Date(r.submittedAt);
+        return date >= currentQuarter.startDate && date <= currentQuarter.endDate;
+      })
+      .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
+  }, [currentQuarter, reports]);
+
+  const [selectedReportFolderId, setSelectedReportFolderId] = useState<string | null>(null);
+
+  const reportFolders = useMemo(() => {
+    const folders = new Map<
+      string,
+      {
+        key: string;
+        project?: Project;
+        title: string;
+        reports: SubmittedReport[];
+      }
+    >();
+
+    quarterReports.forEach(report => {
+      const projectId = String(report.projectId || '').trim();
+      const project = projects.find(item => String(item.id || '').trim() === projectId);
+      const key = projectId || `title:${report.projectTitle || 'unlinked-event'}`;
+      const existing = folders.get(key);
+
+      if (existing) {
+        existing.reports.push(report);
+        return;
+      }
+
+      folders.set(key, {
+        key,
+        project,
+        title: project?.title || report.projectTitle || 'Unlinked Event',
+        reports: [report],
+      });
+    });
+
+    return Array.from(folders.values()).sort((left, right) => {
+      const leftDate = new Date(left.project?.startDate || left.reports[0]?.submittedAt || 0).getTime();
+      const rightDate = new Date(right.project?.startDate || right.reports[0]?.submittedAt || 0).getTime();
+      return rightDate - leftDate;
+    });
+  }, [projects, quarterReports]);
+
+  const selectedReportFolder = useMemo(
+    () => reportFolders.find(folder => folder.key === selectedReportFolderId) || null,
+    [reportFolders, selectedReportFolderId]
   );
 
-  // Filter reports submitted within the selected quarter date range
-  const quarterReports = useMemo(() => {
-    return ownReports.filter(r => {
-      const date = new Date(r.submittedAt);
-      return date >= currentQuarter.startDate && date <= currentQuarter.endDate;
-    });
-  }, [ownReports, currentQuarter]);
-
   const hasQuarterReport = quarterReports.length > 0;
-  const activeReport = quarterReports[0] || null;
+  const activeReport = quarterReports.find(report => report.submitterRole === 'partner') || quarterReports[0] || null;
   const activeSummary = useMemo(() => {
     if (!activeReport) return null;
     return (
-      projectSummaries.find(summary => summary.project.id === activeReport.projectId) ||
+      projectSummaries.find(summary =>
+        summary.project.id === activeReport.projectId ||
+        summary.linkedEvents.some(event => event.id === activeReport.projectId)
+      ) ||
       projectSummaries[0] ||
       null
     );
@@ -826,22 +885,35 @@ export function PartnerReportsDashboard({
 
   const eventsConductedCount = useMemo(() => {
     if (!hasQuarterReport) return 0;
-    return (
-      projectSummaries.reduce((sum, s) => sum + (s.linkedEvents?.length || 0), 0) ||
-      projects.filter(p => p.isEvent).length ||
-      0
+    const quarterReportProjectIds = new Set(quarterReports.map(report => report.projectId).filter(Boolean));
+    const quarterEvents = projects.filter(project =>
+      project.isEvent &&
+      (quarterReportProjectIds.has(project.id) || (
+        project.startDate &&
+        new Date(project.startDate) >= currentQuarter.startDate &&
+        new Date(project.startDate) <= currentQuarter.endDate
+      ))
     );
-  }, [hasQuarterReport, projectSummaries, projects]);
+    return new Set(quarterEvents.map(event => event.id)).size;
+  }, [currentQuarter, hasQuarterReport, projects, quarterReports]);
   const eventsTrend = '—';
 
   const volunteersCount = useMemo(() => {
     if (!hasQuarterReport) return 0;
-    return (
-      projectSummaries.reduce((sum, s) => sum + (s.volunteerAccounts?.length || 0), 0) ||
-      volunteers.length ||
-      0
-    );
-  }, [hasQuarterReport, projectSummaries, volunteers]);
+    const identifiers = new Set<string>();
+    quarterReports
+      .filter(report => report.submitterRole === 'volunteer')
+      .forEach(report => identifiers.add(report.submittedBy || report.submitterName));
+    volunteerJoinRecords.forEach(record => {
+      if (
+        record.projectId &&
+        projects.some(project => project.id === record.projectId && project.isEvent)
+      ) {
+        identifiers.add(record.volunteerId || record.volunteerUserId || record.volunteerName);
+      }
+    });
+    return identifiers.size;
+  }, [hasQuarterReport, projects, quarterReports, volunteerJoinRecords]);
   const volunteerTrend = '—';
 
   // Sectors partner dynamic data - empty neutral state when no report
@@ -885,33 +957,20 @@ export function PartnerReportsDashboard({
     return `conic-gradient(${parts.join(', ')})`;
   }, [sectorData]);
 
-  // Automated Generated Report Documents for the Quarter
+  // The selected quarter has one canonical download. Financial and M&E files
+  // are not separate downloads in this workflow.
   const generatedDocuments = useMemo<PartnerQuarterlyDocument[]>(
     () => [
       {
         id: `doc-${currentQuarter.key}-1`,
         title: `${currentQuarter.label} Quarterly Report.pdf`,
-        size: hasQuarterReport ? '2.4 MB' : '0 KB',
+        size: hasQuarterReport ? 'Generated from linked project/event reports' : '0 KB',
         type: 'pdf',
         url:
           activeReport?.mediaFile ||
           activeReport?.attachments?.find(attachment => attachment.type === 'document')?.url ||
           activeReport?.attachments?.[0]?.url ||
           '',
-      },
-      {
-        id: `doc-${currentQuarter.key}-2`,
-        title: `Financial Summary ${currentQuarter.label}.pdf`,
-        size: hasQuarterReport ? '1.1 MB' : '0 KB',
-        type: 'pdf',
-        url: '',
-      },
-      {
-        id: `doc-${currentQuarter.key}-3`,
-        title: `M&E Summary ${currentQuarter.label}.pdf`,
-        size: hasQuarterReport ? '1.6 MB' : '0 KB',
-        type: 'pdf',
-        url: '',
       },
     ],
     [currentQuarter, activeReport, hasQuarterReport]
@@ -933,6 +992,7 @@ export function PartnerReportsDashboard({
         submittedOn,
         report: activeReport,
         summary: activeSummary,
+        reports: quarterReports,
       })
     );
   };
@@ -1004,13 +1064,19 @@ export function PartnerReportsDashboard({
     <View style={{ flex: 1, backgroundColor: '#F8FAFC' }}>
       <ScrollView
         style={{ flex: 1, backgroundColor: '#F8FAFC' }}
-        contentContainerStyle={{ padding: 20, paddingBottom: 60, gap: 16 }}
+        contentContainerStyle={{ padding: isCompactLayout ? 12 : 20, paddingBottom: 60, gap: 16 }}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
         {/* 1. Breadcrumbs & Quarter Selector */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginBottom: 2 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        <View
+          style={{
+            backgroundColor: '#F8FAFC',
+            paddingBottom: 2,
+            zIndex: 10,
+          }}
+        >
+          <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
             <Text style={{ fontSize: 12, fontWeight: '600', color: '#64748b' }}>Partner Reports</Text>
             <Text style={{ fontSize: 12, color: '#94a3b8' }}>›</Text>
             <Text style={{ fontSize: 12, fontWeight: '600', color: '#64748b' }}>Quarterly Reports</Text>
@@ -1018,33 +1084,63 @@ export function PartnerReportsDashboard({
             <Text style={{ fontSize: 12, fontWeight: '700', color: '#1e293b' }}>{currentQuarter.label}</Text>
           </View>
 
-          {/* Automated 3-Month Quarter Switcher Pills */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            {availableQuarters.map(q => (
-              <TouchableOpacity
-                key={q.key}
-                style={{
-                  paddingHorizontal: 10,
-                  paddingVertical: 4,
-                  borderRadius: 6,
-                  backgroundColor: selectedQuarterKey === q.key ? '#166534' : '#ffffff',
-                  borderWidth: 1,
-                  borderColor: selectedQuarterKey === q.key ? '#166534' : '#cbd5e1',
-                }}
-                onPress={() => setSelectedQuarterKey(q.key)}
-                activeOpacity={0.8}
-              >
-                <Text
+          {/* Keep the quarter switcher visible and usable while the report content scrolls. */}
+          <View
+            style={{
+              marginTop: 8,
+              minHeight: 52,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 8,
+              paddingHorizontal: 10,
+              paddingVertical: 8,
+              borderRadius: 12,
+              borderWidth: 1,
+              borderColor: '#dbe5df',
+              backgroundColor: '#ffffff',
+            }}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, flexShrink: 0 }}>
+              <MaterialIcons name="date-range" size={17} color="#166534" />
+              <Text style={{ fontSize: 12, fontWeight: '800', color: '#166534' }}>Quarter</Text>
+            </View>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={{ flex: 1, minWidth: 0 }}
+              contentContainerStyle={{ gap: 6, paddingRight: 4 }}
+            >
+              {availableQuarters.map(q => (
+                <TouchableOpacity
+                  key={q.key}
                   style={{
-                    fontSize: 11,
-                    fontWeight: '700',
-                    color: selectedQuarterKey === q.key ? '#ffffff' : '#475569',
+                    minHeight: 34,
+                    paddingHorizontal: 10,
+                    paddingVertical: 7,
+                    borderRadius: 7,
+                    backgroundColor: selectedQuarterKey === q.key ? '#166534' : '#ffffff',
+                    borderWidth: 1,
+                    borderColor: selectedQuarterKey === q.key ? '#166534' : '#cbd5e1',
+                    justifyContent: 'center',
                   }}
+                  onPress={() => setSelectedQuarterKey(q.key)}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Show ${q.label} partner report`}
+                  accessibilityState={{ selected: selectedQuarterKey === q.key }}
                 >
-                  {q.label}
-                </Text>
-              </TouchableOpacity>
-            ))}
+                  <Text
+                    style={{
+                      fontSize: 11,
+                      fontWeight: '700',
+                      color: selectedQuarterKey === q.key ? '#ffffff' : '#475569',
+                    }}
+                  >
+                    {q.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
           </View>
         </View>
 
@@ -1055,9 +1151,9 @@ export function PartnerReportsDashboard({
             borderRadius: 16,
             borderWidth: 1,
             borderColor: '#e2e8f0',
-            padding: 20,
-            flexDirection: 'row',
-            alignItems: 'center',
+            padding: isCompactLayout ? 14 : 20,
+            flexDirection: isCompactLayout ? 'column' : 'row',
+            alignItems: isCompactLayout ? 'stretch' : 'center',
             justifyContent: 'space-between',
             flexWrap: 'wrap',
             gap: 16,
@@ -1069,7 +1165,7 @@ export function PartnerReportsDashboard({
           }}
         >
           {/* Left: Icon + Title + Org */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, flex: 1, minWidth: 280 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, flex: isCompactLayout ? undefined : 1, width: isCompactLayout ? '100%' : undefined, minWidth: isCompactLayout ? 0 : 280 }}>
             <View
               style={{
                 width: 52,
@@ -1084,9 +1180,9 @@ export function PartnerReportsDashboard({
             >
               <MaterialIcons name="storefront" size={28} color="#2E7D32" />
             </View>
-            <View style={{ gap: 2 }}>
+            <View style={{ gap: 2, flex: 1, minWidth: 0 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <Text style={{ fontSize: 17, fontWeight: '800', color: '#0f172a' }}>{reportTitle}</Text>
+                <Text style={{ fontSize: 17, fontWeight: '800', color: '#0f172a', flexShrink: 1 }}>{reportTitle}</Text>
                 <View
                   style={{
                     backgroundColor: hasQuarterReport ? '#DCFCE7' : '#F1F5F9',
@@ -1106,9 +1202,9 @@ export function PartnerReportsDashboard({
           </View>
 
           {/* Middle & Right Detail Blocks */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
+          <View style={{ flexDirection: isCompactLayout ? 'column' : 'row', alignItems: isCompactLayout ? 'stretch' : 'center', gap: isCompactLayout ? 10 : 20, flexWrap: 'wrap', width: isCompactLayout ? '100%' : undefined }}>
             {/* Reporting Period */}
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, width: isCompactLayout ? '100%' : undefined }}>
               <MaterialIcons name="event" size={20} color="#64748b" />
               <View>
                 <Text style={{ fontSize: 11, fontWeight: '600', color: '#94a3b8' }}>Reporting Period</Text>
@@ -1117,10 +1213,10 @@ export function PartnerReportsDashboard({
             </View>
 
             {/* Divider */}
-            <View style={{ width: 1, height: 32, backgroundColor: '#e2e8f0' }} />
+            <View style={{ width: isCompactLayout ? '100%' : 1, height: isCompactLayout ? 1 : 32, backgroundColor: '#e2e8f0' }} />
 
             {/* Submitted On */}
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, width: isCompactLayout ? '100%' : undefined }}>
               <MaterialIcons name="schedule" size={20} color="#64748b" />
               <View>
                 <Text style={{ fontSize: 11, fontWeight: '600', color: '#94a3b8' }}>Submitted On</Text>
@@ -1129,10 +1225,10 @@ export function PartnerReportsDashboard({
             </View>
 
             {/* Divider */}
-            <View style={{ width: 1, height: 32, backgroundColor: '#e2e8f0' }} />
+            <View style={{ width: isCompactLayout ? '100%' : 1, height: isCompactLayout ? 1 : 32, backgroundColor: '#e2e8f0' }} />
 
             {/* Submitted By */}
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, width: isCompactLayout ? '100%' : undefined }}>
               <View
                 style={{
                   width: 32,
@@ -1145,7 +1241,7 @@ export function PartnerReportsDashboard({
               >
                 <Text style={{ fontSize: 11, fontWeight: '800', color: '#78350F' }}>{submitterInitials}</Text>
               </View>
-              <View>
+              <View style={{ flex: 1, minWidth: 0 }}>
                 <Text style={{ fontSize: 10, fontWeight: '600', color: '#94a3b8' }}>Submitted By</Text>
                 <Text style={{ fontSize: 12, fontWeight: '700', color: '#1e293b' }}>{submittedByName}</Text>
                 <Text style={{ fontSize: 10, color: '#64748b' }}>{submittedByRole}</Text>
@@ -1153,7 +1249,7 @@ export function PartnerReportsDashboard({
             </View>
 
             {/* Actions */}
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', width: isCompactLayout ? '100%' : undefined }}>
               <TouchableOpacity
                 style={{
                   flexDirection: 'row',
@@ -1165,12 +1261,13 @@ export function PartnerReportsDashboard({
                   borderRadius: 8,
                   paddingHorizontal: 12,
                   paddingVertical: 7,
+                  flexShrink: 1,
                 }}
                 activeOpacity={0.7}
                 onPress={handleDownloadReport}
               >
                 <MaterialIcons name="file-download" size={16} color="#334155" />
-                <Text style={{ fontSize: 12, fontWeight: '700', color: '#334155' }}>Download Report</Text>
+                <Text style={{ fontSize: 12, fontWeight: '700', color: '#334155', flexShrink: 1 }}>Download Report</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={{
@@ -1199,8 +1296,10 @@ export function PartnerReportsDashboard({
           {/* Card 1: Skills Contributed */}
           <View
             style={{
-              flex: 1,
-              minWidth: 180,
+              flex: isCompactLayout ? undefined : 1,
+              flexShrink: isCompactLayout ? 0 : undefined,
+              minWidth: isCompactLayout ? 0 : 180,
+              width: isCompactLayout ? '48%' : undefined,
               backgroundColor: '#ffffff',
               borderRadius: 14,
               borderWidth: 1,
@@ -1233,8 +1332,10 @@ export function PartnerReportsDashboard({
           {/* Card 2: Events Conducted */}
           <View
             style={{
-              flex: 1,
-              minWidth: 180,
+              flex: isCompactLayout ? undefined : 1,
+              flexShrink: isCompactLayout ? 0 : undefined,
+              minWidth: isCompactLayout ? 0 : 180,
+              width: isCompactLayout ? '48%' : undefined,
               backgroundColor: '#ffffff',
               borderRadius: 14,
               borderWidth: 1,
@@ -1267,8 +1368,10 @@ export function PartnerReportsDashboard({
           {/* Card 3: Sectors Partner (Donut Chart) */}
           <View
             style={{
-              flex: 1.2,
-              minWidth: 230,
+              flex: isCompactLayout ? undefined : 1.2,
+              flexShrink: isCompactLayout ? 0 : undefined,
+              minWidth: isCompactLayout ? 0 : 230,
+              width: isCompactLayout ? '48%' : undefined,
               backgroundColor: '#ffffff',
               borderRadius: 14,
               borderWidth: 1,
@@ -1330,8 +1433,10 @@ export function PartnerReportsDashboard({
           {/* Card 4: Volunteers Involved */}
           <View
             style={{
-              flex: 1,
-              minWidth: 180,
+              flex: isCompactLayout ? undefined : 1,
+              flexShrink: isCompactLayout ? 0 : undefined,
+              minWidth: isCompactLayout ? 0 : 180,
+              width: isCompactLayout ? '48%' : undefined,
               backgroundColor: '#ffffff',
               borderRadius: 14,
               borderWidth: 1,
@@ -1363,13 +1468,14 @@ export function PartnerReportsDashboard({
         </View>
 
         {/* 4. Middle Section: Report Documents */}
-        <View style={{ flexDirection: 'row', gap: 16, flexWrap: 'wrap' }}>
+        <View style={{ flexDirection: isCompactLayout ? 'column' : 'row', gap: 16, flexWrap: 'wrap' }}>
 
           {/* Right Card: Report Documents */}
           <View
             style={{
               flex: 1,
-              minWidth: 320,
+              minWidth: 0,
+              width: isCompactLayout ? '100%' : undefined,
               backgroundColor: '#ffffff',
               borderRadius: 14,
               borderWidth: 1,
@@ -1415,8 +1521,8 @@ export function PartnerReportsDashboard({
                           {doc.type === 'pdf' ? 'Abc' : 'Xl'}
                         </Text>
                       </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={{ fontSize: 13, fontWeight: '700', color: '#1e293b' }} numberOfLines={1}>
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text style={{ fontSize: 13, fontWeight: '700', color: '#1e293b' }} numberOfLines={2}>
                           {doc.title}
                         </Text>
                         <Text style={{ fontSize: 11, color: '#64748b' }}>{doc.size}</Text>
@@ -1451,7 +1557,118 @@ export function PartnerReportsDashboard({
           </View>
         </View>
 
-        {/* 5. Bottom Card: Photos from Volunteers Report */}
+        {/* 5. Reports grouped inside their event folders */}
+        <View
+          style={{
+            backgroundColor: '#ffffff',
+            borderRadius: 14,
+            borderWidth: 1,
+            borderColor: '#e2e8f0',
+            padding: 20,
+            gap: 12,
+          }}
+        >
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+              {selectedReportFolder ? (
+                <TouchableOpacity
+                  onPress={() => setSelectedReportFolderId(null)}
+                  activeOpacity={0.7}
+                  accessibilityRole="button"
+                  accessibilityLabel="Back to event folders"
+                  style={{ padding: 2 }}
+                >
+                  <MaterialIcons name="arrow-back" size={19} color="#166534" />
+                </TouchableOpacity>
+              ) : null}
+              <Text style={{ fontSize: 15, fontWeight: '800', color: '#0f172a', flexShrink: 1 }}>
+                {selectedReportFolder ? selectedReportFolder.title : 'Event Folders'}
+              </Text>
+            </View>
+            <Text style={{ fontSize: 12, fontWeight: '700', color: '#64748b' }}>
+              {selectedReportFolder
+                ? `${selectedReportFolder.reports.length} report${selectedReportFolder.reports.length === 1 ? '' : 's'}`
+                : `${reportFolders.length} event${reportFolders.length === 1 ? '' : 's'}`}
+            </Text>
+          </View>
+          {quarterReports.length === 0 ? (
+            <Text style={{ fontSize: 12, color: '#64748b' }}>No reports were submitted for {currentQuarter.label}.</Text>
+          ) : selectedReportFolder ? (
+            <View style={{ gap: 8 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <MaterialIcons name="folder-open" size={17} color="#EAB308" />
+                <Text style={{ fontSize: 11, color: '#64748b' }}>Reports submitted for this event</Text>
+              </View>
+              {selectedReportFolder.reports.map(report => (
+                <TouchableOpacity
+                  key={report.id}
+                  onPress={() => onViewReport(report)}
+                  activeOpacity={0.75}
+                  style={{
+                    borderWidth: 1,
+                    borderColor: '#e2e8f0',
+                    borderRadius: 10,
+                    padding: 12,
+                    backgroundColor: '#f8fafc',
+                  }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                    <Text style={{ flex: 1, fontSize: 13, fontWeight: '800', color: '#1e293b' }} numberOfLines={2}>
+                      {report.title || 'Untitled report'}
+                    </Text>
+                    <MaterialIcons name="chevron-right" size={18} color="#64748b" />
+                  </View>
+                  <Text style={{ fontSize: 11, color: '#475569', marginTop: 4 }} numberOfLines={1}>
+                    {report.projectTitle || 'Linked project/event'} • {report.submitterName || 'Unknown submitter'}
+                  </Text>
+                  <Text style={{ fontSize: 10, color: '#64748b', marginTop: 3 }}>
+                    {new Date(report.submittedAt).toLocaleDateString()} • {report.submitterRole === 'volunteer' ? 'Volunteer report' : 'Partner report'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          ) : (
+            <View style={{ gap: 8 }}>
+              <Text style={{ fontSize: 11, color: '#64748b' }}>Select an event folder to view its reports.</Text>
+              {reportFolders.map(folder => (
+                <TouchableOpacity
+                  key={folder.key}
+                  onPress={() => setSelectedReportFolderId(folder.key)}
+                  activeOpacity={0.75}
+                  style={{
+                    borderWidth: 1,
+                    borderColor: '#e2e8f0',
+                    borderRadius: 10,
+                    padding: 12,
+                    backgroundColor: '#f8fafc',
+                  }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <MaterialIcons name="folder" size={27} color="#EAB308" />
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={{ fontSize: 13, fontWeight: '800', color: '#1e293b' }} numberOfLines={2}>
+                        {folder.title}
+                      </Text>
+                      <Text style={{ fontSize: 10, color: '#64748b', marginTop: 3 }}>
+                        {folder.project?.startDate
+                          ? new Date(folder.project.startDate).toLocaleDateString()
+                          : 'Date unavailable'}
+                      </Text>
+                    </View>
+                    <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                      <MaterialIcons name="chevron-right" size={20} color="#64748b" />
+                      <Text style={{ fontSize: 10, fontWeight: '700', color: '#64748b' }}>
+                        {folder.reports.length} report{folder.reports.length === 1 ? '' : 's'}
+                      </Text>
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+        </View>
+
+        {/* 6. Bottom Card: Photos from Volunteers Report */}
         <View
           style={{
             backgroundColor: '#ffffff',
@@ -1587,7 +1804,7 @@ export function PartnerReportsDashboard({
               {activeReport?.description ||
                 `The ${currentQuarter.label} partner program conducted in collaboration with ${orgName} includes ${eventsConductedCount} community events engaging ${volunteersCount} volunteers.`}
             </Text>
-            {onUploadReport ? (
+            {user?.role !== 'partner' && onUploadReport ? (
               <TouchableOpacity
                 style={{
                   backgroundColor: '#F1F5F9',
@@ -1808,9 +2025,10 @@ function buildPartnerQuarterlyReportPdf(input: {
   submittedOn: string;
   report: SubmittedReport | null;
   summary: PartnerProjectReportSummary | null;
+  reports?: SubmittedReport[];
 }): string {
   const summary = input.summary;
-  const volunteerReports = summary ? getVolunteerReportsForSummary(summary) : [];
+  const relatedReports = input.reports || (summary ? getVolunteerReportsForSummary(summary) : []);
   const metricRows = Object.entries(summary?.metrics || {}).map(([metric, value]) => ({
     metric: formatPdfMetricLabel(metric),
     value,
@@ -1830,7 +2048,7 @@ function buildPartnerQuarterlyReportPdf(input: {
     verified: account.verifiedAttendance,
     beneficiaries: account.beneficiariesServed,
   }));
-  const volunteerReportRows = volunteerReports.map(report => ({
+  const reportRows = relatedReports.map(report => ({
     report: report.title || 'Untitled report',
     volunteer: report.submitterName || 'Unknown volunteer',
     event: report.projectTitle || 'Unlinked event',
@@ -1895,7 +2113,7 @@ function buildPartnerQuarterlyReportPdf(input: {
         emptyMessage: 'No volunteer account activity was recorded.',
       },
       {
-        title: 'Volunteer Report Details',
+        title: 'Project and Event Report Details',
         columns: [
           { key: 'report', label: 'Report', width: 1.1 },
           { key: 'volunteer', label: 'Volunteer', width: 0.95 },
@@ -1904,8 +2122,8 @@ function buildPartnerQuarterlyReportPdf(input: {
           { key: 'submitted', label: 'Submitted', width: 0.95 },
           { key: 'description', label: 'Description', width: 1.9, maxLines: 12 },
         ],
-        rows: volunteerReportRows,
-        emptyMessage: 'No volunteer reports were submitted for this quarter.',
+        rows: reportRows,
+        emptyMessage: 'No reports were submitted for this quarter.',
       },
     ],
   });

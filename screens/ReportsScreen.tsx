@@ -219,30 +219,6 @@ function shouldDisplayReport(report: SubmittedReport): boolean {
   return report.status !== 'Rejected';
 }
 
-function dedupeVolunteerReports(reports: SubmittedReport[]): SubmittedReport[] {
-  const seenVolunteerSubmissions = new Set<string>();
-
-  return [...reports]
-    .sort(
-      (left, right) =>
-        new Date(right.submittedAt).getTime() - new Date(left.submittedAt).getTime()
-    )
-    .filter(report => {
-      if (report.submitterRole !== 'volunteer') {
-        return true;
-      }
-
-      const submitterKey = report.submittedBy || report.submitterName || report.id;
-      const submissionKey = `${report.projectId || 'unlinked'}::${submitterKey}`;
-      if (seenVolunteerSubmissions.has(submissionKey)) {
-        return false;
-      }
-
-      seenVolunteerSubmissions.add(submissionKey);
-      return true;
-    });
-}
-
 function isVolunteerAssignedToTask(
   task: { assignedVolunteerId?: string; assignedVolunteerIds?: string[] },
   volunteerId?: string | null
@@ -328,13 +304,14 @@ function buildPartnerProjectSummaries(
           String(candidate.parentProjectId || '').trim() === String(project.id || '').trim()
       );
       const linkedEventIds = new Set(linkedEvents.map(event => event.id));
+      const relatedProjectIds = new Set([project.id, ...linkedEventIds]);
       const partnerReports = reports
         .filter(
           report =>
             shouldDisplayReport(report) &&
             report.submitterRole === 'partner' &&
             (!partnerUserId || report.submittedBy === partnerUserId) &&
-            String(report.projectId || '').trim() === String(project.id || '').trim()
+            relatedProjectIds.has(String(report.projectId || '').trim())
         )
         .sort(
           (left, right) =>
@@ -345,7 +322,7 @@ function buildPartnerProjectSummaries(
           report =>
             shouldDisplayReport(report) &&
             report.submitterRole === 'volunteer' &&
-            linkedEventIds.has(String(report.projectId || ''))
+            relatedProjectIds.has(String(report.projectId || ''))
         )
         .sort(
           (left, right) =>
@@ -497,6 +474,12 @@ export default function ReportsScreen({ navigation, route }: any) {
   const reportsReloadQueuedRef = useRef(false);
   const hasLoadedReportsRef = useRef(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+
+  useEffect(() => {
+    if (user?.role === 'partner' && activeTopTab === 'volunteer') {
+      setActiveTopTab('partner');
+    }
+  }, [activeTopTab, user?.role]);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Open partners on their own report dashboard once authentication resolves.
@@ -525,7 +508,7 @@ export default function ReportsScreen({ navigation, route }: any) {
         'timeLogs',
         'volunteerProfile',
         'volunteerProjectJoins',
-      ], false, false /* reports don't need project images */);
+      ], false, true /* report form needs the attendance photo fallback */);
       setProjects(snapshot.projects);
       setPartnerApplications([]);
       setVolunteerProfileId(snapshot.volunteerProfile?.id || null);
@@ -595,7 +578,7 @@ export default function ReportsScreen({ navigation, route }: any) {
   }, [projects, volunteerProfileId]);
 
   const loadVolunteers = useCallback(async () => {
-    const allVolunteers = await getAllVolunteers();
+    const allVolunteers = await getAllVolunteers({ includeImages: true });
     setVolunteers(allVolunteers);
   }, []);
 
@@ -629,11 +612,9 @@ export default function ReportsScreen({ navigation, route }: any) {
       }
 
       setReports(
-        dedupeVolunteerReports(
-          rawReports
-            .map(report => normalizeImpactHubReport(report, allProjects))
-            .filter(shouldDisplayReport)
-        )
+        rawReports
+          .map(report => normalizeImpactHubReport(report, allProjects))
+          .filter(shouldDisplayReport)
       );
       hasLoadedReportsRef.current = true;
     } catch (error) {
@@ -779,22 +760,27 @@ export default function ReportsScreen({ navigation, route }: any) {
     [partnerAcceptedEventProjects, partnerAcceptedProjects]
   );
 
+  const partnerReportProjectIds = useMemo(
+    () => new Set([...partnerAcceptedProjectIds, ...partnerAcceptedEventIds]),
+    [partnerAcceptedEventIds, partnerAcceptedProjectIds]
+  );
+
   const partnerVisibleReports = useMemo(
     () =>
       reports.filter(report => {
         const projectId = String(report.projectId || '').trim();
-        if (!projectId) return false;
+        if (!projectId || !partnerReportProjectIds.has(projectId)) {
+          return false;
+        }
 
-        const isOwnApprovedProjectReport =
-          report.submitterRole === 'partner' &&
-          report.submittedBy === user?.id &&
-          partnerAcceptedProjectIds.has(projectId);
-        const isApprovedProjectEventReport =
-          report.submitterRole === 'volunteer' && partnerAcceptedEventIds.has(projectId);
-
-        return isOwnApprovedProjectReport || isApprovedProjectEventReport;
+        // Partners can see volunteer reports from their approved project
+        // events and their own reports attached to the approved project or
+        // one of its events. Admins can review every related report.
+        return user?.role === 'admin'
+          ? true
+          : report.submitterRole === 'volunteer' || report.submittedBy === user?.id;
       }),
-    [partnerAcceptedEventIds, partnerAcceptedProjectIds, reports, user?.id]
+    [partnerReportProjectIds, reports, user?.id, user?.role]
   );
 
   const partnerVolunteerTimeLogs = useMemo(
@@ -842,6 +828,11 @@ export default function ReportsScreen({ navigation, route }: any) {
         return false;
       }
 
+      if (user.role === 'partner') {
+        showToast('Partner accounts can view and download reports only.', 'info');
+        return false;
+      }
+
       const targetProjectId =
         reportData.projectId || (user.role === 'volunteer' ? undefined : projects[0]?.id);
       if (!targetProjectId) {
@@ -882,17 +873,6 @@ export default function ReportsScreen({ navigation, route }: any) {
           }
         }
 
-        if (user.role === 'partner') {
-          const allowedProjectIds = new Set(partnerAcceptedProjects.map(project => project.id));
-          if (!allowedProjectIds.has(targetProjectId)) {
-            showToast(
-              'Partners can only submit reports for projects that they proposed and the admin approved.',
-              'error'
-            );
-            return false;
-          }
-        }
-
         const hadActiveVolunteerLog =
           user.role === 'volunteer'
             ? volunteerTimeLogs.some(
@@ -906,8 +886,6 @@ export default function ReportsScreen({ navigation, route }: any) {
             submitterUserId: user.id,
             submitterName: user.name,
             submitterRole: user.role,
-            partnerUserId: user.role === 'partner' ? user.id : undefined,
-            partnerName: user.role === 'partner' ? user.name : undefined,
             title: reportData.title,
             description: reportData.description,
             metrics: numericMetrics,
@@ -920,8 +898,6 @@ export default function ReportsScreen({ navigation, route }: any) {
             submitterUserId: user.id,
             submitterName: user.name,
             submitterRole: user.role,
-            partnerUserId: user.role === 'partner' ? user.id : undefined,
-            partnerName: user.role === 'partner' ? user.name : undefined,
             reportType,
             title: reportData.title,
             description: reportData.description,
@@ -957,8 +933,8 @@ export default function ReportsScreen({ navigation, route }: any) {
     [
       fieldOfficerProjectIds,
       loadReportsCoalesced,
-      partnerAcceptedProjects,
       projects,
+      showToast,
       user?.id,
       user?.name,
       user?.role,
@@ -1014,6 +990,11 @@ export default function ReportsScreen({ navigation, route }: any) {
   }, [projects]);
 
   const handleOpenUploadModal = useCallback(() => {
+    if (user?.role === 'partner') {
+      showToast('Partner accounts can view and download reports only.', 'info');
+      return;
+    }
+
     if (user?.role === 'volunteer' && volunteerEventProjects.length === 0) {
       Alert.alert(
         'Attendance Required',
@@ -1022,17 +1003,9 @@ export default function ReportsScreen({ navigation, route }: any) {
       return;
     }
 
-    if (user?.role === 'partner' && partnerAcceptedProjects.length === 0) {
-      Alert.alert(
-        'No Approved Project',
-        'Approved projects that your account proposed must exist before you can submit a partner report.'
-      );
-      return;
-    }
-
     setUploadModalInitialValues(null);
     setShowUploadModal(true);
-  }, [partnerAcceptedProjects.length, user?.role, volunteerEventProjects.length]);
+  }, [showToast, user?.role, volunteerEventProjects.length]);
 
   const handleViewAnalytics = useCallback((reportType?: 'all' | 'volunteer' | 'partner') => {
     // Filter reports by type and display them
@@ -1052,7 +1025,7 @@ export default function ReportsScreen({ navigation, route }: any) {
           volunteerTimeLogs={user?.role === 'partner' ? partnerVolunteerTimeLogs : volunteerTimeLogs}
           volunteers={user?.role === 'partner' ? partnerVisibleVolunteers : volunteers}
           onViewReport={handleViewReport}
-          onUploadReport={handleOpenUploadModal}
+          onUploadReport={user?.role === 'partner' ? undefined : handleOpenUploadModal}
           reportType="all"
         />
       );
@@ -1081,7 +1054,7 @@ export default function ReportsScreen({ navigation, route }: any) {
           projects={volunteerProjects}
           volunteerTimeLogs={scopedVolunteerTimeLogs}
           volunteerJoinRecords={scopedVolunteerJoinRecords}
-          onUploadReport={handleOpenUploadModal}
+          onUploadReport={user?.role === 'partner' ? undefined : handleOpenUploadModal}
           onViewReport={handleViewReport}
           loading={loading}
           onRefresh={onRefresh}
@@ -1093,25 +1066,17 @@ export default function ReportsScreen({ navigation, route }: any) {
       );
     }
 
-    const partnerDashboardReports = user?.role === 'admin'
-      ? reports.filter(report => {
-          const projectId = String(report.projectId || '').trim();
-          return (
-            (report.submitterRole === 'partner' && partnerAcceptedProjectIds.has(projectId)) ||
-            (report.submitterRole === 'volunteer' && partnerAcceptedEventIds.has(projectId))
-          );
-        })
-      : partnerVisibleReports;
+    const partnerDashboardReports = partnerVisibleReports;
     return (
       <PartnerReportsDashboard
         // Include the approved project's volunteer reports as well as partner
         // submissions so the dashboard's photos and generated summaries use
         // the same scoped source data for partners and admins.
         reports={partnerDashboardReports}
-        projects={partnerAcceptedProjects}
+        projects={partnerVisibleProjects}
         volunteerTimeLogs={user?.role === 'partner' ? partnerVolunteerTimeLogs : volunteerTimeLogs}
         volunteerJoinRecords={user?.role === 'partner' ? partnerVolunteerJoinRecords : volunteerJoinRecords}
-        onUploadReport={handleOpenUploadModal}
+        onUploadReport={user?.role === 'partner' ? undefined : handleOpenUploadModal}
         onViewReport={handleViewReport}
         loading={loading}
         onRefresh={onRefresh}
@@ -1127,6 +1092,8 @@ export default function ReportsScreen({ navigation, route }: any) {
     <View style={styles.topTabs}>
       {(user?.role === 'volunteer'
         ? (['all', 'volunteer'] as const)
+        : user?.role === 'partner'
+        ? (['all', 'partner'] as const)
         : (['all', 'volunteer', 'partner'] as const)
       ).map(tab => {
         const label = tab === 'all'
@@ -1172,7 +1139,7 @@ export default function ReportsScreen({ navigation, route }: any) {
       {renderTopTabs()}
       {dashboard}
       <ReportUploadModal
-        visible={showUploadModal}
+        visible={showUploadModal && user?.role !== 'partner'}
         onClose={handleCloseUploadModal}
         onSubmit={handleUploadReport}
         projects={
@@ -1197,7 +1164,7 @@ export default function ReportsScreen({ navigation, route }: any) {
         visible={showDetailsModal}
         report={selectedReport}
         onClose={handleCloseDetails}
-        onRevise={user?.role !== 'admin' ? handleReviseReport : undefined}
+        onRevise={user?.role === 'volunteer' ? handleReviseReport : undefined}
       />
       <Modal
         visible={showFilteredReports}

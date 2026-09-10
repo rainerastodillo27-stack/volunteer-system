@@ -13,32 +13,17 @@ function getValidDate(value?: string): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-// Returns the attendance window key. Each window starts at the event's saved
-// start time and runs until that same time on the following day.
+// Returns the calendar date used by the attendance picker and backend. The
+// event start value is retained for call-site compatibility, but attendance
+// records are reported on the local date when they were confirmed.
 export function getAttendanceWindowKey(startValue?: string, value?: string): string {
+  void startValue;
   const target = value ? new Date(value) : new Date();
   if (Number.isNaN(target.getTime())) {
     return '';
   }
 
-  const eventStart = getValidDate(startValue);
-  if (!eventStart) {
-    return getLocalDateKey(target);
-  }
-
-  const windowStart = new Date(target);
-  windowStart.setHours(
-    eventStart.getHours(),
-    eventStart.getMinutes(),
-    eventStart.getSeconds(),
-    eventStart.getMilliseconds()
-  );
-
-  if (target < windowStart) {
-    windowStart.setDate(windowStart.getDate() - 1);
-  }
-
-  return getLocalDateKey(windowStart);
+  return getLocalDateKey(target);
 }
 
 // Attendance opens at the event's saved start time on each event day.
@@ -63,8 +48,8 @@ export function hasEventStartedForToday(startValue?: string, now: Date = new Dat
   return now >= todayStart;
 }
 
-// Keeps the existing 15-minute grace period, but applies it to each daily
-// attendance window instead of comparing every day with the first event day.
+// Keeps the existing 15-minute grace period and applies it to the event's
+// configured start time on the same local calendar day.
 export function isEventAttendanceLate(startValue?: string, timeIn?: string): boolean {
   const eventStart = getValidDate(startValue);
   const logTime = getValidDate(timeIn);
@@ -81,7 +66,7 @@ export function isEventAttendanceLate(startValue?: string, timeIn?: string): boo
   );
 
   if (logTime < windowStart) {
-    windowStart.setDate(windowStart.getDate() - 1);
+    return false;
   }
 
   return logTime.getTime() > windowStart.getTime() + 15 * 60000;

@@ -969,7 +969,7 @@ export default function MappingScreen({ navigation }: any) {
           'programTracks',
         ],
         false,
-        false, // map markers don't need project images
+        true,
       );
       const allPartners = await getAllPartners();
       const mapSourceProjects = withImpactMapFallbackProjects(

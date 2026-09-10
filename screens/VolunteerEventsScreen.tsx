@@ -174,7 +174,7 @@ export default function VolunteerEventsScreen() {
             'volunteerJoinRecords',
           ],
           false,
-          false, // event list doesn't need project images on initial load
+          true,
         ),
         getAllAdminPlanningCalendars(),
         getAllAdminPlanningItems(),

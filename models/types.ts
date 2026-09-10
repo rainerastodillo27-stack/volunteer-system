@@ -175,6 +175,8 @@ export interface Project {
   description: string;
   partnerId: string;
   imageUrl?: string;
+  /** View-only parent fallback populated for event cards/detail screens. */
+  parentProjectImageUrl?: string;
   imageHidden?: boolean;
   icon?: string;
   color?: string;

@@ -115,7 +115,7 @@ export default function PartnerProgramManagementScreen() {
     }
 
     try {
-      const snapshot = await getPartnerDashboardSnapshot();
+      const snapshot = await getPartnerDashboardSnapshot(true);
       setPrograms(
         (snapshot.programs || []).filter(program => !program.isEvent && !program.parentProjectId)
       );

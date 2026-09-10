@@ -186,7 +186,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
           user,
           ['projects', 'programs', 'programTracks', 'volunteerProfile', 'volunteerMatches', 'volunteerJoinRecords'],
           false,
-          false, // project list cards load images lazily
+          true,
         );
         const snapshotRecords = snapshot.projects || [];
         const rawProgramTracks = snapshot.programTracks || [];

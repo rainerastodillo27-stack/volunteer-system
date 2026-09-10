@@ -31,7 +31,14 @@ export function getPrimaryProjectImageSource(
 ): ImageSourcePropType | undefined {
   // Always prefer the exact record's uploaded image. An event may inherit its
   // parent project's uploaded image only when the event has no own image.
-  const parentImage = project?.isEvent ? getOwnProjectImageSource(parentProject) : undefined;
+  const inheritedImageUrl = project?.isEvent
+    ? project.parentProjectImageUrl
+    : undefined;
+  const parentImage = project?.isEvent
+    ? (isImageMediaUri(inheritedImageUrl)
+      ? { uri: inheritedImageUrl }
+      : getOwnProjectImageSource(parentProject))
+    : undefined;
   return getOwnProjectImageSource(project) || parentImage;
 }
 

@@ -81,7 +81,7 @@ export default function MappingScreen({ navigation }: any) {
   // Loads map data and narrows project visibility based on the active role.
   const loadProjects = async () => {
     try {
-      // Load snapshot first to render map quickly, defer large collections
+      // Load cover photos too because the selected-project panel displays them.
       const snapshot = await getProjectsScreenSnapshot(
         user,
         [
@@ -92,7 +92,7 @@ export default function MappingScreen({ navigation }: any) {
           'volunteerMatches',
         ],
         false,
-        false, // map pins don't render project images
+        true,
       );
       const allPartners = await getAllPartners();
       const mapSourceProjects = withImpactMapFallbackProjects(

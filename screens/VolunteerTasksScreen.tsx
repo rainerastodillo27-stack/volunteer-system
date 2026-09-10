@@ -417,12 +417,12 @@ function getTaskEventAttendanceState(
   let helperText = 'Attendance confirmation is ready for this attendance window.';
   if (!isAssigned) {
     helperText = 'You need an assigned task before attendance opens for this event.';
-  } else if (eventHasNotStarted) {
-    helperText = `Attendance confirmation unlocks at ${formatEventStartTime(project.startDate)} on the event start date.`;
   } else if (eventHasEnded) {
     helperText = 'Attendance is closed because the event timeline already ended.';
   } else if (hasConfirmedToday) {
     helperText = `Attendance is already confirmed for this attendance window. It will reset at ${formatEventStartTime(project.startDate)} on the next event day.`;
+  } else if (eventHasNotStarted) {
+    helperText = `Attendance confirmation unlocks at ${formatEventStartTime(project.startDate)} on the event start date.`;
   }
 
   return {
@@ -724,7 +724,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
     const isAssigned = tasks.some(task => task.projectId === projectId);
     const attendanceState = getTaskEventAttendanceState(project, isAssigned, projectLogs);
 
-    if (!attendanceState.canConfirmAttendance && !attendanceState.eventHasNotStarted) {
+    if (!attendanceState.canConfirmAttendance) {
       Alert.alert('Attendance Unavailable', attendanceState.helperText);
       return;
     }
@@ -829,6 +829,11 @@ export default function VolunteerTasksScreen({ navigation }: any) {
     );
   }, [selectedEventProject, volunteerProfile]);
 
+  const selectedEventLifecycleStatus = selectedEventProject
+    ? getProjectDisplayStatus(selectedEventProject)
+    : null;
+  const selectedEventIsClosed = ['Completed', 'Cancelled'].includes(selectedEventLifecycleStatus || '');
+
   const joinedVolunteerOptions = useMemo(() => {
     if (!selectedEventProject) {
       return [];
@@ -905,8 +910,16 @@ export default function VolunteerTasksScreen({ navigation }: any) {
 
     return managedEventVolunteerOptions
       .map(volunteer => {
+        const volunteerIdentifiers = new Set(
+          [volunteer.id, volunteer.userId]
+            .map(value => String(value || '').trim())
+            .filter(Boolean)
+        );
         const logs = allVolunteerTimeLogs
-          .filter(log => log.projectId === selectedManagedEvent.id && log.volunteerId === volunteer.id)
+          .filter(log =>
+            log.projectId === selectedManagedEvent.id &&
+            volunteerIdentifiers.has(String(log.volunteerId || '').trim())
+          )
           .filter(
             log => getAttendanceWindowKey(selectedManagedEvent.startDate, log.attendanceConfirmedAt || log.timeIn) === resolvedManagedAttendanceDateKey
           )
@@ -949,6 +962,16 @@ export default function VolunteerTasksScreen({ navigation }: any) {
     mode: 'assign' | 'remove' = 'assign'
   ) => {
     if (!eventProject || !volunteerProfile) {
+      return;
+    }
+
+    const eventStatus = getProjectDisplayStatus(eventProject);
+    if (eventStatus === 'Completed') {
+      Alert.alert('Event already completed', 'Task assignments are no longer available for this event.');
+      return;
+    }
+    if (eventStatus === 'Cancelled') {
+      Alert.alert('Event cancelled', 'Task assignments are no longer available for this event.');
       return;
     }
 
@@ -1399,14 +1422,25 @@ export default function VolunteerTasksScreen({ navigation }: any) {
   };
 
   const handleOpenTaskSectionItem = (item: TaskSectionPreviewItem) => {
-    setSelectedTaskSection(null);
-
     if (item.kind === 'field-officer-event') {
+      const eventProject = fieldOfficerEvents.find(project => project.id === item.projectId);
+      const eventStatus = eventProject ? getProjectDisplayStatus(eventProject) : null;
+      if (eventStatus === 'Completed') {
+        Alert.alert('Event already completed', 'This event is already completed. Its assignment board is no longer available.');
+        return;
+      }
+      if (eventStatus === 'Cancelled') {
+        Alert.alert('Event cancelled', 'This event is cancelled. Its assignment board is no longer available.');
+        return;
+      }
+
+      setSelectedTaskSection(null);
       setSelectedManagedEventId(item.projectId);
       setShowFieldOfficerBoard(true);
       return;
     }
 
+    setSelectedTaskSection(null);
     setSelectedTaskGroupProjectId(item.projectId);
     setShowTaskGroupDetails(true);
   };
@@ -1458,11 +1492,13 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       ? parentProjectTitleById.get(eventProject.parentProjectId)
       : null;
     const eventBucket = getFieldOfficerEventBucket(eventProject);
+    const eventIsClosed = ['Completed', 'Cancelled'].includes(getProjectDisplayStatus(eventProject));
 
     return (
       <TouchableOpacity
         key={eventProject.id}
-        style={styles.fieldOfficerEventCard}
+        style={[styles.fieldOfficerEventCard, eventIsClosed && styles.closedEventCard]}
+        disabled={eventIsClosed}
         onPress={() =>
           handleOpenTaskSectionItem({
             id: `field-officer-${eventProject.id}`,
@@ -1493,7 +1529,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
               {eventProject.location.address}
             </Text>
           </View>
-          <MaterialIcons name="supervisor-account" size={22} color="#166534" />
+          <MaterialIcons name="supervisor-account" size={22} color={eventIsClosed ? '#64748b' : '#166534'} />
         </View>
 
         <View style={styles.fieldOfficerMetricsRow}>
@@ -1512,8 +1548,18 @@ export default function VolunteerTasksScreen({ navigation }: any) {
         </View>
 
         <View style={styles.fieldOfficerOpenRow}>
-          <Text style={styles.fieldOfficerOpenText}>Open assignment board</Text>
-          <MaterialIcons name="chevron-right" size={20} color="#166534" />
+          <Text style={[styles.fieldOfficerOpenText, eventIsClosed && styles.closedEventText]}>
+            {eventBucket === 'Completed' && getProjectDisplayStatus(eventProject) === 'Completed'
+              ? 'Event already completed'
+              : eventIsClosed
+              ? 'Event unavailable'
+              : 'Open assignment board'}
+          </Text>
+          <MaterialIcons
+            name={eventIsClosed ? 'check-circle' : 'chevron-right'}
+            size={20}
+            color={eventIsClosed ? '#64748b' : '#166534'}
+          />
         </View>
       </TouchableOpacity>
     );
@@ -2009,13 +2055,13 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                             style={[
                               styles.attendanceButton,
                               styles.timeInButton,
-                              ((!attendanceState.canConfirmAttendance && !attendanceState.eventHasNotStarted) ||
+                              (!attendanceState.canConfirmAttendance ||
                                 actionLoadingKey === `attendance-${selectedTaskGroup.projectId}`) &&
                                 styles.attendanceButtonDisabled,
                             ]}
                             onPress={() => void handleConfirmAttendanceForProject(selectedTaskGroup.projectId)}
                             disabled={
-                              (!attendanceState.canConfirmAttendance && !attendanceState.eventHasNotStarted) ||
+                              !attendanceState.canConfirmAttendance ||
                               actionLoadingKey === `attendance-${selectedTaskGroup.projectId}`
                             }
                           >
@@ -2026,14 +2072,24 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                               </View>
                             ) : (
                               <>
-                                <MaterialIcons name={attendanceState.eventHasNotStarted ? "photo-camera" : "verified-user"} size={18} color="#fff" />
+                                <MaterialIcons
+                                  name={
+                                    attendanceState.hasConfirmedToday
+                                      ? 'check-circle'
+                                      : attendanceState.eventHasNotStarted
+                                      ? 'schedule'
+                                      : 'verified-user'
+                                  }
+                                  size={18}
+                                  color="#fff"
+                                />
                                 <Text style={styles.attendanceButtonText}>
-                                  {attendanceState.eventHasNotStarted
-                                    ? 'Submit Photo'
-                                    : attendanceState.hasConfirmedToday
+                                  {attendanceState.hasConfirmedToday
                                     ? 'Done Today'
                                     : attendanceState.eventHasEnded
                                     ? 'Closed'
+                                    : attendanceState.eventHasNotStarted
+                                    ? 'Not Yet Available'
                                     : 'Confirm Attendance'}
                                 </Text>
                               </>
@@ -2049,7 +2105,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                   {selectedTaskGroup.tasks.map(item => (
                     <TouchableOpacity
                       key={item.id}
-                      style={styles.taskCard}
+                      style={[styles.taskCard, item.status === 'Completed' && styles.completedTaskCard]}
                       onPress={() => {
                         setSelectedTask(item);
                         setShowTaskGroupDetails(false);
@@ -2235,19 +2291,32 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                     <Text style={styles.descriptionText}>
                       You can assign volunteers to tasks inside {selectedEventProject.title}.
                     </Text>
-                    <TouchableOpacity
-                      style={styles.manageBoardButton}
-                      onPress={() => {
-                        setSelectedManagedEventId(selectedEventProject.id);
-                        setShowFieldOfficerBoard(true);
-                      }}
-                    >
-                      <MaterialIcons name="assignment-ind" size={18} color="#fff" />
-                      <Text style={styles.manageBoardButtonText}>Open Event Assignment Board</Text>
-                    </TouchableOpacity>
+                    {selectedEventIsClosed ? (
+                      <View style={[styles.manageBoardButton, styles.closedManageBoardButton]}>
+                        <MaterialIcons name="check-circle" size={18} color="#64748b" />
+                        <Text style={styles.closedManageBoardButtonText}>
+                          {selectedEventLifecycleStatus === 'Completed'
+                            ? 'Event already completed'
+                            : 'Event unavailable'}
+                        </Text>
+                      </View>
+                    ) : (
+                      <TouchableOpacity
+                        style={styles.manageBoardButton}
+                        onPress={() => {
+                          setSelectedManagedEventId(selectedEventProject.id);
+                          setShowFieldOfficerBoard(true);
+                        }}
+                      >
+                        <MaterialIcons name="assignment-ind" size={18} color="#fff" />
+                        <Text style={styles.manageBoardButtonText}>Open Event Assignment Board</Text>
+                      </TouchableOpacity>
+                    )}
 
                     <Text style={styles.fieldOfficerHintText}>
-                      Joined volunteers: {joinedVolunteerOptions.length}. Open the board to assign or unassign event tasks.
+                      {selectedEventIsClosed
+                        ? 'Task assignments are locked because this event is already completed.'
+                        : `Joined volunteers: ${joinedVolunteerOptions.length}. Open the board to assign or unassign event tasks.`}
                     </Text>
                   </View>
                 ) : null}
@@ -2838,6 +2907,14 @@ const styles = StyleSheet.create({
     padding: 10,
     gap: 8,
   },
+  closedEventCard: {
+    backgroundColor: '#e2e8f0',
+    borderColor: '#94a3b8',
+    opacity: 0.7,
+  },
+  closedEventText: {
+    color: '#64748b',
+  },
   fieldOfficerEventTopRow: {
     flexDirection: 'row',
     gap: 8,
@@ -3413,6 +3490,11 @@ const styles = StyleSheet.create({
     shadowRadius: 5,
     elevation: 2,
   },
+  completedTaskCard: {
+    backgroundColor: '#e2e8f0',
+    borderColor: '#94a3b8',
+    opacity: 0.7,
+  },
   taskCardGrid: {
     gap: 10,
   },
@@ -3691,10 +3773,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 10,
   },
+  closedManageBoardButton: {
+    backgroundColor: '#e2e8f0',
+    borderWidth: 1,
+    borderColor: '#94a3b8',
+  },
   manageBoardButtonText: {
     fontSize: 12,
     fontWeight: '700',
     color: '#fff',
+  },
+  closedManageBoardButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#64748b',
   },
   fieldOfficerHintText: {
     marginTop: 10,

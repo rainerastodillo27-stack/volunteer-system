@@ -402,7 +402,7 @@ function getProjectSuggestion(project: Project, volunteer: Volunteer | null): Re
 
 // Returns image candidates for a project card, prioritizing bundled local program photos.
 function getProjectImageSources(project: Project): ImageSourcePropType[] {
-  if (project.imageHidden) {
+  if (project.imageHidden && !project.isEvent) {
     return [];
   }
 
@@ -410,6 +410,9 @@ function getProjectImageSources(project: Project): ImageSourcePropType[] {
   const hasUploadedProjectImage = isImageMediaUri(project.imageUrl);
   if (hasUploadedProjectImage) {
     imageSources.push({ uri: project.imageUrl });
+  }
+  if (project.isEvent && !hasUploadedProjectImage && isImageMediaUri(project.parentProjectImageUrl)) {
+    imageSources.push({ uri: project.parentProjectImageUrl });
   }
   const isProposalCreatedProject = String(project.id || '').startsWith('project-proposal-');
   if (isProposalCreatedProject && !hasUploadedProjectImage) {
@@ -651,7 +654,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
   const loadProjectsData = useCallback(async () => {
     const startedAt = perfNow();
     try {
-      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'volunteerProfile'], false, false /* images loaded lazily */);
+      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'volunteerProfile'], false, true);
       applySnapshot(snapshot);
       try {
         setAllPartnerReports(await getAllPartnerReports());

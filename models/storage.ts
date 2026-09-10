@@ -342,7 +342,16 @@ function handleCrossTabStoragePayload(payload: unknown) {
 }
 
 function ensureCrossTabStorageListeners() {
-  if (crossTabStorageListenersInitialized || typeof window === 'undefined') {
+  // React Native exposes a partial `window` global, but it does not provide
+  // browser cross-tab APIs such as `addEventListener('storage', ...)`.
+  // Cross-tab notifications are only meaningful on web; native clients use
+  // the shared storage WebSocket below instead.
+  if (
+    crossTabStorageListenersInitialized ||
+    getPlatformOS() !== 'web' ||
+    typeof window === 'undefined' ||
+    typeof window.addEventListener !== 'function'
+  ) {
     return;
   }
 
@@ -377,7 +386,7 @@ function ensureCrossTabStorageListeners() {
 
 function broadcastStorageChangeToOtherTabs(changedKeys: string[]) {
   const normalizedKeys = Array.from(new Set(changedKeys.filter(Boolean)));
-  if (normalizedKeys.length === 0 || typeof window === 'undefined') {
+  if (normalizedKeys.length === 0 || getPlatformOS() !== 'web' || typeof window === 'undefined') {
     return;
   }
 
@@ -2087,7 +2096,7 @@ export async function getDashboardSnapshot(): Promise<{
 // Loads the combined data set required by the partner dashboard screen.
 // OPTIMIZED: Selective loading to minimize egress while ensuring all data is available.
 // Core collections fetched immediately, supplemental data loaded on-demand.
-export async function getPartnerDashboardSnapshot(): Promise<{
+export async function getPartnerDashboardSnapshot(includeImages: boolean = false): Promise<{
   users: User[];
   partners: Partner[];
   projects: Project[];
@@ -2136,11 +2145,22 @@ export async function getPartnerDashboardSnapshot(): Promise<{
     }),
   ]);
 
+  // Keep the normal partner dashboard lightweight, but fetch media-bearing
+  // collections with images when a photo-visible screen explicitly asks for
+  // them.
+  const mediaItems = includeImages
+    ? await Promise.all([
+        getStorageItemFast<Project[]>(STORAGE_KEYS.PROJECTS, true),
+        getStorageItemFast<Project[]>(STORAGE_KEYS.PROGRAMS, true),
+        getStorageItemFast<Project[]>(STORAGE_KEYS.EVENTS, true),
+      ])
+    : null;
+
   const partners = ((coreItems[STORAGE_KEYS.PARTNERS] as Partner[] | null) || [])
     .filter(p => !p.contactEmail?.toLowerCase().includes('eduindia.org'));
 
-  const programs = (coreItems[STORAGE_KEYS.PROGRAMS] as Project[] | null) || [];
-  const projects = (coreItems[STORAGE_KEYS.PROJECTS] as Project[] | null) || [];
+  const programs = ((mediaItems?.[1] ?? coreItems[STORAGE_KEYS.PROGRAMS]) as Project[] | null) || [];
+  const projects = ((mediaItems?.[0] ?? coreItems[STORAGE_KEYS.PROJECTS]) as Project[] | null) || [];
   const programTracks = (coreItems[STORAGE_KEYS.PROGRAM_TRACKS] as ProgramTrack[] | null) || [];
   const partnerApplications =
     (coreItems[STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS] as PartnerProjectApplication[] | null) ||
@@ -2223,10 +2243,10 @@ export async function getPartnerDashboardSnapshot(): Promise<{
     users: (coreItems[STORAGE_KEYS.USERS] as User[] | null) || [],
     projects: mergeProjectAndEventRecords(
       [...dashboardPrograms, ...projects],
-      coreItems[STORAGE_KEYS.EVENTS] as Project[] | null
+      (mediaItems?.[2] ?? coreItems[STORAGE_KEYS.EVENTS]) as Project[] | null
     ),
     programs: dashboardPrograms,
-    events: (coreItems[STORAGE_KEYS.EVENTS] as Project[] | null) || [],
+    events: ((mediaItems?.[2] ?? coreItems[STORAGE_KEYS.EVENTS]) as Project[] | null) || [],
     partners,
     volunteers: (coreItems[STORAGE_KEYS.VOLUNTEERS] as Volunteer[] | null) || [],
     statusUpdates: (coreItems[STORAGE_KEYS.STATUS_UPDATES] as StatusUpdate[] | null) || [],
@@ -2284,6 +2304,23 @@ export async function getDashboardTimelineSnapshot(): Promise<DashboardTimelineS
   }
 }
 
+// Adds a view-only parent cover for events that do not have their own photo.
+// The event's persisted imageUrl is deliberately left untouched.
+function attachParentProjectImageFallback(projects: Project[]): Project[] {
+  const projectsById = new Map(projects.map(project => [project.id, project]));
+  return projects.map(project => {
+    if (!project.isEvent || project.imageUrl?.trim() || !project.parentProjectId) {
+      return project;
+    }
+
+    const parentProject = projectsById.get(project.parentProjectId);
+    const inheritedImageUrl = parentProject?.imageUrl?.trim();
+    return inheritedImageUrl
+      ? { ...project, parentProjectImageUrl: inheritedImageUrl }
+      : project;
+  });
+}
+
 // Loads the combined project, volunteer, and application data for the projects screen.
 export async function getProjectsScreenSnapshot(
   user?: Pick<User, 'id' | 'role'> | null,
@@ -2301,12 +2338,13 @@ export async function getProjectsScreenSnapshot(
   if (fields && fields.length > 0) {
     params.set('fields', fields.join(','));
   }
-  if (!includeImages) {
-    params.set('include_images', 'false');
-  }
+  // Always explicitly send include_images so the backend does not fall back
+  // to its own default (false), which would strip imageUrl from all records.
+  params.set('include_images', includeImages ? 'true' : 'false');
 
-  // Cache key includes images flag so image-less and image-full snapshots are stored separately
-  const cacheKey = `snapshot:${includeImages ? '1' : '0'}:${params.toString()}`;
+  // Version the snapshot key because event records now inherit their parent
+  // project's cover photo in the view model.
+  const cacheKey = `snapshot:v2:${includeImages ? '1' : '0'}:${params.toString()}`;
   const cached = projectsSnapshotCache.get(cacheKey);
   if (!forceRefresh && cached && Date.now() - cached.timestamp < PROJECTS_SNAPSHOT_CACHE_TTL_MS) {
     console.log(`[Data] ProjectsSnapshot cache hit (${cacheKey.slice(0, 40)}...)`);
@@ -2342,10 +2380,13 @@ export async function getProjectsScreenSnapshot(
           updatedAt: program.updatedAt,
         }));
 
+  const normalizedProjects = (payload.projects || []).map(project =>
+    project?.isEvent ? normalizeEventRecord(project) : normalizeProjectRecord(project)
+  );
+  const projectsWithInheritedImages = attachParentProjectImageFallback(normalizedProjects);
+
   const result = {
-    projects: (payload.projects || []).map(project =>
-      project?.isEvent ? normalizeEventRecord(project) : normalizeProjectRecord(project)
-    ),
+    projects: projectsWithInheritedImages,
     programTracks: normalizedProgramTracks,
     programs: normalizedPrograms,
     volunteerProfile: payload.volunteerProfile || null,
@@ -2418,7 +2459,7 @@ export async function saveAppSettings(settings: Partial<AppSettings>): Promise<v
 export async function getAllProgramTracks(): Promise<ProgramTrack[]> {
   // Programs are now stored ONLY in the programs table.
   // Use the shared cache for the first paint and let the realtime listener refresh it.
-  const allPrograms = (await getStorageItemFast<Project[]>(STORAGE_KEYS.PROGRAMS)) || [];
+  const allPrograms = (await getStorageItemFast<Project[]>(STORAGE_KEYS.PROGRAMS, true)) || [];
 
   // Convert top-level programs to ProgramTrack format
   const programTracks: ProgramTrack[] = allPrograms
@@ -2975,7 +3016,7 @@ function mergeProjectAndEventRecords(
     mergedById.set(event.id, event);
   });
 
-  return Array.from(mergedById.values());
+  return attachParentProjectImageFallback(Array.from(mergedById.values()));
 }
 
 function removeProjectIdsFromVolunteerHistory(
@@ -3999,10 +4040,11 @@ export async function deleteAdminPlanningItem(itemId: string): Promise<void> {
 // Project Storage
 // Inserts or updates a project or event record.
 export async function saveProject(project: Project): Promise<void> {
+  const { parentProjectImageUrl: _parentProjectImageUrl, ...persistableProject } = project;
   const normalizedProject = normalizeProjectRecord({
-    ...project,
+    ...persistableProject,
     isEvent: false,
-    skillsNeeded: normalizeProjectSkillsNeeded(project, project.internalTasks || []),
+    skillsNeeded: normalizeProjectSkillsNeeded(persistableProject, persistableProject.internalTasks || []),
   });
   const savedProject = await saveRemoteStorageRecord(STORAGE_KEYS.PROJECTS, normalizedProject);
   upsertCachedStorageRecord(STORAGE_KEYS.PROJECTS, savedProject);
@@ -4012,9 +4054,10 @@ export async function saveProject(project: Project): Promise<void> {
 
 // Inserts or updates an event record in the dedicated events collection.
 export async function saveEvent(event: Project): Promise<void> {
+  const { parentProjectImageUrl: _parentProjectImageUrl, ...persistableEvent } = event;
   const normalizedEvent = normalizeEventRecord({
-    ...event,
-    skillsNeeded: normalizeProjectSkillsNeeded(event, event.internalTasks || []),
+    ...persistableEvent,
+    skillsNeeded: normalizeProjectSkillsNeeded(persistableEvent, persistableEvent.internalTasks || []),
   });
   const savedEvent = await saveRemoteStorageRecord(STORAGE_KEYS.EVENTS, normalizedEvent);
   upsertCachedStorageRecord(STORAGE_KEYS.EVENTS, savedEvent);
@@ -4529,7 +4572,9 @@ export async function getVolunteerTimeLogs(volunteerId: string): Promise<Volunte
 
 // Returns every volunteer time log stored in the system.
 export async function getAllVolunteerTimeLogs(): Promise<VolunteerTimeLog[]> {
-  const logs = (await getStorageItemFast<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS)) || [];
+  // Attendance and completion photos are used by reports, volunteer history,
+  // and admin attendance views. Do not return the lightweight photo-less list.
+  const logs = (await getStorageItemFast<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS, true)) || [];
   return logs.sort((a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime());
 }
 
@@ -5777,7 +5822,10 @@ function dedupeReports<T extends { id: string }>(reports: T[]): T[] {
 }
 
 export async function savePartnerReport(report: PartnerReport): Promise<void> {
-  const reports = await getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [];
+  // Report records can contain uploaded photos. Always read the full media
+  // payload before replacing the collection so a metadata-only read cannot
+  // accidentally erase attachments while marking or updating a report.
+  const reports = await getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS, true) || [];
   const existingIndex = reports.findIndex(entry => entry.id === report.id);
   if (existingIndex >= 0) {
     reports[existingIndex] = report;
@@ -5790,7 +5838,7 @@ export async function savePartnerReport(report: PartnerReport): Promise<void> {
 // Returns partner reports associated with one project.
 // OPTIMIZED: Use cached getStorageItemFast instead of slow getStorageItem
 export async function getPartnerReportsByProject(projectId: string): Promise<PartnerReport[]> {
-  const reports = await getStorageItemFast<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [];
+  const reports = await getStorageItemFast<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS, true) || [];
   return dedupeReports(reports)
     .filter(report => report.projectId === projectId)
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -5799,7 +5847,7 @@ export async function getPartnerReportsByProject(projectId: string): Promise<Par
 // Returns partner reports submitted by one partner user.
 // OPTIMIZED: Use cached getStorageItemFast instead of slow getStorageItem
 export async function getPartnerReportsByUser(partnerUserId: string): Promise<PartnerReport[]> {
-  const reports = await getStorageItemFast<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [];
+  const reports = await getStorageItemFast<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS, true) || [];
   return dedupeReports(reports)
     .filter(
       report =>
@@ -5812,14 +5860,14 @@ export async function getPartnerReportsByUser(partnerUserId: string): Promise<Pa
 // Returns every partner report stored in the system.
 // OPTIMIZED: Use cached getStorageItemFast instead of slow getStorageItem
 export async function getAllPartnerReports(): Promise<PartnerReport[]> {
-  const reports = await getStorageItemFast<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [];
+  const reports = await getStorageItemFast<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS, true) || [];
   return dedupeReports(reports).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 
 // Returns every impact-hub report submitted by one user regardless of role.
 // OPTIMIZED: Use cached getStorageItemFast instead of slow getStorageItem
 export async function getImpactHubReportsByUser(userId: string): Promise<PartnerReport[]> {
-  const reports = await getStorageItemFast<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS) || [];
+  const reports = await getStorageItemFast<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS, true) || [];
   return dedupeReports(reports)
     .filter(report => report.submitterUserId === userId || report.partnerUserId === userId)
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -6000,6 +6048,10 @@ export async function submitImpactHubReport(input: {
   volunteerPraise?: string;
   gratitudeNote?: string;
 }): Promise<PartnerReport> {
+  if (input.submitterRole === 'partner') {
+    throw new Error('Partner accounts can view and download reports only.');
+  }
+
   await validateVolunteerReportEligibility({
     projectId: input.projectId,
     submitterUserId: input.submitterUserId,

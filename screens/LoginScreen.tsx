@@ -1845,6 +1845,7 @@ export default function LoginScreen() {
                       <MaterialIcons name="arrow-forward" size={16} color="#ffffff" />
                     </TouchableOpacity>
                   </View>
+
                 </View>
 
                 {/* Bottom Sign up link */}
