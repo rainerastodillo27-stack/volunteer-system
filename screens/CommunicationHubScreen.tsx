@@ -1152,13 +1152,18 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         // conversation fetches its own full cards/attachments on demand.
         skipMessages ? Promise.resolve([] as Message[]) : getMessageSummariesForUser(messageUserId),
 
-        user.role === 'partner'
+        // Applications are needed for Event GC membership and the proposal
+        // view, but never for the ordinary Messages tab. Keeping this out of
+        // the initial message request is especially important on mobile.
+        activeSection === 'projects' && user.role === 'partner'
 
           ? getPartnerProjectApplicationsByUser(user.id)
 
-          : user.role === 'admin' || activeSection === 'proposals'
+          : activeSection === 'proposals'
 
-            ? getAllPartnerProjectApplications()
+            ? user.role === 'partner'
+              ? getPartnerProjectApplicationsByUser(user.id)
+              : getAllPartnerProjectApplications()
 
             : Promise.resolve([] as PartnerProjectApplication[]),
 
@@ -1771,13 +1776,18 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         if (event.keys.includes('users')) {
           void loadMessageAccounts();
         }
-        if (event.keys.includes('messages')) {
+        const messagesChanged = event.keys.includes('messages');
+        if (messagesChanged) {
           invalidateMessageCache(messageUserId, selectedUserRef.current?.id);
           setMessageRealtimeVersion(current => current + 1);
         }
         // Direct-message records arrive over their own websocket. This keeps
         // side panels and proposal lists current without another heavy chat read.
-        void loadData(true);
+        // A message change is reconciled by the version effect above. Avoid a
+        // second simultaneous refresh of the same message data.
+        if (!messagesChanged) {
+          void loadData(true);
+        }
       }
     );
 

@@ -18,6 +18,7 @@ import {
   onSnapshot,
   query,
   orderBy,
+  limitToLast,
   where,
   updateDoc,
   doc,
@@ -62,7 +63,10 @@ export function subscribeToDirectMessages(
 ): Unsubscribe {
   const convId = dmConversationId(userId1, userId2);
   const messagesRef = collection(db, 'direct_messages', convId, 'messages');
-  const q = query(messagesRef, orderBy('timestamp', 'asc'));
+  // Keep the listener bounded. The backend conversation endpoint is also
+  // capped at 120 messages, so downloading an unbounded legacy thread here
+  // only adds startup latency and duplicate reconciliation work.
+  const q = query(messagesRef, orderBy('timestamp', 'asc'), limitToLast(120));
 
   return onSnapshot(q, (snapshot) => {
     const messages = snapshot.docs.map((d) => docToData<Message>(d));
@@ -160,7 +164,7 @@ export function subscribeToGroupMessages(
   callback: (messages: ProjectGroupMessage[]) => void
 ): Unsubscribe {
   const messagesRef = collection(db, 'group_messages', projectId, 'messages');
-  const q = query(messagesRef, orderBy('timestamp', 'asc'));
+  const q = query(messagesRef, orderBy('timestamp', 'asc'), limitToLast(200));
 
   return onSnapshot(q, (snapshot) => {
     const messages = snapshot.docs.map((d) => docToData<ProjectGroupMessage>(d));

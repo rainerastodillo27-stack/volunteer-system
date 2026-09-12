@@ -142,6 +142,9 @@ const PROJECTS_SNAPSHOT_CACHE_TTL_MS = 10000;
 // sacrificing real-time chat updates.
 const MESSAGES_CACHE_TTL_MS = 30000;
 const CONVERSATION_CACHE_TTL_MS = 30000;
+// The directory changes much less often than messages. Reusing it avoids a
+// full user/profile read every time Messages regains focus on web or mobile.
+const MESSAGE_USERS_CACHE_TTL_MS = 60000;
 const STORAGE_CHANGE_POLL_INTERVAL_MS = 5000; // Increased from 3s to 5s
 const STORAGE_CHANGE_DEBOUNCE_MS = 200;
 const STORAGE_CHANGE_CALLBACK_COOLDOWN_MS = 0;
@@ -166,6 +169,8 @@ const messagesForUserCache = new Map<string, { data: Message[]; timestamp: numbe
 const messageSummaryCache = new Map<string, { data: Message[]; timestamp: number }>();
 const conversationCache = new Map<string, { data: Message[]; timestamp: number }>();
 const groupMessagesCache = new Map<string, { data: ProjectGroupMessage[]; timestamp: number }>();
+let messageUsersCache: { data: User[]; timestamp: number } | null = null;
+let messageUsersRequest: Promise<User[]> | null = null;
 
 const PERSISTED_CACHE_KEY_PREFIX = 'volcre:cache:';
 const PERSISTED_CACHE_TS_PREFIX = 'volcre:cacheTs:';
@@ -1650,6 +1655,8 @@ function invalidateSharedStorageCache(keys?: string[]): void {
     sharedStorageCacheTimestamps.clear();
     sharedStorageCacheImageModes.clear();
     projectsSnapshotCache.clear();
+    messageUsersCache = null;
+    messageUsersRequest = null;
     return;
   }
 
@@ -1663,6 +1670,10 @@ function invalidateSharedStorageCache(keys?: string[]): void {
       // the backend. Remove it as well so an invalidated project/event cannot
       // reappear after a tab switch or screen refresh.
       void deleteLocalStorageItem(key);
+    }
+    if (key === STORAGE_KEYS.USERS) {
+      messageUsersCache = null;
+      messageUsersRequest = null;
     }
   }
   projectsSnapshotCache.clear();
@@ -3580,11 +3591,35 @@ export async function getAllUsers(): Promise<User[]> {
 // users collection, this includes only identity fields and a compressed
 // profile photo, never IDs or registration documents.
 export async function getMessageUsers(): Promise<User[]> {
+  const now = Date.now();
+  if (messageUsersCache && now - messageUsersCache.timestamp < MESSAGE_USERS_CACHE_TTL_MS) {
+    return messageUsersCache.data;
+  }
+
+  if (messageUsersRequest) {
+    return messageUsersRequest;
+  }
+
+  const request = (async () => {
+    try {
+      const payload = await requestApiJson<{ users?: User[] }>('/users/directory');
+      const users = payload.users || [];
+      messageUsersCache = { data: users, timestamp: Date.now() };
+      return users;
+    } catch {
+      const users = await getAllUsers();
+      messageUsersCache = { data: users, timestamp: Date.now() };
+      return users;
+    }
+  })();
+  messageUsersRequest = request;
+
   try {
-    const payload = await requestApiJson<{ users?: User[] }>('/users/directory');
-    return payload.users || [];
-  } catch {
-    return getAllUsers();
+    return await request;
+  } finally {
+    if (messageUsersRequest === request) {
+      messageUsersRequest = null;
+    }
   }
 }
 

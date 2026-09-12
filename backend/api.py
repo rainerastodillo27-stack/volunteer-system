@@ -2051,6 +2051,8 @@ def _invalidate_collection_cache(keys: list[str] | set[str] | tuple[str, ...] | 
         _storage_collection_cache.delete(f"collection:{key}:images:1")
     if "messages" in keys:
         _message_query_cache.clear()
+    elif "users" in keys:
+        _message_query_cache.delete("users:directory")
     # Invalidate admin dashboard cache whenever any of its constituent keys change.
     if any(k in _ADMIN_DASHBOARD_KEYS for k in keys):
         _admin_dashboard_cache.delete(_ADMIN_DASHBOARD_CACHE_KEY)
@@ -4262,6 +4264,10 @@ def lookup_user(identifier: str) -> dict[str, Any]:
 @app.get("/users/directory")
 # API endpoint used by messaging to resolve sender names and profile photos.
 def get_user_directory() -> dict[str, list[dict[str, Any]]]:
+    cached = _message_query_cache.get("users:directory")
+    if cached is not None:
+        return cached
+
     _require_postgres()
     with get_connection() as connection:
         users = get_postgres_hot_storage_collection(
@@ -4282,7 +4288,9 @@ def get_user_directory() -> dict[str, list[dict[str, Any]]]:
         for user in users
         if isinstance(user, dict) and str(user.get("id") or "").strip()
     ]
-    return {"users": directory}
+    result = {"users": directory}
+    _message_query_cache.set("users:directory", result)
+    return result
 
 
 # Demo accounts for offline/development mode
@@ -6104,6 +6112,79 @@ async def remove_volunteer_from_project(project_id: str, volunteer_id: str) -> d
     return {"success": True, "project": updated_project, "volunteerProfile": updated_volunteer}
 
 
+def _compact_proposal_message_content(content: Any) -> str:
+    """Remove media from a proposal card while retaining its display data."""
+    raw_content = str(content or "")
+    if not raw_content.startswith(_PROPOSAL_CARD_PREFIX):
+        return raw_content[:280]
+
+    try:
+        data = json.loads(raw_content[len(_PROPOSAL_CARD_PREFIX):])
+        if not isinstance(data, dict):
+            return f"{_PROPOSAL_CARD_PREFIX}{json.dumps({'compact': True})}"
+
+        media_keys = {
+            "attachments",
+            "photoAttachment",
+            "documentAttachment",
+            "imageUrl",
+            "profilePhoto",
+        }
+
+        def remove_media(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {
+                    key: remove_media(item)
+                    for key, item in value.items()
+                    if key not in media_keys
+                }
+            if isinstance(value, list):
+                return [remove_media(item) for item in value]
+            return value
+
+        compact_data = remove_media(data)
+        serialized = json.dumps(compact_data, separators=(",", ":"))
+        # Legacy cards can contain arbitrary extra fields. Keep a small,
+        # display-complete fallback if stripping media is still too large.
+        if len(serialized) > 16000:
+            details = data.get("proposalDetails")
+            details = details if isinstance(details, dict) else data
+            compact_data = {
+                key: data.get(key)
+                for key in (
+                    "id",
+                    "applicationId",
+                    "projectId",
+                    "targetProjectId",
+                    "status",
+                    "revisionNumber",
+                    "partnerUserId",
+                    "partnerName",
+                    "partnerEmail",
+                    "reviewNotes",
+                )
+                if data.get(key) not in (None, "")
+            }
+            compact_data["proposalDetails"] = {
+                key: details.get(key)
+                for key in (
+                    "proposedTitle",
+                    "proposedDescription",
+                    "proposedStartDate",
+                    "proposedEndDate",
+                    "proposedLocation",
+                    "proposedVolunteersNeeded",
+                    "requestedProgramModule",
+                )
+                if details.get(key) not in (None, "")
+            }
+            serialized = json.dumps(compact_data, separators=(",", ":"))
+
+        return f"{_PROPOSAL_CARD_PREFIX}{serialized}"
+    except Exception:
+        return f"{_PROPOSAL_CARD_PREFIX}{json.dumps({'compact': True})}"
+
+
 @app.get("/messages")
 # API endpoint that returns all direct messages for one user.
 def get_messages(
@@ -6129,13 +6210,13 @@ def get_messages(
         request_start = time.time()
         from psycopg.rows import dict_row
 
-        # The compact inbox powers the account/contact list.  Proposal cards
-        # may include an image, so return a tiny valid card marker instead of
-        # repeatedly transferring the entire proposal payload for every chat.
+        # The compact inbox powers the account/contact list and the first paint
+        # of an opened conversation. Keep proposal text/status/details, but
+        # remove media fields so cards can render before their photos/files
+        # arrive from the richer conversation request.
         content_expression = (
             "case when content like '___PROPOSAL_CARD___:%%' "
-            "then '___PROPOSAL_CARD___:{\"compact\":true}' "
-            "else left(content, 280) end as content"
+            "then content else left(content, 280) end as content"
             if compact
             else "content"
         )
@@ -6171,6 +6252,10 @@ def get_messages(
                 )
                 rows = cursor.fetchall()
             query_time = time.time() - query_start
+
+            if compact:
+                for row in rows:
+                    row["content"] = _compact_proposal_message_content(row.get("content"))
 
             if current_role and rows:
                 # Batch-fetch all other-user IDs in one query instead of N+1 lookups.
