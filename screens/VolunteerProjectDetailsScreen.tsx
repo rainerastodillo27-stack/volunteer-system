@@ -257,7 +257,7 @@ export default function VolunteerProjectDetailsScreen({
         <View style={[styles.heroRow, !isDesktop && { flexDirection: 'column' }]}>
           {projectImageSource && (
             <View style={[styles.heroImageContainer, !isDesktop && { width: '100%', height: 220 }]}>
-              <Image source={projectImageSource} style={styles.heroImage} resizeMode="cover" />
+              <Image source={projectImageSource} style={styles.heroImage} resizeMode="cover" fadeDuration={0} />
               <View style={styles.imageOverlayBadges}>
                 <View style={styles.overlayBadgeGreen} {...({} as any)}>
                   <Text style={styles.overlayBadgeText}>EVENT</Text>

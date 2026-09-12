@@ -33,10 +33,20 @@ import {
   subscribeToStorageChanges,
 } from '../models/storage';
 import { PartnerProjectApplication, PartnerProjectProposalDetails, PartnerReport, Project, Volunteer, VolunteerProjectJoinRecord, VolunteerProjectMatch, VolunteerTimeLog } from '../models/types';
-import { isImageMediaUri, pickImageFromDevice, pickDocumentFromDevice, pickAttendancePhotoFromDevice } from '../utils/media';
+import {
+  getAttachmentUris,
+  isImageMediaUri,
+  pickImageFromDevice,
+  pickDocumentFromDevice,
+  pickAttendancePhotoFromDevice,
+} from '../utils/media';
 import { navigateToAvailableRoute } from '../utils/navigation';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
+import {
+  getStableImageSource,
+  mergeProjectRecordsPreservingMedia,
+} from '../utils/projectMap';
 import educationImage from '../assets/programs/education.jpg';
 import livelihoodImage from '../assets/programs/livelihood.jpg';
 import mingoReliefImage from '../assets/programs/mingo-relief.jpg';
@@ -410,10 +420,12 @@ function getProjectImageSources(project: Project): ImageSourcePropType[] {
   const imageSources: ImageSourcePropType[] = [];
   const hasUploadedProjectImage = isImageMediaUri(project.imageUrl);
   if (hasUploadedProjectImage) {
-    imageSources.push({ uri: project.imageUrl });
+    const source = getStableImageSource(project.imageUrl);
+    if (source) imageSources.push(source);
   }
   if (project.isEvent && !hasUploadedProjectImage && isImageMediaUri(project.parentProjectImageUrl)) {
-    imageSources.push({ uri: project.parentProjectImageUrl });
+    const source = getStableImageSource(project.parentProjectImageUrl);
+    if (source) imageSources.push(source);
   }
   const isProposalCreatedProject = String(project.id || '').startsWith('project-proposal-');
   if (isProposalCreatedProject && !hasUploadedProjectImage) {
@@ -443,12 +455,23 @@ function ProjectCardImage({
   project: Project;
   onPress: () => void;
 }) {
-  const imageSources = useMemo(() => getProjectImageSources(project), [project]);
+  const imageKey = [
+    project.id,
+    project.imageUrl || '',
+    project.parentProjectImageUrl || '',
+    project.imageHidden ? 'hidden' : 'visible',
+    getAttachmentUris(project.attachments)
+      .filter(attachment => isImageMediaUri(attachment))
+      .join('|'),
+    project.programModule || '',
+    project.category || '',
+  ].join('\u0000');
+  const imageSources = useMemo(() => getProjectImageSources(project), [imageKey]);
   const [imageIndex, setImageIndex] = useState(0);
 
   useEffect(() => {
     setImageIndex(0);
-  }, [imageSources]);
+  }, [imageKey]);
 
   const activeImageSource = imageSources[imageIndex];
   if (!activeImageSource) {
@@ -482,11 +505,13 @@ function ProjectCardImage({
         source={activeImageSource}
         style={styles.programImageBackdrop}
         resizeMode="cover"
+        fadeDuration={0}
       />
       <Image
         source={activeImageSource}
         style={styles.programImage}
         resizeMode="contain"
+        fadeDuration={0}
         onError={() => {
           setImageIndex((currentIndex) => currentIndex + 1);
         }}
@@ -642,7 +667,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
     volunteerJoinRecords: VolunteerProjectJoinRecord[];
   }) => {
     startTransition(() => {
-      setProjects(snapshot.projects);
+      setProjects(current => mergeProjectRecordsPreservingMedia(current, snapshot.projects));
       setVolunteerProfile(snapshot.volunteerProfile);
       setVolunteerMatches(snapshot.volunteerMatches || []);
       setTimeLogs(snapshot.timeLogs);

@@ -30,7 +30,10 @@ import {
 import { Project, Volunteer, VolunteerProjectMatch, VolunteerProjectJoinRecord, AdminPlanningCalendar, AdminPlanningItem } from '../models/types';
 import { getRequestErrorMessage } from '../utils/requestErrors';
 import { getActiveProjectJoinCount } from '../utils/projectVolunteers';
-import { getPrimaryProjectImageSource } from '../utils/projectMap';
+import {
+  getPrimaryProjectImageSource,
+  mergeProjectRecordsPreservingMedia,
+} from '../utils/projectMap';
 import { format } from 'date-fns';
 
 type SortOption = 'date' | 'priority' | 'title';
@@ -184,7 +187,7 @@ export default function VolunteerEventsScreen() {
             new Date(left.startDate).getTime() - new Date(right.startDate).getTime() ||
             new Date(left.endDate).getTime() - new Date(right.endDate).getTime()
         );
-      setRecords(snapshot.projects || []);
+      setRecords(current => mergeProjectRecordsPreservingMedia(current, snapshot.projects || []));
       setVolunteerProfile(snapshot.volunteerProfile);
       setVolunteerMatches(snapshot.volunteerMatches || []);
       setJoinRecords(snapshot.volunteerJoinRecords || []);
@@ -481,6 +484,7 @@ export default function VolunteerEventsScreen() {
               source={displayImageSource}
               style={StyleSheet.absoluteFill}
               resizeMode="cover"
+              fadeDuration={0}
             />
           ) : (
             <View style={styles.cardImagePlaceholder} />
@@ -703,7 +707,7 @@ export default function VolunteerEventsScreen() {
 
       {/* LIST OF EVENTS */}
       <FlatList
-        {...({ key: numColumns } as any)}
+        key={`events-list-${numColumns}`}
         numColumns={numColumns}
         data={displayEvents}
         renderItem={renderEventItem}

@@ -169,6 +169,8 @@ export function VolunteerReportsDashboard({
   volunteers = [],
 }: VolunteerReportsDashboardProps) {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const { width: viewportWidth } = useWindowDimensions();
+  const isCompactLayout = viewportWidth < 700;
 
   const visibleReports = useMemo(
     () =>
@@ -419,25 +421,25 @@ export function VolunteerReportsDashboard({
       >
         {/* Header — hidden for admin, admin sees who submitted via Events → photo → task */}
         {!isAdminView && !isPartnerView ? (
-          <View style={styles.header}>
+          <View style={[styles.header, isCompactLayout && styles.headerCompact]}>
             <View style={styles.headerTitleWrap}>
               <Text style={styles.title}>My Event Reports</Text>
               <Text style={styles.subtitle}>Submit and manage reports for your completed volunteer activities.</Text>
             </View>
-            <TouchableOpacity style={styles.uploadButton} onPress={() => onUploadReport?.()} activeOpacity={0.8}>
+            <TouchableOpacity style={[styles.uploadButton, isCompactLayout && styles.uploadButtonCompact]} onPress={() => onUploadReport?.()} activeOpacity={0.8}>
               <MaterialIcons name="add" size={18} color="#fff" style={{ marginRight: 4 }} />
               <Text style={styles.uploadButtonText}>New Report</Text>
             </TouchableOpacity>
           </View>
         ) : isPartnerView ? (
-          <View style={styles.header}>
+          <View style={[styles.header, isCompactLayout && styles.headerCompact]}>
             <View style={styles.headerTitleWrap}>
               <Text style={styles.title}>Approved Project Events</Text>
               <Text style={styles.subtitle}>View volunteer reports and photos from events linked to your approved projects.</Text>
             </View>
           </View>
         ) : (
-          <View style={[styles.header, { paddingBottom: 8 }]}>
+          <View style={[styles.header, isCompactLayout && styles.headerCompact, { paddingBottom: 8 }]}>
             <View style={styles.headerTitleWrap}>
               <Text style={styles.title}>Volunteer Reports</Text>
               <Text style={styles.subtitle}>Events with attendance and submission photos, grouped by volunteer.</Text>
@@ -446,30 +448,30 @@ export function VolunteerReportsDashboard({
         )}
 
         {/* Quick Stats */}
-        <View style={styles.statsContainer}>
-          <View style={styles.statCard}>
+        <View style={[styles.statsContainer, isCompactLayout && styles.statsContainerCompact]}>
+          <View style={[styles.statCard, isCompactLayout && styles.statCardCompact]}>
             <View style={styles.statIconWrap}>
               <MaterialIcons name="description" size={20} color="#3F7A54" />
             </View>
-            <View style={styles.statLabelWrap}>
+            <View style={[styles.statLabelWrap, isCompactLayout && styles.statLabelWrapCompact]}>
               <Text style={styles.statCardLabel}>Reports</Text>
               <Text style={styles.statCardValue}>{visibleReports.length}</Text>
             </View>
           </View>
-          <View style={styles.statCard}>
+          <View style={[styles.statCard, isCompactLayout && styles.statCardCompact]}>
             <View style={styles.statIconWrap}>
               <MaterialIcons name="send" size={20} color="#3F7A54" />
             </View>
-            <View style={styles.statLabelWrap}>
+            <View style={[styles.statLabelWrap, isCompactLayout && styles.statLabelWrapCompact]}>
               <Text style={styles.statCardLabel}>Submitted</Text>
               <Text style={styles.statCardValue}>{stats.submitted}</Text>
             </View>
           </View>
-          <View style={styles.statCard}>
+          <View style={[styles.statCard, isCompactLayout && styles.statCardCompact]}>
             <View style={styles.statIconWrap}>
               <MaterialIcons name="calendar-month" size={20} color="#3F7A54" />
             </View>
-            <View style={styles.statLabelWrap}>
+            <View style={[styles.statLabelWrap, isCompactLayout && styles.statLabelWrapCompact]}>
               <Text style={styles.statCardLabel}>Linked Events</Text>
               <Text style={styles.statCardValue}>{eventCount}</Text>
             </View>
@@ -482,7 +484,7 @@ export function VolunteerReportsDashboard({
             <Text style={styles.sectionTitle}>Event Folders</Text>
             <Text style={[styles.emptyText, { textAlign: 'left', marginBottom: 0, paddingHorizontal: 0 }]}>Select an event to view photos submitted by volunteers.</Text>
           </View>
-          <View style={styles.eventFolderGrid}>
+          <View style={[styles.eventFolderGrid, isCompactLayout && styles.eventFolderGridCompact]}>
             {eventFolders.map(folder => {
               const isSelected = selectedEventId === folder.event.id;
               const updated = folder.event.startDate ? new Date(folder.event.startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Date unavailable';
@@ -490,7 +492,7 @@ export function VolunteerReportsDashboard({
               return (
                 <TouchableOpacity
                   key={folder.event.id}
-                  style={[styles.folderCard, isSelected && styles.folderCardSelected]}
+                  style={[styles.folderCard, isCompactLayout && styles.folderCardCompact, isSelected && styles.folderCardSelected]}
                   onPress={() => setSelectedEventId(isSelected ? null : folder.event.id)}
                   activeOpacity={0.85}
                 >
@@ -498,7 +500,7 @@ export function VolunteerReportsDashboard({
                     <MaterialIcons name="folder" size={28} color="#EAB308" />
                     <MaterialIcons name="more-vert" size={18} color="#9ca3af" />
                   </View>
-                  <Text style={styles.folderCardTitle} numberOfLines={1}>{folder.event.title}</Text>
+                  <Text style={styles.folderCardTitle} numberOfLines={2} ellipsizeMode="tail">{folder.event.title}</Text>
                   <Text style={styles.folderCardDate}>{updated}</Text>
                   <Text style={styles.folderCardCount}>
                     {reportCount} report{reportCount === 1 ? '' : 's'}
@@ -2199,6 +2201,10 @@ const styles = StyleSheet.create({
     paddingVertical: 18,
     backgroundColor: 'transparent',
   },
+  headerCompact: {
+    flexDirection: 'column',
+    gap: 12,
+  },
   headerTitleWrap: {
     flex: 1,
   },
@@ -2235,6 +2241,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#ffffff',
   },
+  uploadButtonCompact: {
+    alignSelf: 'flex-start',
+  },
   secondaryHeaderButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2259,6 +2268,11 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
     marginBottom: 12,
   },
+  statsContainerCompact: {
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
   statCard: {
     flex: 1,
     flexDirection: 'row',
@@ -2270,6 +2284,17 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#DED2B4',
     gap: 8,
+  },
+  statCardCompact: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 108,
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    justifyContent: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    gap: 6,
   },
   statIconWrap: {
     width: 36,
@@ -2283,12 +2308,17 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
   },
+  statLabelWrapCompact: {
+    width: '100%',
+    flex: 0,
+    marginTop: 6,
+  },
   statCardLabel: {
     fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '700',
     color: '#5B564C',
-    textTransform: 'uppercase',
+    lineHeight: 15,
     letterSpacing: 0.3,
   },
   statCardValue: {
@@ -2666,6 +2696,9 @@ const styles = StyleSheet.create({
     gap: 12,
     marginTop: 12,
   },
+  eventFolderGridCompact: {
+    gap: 10,
+  },
   folderCard: {
     width: '23%',
     minWidth: 140,
@@ -2674,6 +2707,11 @@ const styles = StyleSheet.create({
     borderColor: '#E7E5E4',
     borderRadius: 12,
     padding: 12,
+  },
+  folderCardCompact: {
+    width: '48%',
+    minWidth: 0,
+    minHeight: 126,
   },
   folderCardSelected: {
     borderColor: '#10B981',

@@ -26,7 +26,10 @@ import {
 import { ProgramTrack, Project, VolunteerProjectMatch, VolunteerProjectJoinRecord } from '../models/types';
 import { getRequestErrorMessage, isAbortLikeError } from '../utils/requestErrors';
 import { getProjectDisplayStatus } from '../utils/projectStatus';
-import { getPrimaryProjectImageSource } from '../utils/projectMap';
+import {
+  getPrimaryProjectImageSource,
+  mergeProjectRecordsPreservingMedia,
+} from '../utils/projectMap';
 
 type ProgramGroup = {
   id: string;
@@ -216,7 +219,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
           profile: snapshot.volunteerProfile?.id || 'none',
         });
 
-        setRecords(snapshotRecords);
+        setRecords(current => mergeProjectRecordsPreservingMedia(current, snapshotRecords));
         setPrograms(snapshotPrograms);
         if (Array.isArray(snapshot.volunteerMatches)) {
           setVolunteerMatches(snapshot.volunteerMatches);
@@ -624,6 +627,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
             <Image
               source={eventImageSource}
               style={[styles.cardImage, (isEnded || isFull) && styles.cardImageEnded]}
+              fadeDuration={0}
             />
           ) : (
             <View style={[styles.cardImage, styles.cardImagePlaceholder]} />
@@ -891,6 +895,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
                       <Image
                         source={projectImageSource}
                         style={[styles.cardImage, projectEnded && styles.cardImageEnded]}
+                        fadeDuration={0}
                       />
                     ) : (
                       <View style={[styles.cardImage, styles.cardImagePlaceholder]} />

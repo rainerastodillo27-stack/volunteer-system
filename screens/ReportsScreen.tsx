@@ -32,6 +32,7 @@ import VolunteerReportsDashboard, {
   PartnerReportsDashboard,
 } from '../components/VolunteerReportsDashboard';
 import AllReportsView from '../components/AllReportsView';
+import { mergeProjectRecordsPreservingMedia } from '../utils/projectMap';
 
 export interface SubmittedReport {
   id: string;
@@ -509,7 +510,7 @@ export default function ReportsScreen({ navigation, route }: any) {
         'volunteerProfile',
         'volunteerProjectJoins',
       ], false, false);
-      setProjects(snapshot.projects);
+      setProjects(current => mergeProjectRecordsPreservingMedia(current, snapshot.projects));
       setPartnerApplications([]);
       setVolunteerProfileId(snapshot.volunteerProfile?.id || null);
       setVolunteerTimeLogs(snapshot.timeLogs);
@@ -555,7 +556,7 @@ export default function ReportsScreen({ navigation, route }: any) {
 
     if (user?.role === 'partner' && user.id) {
       const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'partnerApplications'], false, false /* reports */);
-      setProjects(snapshot.projects);
+      setProjects(current => mergeProjectRecordsPreservingMedia(current, snapshot.projects));
       setPartnerApplications(snapshot.partnerApplications || []);
       setVolunteerProfileId(null);
       setVolunteerTimedInProjectIds([]);
@@ -569,7 +570,7 @@ export default function ReportsScreen({ navigation, route }: any) {
         'partnerApplications',
         'volunteerJoinRecords',
       ], false, false /* reports */);
-      setProjects(snapshot.projects);
+      setProjects(current => mergeProjectRecordsPreservingMedia(current, snapshot.projects));
       setPartnerApplications(snapshot.partnerApplications || []);
       setVolunteerProfileId(null);
       setVolunteerTimedInProjectIds([]);

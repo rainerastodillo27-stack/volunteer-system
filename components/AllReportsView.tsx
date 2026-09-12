@@ -54,27 +54,57 @@ function photoFolderKey(report: SubmittedReport): string {
   return report.projectId || 'photos';
 }
 
+type AttachmentFilter = 'all' | 'photos' | 'videos' | 'documents' | 'other' | 'none';
+
+const DOCUMENT_FILE_PATTERN = /\.(pdf|doc|docx|xls|xlsx|csv)(?:$|[?#])/i;
+const VIDEO_FILE_PATTERN = /\.(mp4|mov|m4v|avi|webm|3gp|mkv)(?:$|[?#])/i;
+
+function reportAttachments(report: SubmittedReport) {
+  return (report.attachments || []).filter(
+    attachment => Boolean(attachment && typeof attachment.url === 'string' && attachment.url.trim())
+  );
+}
+
 function reportHasPhoto(report: SubmittedReport): boolean {
   return Boolean(
-    report.attachments?.some(attachment => attachment.type === 'image') ||
-      isImageMediaUri(report.mediaFile || '')
+    isImageMediaUri(report.mediaFile || '') ||
+      reportAttachments(report).some(
+        attachment => attachment.type === 'image' ||
+          (attachment.type === 'media' && isImageMediaUri(attachment.url))
+      )
+  );
+}
+
+function reportHasVideo(report: SubmittedReport): boolean {
+  return Boolean(
+    reportAttachments(report).some(
+      attachment => attachment.type === 'video' || VIDEO_FILE_PATTERN.test(attachment.url)
+    ) ||
+      VIDEO_FILE_PATTERN.test(report.mediaFile || '')
   );
 }
 
 function reportHasDocument(report: SubmittedReport): boolean {
-  const documentExtensions = /\.(pdf|doc|docx|xls|xlsx|csv)(?:$|[?#])/i;
   return Boolean(
-    report.attachments?.some(
-      attachment =>
-        attachment.type === 'document' || documentExtensions.test(attachment.url)
+    reportAttachments(report).some(
+      attachment => attachment.type === 'document' || DOCUMENT_FILE_PATTERN.test(attachment.url)
     ) ||
-      documentExtensions.test(report.title || '') ||
-      documentExtensions.test(report.mediaFile || '')
+      DOCUMENT_FILE_PATTERN.test(report.title || '') ||
+      DOCUMENT_FILE_PATTERN.test(report.mediaFile || '')
   );
 }
 
 function reportHasAttachment(report: SubmittedReport): boolean {
-  return Boolean(report.mediaFile || report.attachments?.length);
+  return Boolean((report.mediaFile || '').trim() || reportAttachments(report).length);
+}
+
+function reportHasOtherAttachment(report: SubmittedReport): boolean {
+  return Boolean(
+    reportHasAttachment(report) &&
+      !reportHasPhoto(report) &&
+      !reportHasVideo(report) &&
+      !reportHasDocument(report)
+  );
 }
 
 function isAttendanceReport(report: SubmittedReport): boolean {
@@ -249,7 +279,7 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
   const [activeFilter, setActiveFilter] = useState<'All' | 'Events' | 'Photos'>('All');
   const [search, setSearch] = useState('');
   const [showFilter, setShowFilter] = useState(false);
-  const [attachmentFilter, setAttachmentFilter] = useState<'all' | 'photos' | 'documents' | 'none'>('all');
+  const [attachmentFilter, setAttachmentFilter] = useState<AttachmentFilter>('all');
   const [selectedEventFolderKey, setSelectedEventFolderKey] = useState<string | null>(null);
   const [selectedPhotoFolderKey, setSelectedPhotoFolderKey] = useState<string | null>(null);
 
@@ -293,14 +323,57 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
     return base;
   }, [reports, volunteerTimeLogs, projectById, volunteers]);
 
+  const filterableItems = useMemo(
+    () => allItems.filter(report => (report as any).status !== 'Rejected'),
+    [allItems]
+  );
+
+  const attachmentFilterOptions = useMemo(() => {
+    const options: { value: AttachmentFilter; label: string; count: number }[] = [
+      { value: 'all', label: 'All reports', count: filterableItems.length },
+      {
+        value: 'photos',
+        label: 'Has photos',
+        count: filterableItems.filter(reportHasPhoto).length,
+      },
+      {
+        value: 'videos',
+        label: 'Has videos',
+        count: filterableItems.filter(reportHasVideo).length,
+      },
+      {
+        value: 'documents',
+        label: 'Has documents',
+        count: filterableItems.filter(reportHasDocument).length,
+      },
+      {
+        value: 'other',
+        label: 'Has other files',
+        count: filterableItems.filter(reportHasOtherAttachment).length,
+      },
+      {
+        value: 'none',
+        label: 'No attachments',
+        count: filterableItems.filter(report => !reportHasAttachment(report)).length,
+      },
+    ];
+
+    // Keep the current selection available while a refresh is in flight, then
+    // expose only attachment categories that are actually present in the data.
+    return options.filter(option => option.value === 'all' || option.count > 0 || option.value === attachmentFilter);
+  }, [attachmentFilter, filterableItems]);
+
   const searchFiltered = useMemo(() => {
-    let r = allItems.filter(r => (r as any).status !== 'Rejected');
+    let r = filterableItems;
     if (attachmentFilter !== 'all') {
       r = r.filter(rep => {
         const hasPhoto = reportHasPhoto(rep);
+        const hasVideo = reportHasVideo(rep);
         const hasDocument = reportHasDocument(rep);
         if (attachmentFilter === 'photos') return hasPhoto;
+        if (attachmentFilter === 'videos') return hasVideo;
         if (attachmentFilter === 'documents') return hasDocument;
+        if (attachmentFilter === 'other') return reportHasOtherAttachment(rep);
         return !reportHasAttachment(rep);
       });
     }
@@ -328,7 +401,7 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
       });
     }
     return r.sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
-  }, [allItems, attachmentFilter, projectById, search]);
+  }, [attachmentFilter, filterableItems, projectById, search]);
 
   const attendanceReports = useMemo(() => searchFiltered.filter(isAttendanceReport), [searchFiltered]);
   const taskReports = useMemo(() => searchFiltered.filter(report => !isAttendanceReport(report)), [searchFiltered]);
@@ -419,8 +492,12 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
   const attachmentFilterLabel =
     attachmentFilter === 'photos'
       ? 'Has Photos'
+      : attachmentFilter === 'videos'
+      ? 'Has Videos'
       : attachmentFilter === 'documents'
       ? 'Has Documents'
+      : attachmentFilter === 'other'
+      ? 'Has Other Files'
       : attachmentFilter === 'none'
       ? 'No Attachments'
       : 'Filter';
@@ -574,12 +651,7 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
       {showFilter ? (
         <View style={[styles.filterMenu, isNarrow && styles.filterMenuNarrow]}>
           <Text style={styles.filterMenuTitle}>Filter reports</Text>
-          {([
-            ['all', 'All reports'],
-            ['photos', 'Has photos'],
-            ['documents', 'Has documents'],
-            ['none', 'No attachments'],
-          ] as const).map(([value, label]) => (
+          {attachmentFilterOptions.map(({ value, label, count }) => (
             <TouchableOpacity
               key={value}
               style={styles.filterMenuItem}
@@ -592,7 +664,7 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
                   attachmentFilter === value && styles.filterMenuItemTextActive,
                 ]}
               >
-                {label}
+                {label} ({count})
               </Text>
               {attachmentFilter === value ? (
                 <MaterialIcons name="check" size={16} color="#166534" />

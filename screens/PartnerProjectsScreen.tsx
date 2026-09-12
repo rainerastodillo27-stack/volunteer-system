@@ -24,7 +24,10 @@ import {
 } from '../models/storage';
 import { PartnerProjectApplication, Project, VolunteerProjectJoinRecord, VolunteerTimeLog } from '../models/types';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
-import { getPrimaryProjectImageSource } from '../utils/projectMap';
+import {
+  getPrimaryProjectImageSource,
+  mergeProjectRecordsPreservingMedia,
+} from '../utils/projectMap';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 function normalizeProjectReference(value: unknown): string {
@@ -162,7 +165,7 @@ export default function PartnerProjectsScreen({ route }: any) {
         false,
         false,
       );
-      setProjects(snapshot.projects || []);
+      setProjects(current => mergeProjectRecordsPreservingMedia(current, snapshot.projects || []));
       setPartnerApplications(snapshot.partnerApplications || []);
       setLoadError(null);
 
@@ -421,7 +424,7 @@ export default function PartnerProjectsScreen({ route }: any) {
                   onPress={() => setSelectedProjectId(project.id)}
                 >
                   {projectImageSource ? (
-                    <Image source={projectImageSource} style={styles.projectBoxImage} resizeMode="cover" />
+                    <Image source={projectImageSource} style={styles.projectBoxImage} resizeMode="cover" fadeDuration={0} />
                   ) : (
                     <View style={styles.projectBoxImagePlaceholder} />
                   )}
@@ -536,7 +539,7 @@ export default function PartnerProjectsScreen({ route }: any) {
                         projectParent,
                       ) || getProposalImageSource(approvedApplication);
                     return projectImageSource ? (
-                      <Image source={projectImageSource} style={styles.modalProjectImage} resizeMode="cover" />
+                      <Image source={projectImageSource} style={styles.modalProjectImage} resizeMode="cover" fadeDuration={0} />
                     ) : (
                       <View style={styles.modalProjectImagePlaceholder} />
                     );
@@ -607,7 +610,7 @@ export default function PartnerProjectsScreen({ route }: any) {
                       return (
                         <View key={event.id} style={styles.eventItem}>
                           {eventImageSource ? (
-                            <Image source={eventImageSource} style={styles.eventItemImage} resizeMode="cover" />
+                            <Image source={eventImageSource} style={styles.eventItemImage} resizeMode="cover" fadeDuration={0} />
                           ) : (
                             <View style={styles.eventItemImagePlaceholder} />
                           )}

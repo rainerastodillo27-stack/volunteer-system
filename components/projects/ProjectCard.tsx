@@ -41,6 +41,7 @@ export default function ProjectCard({ project, onPress }: ProjectCardProps) {
             source={projectImageSource} 
             style={styles.headerImage} 
             resizeMode="cover" 
+            fadeDuration={0}
           />
           <View style={styles.imageOverlay}>
             <View style={[styles.statusBadge, { backgroundColor: statusColor }]}>

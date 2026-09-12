@@ -3,6 +3,83 @@ import { Project } from '../models/types';
 import { getProjectStatusColor } from './projectStatus';
 import { getAttachmentUris, isImageMediaUri } from './media';
 
+// Reuse unchanged remote/data-URI source objects. React Native Web can restart
+// an image when the source object changes by reference during a data refresh.
+const stableImageSources = new Map<string, ImageSourcePropType>();
+const MAX_STABLE_IMAGE_SOURCES = 512;
+
+export function getStableImageSource(uri?: string | null): ImageSourcePropType | undefined {
+  const normalizedUri = uri?.trim();
+  if (!normalizedUri || !isImageMediaUri(normalizedUri)) {
+    return undefined;
+  }
+
+  const cachedSource = stableImageSources.get(normalizedUri);
+  if (cachedSource) {
+    return cachedSource;
+  }
+
+  const source = { uri: normalizedUri } as ImageSourcePropType;
+  stableImageSources.set(normalizedUri, source);
+  if (stableImageSources.size > MAX_STABLE_IMAGE_SOURCES) {
+    const oldestUri = stableImageSources.keys().next().value;
+    if (oldestUri) {
+      stableImageSources.delete(oldestUri);
+    }
+  }
+  return source;
+}
+
+// Lightweight list snapshots intentionally omit photo payloads. Preserve the
+// photo already on screen while that snapshot is applied; the following full
+// media snapshot still remains authoritative for additions/removals.
+export function mergeProjectRecordsPreservingMedia(
+  previous: Project[] | null | undefined,
+  next: Project[] | null | undefined,
+): Project[] {
+  const previousById = new Map((previous || []).map(project => [project.id, project]));
+
+  return (next || []).map(project => {
+    const previousProject = previousById.get(project.id);
+    if (!previousProject) {
+      return project;
+    }
+
+    const nextHasImage = Boolean(getStableImageSource(project.imageUrl)) ||
+      getAttachmentUris(project.attachments).some(attachment => Boolean(getStableImageSource(attachment)));
+    if (nextHasImage) {
+      return project;
+    }
+
+    // `imageHidden` means an explicit removal for a project. For an event it
+    // can also simply mean "no own photo", in which case its parent photo is
+    // still a valid fallback and must remain visible during this refresh.
+    const canPreserveOwnImage = project.imageHidden !== true;
+    const previousHasOwnImage = canPreserveOwnImage && (
+      Boolean(getStableImageSource(previousProject.imageUrl)) ||
+      getAttachmentUris(previousProject.attachments).some(attachment => Boolean(getStableImageSource(attachment)))
+    );
+    const previousHasInheritedEventImage = project.isEvent &&
+      isImageMediaUri(previousProject.parentProjectImageUrl);
+    if (!previousHasOwnImage && !previousHasInheritedEventImage) {
+      return project;
+    }
+
+    return {
+      ...project,
+      imageUrl: project.imageUrl?.trim() || (canPreserveOwnImage ? previousProject.imageUrl : undefined),
+      attachments:
+        !canPreserveOwnImage
+          ? project.attachments
+          : project.attachments && project.attachments.length > 0
+          ? project.attachments
+          : previousProject.attachments,
+      parentProjectImageUrl:
+        project.parentProjectImageUrl || previousProject.parentProjectImageUrl,
+    };
+  });
+}
+
 function getOwnProjectImageSource(project?: Project): ImageSourcePropType | undefined {
   if (!project) {
     return undefined;
@@ -22,7 +99,7 @@ function getOwnProjectImageSource(project?: Project): ImageSourcePropType | unde
     return undefined;
   }
 
-  return { uri: imageUri };
+  return getStableImageSource(imageUri);
 }
 
 export function getPrimaryProjectImageSource(
@@ -36,7 +113,7 @@ export function getPrimaryProjectImageSource(
     : undefined;
   const parentImage = project?.isEvent
     ? (isImageMediaUri(inheritedImageUrl)
-      ? { uri: inheritedImageUrl }
+      ? getStableImageSource(inheritedImageUrl)
       : getOwnProjectImageSource(parentProject))
     : undefined;
   return getOwnProjectImageSource(project) || parentImage;
