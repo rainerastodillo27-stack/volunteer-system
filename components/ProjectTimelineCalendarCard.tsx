@@ -448,14 +448,26 @@ export default function ProjectTimelineCalendarCard({
 
         <View style={styles.bigDayEventsContainer}>
           {dayEvents.slice(0, 2).map((event, eventIdx) => (
-            <View
+            <TouchableOpacity
               key={eventIdx}
               style={[styles.bigEventChip, { backgroundColor: event.color }]}
+              activeOpacity={0.82}
+              disabled={!event.projectId}
+              accessibilityRole={event.projectId ? 'button' : undefined}
+              accessibilityLabel={event.projectId ? `Open ${event.title}` : event.title}
+              onPress={pressEvent => {
+                // The day cell creates a new event. Stop an existing event
+                // chip from bubbling into that handler.
+                pressEvent.stopPropagation?.();
+                if (event.projectId) {
+                  onOpenProject?.(event.projectId);
+                }
+              }}
             >
               <Text style={styles.bigEventChipText} numberOfLines={1}>
                 {new Date(event.startDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} {event.title}
               </Text>
-            </View>
+            </TouchableOpacity>
           ))}
           {dayEvents.length > 2 && (
             <Text style={styles.bigMoreEventsText}>
