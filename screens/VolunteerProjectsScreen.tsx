@@ -186,7 +186,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
           user,
           ['projects', 'programs', 'programTracks', 'volunteerProfile', 'volunteerMatches', 'volunteerJoinRecords'],
           false,
-          true,
+          false,
         );
         const snapshotRecords = snapshot.projects || [];
         const rawProgramTracks = snapshot.programTracks || [];
@@ -231,6 +231,38 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
         } else {
           setJoinRecords([]);
         }
+
+        // Render the project/event list without waiting for large cover-photo
+        // payloads. Fill the same records with their uploaded images in the
+        // background once the first screen is already usable.
+        void getProjectsScreenSnapshot(
+          user,
+          ['projects', 'programs', 'programTracks'],
+          false,
+          true,
+        )
+          .then(imageSnapshot => {
+            setRecords(imageSnapshot.projects || []);
+            const imageTracks = imageSnapshot.programTracks || [];
+            const imagePrograms = imageSnapshot.programs || [];
+            setPrograms(
+              imageTracks.length > 0
+                ? imageTracks
+                : imagePrograms.map(program => ({
+                    id: program.id,
+                    title: program.title,
+                    description: program.description,
+                    icon: program.icon,
+                    color: program.color,
+                    imageUrl: program.imageUrl,
+                    sortOrder: 0,
+                    isActive: true,
+                    createdAt: program.createdAt,
+                    updatedAt: program.updatedAt,
+                  }))
+            );
+          })
+          .catch(error => console.warn('[VolunteerProjectsScreen] Project images skipped:', error));
       } finally {
         // Reserved for future request cancellation; the storage helper owns its timeout.
       }

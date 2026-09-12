@@ -133,16 +133,18 @@ const API_READY_CACHE_MS = 15000;
 const API_REQUEST_MAX_ATTEMPTS = 3;
 const API_REQUEST_RETRY_BASE_MS = 300;
 const API_REQUEST_RETRY_MAX_MS = 2000;
-const SHARED_STORAGE_CACHE_TTL_MS = 600000;
-const PROJECTS_SNAPSHOT_CACHE_TTL_MS = 120000; // Increased from 1m to 2m
+// Realtime invalidation is the primary freshness path. These short TTLs are
+// only a safety net for a device that was offline or missed a notification.
+const SHARED_STORAGE_CACHE_TTL_MS = 30000;
+const PROJECTS_SNAPSHOT_CACHE_TTL_MS = 10000;
 // Direct-message writes invalidate these caches and arrive over WebSocket, so
 // caching for a short window removes repeated network/database reads without
 // sacrificing real-time chat updates.
 const MESSAGES_CACHE_TTL_MS = 30000;
 const CONVERSATION_CACHE_TTL_MS = 30000;
 const STORAGE_CHANGE_POLL_INTERVAL_MS = 5000; // Increased from 3s to 5s
-const STORAGE_CHANGE_DEBOUNCE_MS = 800; // Increased from 500ms
-const STORAGE_CHANGE_CALLBACK_COOLDOWN_MS = 1500; // Increased from 1s
+const STORAGE_CHANGE_DEBOUNCE_MS = 200;
+const STORAGE_CHANGE_CALLBACK_COOLDOWN_MS = 0;
 const LOCAL_ONLY_STORAGE_KEYS = new Set([STORAGE_KEYS.CURRENT_USER, STORAGE_KEYS.APP_SETTINGS]);
 const NEGROS_OCCIDENTAL_BOUNDS = {
   minLatitude: 9.85,
@@ -156,6 +158,9 @@ const inFlightJsonRequests = new Map<string, Promise<unknown>>();
 const inFlightStorageItemRequests = new Map<string, Promise<unknown>>();
 const inFlightStorageBatchRequests = new Map<string, Promise<Record<string, unknown | null>>>();
 const projectsSnapshotCache = new Map<string, { data: unknown; timestamp: number }>();
+const sharedStorageCacheGenerations = new Map<string, number>();
+const invalidatedSharedStorageKeys = new Set<string>();
+let projectsSnapshotGeneration = 0;
 // Message-specific caches, invalidated on send/receive via WebSocket.
 const messagesForUserCache = new Map<string, { data: Message[]; timestamp: number }>();
 const messageSummaryCache = new Map<string, { data: Message[]; timestamp: number }>();
@@ -173,6 +178,28 @@ function getPersistedCacheKey(key: string): string {
 
 function getPersistedCacheTimestampKey(key: string): string {
   return `${PERSISTED_CACHE_TS_PREFIX}${key}`;
+}
+
+function clearInFlightReadRequests(): void {
+  // Existing requests are allowed to finish, but no screen should join one
+  // that started before a confirmed write or realtime invalidation.
+  inFlightJsonRequests.clear();
+  inFlightStorageItemRequests.clear();
+  inFlightStorageBatchRequests.clear();
+}
+
+function getSharedStorageCacheGeneration(key: string): number {
+  return sharedStorageCacheGenerations.get(key) || 0;
+}
+
+function markSharedStorageValueChanged(key: string, invalidatePersisted = false): void {
+  sharedStorageCacheGenerations.set(key, getSharedStorageCacheGeneration(key) + 1);
+  if (invalidatePersisted) {
+    invalidatedSharedStorageKeys.add(key);
+  }
+  projectsSnapshotGeneration += 1;
+  projectsSnapshotCache.clear();
+  clearInFlightReadRequests();
 }
 
 function schedulePersistedWrite(key: string, task: () => Promise<void>): void {
@@ -313,11 +340,15 @@ function handleExternalStorageChange(changedKeys: string[]) {
     subscriber => normalizedKeys.some(key => subscriber.watchedKeys.has(key))
   );
 
+  // Invalidate even when no screen is mounted. A later screen focus must not
+  // receive a stale cached event count just because the app was backgrounded
+  // when the notification arrived.
+  invalidateSharedStorageCache(normalizedKeys);
+
   if (!hasInterestedSubscriber) {
     return;
   }
 
-  invalidateSharedStorageCache(normalizedKeys);
   queueSharedStorageChangedKeys(normalizedKeys);
 }
 
@@ -1330,7 +1361,6 @@ async function requestApiJson<T>(
       console.log(`[Network] ${method} ${path.slice(0, 50)} completed in ${Date.now() - reqStart}ms`);
       return result;
     } catch (error) {
-      inFlightJsonRequests.delete(requestKey);
       throw error;
     }
   })();
@@ -1339,13 +1369,21 @@ async function requestApiJson<T>(
   try {
     return await nextRequest;
   } finally {
-    inFlightJsonRequests.delete(requestKey);
+    if (inFlightJsonRequests.get(requestKey) === nextRequest) {
+      inFlightJsonRequests.delete(requestKey);
+    }
   }
 
 }
 
 
 async function getLocalStorageItem<T>(key: string): Promise<T | null> {
+  if (!isLocalOnlyStorageKey(key) && invalidatedSharedStorageKeys.has(key)) {
+    // On native, AsyncStorage removal is asynchronous. Do not rehydrate an
+    // invalidated value from disk while the authoritative request is running.
+    return null;
+  }
+
   if (memoryStorageCache.has(key)) {
     return (memoryStorageCache.get(key) as T) ?? null;
   }
@@ -1528,7 +1566,16 @@ function setSharedStorageCacheValue<T>(
   key: string,
   value: T | null,
   includeImages = false,
-): void {
+  expectedGeneration?: number,
+): boolean {
+  if (
+    expectedGeneration !== undefined &&
+    getSharedStorageCacheGeneration(key) !== expectedGeneration
+  ) {
+    return false;
+  }
+
+  invalidatedSharedStorageKeys.delete(key);
   const safeValue = sanitizeStorageCacheValue(key, value);
   memoryStorageCache.set(key, safeValue);
   sharedStorageCacheTimestamps.set(key, Date.now());
@@ -1541,6 +1588,7 @@ function setSharedStorageCacheValue<T>(
   if (safeValue !== null && !isLocalOnlyStorageKey(key)) {
     void setLocalStorageItem(key, safeValue);
   }
+  return true;
 }
 
 // Writes one record without fetching and replacing the entire collection.
@@ -1576,6 +1624,7 @@ async function getRemoteStorageRecord<T extends { id: string }>(
 // Replaces or appends a record only when a complete collection is already cached.
 // If it is not cached, the realtime subscriber will fetch the authoritative list.
 function upsertCachedStorageRecord<T extends { id: string }>(key: string, record: T): void {
+  markSharedStorageValueChanged(key);
   const cached = memoryStorageCache.get(key);
   if (!Array.isArray(cached)) {
     return;
@@ -1593,6 +1642,11 @@ function upsertCachedStorageRecord<T extends { id: string }>(key: string, record
 
 function invalidateSharedStorageCache(keys?: string[]): void {
   if (!keys) {
+    Object.values(STORAGE_KEYS).forEach(key => {
+      if (!isLocalOnlyStorageKey(key)) {
+        markSharedStorageValueChanged(key, true);
+      }
+    });
     sharedStorageCacheTimestamps.clear();
     sharedStorageCacheImageModes.clear();
     projectsSnapshotCache.clear();
@@ -1600,6 +1654,7 @@ function invalidateSharedStorageCache(keys?: string[]): void {
   }
 
   for (const key of keys) {
+    markSharedStorageValueChanged(key, !isLocalOnlyStorageKey(key));
     sharedStorageCacheTimestamps.delete(key);
     sharedStorageCacheImageModes.delete(key);
     if (!isLocalOnlyStorageKey(key)) {
@@ -1629,12 +1684,26 @@ function triggerBackgroundStorageRefresh(keys: string[], includeImages = false):
       if (sharedKeys.length === 0) {
         return;
       }
+      const requestGenerations = new Map(
+        sharedKeys.map(key => [key, getSharedStorageCacheGeneration(key)])
+      );
       const remoteResults = await fetchRemoteStorageItems(sharedKeys, includeImages);
+      const changedKeys: string[] = [];
       for (const key of sharedKeys) {
         const value = remoteResults[key] ?? null;
-        setSharedStorageCacheValue(key, value, includeImages);
+        const wasApplied = setSharedStorageCacheValue(
+          key,
+          value,
+          includeImages,
+          requestGenerations.get(key)
+        );
+        if (wasApplied) {
+          changedKeys.push(key);
+        }
       }
-      queueSharedStorageChangedKeys(sharedKeys);
+      if (changedKeys.length > 0) {
+        queueSharedStorageChangedKeys(changedKeys);
+      }
     } catch {
       // Ignore background refresh failures; UI can retry on focus/change events.
     }
@@ -1682,6 +1751,10 @@ async function getLocalStorageItems(keys: string[]): Promise<Record<string, unkn
   const keysToFetch: string[] = [];
 
   for (const key of keys) {
+    if (!isLocalOnlyStorageKey(key) && invalidatedSharedStorageKeys.has(key)) {
+      results[key] = null;
+      continue;
+    }
     if (memoryStorageCache.has(key)) {
       results[key] = memoryStorageCache.get(key) ?? null;
     } else {
@@ -1759,11 +1832,14 @@ export async function getStorageItemsFast(keys: string[]): Promise<Record<string
     // A fresh cache is already safe to display. Refreshing it again here used
     // to notify subscribers, which in turn scheduled another refresh and kept
     // the app busy in a background request loop.
-    if (cached !== null && cachedAt !== undefined && !isFresh) {
-      keysToRefresh.push(key);
-    }
-
-    if (cached !== null && (isFresh || cachedAt === undefined)) {
+    if (cached !== null) {
+      // Stale data is still much better than a blank screen on a mobile
+      // connection. Show it immediately and refresh it in the background;
+      // realtime invalidation still forces an authoritative read when a
+      // write has actually changed this key.
+      if (cachedAt !== undefined && !isFresh) {
+        keysToRefresh.push(key);
+      }
       results[key] = cached;
     } else {
       missingKeys.push(key);
@@ -1874,6 +1950,29 @@ function isExpectedRemoteStorageError(error: unknown): boolean {
 }
 
 // Generic storage functions
+async function fetchRemoteStorageItemConsistent<T>(
+  key: string,
+  includeImages: boolean,
+): Promise<T | null> {
+  let latestValue: T | null = null;
+
+  // If a write/realtime event arrives while the first request is in flight,
+  // discard that response and make one fresh read instead of letting stale
+  // data overwrite the new cache value.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const requestGeneration = getSharedStorageCacheGeneration(key);
+    latestValue = await fetchRemoteStorageItem<T>(key, includeImages);
+    if (requestGeneration !== getSharedStorageCacheGeneration(key)) {
+      continue;
+    }
+
+    setSharedStorageCacheValue(key, latestValue, includeImages, requestGeneration);
+    return latestValue;
+  }
+
+  return latestValue;
+}
+
 // Reads one storage value from the backend or local cache.
 export async function getStorageItem<T>(key: string, includeImages: boolean = false): Promise<T | null> {
   if (isLocalOnlyStorageKey(key)) {
@@ -1887,9 +1986,7 @@ export async function getStorageItem<T>(key: string, includeImages: boolean = fa
 
   try {
     if (getPlatformOS() === 'web') {
-      const remoteValue = await fetchRemoteStorageItem<T>(key, includeImages);
-      setSharedStorageCacheValue(key, remoteValue, includeImages);
-      return remoteValue;
+      return fetchRemoteStorageItemConsistent<T>(key, includeImages);
     }
 
     const cachedValue = getFreshSharedStorageCacheValue<T>(key, includeImages);
@@ -1897,9 +1994,7 @@ export async function getStorageItem<T>(key: string, includeImages: boolean = fa
       return cachedValue.value;
     }
 
-    const remoteValue = await fetchRemoteStorageItem<T>(key, includeImages);
-    setSharedStorageCacheValue(key, remoteValue, includeImages);
-    return remoteValue;
+    return fetchRemoteStorageItemConsistent<T>(key, includeImages);
   } catch (error) {
     // Abort/timeouts can happen during concurrent startup fetches and should not
     // surface as console errors or crash-like LogBox noise.
@@ -1938,11 +2033,33 @@ export async function getStorageItems(
 
   try {
     if (getPlatformOS() === 'web') {
+      const requestGenerations = new Map(
+        sharedKeys.map(key => [key, getSharedStorageCacheGeneration(key)])
+      );
       const remoteResults = await fetchRemoteStorageItems(sharedKeys);
+      const retryKeys: string[] = [];
       for (const key of sharedKeys) {
         const value = remoteResults[key] ?? null;
-        setSharedStorageCacheValue(key, value);
+        if (requestGenerations.get(key) !== getSharedStorageCacheGeneration(key)) {
+          retryKeys.push(key);
+          continue;
+        }
+        setSharedStorageCacheValue(key, value, false, requestGenerations.get(key));
         results[key] = value;
+      }
+      if (retryKeys.length > 0) {
+        const retryGenerations = new Map(
+          retryKeys.map(key => [key, getSharedStorageCacheGeneration(key)])
+        );
+        const refreshed = await fetchRemoteStorageItems(retryKeys);
+        for (const key of retryKeys) {
+          const value = refreshed[key] ?? null;
+          const requestGeneration = retryGenerations.get(key);
+          if (requestGeneration === getSharedStorageCacheGeneration(key)) {
+            setSharedStorageCacheValue(key, value, false, requestGeneration);
+            results[key] = value;
+          }
+        }
       }
       return results;
     }
@@ -1962,11 +2079,33 @@ export async function getStorageItems(
       return results;
     }
 
+    const requestGenerations = new Map(
+      missingSharedKeys.map(key => [key, getSharedStorageCacheGeneration(key)])
+    );
     const remoteResults = await fetchRemoteStorageItems(missingSharedKeys);
+    const retryKeys: string[] = [];
     for (const key of missingSharedKeys) {
       const value = remoteResults[key] ?? null;
-      setSharedStorageCacheValue(key, value);
+      if (requestGenerations.get(key) !== getSharedStorageCacheGeneration(key)) {
+        retryKeys.push(key);
+        continue;
+      }
+      setSharedStorageCacheValue(key, value, false, requestGenerations.get(key));
       results[key] = value;
+    }
+    if (retryKeys.length > 0) {
+      const retryGenerations = new Map(
+        retryKeys.map(key => [key, getSharedStorageCacheGeneration(key)])
+      );
+      const refreshed = await fetchRemoteStorageItems(retryKeys);
+      for (const key of retryKeys) {
+        const value = refreshed[key] ?? null;
+        const requestGeneration = retryGenerations.get(key);
+        if (requestGeneration === getSharedStorageCacheGeneration(key)) {
+          setSharedStorageCacheValue(key, value, false, requestGeneration);
+          results[key] = value;
+        }
+      }
     }
     return results;
   } catch (error) {
@@ -2326,7 +2465,8 @@ export async function getProjectsScreenSnapshot(
   user?: Pick<User, 'id' | 'role'> | null,
   fields?: string[],
   forceRefresh: boolean = false,
-  includeImages: boolean = false
+  includeImages: boolean = false,
+  consistencyRetry: number = 0,
 ): Promise<ProjectsScreenSnapshot> {
   const params = new URLSearchParams();
   if (user?.id) {
@@ -2355,6 +2495,7 @@ export async function getProjectsScreenSnapshot(
   const timerLabel = `[Data] ProjectsSnapshot (${user?.role || 'unknown'}, images=${includeImages})`;
   console.time(timerLabel);
   const snapshotStart = Date.now();
+  const requestGeneration = projectsSnapshotGeneration;
 
   const payload = await requestApiJson<Partial<ProjectsScreenSnapshot>>(
     `/projects/snapshot${query ? `?${query}` : ''}`
@@ -2396,7 +2537,18 @@ export async function getProjectsScreenSnapshot(
     volunteerJoinRecords: payload.volunteerJoinRecords || [],
   };
 
-  projectsSnapshotCache.set(cacheKey, { data: result, timestamp: Date.now() });
+  if (requestGeneration !== projectsSnapshotGeneration && consistencyRetry < 1) {
+    console.warn('[Data] ProjectsSnapshot changed during fetch; retrying once for consistency.');
+    console.timeEnd(timerLabel);
+    return getProjectsScreenSnapshot(user, fields, true, includeImages, consistencyRetry + 1);
+  }
+
+  // Do not cache a response that was known to race with a newer write. The
+  // caller still receives the response, while the next screen focus fetches
+  // the authoritative value instead of preserving the stale snapshot.
+  if (requestGeneration === projectsSnapshotGeneration) {
+    projectsSnapshotCache.set(cacheKey, { data: result, timestamp: Date.now() });
+  }
   console.timeEnd(timerLabel);
   console.log(`[Data] ProjectsSnapshot fetched ${result.projects?.length || 0} projects in ${Date.now() - snapshotStart}ms`);
   return result;
@@ -2411,6 +2563,7 @@ export async function setStorageItem<T>(key: string, value: T): Promise<void> {
 
   try {
     await saveRemoteStorageItem(key, value);
+    markSharedStorageValueChanged(key);
     setSharedStorageCacheValue(key, value);
     if (key === STORAGE_KEYS.USERS) {
       // Replace any pre-bcrypt local cache with the redacted server-safe copy.
@@ -2420,7 +2573,7 @@ export async function setStorageItem<T>(key: string, value: T): Promise<void> {
       }
     }
     projectsSnapshotCache.clear();
-    broadcastStorageChangeToOtherTabs([key]);
+    notifyStorageChanged([key]);
   } catch (error) {
     if (key === STORAGE_KEYS.USERS) {
       // Never fall back to storing a plaintext credential on the device.
@@ -2428,10 +2581,10 @@ export async function setStorageItem<T>(key: string, value: T): Promise<void> {
     }
     if (isExpectedRemoteStorageError(error) || isAbortLikeError(error)) {
       await setLocalStorageItem(key, value);
+      markSharedStorageValueChanged(key);
       setSharedStorageCacheValue(key, value);
       projectsSnapshotCache.clear();
-      broadcastStorageChangeToOtherTabs([key]);
-      queueSharedStorageChangedKeys([key]);
+      notifyStorageChanged([key]);
       return;
     }
 
@@ -4629,6 +4782,12 @@ export async function startVolunteerTimeLog(
     throw new Error('Time in did not complete.');
   }
 
+  // Keep the initiating device in sync immediately. The backend also
+  // broadcasts this change to other web/mobile clients, but the originating
+  // screen should not wait for its websocket round-trip to close the button.
+  upsertCachedStorageRecord(STORAGE_KEYS.VOLUNTEER_TIME_LOGS, payload.log);
+  notifyStorageChanged([STORAGE_KEYS.VOLUNTEER_TIME_LOGS]);
+
   return payload.log;
 }
 
@@ -4653,6 +4812,17 @@ export async function endVolunteerTimeLog(
       }),
     }
   );
+
+  if (payload.log) {
+    upsertCachedStorageRecord(STORAGE_KEYS.VOLUNTEER_TIME_LOGS, payload.log);
+  }
+  if (payload.volunteerProfile) {
+    upsertCachedStorageRecord(STORAGE_KEYS.VOLUNTEERS, payload.volunteerProfile);
+  }
+  notifyStorageChanged([
+    STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
+    ...(payload.volunteerProfile ? [STORAGE_KEYS.VOLUNTEERS] : []),
+  ]);
 
   return {
     log: payload.log || null,
@@ -5219,6 +5389,7 @@ export async function reviewVolunteerProjectMatch(
     } else {
       nextMatches.push(payload.match);
     }
+    markSharedStorageValueChanged(STORAGE_KEYS.VOLUNTEER_MATCHES);
     setSharedStorageCacheValue(STORAGE_KEYS.VOLUNTEER_MATCHES, nextMatches);
     invalidateSharedStorageCache(changedKeys.filter(key => key !== STORAGE_KEYS.VOLUNTEER_MATCHES));
   } else {
@@ -5822,17 +5993,12 @@ function dedupeReports<T extends { id: string }>(reports: T[]): T[] {
 }
 
 export async function savePartnerReport(report: PartnerReport): Promise<void> {
-  // Report records can contain uploaded photos. Always read the full media
-  // payload before replacing the collection so a metadata-only read cannot
-  // accidentally erase attachments while marking or updating a report.
-  const reports = await getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS, true) || [];
-  const existingIndex = reports.findIndex(entry => entry.id === report.id);
-  if (existingIndex >= 0) {
-    reports[existingIndex] = report;
-  } else {
-    reports.push(report);
-  }
-  await setStorageItem(STORAGE_KEYS.PARTNER_REPORTS, dedupeReports(reports));
+  // Save one canonical report record instead of reading and replacing the
+  // entire photo-bearing collection. This is faster on slow connections and
+  // prevents one delayed device from overwriting another device's reports.
+  const savedReport = await saveRemoteStorageRecord(STORAGE_KEYS.PARTNER_REPORTS, report);
+  upsertCachedStorageRecord(STORAGE_KEYS.PARTNER_REPORTS, savedReport);
+  notifyStorageChanged([STORAGE_KEYS.PARTNER_REPORTS]);
 }
 
 // Returns partner reports associated with one project.
@@ -6174,6 +6340,16 @@ export async function joinProjectEvent(
   if (!payload.project) {
     throw new Error('Project join did not complete.');
   }
+
+  const changedKeys = [
+    payload.project.isEvent ? STORAGE_KEYS.EVENTS : STORAGE_KEYS.PROJECTS,
+  ];
+  upsertCachedStorageRecord(changedKeys[0], payload.project);
+  if (payload.volunteerProfile) {
+    upsertCachedStorageRecord(STORAGE_KEYS.VOLUNTEERS, payload.volunteerProfile);
+    changedKeys.push(STORAGE_KEYS.VOLUNTEERS);
+  }
+  notifyStorageChanged(changedKeys);
 
   return {
     project: payload.project,

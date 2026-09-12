@@ -23,7 +23,6 @@ import {
   getProjectsScreenSnapshot,
   subscribeToStorageChanges,
   getAllAdminPlanningCalendars,
-  getAllAdminPlanningItems,
   saveEvent,
   requestVolunteerProjectJoin,
   getAllVolunteers,
@@ -164,7 +163,7 @@ export default function VolunteerEventsScreen() {
   const loadData = useCallback(async () => {
     if (!user) return;
     try {
-      const [snapshot, calendars, items, volunteersList] = await Promise.all([
+      const [snapshot, calendars] = await Promise.all([
         getProjectsScreenSnapshot(
           user,
           [
@@ -174,22 +173,43 @@ export default function VolunteerEventsScreen() {
             'volunteerJoinRecords',
           ],
           false,
-          true,
+          false,
         ),
         getAllAdminPlanningCalendars(),
-        getAllAdminPlanningItems(),
-        getAllVolunteers().catch(() => []),
       ]);
+      const items = (calendars || [])
+        .flatMap(calendar => calendar.planningItems || [])
+        .sort(
+          (left, right) =>
+            new Date(left.startDate).getTime() - new Date(right.startDate).getTime() ||
+            new Date(left.endDate).getTime() - new Date(right.endDate).getTime()
+        );
       setRecords(snapshot.projects || []);
       setVolunteerProfile(snapshot.volunteerProfile);
       setVolunteerMatches(snapshot.volunteerMatches || []);
       setJoinRecords(snapshot.volunteerJoinRecords || []);
-      setAllVolunteersList(volunteersList || []);
       setPlanningCalendars(calendars || []);
       setPlanningItems(items || []);
 
-      // Fetch Google Calendar items
-      try {
+      // The database-backed event list is ready now. Do not make the screen
+      // wait for an optional third-party calendar request.
+      setLoading(false);
+
+      // Images and the complete volunteer directory are secondary data. Load
+      // them after the event list is visible so a slow mobile connection does
+      // not keep the screen blocked. The image refresh preserves the same
+      // records and simply fills in their cover photos when available.
+      void getProjectsScreenSnapshot(user, ['projects'], false, true)
+        .then(imageSnapshot => setRecords(imageSnapshot.projects || []))
+        .catch(error => console.warn('[VolunteerEventsScreen] Event images skipped:', error));
+      void getAllVolunteers()
+        .then(volunteersList => setAllVolunteersList(volunteersList || []))
+        .catch(error => console.warn('[VolunteerEventsScreen] Volunteer directory skipped:', error));
+
+      // Fetch Google Calendar items in the background. This can be slow or
+      // unavailable on a mobile network and is not required for app data.
+      void (async () => {
+        try {
         const storedId = await AsyncStorage.getItem('gcal_id');
         const storedKey = await AsyncStorage.getItem('gcal_key');
         const calendarId = storedId || 'en.philippines#holiday@group.v.calendar.google.com';
@@ -208,11 +228,14 @@ export default function VolunteerEventsScreen() {
           } else {
             setGoogleEvents([]);
           }
+        } else {
+          setGoogleEvents([]);
         }
-      } catch (err) {
-        console.warn('[VolunteerEventsScreen] Google Calendar fetch error:', err);
-        setGoogleEvents([]);
-      }
+        } catch (err) {
+          console.warn('[VolunteerEventsScreen] Google Calendar fetch error:', err);
+          setGoogleEvents([]);
+        }
+      })();
     } catch (error) {
       console.error('[VolunteerEventsScreen] Failed to load events data:', error);
     } finally {

@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { useAuth } from './AuthContext';
 import {
   getAllProjects,
   getAllVolunteers,
@@ -69,6 +70,7 @@ const INITIAL_STATE: GlobalDataState = {
 
 export function GlobalDataProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<GlobalDataState>(INITIAL_STATE);
+  const { user, loading: authLoading } = useAuth();
 
   const updateProgress = useCallback((progress: number) => {
     setState(prev => ({ ...prev, loadingProgress: Math.min(100, Math.max(0, progress)) }));
@@ -195,16 +197,38 @@ export function GlobalDataProvider({ children }: { children: React.ReactNode }) 
 
   // Initial load on mount
   useEffect(() => {
+    if (authLoading) {
+      return;
+    }
+
+    // Mobile volunteer and partner screens load their own role-scoped
+    // snapshots. Fetching the admin-style global collections here as well
+    // creates duplicate cold-start requests and makes the first screen wait
+    // behind unrelated data. Keep the provider ready for any future shared
+    // consumers without making it a mobile startup dependency.
+    if (user?.role !== 'admin') {
+      setState(prev => ({
+        ...prev,
+        isLoading: false,
+        isInitialized: true,
+        loadingProgress: 100,
+        lastUpdated: new Date(),
+      }));
+      return;
+    }
+
     void loadAllData();
-  }, [loadAllData]);
+  }, [authLoading, loadAllData, user?.role]);
 
   // Subscribe to storage changes for automatic cache refresh
   useEffect(() => {
-    if (!state.isInitialized) return;
+    if (!state.isInitialized || user?.role !== 'admin') return;
 
     const unsubscribe = subscribeToStorageChanges(
       [
         'projects',
+        'events',
+        'programs',
         'volunteers',
         'partners',
         'users',
@@ -217,10 +241,20 @@ export function GlobalDataProvider({ children }: { children: React.ReactNode }) 
       async (event) => {
         console.log('🔄 Storage changed, refreshing cache for keys:', event.keys);
         try {
-          const items = await getStorageItemsFast(event.keys);
+          const projectDataChanged = event.keys.some(key =>
+            key === 'projects' || key === 'events' || key === 'programs'
+          );
+          const [items, refreshedProjects] = await Promise.all([
+            getStorageItemsFast(event.keys),
+            projectDataChanged ? getAllProjects() : Promise.resolve(null),
+          ]);
           setState(prev => {
             const next = { ...prev, lastUpdated: new Date() };
-            if (items['projects']) next.projects = items['projects'] as Project[];
+            if (refreshedProjects) {
+              next.projects = refreshedProjects;
+            } else if (items['projects']) {
+              next.projects = items['projects'] as Project[];
+            }
             if (items['volunteers']) next.volunteers = items['volunteers'] as Volunteer[];
             if (items['partners']) next.partners = items['partners'] as Partner[];
             if (items['users']) next.users = items['users'] as User[];
@@ -240,7 +274,7 @@ export function GlobalDataProvider({ children }: { children: React.ReactNode }) 
     return () => {
       unsubscribe?.();
     };
-  }, [state.isInitialized]);
+  }, [state.isInitialized, user?.role]);
 
   const value: GlobalDataContextType = {
     ...state,

@@ -23,6 +23,7 @@ import {
   getAllVolunteers,
   getProjectsScreenSnapshot,
   getVolunteerProjectMatches,
+  REALTIME_STORAGE_CHANGE_OPTIONS,
   requestVolunteerProjectJoin,
   saveEvent,
   notifyVolunteerAboutTaskUnassignment,
@@ -654,8 +655,16 @@ export default function ProjectsScreen({ navigation, route }: any) {
   const loadProjectsData = useCallback(async () => {
     const startedAt = perfNow();
     try {
-      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'volunteerProfile'], false, true);
+      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'volunteerProfile'], false, false);
       applySnapshot(snapshot);
+
+      // Project cards can render with their normal placeholders while the
+      // uploaded cover photos are fetched separately. This keeps the shared
+      // projects screen responsive when a few large images are present.
+      void getProjectsScreenSnapshot(user, ['projects'], false, true)
+        .then(imageSnapshot => setProjects(imageSnapshot.projects || []))
+        .catch(error => console.warn('[ProjectsScreen] Project images skipped:', error));
+
       try {
         setAllPartnerReports(await getAllPartnerReports());
       } catch {
@@ -700,10 +709,11 @@ export default function ProjectsScreen({ navigation, route }: any) {
     React.useCallback(() => {
       void loadProjectsData();
       return subscribeToStorageChanges(
-        ['projects', 'volunteers', 'volunteerProjectJoins', 'volunteerTimeLogs', 'partnerProjectApplications', 'partnerReports', 'volunteerMatches'],
+        ['projects', 'events', 'programs', 'volunteers', 'volunteerProjectJoins', 'volunteerTimeLogs', 'partnerProjectApplications', 'partnerReports', 'volunteerMatches'],
         () => {
           void loadProjectsData();
-        }
+        },
+        REALTIME_STORAGE_CHANGE_OPTIONS
       );
     }, [loadProjectsData])
   );

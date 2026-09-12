@@ -313,28 +313,21 @@ export default function VolunteerDashboardScreen() {
   const loadDashboardData = React.useCallback(async (force = false) => {
     if (!user?.id) return;
     try {
-      await reconcileApprovedVolunteerEventMemberships();
-      const [projectSnapshot, timelineSnapshot, messages] = await Promise.all([
-        getProjectsScreenSnapshot(
-          user,
-          [
-            'projects',
-            'events',
-            'programs',
-            'volunteerProfile',
-            'volunteerMatches',
-            'volunteerJoinRecords',
-            'timeLogs',
-            'programTracks',
-          ],
-          force,
-          false // images not needed for dashboard list view
-        ),
-        getDashboardTimelineSnapshot(),
-        // The dashboard only displays an unread count; avoid downloading every
-        // chat card and its attachments just to calculate that number.
-        getUnreadMessagesForUser(user.id),
-      ]);
+      const projectSnapshot = await getProjectsScreenSnapshot(
+        user,
+        [
+          'projects',
+          'events',
+          'programs',
+          'volunteerProfile',
+          'volunteerMatches',
+          'volunteerJoinRecords',
+          'timeLogs',
+          'programTracks',
+        ],
+        force,
+        false // images not needed for dashboard list view
+      );
 
       setProjects(projectSnapshot.projects || []);
       setVolunteerProfile(projectSnapshot.volunteerProfile);
@@ -383,8 +376,23 @@ export default function VolunteerDashboardScreen() {
       }));
 
       setProgramTracks(resolvedTracks);
-      setPlanningItems(timelineSnapshot.planningItems || []);
-      setUnreadMessages(messages.filter(msg => !msg.read && msg.recipientId === user.id).length);
+
+      // Timeline data and the legacy membership repair are secondary work.
+      // They must not keep the dashboard spinner visible on a slow mobile
+      // connection. Any repair write will still notify subscribed screens.
+      void getDashboardTimelineSnapshot()
+        .then(timelineSnapshot => setPlanningItems(timelineSnapshot.planningItems || []))
+        .catch(error => console.warn('[VolunteerDashboardScreen] Timeline load skipped:', error));
+      void reconcileApprovedVolunteerEventMemberships().catch(error =>
+        console.warn('[VolunteerDashboardScreen] Membership reconciliation skipped:', error)
+      );
+      // The dashboard only displays an unread count; do not download chat
+      // records before the main dashboard is visible.
+      void getUnreadMessagesForUser(user.id)
+        .then(messages => {
+          setUnreadMessages(messages.filter(msg => !msg.read && msg.recipientId === user.id).length);
+        })
+        .catch(error => console.warn('[VolunteerDashboardScreen] Unread count skipped:', error));
     } catch (err) {
       console.error('Failed to load dashboard:', err);
     } finally {
@@ -394,7 +402,9 @@ export default function VolunteerDashboardScreen() {
 
   useFocusEffect(
     React.useCallback(() => {
-      void loadDashboardData(true);
+      // Reuse the shared snapshot on normal tab switches. Explicit actions
+      // such as joining an event still request a forced refresh below.
+      void loadDashboardData(false);
 
       return subscribeToStorageChanges(
         [
@@ -410,7 +420,7 @@ export default function VolunteerDashboardScreen() {
         ],
         debounce(() => {
           void loadDashboardData();
-        }, 1000)
+        }, 250)
       );
     }, [loadDashboardData])
   );

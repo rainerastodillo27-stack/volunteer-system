@@ -815,7 +815,7 @@ export default function AdminAnalyticsScreen() {
 
   useEffect(() => {
     return subscribeToStorageChanges(
-      ['projects', 'programTracks', 'programs', 'volunteers', 'volunteerTimeLogs', 'partnerReports', 'volunteerProjectJoins', 'partners', 'partnerProjectApplications'],
+      ['projects', 'events', 'programTracks', 'programs', 'volunteers', 'volunteerTimeLogs', 'partnerReports', 'volunteerProjectJoins', 'partners', 'partnerProjectApplications'],
       () => {
         void loadAnalytics();
       }

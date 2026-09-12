@@ -156,16 +156,33 @@ export default function PartnerProjectsScreen({ route }: any) {
     }
 
     try {
-      const [snapshot, allVolunteerTimeLogs, allVolunteerJoinRecords] = await Promise.all([
-        getProjectsScreenSnapshot(user, ['projects', 'partnerApplications'], false, true),
-        getAllVolunteerTimeLogs(),
-        getAllVolunteerProjectJoinRecords(),
-      ]);
+      const snapshot = await getProjectsScreenSnapshot(
+        user,
+        ['projects', 'partnerApplications'],
+        false,
+        false,
+      );
       setProjects(snapshot.projects || []);
       setPartnerApplications(snapshot.partnerApplications || []);
-      setVolunteerTimeLogs(allVolunteerTimeLogs || []);
-      setVolunteerJoinRecords(allVolunteerJoinRecords || []);
       setLoadError(null);
+
+      // Show the approved-project list first. Cover photos are fetched after
+      // the first render so a large image payload cannot block the partner's
+      // project dashboard on a slow mobile connection.
+      void getProjectsScreenSnapshot(user, ['projects'], false, true)
+        .then(imageSnapshot => setProjects(imageSnapshot.projects || []))
+        .catch(error => console.warn('[PartnerProjectsScreen] Project images skipped:', error));
+
+      // Project cards are usable without the full attendance-photo history.
+      // Load the heavier metrics after the first screen has rendered.
+      void Promise.all([getAllVolunteerTimeLogs(), getAllVolunteerProjectJoinRecords()])
+        .then(([allVolunteerTimeLogs, allVolunteerJoinRecords]) => {
+          setVolunteerTimeLogs(allVolunteerTimeLogs || []);
+          setVolunteerJoinRecords(allVolunteerJoinRecords || []);
+        })
+        .catch(error => {
+          console.warn('[PartnerProjectsScreen] Attendance metrics load skipped:', error);
+        });
     } catch (error) {
       setLoadError({
         title: getRequestErrorTitle(error, 'Unable to load projects'),

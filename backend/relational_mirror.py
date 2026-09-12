@@ -2441,6 +2441,8 @@ def get_relational_items_by_field(
     key: str,
     field_name: str,
     field_value: Any,
+    *,
+    include_media: bool = True,
 ) -> list[dict[str, Any]]:
     spec = TABLE_SPECS.get(key)
     if not spec:
@@ -2455,19 +2457,28 @@ def get_relational_items_by_field(
         return []
 
     column_names = [column_name for column_name, _ in spec["columns"]]
+    lightweight_media_columns = LIGHTWEIGHT_MEDIA_COLUMNS.get(key, set())
+    select_columns = [
+        (
+            f"null::text as {column_name}"
+            if not include_media and column_name in lightweight_media_columns
+            else column_name
+        )
+        for column_name in column_names
+    ]
     filter_clause = _row_filter_clause(key)
     with connection.cursor(row_factory=dict_row) as cursor:
         if field_value is None:
-            query = f"select {', '.join(column_names)} from {spec['table']} where {column_name} is null"
+            query = f"select {', '.join(select_columns)} from {spec['table']} where {column_name} is null"
             params: tuple[Any, ...] = ()
         elif field_value == "":
             query = (
-                f"select {', '.join(column_names)} from {spec['table']} "
+                f"select {', '.join(select_columns)} from {spec['table']} "
                 f"where ({column_name} is null or {column_name} = '')"
             )
             params = ()
         else:
-            query = f"select {', '.join(column_names)} from {spec['table']} where {column_name} = %s"
+            query = f"select {', '.join(select_columns)} from {spec['table']} where {column_name} = %s"
             params = (field_value,)
 
         if filter_clause:
@@ -2490,7 +2501,7 @@ def get_relational_items_by_field(
                 except Exception:
                     pass
                 alt_pk = 'id'
-                alt_column_names = list(column_names)
+                alt_column_names = list(select_columns)
                 alt_column_names[0] = alt_pk
                 alt_query = f"select {', '.join(alt_column_names)} from {spec['table']}"
                 if field_value is None:

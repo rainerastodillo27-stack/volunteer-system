@@ -508,7 +508,7 @@ export default function ReportsScreen({ navigation, route }: any) {
         'timeLogs',
         'volunteerProfile',
         'volunteerProjectJoins',
-      ], false, true /* report form needs the attendance photo fallback */);
+      ], false, false);
       setProjects(snapshot.projects);
       setPartnerApplications([]);
       setVolunteerProfileId(snapshot.volunteerProfile?.id || null);
@@ -524,6 +524,32 @@ export default function ReportsScreen({ navigation, route }: any) {
           )
         )
       );
+
+      // Report folders and counts do not need photo bytes to render. Fetch
+      // the full media version in the background so submitted photos still
+      // appear after the list is usable on a slow mobile connection.
+      void getProjectsScreenSnapshot(
+        user,
+        ['projects', 'timeLogs', 'volunteerProjectJoins'],
+        false,
+        true,
+      )
+        .then(mediaSnapshot => {
+          setProjects(mediaSnapshot.projects || []);
+          setVolunteerTimeLogs(mediaSnapshot.timeLogs || []);
+          setVolunteerJoinRecords(mediaSnapshot.volunteerJoinRecords || []);
+          setVolunteerTimedInProjectIds(
+            Array.from(
+              new Set(
+                (mediaSnapshot.timeLogs || [])
+                  .filter(log => Boolean(log.timeIn))
+                  .map(log => log.projectId)
+                  .filter(Boolean)
+              )
+            )
+          );
+        })
+        .catch(error => console.warn('[ReportsScreen] Report photos skipped:', error));
       return snapshot.projects;
     }
 
@@ -594,29 +620,30 @@ export default function ReportsScreen({ navigation, route }: any) {
 
     try {
       const allProjects = await loadProjects();
-      const [rawReports, allTimeLogs, allJoinRecords] = await Promise.all([
+      const rawReports =
         user.role === 'admin' || user.role === 'partner'
-          ? getAllPartnerReports()
-          : getImpactHubReportsByUser(user.id),
-        user.role === 'admin' || user.role === 'partner'
-          ? getAllVolunteerTimeLogs()
-          : Promise.resolve(null),
-        user.role === 'admin' || user.role === 'partner'
-          ? getAllVolunteerProjectJoinRecords()
-          : Promise.resolve(null),
-      ]);
+          ? await getAllPartnerReports()
+          : await getImpactHubReportsByUser(user.id);
 
-      if (user.role === 'admin' || user.role === 'partner') {
-        setVolunteerTimeLogs(allTimeLogs || []);
-        setVolunteerJoinRecords(allJoinRecords || []);
-      }
-
-      setReports(
+      const normalizedReports =
         rawReports
           .map(report => normalizeImpactHubReport(report, allProjects))
-          .filter(shouldDisplayReport)
-      );
+          .filter(shouldDisplayReport);
+      setReports(normalizedReports);
       hasLoadedReportsRef.current = true;
+
+      // Attendance logs include uploaded photos and can be much larger than
+      // the report list. Load those metrics after the report screen is usable.
+      if (user.role === 'admin' || user.role === 'partner') {
+        void Promise.all([getAllVolunteerTimeLogs(), getAllVolunteerProjectJoinRecords()])
+          .then(([allTimeLogs, allJoinRecords]) => {
+            setVolunteerTimeLogs(allTimeLogs || []);
+            setVolunteerJoinRecords(allJoinRecords || []);
+          })
+          .catch(error => {
+            console.warn('[ReportsScreen] Attendance metrics load skipped:', error);
+          });
+      }
     } catch (error) {
       console.error('Error loading reports:', error);
       Alert.alert('Error', 'Failed to load reports');
@@ -662,7 +689,7 @@ export default function ReportsScreen({ navigation, route }: any) {
 
   useEffect(() => {
     return subscribeToStorageChanges(
-      ['partnerReports', 'projects', 'partnerProjectApplications', 'volunteerTimeLogs', 'volunteerProjectJoins'],
+      ['partnerReports', 'projects', 'events', 'programs', 'partnerProjectApplications', 'volunteerTimeLogs', 'volunteerProjectJoins'],
       async () => {
         await loadReportsCoalesced();
       }

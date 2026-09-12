@@ -61,13 +61,9 @@ function EmptyTasksIllustration() {
 }
 import {
   getAllVolunteers,
-  getAllProjects,
   getAllVolunteerTimeLogs,
-  getVolunteerByUserId,
-  getVolunteerProjectJoinRecords,
-  getVolunteerTimeLogs,
+  getProjectsScreenSnapshot,
   subscribeToStorageChanges,
-  clearStorageCache,
   saveEvent,
   startVolunteerTimeLog,
   notifyVolunteerAboutTaskUnassignment,
@@ -506,12 +502,64 @@ export default function VolunteerTasksScreen({ navigation }: any) {
 
   const tasksLoadInFlightRef = useRef<Promise<void> | null>(null);
   const tasksReloadQueuedRef = useRef(false);
+  const managementDataLoadInFlightRef = useRef<Promise<void> | null>(null);
+  const managementDataLoadedRef = useRef(false);
+  const managementDataUserIdRef = useRef<string | null>(null);
   const attendanceNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const volunteerJoinRecordByProjectId = useMemo(
     () => new Map(volunteerJoinRecords.map(record => [record.projectId, record] as const)),
     [volunteerJoinRecords]
   );
+
+  const loadManagementData = React.useCallback(async () => {
+    if (!user?.id) {
+      return;
+    }
+
+    if (managementDataUserIdRef.current !== user.id) {
+      managementDataUserIdRef.current = user.id;
+      managementDataLoadedRef.current = false;
+      managementDataLoadInFlightRef.current = null;
+    }
+
+    if (managementDataLoadedRef.current) {
+      return;
+    }
+    if (managementDataLoadInFlightRef.current) {
+      return managementDataLoadInFlightRef.current;
+    }
+
+    const request = Promise.all([
+      getAllVolunteers().catch(error => {
+        console.warn('[VolunteerTasksScreen] Volunteer list load skipped:', error);
+        return [] as Volunteer[];
+      }),
+      // Attendance photos are intentionally loaded only when management data
+      // is needed; they are not required for the volunteer's own task list.
+      getAllVolunteerTimeLogs().catch(error => {
+        console.warn('[VolunteerTasksScreen] Attendance history load skipped:', error);
+        return [] as VolunteerTimeLog[];
+      }),
+    ])
+      .then(([volunteers, timeLogs]) => {
+        setAllVolunteers(volunteers);
+        setAllVolunteerTimeLogs(current => {
+          const byId = new Map(current.map(log => [log.id, log] as const));
+          timeLogs.forEach(log => byId.set(log.id, log));
+          return Array.from(byId.values()).sort(
+            (left, right) => new Date(right.timeIn).getTime() - new Date(left.timeIn).getTime()
+          );
+        });
+        managementDataLoadedRef.current = true;
+      })
+      .finally(() => {
+        managementDataLoadInFlightRef.current = null;
+      });
+
+    managementDataLoadInFlightRef.current = request;
+    return request;
+  }, [user?.id]);
 
   const loadVolunteerTasks = async () => {
     try {
@@ -527,57 +575,19 @@ export default function VolunteerTasksScreen({ navigation }: any) {
         return;
       }
 
-      clearStorageCache(['projects', 'events', 'volunteers', 'volunteerTimeLogs', 'volunteerProjectJoins']);
-
-      const [projects, currentVolunteerProfile, volunteers] = await Promise.all([
-        getAllProjects(),
-        getVolunteerByUserId(user.id),
-        getAllVolunteers(),
-      ]);
-      setAllProjects(projects);
-      setVolunteerProfile(currentVolunteerProfile || null);
-      setAllVolunteers(volunteers);
-
-      let nextVolunteerTimeLogs: VolunteerTimeLog[] = [];
-      let nextAllVolunteerTimeLogs: VolunteerTimeLog[] = [];
-      let nextVolunteerJoinRecords: VolunteerProjectJoinRecord[] = [];
-
-      if (currentVolunteerProfile) {
-        const assignedProjectIds = Array.from(
-          new Set(
-            projects
-              .filter(project =>
-                (project.internalTasks || []).some(
-                  task => isVolunteerAssignedToTask(task, currentVolunteerProfile.id, currentVolunteerProfile.userId)
-                )
-              )
-              .map(project => project.id)
-          )
-        );
-
-        nextVolunteerTimeLogs = await getVolunteerTimeLogs(currentVolunteerProfile.id).catch(error => {
-          console.error('Error loading volunteer time logs for task tracking:', error);
-          return [];
-        });
-        nextAllVolunteerTimeLogs = await getAllVolunteerTimeLogs().catch(error => {
-          console.error('Error loading all volunteer time logs for task tracking:', error);
-          return [];
-        });
-
-        nextVolunteerJoinRecords = (
-          await Promise.all(
-            assignedProjectIds.map(async projectId => {
-              try {
-                const records = await getVolunteerProjectJoinRecords(projectId);
-                return records.find(record => record.volunteerId === currentVolunteerProfile.id) || null;
-              } catch (error) {
-                console.error(`Error loading join record for project ${projectId}:`, error);
-                return null;
-              }
-            })
-          )
-        ).filter((record): record is VolunteerProjectJoinRecord => record !== null);
-      }
+      // One role-scoped request supplies everything needed to render the own
+      // task list. Management volunteers and attendance photos are loaded
+      // only after the user opens that section.
+      const snapshot = await getProjectsScreenSnapshot(
+        user,
+        ['projects', 'volunteerProfile', 'timeLogs', 'volunteerJoinRecords'],
+        false,
+        false,
+      );
+      const projects = snapshot.projects || [];
+      const currentVolunteerProfile = snapshot.volunteerProfile || null;
+      const nextVolunteerTimeLogs = snapshot.timeLogs || [];
+      const nextVolunteerJoinRecords = snapshot.volunteerJoinRecords || [];
 
       const nextJoinRecordByProjectId = new Map(
         nextVolunteerJoinRecords.map(record => [record.projectId, record] as const)
@@ -592,7 +602,6 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       setAllProjects(projects);
       setVolunteerProfile(currentVolunteerProfile);
       setVolunteerTimeLogs(nextVolunteerTimeLogs);
-      setAllVolunteerTimeLogs(nextAllVolunteerTimeLogs);
       setVolunteerJoinRecords(nextVolunteerJoinRecords);
       setTasks(nextTasks);
       setSelectedTask(current =>
@@ -642,6 +651,12 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       void loadVolunteerTasksCoalesced();
     }, [loadVolunteerTasksCoalesced])
   );
+
+  useEffect(() => {
+    if (activeTab === 'Manage Assignments') {
+      void loadManagementData();
+    }
+  }, [activeTab, loadManagementData]);
 
   useEffect(() => {
     return subscribeToStorageChanges(
@@ -1437,6 +1452,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       setSelectedTaskSection(null);
       setSelectedManagedEventId(item.projectId);
       setShowFieldOfficerBoard(true);
+      void loadManagementData();
       return;
     }
 
@@ -1569,7 +1585,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
     const project = allProjects.find(entry => entry.id === group.projectId) || null;
     const joinedVolunteerCount = project?.volunteers?.length || 0;
     const eventAddress = project?.location.address || 'Event details available inside';
-    const eventLogs = allVolunteerTimeLogs.filter(log => log.projectId === group.projectId);
+    const eventLogs = volunteerTimeLogs.filter(log => log.projectId === group.projectId);
     const attendanceCount = eventLogs.filter(log => Boolean(log.timeOut || log.attendanceConfirmedAt)).length;
     const totalVolunteerMinutes = eventLogs.reduce(
       (sum, log) => sum + getCompletedLogMinutes(log),
@@ -2306,6 +2322,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                         onPress={() => {
                           setSelectedManagedEventId(selectedEventProject.id);
                           setShowFieldOfficerBoard(true);
+                          void loadManagementData();
                         }}
                       >
                         <MaterialIcons name="assignment-ind" size={18} color="#fff" />

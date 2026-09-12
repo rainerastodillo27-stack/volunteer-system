@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
+from psycopg.types.json import Jsonb
 
 try:
     from .init_supabase import BASE_DDL
@@ -263,13 +264,22 @@ def migrate_direct_table(source: Any, target: Any, table_name: str) -> tuple[int
         source_cursor.execute(f"select {select_sql} from {table_name}")
         rows = source_cursor.fetchall()
 
+    # Psycopg does not adapt plain Python dictionaries/lists to PostgreSQL
+    # jsonb columns automatically. The direct message tables contain JSON
+    # attachments and metadata, so wrap structured values explicitly while
+    # leaving scalar and PostgreSQL-native values unchanged.
+    adapted_rows = [
+        tuple(Jsonb(value) if isinstance(value, (dict, list)) else value for value in row)
+        for row in rows
+    ]
+
     with target.cursor() as target_cursor:
         target_cursor.execute(f"delete from {table_name}")
-        if rows:
+        if adapted_rows:
             placeholders = ", ".join(["%s"] * len(selected_target_columns))
             target_cursor.executemany(
                 f"insert into {table_name} ({target_column_sql}) values ({placeholders})",
-                rows,
+                adapted_rows,
             )
     target.commit()
     return (len(rows), count_table(target, table_name) or 0)

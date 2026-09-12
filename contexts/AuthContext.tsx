@@ -2,7 +2,6 @@ import React, { createContext, useContext, useState, useEffect, ReactNode } from
 import { Alert } from 'react-native';
 import { User } from '../models/types';
 import {
-  getProjectsScreenSnapshot,
   getStorageItemsFast,
   setCurrentUser as saveCurrentUser,
   getCurrentUser,
@@ -73,9 +72,18 @@ async function prefetchForUser(user: User | null): Promise<void> {
   }
   
   const platform = getPlatformOS();
-  // Warm all role-specific keys in the background so the first screen loads from cache.
-  // On web, prefetch the full admin key set since the admin dashboard is the only web screen.
-  // On mobile, also warm the lightweight projects snapshot for the first screen.
+  const isMobileExperience = platform !== 'web' || !getIsWeb();
+
+  // Mobile screens already request one role-scoped snapshot when they mount.
+  // Starting a second batch request during login creates a cold-start race and
+  // can make the first screen slower on a constrained connection. Keep
+  // prefetching for the normal admin web experience, where it warms the
+  // dashboard without competing with a mobile screen request.
+  if (isMobileExperience) {
+    return;
+  }
+
+  // Warm the admin key set in the background so the first web screen loads from cache.
   const keys = Array.from(PREFETCH_KEYS_BY_ROLE[user.role] ?? []);
 
   if (keys.length > 0) {
@@ -86,17 +94,6 @@ async function prefetchForUser(user: User | null): Promise<void> {
     });
   }
 
-  if (platform !== 'web' && user.role !== 'admin') {
-    void getProjectsScreenSnapshot(user, ['projects', 'programs', 'programTracks', 'volunteerProfile']).catch(error => {
-      console.debug('[App] Background project snapshot prefetch failed:', error);
-    });
-  }
-  // In ?mode=mobile on web, also prefetch the snapshot for volunteer/partner
-  if (platform === 'web' && !getIsWeb() && user.role !== 'admin') {
-    void getProjectsScreenSnapshot(user, ['projects', 'programs', 'programTracks', 'volunteerProfile']).catch(error => {
-      console.debug('[App] Background project snapshot prefetch failed:', error);
-    });
-  }
 }
 
 interface AuthContextType {

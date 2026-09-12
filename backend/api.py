@@ -398,7 +398,7 @@ class ReportSubmitPayload(BaseModel):
 REPORT_MEDIA_FILE_MAX_LENGTH = 500
 APP_TIMEZONE = ZoneInfo("Asia/Manila")
 REMINDER_LEAD_DAYS = 3
-REMINDER_CHECK_INTERVAL_SECONDS = 900  # 15 minutes – ensures even 30-minute reminder windows are caught
+REMINDER_CHECK_INTERVAL_SECONDS = 3600
 _reminder_scheduler_started = False
 _reminder_scheduler_lock = threading.Lock()
 
@@ -775,11 +775,7 @@ def _event_reminder_setting_is_due(event: dict[str, Any], setting: dict[str, Any
     local_now = now.astimezone(APP_TIMEZONE)
     local_start = start_date.astimezone(APP_TIMEZONE)
     send_at = local_start - lead_delta
-    # Allow a grace window equal to the check interval so the scheduler never
-    # misses a reminder just because it ran slightly late or the lead time is
-    # shorter than the check interval (e.g. 30-minute reminder with hourly check).
-    grace_window = timedelta(seconds=REMINDER_CHECK_INTERVAL_SECONDS)
-    return send_at <= local_now < (local_start + grace_window)
+    return send_at <= local_now < local_start
 
 
 def _get_reminder_type(setting: dict[str, Any]) -> str:
@@ -2193,7 +2189,7 @@ def _get_admin_dashboard_collection(
                 order by {pk_column} asc
                 """
             )
-            return [
+            items = [
                 {
                     "id": row["id"],
                     "volunteerId": row["volunteer_id"],
@@ -2211,6 +2207,14 @@ def _get_admin_dashboard_collection(
                 }
                 for row in cursor.fetchall()
             ]
+            if include_images:
+                # Older attendance records may predate upload-time image
+                # compression. Compress them on read so reports do not send
+                # multi-megabyte base64 payloads over mobile connections.
+                for item in items:
+                    item["attendancePhoto"] = _compress_image_data_uri(item.get("attendancePhoto"))
+                    item["completionPhoto"] = _compress_image_data_uri(item.get("completionPhoto"))
+            return items
 
     if key == "partnerReports":
         pk_column = _primary_key_column(key)
@@ -2391,9 +2395,17 @@ def _postgres_get_hot_items_by_field(
     key: str,
     field_name: str,
     field_value: str,
+    *,
+    include_media: bool = True,
 ) -> list[dict[str, Any]]:
     try:
-        return get_relational_items_by_field(connection, key, field_name, field_value)
+        return get_relational_items_by_field(
+            connection,
+            key,
+            field_name,
+            field_value,
+            include_media=include_media,
+        )
     except KeyError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -2622,8 +2634,19 @@ def _postgres_get_project_like_item_by_id(
 
 
 # Finds the volunteer profile tied to a specific user id.
-def _postgres_get_volunteer_by_user_id(connection: Any, user_id: str) -> dict[str, Any] | None:
-    volunteers = _postgres_get_hot_items_by_field(connection, "volunteers", "userId", user_id)
+def _postgres_get_volunteer_by_user_id(
+    connection: Any,
+    user_id: str,
+    *,
+    include_media: bool = True,
+) -> dict[str, Any] | None:
+    volunteers = _postgres_get_hot_items_by_field(
+        connection,
+        "volunteers",
+        "userId",
+        user_id,
+        include_media=include_media,
+    )
     return volunteers[0] if volunteers else None
 
 
@@ -2788,8 +2811,23 @@ def _postgres_get_partner_project_applications_by_user(
 
 
 # Returns all saved time logs for one volunteer profile.
-def _postgres_get_volunteer_time_logs(connection: Any, volunteer_id: str) -> list[dict[str, Any]]:
-    logs = _postgres_get_hot_items_by_field(connection, "volunteerTimeLogs", "volunteerId", volunteer_id)
+def _postgres_get_volunteer_time_logs(
+    connection: Any,
+    volunteer_id: str,
+    *,
+    include_media: bool = True,
+) -> list[dict[str, Any]]:
+    logs = _postgres_get_hot_items_by_field(
+        connection,
+        "volunteerTimeLogs",
+        "volunteerId",
+        volunteer_id,
+        include_media=include_media,
+    )
+    if include_media:
+        for log in logs:
+            log["attendancePhoto"] = _compress_image_data_uri(log.get("attendancePhoto"))
+            log["completionPhoto"] = _compress_image_data_uri(log.get("completionPhoto"))
     return _sort_iso_desc(logs, "timeIn")
 
 
@@ -2797,8 +2835,17 @@ def _postgres_reset_stale_daily_time_logs(
     connection: Any,
     volunteer_id: str,
     now: datetime | None = None,
+    *,
+    include_media: bool = True,
 ) -> list[dict[str, Any]]:
-    return _sort_iso_desc(_postgres_get_volunteer_time_logs(connection, volunteer_id), "timeIn")
+    return _sort_iso_desc(
+        _postgres_get_volunteer_time_logs(
+            connection,
+            volunteer_id,
+            include_media=include_media,
+        ),
+        "timeIn",
+    )
 
 
 # Ensures a volunteer-project join record exists after approval or assignment.
@@ -3011,7 +3058,6 @@ def _build_projects_snapshot(
     requested_fields: set[str] | None = None,
     include_images: bool = False,
 ) -> dict[str, Any]:
-    import sys
     import time as _time
     t0 = _time.perf_counter()
     _trace(f"[TRACE] _build_projects_snapshot: starting optimized hot storage reads at {_time.perf_counter():.3f}")
@@ -3136,9 +3182,27 @@ def _build_projects_snapshot(
         return snapshot
 
     if role == "volunteer":
-        volunteer = _postgres_get_volunteer_by_user_id(connection, user_id)
+        if not any(
+            (
+                include_volunteer_profile,
+                include_volunteer_matches,
+                include_time_logs,
+                include_join_records,
+            )
+        ):
+            return snapshot
+
+        volunteer = _postgres_get_volunteer_by_user_id(
+            connection,
+            user_id,
+            include_media=include_images,
+        )
         if include_volunteer_profile:
-            snapshot["volunteerProfile"] = volunteer
+            snapshot["volunteerProfile"] = (
+                volunteer
+                if include_images
+                else _strip_lightweight_media("volunteers", volunteer)
+            )
         if volunteer is not None:
             if include_volunteer_matches:
                 snapshot["volunteerMatches"] = _sort_iso_desc(
@@ -3151,7 +3215,16 @@ def _build_projects_snapshot(
                     "matchedAt",
                 )
             if include_time_logs:
-                snapshot["timeLogs"] = _postgres_reset_stale_daily_time_logs(connection, volunteer["id"])
+                time_logs = _postgres_reset_stale_daily_time_logs(
+                    connection,
+                    volunteer["id"],
+                    include_media=include_images,
+                )
+                snapshot["timeLogs"] = (
+                    time_logs
+                    if include_images
+                    else _strip_lightweight_media("volunteerTimeLogs", time_logs)
+                )
             if include_join_records:
                 volunteer_join_records = _postgres_get_hot_items_by_field(
                     connection,
@@ -3543,100 +3616,6 @@ def db_health(force: bool = False):
 @app.post("/admin/reminders/run")
 def run_reminders_now() -> dict[str, Any]:
     return run_event_reminder_check()
-
-
-@app.get("/admin/reminders/diagnose")
-def diagnose_reminders() -> dict[str, Any]:
-    """Returns diagnostic info about upcoming events and their reminder state."""
-    _require_postgres()
-    now = datetime.now(timezone.utc)
-    results: list[dict[str, Any]] = []
-    with get_connection() as connection:
-        _ensure_reminder_tables(connection)
-        upcoming_items = [
-            item for item in (
-                get_postgres_hot_storage_collection(connection, "events") +
-                get_postgres_hot_storage_collection(connection, "projects")
-            )
-            if isinstance(item, dict)
-            and str(item.get("status") or "") not in {"Completed", "Cancelled"}
-        ]
-        volunteers = get_postgres_hot_storage_collection(connection, "volunteers")
-        users = get_postgres_hot_storage_collection(connection, "users")
-        join_records = get_postgres_hot_storage_collection(connection, "volunteerProjectJoins")
-        users_by_id = {str(u.get("id") or ""): u for u in users if isinstance(u, dict)}
-        volunteers_by_id = {str(v.get("id") or ""): v for v in volunteers if isinstance(v, dict)}
-        volunteers_by_user_id = {
-            str(v.get("userId") or ""): v
-            for v in volunteers
-            if isinstance(v, dict) and str(v.get("userId") or "").strip()
-        }
-        with connection.cursor() as cursor:
-            for event in upcoming_items:
-                event_id = str(event.get("id") or "").strip()
-                joined_volunteer_ids: set[str] = {str(v or "").strip() for v in (event.get("volunteers") or []) if str(v or "").strip()}
-                joined_user_ids: set[str] = {str(v or "").strip() for v in (event.get("joinedUserIds") or []) if str(v or "").strip()}
-                for record in join_records:
-                    if not isinstance(record, dict) or str(record.get("projectId") or "").strip() != event_id:
-                        continue
-                    vid = str(record.get("volunteerId") or "").strip()
-                    vuid = str(record.get("volunteerUserId") or "").strip()
-                    if vid:
-                        joined_volunteer_ids.add(vid)
-                    if vuid:
-                        joined_user_ids.add(vuid)
-                event_volunteers = [volunteers_by_id[vid] for vid in joined_volunteer_ids if vid in volunteers_by_id]
-                event_volunteers.extend(
-                    volunteers_by_user_id[uid]
-                    for uid in joined_user_ids
-                    if uid in volunteers_by_user_id and volunteers_by_user_id[uid] not in event_volunteers
-                )
-                settings = _get_event_email_reminder_settings(event)
-                setting_diagnostics: list[dict[str, Any]] = []
-                for setting in settings:
-                    is_due = _event_reminder_setting_is_due(event, setting, now)
-                    lead_delta = _notification_lead_delta(setting)
-                    start_date = _parse_iso_datetime(event.get("startDate"))
-                    send_at_str = (start_date - lead_delta).isoformat() if start_date and lead_delta else None
-                    entry: dict[str, Any] = {
-                        "type": setting.get("type"),
-                        "value": setting.get("value"),
-                        "unit": setting.get("unit"),
-                        "is_due": is_due,
-                        "send_at": send_at_str,
-                        "now_utc": now.isoformat(),
-                        "volunteers": [],
-                    }
-                    if is_due:
-                        for volunteer in event_volunteers:
-                            volunteer_id = str(volunteer.get("id") or "").strip()
-                            recipient_email = _get_reminder_email_for_volunteer(volunteer, users_by_id)
-                            reminder_type = _get_reminder_type(setting)
-                            reminder_id = f"{reminder_type}:{event_id}:{volunteer_id}"
-                            cursor.execute(
-                                "select reminder_id from public.event_email_reminders where reminder_id = %s",
-                                (reminder_id,),
-                            )
-                            already_sent = cursor.fetchone() is not None
-                            entry["volunteers"].append({
-                                "volunteer_id": volunteer_id,
-                                "email": recipient_email,
-                                "reminder_id": reminder_id,
-                                "already_sent": already_sent,
-                            })
-                    setting_diagnostics.append(entry)
-                results.append({
-                    "event_id": event_id,
-                    "title": event.get("title"),
-                    "status": event.get("status"),
-                    "startDate": event.get("startDate"),
-                    "isEvent": event.get("isEvent"),
-                    "notification_settings_raw": event.get("notificationSettings"),
-                    "volunteer_count": len(event_volunteers),
-                    "settings": setting_diagnostics,
-                })
-    return {"now_utc": now.isoformat(), "events": results}
-
 
 
 # Returns the email username part when an identifier is not a full email or phone.
@@ -5246,10 +5225,11 @@ async def start_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogStartP
             None,
         )
         if today_log is not None:
-            raise HTTPException(
-                status_code=409,
-                detail="Attendance has already been recorded for this event today.",
-            )
+            # A slow client may retry after the first request already committed.
+            # Return the canonical log so the retry is safe and the client can
+            # immediately render the confirmed state instead of showing an
+            # error for an attendance record that actually exists.
+            return {"log": today_log}
 
         new_log = {
             "id": f"timelog-{int(datetime.now(timezone.utc).timestamp() * 1000)}",
@@ -5325,6 +5305,23 @@ async def end_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogEndPaylo
             None,
         )
         if active_log is None:
+            # Treat a retry after a successful sign-out as idempotent. Without
+            # this, the first request can commit while the response is lost,
+            # then the retry reports a false "confirm attendance" error.
+            completed_log = max(
+                (
+                    log
+                    for log in existing_logs
+                    if log.get("projectId") == payload.projectId
+                    and log.get("timeOut")
+                    and (log.get("completionReport") or log.get("completionPhoto"))
+                ),
+                key=lambda log: str(log.get("timeOut") or ""),
+                default=None,
+            )
+            if completed_log is not None:
+                volunteer = _postgres_get_hot_item_by_id(connection, "volunteers", volunteer_id)
+                return {"log": completed_log, "volunteerProfile": volunteer}
             raise HTTPException(
                 status_code=400,
                 detail="You must confirm attendance before you can complete sign-out.",
