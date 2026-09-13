@@ -1,120 +1,109 @@
-# Build APK for NVC Volunteer System
-# This script builds an APK using EAS Build
+# Build the current NVC Android APK with the selected EAS profile.
+
+$ErrorActionPreference = "Stop"
 
 Write-Host ""
-Write-Host "==========================================="  -ForegroundColor Cyan
-Write-Host " NVC VOLUNTEER SYSTEM - APK BUILDER"  -ForegroundColor Cyan
-Write-Host "==========================================="  -ForegroundColor Cyan
+Write-Host "===========================================" -ForegroundColor Cyan
+Write-Host " NVC VOLUNTEER SYSTEM - APK BUILDER" -ForegroundColor Cyan
+Write-Host "===========================================" -ForegroundColor Cyan
 Write-Host ""
 
-# Check if EAS CLI is installed
 Write-Host "[1/5] Checking EAS CLI..." -ForegroundColor Yellow
-$easInstalled = Get-Command eas -ErrorAction SilentlyContinue
-if (-not $easInstalled) {
-    Write-Host "  ✗ EAS CLI not found. Installing..." -ForegroundColor Red
-    npm install -g eas-cli
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "  ✗ Failed to install EAS CLI" -ForegroundColor Red
-        exit 1
-    }
-    Write-Host "  ✓ EAS CLI installed" -ForegroundColor Green
-} else {
-    Write-Host "  ✓ EAS CLI found" -ForegroundColor Green
+$easCommand = Get-Command eas -ErrorAction SilentlyContinue
+if (-not $easCommand) {
+    Write-Host "  EAS CLI is not installed. Install it with: npm install -g eas-cli@latest" -ForegroundColor Red
+    exit 1
 }
+Write-Host "  EAS CLI found" -ForegroundColor Green
 
-# Check if logged in to EAS
 Write-Host ""
 Write-Host "[2/5] Checking EAS authentication..." -ForegroundColor Yellow
-$whoami = eas whoami 2>&1
+$whoami = (& eas whoami 2>&1 | Out-String).Trim()
 if ($whoami -match "Not logged in") {
-    Write-Host "  ✗ Not logged in to EAS. Please login:" -ForegroundColor Red
-    eas login
+    Write-Host "  Please log in to EAS." -ForegroundColor Yellow
+    & eas login
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "  ✗ Login failed" -ForegroundColor Red
+        Write-Host "  EAS login failed." -ForegroundColor Red
         exit 1
     }
-    Write-Host "  ✓ Logged in successfully" -ForegroundColor Green
 } else {
-    Write-Host "  ✓ Already logged in as: $($whoami.Trim())" -ForegroundColor Green
+    Write-Host "  Logged in to EAS" -ForegroundColor Green
 }
 
-# Check backend is running
 Write-Host ""
-Write-Host "[3/5] Checking local backend..." -ForegroundColor Yellow
-try {
-    $response = Invoke-WebRequest -Uri "http://127.0.0.1:8000/db-health" -TimeoutSec 5 -ErrorAction Stop
-    Write-Host "  ✓ Backend is running" -ForegroundColor Green
-} catch {
-    Write-Host "  ⚠ Backend not responding. Starting backend..." -ForegroundColor Yellow
-    Write-Host "  Please run 'npm start' in another terminal and wait 30 seconds" -ForegroundColor Yellow
-    Write-Host "  Then run this script again" -ForegroundColor Yellow
-    exit 1
-}
-
-# Check ngrok tunnel
-Write-Host ""
-Write-Host "[4/5] Checking ngrok tunnel..." -ForegroundColor Yellow
-try {
-    $ngrokUrl = "https://chatroom-vice-frivolous.ngrok-free.dev/db-health"
-    $response = Invoke-WebRequest -Uri $ngrokUrl -TimeoutSec 10 -ErrorAction Stop
-    Write-Host "  ✓ Ngrok tunnel is active" -ForegroundColor Green
-    Write-Host "    URL: https://chatroom-vice-frivolous.ngrok-free.dev" -ForegroundColor Cyan
-} catch {
-    Write-Host "  ⚠ Ngrok tunnel not responding" -ForegroundColor Yellow
-    Write-Host "  The APK will be built with this URL, but it may not work until ngrok is running" -ForegroundColor Yellow
-    Write-Host ""
-    $continue = Read-Host "Continue anyway? (y/n)"
-    if ($continue -ne "y") {
-        Write-Host "  Build cancelled. Please start ngrok and try again." -ForegroundColor Red
-        exit 1
-    }
-}
-
-# Build APK
-Write-Host ""
-Write-Host "[5/5] Building APK..." -ForegroundColor Yellow
-Write-Host "  This will take 10-15 minutes. The build runs on EAS servers." -ForegroundColor Cyan
-Write-Host ""
-
-# Prompt for build profile
-Write-Host "Choose build profile:" -ForegroundColor Cyan
-Write-Host "  1. preview  (recommended - for testing)" -ForegroundColor White
-Write-Host "  2. production  (for final release)" -ForegroundColor White
+Write-Host "[3/5] Selecting build profile..." -ForegroundColor Yellow
+Write-Host "  1. preview     (testing APK)" -ForegroundColor White
+Write-Host "  2. production  (release APK)" -ForegroundColor White
 Write-Host ""
 $choice = Read-Host "Enter choice (1 or 2)"
+$profile = if ($choice -eq "2") { "production" } else { "preview" }
+Write-Host "  Using profile: $profile" -ForegroundColor Green
 
-$profile = "preview"
-if ($choice -eq "2") {
-    $profile = "production"
-}
-
-Write-Host ""
-Write-Host "  Building with profile: $profile" -ForegroundColor Green
-Write-Host ""
-
-# Run EAS build
-eas build --platform android --profile $profile
-
-if ($LASTEXITCODE -eq 0) {
-    Write-Host ""
-    Write-Host "==========================================="  -ForegroundColor Green
-    Write-Host " BUILD COMPLETED SUCCESSFULLY!"  -ForegroundColor Green
-    Write-Host "==========================================="  -ForegroundColor Green
-    Write-Host ""
-    Write-Host "Next steps:" -ForegroundColor Cyan
-    Write-Host "  1. Download the APK from the link provided above" -ForegroundColor White
-    Write-Host "  2. Transfer it to your Android device" -ForegroundColor White
-    Write-Host "  3. Install and test" -ForegroundColor White
-    Write-Host ""
-    Write-Host "IMPORTANT: Keep your backend and ngrok running while testing the app!" -ForegroundColor Yellow
-    Write-Host ""
-} else {
-    Write-Host ""
-    Write-Host "==========================================="  -ForegroundColor Red
-    Write-Host " BUILD FAILED"  -ForegroundColor Red
-    Write-Host "==========================================="  -ForegroundColor Red
-    Write-Host ""
-    Write-Host "Check the error messages above for details." -ForegroundColor Red
-    Write-Host ""
+$easConfig = Get-Content -Raw -Path "./eas.json" | ConvertFrom-Json
+$profileConfig = $easConfig.build.PSObject.Properties[$profile].Value
+$apiBaseUrl = [string]$profileConfig.env.EXPO_PUBLIC_API_BASE_URL
+if ([string]::IsNullOrWhiteSpace($apiBaseUrl)) {
+    Write-Host "  No API URL is configured for the $profile profile." -ForegroundColor Red
     exit 1
 }
+
+Write-Host ""
+Write-Host "[4/5] Checking the backend and Android OAuth configuration..." -ForegroundColor Yellow
+try {
+    $healthUrl = "$($apiBaseUrl.TrimEnd('/'))/db-health"
+    $health = Invoke-WebRequest -Uri $healthUrl -TimeoutSec 10 -UseBasicParsing
+    if ($health.StatusCode -ne 200) {
+        throw "Unexpected status $($health.StatusCode)"
+    }
+    Write-Host "  Backend is reachable: $healthUrl" -ForegroundColor Green
+} catch {
+    Write-Host "  Backend health check failed for $apiBaseUrl" -ForegroundColor Red
+    Write-Host "  Start or repair the VPS backend before building the APK." -ForegroundColor Yellow
+    exit 1
+}
+
+$androidGoogleClientId = [string]$env:EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID
+if ([string]::IsNullOrWhiteSpace($androidGoogleClientId) -and (Test-Path "./.env")) {
+    $localOAuthLine = Get-Content -Path "./.env" | Where-Object {
+        $_ -match '^EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID='
+    } | Select-Object -Last 1
+    if ($localOAuthLine) {
+        $androidGoogleClientId = ($localOAuthLine -split '=', 2)[1].Trim()
+    }
+}
+if ([string]::IsNullOrWhiteSpace($androidGoogleClientId)) {
+    try {
+        $remoteOAuthOutput = (& eas env:get $profile --variable-name EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID --non-interactive 2>$null | Out-String).Trim()
+        if ($LASTEXITCODE -eq 0 -and $remoteOAuthOutput -match '\.apps\.googleusercontent\.com') {
+            $androidGoogleClientId = "configured-remotely"
+        }
+    } catch {
+        $androidGoogleClientId = ""
+    }
+}
+if ([string]::IsNullOrWhiteSpace($androidGoogleClientId)) {
+    Write-Host "  Android Google OAuth is missing." -ForegroundColor Red
+    Write-Host "  Set EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID in the EAS $profile environment." -ForegroundColor Yellow
+    exit 1
+}
+Write-Host "  Android Google OAuth is configured" -ForegroundColor Green
+
+Write-Host ""
+Write-Host "[5/5] Validating the current mobile source..." -ForegroundColor Yellow
+& npx tsc --noEmit
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  TypeScript validation failed. APK build cancelled." -ForegroundColor Red
+    exit 1
+}
+Write-Host "  TypeScript validation passed" -ForegroundColor Green
+
+Write-Host ""
+Write-Host "Starting EAS Android build with the latest source..." -ForegroundColor Yellow
+& eas build --platform android --profile $profile
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "APK build failed." -ForegroundColor Red
+    exit 1
+}
+
+Write-Host ""
+Write-Host "APK build submitted successfully. Download the finished APK from the EAS link." -ForegroundColor Green

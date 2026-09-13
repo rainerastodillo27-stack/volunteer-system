@@ -6,12 +6,15 @@
   "build": {
     "preview": {
       "distribution": "internal",
+      "environment": "preview",
+      "autoIncrement": true,
       "android": {
         "buildType": "apk"
       },
       "env": {
         "VOLCRE_API_BASE_URL": "http://129.121.73.76",
         "EXPO_PUBLIC_API_BASE_URL": "http://129.121.73.76",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "163385365479-jaeg90dmalfqvjrkmbc0pigdaocof652.apps.googleusercontent.com",
         "EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY": "AIzaSyDrZWSM9FJ7pURqvnd2lNqK5y0I084kupE",
         "EXPO_PUBLIC_FIREBASE_API_KEY": "AIzaSyDCNwE9IOIDGnnoGwBTIY27KStmMVeZGzA",
         "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN": "capstone-4c12a.firebaseapp.com",
@@ -22,12 +25,15 @@
       }
     },
     "production": {
+      "environment": "production",
+      "autoIncrement": true,
       "android": {
         "buildType": "apk"
       },
       "env": {
         "VOLCRE_API_BASE_URL": "http://129.121.73.76",
         "EXPO_PUBLIC_API_BASE_URL": "http://129.121.73.76",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "163385365479-jaeg90dmalfqvjrkmbc0pigdaocof652.apps.googleusercontent.com",
         "EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY": "AIzaSyDrZWSM9FJ7pURqvnd2lNqK5y0I084kupE",
         "EXPO_PUBLIC_FIREBASE_API_KEY": "AIzaSyDCNwE9IOIDGnnoGwBTIY27KStmMVeZGzA",
         "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN": "capstone-4c12a.firebaseapp.com",

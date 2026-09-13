@@ -3568,6 +3568,40 @@ export async function loginWithCredentials(
   }
 }
 
+// Sends a one-time code to an existing account email for password recovery.
+export async function sendPasswordResetCode(email: string): Promise<{
+  message?: string;
+  email?: string;
+  expires_in?: number;
+}> {
+  return requestApiJson('/auth/password-reset/send', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ email: email.trim().toLowerCase() }),
+  });
+}
+
+// Verifies a password recovery code and stores the new password server-side.
+export async function confirmPasswordReset(
+  email: string,
+  otp: string,
+  newPassword: string,
+): Promise<{ message?: string; email?: string }> {
+  return requestApiJson('/auth/password-reset/confirm', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      email: email.trim().toLowerCase(),
+      otp: otp.trim(),
+      newPassword: newPassword.trim(),
+    }),
+  });
+}
+
 // Authenticates a user with a Google ID token that is verified by the backend.
 export async function loginWithGoogle(idToken: string): Promise<User | null> {
   const normalizedToken = idToken.trim();

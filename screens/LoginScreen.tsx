@@ -61,6 +61,8 @@ import {
   getUserByEmailOrPhone,
   loginWithCredentials,
   loginWithGoogle,
+  sendPasswordResetCode,
+  confirmPasswordReset,
   saveAppSettings,
   setRuntimeBackendUrl,
   subscribeToStorageChanges,
@@ -133,6 +135,7 @@ type MobileEntryRole = Exclude<UserRole, "admin">;
 type SignupStep = "role" | "details";
 
 type RegistrationOtpPhase = "idle" | "sent" | "expired" | "verified";
+type PasswordResetStep = "email" | "code";
 
 function getPasswordValidationMessage(password: string): string | null {
   const trimmedPassword = password.trim();
@@ -364,6 +367,13 @@ export default function LoginScreen() {
   const [showServerModal, setShowServerModal] = useState(false);
   const [serverUrlInput, setServerUrlInput] = useState('');
   const [serverUrlSaving, setServerUrlSaving] = useState(false);
+  const [showPasswordResetModal, setShowPasswordResetModal] = useState(false);
+  const [passwordResetStep, setPasswordResetStep] = useState<PasswordResetStep>("email");
+  const [passwordResetEmail, setPasswordResetEmail] = useState("");
+  const [passwordResetOtp, setPasswordResetOtp] = useState("");
+  const [passwordResetNewPassword, setPasswordResetNewPassword] = useState("");
+  const [passwordResetConfirmPassword, setPasswordResetConfirmPassword] = useState("");
+  const [passwordResetLoading, setPasswordResetLoading] = useState(false);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [selectedRegionCode, setSelectedRegionCode] = useState("");
@@ -964,6 +974,86 @@ export default function LoginScreen() {
     setIdentifier("");
     setPassword("");
     setLoginError(null);
+  };
+
+  const openPasswordResetModal = () => {
+    const suggestedEmail = identifier.trim().includes("@")
+      ? identifier.trim().toLowerCase()
+      : "";
+    setPasswordResetEmail(suggestedEmail);
+    setPasswordResetOtp("");
+    setPasswordResetNewPassword("");
+    setPasswordResetConfirmPassword("");
+    setPasswordResetStep("email");
+    setShowPasswordResetModal(true);
+  };
+
+  const closePasswordResetModal = () => {
+    setShowPasswordResetModal(false);
+    setPasswordResetStep("email");
+    setPasswordResetOtp("");
+    setPasswordResetNewPassword("");
+    setPasswordResetConfirmPassword("");
+  };
+
+  const handleSendPasswordResetCode = async () => {
+    const email = passwordResetEmail.trim().toLowerCase();
+    if (!email || !email.includes("@")) {
+      Alert.alert("Invalid email", "Enter the email address registered to your account.");
+      return;
+    }
+
+    setPasswordResetLoading(true);
+    try {
+      await sendPasswordResetCode(email);
+      setPasswordResetEmail(email);
+      setPasswordResetStep("code");
+      Alert.alert("Code sent", "Check your email for the 6-digit password reset code.");
+    } catch (error) {
+      showError(error instanceof Error ? error : new Error("Unable to send the reset code."), {
+        fallbackTitle: "Password reset failed",
+        fallbackMessage: "Unable to send the reset code. Please try again.",
+      });
+    } finally {
+      setPasswordResetLoading(false);
+    }
+  };
+
+  const handleConfirmPasswordReset = async () => {
+    const email = passwordResetEmail.trim().toLowerCase();
+    const otp = passwordResetOtp.trim();
+    const newPassword = passwordResetNewPassword.trim();
+    const confirmPassword = passwordResetConfirmPassword.trim();
+    const validationMessage = getPasswordValidationMessage(newPassword);
+
+    if (!/^\d{6}$/.test(otp)) {
+      Alert.alert("Invalid code", "Enter the 6-digit code sent to your email.");
+      return;
+    }
+    if (validationMessage) {
+      Alert.alert("Weak password", validationMessage);
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      Alert.alert("Passwords do not match", "Enter the same new password in both fields.");
+      return;
+    }
+
+    setPasswordResetLoading(true);
+    try {
+      await confirmPasswordReset(email, otp, newPassword);
+      setIdentifier(email);
+      setPassword(newPassword);
+      closePasswordResetModal();
+      Alert.alert("Password reset", "Your password was updated. Tap Log in to continue.");
+    } catch (error) {
+      showError(error instanceof Error ? error : new Error("Unable to reset the password."), {
+        fallbackTitle: "Password reset failed",
+        fallbackMessage: "Unable to reset the password. Check the code and try again.",
+      });
+    } finally {
+      setPasswordResetLoading(false);
+    }
   };
 
   // Updates one field in the volunteer membership form without replacing the whole object.
@@ -1984,12 +2074,7 @@ export default function LoginScreen() {
                     <View style={styles.passwordFieldHeaderRow}>
                       <Text style={styles.inputFieldLabel}>Password</Text>
                       <TouchableOpacity
-                        onPress={() => {
-                          Alert.alert(
-                            "Forgot Password",
-                            "Please contact your NVC system administrator to recover or reset your account password."
-                          );
-                        }}
+                        onPress={openPasswordResetModal}
                       >
                         <Text style={styles.forgotPasswordLinkText}>Forgot password?</Text>
                       </TouchableOpacity>
@@ -2134,6 +2219,118 @@ export default function LoginScreen() {
           </View>
         </View>
       </ScrollView>
+
+      {showPasswordResetModal ? (
+        <Modal
+          visible
+          transparent
+          animationType="fade"
+          onRequestClose={closePasswordResetModal}
+        >
+          <View style={styles.passwordResetOverlay}>
+            <View style={styles.passwordResetCard}>
+              <View style={styles.passwordResetHeader}>
+                <Text style={styles.passwordResetTitle}>Reset password</Text>
+                <TouchableOpacity
+                  onPress={closePasswordResetModal}
+                  disabled={passwordResetLoading}
+                  accessibilityLabel="Close password reset"
+                >
+                  <MaterialIcons name="close" size={24} color="#475569" />
+                </TouchableOpacity>
+              </View>
+              {passwordResetStep === "email" ? (
+                <>
+                  <Text style={styles.passwordResetDescription}>
+                    Enter your registered email. We will send a one-time code to verify your account.
+                  </Text>
+                  <Text style={styles.serverModalInputLabel}>Email address</Text>
+                  <TextInput
+                    style={styles.serverModalInput}
+                    value={passwordResetEmail}
+                    onChangeText={setPasswordResetEmail}
+                    placeholder="you@example.com"
+                    placeholderTextColor="#94a3b8"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="email-address"
+                    editable={!passwordResetLoading}
+                  />
+                  <TouchableOpacity
+                    style={styles.passwordResetPrimaryButton}
+                    onPress={() => void handleSendPasswordResetCode()}
+                    disabled={passwordResetLoading}
+                  >
+                    {passwordResetLoading ? (
+                      <ActivityIndicator size="small" color="#ffffff" />
+                    ) : (
+                      <Text style={styles.passwordResetPrimaryButtonText}>Send reset code</Text>
+                    )}
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.passwordResetDescription}>
+                    Enter the code sent to {passwordResetEmail}, then choose a new password.
+                  </Text>
+                  <Text style={styles.serverModalInputLabel}>6-digit code</Text>
+                  <TextInput
+                    style={styles.serverModalInput}
+                    value={passwordResetOtp}
+                    onChangeText={(value) => setPasswordResetOtp(value.replace(/\D/g, "").slice(0, 6))}
+                    placeholder="000000"
+                    placeholderTextColor="#94a3b8"
+                    keyboardType="number-pad"
+                    editable={!passwordResetLoading}
+                  />
+                  <Text style={styles.serverModalInputLabel}>New password</Text>
+                  <TextInput
+                    style={styles.serverModalInput}
+                    value={passwordResetNewPassword}
+                    onChangeText={setPasswordResetNewPassword}
+                    placeholder="At least 8 characters"
+                    placeholderTextColor="#94a3b8"
+                    secureTextEntry
+                    autoCapitalize="none"
+                    editable={!passwordResetLoading}
+                  />
+                  <Text style={styles.serverModalInputLabel}>Confirm new password</Text>
+                  <TextInput
+                    style={styles.serverModalInput}
+                    value={passwordResetConfirmPassword}
+                    onChangeText={setPasswordResetConfirmPassword}
+                    placeholder="Repeat your new password"
+                    placeholderTextColor="#94a3b8"
+                    secureTextEntry
+                    autoCapitalize="none"
+                    editable={!passwordResetLoading}
+                  />
+                  <View style={styles.passwordResetButtons}>
+                    <TouchableOpacity
+                      style={styles.passwordResetSecondaryButton}
+                      onPress={() => setPasswordResetStep("email")}
+                      disabled={passwordResetLoading}
+                    >
+                      <Text style={styles.passwordResetSecondaryButtonText}>Change email</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.passwordResetPrimaryButton}
+                      onPress={() => void handleConfirmPasswordReset()}
+                      disabled={passwordResetLoading}
+                    >
+                      {passwordResetLoading ? (
+                        <ActivityIndicator size="small" color="#ffffff" />
+                      ) : (
+                        <Text style={styles.passwordResetPrimaryButtonText}>Reset password</Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
+            </View>
+          </View>
+        </Modal>
+      ) : null}
 
       {showSignupModal ? (
         <Modal
@@ -5103,6 +5300,83 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#94a3b8",
     fontWeight: "500",
+  },
+  passwordResetOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+  },
+  passwordResetCard: {
+    width: "100%",
+    maxWidth: 440,
+    backgroundColor: "#ffffff",
+    borderRadius: 16,
+    padding: 20,
+    shadowColor: "#000",
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  passwordResetHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 8,
+  },
+  passwordResetTitle: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: "#0f172a",
+  },
+  passwordResetDescription: {
+    fontSize: 13,
+    color: "#64748b",
+    lineHeight: 19,
+    marginBottom: 14,
+  },
+  serverModalInputLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#475569",
+    marginBottom: 5,
+  },
+  passwordResetButtons: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 2,
+  },
+  passwordResetPrimaryButton: {
+    flex: 1,
+    minHeight: 44,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    borderRadius: 10,
+    backgroundColor: "#166534",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  passwordResetPrimaryButtonText: {
+    color: "#ffffff",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  passwordResetSecondaryButton: {
+    flex: 1,
+    minHeight: 44,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  passwordResetSecondaryButtonText: {
+    color: "#475569",
+    fontSize: 13,
+    fontWeight: "700",
   },
   serverModalOverlay: {
     flex: 1,

@@ -266,6 +266,17 @@ class RegistrationOtpVerifyPayload(BaseModel):
     otp: str
 
 
+# Request payload to start or complete an account password reset.
+class PasswordResetRequestPayload(BaseModel):
+    email: str
+
+
+class PasswordResetConfirmPayload(BaseModel):
+    email: str
+    otp: str
+    newPassword: str
+
+
 # Request payload for approving/rejecting user accounts.
 class UserApprovalPayload(BaseModel):
     status: str  # 'approved' or 'rejected'
@@ -4406,6 +4417,9 @@ def _get_demo_account(identifier: str) -> dict[str, Any] | None:
 _registration_otp_store: dict[str, dict[str, Any]] = {}
 _registration_otp_store_lock = threading.Lock()
 REGISTRATION_OTP_TTL_SECONDS = 300
+_password_reset_otp_store: dict[str, dict[str, Any]] = {}
+_password_reset_otp_store_lock = threading.Lock()
+PASSWORD_RESET_OTP_TTL_SECONDS = 300
 
 
 def _purge_expired_registration_otps() -> None:
@@ -4431,6 +4445,31 @@ def _send_registration_otp_email(recipient_email: str, otp: str) -> None:
     </div>
     """
     _send_email_message(recipient_email, "Your NVC Connect Registration Code", text_body, html_body)
+
+
+def _send_password_reset_otp_email(recipient_email: str, otp: str) -> None:
+    text_body = f"Your NVC Connect password reset code is: {otp}\n\nThis code expires in 5 minutes."
+    html_body = f"""
+    <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:32px;background:#f8fafc;border-radius:12px;">
+      <h2 style="color:#15803d;margin-bottom:8px;">NVC Connect</h2>
+      <p style="color:#334155;font-size:15px;">Use this code to reset your account password:</p>
+      <div style="font-size:40px;font-weight:900;letter-spacing:12px;color:#0f172a;margin:24px 0;">{otp}</div>
+      <p style="color:#64748b;font-size:13px;">This code expires in <strong>5 minutes</strong>. If you did not request this, you can ignore this email.</p>
+    </div>
+    """
+    _send_email_message(recipient_email, "Your NVC Connect Password Reset Code", text_body, html_body)
+
+
+def _purge_expired_password_reset_otps() -> None:
+    now = datetime.now(timezone.utc)
+    with _password_reset_otp_store_lock:
+        expired_keys = [
+            key
+            for key, value in _password_reset_otp_store.items()
+            if value["expires_at"] < now
+        ]
+        for key in expired_keys:
+            del _password_reset_otp_store[key]
 
 
 def _is_email_already_registered(email: str, connection: Any | None = None) -> bool:
@@ -4589,6 +4628,128 @@ def auth_registration_otp_verify(payload: RegistrationOtpVerifyPayload) -> dict[
         del _registration_otp_store[email]
 
     return {"verified": True, "email": email, "message": "Email verified."}
+
+
+@app.post("/auth/password-reset/send")
+def auth_password_reset_send(payload: PasswordResetRequestPayload) -> dict[str, Any]:
+    """Send a one-time password reset code to an existing account email."""
+
+    email = str(payload.email or "").strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="A valid email address is required.")
+
+    _purge_expired_password_reset_otps()
+
+    with _password_reset_otp_store_lock:
+        existing = _password_reset_otp_store.get(email)
+        if existing:
+            time_since = (datetime.now(timezone.utc) - existing["issued_at"]).total_seconds()
+            if time_since < 60:
+                wait = int(60 - time_since)
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Please wait {wait} seconds before requesting a new code.",
+                )
+
+    # Keep the response generic for unknown emails so this endpoint cannot be
+    # used to enumerate registered accounts.
+    try:
+        with get_connection() as connection:
+            user = _get_user_by_identifier(email, connection)
+    except Exception as database_error:
+        print(f"[PASSWORD-RESET] Account lookup failed: {type(database_error).__name__}: {database_error}")
+        raise HTTPException(
+            status_code=503,
+            detail="The account service is temporarily unavailable. Please try again.",
+        ) from database_error
+
+    if user is None:
+        return {
+            "message": "If an account exists for that email, a password reset code has been sent.",
+            "email": email,
+            "expires_in": PASSWORD_RESET_OTP_TTL_SECONDS,
+        }
+
+    otp = "".join(str(secrets.randbelow(10)) for _ in range(6))
+    now = datetime.now(timezone.utc)
+    with _password_reset_otp_store_lock:
+        _password_reset_otp_store[email] = {
+            "otp": otp,
+            "issued_at": now,
+            "expires_at": now + timedelta(seconds=PASSWORD_RESET_OTP_TTL_SECONDS),
+            "attempts": 0,
+        }
+
+    try:
+        _send_password_reset_otp_email(email, otp)
+    except Exception as smtp_error:
+        with _password_reset_otp_store_lock:
+            stored = _password_reset_otp_store.get(email)
+            if stored and stored.get("otp") == otp:
+                del _password_reset_otp_store[email]
+        print(f"[PASSWORD-RESET] SMTP unavailable ({smtp_error}).")
+        raise HTTPException(
+            status_code=503,
+            detail="We could not send the reset code to that email address. Please try again.",
+        ) from smtp_error
+
+    return {
+        "message": "If an account exists for that email, a password reset code has been sent.",
+        "email": email,
+        "expires_in": PASSWORD_RESET_OTP_TTL_SECONDS,
+    }
+
+
+@app.post("/auth/password-reset/confirm")
+def auth_password_reset_confirm(payload: PasswordResetConfirmPayload) -> dict[str, Any]:
+    """Verify a reset code and replace the account password with a bcrypt hash."""
+
+    email = str(payload.email or "").strip().lower()
+    otp = str(payload.otp or "").strip()
+    new_password = str(payload.newPassword or "").strip()
+
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="A valid email address is required.")
+    if not otp or len(otp) != 6 or not otp.isdigit():
+        raise HTTPException(status_code=400, detail="Please enter the 6-digit code sent to your email.")
+    if len(new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters long.")
+    if not any(character.isupper() for character in new_password):
+        raise HTTPException(status_code=400, detail="Password must include at least one uppercase letter.")
+    if not any(character.islower() for character in new_password):
+        raise HTTPException(status_code=400, detail="Password must include at least one lowercase letter.")
+    if not any(character.isdigit() for character in new_password):
+        raise HTTPException(status_code=400, detail="Password must include at least one number.")
+
+    _purge_expired_password_reset_otps()
+    with _password_reset_otp_store_lock:
+        stored = _password_reset_otp_store.get(email)
+        if stored is None:
+            raise HTTPException(status_code=401, detail="No reset code found. Please request a new one.")
+        if datetime.now(timezone.utc) > stored["expires_at"]:
+            del _password_reset_otp_store[email]
+            raise HTTPException(status_code=401, detail="Your reset code has expired. Please request a new one.")
+        if stored["otp"] != otp:
+            stored["attempts"] = int(stored.get("attempts") or 0) + 1
+            if stored["attempts"] >= 5:
+                del _password_reset_otp_store[email]
+                raise HTTPException(status_code=429, detail="Too many incorrect codes. Please request a new one.")
+            raise HTTPException(status_code=401, detail="Incorrect code. Please try again.")
+        del _password_reset_otp_store[email]
+
+    with get_connection() as connection:
+        user = _get_user_by_identifier(email, connection)
+        if user is None:
+            raise HTTPException(status_code=404, detail="Account not found.")
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "update users set password = %s where users_id = %s",
+                (hash_password(new_password), user.get("id")),
+            )
+        connection.commit()
+
+    _invalidate_collection_cache(["users"])
+    return {"message": "Your password has been reset successfully.", "email": email}
 
 @app.post("/auth/login")
 # API endpoint that validates login credentials.

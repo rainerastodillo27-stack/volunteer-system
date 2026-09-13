@@ -121,13 +121,18 @@ module.exports = () => {
     '';
   const googleWebClientId =
     process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || DEFAULT_GOOGLE_WEB_CLIENT_ID;
-  const googleAndroidClientId = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || '';
+  const googleAndroidClientId =
+    process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ||
+    process.env.GOOGLE_ANDROID_CLIENT_ID ||
+    '';
   const googleIosClientId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || '';
 
   return {
     expo: {
       name: 'NVC',
       slug: 'volcre',
+      owner: '11doom11',
+      icon: './assets/nvc-app-icon.png',
       version: '1.0.0',
       orientation: 'portrait',
       assetBundlePatterns: ['**/*'],
@@ -141,6 +146,7 @@ module.exports = () => {
       },
       android: {
         package: 'com.volcre.nvcconnect',
+        icon: './assets/nvc-app-icon.png',
         versionCode: 1,
         adaptiveIcon: {
           backgroundColor: '#ffffff',
@@ -163,6 +169,9 @@ module.exports = () => {
         googleWebClientId,
         googleAndroidClientId,
         googleIosClientId,
+        eas: {
+          projectId: '76052145-d8f4-47a9-aedf-c18a0de136c8',
+        },
       },
       plugins: [
         'expo-font',
