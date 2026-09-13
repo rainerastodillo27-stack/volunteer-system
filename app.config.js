@@ -113,6 +113,9 @@ module.exports = () => {
   const mobileGoogleMapsApiKey =
     process.env.GOOGLE_MAPS_MOBILE_API_KEY ||
     process.env.GOOGLE_MAPS_ANDROID_API_KEY ||
+    process.env.GOOGLE_MAPS_API_KEY ||
+    process.env.GOOGLE_MAPS_WEB_API_KEY ||
+    process.env.EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY ||
     '';
   const webGoogleMapsApiKey =
     process.env.EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY ||
@@ -146,6 +149,9 @@ module.exports = () => {
       },
       android: {
         package: 'com.volcre.nvcconnect',
+        // expo-auth-session's Google provider returns to the Android package
+        // scheme. Keep the native intent filter aligned with that redirect.
+        scheme: 'com.volcre.nvcconnect',
         icon: './assets/nvc-app-icon.png',
         versionCode: 1,
         adaptiveIcon: {

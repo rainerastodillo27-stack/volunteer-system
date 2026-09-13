@@ -1,0 +1,17 @@
+node_modules/
+.npm-cache/
+.expo/
+.git/
+.venv/
+.dev-logs/
+.dev-pids/
+artifacts/
+dist/
+docs/
+migration_backups/
+playwright-report/
+test-results/
+scratch/
+runtime/message-attachments/
+*.log
+diagnose_out.json

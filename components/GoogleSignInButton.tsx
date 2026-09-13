@@ -72,12 +72,17 @@ function ConfiguredGoogleSignInButton({ disabled, onError, onToken }: GoogleSign
   const handledResponseRef = useRef<unknown>(null);
   const nonceRef = useRef<string>(generateWebNonce());
   const clientId = getGoogleClientId();
+  const nativeRedirectUri =
+    Platform.OS === "android"
+      ? `${Constants.expoConfig?.android?.package || "com.volcre.nvcconnect"}:/oauthredirect`
+      : undefined;
   const [request, response, promptAsync] = useIdTokenAuthRequest({
     clientId,
     webClientId: GOOGLE_WEB_CLIENT_ID,
     androidClientId: GOOGLE_ANDROID_CLIENT_ID,
     iosClientId: GOOGLE_IOS_CLIENT_ID,
     selectAccount: true,
+    ...(nativeRedirectUri ? { redirectUri: nativeRedirectUri } : {}),
     extraParams: {
       nonce: nonceRef.current,
     },
