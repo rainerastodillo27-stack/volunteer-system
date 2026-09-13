@@ -128,7 +128,6 @@ module.exports = () => {
     expo: {
       name: 'NVC',
       slug: 'volcre',
-      owner: '09092233654',
       version: '1.0.0',
       orientation: 'portrait',
       assetBundlePatterns: ['**/*'],
@@ -164,9 +163,6 @@ module.exports = () => {
         googleWebClientId,
         googleAndroidClientId,
         googleIosClientId,
-        eas: {
-          projectId: '5fe09f19-4371-4c48-af29-d0cebd1dcb94',
-        },
       },
       plugins: [
         'expo-font',
