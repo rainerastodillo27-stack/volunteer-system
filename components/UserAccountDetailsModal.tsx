@@ -42,7 +42,7 @@ export default function UserAccountDetailsModal({
                   onPress={() => setDocumentPreview({ title: 'Valid ID Preview', uri: validIdPhoto })}
                   style={{ padding: 4, backgroundColor: '#f0fdf4', borderRadius: 6 }}
                 >
-                  <Image source={{ uri: validIdPhoto }} style={{ width: '100%', height: 180, borderRadius: 8, resizeMode: 'contain' }} />
+                  <Image source={{ uri: validIdPhoto }} style={{ width: '100%', height: 180, borderRadius: 8 }} resizeMode="contain" />
                 </TouchableOpacity>
               </View>
             ) : null}

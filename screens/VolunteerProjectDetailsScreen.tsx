@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import {
   View,
   ScrollView,
@@ -41,6 +41,17 @@ export default function VolunteerProjectDetailsScreen({
 }) {
   const { user } = useAuth();
   const projectId = route?.params?.projectId;
+  const returnTo = route?.params?.returnTo || 'Events';
+  const returnProjectId = route?.params?.returnProjectId;
+  const returnBackTo = route?.params?.returnBackTo || 'Events';
+  const backLabel =
+    returnTo === 'Programs'
+      ? 'Back to Programs'
+      : returnTo === 'Projects'
+        ? 'Back to Projects'
+        : returnTo === 'ProjectDetails'
+          ? 'Back to Event'
+          : 'Back to Events';
 
   const [project, setProject] = useState<Project | null>(null);
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
@@ -52,6 +63,9 @@ export default function VolunteerProjectDetailsScreen({
   const [loading, setLoading] = useState(true);
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const [isDesktop, setIsDesktop] = useState(false);
+  const hasLoadedOnceRef = useRef(false);
+  const loadInFlightRef = useRef(false);
+  const reloadQueuedRef = useRef(false);
 
   useEffect(() => {
     const checkLayout = () => {
@@ -63,11 +77,34 @@ export default function VolunteerProjectDetailsScreen({
     return () => subscription.remove();
   }, []);
 
+  useEffect(() => {
+    navigation?.setOptions?.({
+      title: project?.isEvent ? 'Event Details' : 'Project Details',
+    });
+  }, [navigation, project?.isEvent]);
+
   const loadData = useCallback(async () => {
-    if (!projectId || !user?.id) return;
+    if (!projectId || !user?.id) {
+      setLoading(false);
+      return;
+    }
+
+    // Storage notifications can arrive in bursts (for example, when an admin
+    // updates an event). Do not start another full detail load while one is
+    // already running; one follow-up refresh is enough to catch the latest
+    // committed data.
+    if (loadInFlightRef.current) {
+      reloadQueuedRef.current = true;
+      return;
+    }
+
+    loadInFlightRef.current = true;
+    const shouldShowBlockingLoader = !hasLoadedOnceRef.current;
 
     try {
-      setLoading(true);
+      if (shouldShowBlockingLoader) {
+        setLoading(true);
+      }
       const profile = await getVolunteerByUserId(user.id);
       setVolunteerProfile(profile);
 
@@ -96,10 +133,19 @@ export default function VolunteerProjectDetailsScreen({
       } else {
         setParentProject(null);
       }
+      hasLoadedOnceRef.current = true;
     } catch (error) {
       console.error('Error loading project details:', error);
     } finally {
-      setLoading(false);
+      if (shouldShowBlockingLoader) {
+        setLoading(false);
+      }
+      loadInFlightRef.current = false;
+
+      if (reloadQueuedRef.current) {
+        reloadQueuedRef.current = false;
+        void loadData();
+      }
     }
   }, [projectId, user?.id]);
 
@@ -112,6 +158,22 @@ export default function VolunteerProjectDetailsScreen({
       );
     }, [loadData])
   );
+
+  const handleBack = useCallback(() => {
+    if (returnTo === 'ProjectDetails') {
+      if (returnProjectId) {
+        navigation.navigate('ProjectDetails', {
+          projectId: returnProjectId,
+          returnTo: returnBackTo,
+        });
+      } else {
+        navigation.navigate('Events');
+      }
+      return;
+    }
+
+    navigation.navigate(returnTo);
+  }, [navigation, returnBackTo, returnProjectId, returnTo]);
 
 
   const handleJoinEvent = async () => {
@@ -149,7 +211,7 @@ export default function VolunteerProjectDetailsScreen({
       <View style={styles.centerWrapper}>
         <MaterialIcons name="folder-open" size={48} color="#ccc" />
         <Text style={styles.errorText}>Event not found</Text>
-        <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
+        <TouchableOpacity style={styles.backButton} onPress={handleBack}>
           <Text style={styles.backButtonText}>Go Back</Text>
         </TouchableOpacity>
       </View>
@@ -479,7 +541,12 @@ export default function VolunteerProjectDetailsScreen({
           activeOpacity={0.8}
           onPress={() => {
             if (parentProject) {
-              navigation.navigate('ProjectDetails', { projectId: parentProject.id });
+              navigation.navigate('ProjectDetails', {
+                projectId: parentProject.id,
+                returnTo: 'ProjectDetails',
+                returnProjectId: project.id,
+                returnBackTo,
+              });
             } else {
               Alert.alert('Project Details', 'No parent project linked.');
             }
@@ -507,17 +574,11 @@ export default function VolunteerProjectDetailsScreen({
     <View style={styles.container}>
       {/* Top Navbar */}
       <View style={styles.navbar}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.navBackBtn}>
+        <TouchableOpacity onPress={handleBack} style={styles.navBackBtn}>
           <MaterialIcons name="arrow-back" size={20} color="#1e293b" />
-          <Text style={styles.navBackText}>Back to Events</Text>
+          <Text style={styles.navBackText}>{backLabel}</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.navBellBtn}>
-          <MaterialIcons name="notifications-none" size={22} color="#1e293b" />
-          <View style={styles.bellRedBadge} {...({} as any)}>
-            <Text style={styles.bellBadgeText}>3</Text>
-          </View>
-        </TouchableOpacity>
       </View>
 
       <ScrollView contentContainerStyle={[styles.scrollContent, !isDesktop && { padding: 16 }]} showsVerticalScrollIndicator={false}>
@@ -575,26 +636,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#1e293b',
-  },
-  navBellBtn: {
-    position: 'relative',
-    padding: 4,
-  },
-  bellRedBadge: {
-    position: 'absolute',
-    top: -2,
-    right: -2,
-    backgroundColor: '#ef4444',
-    width: 15,
-    height: 15,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bellBadgeText: {
-    color: '#ffffff',
-    fontSize: 9,
-    fontWeight: '800',
   },
   scrollContent: {
     padding: 24,

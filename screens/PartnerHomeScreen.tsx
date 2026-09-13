@@ -25,6 +25,7 @@ import presImage from '../assets/about-us-2020.jpg';
 import livelihoodImage from '../assets/programs/livelihood.jpg';
 import nutritionImage from '../assets/programs/nutrition.jpg';
 import educationImage from '../assets/programs/education.jpg';
+import { useNotificationCenter } from '../components/NotificationCenter';
 
 type PartnerNavProp = BottomTabNavigationProp<PartnerTabParamList>;
 
@@ -32,6 +33,7 @@ export default function PartnerHomeScreen() {
   const { user } = useAuth();
   const navigation = useNavigation<PartnerNavProp>();
   const insets = useSafeAreaInsets();
+  const { openNotifications } = useNotificationCenter();
   const [partner, setPartner] = React.useState<Partner | null>(null);
 
   React.useEffect(() => {
@@ -87,7 +89,7 @@ export default function PartnerHomeScreen() {
   };
 
   const handleNotificationPress = () => {
-    navigation.navigate('Messages');
+    openNotifications(() => navigation.navigate('Messages'));
   };
 
   return (

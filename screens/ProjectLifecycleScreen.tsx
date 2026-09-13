@@ -170,6 +170,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { format } from 'date-fns';
 
 import { navigateToAvailableRoute } from '../utils/navigation';
+import { buildTablePdf, downloadPdfFile } from '../utils/pdfDownload';
 
 import {
 
@@ -182,7 +183,11 @@ import {
 } from '../utils/projectMap';
 
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
-import { getAttendanceWindowKey, isEventAttendanceLate } from '../utils/attendanceSchedule';
+import {
+  getAttendanceWindowKey,
+  hasEventStartedForToday,
+  isEventAttendanceLate,
+} from '../utils/attendanceSchedule';
 
 import { getAttachmentLabel, getPrimaryReportMediaUri, isImageMediaUri, openAttachmentUri, pickDocumentFromDevice, pickImageFromDevice } from '../utils/media';
 
@@ -2408,7 +2413,7 @@ const InlineProjectForm = React.memo(({
 
           }}>
 
-            <Image source={{ uri: projectDraft.imageUrl }} style={{ width: '100%', height: '100%', resizeMode: 'cover' }} />
+            <Image source={{ uri: projectDraft.imageUrl }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
 
             <TouchableOpacity
 
@@ -6575,7 +6580,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
           }}>
 
-            <Image source={{ uri: projectDraft.imageUrl }} style={{ width: '100%', height: '100%', resizeMode: 'cover' }} />
+            <Image source={{ uri: projectDraft.imageUrl }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
 
             <TouchableOpacity
 
@@ -19179,120 +19184,98 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-    const handleExportAttendanceReport = () => {
-
+    const handleExportAttendancePdf = () => {
       const exportDateKey = resolvedAttendanceDateKey;
-
+      const exportDateValue = new Date(`${exportDateKey}T00:00:00`);
+      const exportCurrentDateValue = new Date(currentDate);
+      exportCurrentDateValue.setHours(0, 0, 0, 0);
+      const exportDateIsToday =
+        exportDateKey === getAttendanceWindowKey(activeSelectedProject.startDate, currentDate.toISOString());
+      const exportDateNotStarted =
+        (!Number.isNaN(exportDateValue.getTime()) &&
+          exportDateValue.getTime() > exportCurrentDateValue.getTime()) ||
+        (exportDateIsToday && !hasEventStartedForToday(activeSelectedProject.startDate, currentDate));
       const eventVolunteers = getProjectVolunteerEntries(activeSelectedProject);
-
       const rows = eventVolunteers.map(volunteer => {
-
         const volunteerLogs = volunteerTimeLogs.filter(log =>
           log.projectId === activeSelectedProject.id &&
           doesTimeLogBelongToVolunteer(log, volunteer)
         );
-
-        const todayLog = volunteerLogs.find(
-          log => getAttendanceWindowKey(activeSelectedProject.startDate, log.attendanceConfirmedAt || log.timeIn) === resolvedAttendanceDateKey
+        const attendanceLog = volunteerLogs.find(
+          log => getAttendanceWindowKey(
+            activeSelectedProject.startDate,
+            log.attendanceConfirmedAt || log.timeIn
+          ) === exportDateKey
         );
-
-
-
         const isLate = Boolean(
-          todayLog && (
-            todayLog.note?.startsWith('[Late]') ||
-            todayLog.note?.includes('late') ||
-            (activeSelectedProject.isEvent && isEventAttendanceLate(activeSelectedProject.startDate, todayLog.timeIn))
+          attendanceLog && (
+            attendanceLog.note?.startsWith('[Late]') ||
+            attendanceLog.note?.includes('late') ||
+            (activeSelectedProject.isEvent && isEventAttendanceLate(
+              activeSelectedProject.startDate,
+              attendanceLog.timeIn
+            ))
           )
         );
+        const assignedTasks = (activeSelectedProject.internalTasks || []).filter(task => {
+          const volunteerIdentifiers = getVolunteerIdentityIdentifiers(volunteer);
+          return getTaskAssignedVolunteerIds(task, volunteers).some(assignedId =>
+            volunteerIdentifiers.has(normalizeVolunteerIdentifier(assignedId))
+          );
+        });
+        const completedTasks = assignedTasks
+          .filter(task => task.status === 'Completed')
+          .map(task => task.title);
+        const noteTask = attendanceLog?.note?.replace(/^\[Late\]\s*/, '').trim();
 
-        const isPresent = todayLog && !isLate;
-
-        const attendanceStatus = isLate ? 'Late' : isPresent ? 'Present' : 'Absent';
-
-
-
-        let completedTask = 'None';
-
-        if (todayLog) {
-
-          const cleanNote = (todayLog.note || '').replace(/^\[Late\]\s*/, '').trim();
-
-          completedTask = cleanNote || 'None';
-
-        }
-
-
-
-        return [
-
-          volunteer.name,
-
-          volunteer.email,
-
-          attendanceStatus,
-
-          completedTask,
-
-        ];
-
+        return {
+          volunteer: volunteer.name,
+          email: volunteer.email,
+          attendance: isLate
+            ? 'Late'
+            : attendanceLog
+              ? 'Present'
+              : exportDateNotStarted
+                ? 'Not started'
+                : 'Absent',
+          marked: attendanceLog?.attendanceCheckedAt ? 'Marked' : 'Not marked',
+          time: attendanceLog ? format(new Date(attendanceLog.timeIn), 'h:mm a') : 'Not timed in',
+          assignedTasks: assignedTasks.map(task => task.title).join(', ') || 'No task assigned',
+          completedTask: noteTask || completedTasks.join(', ') || 'None',
+          photo: attendanceLog?.attendancePhoto || attendanceLog?.completionPhoto ? 'Yes' : 'No',
+        };
       });
-
-
-
-      const csv = [
-
-        ['Volunteer Name', 'Email', 'Attendance Status', 'Task Completed'],
-
-        ...rows,
-
-      ]
-
-        .map(columns =>
-
-          columns
-
-            .map(value => `"${String(value).replace(/"/g, '""')}"`)
-
-            .join(',')
-
-        )
-
-        .join('\n');
-
-
-
-      if (typeof document !== 'undefined') {
-
-        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-
-        const url = window.URL.createObjectURL(blob);
-
-        const link = document.createElement('a');
-
-        link.href = url;
-
-        link.download = `attendance-report-${activeSelectedProject.title.toLowerCase().replace(/\s+/g, '-')}-${exportDateKey}.csv`;
-
-        document.body.appendChild(link);
-
-        link.click();
-
-        document.body.removeChild(link);
-
-        window.URL.revokeObjectURL(url);
-
-        return;
-
-      }
-
-
-
-      Alert.alert('Report Ready', 'Report generated successfully.');
-
+      const fileTitle = `attendance-report-${activeSelectedProject.title
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/gi, '-')
+        .replace(/^-|-$/g, '')}-${exportDateKey}`;
+      const pdf = buildTablePdf(`Attendance Report - ${activeSelectedProject.title}`, {
+        subtitle: `Attendance date: ${exportDateKey} • ${rows.length} volunteer${rows.length === 1 ? '' : 's'}`,
+        orientation: 'landscape',
+        tables: [
+          {
+            title: 'Daily Attendance',
+            columns: [
+              { key: 'volunteer', label: 'Volunteer', width: 1.3 },
+              { key: 'email', label: 'Email', width: 1.35 },
+              { key: 'attendance', label: 'Attendance', width: 0.8 },
+              { key: 'marked', label: 'Marked', width: 0.8 },
+              { key: 'time', label: 'Time', width: 0.75 },
+              { key: 'assignedTasks', label: 'Assigned Tasks', width: 1.55 },
+              { key: 'completedTask', label: 'Task Completed', width: 1.35 },
+              { key: 'photo', label: 'Photo', width: 0.55 },
+            ],
+            rows,
+            emptyMessage: 'No volunteers are assigned to this event.',
+          },
+        ],
+      });
+      void downloadPdfFile(
+        `${fileTitle}.pdf`,
+        pdf,
+        'Unable to save the attendance PDF on this device.'
+      );
     };
-
-
 
     const renderInitialsAvatar = (name: string, size = 40) => {
 
@@ -19395,6 +19378,18 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       const activeTaskAction = taskCards.find(task => task.id === activeActionTaskId) || null;
       const activeTaskActionAssignedIds = activeTaskAction ? getTaskAssignedVolunteerIds(activeTaskAction) : [];
+
+      const selectedAttendanceDateValue = new Date(`${resolvedAttendanceDateKey}T00:00:00`);
+      const currentDateValue = new Date(currentDate);
+      currentDateValue.setHours(0, 0, 0, 0);
+      const selectedAttendanceDateIsToday =
+        resolvedAttendanceDateKey === getAttendanceWindowKey(project.startDate, currentDate.toISOString());
+      const selectedAttendanceDateIsFuture =
+        !Number.isNaN(selectedAttendanceDateValue.getTime()) &&
+        selectedAttendanceDateValue.getTime() > currentDateValue.getTime();
+      const selectedAttendanceDateNotStarted =
+        selectedAttendanceDateIsFuture ||
+        (selectedAttendanceDateIsToday && !hasEventStartedForToday(project.startDate, currentDate));
 
 
 
@@ -19603,6 +19598,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                       {selectedDateAttendanceEntries.length} with attendance
                     </Text>
                   </View>
+
                 </View>
 
                 <Modal
@@ -19889,23 +19885,37 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
               flexDirection: 'row',
 
-              backgroundColor: '#ffffff',
+              alignItems: 'center',
 
-              borderWidth: 1,
+              justifyContent: 'space-between',
 
-              borderColor: '#e2e8f0',
+              flexWrap: 'wrap',
 
-              borderRadius: 14,
-
-              padding: 4,
+              gap: 12,
 
               marginBottom: 20,
 
-              width: 320,
-
             }}>
 
-              {(['Attendance', 'Tasks'] as const).map(tab => (
+              <View style={{
+
+                flexDirection: 'row',
+
+                backgroundColor: '#ffffff',
+
+                borderWidth: 1,
+
+                borderColor: '#e2e8f0',
+
+                borderRadius: 14,
+
+                padding: 4,
+
+                width: 320,
+
+              }}>
+
+                {(['Attendance', 'Tasks'] as const).map(tab => (
 
                 <TouchableOpacity
 
@@ -19945,7 +19955,33 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 </TouchableOpacity>
 
-              ))}
+                ))}
+
+              </View>
+
+              {eventWorkspaceTab === 'Attendance' ? (
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel="Download attendance PDF for the selected day"
+                  onPress={handleExportAttendancePdf}
+                  activeOpacity={0.85}
+                  style={{
+                    minHeight: 42,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 7,
+                    borderRadius: 10,
+                    backgroundColor: '#166534',
+                    paddingHorizontal: 14,
+                    paddingVertical: 10,
+                  }}
+                >
+                  <MaterialIcons name="picture-as-pdf" size={17} color="#ffffff" />
+                  <Text style={{ fontSize: 13, fontWeight: '800', color: '#ffffff' }}>
+                    Download PDF
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
 
             </View>
 
@@ -21093,11 +21129,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-                      let attendanceStatus = 'Absent';
+                      let attendanceStatus = selectedAttendanceDateNotStarted ? 'Not started' : 'Absent';
 
-                      let badgeColor = '#fee2e2';
+                      let badgeColor = selectedAttendanceDateNotStarted ? '#e0f2fe' : '#fee2e2';
 
-                      let textColor = '#dc2626';
+                      let textColor = selectedAttendanceDateNotStarted ? '#0369a1' : '#dc2626';
 
 
 
@@ -21275,7 +21311,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                             ) : (
 
-                              <Text style={{ fontSize: 13, color: '#94a3b8' }}>Not timed in</Text>
+                              <Text style={{ fontSize: 13, color: '#94a3b8' }}>
+                                {selectedAttendanceDateNotStarted ? 'Not started' : 'Not timed in'}
+                              </Text>
 
                             )}
 
@@ -30557,7 +30595,6 @@ const styles = StyleSheet.create({
 
     height: 90,
 
-    resizeMode: 'cover',
 
   },
 

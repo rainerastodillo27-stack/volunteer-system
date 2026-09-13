@@ -15,6 +15,8 @@ import subprocess
 import tempfile
 import traceback
 import re
+import mimetypes
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, unquote_to_bytes
 from urllib.request import Request, urlopen
@@ -29,7 +31,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from starlette.middleware.gzip import GZipMiddleware
 
@@ -349,6 +351,67 @@ class MessagePayload(BaseModel):
     timestamp: str
     read: bool = False
     attachments: list[str] | None = None
+
+
+# Uploads are kept outside message rows. The database and realtime payload only
+# receive the resulting URL, so a video is transferred once instead of being
+# embedded in every chat history response.
+class MessageAttachmentUploadPayload(BaseModel):
+    dataUri: str
+    filename: str | None = None
+    mimeType: str | None = None
+
+
+MESSAGE_ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024
+MESSAGE_ATTACHMENT_ROOT = Path(
+    os.getenv(
+        "VOLCRE_MESSAGE_ATTACHMENT_DIR",
+        str(Path(__file__).resolve().parent.parent / "runtime" / "message-attachments"),
+    )
+).resolve()
+MESSAGE_ATTACHMENT_DATA_URI_PATTERN = re.compile(
+    r"^data:(?P<mime>[^;,]+)(?P<parameters>(?:;[^,]*)*),(?P<payload>.*)$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _safe_message_attachment_filename(filename: str | None, mime_type: str) -> str:
+    raw_name = str(filename or "").strip()
+    raw_name = Path(raw_name.replace("\\", "/")).name
+    raw_name = re.sub(r"[^A-Za-z0-9._-]+", "_", raw_name).strip("._")
+
+    if not raw_name:
+        extension = mimetypes.guess_extension(mime_type) or ".bin"
+        raw_name = f"attachment{extension}"
+    elif "." not in raw_name:
+        extension = mimetypes.guess_extension(mime_type)
+        if extension:
+            raw_name = f"{raw_name}{extension}"
+
+    return raw_name[:180] or "attachment.bin"
+
+
+def _parse_message_attachment_data_uri(data_uri: str, declared_mime_type: str | None) -> tuple[str, bytes]:
+    match = MESSAGE_ATTACHMENT_DATA_URI_PATTERN.match(str(data_uri or "").strip())
+    if not match or ";base64" not in match.group("parameters").lower():
+        raise HTTPException(status_code=400, detail="Only Base64 data attachments are supported.")
+
+    mime_type = (declared_mime_type or match.group("mime") or "application/octet-stream").strip().lower()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*", mime_type):
+        mime_type = match.group("mime").strip().lower() or "application/octet-stream"
+
+    try:
+        content = base64.b64decode(match.group("payload"), validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise HTTPException(status_code=400, detail="The attachment data is invalid.") from error
+
+    if not content:
+        raise HTTPException(status_code=400, detail="The attachment is empty.")
+    if len(content) > MESSAGE_ATTACHMENT_MAX_BYTES:
+        max_mb = MESSAGE_ATTACHMENT_MAX_BYTES // (1024 * 1024)
+        raise HTTPException(status_code=413, detail=f"Attachments must be {max_mb} MB or smaller.")
+
+    return mime_type, content
 
 
 # Request payload for project group chat messages.
@@ -1318,7 +1381,7 @@ def ensure_project_group_message_storage() -> None:
             cursor.execute(
                 """
                 create table if not exists project_group_messages (
-                  id text primary key,
+                  project_group_messages_id text primary key,
                   project_id text not null,
                   sender_id text not null references users(id) on delete cascade,
                   content text not null,
@@ -1333,6 +1396,26 @@ def ensure_project_group_message_storage() -> None:
                 )
                 """
             )
+            # Older local databases created this table with `id`, while the
+            # relational mirror and the deployed schema use the canonical
+            # `project_group_messages_id` column. Normalize that legacy name
+            # before any group-chat read/write touches the table.
+            cursor.execute(
+                """
+                select column_name
+                from information_schema.columns
+                where table_schema = 'public'
+                  and table_name = 'project_group_messages'
+                """
+            )
+            message_columns = {row[0] for row in cursor.fetchall()}
+            if "project_group_messages_id" not in message_columns and "id" in message_columns:
+                cursor.execute(
+                    """
+                    alter table public.project_group_messages
+                    rename column id to project_group_messages_id
+                    """
+                )
             cursor.execute(
                 "alter table project_group_messages add column if not exists kind text not null default 'message'"
             )
@@ -5251,6 +5334,8 @@ async def start_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogStartP
         }
         _postgres_upsert_hot_item(connection, "volunteerTimeLogs", new_log)
         connection.commit()
+    _invalidate_collection_cache(["volunteerTimeLogs"])
+    _projects_snapshot_cache.clear()
     asyncio.create_task(connection_manager.broadcast_storage_event(["volunteerTimeLogs"]))
     return {"log": new_log}
 
@@ -5294,6 +5379,8 @@ async def set_volunteer_attendance_check(log_id: str, payload: VolunteerTimeLogA
         }
         _postgres_upsert_hot_item(connection, "volunteerTimeLogs", updated_log)
         connection.commit()
+    _invalidate_collection_cache(["volunteerTimeLogs"])
+    _projects_snapshot_cache.clear()
     asyncio.create_task(connection_manager.broadcast_storage_event(["volunteerTimeLogs"]))
     return {"log": updated_log}
 
@@ -5366,6 +5453,8 @@ async def end_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogEndPaylo
         _postgres_upsert_hot_item(connection, "volunteerTimeLogs", updated_log)
         volunteer = _postgres_add_logged_hours_to_volunteer(connection, volunteer_id, updated_log)
         connection.commit()
+    _invalidate_collection_cache(["volunteerTimeLogs", "volunteers"])
+    _projects_snapshot_cache.clear()
     asyncio.create_task(
         connection_manager.broadcast_storage_event(["volunteerTimeLogs", "volunteers"])
     )
@@ -6466,17 +6555,26 @@ def get_conversation(user1: str, user2: str, limit: int = 120) -> dict[str, list
 
 @app.get("/projects/{project_id}/group-messages")
 # API endpoint that returns project group chat messages for an authorized user.
-def get_project_group_messages(project_id: str, user_id: str, limit: int = 200) -> dict[str, list[dict[str, Any]]]:
+def get_project_group_messages(
+    project_id: str,
+    user_id: str,
+    limit: int = 200,
+    compact: bool = False,
+) -> dict[str, list[dict[str, Any]]]:
     ensure_project_group_message_storage()
     from psycopg.rows import dict_row
+
+    query_limit = 1 if compact else max(1, min(limit, 200))
+    order_direction = "desc" if compact else "asc"
+    attachments_expression = "'[]'::text" if compact else "attachments"
 
     with get_connection() as connection:
         _assert_project_group_chat_access(connection, project_id, user_id)
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
-                """
+                f"""
                 select
-                  id as project_group_messages_id,
+                  project_group_messages_id,
                   project_id,
                   sender_id,
                   content,
@@ -6487,16 +6585,76 @@ def get_project_group_messages(project_id: str, user_id: str, limit: int = 200) 
                   response_to_message_id,
                   response_action,
                   response_to_title,
-                  attachments
+                  {attachments_expression} as attachments
                 from project_group_messages
                 where project_id = %s
-                order by timestamp asc, project_group_messages_id asc
+                order by timestamp {order_direction}, project_group_messages_id {order_direction}
                 limit %s
                 """,
-                (project_id, limit),
+                (project_id, query_limit),
             )
             rows = cursor.fetchall()
+    if compact:
+        rows.reverse()
     return {"messages": [serialize_project_group_message_row(row) for row in rows]}
+
+
+# Uploads one message attachment to the API's persistent file directory and
+# returns a small URL that can safely be stored in a message row.
+@app.post("/attachments")
+async def upload_message_attachment(payload: MessageAttachmentUploadPayload) -> dict[str, Any]:
+    mime_type, content = _parse_message_attachment_data_uri(payload.dataUri, payload.mimeType)
+    safe_filename = _safe_message_attachment_filename(payload.filename, mime_type)
+    attachment_id = secrets.token_urlsafe(18)
+    attachment_directory = MESSAGE_ATTACHMENT_ROOT / attachment_id
+    attachment_path = attachment_directory / safe_filename
+
+    try:
+        attachment_directory.mkdir(parents=True, exist_ok=False)
+        attachment_path.write_bytes(content)
+    except OSError as error:
+        shutil.rmtree(attachment_directory, ignore_errors=True)
+        print(f"[ERROR] Failed to persist message attachment: {error}")
+        raise HTTPException(status_code=500, detail="The attachment could not be saved.") from error
+
+    return {
+        "url": f"/attachments/{attachment_id}/{safe_filename}",
+        "filename": safe_filename,
+        "mimeType": mime_type,
+        "size": len(content),
+    }
+
+
+@app.get("/attachments/{attachment_id}/{filename}")
+def get_message_attachment(attachment_id: str, filename: str) -> FileResponse:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{12,64}", attachment_id):
+        raise HTTPException(status_code=404, detail="Attachment not found.")
+
+    safe_filename = Path(filename.replace("\\", "/")).name
+    if safe_filename != filename or not safe_filename:
+        raise HTTPException(status_code=404, detail="Attachment not found.")
+
+    attachment_path = MESSAGE_ATTACHMENT_ROOT / attachment_id / safe_filename
+    if not attachment_path.is_file():
+        raise HTTPException(status_code=404, detail="Attachment not found.")
+
+    mime_type = mimetypes.guess_type(safe_filename)[0] or "application/octet-stream"
+    can_preview_inline = (
+        mime_type.startswith("image/")
+        or mime_type.startswith("video/")
+        or mime_type.startswith("audio/")
+        or mime_type == "application/pdf"
+    )
+    disposition = "inline" if can_preview_inline else "attachment"
+    return FileResponse(
+        attachment_path,
+        media_type=mime_type,
+        headers={
+            "Content-Disposition": f'{disposition}; filename="{safe_filename}"',
+            "Cache-Control": "private, max-age=3600",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @app.post("/messages")
@@ -6545,7 +6703,11 @@ async def create_message(payload: MessagePayload) -> dict[str, Any]:
 
     _invalidate_collection_cache(["messages"])
     message = serialize_message_row(row)
-    await connection_manager.broadcast_message_event(message)
+    # The database write above is the source of truth. Do not make the HTTP
+    # response wait for a possibly stale websocket client; otherwise the
+    # sender's composer can remain in its loading state even though the
+    # message was already committed successfully.
+    asyncio.create_task(connection_manager.broadcast_message_event(message))
     return message
 
 
@@ -6602,7 +6764,7 @@ async def create_project_group_message(
                 cursor.execute(
                     """
                     insert into project_group_messages (
-                      id,
+                      project_group_messages_id,
                       project_id,
                       sender_id,
                       content,
@@ -6617,7 +6779,7 @@ async def create_project_group_message(
                     )
                     values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     returning
-                      id as project_group_messages_id,
+                      project_group_messages_id,
                       project_id,
                       sender_id,
                       content,
@@ -6652,7 +6814,11 @@ async def create_project_group_message(
 
         _invalidate_collection_cache(["projectGroupMessages"])
         message = serialize_project_group_message_row(row)
-        await connection_manager.broadcast_project_group_message_event(project_id, message)
+        # Realtime delivery is best-effort and must not delay a successful
+        # send response when one of the connected clients is unresponsive.
+        asyncio.create_task(
+            connection_manager.broadcast_project_group_message_event(project_id, message)
+        )
         return message
     except HTTPException:
         raise

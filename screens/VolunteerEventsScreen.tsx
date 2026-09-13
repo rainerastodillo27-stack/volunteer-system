@@ -475,7 +475,10 @@ export default function VolunteerEventsScreen() {
       <TouchableOpacity
         style={cardStyle}
         activeOpacity={0.9}
-        onPress={() => (navigation as any).navigate('ProjectDetails', { projectId: item.id })}
+        onPress={() => (navigation as any).navigate('ProjectDetails', {
+          projectId: item.id,
+          returnTo: 'Events',
+        })}
       >
         {/* Card Header Image */}
         <View style={styles.cardImageContainer}>
@@ -630,10 +633,6 @@ export default function VolunteerEventsScreen() {
           <View style={styles.menuLine} />
         </TouchableOpacity>
         <Text style={styles.pageTitle}>Events</Text>
-        <TouchableOpacity style={styles.bellWrap} onPress={() => navigation.navigate('Messages' as never)}>
-          <MaterialIcons name="notifications-none" size={24} color="#1F3A2E" />
-          <View style={styles.bellDot} />
-        </TouchableOpacity>
       </View>
 
       {/* SEARCH AND FILTER BAR */}
@@ -840,21 +839,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontSize: 22,
     color: '#3c4043',
-  },
-  bellWrap: {
-    position: 'relative',
-    padding: 2,
-  },
-  bellDot: {
-    position: 'absolute',
-    top: 2,
-    right: 2,
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#ef4444',
-    borderWidth: 1.5,
-    borderColor: '#ffffff',
   },
   searchAndFilterRow: {
     flexDirection: 'row',

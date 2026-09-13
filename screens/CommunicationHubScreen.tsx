@@ -75,15 +75,25 @@ import {
 
   getMessageSummariesForUser,
 
+  getProjectGroupMessages,
+
+  getApiBaseUrl,
+
   getProjectsScreenSnapshot,
 
   invalidateMessageCache,
+
+  markMessageAsRead,
 
   leaveVolunteerEventGroup,
 
   saveEvent,
 
   saveMessage,
+
+  uploadMessageAttachment,
+
+  saveProjectGroupMessage,
 
   saveProject,
 
@@ -105,8 +115,6 @@ import {
   subscribeToDirectMessages,
 
   subscribeToGroupMessages,
-
-  sendGroupMessage,
 
   markDirectMessageReadFirestore,
 
@@ -132,11 +140,12 @@ import {
 
 import { navigateToAvailableRoute } from '../utils/navigation';
 
-import { downloadAttachmentUri, isImageMediaUri, pickDocumentFromDevice, pickImageFromDevice } from '../utils/media';
+import { downloadAttachmentUri, isImageMediaUri, isVideoMediaUri, pickDocumentFromDevice, pickImageFromDevice } from '../utils/media';
 
 import { getRequestErrorMessage } from '../utils/requestErrors';
 
 import ProposalMessageTemplate from '../components/ProposalMessageTemplate';
+import { WebView } from 'react-native-webview';
 
 function LazyDateTimePicker(props: any) {
 
@@ -240,7 +249,37 @@ type ProjectChatItem = {
 
   members: ProjectChatMember[];
 
+  lastMessage?: ProjectGroupMessage;
+
 };
+
+function getProjectChatMessageTime(message?: ProjectGroupMessage): number {
+  if (!message?.timestamp) return 0;
+  const timestamp = new Date(message.timestamp).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function sortProjectChatsByLatestMessage(chats: ProjectChatItem[]): ProjectChatItem[] {
+  return [...chats].sort((left, right) => {
+    const timeDifference =
+      getProjectChatMessageTime(right.lastMessage) - getProjectChatMessageTime(left.lastMessage);
+    if (timeDifference !== 0) return timeDifference;
+    return left.project.title.localeCompare(right.project.title);
+  });
+}
+
+function upsertProjectChatLatestMessage(
+  chats: ProjectChatItem[],
+  message: ProjectGroupMessage
+): ProjectChatItem[] {
+  return sortProjectChatsByLatestMessage(chats.map(chat => {
+    if (chat.project.id !== message.projectId) return chat;
+
+    const currentTime = getProjectChatMessageTime(chat.lastMessage);
+    const incomingTime = getProjectChatMessageTime(message);
+    return incomingTime >= currentTime ? { ...chat, lastMessage: message } : chat;
+  }));
+}
 
 const PROPOSAL_PREFIX = '___PROPOSAL_CARD___:';
 // WebSocket delivery is immediate. This is only a low-frequency fallback when
@@ -535,6 +574,16 @@ function getAttachmentName(uri: string, index: number): string {
 }
 
 
+function resolveMessageAttachmentUri(uri: string): string {
+  const normalizedUri = String(uri || '').trim();
+  if (!normalizedUri || /^(data:|https?:|file:|content:|ph:)/i.test(normalizedUri)) {
+    return normalizedUri;
+  }
+
+  return `${getApiBaseUrl()}${normalizedUri.startsWith('/') ? '' : '/'}${normalizedUri}`;
+}
+
+
 
 function formatProposalDate(value?: string): string {
 
@@ -753,6 +802,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   const [searchText, setSearchText] = useState('');
 
   const [isSending, setIsSending] = useState(false);
+
+  const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
 
   const [reviewNotice, setReviewNotice] = useState<{
 
@@ -997,6 +1048,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       if (event.type === 'project-group-message.changed') {
         invalidateMessageCache(undefined, undefined, event.message.projectId);
+        setProjectChats(current => upsertProjectChatLatestMessage(current, event.message));
         if (selectedProjectChatRef.current?.project.id === event.message.projectId) {
           setMessages(current => mergeChatMessageLists(current as ProjectGroupMessage[], [event.message]));
         }
@@ -1264,7 +1316,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
 
 
-      setProjectChats(
+      const nextProjectChats: ProjectChatItem[] =
 
         snapshot.projects
 
@@ -1456,9 +1508,35 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
             };
 
-          })
+          });
 
-      );
+      setProjectChats(sortProjectChatsByLatestMessage(nextProjectChats));
+
+      // Fetch only the latest compact message for each event so the sidebar
+      // can sort by activity without downloading video attachments.
+      if (activeSection === 'projects' && nextProjectChats.length > 0) {
+        void Promise.all(nextProjectChats.map(async chat => {
+          try {
+            const latestMessages = await getProjectGroupMessages(
+              chat.project.id,
+              messageUserId,
+              { compact: true }
+            );
+            return [chat.project.id, latestMessages[latestMessages.length - 1]] as const;
+          } catch {
+            return [chat.project.id, undefined] as const;
+          }
+        })).then(latestEntries => {
+          setProjectChats(currentChats => latestEntries.reduce(
+            (currentChatsWithLatest, [, latestMessage]) => (
+              latestMessage
+                ? upsertProjectChatLatestMessage(currentChatsWithLatest, latestMessage)
+                : currentChatsWithLatest
+            ),
+            currentChats
+          ));
+        });
+      }
 
 
 
@@ -1577,7 +1655,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     void loadData(false);
   }, [activeSection, loadData, messageRealtimeVersion]);
 
-  // Firestore real-time listener; tears down automatically when conversation changes.
+  // Keep the legacy Firestore listener for older group messages, while the
+  // backend websocket/API is the source of truth for new group messages.
 
   useEffect(() => {
 
@@ -1710,13 +1789,45 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
     if (selectedProjectChat) {
 
+      let cancelled = false;
+      const projectId = selectedProjectChat.project.id;
+
       setMessages([]);
 
-      return subscribeToGroupMessages(selectedProjectChat.project.id, msgs => {
+      // Load messages saved by the backend. This also prevents large video
+      // attachments from being written into a Firestore document, whose size
+      // limit is what caused the upload error shown to the user.
+      void getProjectGroupMessages(projectId, messageUserId)
+        .then(msgs => {
+          if (cancelled) return;
+          setMessages(current => dedupeProposalReviewCards(
+            mergeChatMessageLists(current as ProjectGroupMessage[], msgs)
+          ));
+        })
+        .catch(error => {
+          if (!cancelled) {
+            console.warn('[Messages] Unable to load project group messages:', error);
+          }
+        });
 
-        setMessages(dedupeProposalReviewCards(msgs));
+      const unsubscribe = subscribeToGroupMessages(projectId, firestoreMessages => {
+        if (cancelled) return;
+
+        const latestFirestoreMessage = firestoreMessages[firestoreMessages.length - 1];
+        if (latestFirestoreMessage) {
+          setProjectChats(current => upsertProjectChatLatestMessage(current, latestFirestoreMessage));
+        }
+
+        setMessages(current => dedupeProposalReviewCards(
+          mergeChatMessageLists(current as ProjectGroupMessage[], firestoreMessages)
+        ));
 
       });
+
+      return () => {
+        cancelled = true;
+        unsubscribe();
+      };
 
     }
 
@@ -1735,6 +1846,50 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     selectedUserRef.current = selectedUser;
 
   }, [selectedUser]);
+
+
+
+  // Opening a direct conversation marks every message addressed to the
+  // current user as read. Update local state first so the sidebar badge clears
+  // immediately, then persist the same state for the navigator notification
+  // badge and other devices.
+  useEffect(() => {
+    if (!selectedUser || !messageUserId) {
+      return;
+    }
+
+    const unreadMessages = messages.filter((message): message is Message => (
+      'recipientId' in message &&
+      message.recipientId === messageUserId &&
+      !message.read
+    ));
+    if (unreadMessages.length === 0) {
+      return;
+    }
+
+    const unreadIds = new Set(unreadMessages.map(message => message.id));
+    const markDirectMessageReadLocally = (message: Message): Message => (
+      unreadIds.has(message.id) ? { ...message, read: true } : message
+    );
+    const nextDirectMessages = directMessagesRef.current.map(markDirectMessageReadLocally);
+
+    directMessagesRef.current = nextDirectMessages;
+    setDirectMessages(nextDirectMessages);
+    setMessages(current => current.map(message => (
+      unreadIds.has(message.id) ? { ...message, read: true } : message
+    )));
+    setConversations(current => current.map(conversation => (
+      conversation.user.id === selectedUser.id
+        ? { ...conversation, unreadCount: 0 }
+        : conversation
+    )));
+    invalidateMessageCache(messageUserId, selectedUser.id);
+
+    void Promise.all(unreadMessages.map(message => Promise.all([
+      markMessageAsRead(message.id).catch(() => undefined),
+      markDirectMessageReadFirestore(message.id, message.senderId, message.recipientId),
+    ])));
+  }, [invalidateMessageCache, messageUserId, messages, selectedUser]);
 
 
 
@@ -2055,6 +2210,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       setShowAttachmentMenu(false);
 
+      setIsUploadingAttachment(true);
+
       const uri = type === 'photo'
 
         ? await pickImageFromDevice()
@@ -2069,9 +2226,12 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       }
 
+      const uploadedUri = await uploadMessageAttachment(
+        uri,
+        getAttachmentName(uri, 0),
+      );
 
-
-      setPendingAttachments(current => [...current, uri]);
+      setPendingAttachments(current => [...current, uploadedUri]);
 
     } catch (error) {
 
@@ -2082,6 +2242,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         error instanceof Error ? error.message : 'Unable to attach this file. Please try again.'
 
       );
+
+    } finally {
+
+      setIsUploadingAttachment(false);
 
     }
 
@@ -2178,6 +2342,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   const [previewImageName, setPreviewImageName] = useState('Photo preview');
   const [previewDocumentUri, setPreviewDocumentUri] = useState<string | null>(null);
   const [previewDocumentName, setPreviewDocumentName] = useState('Document preview');
+  const [previewDocumentIsVideo, setPreviewDocumentIsVideo] = useState(false);
 
   const handleOpenProposalAttachment = async (
     uri: string,
@@ -2185,7 +2350,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     attachmentType?: 'image' | 'document',
   ) => {
 
-    const normalizedUri = String(uri || '').trim();
+    const normalizedUri = resolveMessageAttachmentUri(String(uri || '').trim());
 
     if (!normalizedUri) {
 
@@ -2196,6 +2361,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     // Prefer the attachment's explicit type. This avoids treating every remote
     // document URL as an image just because it uses http(s).
     const isImage = attachmentType === 'image' || (!attachmentType && isImageMediaUri(normalizedUri));
+    const isVideo = !isImage && isVideoMediaUri(normalizedUri);
 
     try {
 
@@ -2208,6 +2374,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         }
 
         setPreviewDocumentName(getAttachmentName(normalizedUri, attachmentIndex));
+        setPreviewDocumentIsVideo(isVideo);
         setPreviewDocumentUri(normalizedUri);
         return;
       }
@@ -2219,6 +2386,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       }
 
       setPreviewDocumentName(getAttachmentName(normalizedUri, attachmentIndex));
+      setPreviewDocumentIsVideo(isVideo);
       setPreviewDocumentUri(normalizedUri);
 
     } catch {
@@ -2233,6 +2401,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     setPreviewImageUri(null);
     setPreviewImageName('Photo preview');
     setPreviewDocumentUri(null);
+    setPreviewDocumentIsVideo(false);
   };
 
   const downloadPreviewAttachment = async () => {
@@ -2525,7 +2694,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
     const senderId = messageUserId || user?.id || '';
 
-    if (!user || !senderId || (!trimmedMessage && pendingAttachments.length === 0) || isSending) return;
+    if (!user || !senderId || (!trimmedMessage && pendingAttachments.length === 0) || isSending || isUploadingAttachment) return;
 
     stopTyping();
     setIsSending(true);
@@ -2566,7 +2735,17 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
         const fullMsg = { ...msg, projectId: selectedProjectChat.project.id, kind: 'message' as const };
 
-        await sendGroupMessage(fullMsg);
+        // Group messages now use the backend path, matching direct messages.
+        // Firestore has a ~1 MiB document limit and rejects videos embedded as
+        // Base64 attachment strings with "property 'array' is longer...".
+        setMessages(current => dedupeProposalReviewCards(
+          mergeChatMessageLists(current as ProjectGroupMessage[], [fullMsg as ProjectGroupMessage])
+        ));
+        setProjectChats(current => upsertProjectChatLatestMessage(
+          current,
+          fullMsg as ProjectGroupMessage
+        ));
+        await saveProjectGroupMessage(fullMsg as ProjectGroupMessage);
 
       }
 
@@ -3033,6 +3212,32 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   const filteredConversations = conversations.filter(c => c.user.name.toLowerCase().includes(searchText.toLowerCase()));
 
   const filteredProjects = projectChats.filter(c => c.project.title.toLowerCase().includes(searchText.toLowerCase()));
+
+  const projectChatIdsKey = projectChats
+    .map(chat => chat.project.id)
+    .sort()
+    .join('|');
+
+  useEffect(() => {
+    if (activeSection !== 'projects' || !projectChatIdsKey) {
+      return undefined;
+    }
+
+    // Legacy Firestore group messages are still supported, but only the
+    // newest document per project is observed for sidebar ordering.
+    const unsubscribers = projectChats.map(chat => subscribeToGroupMessages(
+      chat.project.id,
+      latestMessages => {
+        const latestMessage = latestMessages[latestMessages.length - 1];
+        if (latestMessage) {
+          setProjectChats(current => upsertProjectChatLatestMessage(current, latestMessage));
+        }
+      },
+      { latestOnly: true }
+    ));
+
+    return () => unsubscribers.forEach(unsubscribe => unsubscribe());
+  }, [activeSection, projectChatIdsKey]);
 
   const filteredProposals = proposalChats.filter(c => c.application.partnerName.toLowerCase().includes(searchText.toLowerCase()) || c.projectTitle.toLowerCase().includes(searchText.toLowerCase()));
 
@@ -4989,7 +5194,9 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                           const attachmentName = getAttachmentName(attachmentUri, attachmentIndex);
 
-                          const isImageAttachment = isImageMediaUri(attachmentUri);
+                          const resolvedAttachmentUri = resolveMessageAttachmentUri(attachmentUri);
+                          const isImageAttachment = isImageMediaUri(resolvedAttachmentUri);
+                          const isVideoAttachment = !isImageAttachment && isVideoMediaUri(resolvedAttachmentUri);
 
 
 
@@ -5007,7 +5214,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                               ]}
 
-                              onPress={() => void handleOpenProposalAttachment(attachmentUri, attachmentIndex)}
+                              onPress={() => void handleOpenProposalAttachment(resolvedAttachmentUri, attachmentIndex)}
 
                               activeOpacity={0.85}
 
@@ -5015,7 +5222,17 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                               {isImageAttachment ? (
 
-                                <Image source={{ uri: attachmentUri }} style={styles.messageAttachmentImage} />
+                                <Image source={{ uri: resolvedAttachmentUri }} style={styles.messageAttachmentImage} />
+
+                              ) : isVideoAttachment ? (
+
+                                <View style={[styles.messageAttachmentFileIcon, styles.messageAttachmentVideoIcon, isOwn && styles.messageAttachmentFileIconOwn]}>
+
+                                  <MaterialIcons name="play-circle-filled" size={34} color={isOwn ? '#dcfce7' : '#166534'} />
+
+                                  <Text style={[styles.messageAttachmentVideoLabel, isOwn && styles.messageAttachmentNameOwn]}>Video</Text>
+
+                                </View>
 
                               ) : (
 
@@ -5162,7 +5379,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                   <MaterialIcons
 
-                    name={isImageMediaUri(attachmentUri) ? 'image' : 'insert-drive-file'}
+                    name={isImageMediaUri(attachmentUri) ? 'image' : isVideoMediaUri(attachmentUri) ? 'movie' : 'insert-drive-file'}
 
                     size={16}
 
@@ -5259,16 +5476,17 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                 styles.sendBtn,
 
                 (!messageText.trim() && pendingAttachments.length === 0) && styles.sendBtnDisabled,
+                isUploadingAttachment && styles.sendBtnDisabled,
 
               ]}
 
               onPress={handleSendMessage}
 
-              disabled={(!messageText.trim() && pendingAttachments.length === 0) || isSending}
+              disabled={(!messageText.trim() && pendingAttachments.length === 0) || isSending || isUploadingAttachment}
 
             >
 
-              {isSending ? (
+              {isSending || isUploadingAttachment ? (
 
                 <ActivityIndicator size="small" color="#fff" />
 
@@ -6042,7 +6260,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
           <View style={styles.documentPreviewModalCard}>
             <View style={styles.imagePreviewHeader}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.imagePreviewTitle}>Preview Document</Text>
+                <Text style={styles.imagePreviewTitle}>{previewDocumentIsVideo ? 'Preview Video' : 'Preview Document'}</Text>
                 <Text style={styles.documentPreviewModalName} numberOfLines={1}>
                   {previewDocumentName}
                 </Text>
@@ -6062,7 +6280,36 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
               </View>
             </View>
 
-            {Platform.OS === 'web' && previewDocumentUri ? (
+            {previewDocumentIsVideo ? (
+              Platform.OS === 'web' && previewDocumentUri ? (
+                <View style={styles.documentPreviewFrame}>
+                  {React.createElement('video', {
+                    src: previewDocumentUri,
+                    controls: true,
+                    playsInline: true,
+                    preload: 'metadata',
+                    style: { width: '100%', height: '100%', objectFit: 'contain', backgroundColor: '#0f172a' },
+                  })}
+                </View>
+              ) : Platform.OS !== 'web' && previewDocumentUri ? (
+                <View style={styles.documentPreviewFrame}>
+                  <WebView
+                    source={{ uri: previewDocumentUri }}
+                    style={styles.documentPreviewWebView}
+                    allowsInlineMediaPlayback
+                    mediaPlaybackRequiresUserAction
+                    originWhitelist={['*']}
+                  />
+                </View>
+              ) : (
+                <View style={styles.documentPreviewFallback}>
+                  <MaterialIcons name="movie" size={54} color="#166534" />
+                  <Text style={styles.documentPreviewFallbackText}>
+                    Open the video to play it on this device.
+                  </Text>
+                </View>
+              )
+            ) : Platform.OS === 'web' && previewDocumentUri ? (
               <View style={styles.documentPreviewFrame}>
                 {React.createElement('iframe', {
                   src: previewDocumentUri,
@@ -6084,8 +6331,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
               onPress={openPreviewDocumentExternally}
               activeOpacity={0.85}
             >
-              <MaterialIcons name="open-in-new" size={17} color="#ffffff" />
-              <Text style={styles.documentPreviewOpenButtonText}>Open Document</Text>
+              <MaterialIcons name={previewDocumentIsVideo ? 'play-arrow' : 'open-in-new'} size={17} color="#ffffff" />
+              <Text style={styles.documentPreviewOpenButtonText}>{previewDocumentIsVideo ? 'Open Video' : 'Open Document'}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -7058,6 +7305,8 @@ const styles = StyleSheet.create({
 
   documentPreviewFrame: { flex: 1, backgroundColor: '#f8fafc' },
 
+  documentPreviewWebView: { flex: 1, backgroundColor: '#0f172a' },
+
   documentPreviewFallback: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, backgroundColor: '#f8fafc' },
 
   documentPreviewFallbackText: { color: '#475569', fontSize: 14, fontWeight: '700' },
@@ -7207,6 +7456,22 @@ const styles = StyleSheet.create({
     borderTopColor: '#f1f5f9',
 
     backgroundColor: '#ffffff',
+
+  },
+
+  messageAttachmentVideoIcon: {
+
+    gap: 4,
+
+  },
+
+  messageAttachmentVideoLabel: {
+
+    color: '#166534',
+
+    fontSize: 11,
+
+    fontWeight: '800',
 
   },
 

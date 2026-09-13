@@ -25,6 +25,7 @@ import {
   Unsubscribe,
   Timestamp,
   serverTimestamp,
+  limit,
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { Message, ProjectGroupMessage } from '../models/types';
@@ -161,14 +162,18 @@ export async function markDirectMessageReadFirestore(
  */
 export function subscribeToGroupMessages(
   projectId: string,
-  callback: (messages: ProjectGroupMessage[]) => void
+  callback: (messages: ProjectGroupMessage[]) => void,
+  options: { latestOnly?: boolean } = {}
 ): Unsubscribe {
   const messagesRef = collection(db, 'group_messages', projectId, 'messages');
-  const q = query(messagesRef, orderBy('timestamp', 'asc'), limitToLast(200));
+  const latestOnly = options.latestOnly === true;
+  const q = latestOnly
+    ? query(messagesRef, orderBy('timestamp', 'desc'), limit(1))
+    : query(messagesRef, orderBy('timestamp', 'asc'), limitToLast(200));
 
   return onSnapshot(q, (snapshot) => {
     const messages = snapshot.docs.map((d) => docToData<ProjectGroupMessage>(d));
-    callback(messages);
+    callback(latestOnly ? messages.reverse() : messages);
   });
 }
 

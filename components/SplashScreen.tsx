@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Animated, ActivityIndicator, Image } from 'react-native';
+import { View, Text, StyleSheet, Animated, ActivityIndicator, Image, Platform } from 'react-native';
 import logoImage from '../assets/nvc-logo.png';
 
 type SplashScreenProps = {
@@ -18,13 +18,13 @@ export default function SplashScreen({ progress, message }: SplashScreenProps) {
       Animated.timing(fadeAnim, {
         toValue: 1,
         duration: 500,
-        useNativeDriver: true,
+        useNativeDriver: Platform.OS !== 'web',
       }),
       Animated.spring(scaleAnim, {
         toValue: 1,
         tension: 50,
         friction: 7,
-        useNativeDriver: true,
+        useNativeDriver: Platform.OS !== 'web',
       }),
     ]).start();
   }, [fadeAnim, scaleAnim]);

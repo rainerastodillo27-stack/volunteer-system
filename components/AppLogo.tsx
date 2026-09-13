@@ -21,7 +21,6 @@ export default function AppLogo({ width = 96 }: AppLogoProps) {
 
 const styles = StyleSheet.create({
   logo: {
-    resizeMode: 'contain',
     backgroundColor: 'transparent',
   },
 });

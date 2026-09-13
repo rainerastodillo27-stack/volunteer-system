@@ -561,7 +561,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
     return request;
   }, [user?.id]);
 
-  const loadVolunteerTasks = async () => {
+  const loadVolunteerTasks = React.useCallback(async () => {
     try {
       if (!user?.id) {
         setTasks([]);
@@ -626,7 +626,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       });
       setLoading(false);
     }
-  };
+  }, [user]);
 
   const loadVolunteerTasksCoalesced = React.useCallback(async () => {
     if (tasksLoadInFlightRef.current) {
@@ -644,7 +644,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
         tasksLoadInFlightRef.current = null;
       }
     } while (tasksReloadQueuedRef.current);
-  }, [user]);
+  }, [loadVolunteerTasks]);
 
   useFocusEffect(
     React.useCallback(() => {

@@ -160,6 +160,7 @@ let apiReadyCheckPromise: Promise<void> | null = null;
 const inFlightJsonRequests = new Map<string, Promise<unknown>>();
 const inFlightStorageItemRequests = new Map<string, Promise<unknown>>();
 const inFlightStorageBatchRequests = new Map<string, Promise<Record<string, unknown | null>>>();
+const inFlightBackgroundStorageRefreshes = new Set<string>();
 const projectsSnapshotCache = new Map<string, { data: unknown; timestamp: number }>();
 const sharedStorageCacheGenerations = new Map<string, number>();
 const invalidatedSharedStorageKeys = new Set<string>();
@@ -1685,38 +1686,41 @@ export function clearStorageCache(keys?: string[]): void {
 }
 
 function triggerBackgroundStorageRefresh(keys: string[], includeImages = false): void {
-  if (keys.length === 0) {
+  const refreshKeys = Array.from(new Set(keys.filter(key => !isLocalOnlyStorageKey(key))))
+    .filter(key => {
+      const refreshKey = `${includeImages ? 'images' : 'no-images'}:${key}`;
+      if (inFlightBackgroundStorageRefreshes.has(refreshKey)) {
+        return false;
+      }
+      inFlightBackgroundStorageRefreshes.add(refreshKey);
+      return true;
+    });
+
+  if (refreshKeys.length === 0) {
     return;
   }
 
   void (async () => {
     try {
-      const sharedKeys = keys.filter(key => !isLocalOnlyStorageKey(key));
-      if (sharedKeys.length === 0) {
-        return;
-      }
       const requestGenerations = new Map(
-        sharedKeys.map(key => [key, getSharedStorageCacheGeneration(key)])
+        refreshKeys.map(key => [key, getSharedStorageCacheGeneration(key)])
       );
-      const remoteResults = await fetchRemoteStorageItems(sharedKeys, includeImages);
-      const changedKeys: string[] = [];
-      for (const key of sharedKeys) {
+      const remoteResults = await fetchRemoteStorageItems(refreshKeys, includeImages);
+      for (const key of refreshKeys) {
         const value = remoteResults[key] ?? null;
-        const wasApplied = setSharedStorageCacheValue(
+        setSharedStorageCacheValue(
           key,
           value,
           includeImages,
           requestGenerations.get(key)
         );
-        if (wasApplied) {
-          changedKeys.push(key);
-        }
-      }
-      if (changedKeys.length > 0) {
-        queueSharedStorageChangedKeys(changedKeys);
       }
     } catch {
       // Ignore background refresh failures; UI can retry on focus/change events.
+    } finally {
+      refreshKeys.forEach(key => {
+        inFlightBackgroundStorageRefreshes.delete(`${includeImages ? 'images' : 'no-images'}:${key}`);
+      });
     }
   })();
 }
@@ -4955,6 +4959,39 @@ export async function saveMessage(message: Message): Promise<void> {
   }
 }
 
+// Uploads a message attachment once and returns a lightweight API URL. Message
+// records should contain this URL instead of a multi-megabyte Base64 string.
+export async function uploadMessageAttachment(uri: string, filename?: string): Promise<string> {
+  const normalizedUri = typeof uri === 'string' ? uri.trim() : '';
+  if (!normalizedUri) {
+    throw new Error('Attachment URI is empty.');
+  }
+
+  const mimeType = normalizedUri.match(/^data:([^;,]+)/i)?.[1] || undefined;
+  const payload = await requestApiJson<{
+    url?: string;
+  }>('/attachments', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      dataUri: normalizedUri,
+      filename: filename || undefined,
+      mimeType,
+    }),
+  }, 120000);
+
+  const attachmentUrl = String(payload.url || '').trim();
+  if (!attachmentUrl) {
+    throw new Error('The attachment upload returned no file URL.');
+  }
+
+  // Keep the path relative so a message created on localhost remains usable
+  // by a phone, tunnel, or deployed web client using a different API host.
+  return attachmentUrl;
+}
+
 // Persists a project group chat message and triggers refresh notifications.
 export async function saveProjectGroupMessage(message: ProjectGroupMessage): Promise<void> {
   try {
@@ -5047,15 +5084,17 @@ export async function getConversation(userId1: string, userId2: string): Promise
 // Results are cached for CONVERSATION_CACHE_TTL_MS and invalidated on new messages.
 export async function getProjectGroupMessages(
   projectId: string,
-  userId: string
+  userId: string,
+  options: { compact?: boolean } = {}
 ): Promise<ProjectGroupMessage[]> {
-  const cacheKey = `${projectId}:${userId}`;
+  const compact = options.compact === true;
+  const cacheKey = `${projectId}:${userId}:${compact ? 'compact' : 'full'}`;
   const cached = groupMessagesCache.get(cacheKey);
   if (cached && Date.now() - cached.timestamp < CONVERSATION_CACHE_TTL_MS) {
     return cached.data;
   }
   const payload = await requestApiJson<{ messages?: ProjectGroupMessage[] }>(
-    `/projects/${encodeURIComponent(projectId)}/group-messages?user_id=${encodeURIComponent(userId)}`
+    `/projects/${encodeURIComponent(projectId)}/group-messages?user_id=${encodeURIComponent(userId)}${compact ? '&compact=true&limit=1' : ''}`
   );
   const messages = payload.messages || [];
   groupMessagesCache.set(cacheKey, { data: messages, timestamp: Date.now() });

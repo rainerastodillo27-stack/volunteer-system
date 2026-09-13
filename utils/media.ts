@@ -16,6 +16,7 @@ function getPlatformOS(): string {
 }
 
 const IMAGE_FILE_PATTERN = /\.(png|jpe?g|gif|webp|bmp|heic|heif)(\?.*)?$/i;
+const VIDEO_FILE_PATTERN = /\.(mp4|m4v|mov|webm|ogv|avi|mkv)(\?.*)?$/i;
 
 // Allowed MIME types and extensions for attendance photo uploads.
 const ALLOWED_ATTENDANCE_MIME_TYPES = new Set([
@@ -39,6 +40,14 @@ function buildUnsupportedFileError(fileNameOrMime: string): Error {
   );
 }
 const DATA_URI_PATTERN = /^data:([^;,]+)(;base64)?,/i;
+
+function normalizeBase64DataUri(value: string, mimeType?: string | null): string {
+  if (value.trim().toLowerCase().startsWith('data:')) {
+    return value.trim();
+  }
+
+  return `data:${mimeType || 'application/octet-stream'};base64,${value.trim()}`;
+}
 
 // Keep browser-selected images consistent with native uploads. Compression is
 // best-effort so a picker still succeeds if the browser cannot use canvas.
@@ -70,6 +79,21 @@ export function isImageMediaUri(value?: string | null): boolean {
   }
 
   return IMAGE_FILE_PATTERN.test(normalizedValue);
+}
+
+// Returns true when the provided string identifies a browser/device-playable video.
+export function isVideoMediaUri(value?: string | null): boolean {
+  if (!value) {
+    return false;
+  }
+
+  const normalizedValue = value.trim();
+  if (normalizedValue.startsWith('data:')) {
+    return normalizedValue.toLowerCase().startsWith('data:video/');
+  }
+
+  const pathWithoutQuery = normalizedValue.split(/[?#]/)[0] || normalizedValue;
+  return VIDEO_FILE_PATTERN.test(pathWithoutQuery);
 }
 
 // Flattens attachment values into a unique list of URIs.
@@ -455,9 +479,26 @@ export async function pickDocumentFromDevice(): Promise<string | null> {
     }
 
     const asset = result.assets[0];
-    // On web, base64 is a data URI that can be saved with the project/event.
-    // On native, the cache URI is the persistable document reference.
-    return asset.base64 || asset.uri || null;
+    // Normalize both web and native picker results to a data URI. This lets the
+    // message attachment endpoint receive the file once and persist it outside
+    // the message row, instead of storing the whole Base64 value in chat.
+    if (asset.base64) {
+      return normalizeBase64DataUri(asset.base64, asset.mimeType);
+    }
+
+    if (asset.uri && Platform.OS !== 'web') {
+      try {
+        const base64 = await FileSystem.readAsStringAsync(asset.uri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        return normalizeBase64DataUri(base64, asset.mimeType);
+      } catch {
+        // Fall back to the picker URI for platforms that do not expose a
+        // readable cache file. The caller will show a normal upload error.
+      }
+    }
+
+    return asset.uri || null;
   } catch (error) {
     console.error('Error picking document:', error);
     throw error;

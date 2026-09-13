@@ -3,6 +3,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ScreenBrandHeader from '../components/ScreenBrandHeader';
+import { NotificationCenterProvider } from '../components/NotificationCenter';
 import { useAuth } from '../contexts/AuthContext';
 import { getUnreadMessagesForUser, subscribeToMessages, getAllUsers, subscribeToStorageChanges, markMessageAsRead } from '../models/storage';
 
@@ -118,8 +119,12 @@ export default function PartnerNavigator() {
   }, [unreadMessages, user?.id]);
 
   return (
-    <Tab.Navigator
-      screenOptions={({ route }) => ({
+    <NotificationCenterProvider
+      unreadMessages={unreadMessages}
+      onNotificationClick={handleNotificationClick}
+    >
+      <Tab.Navigator
+        screenOptions={({ route }) => ({
         headerShown: route.name !== 'Messages',
         header: ({ options, navigation }) => (
           <ScreenBrandHeader
@@ -143,22 +148,23 @@ export default function PartnerNavigator() {
           paddingTop: 6,
           paddingBottom: Math.max(insets.bottom, 16),
         },
-      })}
-    >
-      <Tab.Screen name="Home" component={PartnerHomeScreen} options={{ title: 'Home', headerShown: false }} />
-      <Tab.Screen name="Dashboard" component={PartnerDashboardScreen} options={{ title: 'Partner Dashboard' }} />
-      <Tab.Screen name="Programs" component={PartnerProgramManagementScreen} options={{ title: 'Program Management' }} />
-      <Tab.Screen name="Projects" component={PartnerProjectsScreen} options={{ title: 'My Projects', tabBarLabel: 'Projects' }} />
-      <Tab.Screen name="ProjectLifecycle" component={ProjectLifecycleScreen} options={{ title: 'Project Details', tabBarButton: () => null }} />
-      <Tab.Screen name="Map" component={MappingScreen} options={{ title: 'Impact Map' }} />
-      <Tab.Screen
-        name="Messages"
-        component={CommunicationHubScreen}
-        listeners={{ tabPress: handleMessagesTabPress }}
-        options={{ title: 'Messages', tabBarBadge: messageUnreadCount > 0 ? messageUnreadCount : undefined }}
-      />
-      <Tab.Screen name="Reports" component={PartnerReportsScreen} options={{ title: 'Reports' }} />
-      <Tab.Screen name="Profile" component={ProfileScreen} options={{ title: 'Partner Profile' }} />
-    </Tab.Navigator>
+        })}
+      >
+        <Tab.Screen name="Home" component={PartnerHomeScreen} options={{ title: 'Home', headerShown: false }} />
+        <Tab.Screen name="Dashboard" component={PartnerDashboardScreen} options={{ title: 'Partner Dashboard' }} />
+        <Tab.Screen name="Programs" component={PartnerProgramManagementScreen} options={{ title: 'Program Management' }} />
+        <Tab.Screen name="Projects" component={PartnerProjectsScreen} options={{ title: 'My Projects', tabBarLabel: 'Projects' }} />
+        <Tab.Screen name="ProjectLifecycle" component={ProjectLifecycleScreen} options={{ title: 'Project Details', tabBarButton: () => null }} />
+        <Tab.Screen name="Map" component={MappingScreen} options={{ title: 'Impact Map' }} />
+        <Tab.Screen
+          name="Messages"
+          component={CommunicationHubScreen}
+          listeners={{ tabPress: handleMessagesTabPress }}
+          options={{ title: 'Messages', tabBarBadge: messageUnreadCount > 0 ? messageUnreadCount : undefined }}
+        />
+        <Tab.Screen name="Reports" component={PartnerReportsScreen} options={{ title: 'Reports' }} />
+        <Tab.Screen name="Profile" component={ProfileScreen} options={{ title: 'Partner Profile' }} />
+      </Tab.Navigator>
+    </NotificationCenterProvider>
   );
 }

@@ -22,6 +22,7 @@ import { useNavigation } from '@react-navigation/native';
 import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import type { VolunteerTabParamList } from '../navigation/VolunteerNavigator';
 import AppLogo from '../components/AppLogo';
+import { useNotificationCenter } from '../components/NotificationCenter';
 
 type VolunteerNavProp = BottomTabNavigationProp<VolunteerTabParamList>;
 
@@ -29,6 +30,7 @@ export default function VolunteerHomeScreen() {
   const { user } = useAuth();
   const navigation = useNavigation<VolunteerNavProp>();
   const insets = useSafeAreaInsets();
+  const { openNotifications } = useNotificationCenter();
 
   const handleSeeMission = () => {
     navigation.navigate('Events');
@@ -55,7 +57,7 @@ export default function VolunteerHomeScreen() {
   };
 
   const handleNotificationPress = () => {
-    navigation.navigate('Messages');
+    openNotifications(() => navigation.navigate('Messages'));
   };
 
   return (

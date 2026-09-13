@@ -64,6 +64,15 @@ export default function StackNavigator() {
 
     const elapsedMs = Date.now() - bootTs;
     const platformLabel = Platform.OS === "web" ? "web" : "mobile";
+
+    // Fast Refresh can remount this navigator without re-running
+    // platformInit.ts, leaving the original bundle boot timestamp in the
+    // global object. Values this large are not a meaningful launch metric.
+    if (elapsedMs > 5 * 60 * 1000) {
+      console.debug(`[Perf] Ignoring stale ${platformLabel} launch timestamp (${elapsedMs}ms).`);
+      return;
+    }
+
     console.log(`[Perf] ${platformLabel} launch to first screen: ${elapsedMs}ms`);
     if (elapsedMs > 2000) {
       console.warn(`[Perf] Slow ${platformLabel} launch detected (>2000ms).`);

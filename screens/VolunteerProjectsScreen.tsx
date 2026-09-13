@@ -566,7 +566,10 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
   };
 
   const openProjectDetails = (projectId: string) => {
-    navigation.navigate('ProjectDetails', { projectId });
+    navigation.navigate('ProjectDetails', {
+      projectId,
+      returnTo: route?.name === 'Projects' ? 'Projects' : 'Programs',
+    });
   };
 
   const openProgramDetails = (programId: string) => {

@@ -18,5 +18,6 @@ web-build/
 .env.local
 
 .dev-pids/
+runtime/message-attachments/
 playwright-report/
 test-results/

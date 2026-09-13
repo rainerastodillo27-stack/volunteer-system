@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
 import ScreenBrandHeader from '../components/ScreenBrandHeader';
+import { NotificationCenterProvider } from '../components/NotificationCenter';
 import VolunteerHomeScreen from '../screens/VolunteerHomeScreen';
 import VolunteerDashboardScreen from '../screens/VolunteerDashboardScreen';
 import VolunteerEventsScreen from '../screens/VolunteerEventsScreen';
@@ -22,7 +23,12 @@ export type VolunteerTabParamList = {
   Dashboard: undefined;
   Programs: { projectId?: string } | undefined;
   Projects: { projectId?: string } | undefined;
-  ProjectDetails: { projectId: string };
+  ProjectDetails: {
+    projectId: string;
+    returnTo?: 'Events' | 'Programs' | 'Projects' | 'ProjectDetails';
+    returnProjectId?: string;
+    returnBackTo?: 'Events' | 'Programs' | 'Projects';
+  };
   Events: { projectId?: string } | undefined;
   Tasks: undefined;
   Map: undefined;
@@ -103,8 +109,12 @@ export default function VolunteerNavigator() {
   }, [unreadMessages, user?.id]);
 
   return (
-    <Tab.Navigator
-      screenOptions={({ route }) => ({
+    <NotificationCenterProvider
+      unreadMessages={unreadMessages}
+      onNotificationClick={handleNotificationClick}
+    >
+      <Tab.Navigator
+        screenOptions={({ route }) => ({
         headerShown: route.name !== 'Messages',
         header: ({ options, navigation }) => (
           <ScreenBrandHeader
@@ -126,24 +136,25 @@ export default function VolunteerNavigator() {
         tabBarShowLabel: false,
         tabBarItemStyle: { paddingTop: 6, paddingBottom: 8 },
         tabBarStyle: { backgroundColor: '#fff', borderTopColor: '#eee', paddingBottom: Math.max(insets.bottom, 12), height: 56 + Math.max(insets.bottom, 12) },
-      })}
-    >
-      <Tab.Screen name="Home" component={VolunteerHomeScreen} options={{ title: 'Home', headerShown: false }} />
-      <Tab.Screen name="Dashboard" component={VolunteerDashboardScreen} options={{ title: 'Volunteer Dashboard' }} />
-      <Tab.Screen name="Programs" component={VolunteerProjectsScreen} options={{ title: 'Program Management' }} />
-      <Tab.Screen name="Projects" component={VolunteerProjectsScreen} options={{ title: 'Program Management', tabBarButton: () => null }} />
-      <Tab.Screen name="Events" component={VolunteerEventsScreen} options={{ title: 'Events' }} />
-      <Tab.Screen name="ProjectDetails" component={VolunteerProjectDetailsScreen} options={{ title: 'Project Details', tabBarButton: () => null }} />
-      <Tab.Screen name="Tasks" component={VolunteerTasksScreen} options={{ title: 'My Tasks' }} />
-      <Tab.Screen name="Map" component={MappingScreen} options={{ title: 'Impact Map' }} />
-      <Tab.Screen
-        name="Messages"
-        component={CommunicationHubScreen}
-        listeners={{ tabPress: handleMessagesTabPress }}
-        options={{ title: 'Messages', tabBarBadge: messageUnreadCount > 0 ? messageUnreadCount : undefined }}
-      />
-      <Tab.Screen name="Reports" component={VolunteerReportsScreen} options={{ title: 'My Reports' }} />
-      <Tab.Screen name="Profile" component={ProfileScreen} options={{ title: 'My Profile' }} />
-    </Tab.Navigator>
+        })}
+      >
+        <Tab.Screen name="Home" component={VolunteerHomeScreen} options={{ title: 'Home', headerShown: false }} />
+        <Tab.Screen name="Dashboard" component={VolunteerDashboardScreen} options={{ title: 'Volunteer Dashboard' }} />
+        <Tab.Screen name="Programs" component={VolunteerProjectsScreen} options={{ title: 'Program Management' }} />
+        <Tab.Screen name="Projects" component={VolunteerProjectsScreen} options={{ title: 'Program Management', tabBarButton: () => null }} />
+        <Tab.Screen name="Events" component={VolunteerEventsScreen} options={{ title: 'Events' }} />
+        <Tab.Screen name="ProjectDetails" component={VolunteerProjectDetailsScreen} options={{ title: 'Project Details', tabBarButton: () => null }} />
+        <Tab.Screen name="Tasks" component={VolunteerTasksScreen} options={{ title: 'My Tasks' }} />
+        <Tab.Screen name="Map" component={MappingScreen} options={{ title: 'Impact Map' }} />
+        <Tab.Screen
+          name="Messages"
+          component={CommunicationHubScreen}
+          listeners={{ tabPress: handleMessagesTabPress }}
+          options={{ title: 'Messages', tabBarBadge: messageUnreadCount > 0 ? messageUnreadCount : undefined }}
+        />
+        <Tab.Screen name="Reports" component={VolunteerReportsScreen} options={{ title: 'My Reports' }} />
+        <Tab.Screen name="Profile" component={ProfileScreen} options={{ title: 'My Profile' }} />
+      </Tab.Navigator>
+    </NotificationCenterProvider>
   );
 }

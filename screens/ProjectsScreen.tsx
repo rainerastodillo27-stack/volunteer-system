@@ -4159,9 +4159,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     lineHeight: Platform.select({ web: 30, default: 22 }),
     textAlign: 'center',
-    textShadowColor: 'rgba(0, 0, 0, 0.65)',
-    textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 6,
+    ...({ textShadow: '0px 2px 6px rgba(0, 0, 0, 0.65)' } as any),
   },
   programImageCategory: {
     marginTop: 4,
@@ -4171,9 +4169,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     textTransform: 'uppercase',
     textAlign: 'center',
-    textShadowColor: 'rgba(0, 0, 0, 0.55)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
+    ...({ textShadow: '0px 1px 4px rgba(0, 0, 0, 0.55)' } as any),
   },
   programImageOverlay: {
     position: 'absolute',
