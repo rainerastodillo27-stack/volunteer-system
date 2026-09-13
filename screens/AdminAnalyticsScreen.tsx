@@ -28,6 +28,7 @@ import {
 import type { Partner, PartnerProjectApplication, PartnerReport, ProgramTrack, Project, Volunteer, VolunteerProjectJoinRecord, VolunteerTimeLog } from '../models/types';
 import ModernTheme from '../utils/modernTheme';
 import { navigateToAvailableRoute } from '../utils/navigation';
+import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 
 type MonthPoint = {
   key: string;
@@ -339,13 +340,23 @@ function buildSkillSlices(
   const joinedVolunteerIds = new Set<string>();
 
   events.forEach(event => {
-    getEventVolunteerIds(event, timeLogs, joinRecords, volunteersById, volunteersByUserId).forEach(id => joinedVolunteerIds.add(id));
+    getEventVolunteerIds(event, timeLogs, joinRecords, volunteersById, volunteersByUserId).forEach(id => {
+      joinedVolunteerIds.add(String(id).trim());
+    });
   });
 
-  // Always include all volunteers' skills, not just those in events
+  const joinedVolunteers = volunteers.filter(volunteer =>
+    [volunteer.id, volunteer.userId]
+      .map(value => String(value || '').trim())
+      .filter(Boolean)
+      .some(identifier => joinedVolunteerIds.has(identifier))
+  );
+
+  // This card is specifically about skills contributed by volunteers who have
+  // joined an event, so exclude registered-but-unassigned volunteers.
   const skillCounts = new Map<string, number>();
 
-  volunteers.forEach(volunteer => {
+  joinedVolunteers.forEach(volunteer => {
     (volunteer.skills || [])
       .map(normalizeSkill)
       .filter(Boolean)
@@ -369,7 +380,7 @@ function buildSkillSlices(
       percent: contributionCount > 0 ? Math.round((count / contributionCount) * 100) : 0,
       color: SKILL_COLORS[index % SKILL_COLORS.length],
     })),
-    volunteerCount: volunteers.length,
+    volunteerCount: joinedVolunteers.length,
     contributionCount,
   };
 }
@@ -406,6 +417,13 @@ function getCompletedVolunteerHours(log: VolunteerTimeLog): number {
 }
 
 function isTopLevelProgramRecord(project: Project, programTracks: ProgramTrack[]): boolean {
+  // A child project may legitimately share its program's title. Only a
+  // parentless record should be removed from project analytics as the program
+  // header itself.
+  if (String(project.parentProjectId || '').trim() || String((project as any).program_id || '').trim()) {
+    return false;
+  }
+
   const projectId = String(project.id || '').trim().toLowerCase();
   const projectTitle = String(project.title || '').trim().toLowerCase();
 
@@ -418,6 +436,27 @@ function isTopLevelProgramRecord(project: Project, programTracks: ProgramTrack[]
       (trackTitle && projectTitle === trackTitle)
     );
   });
+}
+
+function belongsToProgram(project: Project, programId: string, allProjects: Project[]): boolean {
+  const targetId = String(programId || '').trim();
+  if (!targetId) return false;
+
+  if (String((project as any).program_id || '').trim() === targetId) {
+    return true;
+  }
+
+  const byId = new Map(allProjects.map(candidate => [candidate.id, candidate]));
+  const visited = new Set<string>();
+  let parentId = String(project.parentProjectId || '').trim();
+
+  while (parentId && !visited.has(parentId)) {
+    if (parentId === targetId) return true;
+    visited.add(parentId);
+    parentId = String(byId.get(parentId)?.parentProjectId || '').trim();
+  }
+
+  return false;
 }
 
 type PartnerSectorData = {
@@ -483,6 +522,7 @@ function generatePDFReportHTML(
     timeLogs: VolunteerTimeLog[];
     joinRecords: VolunteerProjectJoinRecord[];
     applications: PartnerProjectApplication[];
+    trackedProjects?: Project[];
   },
   analytics: {
     partnerFilter: string | 'all';
@@ -588,6 +628,12 @@ function generatePDFReportHTML(
   // Section 2: Events
   if (sections.includes('events')) {
     const events = data.projects.filter(p => p.isEvent);
+    const volunteersById = new Map(data.volunteers.map(volunteer => [volunteer.id, volunteer]));
+    const volunteersByUserId = new Map(
+      data.volunteers
+        .map(volunteer => [String(volunteer.userId || '').trim(), volunteer] as const)
+        .filter(([userId]) => Boolean(userId))
+    );
     
     html += `
     <div class="section">
@@ -605,7 +651,13 @@ function generatePDFReportHTML(
           </thead>
           <tbody>
             ${events.map(event => {
-              const volunteerCount = (event.volunteers || []).length;
+              const volunteerCount = getEventVolunteerIds(
+                event,
+                data.timeLogs,
+                data.joinRecords,
+                volunteersById,
+                volunteersByUserId
+              ).size;
               return `
                 <tr>
                   <td>${event.title || 'Untitled Event'}</td>
@@ -711,12 +763,13 @@ function generatePDFReportHTML(
 
   // Section 5: Projects
   if (sections.includes('projects')) {
+    const projectRecords = data.trackedProjects || data.projects.filter(project => !project.isEvent);
     const statusCounts = {
-      Planning: data.projects.filter(p => p.status === 'Planning').length,
-      'In Progress': data.projects.filter(p => p.status === 'In Progress').length,
-      'On Hold': data.projects.filter(p => p.status === 'On Hold').length,
-      Completed: data.projects.filter(p => p.status === 'Completed').length,
-      Cancelled: data.projects.filter(p => p.status === 'Cancelled').length,
+      Planning: projectRecords.filter(p => getProjectDisplayStatus(p) === 'Planning').length,
+      'In Progress': projectRecords.filter(p => getProjectDisplayStatus(p) === 'In Progress').length,
+      'On Hold': projectRecords.filter(p => getProjectDisplayStatus(p) === 'On Hold').length,
+      Completed: projectRecords.filter(p => getProjectDisplayStatus(p) === 'Completed').length,
+      Cancelled: projectRecords.filter(p => getProjectDisplayStatus(p) === 'Cancelled').length,
     };
     
     html += `
@@ -839,7 +892,7 @@ export default function AdminAnalyticsScreen() {
     
     // Filter by program
     if (selectedProgramId !== 'all') {
-      result = result.filter(p => p.program_id === selectedProgramId);
+      result = result.filter(p => belongsToProgram(p, selectedProgramId, projects));
     }
     
     return result;
@@ -971,14 +1024,26 @@ export default function AdminAnalyticsScreen() {
 
       // 3. Events Summary
       const events = filteredProjects.filter(p => p.isEvent);
+      const volunteersById = new Map(filteredVolunteers.map(volunteer => [volunteer.id, volunteer]));
+      const volunteersByUserId = new Map(
+        filteredVolunteers
+          .map(volunteer => [String(volunteer.userId || '').trim(), volunteer] as const)
+          .filter(([userId]) => Boolean(userId))
+      );
       csvContent += `EVENTS SUMMARY\n`;
       csvContent += `Event Title,Start Date,End Date,Volunteer Count,Status\n`;
       events.forEach(event => {
         const title = (event.title || 'Untitled Event').replace(/"/g, '""');
         const startDate = event.startDate ? new Date(event.startDate).toLocaleDateString() : 'TBD';
         const endDate = event.endDate ? new Date(event.endDate).toLocaleDateString() : 'TBD';
-        const volunteerCount = (event.volunteers || []).length;
-        csvContent += `"${title}",${startDate},${endDate},${volunteerCount},${event.status}\n`;
+        const volunteerCount = getEventVolunteerIds(
+          event,
+          filteredTimeLogs,
+          filteredJoinRecords,
+          volunteersById,
+          volunteersByUserId
+        ).size;
+        csvContent += `"${title}",${startDate},${endDate},${volunteerCount},${getProjectDisplayStatus(event)}\n`;
       });
       csvContent += `\n`;
 
@@ -1000,9 +1065,15 @@ export default function AdminAnalyticsScreen() {
         const endDate = project.endDate ? new Date(project.endDate).toLocaleDateString() : 'N/A';
         const hoursLogged = filteredTimeLogs.filter(log => log.projectId === project.id)
           .reduce((sum, log) => sum + getCompletedVolunteerHours(log), 0);
-        const volunteerCount = (project.volunteers || []).length;
+        const volunteerCount = getProjectVolunteerIdsIncludingEvents(
+          project,
+          filteredProjects,
+          filteredTimeLogs,
+          filteredJoinRecords,
+          filteredVolunteers
+        ).size;
         const isEvent = project.isEvent ? 'Yes' : 'No';
-        csvContent += `"${title}",${project.status},${startDate},${endDate},${hoursLogged},${volunteerCount},${isEvent}\n`;
+        csvContent += `"${title}",${getProjectDisplayStatus(project)},${startDate},${endDate},${hoursLogged},${volunteerCount},${isEvent}\n`;
       });
       csvContent += `\n`;
 
@@ -1568,7 +1639,7 @@ export default function AdminAnalyticsScreen() {
 
           <View style={styles.statusList}>
             {(['Planning', 'In Progress', 'On Hold', 'Completed', 'Cancelled'] as const).map(status => {
-              const count = trackedProjects.filter(p => p.status === status).length;
+              const count = trackedProjects.filter(p => getProjectDisplayStatus(p) === status).length;
               const statusColor = 
                 status === 'Planning' ? ModernTheme.colors.status.planning :
                 status === 'In Progress' ? ModernTheme.colors.status.inProgress :
@@ -1606,7 +1677,7 @@ export default function AdminAnalyticsScreen() {
                       <Text style={[styles.filterChipText, styles.filterChipTextActive]}>All ({partnerProjects.length})</Text>
                     </View>
                     {(['Planning', 'In Progress', 'On Hold', 'Completed', 'Cancelled'] as const).map(status => {
-                      const count = partnerProjects.filter(p => p.status === status).length;
+                      const count = partnerProjects.filter(p => getProjectDisplayStatus(p) === status).length;
                       return (
                         <View key={status} style={styles.filterChip}>
                           <Text style={styles.filterChipText}>{status} ({count})</Text>
@@ -1634,12 +1705,8 @@ export default function AdminAnalyticsScreen() {
             return (
               <View style={styles.projectTrackingList}>
                 {partnerProjects.map(project => {
-                  const statusColor = 
-                    project.status === 'Planning' ? ModernTheme.colors.status.planning :
-                    project.status === 'In Progress' ? ModernTheme.colors.status.inProgress :
-                    project.status === 'On Hold' ? ModernTheme.colors.status.onHold :
-                    project.status === 'Completed' ? ModernTheme.colors.status.completed :
-                    ModernTheme.colors.status.cancelled;
+                  const displayStatus = getProjectDisplayStatus(project);
+                  const statusColor = getProjectStatusColor(project);
 
                   // Find the partner organization for this project
                   const application = partnerApplications.find(
@@ -1685,7 +1752,7 @@ export default function AdminAnalyticsScreen() {
                           <Text style={styles.projectStatText}>{volunteerCount}</Text>
                         </View>
                         <View style={[styles.projectStatusBadge, { backgroundColor: `${statusColor}15`, borderColor: statusColor }]}>
-                          <Text style={[styles.projectStatusText, { color: statusColor }]}>{project.status}</Text>
+                          <Text style={[styles.projectStatusText, { color: statusColor }]}>{displayStatus}</Text>
                         </View>
                       </View>
                     </TouchableOpacity>
@@ -1909,6 +1976,7 @@ export default function AdminAnalyticsScreen() {
                         timeLogs: filteredTimeLogs,
                         joinRecords: filteredJoinRecords,
                         applications: partnerApplications,
+                        trackedProjects,
                       },
                       {
                         partnerFilter: selectedPartnerId,

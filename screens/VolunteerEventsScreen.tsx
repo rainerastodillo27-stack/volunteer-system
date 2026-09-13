@@ -705,41 +705,49 @@ export default function VolunteerEventsScreen() {
       </View>
 
       {/* LIST OF EVENTS */}
-      <FlatList
-        key={`events-list-${numColumns}`}
-        numColumns={numColumns}
-        data={displayEvents}
-        renderItem={renderEventItem}
-        keyExtractor={item => item.id}
-        contentContainerStyle={styles.listContent}
-        columnWrapperStyle={numColumns > 1 ? styles.listGridRow : undefined}
-        showsVerticalScrollIndicator={false}
-        ListEmptyComponent={null}
-      />
-
-      {/* BOTTOM REVIEW BANNER */}
-      {activeTab === 'all' && (
-        <View style={styles.reviewBanner}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
-            <View style={styles.reviewIconContainer}>
-              <MaterialIcons name="assignment" size={18} color="#15803d" />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.reviewBannerTitle}>For review applications</Text>
-              <Text style={styles.reviewBannerText}>
-                Applications for events with limited slots will be reviewed by the organizer.
+      <View style={styles.eventsListContainer}>
+        <FlatList
+          style={styles.eventsList}
+          key={`events-list-${numColumns}`}
+          numColumns={numColumns}
+          data={displayEvents}
+          renderItem={renderEventItem}
+          keyExtractor={item => item.id}
+          contentContainerStyle={styles.listContent}
+          columnWrapperStyle={numColumns > 1 ? styles.listGridRow : undefined}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={
+            <View style={styles.emptyContainer}>
+              <MaterialIcons name="event-busy" size={42} color="#9aa0a6" />
+              <Text style={styles.emptyText}>
+                {activeTab === 'applications' ? 'No applications found' : 'No events found'}
               </Text>
             </View>
-          </View>
-          <TouchableOpacity
-            style={styles.reviewBannerButton}
-            onPress={() => setActiveTab('applications')}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.reviewBannerButtonText}>View My Applications</Text>
-          </TouchableOpacity>
-        </View>
-      )}
+          }
+          ListFooterComponent={activeTab === 'all' ? (
+            <View style={[styles.reviewBanner, width < 600 && styles.reviewBannerCompact]}>
+              <View style={[styles.reviewBannerContent, width < 600 && styles.reviewBannerContentCompact]}>
+                <View style={styles.reviewIconContainer}>
+                  <MaterialIcons name="assignment" size={18} color="#15803d" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.reviewBannerTitle}>For review applications</Text>
+                  <Text style={styles.reviewBannerText}>
+                    Applications for events with limited slots will be reviewed by the organizer.
+                  </Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                style={[styles.reviewBannerButton, width < 600 && styles.reviewBannerButtonCompact]}
+                onPress={() => setActiveTab('applications')}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.reviewBannerButtonText}>View My Applications</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+        />
+      </View>
 
       {/* Sort Options Modal */}
       {showSortModal && (
@@ -817,7 +825,9 @@ const styles = StyleSheet.create({
   topbar: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'center',
+    minHeight: 56,
+    position: 'relative',
     paddingHorizontal: 16,
     paddingTop: 8,
     paddingBottom: 14,
@@ -828,6 +838,9 @@ const styles = StyleSheet.create({
     width: 24,
     height: 20,
     justifyContent: 'space-between',
+    position: 'absolute',
+    left: 16,
+    top: 18,
   },
   menuLine: {
     height: 2.5,
@@ -934,7 +947,15 @@ const styles = StyleSheet.create({
   },
   listContent: {
     paddingHorizontal: 16,
-    paddingBottom: 120,
+    paddingTop: 4,
+    paddingBottom: 24,
+  },
+  eventsListContainer: {
+    flex: 1,
+    minHeight: 0,
+  },
+  eventsList: {
+    flex: 1,
   },
   listGridRow: {
     justifyContent: 'space-between',
@@ -1051,13 +1072,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   reviewBanner: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
     backgroundColor: '#f6fdf9',
     borderTopWidth: 1,
     borderTopColor: '#e6f4ea',
+    borderWidth: 1,
+    borderColor: '#d9f0df',
+    borderRadius: 14,
     paddingHorizontal: 16,
     paddingVertical: 14,
     flexDirection: 'row',
@@ -1069,6 +1089,22 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 6,
     elevation: 4,
+  },
+  reviewBannerCompact: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: 12,
+    marginTop: 4,
+    paddingHorizontal: 12,
+  },
+  reviewBannerContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  reviewBannerContentCompact: {
+    width: '100%',
   },
   reviewIconContainer: {
     width: 36,
@@ -1095,6 +1131,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     backgroundColor: '#ffffff',
+  },
+  reviewBannerButtonCompact: {
+    width: '100%',
+    alignItems: 'center',
   },
   reviewBannerButtonText: {
     fontSize: 12,

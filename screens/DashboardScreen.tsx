@@ -401,6 +401,7 @@ export default function DashboardScreen({ navigation }: any) {
   const [hasNewActivity, setHasNewActivity] = useState(false);
   const previousUpdatesRef = React.useRef<any[]>([]);
   const [projectsData, setProjectsData] = useState<Project[]>([]);
+  const [programIdsData, setProgramIdsData] = useState<string[]>([]);
   const [partnersData, setPartnersData] = useState<Partner[]>([]);
   const [partnerApplicationsData, setPartnerApplicationsData] = useState<PartnerProjectApplication[]>([]);
   const [volunteersData, setVolunteersData] = useState<Volunteer[]>([]);
@@ -444,6 +445,7 @@ export default function DashboardScreen({ navigation }: any) {
 
       setLoadError(null);
       setProjectsData(projects);
+      setProgramIdsData((programs || []).map(program => program.id));
       console.log('[DASHBOARD] Set projectsData to:', projects.length, 'projects');
       setPartnersData(partners);
       setPartnerApplicationsData(partnerProjectApplications || []);
@@ -452,7 +454,9 @@ export default function DashboardScreen({ navigation }: any) {
 
       setDashboardProjectCounts({
         allProjects: projects.filter(
-          project => !(programs || []).some(program => program.id === project.id)
+          project =>
+            !project.isEvent &&
+            !(programs || []).some(program => program.id === project.id)
         ).length,
         programs: (programTracks || []).length > 0
           ? (programTracks || []).filter(track => track.isActive !== false).length
@@ -521,7 +525,7 @@ export default function DashboardScreen({ navigation }: any) {
         id: `proj-act-${p.id}`,
         projectId: p.id,
         projectName: p.title,
-        description: `${p.isEvent ? 'Event' : 'Project'} scheduled (${p.status || 'Active'})`,
+        description: `${p.isEvent ? 'Event' : 'Project'} scheduled (${getProjectDisplayStatus(p)})`,
         updatedAt: p.createdAt || p.startDate || new Date().toISOString(),
         type: 'project',
       }));
@@ -617,6 +621,7 @@ export default function DashboardScreen({ navigation }: any) {
       setLoadError(errorMessage);
       setRecentUpdates([]);
       setProjectsData([]);
+      setProgramIdsData([]);
       setPartnersData([]);
       setVolunteersData([]);
       setVolunteerJoinRecordsData([]);
@@ -1008,10 +1013,17 @@ export default function DashboardScreen({ navigation }: any) {
   const totalPartnersSector = ngoCount + hospitalCount + privateCount + institutionCount || 1;
 
   // 4. Project Status count calculations
-  const planningCount = projectsData.filter(p => p.status === 'Planning').length;
-  const inProgressCount = projectsData.filter(p => p.status === 'In Progress').length;
-  const completedCount = projectsData.filter(p => p.status === 'Completed').length;
-  const onHoldCount = projectsData.filter(p => p.status === 'On Hold').length;
+  // Use the canonical lifecycle calculation so date-based system statuses do
+  // not remain stale in dashboard analytics after a project has ended.
+  // Programs and events are reported in their own dashboard sections; keep
+  // this project chart on the same project-only scope as Admin Analytics.
+  const trackedDashboardProjects = projectsData.filter(
+    project => !project.isEvent && !programIdsData.includes(project.id)
+  );
+  const planningCount = trackedDashboardProjects.filter(p => getProjectDisplayStatus(p) === 'Planning').length;
+  const inProgressCount = trackedDashboardProjects.filter(p => getProjectDisplayStatus(p) === 'In Progress').length;
+  const completedCount = trackedDashboardProjects.filter(p => getProjectDisplayStatus(p) === 'Completed').length;
+  const onHoldCount = trackedDashboardProjects.filter(p => getProjectDisplayStatus(p) === 'On Hold').length;
 
   // 5. System Aligned Analytics Calculations:
   // a) Skills Contributed (exact counts of normalization/top skills)
