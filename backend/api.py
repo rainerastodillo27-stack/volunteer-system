@@ -375,6 +375,11 @@ class StoragePayload(BaseModel):
     value: Any
 
 
+# Request payload for recording an administrator notification as read.
+class NotificationReadPayload(BaseModel):
+    notificationId: str
+
+
 # Request payload for batch storage reads.
 class StorageBatchPayload(BaseModel):
     keys: list[str]
@@ -2211,6 +2216,30 @@ def _require_postgres() -> None:
         raise HTTPException(status_code=503, detail="Supabase Postgres backend is unavailable.")
 
 
+# Ensures the per-admin notification read-state table exists. This is kept
+# separate from the general storage mirror because notification reads are
+# user-specific metadata, not application records visible to other users.
+def _ensure_notification_reads_table(connection: Any) -> None:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            create table if not exists public.notification_reads (
+              notification_reads_id text primary key,
+              user_id text not null,
+              notification_id text not null,
+              seen_at timestamptz not null default now(),
+              unique (user_id, notification_id)
+            )
+            """
+        )
+        cursor.execute(
+            """
+            create index if not exists notification_reads_user_seen_idx
+            on public.notification_reads (user_id, seen_at desc)
+            """
+        )
+
+
 # Sorts dictionaries by an ISO timestamp field in descending order.
 def _sort_iso_desc(items: list[dict[str, Any]], field: str) -> list[dict[str, Any]]:
     return sorted(items, key=lambda item: str(item.get(field) or ""), reverse=True)
@@ -3681,10 +3710,11 @@ def startup() -> None:
 
         try:
             with get_connection() as connection:
+                _ensure_notification_reads_table(connection)
                 ensure_volunteer_time_logs_table_shape(connection)
                 _ensure_reminder_tables(connection)
                 connection.commit()
-            print("[OK] Volunteer time logs and integration schemas ensured.")
+            print("[OK] Notification read-state, volunteer time logs, and integration schemas ensured.")
         except Exception as error:
             print(f"[WARN] Schema ensure skipped: {error}")
 
@@ -7331,6 +7361,66 @@ async def storage_websocket(websocket: WebSocket) -> None:
         connection_manager.disconnect_storage(websocket)
     except Exception:
         connection_manager.disconnect_storage(websocket)
+
+
+# Reads notification ids already opened by the signed-in administrator.
+@app.get("/notifications/read")
+def get_admin_notification_reads(request: FastAPIRequest) -> dict[str, list[str]]:
+    _require_admin_session(request)
+    _require_postgres()
+    admin_user_id = str(_get_session_user(request).get("sub") or "").strip()
+    with get_connection() as connection:
+        _ensure_notification_reads_table(connection)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                select notification_id
+                from public.notification_reads
+                where user_id = %s
+                order by seen_at desc
+                limit 2000
+                """,
+                (admin_user_id,),
+            )
+            notification_ids = [str(row[0]) for row in cursor.fetchall() if row[0]]
+    return {"notificationIds": notification_ids}
+
+
+# Persists one notification as read for the signed-in administrator.
+@app.post("/notifications/read")
+def mark_admin_notification_read(
+    request: FastAPIRequest,
+    payload: NotificationReadPayload,
+) -> dict[str, str]:
+    _require_admin_session(request)
+    _require_postgres()
+    admin_user_id = str(_get_session_user(request).get("sub") or "").strip()
+    notification_id = str(payload.notificationId or "").strip()
+    if not notification_id:
+        raise HTTPException(status_code=400, detail="Notification id is required.")
+    if len(notification_id) > 512:
+        raise HTTPException(status_code=400, detail="Notification id is too long.")
+
+    with get_connection() as connection:
+        _ensure_notification_reads_table(connection)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                insert into public.notification_reads (
+                  notification_reads_id, user_id, notification_id, seen_at
+                )
+                values (%s, %s, %s, now())
+                on conflict (user_id, notification_id) do update
+                  set seen_at = excluded.seen_at
+                """,
+                (
+                    secrets.token_urlsafe(24),
+                    admin_user_id,
+                    notification_id,
+                ),
+            )
+        connection.commit()
+    return {"status": "ok"}
 
 
 @app.get("/storage/{key}")

@@ -5291,6 +5291,34 @@ export async function markMessageAsRead(messageId: string): Promise<void> {
   notifyWebMessageUpdate();
 }
 
+// Returns the notification ids that the signed-in administrator has already
+// opened. These ids are stored by the API so web and native clients share the
+// same read state instead of rebuilding the bell from local React state.
+export async function getAdminNotificationReadIds(): Promise<string[]> {
+  const payload = await requestApiJson<{ notificationIds?: unknown[] }>(
+    '/notifications/read'
+  );
+  return Array.isArray(payload.notificationIds)
+    ? payload.notificationIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
+    : [];
+}
+
+// Persists one notification as read for the signed-in administrator.
+export async function markAdminNotificationRead(notificationId: string): Promise<void> {
+  const normalizedId = String(notificationId || '').trim();
+  if (!normalizedId) return;
+  await requestApiJson(
+    '/notifications/read',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ notificationId: normalizedId }),
+    }
+  );
+}
+
 export type MessageSubscriptionEvent =
   | { type: 'message.changed'; message: Message }
   | { type: 'project-group-message.changed'; message: ProjectGroupMessage }

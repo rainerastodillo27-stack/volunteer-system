@@ -361,6 +361,16 @@ CREATE TABLE public.messages (
   CONSTRAINT messages_pkey PRIMARY KEY (id)
 );
 
+-- ── notification_reads ───────────────────────────────────────
+CREATE TABLE public.notification_reads (
+  notification_reads_id text NOT NULL,
+  user_id text NOT NULL,
+  notification_id text NOT NULL,
+  seen_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT notification_reads_pkey PRIMARY KEY (notification_reads_id),
+  CONSTRAINT notification_reads_user_notification_key UNIQUE (user_id, notification_id)
+);
+
 -- ── project_group_messages ───────────────────────────────────
 CREATE TABLE public.project_group_messages (
   id text NOT NULL,
@@ -392,6 +402,7 @@ CREATE TABLE public.admin_planning_calendars (
 -- ── Indexes ──────────────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS idx_messages_recipient_id            ON public.messages(recipient_id);
 CREATE INDEX IF NOT EXISTS idx_messages_sender_id               ON public.messages(sender_id);
+CREATE INDEX IF NOT EXISTS idx_notification_reads_user_seen    ON public.notification_reads(user_id, seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_projects_partner_id              ON public.projects(partner_id);
 CREATE INDEX IF NOT EXISTS idx_projects_program_id              ON public.projects(program_id);
 CREATE INDEX IF NOT EXISTS idx_events_partner_id                ON public.events(partner_id);

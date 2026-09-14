@@ -23,6 +23,8 @@ import {
   subscribeToMessages,
   subscribeToStorageChanges,
   markMessageAsRead,
+  getAdminNotificationReadIds,
+  markAdminNotificationRead,
   savePartnerReport,
 } from '../models/storage';
 import { User, PartnerProjectApplication } from '../models/types';
@@ -268,10 +270,8 @@ export default function AdminNavigator() {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [isNotificationPanelOpen, setIsNotificationPanelOpen] = useState(false);
-  const [seenPendingUserIds, setSeenPendingUserIds] = useState<Set<string>>(() => new Set());
-  const [seenReportIds, setSeenReportIds] = useState<Set<string>>(() => new Set());
-  const [seenPartnerApplicationIds, setSeenPartnerApplicationIds] = useState<Set<string>>(() => new Set());
-  const [seenVolunteerRequestIds, setSeenVolunteerRequestIds] = useState<Set<string>>(() => new Set());
+  const [seenNotificationIds, setSeenNotificationIds] = useState<Set<string>>(() => new Set());
+  const [seenNotificationUserId, setSeenNotificationUserId] = useState<string | null>(null);
 
   const messageUnreadCount = unreadMessages.length;
   const reportNotificationCount = unreadReports.length;
@@ -297,7 +297,32 @@ export default function AdminNavigator() {
   const isWeb = getPlatformOS() === 'web' && !isMobileModeOnWeb;
 
   useEffect(() => {
-    if (!user?.id) return;
+    let cancelled = false;
+    setSeenNotificationIds(new Set());
+    setSeenNotificationUserId(null);
+
+    if (!user?.id) return undefined;
+
+    void getAdminNotificationReadIds()
+      .then(notificationIds => {
+        if (cancelled) return;
+        setSeenNotificationIds(new Set(notificationIds));
+        setSeenNotificationUserId(user.id);
+      })
+      .catch(() => {
+        // Fail open if an older backend is still serving the bundle. The
+        // notification itself remains actionable and the next retry can load
+        // the persisted state after deployment is complete.
+        if (!cancelled) setSeenNotificationUserId(user.id);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id || seenNotificationUserId !== user.id) return;
 
     const loadAllNotifications = async () => {
       try {
@@ -330,7 +355,7 @@ export default function AdminNavigator() {
 
         // Map unread reports and enrich with submitterName, projectTitle
         const unreadRpts = reports.filter(
-          r => !r.viewedBy?.includes(user.id) && !seenReportIds.has(r.id)
+          r => !r.viewedBy?.includes(user.id) && !seenNotificationIds.has(`report-${r.id}`)
         );
         const enrichedReports = unreadRpts.map(r => {
           const project = projects.find(p => p.id === r.projectId);
@@ -343,17 +368,17 @@ export default function AdminNavigator() {
         setUnreadReports(enrichedReports);
 
         // Pending user approvals
-        setPendingUsers(pUsers.filter(pendingUser => !seenPendingUserIds.has(pendingUser.id)));
+        setPendingUsers(pUsers.filter(pendingUser => !seenNotificationIds.has(`approval-${pendingUser.id}`)));
 
         // Pending partner applications
         const pendingApps = apps.filter(
-          a => a.status === 'Pending' && !seenPartnerApplicationIds.has(a.id)
+          a => a.status === 'Pending' && !seenNotificationIds.has(`partner-application-${a.id}`)
         );
         setPendingPartnerApplications(pendingApps);
 
         // Pending volunteer requests
         const pendingMatches = matches.filter(
-          m => m.status === 'Requested' && !seenVolunteerRequestIds.has(m.id)
+          m => m.status === 'Requested' && !seenNotificationIds.has(`volunteer-request-${m.id}`)
         );
         const enrichedMatches = pendingMatches.map(match => {
           const volunteer = volunteers.find(v => v.id === match.volunteerId);
@@ -388,10 +413,8 @@ export default function AdminNavigator() {
       unsubStorage?.();
     };
   }, [
-    seenPartnerApplicationIds,
-    seenPendingUserIds,
-    seenReportIds,
-    seenVolunteerRequestIds,
+    seenNotificationIds,
+    seenNotificationUserId,
     user?.id,
   ]);
 
@@ -407,19 +430,20 @@ export default function AdminNavigator() {
   const markReportsSeen = React.useCallback(async () => {
     if (!user?.id || unreadReports.length === 0) return;
     const reportsToMark = unreadReports;
-    setSeenReportIds(current => {
+    setSeenNotificationIds(current => {
       const next = new Set(current);
-      reportsToMark.forEach(report => next.add(report.id));
+      reportsToMark.forEach(report => next.add(`report-${report.id}`));
       return next;
     });
     setUnreadReports([]);
     await Promise.all(
-      reportsToMark.map(report =>
+      reportsToMark.flatMap(report => [
+        markAdminNotificationRead(`report-${report.id}`).catch(() => undefined),
         savePartnerReport({
           ...report,
           viewedBy: Array.from(new Set([...(report.viewedBy || []), user.id])),
-        }).catch(() => undefined)
-      )
+        }).catch(() => undefined),
+      ])
     );
   }, [unreadReports, user?.id]);
 
@@ -427,13 +451,17 @@ export default function AdminNavigator() {
     (item: AdminNotificationReference) => {
       const itemId = item.data?.id || item.id || '';
       const notificationType = item.type ||
-        (item.id?.startsWith('user-') ? 'approval' :
+        (item.id?.startsWith('approval-') ? 'approval' :
           item.id?.startsWith('message-') ? 'message' :
             item.id?.startsWith('report-') ? 'report' :
               item.id?.startsWith('partner-application-') ? 'partner-application' :
                 item.id?.startsWith('volunteer-request-') ? 'volunteer-request' : undefined);
 
       if (!itemId || !notificationType) return;
+
+      const notificationId = item.id || `${notificationType}-${itemId}`;
+      setSeenNotificationIds(current => new Set(current).add(notificationId));
+      void markAdminNotificationRead(notificationId).catch(() => undefined);
 
       if (notificationType === 'message') {
         setUnreadMessages(current => current.filter(message => message.id !== itemId));
@@ -443,7 +471,6 @@ export default function AdminNavigator() {
 
       if (notificationType === 'report') {
         const report = item.data;
-        setSeenReportIds(current => new Set(current).add(itemId));
         setUnreadReports(current => current.filter(unreadReport => unreadReport.id !== itemId));
         if (report && user?.id) {
           void savePartnerReport({
@@ -455,18 +482,15 @@ export default function AdminNavigator() {
       }
 
       if (notificationType === 'approval') {
-        setSeenPendingUserIds(current => new Set(current).add(itemId));
         setPendingUsers(current => current.filter(pendingUser => pendingUser.id !== itemId));
         return;
       }
 
       if (notificationType === 'partner-application') {
-        setSeenPartnerApplicationIds(current => new Set(current).add(itemId));
         setPendingPartnerApplications(current => current.filter(application => application.id !== itemId));
         return;
       }
 
-      setSeenVolunteerRequestIds(current => new Set(current).add(itemId));
       setPendingVolunteerRequests(current => current.filter(request => request.id !== itemId));
     },
     [user?.id]
@@ -485,27 +509,29 @@ export default function AdminNavigator() {
       }
 
       if (route === 'Projects') {
-        setSeenVolunteerRequestIds(current => {
+        const projectNotificationIds = [
+          ...pendingVolunteerRequests.map(request => `volunteer-request-${request.id}`),
+          ...pendingPartnerApplications.map(application => `partner-application-${application.id}`),
+        ];
+        setSeenNotificationIds(current => {
           const next = new Set(current);
-          pendingVolunteerRequests.forEach(request => next.add(request.id));
+          projectNotificationIds.forEach(notificationId => next.add(notificationId));
           return next;
         });
-        setSeenPartnerApplicationIds(current => {
-          const next = new Set(current);
-          pendingPartnerApplications.forEach(application => next.add(application.id));
-          return next;
-        });
+        void Promise.all(projectNotificationIds.map(notificationId => markAdminNotificationRead(notificationId).catch(() => undefined)));
         setPendingVolunteerRequests([]);
         setPendingPartnerApplications([]);
         return;
       }
 
       if (route === 'Users') {
-        setSeenPendingUserIds(current => {
+        const userNotificationIds = pendingUsers.map(pendingUser => `approval-${pendingUser.id}`);
+        setSeenNotificationIds(current => {
           const next = new Set(current);
-          pendingUsers.forEach(pendingUser => next.add(pendingUser.id));
+          userNotificationIds.forEach(notificationId => next.add(notificationId));
           return next;
         });
+        void Promise.all(userNotificationIds.map(notificationId => markAdminNotificationRead(notificationId).catch(() => undefined)));
         setPendingUsers([]);
       }
     },
@@ -547,7 +573,7 @@ export default function AdminNavigator() {
 
     return [
       ...pendingUsers.map((pendingUser): AdminNotificationItem => ({
-        id: `user-${pendingUser.id}`,
+        id: `approval-${pendingUser.id}`,
         title: pendingUser.name || pendingUser.email || 'Pending account',
         subtitle: `${pendingUser.role || 'User'} account waiting for approval`,
         timestamp: formatTimestamp(pendingUser.createdAt),
