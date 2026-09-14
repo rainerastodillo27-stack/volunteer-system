@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Modal, ScrollView } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import MapView, { Callout, Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 
 // Safe Platform accessor for web environments
@@ -115,16 +116,21 @@ const MapMarker = React.memo<MapMarkerProps>(
 
   return (
     <Marker
+      key={`${project.id}-${getProjectMarkerColor(project)}-${volunteerHits.length}`}
       coordinate={{
         latitude: project.location.latitude,
         longitude: project.location.longitude,
       }}
       anchor={{ x: 0.5, y: 1 }}
+      pinColor={getPlatformOS() === 'android' ? getProjectMarkerColor(project) : undefined}
+      tracksViewChanges={getPlatformOS() !== 'android'}
       title={project.title}
       description={project.location.address}
       onPress={() => onPress(project)}
     >
-      <PhotoMapMarker accentColor={getProjectMarkerColor(project)} count={volunteerHits.length} />
+      {getPlatformOS() !== 'android' ? (
+        <PhotoMapMarker accentColor={getProjectMarkerColor(project)} count={volunteerHits.length} />
+      ) : null}
       <Callout tooltip>
         <View style={styles.calloutCard}>
           <Text style={styles.calloutTitle} numberOfLines={2}>
@@ -360,6 +366,7 @@ export default function VolunteerImpactMap({
   onVolunteerPress,
   onPartnerPress,
 }: VolunteerImpactMapProps) {
+  const [mapViewKey, setMapViewKey] = useState(0);
   const mappedProjects = useMemo(() => getMappedProjects(projects), [projects]);
   const mappedEvents = useMemo(
     () => mappedProjects.filter(project => project.isEvent),
@@ -487,6 +494,15 @@ export default function VolunteerImpactMap({
 
   const mapRegion = useMemo(() => getInitialProjectRegion(displayProjects) as Region, [displayProjects]);
 
+  // The profile tab remains mounted while users visit other tabs. Recreate the
+  // native map surface when it regains focus so Android re-registers its pins
+  // after the underlying Google Map view has been detached and reattached.
+  useFocusEffect(
+    useCallback(() => {
+      setMapViewKey(current => current + 1);
+    }, [])
+  );
+
   if (!hasAnyMapData) {
     return null;
   }
@@ -574,6 +590,7 @@ export default function VolunteerImpactMap({
         ]}
       >
         <MapContent
+          key={`impact-map-${mapViewKey}`}
           displayProjects={displayProjects}
           mapRegion={mapRegion}
           nativeMapType={nativeMapType}

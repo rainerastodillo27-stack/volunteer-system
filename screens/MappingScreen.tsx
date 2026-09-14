@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import ModernTheme from '../utils/modernTheme';
 import {
   View,
@@ -14,6 +14,7 @@ import {
   type ImageStyle,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import MapView, { Callout, Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import InlineLoadError from '../components/InlineLoadError';
 import PhotoMapMarker from '../components/PhotoMapMarker';
@@ -54,6 +55,7 @@ export default function MappingScreen({ navigation }: any) {
   const [showDetails, setShowDetails] = useState(false);
   const [locationPromptProject, setLocationPromptProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
+  const [mapViewKey, setMapViewKey] = useState(0);
   const mapRef = React.useRef<MapView | null>(null);
   const mappedProjects = React.useMemo(() => getMappedProjects(projects), [projects]);
   const unmappedProjects = React.useMemo(() => getUnmappedProjects(projects), [projects]);
@@ -63,23 +65,8 @@ export default function MappingScreen({ navigation }: any) {
     [mappedProjects]
   );
 
-  useEffect(() => {
-    void loadProjects();
-  }, [user]);
-
-  useEffect(() => {
-    return subscribeToStorageChanges(
-      ['projects', 'events', 'volunteers', 'partnerReports', 'partnerProjectApplications', 'volunteerProjectJoins'],
-      () => {
-        void loadProjects();
-      }
-    );
-  }, [user]);
-
-
-
   // Loads map data and narrows project visibility based on the active role.
-  const loadProjects = async () => {
+  const loadProjects = useCallback(async () => {
     try {
       // Load cover photos too because the selected-project panel displays them.
       const snapshot = await getProjectsScreenSnapshot(
@@ -164,17 +151,30 @@ export default function MappingScreen({ navigation }: any) {
       setLoading(false);
     } catch (error) {
       console.error('Error loading projects for map:', error);
-      setProjects([]);
-      setPartnerReports([]);
-      setVolunteers([]);
-      setPartners([]);
       setLoadError({
         title: getRequestErrorTitle(error, 'Database Unavailable'),
         message: getRequestErrorMessage(error, 'Failed to load projects from Postgres.'),
       });
       setLoading(false);
     }
-  };
+  }, [user]);
+
+  // Android can retain a detached Google Map surface when a bottom-tab screen
+  // is revisited. Refresh the data and recreate the native map so its marker
+  // layer is registered again instead of relying on the stale surface.
+  useFocusEffect(
+    useCallback(() => {
+      setMapViewKey(current => current + 1);
+      void loadProjects();
+
+      return subscribeToStorageChanges(
+        ['projects', 'events', 'volunteers', 'partnerReports', 'partnerProjectApplications', 'volunteerProjectJoins'],
+        () => {
+          void loadProjects();
+        }
+      );
+    }, [loadProjects])
+  );
 
   // Opens the details modal for the tapped map marker.
   const handleProjectSelection = (projectId: string) => {
@@ -254,6 +254,7 @@ export default function MappingScreen({ navigation }: any) {
         ) : null}
 
         <MapView
+          key={`mapping-map-${mapViewKey}`}
           ref={map => {
             mapRef.current = map;
           }}
@@ -265,21 +266,34 @@ export default function MappingScreen({ navigation }: any) {
           toolbarEnabled
           mapType="standard"
         >
-          {mappedProjects.map((project, index) => (
-            <Marker
-              key={project.id}
-              coordinate={{
-                latitude: project.location.latitude,
-                longitude: project.location.longitude,
-              }}
-              title={`${index + 1}. ${project.title}`}
-              description={`${project.isEvent ? 'Event' : 'Project'} | ${getProjectDisplayStatus(project)}`}
-              onPress={() => handleProjectSelection(project.id)}
-            >
-              <PhotoMapMarker
-                accentColor={getProjectMarkerColor(project)}
-                count={getProjectVolunteerMapEntries(project, volunteers, volunteerJoinRecords).length}
-              />
+          {mappedProjects.map((project, index) => {
+            const markerColor = getProjectMarkerColor(project);
+            const volunteerCount = getProjectVolunteerMapEntries(
+              project,
+              volunteers,
+              volunteerJoinRecords
+            ).length;
+
+            return (
+              <Marker
+                key={`${project.id}-${markerColor}-${volunteerCount}`}
+                coordinate={{
+                  latitude: project.location.latitude,
+                  longitude: project.location.longitude,
+                }}
+                anchor={{ x: 0.5, y: 1 }}
+                pinColor={Platform.OS === 'android' ? markerColor : undefined}
+                tracksViewChanges={Platform.OS !== 'android'}
+                title={`${index + 1}. ${project.title}`}
+                description={`${project.isEvent ? 'Event' : 'Project'} | ${getProjectDisplayStatus(project)}`}
+                onPress={() => handleProjectSelection(project.id)}
+              >
+                {Platform.OS !== 'android' ? (
+                  <PhotoMapMarker
+                    accentColor={markerColor}
+                    count={volunteerCount}
+                  />
+                ) : null}
               <Callout tooltip>
                 <View style={styles.calloutCard}>
                   <Text style={styles.calloutTitle} numberOfLines={2}>
@@ -382,8 +396,9 @@ export default function MappingScreen({ navigation }: any) {
                   })()}
                 </View>
               </Callout>
-            </Marker>
-          ))}
+              </Marker>
+            );
+          })}
         </MapView>
 
         {isVolunteerView ? (
