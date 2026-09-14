@@ -227,6 +227,79 @@ function getMapLegendFootnote(selectedMapStyleKey: MapStylePresetKey) {
   return 'Across Philippines';
 }
 
+type EventScheduleState = 'today' | 'upcoming' | 'past' | 'unscheduled';
+
+function getEventDateRange(project: Project) {
+  if (!project.startDate) {
+    return null;
+  }
+
+  const start = new Date(project.startDate);
+  if (!Number.isFinite(start.getTime())) {
+    return null;
+  }
+
+  const end = project.endDate ? new Date(project.endDate) : new Date(start);
+  if (!Number.isFinite(end.getTime())) {
+    return { start, end: new Date(start) };
+  }
+
+  return { start, end: end < start ? new Date(start) : end };
+}
+
+function getEventScheduleState(project: Project, referenceDate = new Date()): EventScheduleState {
+  const range = getEventDateRange(project);
+  if (!range) {
+    return 'unscheduled';
+  }
+
+  const todayStart = new Date(
+    referenceDate.getFullYear(),
+    referenceDate.getMonth(),
+    referenceDate.getDate(),
+  ).getTime();
+  const eventStart = new Date(
+    range.start.getFullYear(),
+    range.start.getMonth(),
+    range.start.getDate(),
+  ).getTime();
+  const eventEnd = new Date(
+    range.end.getFullYear(),
+    range.end.getMonth(),
+    range.end.getDate(),
+  ).getTime();
+
+  if (eventEnd < todayStart) {
+    return 'past';
+  }
+  if (eventStart > todayStart) {
+    return 'upcoming';
+  }
+  return 'today';
+}
+
+function formatEventDateRange(project: Project) {
+  const range = getEventDateRange(project);
+  if (!range) {
+    return 'Date to be announced';
+  }
+
+  const formatDate = (value: Date) =>
+    value.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const startLabel = formatDate(range.start);
+  const endLabel = formatDate(range.end);
+
+  return startLabel === endLabel ? startLabel : `${startLabel} – ${endLabel}`;
+}
+
+function formatDayNumber(value: Date) {
+  return value.toLocaleDateString('en-US', { day: '2-digit' });
+}
+
+function formatMonthShort(value: Date) {
+  return value.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
+}
+
 // Displays the web version of the project map using the Google Maps JavaScript API.
 export default function MappingScreen({ navigation }: any) {
   const { user } = useAuth();
@@ -572,7 +645,11 @@ export default function MappingScreen({ navigation }: any) {
       eventScoped ? Boolean(project.isEvent) : !project.isEvent
     );
     const totalProjects = scopedProjects.length;
-    const totalEvents = displayProjects.filter(p => p.isEvent).length;
+    const totalEvents = displayProjects.filter(project => {
+      if (!project.isEvent) return false;
+      const scheduleState = getEventScheduleState(project);
+      return scheduleState === 'today' || scheduleState === 'upcoming';
+    }).length;
     const completedProjects = displayProjects.filter(p => p.status === 'Completed').length;
     const inProgressProjects = displayProjects.filter(p => p.status === 'In Progress').length;
     
@@ -598,23 +675,36 @@ export default function MappingScreen({ navigation }: any) {
 
   const selectedMapStyle =
     MAP_STYLE_PRESETS.find(preset => preset.key === selectedMapStyleKey) || MAP_STYLE_PRESETS[0];
-  const today = new Date();
-  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
-  const endOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999).getTime();
-  const featuredProject =
-    mappedProjects.find(project => {
-      if (!project.isEvent || !project.startDate) return false;
-      const start = new Date(project.startDate).getTime();
-      const end = project.endDate ? new Date(project.endDate).getTime() : start;
-      return Number.isFinite(start) && Number.isFinite(end) && start <= endOfToday && end >= startOfToday;
-    }) ||
-    mappedProjects.find(project => {
-      if (!project.isEvent || !project.startDate) return false;
-      const start = new Date(project.startDate).getTime();
-      return Number.isFinite(start) && start > endOfToday;
-    }) ||
-    mappedProjects[0] ||
-    null;
+  const [scheduleReferenceDate, setScheduleReferenceDate] = useState(() => new Date());
+  useEffect(() => {
+    const refreshScheduleDate = () => setScheduleReferenceDate(new Date());
+    const intervalId = window.setInterval(refreshScheduleDate, 60 * 1000);
+    return () => window.clearInterval(intervalId);
+  }, []);
+  const eventSchedule = React.useMemo(() => {
+    const events = mappedProjects
+      .filter(project => Boolean(project.isEvent))
+      .map(project => ({ project, state: getEventScheduleState(project, scheduleReferenceDate) }))
+      .filter(item => item.state !== 'past' && item.state !== 'unscheduled')
+      .sort((left, right) => {
+        const leftTime = getEventDateRange(left.project)?.start.getTime() || Number.MAX_SAFE_INTEGER;
+        const rightTime = getEventDateRange(right.project)?.start.getTime() || Number.MAX_SAFE_INTEGER;
+        return leftTime - rightTime;
+      });
+
+    return {
+      today: events.filter(item => item.state === 'today').map(item => item.project),
+      upcoming: events.filter(item => item.state === 'upcoming').map(item => item.project),
+    };
+  }, [mappedProjects, scheduleReferenceDate]);
+  const featuredEvent = eventSchedule.today[0] || eventSchedule.upcoming[0] || null;
+  const featuredProject = selectedMapStyleKey === 'projects-view'
+    ? mappedProjects.find(project => !project.isEvent) || null
+    : featuredEvent;
+  const featuredEventState = featuredProject?.isEvent
+    ? getEventScheduleState(featuredProject, scheduleReferenceDate)
+    : null;
+  const featuredDateRange = featuredProject ? getEventDateRange(featuredProject) : null;
   const statusLegend = [
     { label: 'In Progress', color: '#5B9B57' },
     { label: 'Planned', color: '#5F8FDC' },
@@ -1501,9 +1591,86 @@ export default function MappingScreen({ navigation }: any) {
         ) : null}
       </View>
 
-      {featuredProject ? (
+      {selectedMapStyleKey !== 'projects-view' ? (
+        <View style={styles.eventScheduleSection}>
+          <View style={styles.eventScheduleHeader}>
+            <View style={styles.eventScheduleHeadingCopy}>
+              <View style={styles.eventScheduleEyebrow}>
+                <MaterialIcons name="event-available" size={16} color="#15803d" />
+                <Text style={styles.eventScheduleEyebrowText}>EVENT SCHEDULE</Text>
+              </View>
+              <Text style={styles.eventScheduleTitle}>
+                {eventSchedule.today.length > 0 ? 'Happening today' : featuredEvent ? 'Next on the calendar' : 'No upcoming events'}
+              </Text>
+              <Text style={styles.eventScheduleSubtitle}>
+                {eventSchedule.today.length > 0
+                  ? `${eventSchedule.today.length} event${eventSchedule.today.length === 1 ? '' : 's'} scheduled for today`
+                  : featuredEvent
+                  ? 'Your next scheduled event is shown below.'
+                  : 'Past events are hidden so this view stays current.'}
+              </Text>
+            </View>
+            <View style={styles.todayDateBadge}>
+              <Text style={styles.todayDateMonth}>{formatMonthShort(scheduleReferenceDate)}</Text>
+              <Text style={styles.todayDateNumber}>{formatDayNumber(scheduleReferenceDate)}</Text>
+              <Text style={styles.todayDateYear}>{scheduleReferenceDate.getFullYear()}</Text>
+            </View>
+          </View>
+
+          {featuredProject ? (
+            <TouchableOpacity style={styles.featuredProjectCard} activeOpacity={0.88} onPress={() => { setSelectedProject(featuredProject); setShowDetails(true); }}>
+              <View style={styles.featuredDateTile}>
+                <Text style={styles.featuredDateTileLabel}>{featuredEventState === 'today' ? 'TODAY' : 'NEXT'}</Text>
+                {featuredDateRange ? (
+                  <>
+                    <Text style={styles.featuredDateTileDay}>{formatDayNumber(featuredDateRange.start)}</Text>
+                    <Text style={styles.featuredDateTileMonth}>{formatMonthShort(featuredDateRange.start)}</Text>
+                  </>
+                ) : <MaterialIcons name="event" size={27} color="#15803d" />}
+              </View>
+              <View style={styles.featuredIconShell}><MaterialIcons name="event" size={42} color="#4C8249" /></View>
+              <View style={styles.featuredCopy}>
+                <Text style={styles.featuredTitle} numberOfLines={1}>{featuredProject.title}</Text>
+                <View style={styles.featuredBadges}>
+                  <View style={styles.categoryBadge}><Text style={styles.categoryBadgeText}>{featuredProject.category}</Text></View>
+                  <View style={styles.scheduleBadge}>
+                    <View style={styles.scheduleBadgeDot} />
+                    <Text style={styles.scheduleBadgeText}>{featuredEventState === 'today' ? 'Today' : 'Upcoming'}</Text>
+                  </View>
+                  <View style={styles.progressBadge}><View style={styles.progressDot} /><Text style={styles.progressBadgeText}>{getProjectDisplayStatus(featuredProject)}</Text></View>
+                </View>
+                <View style={styles.featuredMeta}>
+                  <View style={styles.metaItem}><MaterialIcons name="location-on" size={23} color="#5B6470" /><Text style={styles.metaText} numberOfLines={1}>{featuredProject.location.address || 'Philippines'}</Text></View>
+                  <View style={styles.metaItem}><MaterialIcons name="calendar-today" size={20} color="#5B6470" /><Text style={styles.metaText}>{formatEventDateRange(featuredProject)}</Text></View>
+                </View>
+              </View>
+              <View style={styles.volunteerSummary}><MaterialIcons name="groups-2" size={40} color="#5B6470" /><View><Text style={styles.volunteerNumber}>{(markerVolunteerEntriesByProjectId.get(featuredProject.id) || []).length} / {getProjectVolunteersNeeded(featuredProject, projects)}</Text><Text style={styles.volunteerLabel}>Volunteers</Text></View></View>
+              <View style={styles.cardDivider} />
+              <TouchableOpacity
+                style={styles.featuredDirectionsBtn}
+                onPress={(e) => {
+                  e.stopPropagation?.();
+                  handleGetDirections(featuredProject);
+                }}
+              >
+                <MaterialIcons name="directions" size={20} color="#16a34a" />
+                <Text style={styles.featuredDirectionsText}>Directions</Text>
+              </TouchableOpacity>
+              <View style={styles.detailsButton}><Text style={styles.detailsButtonText}>View Details</Text><MaterialIcons name="arrow-forward" size={24} color="#4C8249" /></View>
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.eventScheduleEmpty}>
+              <View style={styles.eventScheduleEmptyIcon}><MaterialIcons name="event-busy" size={28} color="#94a3b8" /></View>
+              <View style={styles.eventScheduleEmptyCopy}>
+                <Text style={styles.eventScheduleEmptyTitle}>Nothing scheduled for today</Text>
+                <Text style={styles.eventScheduleEmptyText}>New events will appear here automatically when their date is reached.</Text>
+              </View>
+            </View>
+          )}
+        </View>
+      ) : featuredProject ? (
         <TouchableOpacity style={styles.featuredProjectCard} activeOpacity={0.88} onPress={() => { setSelectedProject(featuredProject); setShowDetails(true); }}>
-          <View style={styles.featuredIconShell}><MaterialIcons name="school" size={45} color="#4C8249" /></View>
+          <View style={styles.featuredIconShell}><MaterialIcons name="school" size={42} color="#4C8249" /></View>
           <View style={styles.featuredCopy}>
             <Text style={styles.featuredTitle} numberOfLines={1}>{featuredProject.title}</Text>
             <View style={styles.featuredBadges}>
@@ -1512,21 +1679,11 @@ export default function MappingScreen({ navigation }: any) {
             </View>
             <View style={styles.featuredMeta}>
               <View style={styles.metaItem}><MaterialIcons name="location-on" size={23} color="#5B6470" /><Text style={styles.metaText} numberOfLines={1}>{featuredProject.location.address || 'Philippines'}</Text></View>
-              <View style={styles.metaItem}><MaterialIcons name="calendar-today" size={20} color="#5B6470" /><Text style={styles.metaText}>{new Date(featuredProject.startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</Text></View>
+              <View style={styles.metaItem}><MaterialIcons name="calendar-today" size={20} color="#5B6470" /><Text style={styles.metaText}>{formatEventDateRange(featuredProject)}</Text></View>
             </View>
           </View>
           <View style={styles.volunteerSummary}><MaterialIcons name="groups-2" size={40} color="#5B6470" /><View><Text style={styles.volunteerNumber}>{(markerVolunteerEntriesByProjectId.get(featuredProject.id) || []).length} / {getProjectVolunteersNeeded(featuredProject, projects)}</Text><Text style={styles.volunteerLabel}>Volunteers</Text></View></View>
           <View style={styles.cardDivider} />
-          <TouchableOpacity
-            style={styles.featuredDirectionsBtn}
-            onPress={(e) => {
-              e.stopPropagation?.();
-              handleGetDirections(featuredProject);
-            }}
-          >
-            <MaterialIcons name="directions" size={20} color="#16a34a" />
-            <Text style={styles.featuredDirectionsText}>Directions</Text>
-          </TouchableOpacity>
           <View style={styles.detailsButton}><Text style={styles.detailsButtonText}>View Details</Text><MaterialIcons name="arrow-forward" size={24} color="#4C8249" /></View>
         </TouchableOpacity>
       ) : null}
@@ -2118,42 +2275,182 @@ const styles = StyleSheet.create({
   legendTotalLabel: { marginHorizontal: 12, marginTop: 6, color: '#39465A', fontSize: 11, fontWeight: '800' },
   legendTotal: { marginHorizontal: 12, marginTop: 2, color: '#4D894B', fontSize: 20, fontWeight: '800' },
   legendFootnote: { marginHorizontal: 12, marginBottom: 4, marginTop: 2, color: '#6B778B', fontSize: 10, fontWeight: '600' },
+  eventScheduleSection: {
+    marginHorizontal: 31,
+    marginTop: 26,
+    padding: 22,
+    borderRadius: 22,
+    backgroundColor: '#F7FBF6',
+    borderWidth: 1,
+    borderColor: '#DDEDDD',
+  },
+  eventScheduleHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 20,
+    marginBottom: 18,
+  },
+  eventScheduleHeadingCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  eventScheduleEyebrow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+  eventScheduleEyebrowText: {
+    color: '#15803D',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 1.2,
+  },
+  eventScheduleTitle: {
+    marginTop: 6,
+    color: '#172238',
+    fontSize: 23,
+    fontWeight: '800',
+  },
+  eventScheduleSubtitle: {
+    marginTop: 4,
+    color: '#64748B',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  todayDateBadge: {
+    width: 78,
+    minHeight: 82,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#CFE6D0',
+    shadowColor: '#166534',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 1,
+  },
+  todayDateMonth: {
+    color: '#15803D',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 1,
+  },
+  todayDateNumber: {
+    marginTop: 1,
+    color: '#172238',
+    fontSize: 27,
+    lineHeight: 30,
+    fontWeight: '800',
+  },
+  todayDateYear: {
+    color: '#64748B',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  eventScheduleEmpty: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    padding: 18,
+    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  eventScheduleEmptyIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F1F5F9',
+  },
+  eventScheduleEmptyCopy: {
+    flex: 1,
+  },
+  eventScheduleEmptyTitle: {
+    color: '#334155',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  eventScheduleEmptyText: {
+    marginTop: 3,
+    color: '#64748B',
+    fontSize: 13,
+    lineHeight: 19,
+  },
   featuredProjectCard: {
     minHeight: 160,
-    marginHorizontal: 31,
-    marginTop: 30,
+    marginTop: 0,
     paddingHorizontal: 28,
-    paddingVertical: 27,
-    borderRadius: 20,
+    paddingVertical: 23,
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: '#E4E9EE',
+    borderColor: '#E0EAE0',
     backgroundColor: '#FFFFFF',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 25,
+    gap: 18,
     shadowColor: '#334155',
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.05,
     shadowRadius: 9,
     elevation: 2,
   },
-  featuredIconShell: { width: 90, height: 104, borderRadius: 17, backgroundColor: '#F0F8EF', alignItems: 'center', justifyContent: 'center' },
+  featuredDateTile: {
+    width: 62,
+    minHeight: 82,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    borderRadius: 14,
+    backgroundColor: '#F0F8EF',
+    borderWidth: 1,
+    borderColor: '#D8ECD7',
+  },
+  featuredDateTileLabel: {
+    color: '#4B8649',
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+  },
+  featuredDateTileDay: {
+    marginTop: 1,
+    color: '#172238',
+    fontSize: 24,
+    lineHeight: 28,
+    fontWeight: '900',
+  },
+  featuredDateTileMonth: {
+    color: '#64748B',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  featuredIconShell: { width: 76, height: 82, borderRadius: 16, backgroundColor: '#F0F8EF', alignItems: 'center', justifyContent: 'center' },
   featuredCopy: { flex: 1, alignSelf: 'stretch', justifyContent: 'center', minWidth: 280 },
-  featuredTitle: { color: '#172238', fontSize: 25, fontWeight: '800' },
-  featuredBadges: { marginTop: 9, flexDirection: 'row', alignItems: 'center', gap: 10 },
-  categoryBadge: { borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6, backgroundColor: '#F0F8EF' },
-  categoryBadgeText: { color: '#4B8649', fontSize: 15, fontWeight: '800' },
-  progressBadge: { borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6, backgroundColor: '#F0F8EF', flexDirection: 'row', alignItems: 'center', gap: 7 },
-  progressDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: '#5A9855' },
-  progressBadgeText: { color: '#4B8649', fontSize: 15, fontWeight: '800' },
-  featuredMeta: { marginTop: 17, flexDirection: 'row', alignItems: 'center', gap: 24 },
+  featuredTitle: { color: '#172238', fontSize: 22, fontWeight: '800' },
+  featuredBadges: { marginTop: 8, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 7 },
+  categoryBadge: { borderRadius: 20, paddingHorizontal: 11, paddingVertical: 5, backgroundColor: '#F0F8EF' },
+  categoryBadgeText: { color: '#4B8649', fontSize: 13, fontWeight: '800' },
+  scheduleBadge: { borderRadius: 20, paddingHorizontal: 11, paddingVertical: 5, backgroundColor: '#ECFDF3', flexDirection: 'row', alignItems: 'center', gap: 6 },
+  scheduleBadgeDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#16A34A' },
+  scheduleBadgeText: { color: '#15803D', fontSize: 13, fontWeight: '800' },
+  progressBadge: { borderRadius: 20, paddingHorizontal: 11, paddingVertical: 5, backgroundColor: '#F0F8EF', flexDirection: 'row', alignItems: 'center', gap: 7 },
+  progressDot: { width: 8, height: 8, borderRadius: 5, backgroundColor: '#5A9855' },
+  progressBadgeText: { color: '#4B8649', fontSize: 13, fontWeight: '800' },
+  featuredMeta: { marginTop: 13, flexDirection: 'row', alignItems: 'center', gap: 18 },
   metaItem: { maxWidth: 300, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  metaText: { color: '#485569', fontSize: 16, fontWeight: '600' },
-  volunteerSummary: { width: 250, paddingLeft: 24, borderLeftWidth: 1, borderLeftColor: '#E4E9EE', flexDirection: 'row', alignItems: 'center', gap: 17 },
+  metaText: { color: '#485569', fontSize: 14, fontWeight: '600' },
+  volunteerSummary: { width: 210, paddingLeft: 18, borderLeftWidth: 1, borderLeftColor: '#E4E9EE', flexDirection: 'row', alignItems: 'center', gap: 13 },
   volunteerNumber: { color: '#263244', fontSize: 17, fontWeight: '800' },
   volunteerLabel: { marginTop: 2, color: '#536074', fontSize: 15, fontWeight: '600' },
   cardDivider: { width: 1, height: 57, backgroundColor: '#E4E9EE' },
-  detailsButton: { width: 186, height: 54, borderWidth: 2, borderColor: '#78A974', borderRadius: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 14 },
+  detailsButton: { width: 170, height: 50, borderWidth: 2, borderColor: '#78A974', borderRadius: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
   detailsButtonText: { color: '#4C8249', fontSize: 16, fontWeight: '800' },  centeredView: {
     flex: 1,
     justifyContent: 'flex-end',
