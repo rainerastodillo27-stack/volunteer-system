@@ -411,7 +411,11 @@ CREATE INDEX IF NOT EXISTS idx_partners_contact_email            ON public.partn
 CREATE INDEX IF NOT EXISTS idx_partners_contact_phone            ON public.partners(coalesce(contact_phone, ''));
 CREATE INDEX IF NOT EXISTS idx_projects_partner_id              ON public.projects(partner_id);
 CREATE INDEX IF NOT EXISTS idx_projects_program_id              ON public.projects(program_id);
+CREATE INDEX IF NOT EXISTS idx_projects_volunteers_gin           ON public.projects USING gin(volunteers);
+CREATE INDEX IF NOT EXISTS idx_projects_joined_users_gin         ON public.projects USING gin(joined_user_ids);
 CREATE INDEX IF NOT EXISTS idx_events_partner_id                ON public.events(partner_id);
+CREATE INDEX IF NOT EXISTS idx_events_volunteers_gin             ON public.events USING gin(volunteers);
+CREATE INDEX IF NOT EXISTS idx_events_joined_users_gin           ON public.events USING gin(joined_user_ids);
 CREATE INDEX IF NOT EXISTS idx_volunteer_matches_volunteer      ON public.volunteer_matches(volunteer_id);
 CREATE INDEX IF NOT EXISTS idx_volunteer_matches_project        ON public.volunteer_matches(project_id);
 CREATE INDEX IF NOT EXISTS idx_volunteer_event_joins_project    ON public.volunteer_event_joins(project_id);

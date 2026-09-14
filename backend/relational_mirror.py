@@ -349,6 +349,8 @@ RELATIONAL_TABLE_DDL = [
     "create index if not exists projects_category_idx on projects (category)",
     "create index if not exists projects_created_at_idx on projects (created_at)",
     "create index if not exists projects_is_event_idx on projects (is_event)",
+    "create index if not exists projects_volunteers_gin_idx on projects using gin (volunteers)",
+    "create index if not exists projects_joined_user_ids_gin_idx on projects using gin (joined_user_ids)",
     "analyze projects",
     f"""
     create table if not exists programs (
@@ -481,6 +483,8 @@ RELATIONAL_TABLE_DDL = [
     "create index if not exists events_category_idx on events (category)",
     "create index if not exists events_created_at_idx on events (created_at)",
     "create index if not exists events_is_event_idx on events (is_event)",
+    "create index if not exists events_volunteers_gin_idx on events using gin (volunteers)",
+    "create index if not exists events_joined_user_ids_gin_idx on events using gin (joined_user_ids)",
     "analyze events",
     f"""
     create table if not exists status_updates (

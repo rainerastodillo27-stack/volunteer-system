@@ -1933,53 +1933,109 @@ def _cascade_delete_project_references(connection: Any, related_project_ids: set
     if not related_ids:
         return []
 
-    changed_keys: list[str] = []
-
     with connection.cursor() as cursor:
         try:
             cursor.execute(
                 """
-                select coalesce(events_id, '') from events
-                where parent_project_id = any(%s)
-                   or events_id = any(%s)
+                with requested_ids(id) as (
+                    select unnest(%s::text[])
+                ),
+                child_ids(id) as (
+                    select distinct events_id
+                    from events
+                    where parent_project_id in (select id from requested_ids)
+                       or events_id in (select id from requested_ids)
+                ),
+                all_ids(id) as (
+                    select id from requested_ids
+                    union
+                    select id from child_ids
+                ),
+                deleted_events as (
+                    delete from events
+                    where events_id in (select id from all_ids)
+                       or parent_project_id in (select id from all_ids)
+                    returning 1
+                ),
+                deleted_projects as (
+                    delete from projects
+                    where projects_id in (select id from all_ids)
+                    returning 1
+                ),
+                deleted_time_logs as (
+                    delete from volunteer_time_logs
+                    where project_id in (select id from all_ids)
+                    returning 1
+                ),
+                deleted_matches as (
+                    delete from volunteer_matches
+                    where project_id in (select id from all_ids)
+                    returning 1
+                ),
+                deleted_joins as (
+                    delete from volunteer_event_joins
+                    where project_id in (select id from all_ids)
+                    returning 1
+                ),
+                deleted_applications as (
+                    delete from partner_project_applications
+                    where project_id in (select id from all_ids)
+                    returning 1
+                ),
+                deleted_status_updates as (
+                    delete from status_updates
+                    where project_id in (select id from all_ids)
+                    returning 1
+                ),
+                deleted_reports as (
+                    delete from reports
+                    where project_id in (select id from all_ids)
+                    returning 1
+                ),
+                deleted_group_messages as (
+                    delete from project_group_messages
+                    where project_id in (select id from all_ids)
+                    returning 1
+                )
+                select
+                    (select count(*) from deleted_events),
+                    (select count(*) from deleted_projects),
+                    (select count(*) from deleted_time_logs),
+                    (select count(*) from deleted_matches),
+                    (select count(*) from deleted_joins),
+                    (select count(*) from deleted_applications),
+                    (select count(*) from deleted_status_updates),
+                    (select count(*) from deleted_reports),
+                    (select count(*) from deleted_group_messages)
                 """,
-                (related_ids, related_ids),
+                (related_ids,),
             )
-            child_ids = [str(r[0]) for r in cursor.fetchall() if r[0]]
+            counts = cursor.fetchone() or (0,) * 9
         except Exception:
             try:
                 connection.rollback()
             except Exception:
                 pass
-            child_ids = []
+            return []
 
-        all_ids_to_purge = list(dict.fromkeys([*related_ids, *child_ids]))
-        for table, col, key in [
-            ("events", "events_id", "events"),
-            ("events", "parent_project_id", "events"),
-            ("projects", "projects_id", "projects"),
-            ("volunteer_time_logs", "project_id", "volunteerTimeLogs"),
-            ("volunteer_matches", "project_id", "volunteerMatches"),
-            ("volunteer_event_joins", "project_id", "volunteerProjectJoins"),
-            ("partner_project_applications", "project_id", "partnerProjectApplications"),
-            ("status_updates", "project_id", "statusUpdates"),
-            ("reports", "project_id", "partnerReports"),
-            ("project_group_messages", "project_id", "projectGroupMessages"),
-        ]:
-            try:
-                cursor.execute(
-                    f"delete from {table} where {col} = any(%s)",
-                    (all_ids_to_purge,),
-                )
-                if cursor.rowcount:
-                    changed_keys.append(key)
-            except Exception:
-                try:
-                    connection.rollback()
-                except Exception:
-                    pass
-
-    return list(dict.fromkeys(changed_keys))
+    changed_keys: list[str] = []
+    for count, key in zip(
+        counts,
+        (
+            "events",
+            "projects",
+            "volunteerTimeLogs",
+            "volunteerMatches",
+            "volunteerProjectJoins",
+            "partnerProjectApplications",
+            "statusUpdates",
+            "partnerReports",
+            "projectGroupMessages",
+        ),
+    ):
+        if count:
+            changed_keys.append(key)
+    return changed_keys
 
 
 def _remove_volunteer_assignments_from_project(
@@ -2085,6 +2141,8 @@ def _update_project_assignments_after_volunteer_delete(
         ("projects", "projects_id", "projects"),
         ("events", "events_id", "events"),
     ):
+        assignment_ids = list(removed_volunteer_ids | removed_volunteer_user_ids)
+        task_patterns = [f"%{assignment_id}%" for assignment_id in assignment_ids]
         # Only fetch assignment fields. In particular, image_url and
         # attachments never cross this update path.
         with connection.cursor(row_factory=dict_row) as cursor:
@@ -2092,7 +2150,11 @@ def _update_project_assignments_after_volunteer_delete(
                 f"""
                 select {id_column}, volunteers, joined_user_ids, internal_tasks
                 from public.{table_name}
-                """
+                where volunteers && %s::text[]
+                   or joined_user_ids && %s::text[]
+                   or internal_tasks::text like any(%s)
+                """,
+                (assignment_ids, assignment_ids, task_patterns),
             )
             rows = cursor.fetchall()
 
