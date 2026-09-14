@@ -3247,9 +3247,12 @@ export async function createUserAccount(input: {
     stakeholderName?: string;
     sectorType: PartnerSectorType;
     dswdAccreditationNo?: string;
-    secRegistrationNo?: string;
-    registrationDocuments?: string[];
-    advocacyFocus: AdvocacyFocus[];
+      secRegistrationNo?: string;
+      registrationDocuments?: string[];
+      region?: string;
+      province?: string;
+      cityMunicipality?: string;
+      advocacyFocus: AdvocacyFocus[];
   };
   volunteerMembershipSheet?: {
     gender: string;
@@ -3413,6 +3416,9 @@ export async function createUserAccount(input: {
           .map(document => document.trim())
           .filter(Boolean),
         advocacyFocus: input.partnerRegistration.advocacyFocus,
+        region: input.partnerRegistration.region,
+        province: input.partnerRegistration.province,
+        cityMunicipality: input.partnerRegistration.cityMunicipality,
         contactEmail: createdUser.email,
         contactPhone: createdUser.phone,
         status: 'Pending',

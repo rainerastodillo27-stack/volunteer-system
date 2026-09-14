@@ -63,6 +63,7 @@ from .image_compression import compress_base64_image, get_image_size_kb
 from .password_utils import hash_password, is_bcrypt_hash, verify_password
 from .relational_mirror import (
     TABLE_SPECS,
+    LIGHTWEIGHT_MEDIA_COLUMNS,
     ensure_volunteer_time_logs_table_shape,
     get_relational_item_by_id,
     get_relational_items_by_field,
@@ -2425,9 +2426,9 @@ def _get_media_light_collection(connection: Any, key: str, include_images: bool 
 
     spec = TABLE_SPECS[key]
     column_names = [column_name for column_name, _ in spec["columns"]]
+    media_columns = LIGHTWEIGHT_MEDIA_COLUMNS.get(key, set())
     select_columns = [
-        ("null::text as image_url" if not include_images else column_name)
-        if column_name == "image_url" else column_name
+        (f"null::text as {column_name}" if not include_images and column_name in media_columns else column_name)
         for column_name in column_names
     ]
     pk_column = _primary_key_column(key)
@@ -2651,6 +2652,14 @@ def _postgres_upsert_hot_item(connection: Any, key: str, item: dict[str, Any]) -
                 if compressed:
                     item = dict(item)
                     item["imageUrl"] = f"{prefix}{compressed}" if prefix else compressed
+        elif key == "users" and isinstance(item.get("profilePhoto"), str):
+            # Profile photos are captured as native base64 data URIs. Keep
+            # them small enough for mobile writes and directory responses.
+            profile_photo = item["profilePhoto"]
+            compressed_profile_photo = _compress_image_data_uri(profile_photo)
+            if compressed_profile_photo != profile_photo:
+                item = dict(item)
+                item["profilePhoto"] = compressed_profile_photo
         elif key == "partnerProjectApplications" and isinstance(item.get("proposalDetails"), dict):
             details = item["proposalDetails"]
             attachments = details.get("attachments")

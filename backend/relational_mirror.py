@@ -80,7 +80,8 @@ RELATIONAL_TABLE_DDL = [
       approved_by text,
       approved_at text,
       rejection_reason text,
-      created_at text
+      created_at text,
+      profile_photo text
     )
     """,
     "create index if not exists users_email_idx on users (lower(coalesce(email, '')))",
@@ -89,6 +90,7 @@ RELATIONAL_TABLE_DDL = [
     "alter table users add column if not exists approved_by text",
     "alter table users add column if not exists approved_at text",
     "alter table users add column if not exists rejection_reason text",
+    "alter table users add column if not exists profile_photo text",
     f"""
     create table if not exists partners (
       id text primary key,
@@ -111,13 +113,19 @@ RELATIONAL_TABLE_DDL = [
       validated_at text,
       credentials_unlocked_at text,
       created_at text,
-      registration_documents text not null default {JSON_ARRAY}
+      registration_documents text not null default {JSON_ARRAY},
+      region text,
+      province text,
+      city_municipality text
     )
     """,
     "create index if not exists partners_owner_user_id_idx on partners (owner_user_id)",
     "create index if not exists partners_dswd_accreditation_no_idx on partners (dswd_accreditation_no)",
     "alter table partners add column if not exists stakeholder_name text",
     "alter table partners add column if not exists sec_registration_no text",
+    "alter table partners add column if not exists region text",
+    "alter table partners add column if not exists province text",
+    "alter table partners add column if not exists city_municipality text",
     f"""
         create table if not exists volunteers (
             id text primary key,
@@ -151,7 +159,10 @@ RELATIONAL_TABLE_DDL = [
             reviewed_by text,
             reviewed_at text,
             credentials_unlocked_at text,
-            created_at text
+            created_at text,
+            hobbies_and_interests text,
+            special_skills text,
+            rejection_reason text
         )
     """,
     "create index if not exists volunteers_user_id_idx on volunteers (user_id)",
@@ -168,6 +179,9 @@ RELATIONAL_TABLE_DDL = [
     "alter table volunteers add column if not exists home_address_barangay text",
     "alter table volunteers add column if not exists valid_id_photo text",
     "alter table volunteers add column if not exists video_briefing_url text",
+    "alter table volunteers add column if not exists hobbies_and_interests text",
+    "alter table volunteers add column if not exists special_skills text",
+    "alter table volunteers add column if not exists rejection_reason text",
     f"""
     create table if not exists skills (
       skills_id text primary key,
@@ -239,7 +253,18 @@ RELATIONAL_TABLE_DDL = [
       skills_needed text[] not null default {TEXT_ARRAY},
       internal_tasks text not null default {JSON_ARRAY},
       created_at text,
-      updated_at text
+      updated_at text,
+      icon text,
+      color text,
+      volunteer_requirements text[] not null default {TEXT_ARRAY},
+      accept_volunteers boolean not null default true,
+      application_required boolean not null default false,
+      review_required boolean not null default false,
+      application_deadline text,
+      community_need text,
+      expected_deliverables text,
+      attachments text not null default {JSON_ARRAY},
+      group_chat_disabled boolean not null default false
     )
     """,
     """
@@ -303,6 +328,17 @@ RELATIONAL_TABLE_DDL = [
     "alter table projects add column if not exists location_venue text",
     "alter table projects add column if not exists google_meet_url text",
     "alter table projects add column if not exists notification_settings text not null default '[]'",
+    "alter table projects add column if not exists icon text",
+    "alter table projects add column if not exists color text",
+    "alter table projects add column if not exists volunteer_requirements text[] not null default '{}'::text[]",
+    "alter table projects add column if not exists accept_volunteers boolean not null default true",
+    "alter table projects add column if not exists application_required boolean not null default false",
+    "alter table projects add column if not exists review_required boolean not null default false",
+    "alter table projects add column if not exists application_deadline text",
+    "alter table projects add column if not exists community_need text",
+    "alter table projects add column if not exists expected_deliverables text",
+    "alter table projects add column if not exists attachments text not null default '[]'",
+    "alter table projects add column if not exists group_chat_disabled boolean not null default false",
     "create index if not exists projects_partner_id_idx on projects (partner_id)",
     "create index if not exists projects_parent_project_id_idx on projects (parent_project_id)",
     "create index if not exists projects_status_idx on projects (status)",
@@ -333,7 +369,16 @@ RELATIONAL_TABLE_DDL = [
       joined_user_ids text[] not null default {TEXT_ARRAY},
       linked_event_count integer not null default 0,
       created_at text,
-      updated_at text
+      updated_at text,
+      volunteer_requirements text[] not null default {TEXT_ARRAY},
+      accept_volunteers boolean not null default true,
+      application_required boolean not null default false,
+      review_required boolean not null default false,
+      application_deadline text,
+      community_need text,
+      expected_deliverables text,
+      attachments text not null default {JSON_ARRAY},
+      group_chat_disabled boolean not null default false
     )
     """,
     "alter table programs add column if not exists icon text",
@@ -348,6 +393,15 @@ RELATIONAL_TABLE_DDL = [
     "alter table programs add column if not exists linked_event_count integer not null default 0",
     "alter table programs add column if not exists updated_at text",
     "alter table programs alter column updated_at type text using updated_at::text",
+    "alter table programs add column if not exists volunteer_requirements text[] not null default '{}'::text[]",
+    "alter table programs add column if not exists accept_volunteers boolean not null default true",
+    "alter table programs add column if not exists application_required boolean not null default false",
+    "alter table programs add column if not exists review_required boolean not null default false",
+    "alter table programs add column if not exists application_deadline text",
+    "alter table programs add column if not exists community_need text",
+    "alter table programs add column if not exists expected_deliverables text",
+    "alter table programs add column if not exists attachments text not null default '[]'",
+    "alter table programs add column if not exists group_chat_disabled boolean not null default false",
     "create index if not exists programs_partner_id_idx on programs (partner_id)",
     "create index if not exists programs_program_module_idx on programs (program_module)",
     "create index if not exists programs_category_idx on programs (category)",
@@ -377,7 +431,18 @@ RELATIONAL_TABLE_DDL = [
       skills_needed text[] not null default {TEXT_ARRAY},
       internal_tasks text not null default {JSON_ARRAY},
       created_at text,
-      updated_at text
+      updated_at text,
+      icon text,
+      color text,
+      volunteer_requirements text[] not null default {TEXT_ARRAY},
+      accept_volunteers boolean not null default true,
+      application_required boolean not null default false,
+      review_required boolean not null default false,
+      application_deadline text,
+      community_need text,
+      expected_deliverables text,
+      attachments text not null default {JSON_ARRAY},
+      group_chat_disabled boolean not null default false
     )
     """,
     "alter table events add column if not exists is_event boolean not null default true",
@@ -395,6 +460,17 @@ RELATIONAL_TABLE_DDL = [
     "alter table events add column if not exists location_venue text",
     "alter table events add column if not exists google_meet_url text",
     "alter table events add column if not exists notification_settings text not null default '[]'",
+    "alter table events add column if not exists icon text",
+    "alter table events add column if not exists color text",
+    "alter table events add column if not exists volunteer_requirements text[] not null default '{}'::text[]",
+    "alter table events add column if not exists accept_volunteers boolean not null default true",
+    "alter table events add column if not exists application_required boolean not null default false",
+    "alter table events add column if not exists review_required boolean not null default false",
+    "alter table events add column if not exists application_deadline text",
+    "alter table events add column if not exists community_need text",
+    "alter table events add column if not exists expected_deliverables text",
+    "alter table events add column if not exists attachments text not null default '[]'",
+    "alter table events add column if not exists group_chat_disabled boolean not null default false",
     "create index if not exists events_partner_id_idx on events (partner_id)",
     "create index if not exists events_parent_project_id_idx on events (parent_project_id)",
     "create index if not exists events_status_idx on events (status)",
@@ -603,6 +679,7 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("approved_at", False),
             ("rejection_reason", False),
             ("created_at", False),
+            ("profile_photo", False),
         ],
     },
     "partners": {
@@ -629,6 +706,9 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("credentials_unlocked_at", False),
             ("created_at", False),
             ("registration_documents", False),
+            ("region", False),
+            ("province", False),
+            ("city_municipality", False),
         ],
     },
     "volunteers": {
@@ -667,6 +747,9 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("reviewed_at", False),
             ("credentials_unlocked_at", False),
             ("created_at", False),
+            ("hobbies_and_interests", False),
+            ("special_skills", False),
+            ("rejection_reason", False),
         ],
     },
     "skills": {
@@ -728,6 +811,17 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("internal_tasks", False),
             ("created_at", False),
             ("updated_at", False),
+            ("icon", False),
+            ("color", False),
+            ("volunteer_requirements", False),
+            ("accept_volunteers", False),
+            ("application_required", False),
+            ("review_required", False),
+            ("application_deadline", False),
+            ("community_need", False),
+            ("expected_deliverables", False),
+            ("attachments", False),
+            ("group_chat_disabled", False),
         ],
     },
     "programs": {
@@ -791,6 +885,17 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("internal_tasks", False),
             ("created_at", False),
             ("updated_at", False),
+            ("icon", False),
+            ("color", False),
+            ("volunteer_requirements", False),
+            ("accept_volunteers", False),
+            ("application_required", False),
+            ("review_required", False),
+            ("application_deadline", False),
+            ("community_need", False),
+            ("expected_deliverables", False),
+            ("attachments", False),
+            ("group_chat_disabled", False),
         ],
     },
     "statusUpdates": {
@@ -930,9 +1035,10 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
 # Columns that can contain base64 images or large attachment JSON. Lightweight
 # reads replace them in SQL so the bytes do not leave Postgres at all.
 LIGHTWEIGHT_MEDIA_COLUMNS: dict[str, set[str]] = {
-    "projects": {"image_url"},
-    "programs": {"image_url"},
-    "events": {"image_url"},
+    "users": {"profile_photo"},
+    "projects": {"image_url", "attachments"},
+    "programs": {"image_url", "attachments"},
+    "events": {"image_url", "attachments"},
     "partners": {"registration_documents"},
     "volunteers": {
         "certifications_or_trainings",
@@ -946,6 +1052,9 @@ LIGHTWEIGHT_MEDIA_COLUMNS: dict[str, set[str]] = {
 
 
 FIELD_NAME_MAPS: dict[str, dict[str, str]] = {
+    "users": {
+        "profilePhoto": "profile_photo",
+    },
     "projects": {
         "partnerId": "partner_id",
         "imageUrl": "image_url",
@@ -967,6 +1076,14 @@ FIELD_NAME_MAPS: dict[str, dict[str, str]] = {
         "joinedUserIds": "joined_user_ids",
         "skillsNeeded": "skills_needed",
         "internalTasks": "internal_tasks",
+        "volunteerRequirements": "volunteer_requirements",
+        "acceptVolunteers": "accept_volunteers",
+        "applicationRequired": "application_required",
+        "reviewRequired": "review_required",
+        "applicationDeadline": "application_deadline",
+        "communityNeed": "community_need",
+        "expectedDeliverables": "expected_deliverables",
+        "groupChatDisabled": "group_chat_disabled",
         "createdAt": "created_at",
         "updatedAt": "updated_at",
     },
@@ -982,6 +1099,14 @@ FIELD_NAME_MAPS: dict[str, dict[str, str]] = {
         "volunteersNeeded": "volunteers_needed",
         "joinedUserIds": "joined_user_ids",
         "linkedEventCount": "linked_event_count",
+        "volunteerRequirements": "volunteer_requirements",
+        "acceptVolunteers": "accept_volunteers",
+        "applicationRequired": "application_required",
+        "reviewRequired": "review_required",
+        "applicationDeadline": "application_deadline",
+        "communityNeed": "community_need",
+        "expectedDeliverables": "expected_deliverables",
+        "groupChatDisabled": "group_chat_disabled",
         "createdAt": "created_at",
         "updatedAt": "updated_at",
     },
@@ -1003,11 +1128,22 @@ FIELD_NAME_MAPS: dict[str, dict[str, str]] = {
         "joinedUserIds": "joined_user_ids",
         "skillsNeeded": "skills_needed",
         "internalTasks": "internal_tasks",
+        "volunteerRequirements": "volunteer_requirements",
+        "acceptVolunteers": "accept_volunteers",
+        "applicationRequired": "application_required",
+        "reviewRequired": "review_required",
+        "applicationDeadline": "application_deadline",
+        "communityNeed": "community_need",
+        "expectedDeliverables": "expected_deliverables",
+        "groupChatDisabled": "group_chat_disabled",
         "createdAt": "created_at",
         "updatedAt": "updated_at",
     },
     "volunteers": {"userId": "user_id"},
-    "partners": {"ownerUserId": "owner_user_id"},
+    "partners": {
+        "ownerUserId": "owner_user_id",
+        "cityMunicipality": "city_municipality",
+    },
     "statusUpdates": {
         "projectId": "project_id",
         "updatedBy": "updated_by",
@@ -1305,6 +1441,7 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("approvedAt"),
             item.get("rejectionReason"),
             item.get("createdAt"),
+            item.get("profilePhoto"),
         )
 
     if key == "partners":
@@ -1330,6 +1467,9 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("credentialsUnlockedAt"),
             item.get("createdAt"),
             _json_dump(item.get("registrationDocuments"), []),
+            item.get("region"),
+            item.get("province"),
+            item.get("cityMunicipality"),
         )
 
     if key == "volunteers":
@@ -1367,6 +1507,9 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("reviewedAt"),
             item.get("credentialsUnlockedAt"),
             item.get("createdAt"),
+            item.get("hobbiesAndInterests"),
+            item.get("specialSkills"),
+            item.get("rejectionReason"),
         )
 
     if key == "skills":
@@ -1425,6 +1568,17 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             _json_dump(item.get("internalTasks"), []),
             item.get("createdAt"),
             item.get("updatedAt"),
+            item.get("icon"),
+            item.get("color"),
+            _normalize_string_list(item.get("volunteerRequirements")),
+            bool(item.get("acceptVolunteers", True)),
+            bool(item.get("applicationRequired", False)),
+            bool(item.get("reviewRequired", False)),
+            item.get("applicationDeadline"),
+            item.get("communityNeed"),
+            item.get("expectedDeliverables"),
+            _json_dump(item.get("attachments"), []),
+            bool(item.get("groupChatDisabled", False)),
         )
 
     if key == "programs":
@@ -1486,6 +1640,17 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             _json_dump(item.get("internalTasks"), []),
             item.get("createdAt"),
             item.get("updatedAt"),
+            item.get("icon"),
+            item.get("color"),
+            _normalize_string_list(item.get("volunteerRequirements")),
+            bool(item.get("acceptVolunteers", True)),
+            bool(item.get("applicationRequired", False)),
+            bool(item.get("reviewRequired", False)),
+            item.get("applicationDeadline"),
+            item.get("communityNeed"),
+            item.get("expectedDeliverables"),
+            _json_dump(item.get("attachments"), []),
+            bool(item.get("groupChatDisabled", False)),
         )
 
     if key == "statusUpdates":
@@ -1615,6 +1780,19 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
     raise KeyError(f"Unsupported relational mirror key: {key}")
 
 
+_MEDIA_FIELDS_BY_KEY: dict[str, tuple[str, ...]] = {
+    "users": ("profilePhoto",),
+    "partners": ("registrationDocuments",),
+    "volunteers": ("validIdPhoto", "certificationsOrTrainings", "videoBriefingUrl"),
+    "projects": ("imageUrl", "attachments"),
+    "programs": ("imageUrl",),
+    "events": ("imageUrl", "attachments"),
+    "volunteerTimeLogs": ("attendancePhoto", "completionPhoto"),
+    "partnerReports": ("attachments", "mediaFile"),
+    "publishedImpactReports": ("attachments", "mediaFile"),
+}
+
+
 def _field_column_name(key: str, field_name: str) -> str:
     if field_name == "id":
         return _primary_key_column(key)
@@ -1655,6 +1833,7 @@ def _row_to_item(
             "approvedAt": row.get("approved_at"),
             "rejectionReason": row.get("rejection_reason"),
             "createdAt": row["created_at"],
+            "profilePhoto": row.get("profile_photo"),
         }
         if include_password:
             user["password"] = row["password"]
@@ -1683,6 +1862,9 @@ def _row_to_item(
             "credentialsUnlockedAt": row["credentials_unlocked_at"],
             "createdAt": row["created_at"],
             "registrationDocuments": _json_load(row["registration_documents"], []),
+            "region": row.get("region"),
+            "province": row.get("province"),
+            "cityMunicipality": row.get("city_municipality"),
         }
 
     if key == "volunteers":
@@ -1719,6 +1901,9 @@ def _row_to_item(
             "reviewedAt": row.get("reviewed_at"),
             "credentialsUnlockedAt": row.get("credentials_unlocked_at"),
             "createdAt": row["created_at"],
+            "hobbiesAndInterests": row.get("hobbies_and_interests"),
+            "specialSkills": row.get("special_skills"),
+            "rejectionReason": row.get("rejection_reason"),
         }
 
     if key == "skills":
@@ -1767,6 +1952,9 @@ def _row_to_item(
             "locationRegion": row.get("location_region"),
             "locationCity": row.get("location_city"),
             "locationBarangay": row.get("location_barangay"),
+            "locationVenue": row.get("location_venue"),
+            "googleMeetUrl": row.get("google_meet_url"),
+            "notificationSettings": _json_load(row.get("notification_settings"), []),
             "volunteersNeeded": row.get("volunteers_needed"),
             "volunteers": row.get("volunteers") or [],
             "joinedUserIds": row.get("joined_user_ids") or [],
@@ -1774,6 +1962,17 @@ def _row_to_item(
             "internalTasks": _json_load(row.get("internal_tasks"), []),
             "createdAt": row.get("created_at"),
             "updatedAt": row.get("updated_at"),
+            "icon": row.get("icon"),
+            "color": row.get("color"),
+            "volunteerRequirements": row.get("volunteer_requirements") or [],
+            "acceptVolunteers": bool(row.get("accept_volunteers", True)),
+            "applicationRequired": bool(row.get("application_required", False)),
+            "reviewRequired": bool(row.get("review_required", False)),
+            "applicationDeadline": row.get("application_deadline"),
+            "communityNeed": row.get("community_need"),
+            "expectedDeliverables": row.get("expected_deliverables"),
+            "attachments": _json_load(row.get("attachments"), []),
+            "groupChatDisabled": bool(row.get("group_chat_disabled", False)),
         }
 
     if key == "programs":
@@ -1835,6 +2034,17 @@ def _row_to_item(
             "internalTasks": _json_load(row.get("internal_tasks"), []),
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
+            "icon": row.get("icon"),
+            "color": row.get("color"),
+            "volunteerRequirements": row.get("volunteer_requirements") or [],
+            "acceptVolunteers": bool(row.get("accept_volunteers", True)),
+            "applicationRequired": bool(row.get("application_required", False)),
+            "reviewRequired": bool(row.get("review_required", False)),
+            "applicationDeadline": row.get("application_deadline"),
+            "communityNeed": row.get("community_need"),
+            "expectedDeliverables": row.get("expected_deliverables"),
+            "attachments": _json_load(row.get("attachments"), []),
+            "groupChatDisabled": bool(row.get("group_chat_disabled", False)),
         }
 
     if key == "statusUpdates":
@@ -2553,6 +2763,20 @@ def upsert_relational_item(connection: Any, key: str, item: dict[str, Any]) -> d
         raise ValueError(f"Relational storage key '{key}' expects an object with an id.")
 
     item_for_storage = item
+    try:
+        existing_item = get_relational_item_by_id(connection, key, str(item_id))
+    except Exception:
+        existing_item = None
+    if isinstance(existing_item, dict):
+        merged_item = {**existing_item, **item}
+        # A lightweight read represents media as null. Preserve the existing
+        # server copy in that case, while still allowing an explicit empty
+        # string/list to clear a media value.
+        for media_field in _MEDIA_FIELDS_BY_KEY.get(key, ()):
+            if item.get(media_field) is None and existing_item.get(media_field) is not None:
+                merged_item[media_field] = existing_item.get(media_field)
+        item_for_storage = merged_item
+
     if key == "users" and not str(item.get("password") or "").strip():
         existing_password = ""
         try:
@@ -2566,7 +2790,7 @@ def upsert_relational_item(connection: Any, key: str, item: dict[str, Any]) -> d
                     existing_password = str(existing_row[0] or "")
         except Exception:
             existing_password = ""
-        item_for_storage = {**item, "password": existing_password}
+        item_for_storage = {**item_for_storage, "password": existing_password}
 
     row = _normalize_row(key, item_for_storage)
     column_names = [column_name for column_name, _ in spec["columns"]]
