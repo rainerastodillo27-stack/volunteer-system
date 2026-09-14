@@ -2,7 +2,6 @@ import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  FlatList,
   Image,
   Platform,
   ScrollView,
@@ -625,6 +624,13 @@ export default function VolunteerEventsScreen() {
   return (
     <View style={[styles.rootContainer, { paddingTop: Math.max(insets.top, 12) }]}>
       
+      <ScrollView
+        style={styles.screenScroll}
+        contentContainerStyle={styles.screenScrollContent}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        nestedScrollEnabled
+      >
       {/* TOP BAR */}
       <View style={styles.topbar}>
         <TouchableOpacity style={styles.menuIcon} onPress={() => {}}>
@@ -704,50 +710,45 @@ export default function VolunteerEventsScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* LIST OF EVENTS */}
-      <View style={styles.eventsListContainer}>
-        <FlatList
-          style={styles.eventsList}
-          key={`events-list-${numColumns}`}
-          numColumns={numColumns}
-          data={displayEvents}
-          renderItem={renderEventItem}
-          keyExtractor={item => item.id}
-          contentContainerStyle={styles.listContent}
-          columnWrapperStyle={numColumns > 1 ? styles.listGridRow : undefined}
-          showsVerticalScrollIndicator={false}
-          ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <MaterialIcons name="event-busy" size={42} color="#9aa0a6" />
-              <Text style={styles.emptyText}>
-                {activeTab === 'applications' ? 'No applications found' : 'No events found'}
+      {/* EVENTS */}
+      {displayEvents.length === 0 ? (
+        <View style={styles.emptyContainer}>
+          <MaterialIcons name="event-busy" size={42} color="#9aa0a6" />
+          <Text style={styles.emptyText}>
+            {activeTab === 'applications' ? 'No applications found' : 'No events found'}
+          </Text>
+        </View>
+      ) : (
+        <View style={numColumns > 1 ? styles.eventsGrid : undefined}>
+          {displayEvents.map(item => (
+            <React.Fragment key={item.id}>{renderEventItem({ item })}</React.Fragment>
+          ))}
+        </View>
+      )}
+
+      {activeTab === 'all' ? (
+        <View style={[styles.reviewBanner, width < 600 && styles.reviewBannerCompact]}>
+          <View style={[styles.reviewBannerContent, width < 600 && styles.reviewBannerContentCompact]}>
+            <View style={styles.reviewIconContainer}>
+              <MaterialIcons name="assignment" size={18} color="#15803d" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.reviewBannerTitle}>For review applications</Text>
+              <Text style={styles.reviewBannerText}>
+                Applications for events with limited slots will be reviewed by the organizer.
               </Text>
             </View>
-          }
-          ListFooterComponent={activeTab === 'all' ? (
-            <View style={[styles.reviewBanner, width < 600 && styles.reviewBannerCompact]}>
-              <View style={[styles.reviewBannerContent, width < 600 && styles.reviewBannerContentCompact]}>
-                <View style={styles.reviewIconContainer}>
-                  <MaterialIcons name="assignment" size={18} color="#15803d" />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.reviewBannerTitle}>For review applications</Text>
-                  <Text style={styles.reviewBannerText}>
-                    Applications for events with limited slots will be reviewed by the organizer.
-                  </Text>
-                </View>
-              </View>
-              <TouchableOpacity
-                style={[styles.reviewBannerButton, width < 600 && styles.reviewBannerButtonCompact]}
-                onPress={() => setActiveTab('applications')}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.reviewBannerButtonText}>View My Applications</Text>
-              </TouchableOpacity>
-            </View>
-          ) : null}
-        />
-      </View>
+          </View>
+          <TouchableOpacity
+            style={[styles.reviewBannerButton, width < 600 && styles.reviewBannerButtonCompact]}
+            onPress={() => setActiveTab('applications')}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.reviewBannerButtonText}>View My Applications</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+      </ScrollView>
 
       {/* Sort Options Modal */}
       {showSortModal && (
@@ -789,7 +790,7 @@ export default function VolunteerEventsScreen() {
         >
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Filter By Category</Text>
-            {['All'].map(cat => (
+            {(['All', 'Nutrition', 'Education', 'Livelihood', 'Disaster'] as FilterCategory[]).map(cat => (
               <TouchableOpacity
                 key={cat}
                 style={[styles.modalOption, filterCategory === cat && styles.modalOptionActive]}
@@ -815,6 +816,12 @@ const styles = StyleSheet.create({
   rootContainer: {
     flex: 1,
     backgroundColor: '#ffffff',
+  },
+  screenScroll: {
+    flex: 1,
+  },
+  screenScrollContent: {
+    paddingBottom: 24,
   },
   loadingWrapper: {
     flex: 1,
@@ -950,14 +957,9 @@ const styles = StyleSheet.create({
     paddingTop: 4,
     paddingBottom: 24,
   },
-  eventsListContainer: {
-    flex: 1,
-    minHeight: 0,
-  },
-  eventsList: {
-    flex: 1,
-  },
-  listGridRow: {
+  eventsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
     gap: 16,
   },

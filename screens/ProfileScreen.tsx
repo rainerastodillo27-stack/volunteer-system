@@ -11,12 +11,14 @@ import {
   TextInput,
   Image,
   ActivityIndicator,
+  KeyboardAvoidingView,
   type ImageStyle,
 } from 'react-native';
 import { Text } from '../components/Text';
 import { Picker } from '@react-native-picker/picker';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import InlineLoadError from '../components/InlineLoadError';
 import LogoutConfirmationModal from '../components/LogoutConfirmationModal';
 import { useAuth } from '../contexts/AuthContext';
@@ -1468,21 +1470,33 @@ export default function ProfileScreen() {
       <Modal
         visible={showEditModal}
         animationType="slide"
+        statusBarTranslucent={false}
         onRequestClose={() => {
           if (!saveLoading) {
             handleCancelEdit();
           }
         }}
       >
-        <View style={styles.modalContainer}>
+        <SafeAreaView style={styles.modalContainer} edges={['top', 'bottom']}>
           <View style={styles.modalHeader}>
-            <TouchableOpacity onPress={handleCancelEdit} disabled={saveLoading}>
+            <TouchableOpacity
+              style={styles.modalHeaderAction}
+              onPress={handleCancelEdit}
+              disabled={saveLoading}
+              hitSlop={8}
+              activeOpacity={0.65}
+              accessibilityRole="button"
+              accessibilityLabel="Cancel profile editing"
+            >
               <Text style={styles.modalCancel}>Cancel</Text>
             </TouchableOpacity>
-            <Text style={styles.modalTitle}>Edit Profile</Text>
+            <Text style={styles.modalTitle} numberOfLines={1}>Edit Profile</Text>
             <TouchableOpacity
+              style={styles.modalHeaderAction}
               onPress={handleSaveProfile}
               disabled={saveLoading}
+              hitSlop={8}
+              activeOpacity={0.65}
               accessibilityRole="button"
               accessibilityLabel={saveLoading ? 'Saving profile' : 'Save profile changes'}
             >
@@ -1497,7 +1511,16 @@ export default function ProfileScreen() {
             </TouchableOpacity>
           </View>
 
-          <ScrollView contentContainerStyle={styles.modalBody}>
+          <KeyboardAvoidingView
+            style={styles.modalKeyboardAvoidingView}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          >
+          <ScrollView
+            style={styles.modalScroll}
+            contentContainerStyle={styles.modalBody}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+          >
             <Text style={styles.modalLabel}>Update your account details below.</Text>
 
             <View style={styles.photoSection}>
@@ -1953,6 +1976,33 @@ export default function ProfileScreen() {
               autoCapitalize="none"
             />
           </ScrollView>
+          </KeyboardAvoidingView>
+          <View style={styles.modalFooterActions}>
+            <TouchableOpacity
+              style={[styles.modalFooterButton, styles.modalFooterCancelButton]}
+              onPress={handleCancelEdit}
+              disabled={saveLoading}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel="Cancel profile editing"
+            >
+              <Text style={styles.modalFooterCancelText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modalFooterButton, styles.modalFooterSaveButton]}
+              onPress={handleSaveProfile}
+              disabled={saveLoading}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel={saveLoading ? 'Saving profile' : 'Save profile changes'}
+            >
+              {saveLoading ? (
+                <ActivityIndicator size="small" color="#ffffff" />
+              ) : (
+                <Text style={styles.modalFooterSaveText}>Save Changes</Text>
+              )}
+            </TouchableOpacity>
+          </View>
           {saveLoading ? (
             <View style={styles.profileSavingOverlay} accessibilityLiveRegion="polite">
               <View style={styles.profileSavingCard}>
@@ -1964,7 +2014,7 @@ export default function ProfileScreen() {
               </View>
             </View>
           ) : null}
-        </View>
+        </SafeAreaView>
       </Modal>
 
       {/* Skills Selection Modal */}
@@ -2521,6 +2571,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    minHeight: 72,
+    position: 'relative',
+    zIndex: 2,
+    elevation: 2,
+  },
+  modalHeaderAction: {
+    minWidth: 76,
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
   },
   modalTitle: {
     fontSize: 18,
@@ -2547,7 +2608,53 @@ const styles = StyleSheet.create({
   },
   modalBody: {
     padding: 16,
-    paddingBottom: 40,
+    paddingBottom: 32,
+  },
+  modalKeyboardAvoidingView: {
+    flex: 1,
+  },
+  modalScroll: {
+    flex: 1,
+  },
+  modalFooterActions: {
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 10,
+    backgroundColor: '#ffffff',
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+    zIndex: 2,
+    elevation: 3,
+  },
+  modalFooterButton: {
+    flex: 1,
+    minHeight: 48,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  modalFooterCancelButton: {
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
+  modalFooterSaveButton: {
+    backgroundColor: '#15803d',
+  },
+  modalFooterCancelText: {
+    color: '#475569',
+    fontSize: 14,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
+    fontWeight: '800',
+  },
+  modalFooterSaveText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
+    fontWeight: '800',
   },
   profileSavingOverlay: {
     position: 'absolute',
