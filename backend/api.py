@@ -117,13 +117,25 @@ def _is_public_api_path(path: str) -> bool:
 
 def _apply_security_headers(response, request: FastAPIRequest):
     """Apply response hardening without assuming TLS is already configured."""
+    is_attachment_response = request.url.path.startswith("/attachments/")
     if request.url.path.startswith("/auth/") or request.url.path == "/db-health":
         response.headers.setdefault("Cache-Control", "no-store")
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    response.headers.setdefault("X-Frame-Options", "DENY")
+    # Attachment URLs are opaque capability URLs consumed by browser/native
+    # media elements. Their preview iframe cannot provide an API Bearer header
+    # and must not inherit the app's frame-deny policy. The attachment route is
+    # otherwise isolated from application HTML and uses Content-Disposition for
+    # non-previewable files.
+    if not is_attachment_response:
+        response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
-    response.headers.setdefault("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'none'; base-uri 'none'"
+        if is_attachment_response
+        else "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    )
     if request.url.scheme == "https":
         response.headers.setdefault(
             "Strict-Transport-Security",
@@ -135,7 +147,17 @@ def _apply_security_headers(response, request: FastAPIRequest):
 @app.middleware("http")
 async def require_api_session(request: FastAPIRequest, call_next):
     """Require a signed session for every API route except auth/bootstrap routes."""
-    if request.method == "OPTIONS" or _is_public_api_path(request.url.path):
+    # Browser <img>/<video>/<iframe> elements and React Native's Image/
+    # FileSystem loaders cannot attach the Bearer header used by the JSON API.
+    # Attachment URLs are already capability URLs: the path contains a
+    # cryptographically random per-file id, while the upload endpoint and all
+    # message APIs remain protected by the session middleware. Keep only the
+    # read path public so these media components can retrieve the file.
+    is_attachment_download = (
+        request.method in {"GET", "HEAD"}
+        and request.url.path.startswith("/attachments/")
+    )
+    if request.method == "OPTIONS" or _is_public_api_path(request.url.path) or is_attachment_download:
         return _apply_security_headers(await call_next(request), request)
 
     token = extract_bearer_token(request.headers.get("authorization"))
