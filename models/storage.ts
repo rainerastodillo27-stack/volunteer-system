@@ -66,6 +66,7 @@ const WEB_MESSAGE_SYNC_KEY = 'volcre:messages:updatedAt';
 // record in addition to the general cache so a browser refresh never depends
 // on shared-cache invalidation or its debounce queue.
 const WEB_AUTH_SESSION_KEY = 'volcre:auth-session:v1';
+const API_AUTH_TOKEN_KEY = 'volcre:api-session-token:v1';
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   notificationsEnabled: true,
   autoRefreshEnabled: true,
@@ -79,6 +80,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
 // Runtime override for the backend URL — loaded from AsyncStorage at app start.
 // When set (e.g. to an ngrok URL), this takes priority over the baked-in APK URL.
 let _runtimeCustomBackendUrl: string | null = null;
+let memoryApiAuthToken: string | null = null;
 
 export function setRuntimeBackendUrl(url: string | null): void {
   _runtimeCustomBackendUrl = url && url.trim() ? url.trim().replace(/\/$/, '') : null;
@@ -474,7 +476,7 @@ function clearSharedStorageSocketResources(closeSocket = true) {
   }
 }
 
-function connectSharedStorageSocket() {
+async function connectSharedStorageSocket() {
   if (!hasStorageChangeSubscribers()) {
     clearSharedStorageSocketResources(true);
     return;
@@ -493,7 +495,19 @@ function connectSharedStorageSocket() {
     sharedStorageReconnectTimer = null;
   }
 
-  sharedStorageSocket = new WebSocket(getStorageWebSocketUrl());
+  const socketUrl = await getStorageWebSocketUrl();
+  if (!socketUrl || !hasStorageChangeSubscribers()) {
+    return;
+  }
+  if (
+    sharedStorageSocket &&
+    (sharedStorageSocket.readyState === WebSocket.OPEN ||
+      sharedStorageSocket.readyState === WebSocket.CONNECTING)
+  ) {
+    return;
+  }
+
+  sharedStorageSocket = new WebSocket(socketUrl);
 
   sharedStorageSocket.onopen = () => {
     if (sharedStorageHeartbeat) {
@@ -1061,16 +1075,79 @@ export function getApiBaseUrl(): string {
   return resolveNativeApiBaseUrl(configuredNativeBaseUrl);
 }
 
+// The backend session token is kept separately from the cached user record.
+// Cached user data is not proof of authentication and must never be sent as
+// an authorization credential.
+export async function getApiAuthToken(): Promise<string | null> {
+  if (memoryApiAuthToken) {
+    return memoryApiAuthToken;
+  }
+
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const storedToken = window.localStorage.getItem(API_AUTH_TOKEN_KEY)?.trim() || '';
+      memoryApiAuthToken = storedToken || null;
+      return memoryApiAuthToken;
+    } catch {
+      return null;
+    }
+  }
+
+  try {
+    const storedToken = (await AsyncStorage.getItem(API_AUTH_TOKEN_KEY))?.trim() || '';
+    memoryApiAuthToken = storedToken || null;
+    return memoryApiAuthToken;
+  } catch {
+    return null;
+  }
+}
+
+export async function setApiAuthToken(token: string | null): Promise<void> {
+  memoryApiAuthToken = token?.trim() || null;
+
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      if (memoryApiAuthToken) {
+        window.localStorage.setItem(API_AUTH_TOKEN_KEY, memoryApiAuthToken);
+      } else {
+        window.localStorage.removeItem(API_AUTH_TOKEN_KEY);
+      }
+    } catch {
+      // Continue to native storage fallback only when browser storage is not usable.
+    }
+    return;
+  }
+
+  try {
+    if (memoryApiAuthToken) {
+      await AsyncStorage.setItem(API_AUTH_TOKEN_KEY, memoryApiAuthToken);
+    } else {
+      await AsyncStorage.removeItem(API_AUTH_TOKEN_KEY);
+    }
+  } catch {
+    // A session still remains available in memory for the current process.
+  }
+}
+
+export async function getApiAuthHeaders(): Promise<Record<string, string>> {
+  const token = await getApiAuthToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 // Builds the websocket URL used for user-specific message updates.
-function getMessagesWebSocketUrl(userId: string): string {
+async function getMessagesWebSocketUrl(userId: string): Promise<string | null> {
   const wsBaseUrl = getApiBaseUrl().replace(/^http/i, 'ws');
-  return `${wsBaseUrl}/ws/messages/${encodeURIComponent(userId)}`;
+  const token = await getApiAuthToken();
+  return token
+    ? `${wsBaseUrl}/ws/messages/${encodeURIComponent(userId)}?token=${encodeURIComponent(token)}`
+    : null;
 }
 
 // Builds the websocket URL used for shared storage change notifications.
-function getStorageWebSocketUrl(): string {
+async function getStorageWebSocketUrl(): Promise<string | null> {
   const wsBaseUrl = getApiBaseUrl().replace(/^http/i, 'ws');
-  return `${wsBaseUrl}/ws/storage`;
+  const token = await getApiAuthToken();
+  return token ? `${wsBaseUrl}/ws/storage?token=${encodeURIComponent(token)}` : null;
 }
 
 async function delay(ms: number): Promise<void> {
@@ -1298,6 +1375,7 @@ async function fetchApiResponse(
     }, actualTimeoutMs);
 
     try {
+      const authHeaders = await getApiAuthHeaders();
       const response = await fetch(`${getApiBaseUrl()}${path}`, {
         ...init,
         signal: controller.signal,
@@ -1306,6 +1384,7 @@ async function fetchApiResponse(
           'User-Agent': 'VolCre-App/1.0',
           'Accept': 'application/json',
           ...(init?.headers || {}),
+          ...authHeaders,
         },
       });
 
@@ -2795,12 +2874,21 @@ export async function saveUser(user: User): Promise<void> {
 // Validates DSWD accreditation numbers before partner applications are saved.
 export function isValidDswdAccreditationNo(value: string): boolean {
   const normalizedValue = value.trim().toUpperCase();
+  // DSWD accreditation is optional for partner organizations. An empty value
+  // means the organization did not provide one and should not block saving.
+  if (!normalizedValue) {
+    return true;
+  }
   return /^[A-Z0-9][A-Z0-9\-\/]{5,}$/.test(normalizedValue);
 }
 
 // Validates DSWD accreditation number against database (format + assignment check).
 export async function validateDswdAccreditationNo(value: string): Promise<{ valid: boolean; reason?: string }> {
   const normalizedValue = value.trim().toUpperCase();
+
+  if (!normalizedValue) {
+    return { valid: true };
+  }
 
   // First check basic format
   if (!isValidDswdAccreditationNo(value)) {
@@ -3576,7 +3664,7 @@ export async function loginWithCredentials(
   password: string
 ): Promise<User | null> {
   try {
-    const payload = await requestApiJson<{ user?: User | null }>('/auth/login', {
+    const payload = await requestApiJson<{ user?: User | null; sessionToken?: string }>('/auth/login', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -3586,6 +3674,11 @@ export async function loginWithCredentials(
         password: password.trim(),
       }),
     });
+    if (payload.sessionToken) {
+      await setApiAuthToken(payload.sessionToken);
+    } else {
+      throw new Error('The server did not establish a secure session. Please try again.');
+    }
     return payload.user || null;
   } catch (error: any) {
     // Password verification must happen on the backend. Cached account data
@@ -3635,13 +3728,19 @@ export async function loginWithGoogle(idToken: string): Promise<User | null> {
     throw new Error('Google sign-in did not return a valid identity token.');
   }
 
-  const payload = await requestApiJson<{ user?: User | null }>('/auth/google', {
+  const payload = await requestApiJson<{ user?: User | null; sessionToken?: string }>('/auth/google', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ idToken: normalizedToken }),
   });
+
+  if (payload.sessionToken) {
+    await setApiAuthToken(payload.sessionToken);
+  } else {
+    throw new Error('The server did not establish a secure session. Please try again.');
+  }
 
   return payload.user || null;
 }
@@ -3732,6 +3831,7 @@ export async function setCurrentUser(user: User | null): Promise<void> {
   if (user) {
     await setLocalStorageItem(STORAGE_KEYS.CURRENT_USER, user, { immediate: true });
   } else {
+    await setApiAuthToken(null);
     await deleteLocalStorageItem(STORAGE_KEYS.CURRENT_USER);
   }
 }
@@ -4014,9 +4114,10 @@ export async function sendRejectionEmail(
   }
 
   try {
+    const authHeaders = await getApiAuthHeaders();
     const response = await fetch(`${getApiBaseUrl()}/auth/send-rejection-email`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
       body: JSON.stringify({
         recipientEmail: normalizedEmail,
         recipientName: (recipientName || 'Volunteer').trim(),
@@ -5238,9 +5339,13 @@ export function subscribeToMessages(
     }
   };
 
-  const connect = () => {
+  const connect = async () => {
     cleanupSocket();
-    socket = new WebSocket(getMessagesWebSocketUrl(userId));
+    const socketUrl = await getMessagesWebSocketUrl(userId);
+    if (!socketUrl || closed) {
+      return;
+    }
+    socket = new WebSocket(socketUrl);
 
     socket.onopen = () => {
       heartbeat = setInterval(() => {

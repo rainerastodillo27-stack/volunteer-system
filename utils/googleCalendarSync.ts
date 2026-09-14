@@ -14,7 +14,7 @@ import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import { Platform } from 'react-native';
 import { Project } from '../models/types';
-import { getApiBaseUrl } from '../models/storage';
+import { getApiBaseUrl, getApiAuthHeaders } from '../models/storage';
 
 // Required so the auth session redirect works correctly on mobile
 WebBrowser.maybeCompleteAuthSession();
@@ -357,10 +357,12 @@ export async function sendGoogleCalendarSyncEmail({
     return;
   }
 
+  const authHeaders = await getApiAuthHeaders();
   await fetch(`${getApiBaseUrl()}/notify/gcal-sync`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      ...authHeaders,
     },
     body: JSON.stringify({
       recipient_email: recipientEmail.trim(),

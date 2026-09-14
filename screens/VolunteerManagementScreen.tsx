@@ -31,6 +31,7 @@ import {
   rejectUser,
   sendRejectionEmail,
   getApiBaseUrl,
+  getApiAuthHeaders,
 } from '../models/storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../contexts/AuthContext';
@@ -472,6 +473,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
 
       // Call backend approve endpoint with status=rejected to fully delete the user and all linked records
       if (selectedVolunteer.userId) {
+        const authHeaders = await getApiAuthHeaders();
         const response = await fetch(
           `${getApiBaseUrl()}/auth/users/${selectedVolunteer.userId}/approve?admin_id=${encodeURIComponent(adminId)}`,
           {
@@ -481,6 +483,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
               'ngrok-skip-browser-warning': '69420',
               'User-Agent': 'VolCre-App/1.0',
               'Accept': 'application/json',
+              ...authHeaders,
             },
             body: JSON.stringify({ status: 'rejected', rejectionReason: trimmedReason }),
           }

@@ -29,7 +29,7 @@ from zoneinfo import ZoneInfo
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request as FastAPIRequest, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -48,12 +48,12 @@ from .app_storage_seed import (
     is_hot_storage_key,
     replace_postgres_hot_storage_collection,
 )
+from .auth import create_session_token, extract_bearer_token, verify_session_token
 from .db import (
     get_configured_db_mode,
     get_db_mode,
     get_postgres_connection,
     get_connection,
-    get_postgres_diagnostics,
     get_postgres_status,
     init_postgres_pool,
     _is_retryable_connection_error,
@@ -82,18 +82,124 @@ def _trace(message: str) -> None:
     if TRACE_STORAGE:
         print(message)
 
-# Initialize FastAPI application
-app = FastAPI(title="NVC CONNECT API")
+# Initialize FastAPI application. The interactive API documentation is
+# disabled in production because it exposes the complete route inventory and
+# is not needed by the web or Android clients.
+app = FastAPI(
+    title="NVC CONNECT API",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
+
+PUBLIC_API_PATHS = {
+    "/health",
+    "/db-health",
+    "/auth/login",
+    "/auth/google",
+    "/auth/check-email",
+    "/auth/registration-otp/send",
+    "/auth/registration-otp/verify",
+    "/auth/password-reset/send",
+    "/auth/password-reset/confirm",
+}
+ADMIN_ONLY_API_PREFIXES = (
+    "/admin/",
+    "/auth/users/",
+    "/auth/approval-email",
+    "/auth/send-rejection-email",
+)
+
+
+def _is_public_api_path(path: str) -> bool:
+    return path in PUBLIC_API_PATHS or path.startswith("/validation/dswd-accreditation/")
+
+
+def _apply_security_headers(response, request: FastAPIRequest):
+    """Apply response hardening without assuming TLS is already configured."""
+    if request.url.path.startswith("/auth/") or request.url.path == "/db-health":
+        response.headers.setdefault("Cache-Control", "no-store")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+    response.headers.setdefault("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'")
+    if request.url.scheme == "https":
+        response.headers.setdefault(
+            "Strict-Transport-Security",
+            "max-age=31536000; includeSubDomains",
+        )
+    return response
+
+
+@app.middleware("http")
+async def require_api_session(request: FastAPIRequest, call_next):
+    """Require a signed session for every API route except auth/bootstrap routes."""
+    if request.method == "OPTIONS" or _is_public_api_path(request.url.path):
+        return _apply_security_headers(await call_next(request), request)
+
+    token = extract_bearer_token(request.headers.get("authorization"))
+    session = verify_session_token(token)
+    if session is None:
+        return _apply_security_headers(JSONResponse(
+            status_code=401,
+            content={"detail": "Authentication required. Please sign in again."},
+            headers={"Cache-Control": "no-store"},
+        ), request)
+
+    if request.url.path.startswith(ADMIN_ONLY_API_PREFIXES) and session.get("role") != "admin":
+        return _apply_security_headers(JSONResponse(
+            status_code=403,
+            content={"detail": "Administrator access is required."},
+            headers={"Cache-Control": "no-store"},
+        ), request)
+
+    request.state.auth_user = session
+    response = await call_next(request)
+    response.headers.setdefault("Cache-Control", "no-store")
+    return _apply_security_headers(response, request)
+
+
+def _get_session_user(request: FastAPIRequest) -> dict[str, Any]:
+    session = getattr(request.state, "auth_user", None)
+    if not isinstance(session, dict) or not str(session.get("sub") or "").strip():
+        raise HTTPException(status_code=401, detail="Authentication required. Please sign in again.")
+    return session
+
+
+def _require_admin_session(request: FastAPIRequest) -> dict[str, Any]:
+    session = _get_session_user(request)
+    if session.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Administrator access is required.")
+    return session
+
+
+def _require_same_user_or_admin(request: FastAPIRequest, target_user_id: str) -> dict[str, Any]:
+    session = _get_session_user(request)
+    if session.get("role") != "admin" and str(session.get("sub")) != str(target_user_id).strip():
+        raise HTTPException(status_code=403, detail="You are not allowed to access this account.")
+    return session
 
 # Add CORS middleware to allow frontend requests. A wildcard origin cannot be
 # combined with credentialed browser requests, so only enable credentials when
 # the deployment explicitly supplies a concrete origin list.
 configured_cors_origins = [
     origin.strip()
-    for origin in os.getenv("ALLOWED_ORIGINS", "*").split(",")
+    for origin in os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:8081,http://127.0.0.1:8081",
+    ).split(",")
     if origin.strip()
 ]
-cors_allows_any_origin = "*" in configured_cors_origins
+# Wildcard CORS is disabled by default. It can only be re-enabled explicitly
+# for a controlled local test environment, never merely by an old `*` value
+# left in a production environment file.
+cors_allows_any_origin = (
+    "*" in configured_cors_origins
+    and os.getenv("ALLOW_WILDCARD_CORS", "false").strip().lower() == "true"
+)
+if not cors_allows_any_origin:
+    configured_cors_origins = [origin for origin in configured_cors_origins if origin != "*"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"] if cors_allows_any_origin else configured_cors_origins,
@@ -3705,11 +3811,10 @@ def health():
 
 
 @app.get("/db-health", response_model=None)
-# Returns detailed database diagnostics for troubleshooting.
+# Returns only non-sensitive database status for readiness checks.
 def db_health(force: bool = False):
     configured_mode = get_configured_db_mode()
     available, error = get_postgres_status(force_refresh=force)
-    diagnostics = get_postgres_diagnostics()
     timestamp = datetime.now(timezone.utc).isoformat()
 
     status_code = 200 if available else 503
@@ -3718,8 +3823,9 @@ def db_health(force: bool = False):
         "configured_mode": configured_mode,
         "mode": get_db_mode(),
         "available": available,
-        "error": error,
-        "diagnostics": diagnostics,
+        # Never return database URLs, usernames, passwords, candidate hosts,
+        # or raw driver errors from a public readiness endpoint.
+        "error": "Database unavailable." if not available else None,
         "timestamp": timestamp,
     }
 
@@ -4364,20 +4470,41 @@ def _get_volunteer_login_block_reason(connection: Any, user: dict[str, Any]) -> 
 
 @app.get("/users/lookup")
 # API endpoint that looks up a user by email or phone.
-def lookup_user(identifier: str) -> dict[str, Any]:
+def lookup_user(request: FastAPIRequest, identifier: str) -> dict[str, Any]:
+    session = _get_session_user(request)
     user = _get_user_by_identifier(identifier)
     if user is not None:
         user = dict(user)
         user.pop("password", None)
+        # A user may resolve an identity for messaging, but only the account
+        # owner or an administrator may receive the complete profile record.
+        if session.get("role") != "admin" and str(user.get("id") or "") != str(session.get("sub") or ""):
+            user = {
+                "id": user.get("id"),
+                "name": user.get("name") or "NVC Member",
+                "role": user.get("role"),
+            }
     return {"user": user}
 
 
 @app.get("/users/directory")
 # API endpoint used by messaging to resolve sender names and profile photos.
-def get_user_directory() -> dict[str, list[dict[str, Any]]]:
+def get_user_directory(request: FastAPIRequest) -> dict[str, list[dict[str, Any]]]:
+    session = _get_session_user(request)
     cached = _message_query_cache.get("users:directory")
     if cached is not None:
-        return cached
+        if session.get("role") == "admin":
+            return cached
+        return {
+            "users": [
+                {
+                    key: value
+                    for key, value in user.items()
+                    if key not in {"email", "phone"}
+                }
+                for user in cached.get("users", [])
+            ]
+        }
 
     _require_postgres()
     with get_connection() as connection:
@@ -4391,8 +4518,6 @@ def get_user_directory() -> dict[str, list[dict[str, Any]]]:
         {
             "id": user.get("id"),
             "name": user.get("name") or "NVC Member",
-            "email": user.get("email"),
-            "phone": user.get("phone"),
             "role": user.get("role"),
             "profilePhoto": _compress_image_data_uri(user.get("profilePhoto")),
         }
@@ -4771,8 +4896,6 @@ def auth_password_reset_confirm(payload: PasswordResetConfirmPayload) -> dict[st
 @app.post("/auth/login")
 # API endpoint that validates login credentials.
 def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
-    print(f"[DEBUG] Login attempt for: {payload.identifier}")
-    
     # Try demo account first (fast path)
     user = _get_demo_account(payload.identifier)
     is_demo_account = user is not None
@@ -4780,17 +4903,14 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
     # If demo account not found, try the shared database directly.
     if user is None:
         try:
-            print("[DEBUG] Demo account not found, trying database...")
             with get_connection() as connection:
                 user = _get_user_by_identifier(payload.identifier, connection)
         except Exception as db_error:
-            print(f"[DEBUG] Database lookup failed: {db_error}")
+            print(f"[WARN] Database lookup failed during login: {type(db_error).__name__}")
             raise HTTPException(
                 status_code=503,
                 detail="Database unavailable while checking your account. Please try again."
             )
-    
-    print(f"[DEBUG] User found: {user.get('id') if user else 'None'}")
     
     if user is None:
         raise HTTPException(
@@ -4814,8 +4934,6 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
                 )
             connection.commit()
 
-    print(f"[DEBUG] Password correct for: {user.get('id')}")
-    
     # For demo mode (most of the time), skip approval checks
     if user.get("id", "").endswith("1") or user.get("id", "").startswith(("admin", "volunteer", "partner")):
         # This is a demo account, skip database checks
@@ -4832,12 +4950,16 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
                 raise HTTPException(status_code=403, detail=block_reason)
         except HTTPException:
             raise
-        except Exception as e:
-            print(f"[DEBUG] Error during approval check: {e}")
+        except Exception as error:
+            print(f"[WARN] Error during approval check: {type(error).__name__}")
 
     public_user = dict(user)
     public_user.pop("password", None)
-    return {"user": public_user, "message": "Login successful"}
+    return {
+        "user": public_user,
+        "sessionToken": create_session_token(str(public_user.get("id") or ""), str(public_user.get("role") or "")),
+        "message": "Login successful",
+    }
 
 
 @app.post("/auth/google")
@@ -4872,7 +4994,11 @@ def auth_google(payload: GoogleAuthPayload) -> dict[str, Any]:
 
     public_user = dict(user)
     public_user.pop("password", None)
-    return {"user": public_user, "message": "Google login successful"}
+    return {
+        "user": public_user,
+        "sessionToken": create_session_token(str(public_user.get("id") or ""), str(public_user.get("role") or "")),
+        "message": "Google login successful",
+    }
 
 
 @app.post("/auth/send-rejection-email")
@@ -4886,9 +5012,9 @@ def send_rejection_email_endpoint(payload: RejectionEmailPayload) -> dict[str, A
             role=payload.role,
         )
         return {"success": True, "message": "Rejection email sent successfully."}
-    except Exception as e:
-        print(f"[REJECTION-EMAIL-ERROR] Failed to send rejection email: {e}")
-        return {"success": False, "message": f"Email sending failed: {str(e)}"}
+    except Exception as error:
+        print(f"[REJECTION-EMAIL-ERROR] Failed to send rejection email: {type(error).__name__}")
+        return {"success": False, "message": "Email sending failed. Please try again."}
 
 
 @app.post("/auth/approval-email")
@@ -4903,8 +5029,8 @@ def send_approval_email_endpoint(payload: ApprovalEmailPayload) -> dict[str, Any
         )
         return {"success": True, "message": "Approval email sent successfully."}
     except Exception as error:
-        print(f"[APPROVAL-EMAIL-ERROR] Failed to send approval email: {error}")
-        return {"success": False, "message": f"Email sending failed: {str(error)}"}
+        print(f"[APPROVAL-EMAIL-ERROR] Failed to send approval email: {type(error).__name__}")
+        return {"success": False, "message": "Email sending failed. Please try again."}
 
 
 @app.post("/auth/users/{user_id}/approve")
@@ -5047,7 +5173,8 @@ async def approve_user(user_id: str, payload: UserApprovalPayload, admin_id: str
 
 @app.get("/auth/users/pending")
 # API endpoint to get all pending user approvals (admin only).
-def get_pending_users() -> dict[str, Any]:
+def get_pending_users(request: FastAPIRequest) -> dict[str, Any]:
+    _require_admin_session(request)
     with get_connection() as connection:
         all_users = _get_all_users_from_storage(connection)
         volunteers = get_postgres_hot_storage_collection(connection, "volunteers")
@@ -5284,41 +5411,53 @@ async def delete_user_account(user_id: str) -> dict[str, Any]:
 @app.get("/validation/dswd-accreditation/{accreditation_no}")
 # API endpoint that validates if a DSWD accreditation number is valid and unassigned.
 def validate_dswd_accreditation(accreditation_no: str) -> dict[str, Any]:
-    _require_postgres()
-    
     # Basic format validation
-    normalized_value = accreditation_no.strip().upper()
-    if not normalized_value or not normalized_value[0].isalnum():
+    normalized_value = str(accreditation_no or "").strip().upper()
+    # This field is optional. Only validate format and assignment when a
+    # partner actually supplies an accreditation number.
+    if not normalized_value:
+        return {"valid": True}
+    if len(normalized_value) > 60 or not normalized_value[0].isalnum():
         return {"valid": False, "reason": "Invalid format"}
-    
+
     # Check regex pattern
-    import re
     if not re.match(r'^[A-Z0-9][A-Z0-9\-\/]{5,}$', normalized_value):
         return {"valid": False, "reason": "Invalid format"}
-    
-    # Check against database
-    with get_connection() as connection:
-        with connection.cursor() as cursor:
-            cursor.execute("""
-                SELECT is_assigned, assigned_to_partner_id 
-                FROM dswd_accreditation_numbers 
-                WHERE accreditation_no = %s
-            """, (normalized_value,))
-            
-            result = cursor.fetchone()
-            if not result:
-                return {"valid": False, "reason": "Accreditation number not found in database"}
-            
-            is_assigned, assigned_to_partner_id = result
-            if is_assigned:
-                return {"valid": False, "reason": "Accreditation number already assigned"}
-            
-            return {"valid": True}
+
+    try:
+        _require_postgres()
+        # Check against database only after the input has passed validation.
+        with get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT is_assigned
+                    FROM dswd_accreditation_numbers
+                    WHERE accreditation_no = %s
+                    """,
+                    (normalized_value,),
+                )
+
+                result = cursor.fetchone()
+                if not result:
+                    return {"valid": False, "reason": "Accreditation number not found in database"}
+
+                if bool(result[0]):
+                    return {"valid": False, "reason": "Accreditation number already assigned"}
+
+                return {"valid": True}
+    except Exception as error:
+        print(f"[WARN] DSWD accreditation validation unavailable: {type(error).__name__}", flush=True)
+        raise HTTPException(
+            status_code=503,
+            detail="Accreditation validation is temporarily unavailable. Please try again.",
+        ) from error
 
 
 @app.get("/projects/snapshot")
 # API endpoint that returns the projects screen snapshot.
 def get_projects_snapshot(
+    request: FastAPIRequest,
     user_id: str | None = None,
     role: str | None = None,
     fields: str | None = None,
@@ -5327,6 +5466,19 @@ def get_projects_snapshot(
     include_images: bool = False,
 ) -> dict[str, Any]:
     """Return the project snapshot used by web and native project screens."""
+    session = _get_session_user(request)
+    session_user_id = str(session.get("sub") or "").strip()
+    session_role = str(session.get("role") or "").strip().lower()
+    requested_user_id = str(user_id or "").strip()
+    requested_role = str(role or "").strip().lower()
+    if session_role != "admin":
+        if requested_user_id and requested_user_id != session_user_id:
+            raise HTTPException(status_code=403, detail="You are not allowed to access another user's project snapshot.")
+        user_id = session_user_id
+        role = session_role
+    elif requested_role and requested_role != "admin" and not requested_user_id:
+        raise HTTPException(status_code=400, detail="A user id is required for a scoped snapshot.")
+
     try:
         _require_postgres()
 
@@ -5396,7 +5548,8 @@ def get_projects_snapshot(
 
 @app.get("/volunteers/by-user/{user_id}")
 # API endpoint that returns a volunteer profile by user id.
-def get_volunteer_by_user(user_id: str) -> dict[str, Any]:
+def get_volunteer_by_user(request: FastAPIRequest, user_id: str) -> dict[str, Any]:
+    _require_same_user_or_admin(request, user_id)
     _require_postgres()
     with get_connection() as connection:
         volunteer = _postgres_get_volunteer_by_user_id(connection, user_id)
@@ -5411,30 +5564,51 @@ def get_volunteer_by_user(user_id: str) -> dict[str, Any]:
 
 @app.get("/volunteers/{volunteer_id}/recognition")
 # API endpoint that returns volunteer recognition metrics.
-def get_volunteer_recognition_status(volunteer_id: str) -> dict[str, Any]:
+def get_volunteer_recognition_status(request: FastAPIRequest, volunteer_id: str) -> dict[str, Any]:
+    session = _get_session_user(request)
     _require_postgres()
     with get_connection() as connection:
+        volunteer = _postgres_get_hot_item_by_id(connection, "volunteers", volunteer_id)
+        if volunteer is None:
+            raise HTTPException(status_code=404, detail="Volunteer not found.")
+        owner_user_id = str(volunteer.get("userId") or "").strip()
+        if session.get("role") != "admin" and owner_user_id != str(session.get("sub") or ""):
+            raise HTTPException(status_code=403, detail="You are not allowed to access this volunteer record.")
         recognition = _postgres_get_volunteer_recognition_status(connection, volunteer_id)
     return {"recognition": recognition}
 
 
 @app.get("/volunteers/{volunteer_id}/time-logs")
 # API endpoint that returns a volunteer's time logs.
-def get_volunteer_logs(volunteer_id: str) -> dict[str, Any]:
+def get_volunteer_logs(request: FastAPIRequest, volunteer_id: str) -> dict[str, Any]:
+    session = _get_session_user(request)
     _require_postgres()
     with get_connection() as connection:
+        volunteer = _postgres_get_hot_item_by_id(connection, "volunteers", volunteer_id)
+        if volunteer is None:
+            raise HTTPException(status_code=404, detail="Volunteer not found.")
+        owner_user_id = str(volunteer.get("userId") or "").strip()
+        if session.get("role") != "admin" and owner_user_id != str(session.get("sub") or ""):
+            raise HTTPException(status_code=403, detail="You are not allowed to access these attendance logs.")
         logs = _postgres_reset_stale_daily_time_logs(connection, volunteer_id)
     return {"logs": logs}
 
 
 @app.post("/volunteers/{volunteer_id}/time-logs/start")
 # API endpoint that starts a volunteer time log.
-async def start_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogStartPayload) -> dict[str, Any]:
+async def start_volunteer_log(
+    request: FastAPIRequest,
+    volunteer_id: str,
+    payload: VolunteerTimeLogStartPayload,
+) -> dict[str, Any]:
+    session = _get_session_user(request)
     _require_postgres()
     with get_connection() as connection:
         volunteer = _postgres_get_hot_item_by_id(connection, "volunteers", volunteer_id)
         if volunteer is None:
             raise HTTPException(status_code=404, detail="Volunteer not found.")
+        if session.get("role") != "admin" and str(volunteer.get("userId") or "").strip() != str(session.get("sub") or ""):
+            raise HTTPException(status_code=403, detail="You can only start your own attendance log.")
 
         project, _ = _postgres_get_project_like_item_by_id(connection, payload.projectId)
         if project is None:
@@ -5519,7 +5693,12 @@ async def start_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogStartP
 
 
 @app.post("/volunteer-time-logs/{log_id}/attendance-check")
-async def set_volunteer_attendance_check(log_id: str, payload: VolunteerTimeLogAttendanceCheckPayload) -> dict[str, Any]:
+async def set_volunteer_attendance_check(
+    request: FastAPIRequest,
+    log_id: str,
+    payload: VolunteerTimeLogAttendanceCheckPayload,
+) -> dict[str, Any]:
+    session = _get_session_user(request)
     _require_postgres()
     with get_connection() as connection:
         log = _postgres_get_hot_item_by_id(connection, "volunteerTimeLogs", log_id)
@@ -5527,6 +5706,10 @@ async def set_volunteer_attendance_check(log_id: str, payload: VolunteerTimeLogA
             raise HTTPException(status_code=404, detail="Attendance record not found.")
 
         checked_by_user_id = str(payload.checkedByUserId or "").strip()
+        if session.get("role") != "admin":
+            if checked_by_user_id and checked_by_user_id != str(session.get("sub") or ""):
+                raise HTTPException(status_code=403, detail="You cannot mark attendance for another account.")
+            checked_by_user_id = str(session.get("sub") or "")
         checked_by_name = None
         if checked_by_user_id:
             checked_by_user = _postgres_get_hot_item_by_id(connection, "users", checked_by_user_id)
@@ -5565,9 +5748,19 @@ async def set_volunteer_attendance_check(log_id: str, payload: VolunteerTimeLogA
 
 @app.post("/volunteers/{volunteer_id}/time-logs/end")
 # API endpoint that ends a volunteer time log.
-async def end_volunteer_log(volunteer_id: str, payload: VolunteerTimeLogEndPayload) -> dict[str, Any]:
+async def end_volunteer_log(
+    request: FastAPIRequest,
+    volunteer_id: str,
+    payload: VolunteerTimeLogEndPayload,
+) -> dict[str, Any]:
+    session = _get_session_user(request)
     _require_postgres()
     with get_connection() as connection:
+        volunteer = _postgres_get_hot_item_by_id(connection, "volunteers", volunteer_id)
+        if volunteer is None:
+            raise HTTPException(status_code=404, detail="Volunteer not found.")
+        if session.get("role") != "admin" and str(volunteer.get("userId") or "").strip() != str(session.get("sub") or ""):
+            raise HTTPException(status_code=403, detail="You can only end your own attendance log.")
         existing_logs = _postgres_reset_stale_daily_time_logs(connection, volunteer_id)
         active_log = next(
             (
@@ -7000,11 +7193,12 @@ async def create_project_group_message(
         return message
     except HTTPException:
         raise
-    except Exception as e:
-        error_msg = f"Error creating project group message: {str(e)}"
-        print(error_msg)
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=error_msg)
+    except Exception as error:
+        print(f"[ERROR] Error creating project group message: {type(error).__name__}")
+        raise HTTPException(
+            status_code=500,
+            detail="The message could not be created. Please try again.",
+        ) from error
 
 
 @app.delete("/projects/{project_id}/group-messages")
@@ -7059,6 +7253,14 @@ async def mark_message_read(message_id: str) -> dict[str, Any]:
 @app.websocket("/ws/messages/{user_id}")
 # Websocket endpoint that streams message events to one user.
 async def messages_websocket(websocket: WebSocket, user_id: str) -> None:
+    session = verify_session_token(websocket.query_params.get("token"))
+    if session is None:
+        await websocket.close(code=1008, reason="Authentication required")
+        return
+    if session.get("role") != "admin" and str(session.get("sub")) != str(user_id).strip():
+        await websocket.close(code=1008, reason="You are not allowed to open this channel")
+        return
+
     await connection_manager.connect(user_id, websocket)
     try:
         while True:
@@ -7095,6 +7297,10 @@ async def messages_websocket(websocket: WebSocket, user_id: str) -> None:
 @app.websocket("/ws/storage")
 # Websocket endpoint that streams shared storage changes to all listeners.
 async def storage_websocket(websocket: WebSocket) -> None:
+    if verify_session_token(websocket.query_params.get("token")) is None:
+        await websocket.close(code=1008, reason="Authentication required")
+        return
+
     await connection_manager.connect_storage(websocket)
     try:
         while True:
@@ -7389,8 +7595,9 @@ _admin_dashboard_cache = TTLCache(ttl_seconds=60)
 @app.get("/admin/dashboard-snapshot")
 # Optimized endpoint that returns all admin dashboard collections.
 # Uses parallel worker connections and TTLCache for fast sub-second responses.
-def get_admin_dashboard_snapshot() -> dict[str, Any]:
+def get_admin_dashboard_snapshot(request: FastAPIRequest) -> dict[str, Any]:
     """Return all collections needed by the admin dashboard in one request."""
+    _require_admin_session(request)
     try:
         _require_postgres()
 
@@ -7512,7 +7719,11 @@ def get_storage_item_by_id(key: str, item_id: str) -> dict[str, Any]:
     except HTTPException:
         raise
     except Exception as error:
-        raise HTTPException(status_code=500, detail=f"Storage item read failed: {error}") from error
+        print(f"[ERROR] Storage item read failed: {type(error).__name__}")
+        raise HTTPException(
+            status_code=500,
+            detail="The storage item could not be read. Please try again.",
+        ) from error
 
 
 @app.put("/storage/{key}/items/{item_id}")
@@ -7553,7 +7764,11 @@ async def put_storage_item_by_id(
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:
-        raise HTTPException(status_code=500, detail=f"Storage item write failed: {error}") from error
+        print(f"[ERROR] Storage item write failed: {type(error).__name__}")
+        raise HTTPException(
+            status_code=500,
+            detail="The storage item could not be saved. Please try again.",
+        ) from error
 
     _invalidate_collection_cache(changed_keys)
     if any(
@@ -7709,16 +7924,17 @@ async def _put_storage_item_once(key: str, payload: StoragePayload) -> dict[str,
                             changed_keys.append("volunteers")
                 connection.commit()
             except Exception as e:
-                # Log full traceback for debugging storage write failures
-                print(f"[ERROR] put_storage_item failed for key={key}: {type(e).__name__}: {e}", flush=True)
-                print(traceback.format_exc(), flush=True)
+                print(f"[ERROR] put_storage_item failed for key={key}: {type(e).__name__}", flush=True)
                 try:
                     connection.rollback()
                 except Exception:
                     pass
                 if isinstance(e, ValueError):
                     raise HTTPException(status_code=400, detail=str(e))
-                raise HTTPException(status_code=500, detail=f"Storage write failed for '{key}': {str(e)}")
+                raise HTTPException(
+                    status_code=500,
+                    detail="The storage data could not be saved. Please try again.",
+                ) from e
         
         _invalidate_collection_cache(changed_keys)
         _projects_snapshot_cache.clear()
@@ -7830,23 +8046,24 @@ async def delete_event_record(event_id: str) -> dict[str, Any]:
 
 @app.options("/reports")
 async def reports_options():
-    """Handle CORS preflight for reports endpoint"""
-    return JSONResponse(content={"status": "ok"}, headers={
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "*",
-    })
+    """Keep a compatibility route; CORSMiddleware supplies the allow-list headers."""
+    return JSONResponse(content={"status": "ok"})
 
 
 @app.post("/reports")
 # API endpoint that inserts or updates one submitted report row directly.
-async def submit_report(payload: ReportSubmitPayload) -> dict[str, Any]:
+async def submit_report(request: FastAPIRequest, payload: ReportSubmitPayload) -> dict[str, Any]:
     _require_postgres()
 
     now = datetime.now(timezone.utc).isoformat()
     project_id = str(payload.projectId).strip()
     submitter_user_id = str(payload.submitterUserId).strip()
     submitter_role = str(payload.submitterRole).strip().lower()
+    session = _get_session_user(request)
+    if session.get("role") != "admin" and submitter_user_id != str(session.get("sub") or ""):
+        raise HTTPException(status_code=403, detail="You can only submit reports for your own account.")
+    if submitter_role and session.get("role") != "admin" and submitter_role != session.get("role"):
+        raise HTTPException(status_code=403, detail="The report role does not match your account.")
     metrics = dict(payload.metrics) if isinstance(payload.metrics, dict) else {}
     report_type = str(payload.reportType or "").strip()
     if (
@@ -7995,7 +8212,11 @@ async def submit_report(payload: ReportSubmitPayload) -> dict[str, Any]:
     except HTTPException:
         raise
     except Exception as error:
-        raise HTTPException(status_code=500, detail=f"Report submission failed: {error}") from error
+        print(f"[ERROR] Report submission failed: {type(error).__name__}")
+        raise HTTPException(
+            status_code=500,
+            detail="The report could not be submitted. Please try again.",
+        ) from error
 
 
 @app.delete("/storage/{key}")
@@ -8111,6 +8332,6 @@ async def notify_gcal_sync(payload: GcalSyncNotifyPayload) -> dict[str, Any]:
             html_body=html_body,
         )
         return {"status": "ok", "message": f"Confirmation email sent to {payload.recipient_email}"}
-    except Exception as e:
-        print(f"[GCAL-NOTIFY] Failed to send email: {e}")
-        return {"status": "error", "message": str(e)}
+    except Exception as error:
+        print(f"[GCAL-NOTIFY] Failed to send email: {type(error).__name__}")
+        return {"status": "error", "message": "Calendar notification failed. Please try again."}

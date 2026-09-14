@@ -58,7 +58,6 @@ import {
   getAllProjects,
   getAllUsers,
   getApiBaseUrl,
-  getUserByEmailOrPhone,
   loginWithCredentials,
   loginWithGoogle,
   sendPasswordResetCode,
@@ -668,25 +667,6 @@ export default function LoginScreen() {
           "Trying to reach the database on a slow connection...",
         );
       }
-      // Pre-check whether the identifier maps to any known account (email, username alias, or phone).
-      // This lets us provide a more specific error to the user (username vs password).
-      let identifierMatchedUser: User | null = null;
-      try {
-        identifierMatchedUser = await getUserByEmailOrPhone(trimmedIdentifier);
-      } catch (e) {
-        // If the lookup fails, fall back to attempting login normally.
-        identifierMatchedUser = null;
-      }
-
-      if (!identifierMatchedUser) {
-        // No local/mirrored account matches the identifier — inform the user.
-        showLoginError(
-          getUserNotFoundDisplay().title,
-          getUserNotFoundDisplay().message,
-        );
-        return;
-      }
-
       const user = await loginWithCredentials(
         trimmedIdentifier,
         trimmedPassword,

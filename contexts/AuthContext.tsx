@@ -5,6 +5,7 @@ import {
   getStorageItemsFast,
   setCurrentUser as saveCurrentUser,
   getCurrentUser,
+  getApiAuthToken,
 } from '../models/storage';
 
 // Safe Platform accessor for web environments
@@ -120,13 +121,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const restoreSession = async () => {
       try {
         const savedUser = await getCurrentUser();
+        const apiAuthToken = savedUser ? await getApiAuthToken() : null;
         // The normal web app is the admin experience. If a volunteer or
         // partner session was saved by mobile mode, do not carry it into the
         // normal web app where that role is intentionally restricted.
         const canRestoreSavedUser =
           !getIsWeb() || savedUser?.role === 'admin';
 
-        if (savedUser && canRestoreSavedUser) {
+        if (savedUser && apiAuthToken && canRestoreSavedUser) {
           setUser(savedUser);
           void prefetchForUser(savedUser).catch(() => null);
         } else if (savedUser) {

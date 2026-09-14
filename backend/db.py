@@ -302,10 +302,47 @@ def get_db_mode() -> str:
     return "postgres" if postgres_available else "unavailable"
 
 
-# Returns runtime diagnostics about connection settings and recent health state.
+# Returns a credential-free runtime summary for internal diagnostics.
+def _redact_database_url(database_url: str | None) -> str | None:
+    value = str(database_url or "").strip()
+    if not value:
+        return None
+
+    try:
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"postgres", "postgresql"} or not parsed.hostname:
+            return "[redacted]"
+        port = f":{parsed.port}" if parsed.port else ""
+        return urlunsplit(
+            (
+                parsed.scheme,
+                f"[redacted]@{parsed.hostname}{port}",
+                parsed.path,
+                parsed.query,
+                parsed.fragment,
+            )
+        )
+    except Exception:
+        return "[redacted]"
+
+
+def _redact_database_error(error: Any) -> str | None:
+    value = str(error or "").strip()
+    if not value:
+        return None
+    for candidate in _get_database_url_candidates():
+        if candidate:
+            value = value.replace(candidate, "[redacted database URL]")
+    return value
+
+
 def get_postgres_diagnostics() -> dict[str, Any]:
     return {
-        "database_url_candidates": _get_database_url_candidates(),
+        "database_url_candidates": [
+            redacted
+            for redacted in (_redact_database_url(value) for value in _get_database_url_candidates())
+            if redacted
+        ],
         "connect_timeout_seconds": _get_connect_timeout(),
         "candidate_connect_timeout_seconds": _get_candidate_connect_timeout(),
         "connect_attempts": _get_connect_attempts(),
@@ -314,9 +351,15 @@ def get_postgres_diagnostics() -> dict[str, Any]:
         "probe_cache_ttl_seconds": _get_probe_cache_ttl(),
         "last_probe_checked_at": _POSTGRES_PROBE_CACHE["checked_at"],
         "last_probe_available": _POSTGRES_PROBE_CACHE["available"],
-        "last_probe_error": _POSTGRES_PROBE_CACHE["error"],
-        "last_successful_database_url": _POSTGRES_LAST_SUCCESSFUL_URL,
-        "candidate_failures": _POSTGRES_CANDIDATE_FAILURES,
+        "last_probe_error": _redact_database_error(_POSTGRES_PROBE_CACHE["error"]),
+        "last_successful_database_url": _redact_database_url(_POSTGRES_LAST_SUCCESSFUL_URL),
+        "candidate_failures": {
+            _redact_database_url(candidate) or "[redacted]": {
+                **(details if isinstance(details, dict) else {}),
+                "error": _redact_database_error(details.get("error")) if isinstance(details, dict) else None,
+            }
+            for candidate, details in _POSTGRES_CANDIDATE_FAILURES.items()
+        },
     }
 
 

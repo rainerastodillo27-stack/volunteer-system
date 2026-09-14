@@ -1,0 +1,138 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1400" viewBox="0 0 1800 1400" role="img" aria-labelledby="title description">
+  <title id="title">NVC System Sitemap</title>
+  <desc id="description">Visual sitemap showing authentication, Admin, Volunteer, and Partner portals, shared features, and the VPS database and Google integrations.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#52606d"/>
+    </marker>
+    <style>
+      .title { font: 700 34px Arial, sans-serif; fill: #102a43; }
+      .subtitle { font: 400 16px Arial, sans-serif; fill: #627d98; }
+      .section-title { font: 700 22px Arial, sans-serif; fill: #102a43; }
+      .node-title { font: 700 18px Arial, sans-serif; fill: #102a43; }
+      .node-text { font: 400 15px Arial, sans-serif; fill: #334e68; }
+      .small { font: 400 14px Arial, sans-serif; fill: #486581; }
+      .connector { fill: none; stroke: #829ab1; stroke-width: 3; marker-end: url(#arrow); }
+      .shared-connector { fill: none; stroke: #9fb3c8; stroke-width: 2.5; stroke-dasharray: 8 7; marker-end: url(#arrow); }
+      .panel { stroke-width: 2; }
+      .box { stroke-width: 2; }
+    </style>
+  </defs>
+
+  <rect width="1800" height="1400" fill="#f7fafc"/>
+  <text x="900" y="48" text-anchor="middle" class="title">NVC System Sitemap</text>
+  <text x="900" y="76" text-anchor="middle" class="subtitle">Role-based volunteer management system</text>
+
+  <rect x="650" y="100" width="500" height="68" rx="14" fill="#d9f5e5" stroke="#2f855a" class="box"/>
+  <text x="900" y="140" text-anchor="middle" class="node-title">NVC System</text>
+  <text x="900" y="160" text-anchor="middle" class="small">Web portal and Android APK</text>
+
+  <rect x="650" y="205" width="500" height="68" rx="14" fill="#dbeafe" stroke="#3182ce" class="box"/>
+  <text x="900" y="245" text-anchor="middle" class="node-title">Authentication</text>
+  <text x="900" y="265" text-anchor="middle" class="small">Login, sign-up, Google sign-in, password reset</text>
+
+  <rect x="650" y="310" width="500" height="68" rx="14" fill="#edf2f7" stroke="#718096" class="box"/>
+  <text x="900" y="350" text-anchor="middle" class="node-title">Role dispatcher</text>
+  <text x="900" y="370" text-anchor="middle" class="small">Routes users to the correct portal</text>
+
+  <path d="M 900 168 L 900 205" class="connector"/>
+  <path d="M 900 273 L 900 310" class="connector"/>
+
+  <!-- Admin portal -->
+  <rect x="40" y="420" width="540" height="470" rx="18" fill="#f0fff4" stroke="#68d391" class="panel"/>
+  <rect x="70" y="450" width="480" height="62" rx="12" fill="#c6f6d5" stroke="#38a169" class="box"/>
+  <text x="310" y="488" text-anchor="middle" class="section-title">Admin Portal</text>
+  <rect x="70" y="535" width="480" height="62" rx="10" fill="#ffffff" stroke="#9ae6b4" class="box"/>
+  <text x="310" y="563" text-anchor="middle" class="node-title">Dashboard</text>
+  <text x="310" y="583" text-anchor="middle" class="small">Calendar sync, activity, overview</text>
+  <rect x="70" y="610" width="480" height="62" rx="10" fill="#ffffff" stroke="#9ae6b4" class="box"/>
+  <text x="310" y="638" text-anchor="middle" class="node-title">Programs, projects, calendar</text>
+  <text x="310" y="658" text-anchor="middle" class="small">Create and manage project workspaces</text>
+  <rect x="70" y="685" width="480" height="62" rx="10" fill="#ffffff" stroke="#9ae6b4" class="box"/>
+  <text x="310" y="713" text-anchor="middle" class="node-title">Users, volunteers, partners</text>
+  <text x="310" y="733" text-anchor="middle" class="small">Applications, approvals, documents</text>
+  <rect x="70" y="760" width="480" height="62" rx="10" fill="#ffffff" stroke="#9ae6b4" class="box"/>
+  <text x="310" y="788" text-anchor="middle" class="node-title">Messages, analytics, reports</text>
+  <text x="310" y="808" text-anchor="middle" class="small">Communication, metrics, exports</text>
+
+  <!-- Volunteer portal -->
+  <rect x="630" y="420" width="540" height="470" rx="18" fill="#eff6ff" stroke="#63b3ed" class="panel"/>
+  <rect x="660" y="450" width="480" height="62" rx="12" fill="#bee3f8" stroke="#3182ce" class="box"/>
+  <text x="900" y="488" text-anchor="middle" class="section-title">Volunteer Portal</text>
+  <rect x="660" y="535" width="480" height="62" rx="10" fill="#ffffff" stroke="#90cdf4" class="box"/>
+  <text x="900" y="563" text-anchor="middle" class="node-title">Home and dashboard</text>
+  <text x="900" y="583" text-anchor="middle" class="small">Welcome, activity, notifications</text>
+  <rect x="660" y="610" width="480" height="62" rx="10" fill="#ffffff" stroke="#90cdf4" class="box"/>
+  <text x="900" y="638" text-anchor="middle" class="node-title">Programs and events</text>
+  <text x="900" y="658" text-anchor="middle" class="small">Search, apply, join, view details</text>
+  <rect x="660" y="685" width="480" height="62" rx="10" fill="#ffffff" stroke="#90cdf4" class="box"/>
+  <text x="900" y="713" text-anchor="middle" class="node-title">Tasks and attendance</text>
+  <text x="900" y="733" text-anchor="middle" class="small">Assignments, status, photos, reporting</text>
+  <rect x="660" y="760" width="480" height="62" rx="10" fill="#ffffff" stroke="#90cdf4" class="box"/>
+  <text x="900" y="788" text-anchor="middle" class="node-title">Messages, reports, profile</text>
+  <text x="900" y="808" text-anchor="middle" class="small">Account and participation records</text>
+
+  <!-- Partner portal -->
+  <rect x="1220" y="420" width="540" height="470" rx="18" fill="#faf5ff" stroke="#b794f4" class="panel"/>
+  <rect x="1250" y="450" width="480" height="62" rx="12" fill="#e9d8fd" stroke="#805ad5" class="box"/>
+  <text x="1490" y="488" text-anchor="middle" class="section-title">Partner Portal</text>
+  <rect x="1250" y="535" width="480" height="62" rx="10" fill="#ffffff" stroke="#d6bcfa" class="box"/>
+  <text x="1490" y="563" text-anchor="middle" class="node-title">Home and dashboard</text>
+  <text x="1490" y="583" text-anchor="middle" class="small">Partner space and project status</text>
+  <rect x="1250" y="610" width="480" height="62" rx="10" fill="#ffffff" stroke="#d6bcfa" class="box"/>
+  <text x="1490" y="638" text-anchor="middle" class="node-title">Programs and projects</text>
+  <text x="1490" y="658" text-anchor="middle" class="small">Manage programs and project calendar</text>
+  <rect x="1250" y="685" width="480" height="62" rx="10" fill="#ffffff" stroke="#d6bcfa" class="box"/>
+  <text x="1490" y="713" text-anchor="middle" class="node-title">Proposals and project lifecycle</text>
+  <text x="1490" y="733" text-anchor="middle" class="small">Submit, revise, approve, deliver</text>
+  <rect x="1250" y="760" width="480" height="62" rx="10" fill="#ffffff" stroke="#d6bcfa" class="box"/>
+  <text x="1490" y="788" text-anchor="middle" class="node-title">Messages, reports, profile</text>
+  <text x="1490" y="808" text-anchor="middle" class="small">Organization and project records</text>
+
+  <path d="M 900 378 L 310 450" class="connector"/>
+  <path d="M 900 378 L 900 450" class="connector"/>
+  <path d="M 900 378 L 1490 450" class="connector"/>
+
+  <!-- Shared features -->
+  <rect x="130" y="950" width="1540" height="190" rx="18" fill="#fffbeb" stroke="#ecc94b" class="panel"/>
+  <text x="900" y="985" text-anchor="middle" class="section-title">Shared Features</text>
+  <rect x="180" y="1010" width="330" height="78" rx="10" fill="#ffffff" stroke="#ecc94b" class="box"/>
+  <text x="345" y="1044" text-anchor="middle" class="node-title">Impact map</text>
+  <text x="345" y="1066" text-anchor="middle" class="small">Project and event pins</text>
+  <rect x="550" y="1010" width="330" height="78" rx="10" fill="#ffffff" stroke="#ecc94b" class="box"/>
+  <text x="715" y="1044" text-anchor="middle" class="node-title">Messaging</text>
+  <text x="715" y="1066" text-anchor="middle" class="small">Direct conversations and files</text>
+  <rect x="920" y="1010" width="330" height="78" rx="10" fill="#ffffff" stroke="#ecc94b" class="box"/>
+  <text x="1085" y="1044" text-anchor="middle" class="node-title">Reports</text>
+  <text x="1085" y="1066" text-anchor="middle" class="small">Submissions, metrics, exports</text>
+  <rect x="1290" y="1010" width="330" height="78" rx="10" fill="#ffffff" stroke="#ecc94b" class="box"/>
+  <text x="1455" y="1044" text-anchor="middle" class="node-title">Profiles and accounts</text>
+  <text x="1455" y="1066" text-anchor="middle" class="small">Edit, password, logout</text>
+
+  <path d="M 310 822 L 345 1010" class="shared-connector"/>
+  <path d="M 310 822 L 715 1010" class="shared-connector"/>
+  <path d="M 900 822 L 345 1010" class="shared-connector"/>
+  <path d="M 900 822 L 715 1010" class="shared-connector"/>
+  <path d="M 1490 822 L 1085 1010" class="shared-connector"/>
+  <path d="M 1490 822 L 1455 1010" class="shared-connector"/>
+
+  <!-- Platform and integrations -->
+  <rect x="130" y="1190" width="1540" height="150" rx="18" fill="#f1f5f9" stroke="#94a3b8" class="panel"/>
+  <text x="900" y="1225" text-anchor="middle" class="section-title">Platform and Integrations</text>
+  <rect x="220" y="1250" width="390" height="62" rx="10" fill="#ffffff" stroke="#94a3b8" class="box"/>
+  <text x="415" y="1288" text-anchor="middle" class="node-title">NVC API and VPS backend</text>
+  <rect x="705" y="1250" width="390" height="62" rx="10" fill="#ffffff" stroke="#94a3b8" class="box"/>
+  <text x="900" y="1288" text-anchor="middle" class="node-title">PostgreSQL database</text>
+  <rect x="1190" y="1250" width="390" height="62" rx="10" fill="#ffffff" stroke="#94a3b8" class="box"/>
+  <text x="1385" y="1288" text-anchor="middle" class="node-title">Google OAuth and Calendar</text>
+
+  <path d="M 345 1088 L 415 1250" class="connector"/>
+  <path d="M 715 1088 L 415 1250" class="connector"/>
+  <path d="M 1085 1088 L 415 1250" class="connector"/>
+  <path d="M 1455 1088 L 415 1250" class="connector"/>
+  <path d="M 610 1281 L 705 1281" class="connector"/>
+  <path d="M 900 273 L 1385 1250" class="shared-connector"/>
+  <path d="M 510 535 L 1385 1250" class="shared-connector"/>
+
+  <text x="900" y="1372" text-anchor="middle" class="subtitle">Web and APK use the same VPS API and database so profiles, projects, attendance, messages, reports, and map data stay synchronized.</text>
+</svg>

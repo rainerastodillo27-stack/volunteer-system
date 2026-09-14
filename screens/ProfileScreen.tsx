@@ -1644,7 +1644,7 @@ export default function ProfileScreen() {
                       style={styles.input}
                       value={dswdAccreditationNoDraft}
                       onChangeText={setDswdAccreditationNoDraft}
-                      placeholder="DSWD Accreditation No."
+                      placeholder="DSWD Accreditation No. (Optional)"
                       editable={!saveLoading}
                     />
                   </>
