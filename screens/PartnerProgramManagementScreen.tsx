@@ -32,6 +32,7 @@ import { isAbortLikeError } from '../utils/requestErrors';
 import {
   assertGoogleCalendarAccountMatchesUser,
   getGoogleAuthConfig,
+  resolveGoogleCalendarAccessToken,
   sendGoogleCalendarSyncEmail,
   syncProjectsToGoogleCalendar,
 } from '../utils/googleCalendarSync';
@@ -274,7 +275,11 @@ export default function PartnerProgramManagementScreen() {
       }
 
       const authResult = await promptGoogleAuth();
-      const accessToken = authResult.type === 'success' ? authResult.authentication?.accessToken : undefined;
+      const accessToken = await resolveGoogleCalendarAccessToken(
+        authResult,
+        googleAuthRequest,
+        googleAuthConfig
+      );
       if (!accessToken) {
         throw new Error('Google Calendar permission was not granted.');
       }

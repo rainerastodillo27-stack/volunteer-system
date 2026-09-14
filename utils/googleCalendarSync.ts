@@ -12,6 +12,7 @@
 
 import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
+import { Platform } from 'react-native';
 import { Project } from '../models/types';
 import { getApiBaseUrl } from '../models/storage';
 
@@ -24,10 +25,24 @@ WebBrowser.maybeCompleteAuthSession();
  * Your Google Cloud OAuth 2.0 Client ID.
  * Replace this with the one from your Google Cloud Console credentials page.
  */
-export const GOOGLE_CLIENT_ID =
+export const GOOGLE_WEB_CLIENT_ID =
   process.env.EXPO_PUBLIC_GOOGLE_OAUTH_CLIENT_ID ||
   process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ||
   '163385365479-jaeg90dmalfqvjrkmbc0pigdaocof652.apps.googleusercontent.com';
+
+export const GOOGLE_ANDROID_CLIENT_ID =
+  process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ||
+  process.env.GOOGLE_ANDROID_CLIENT_ID ||
+  '163385365479-ad5evavq9an4oarcp08ct9abv50jcr74.apps.googleusercontent.com';
+
+const GOOGLE_NATIVE_REDIRECT_URI = 'com.volcre.nvcconnect:/oauthredirect';
+
+// Retain the existing export for callers that only need the active platform's
+// client ID. Calendar OAuth must use the Android client in the APK and the web
+// client in the browser.
+export const GOOGLE_CLIENT_ID = Platform.OS === 'android'
+  ? GOOGLE_ANDROID_CLIENT_ID
+  : GOOGLE_WEB_CLIENT_ID;
 
 const GOOGLE_CALENDAR_API = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
 
@@ -84,14 +99,19 @@ export function getGoogleAuthConfig(loginHint?: string) {
     revocationEndpoint: 'https://oauth2.googleapis.com/revoke',
   };
 
-  const redirectUri = AuthSession.makeRedirectUri();
+  const isAndroid = Platform.OS === 'android';
+  const redirectUri = AuthSession.makeRedirectUri(
+    isAndroid ? { native: GOOGLE_NATIVE_REDIRECT_URI } : undefined
+  );
 
   const request: AuthSession.AuthRequestConfig = {
-    clientId: GOOGLE_CLIENT_ID,
+    clientId: isAndroid ? GOOGLE_ANDROID_CLIENT_ID : GOOGLE_WEB_CLIENT_ID,
     redirectUri,
     scopes: GOOGLE_SCOPES,
-    responseType: AuthSession.ResponseType.Token,
-    usePKCE: false,
+    // Keep the existing browser behavior while using Google's recommended
+    // authorization-code + PKCE flow in the Android production build.
+    responseType: isAndroid ? AuthSession.ResponseType.Code : AuthSession.ResponseType.Token,
+    usePKCE: isAndroid,
     extraParams: {
       access_type: 'online',
       prompt: 'select_account',
@@ -100,6 +120,51 @@ export function getGoogleAuthConfig(loginHint?: string) {
   };
 
   return { discovery, request, redirectUri };
+}
+
+/**
+ * Returns the access token from either the browser implicit response or the
+ * Android authorization-code response. The core AuthSession hook does not
+ * exchange authorization codes automatically, so native builds do it here
+ * with the request's PKCE verifier.
+ */
+export async function resolveGoogleCalendarAccessToken(
+  authResult: AuthSession.AuthSessionResult,
+  request: Pick<AuthSession.AuthRequest, 'codeVerifier'> | null,
+  authConfig: ReturnType<typeof getGoogleAuthConfig>
+): Promise<string | undefined> {
+  if (authResult.type !== 'success') {
+    return undefined;
+  }
+
+  const directAccessToken = authResult.authentication?.accessToken;
+  if (directAccessToken) {
+    return directAccessToken;
+  }
+
+  const code = authResult.params.code;
+  if (!code) {
+    return undefined;
+  }
+
+  if (!request?.codeVerifier) {
+    throw new Error('Google authorization did not return a valid PKCE verifier. Please try again.');
+  }
+
+  const tokenResponse = await AuthSession.exchangeCodeAsync(
+    {
+      clientId: authConfig.request.clientId,
+      code,
+      redirectUri: authConfig.redirectUri,
+      scopes: GOOGLE_SCOPES,
+      extraParams: {
+        code_verifier: request.codeVerifier,
+      },
+    },
+    authConfig.discovery
+  );
+
+  return tokenResponse.accessToken || undefined;
 }
 
 function normalizeEmail(value?: string | null): string {

@@ -85,11 +85,19 @@ def _trace(message: str) -> None:
 # Initialize FastAPI application
 app = FastAPI(title="NVC CONNECT API")
 
-# Add CORS middleware to allow frontend requests
+# Add CORS middleware to allow frontend requests. A wildcard origin cannot be
+# combined with credentialed browser requests, so only enable credentials when
+# the deployment explicitly supplies a concrete origin list.
+configured_cors_origins = [
+    origin.strip()
+    for origin in os.getenv("ALLOWED_ORIGINS", "*").split(",")
+    if origin.strip()
+]
+cors_allows_any_origin = "*" in configured_cors_origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("ALLOWED_ORIGINS", "*").split(","),
-    allow_credentials=True,
+    allow_origins=["*"] if cors_allows_any_origin else configured_cors_origins,
+    allow_credentials=not cors_allows_any_origin,
     allow_methods=["*"],
     allow_headers=["*"],
 )

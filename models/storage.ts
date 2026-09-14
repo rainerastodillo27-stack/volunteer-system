@@ -980,6 +980,20 @@ function isPrivateOrLocalHost(hostname: string): boolean {
   );
 }
 
+function shouldUseHostedWebPageOrigin(hostname: string, configuredBaseUrl?: string): boolean {
+  const pageHost = (hostname || '').toLowerCase().trim();
+  if (!pageHost.endsWith('.nip.io') || !configuredBaseUrl) {
+    return false;
+  }
+
+  try {
+    const configuredHost = new URL(configuredBaseUrl).hostname.toLowerCase().trim();
+    return pageHost.slice(0, -'.nip.io'.length) === configuredHost;
+  } catch {
+    return false;
+  }
+}
+
 // Resolves the native-device API base URL from Expo config or Metro host info.
 function resolveNativeApiBaseUrl(configuredBaseUrl?: string): string {
   const bundlerHost = getBundlerHost();
@@ -1028,6 +1042,13 @@ export function getApiBaseUrl(): string {
     const host = document.location.hostname || '127.0.0.1';
     if (isPrivateOrLocalHost(host)) {
       return `${protocol}//${host}:8000`;
+    }
+
+    // The VPS web app is served through an nip.io hostname while older
+    // configuration may still contain the raw VPS IP. Use the page origin in
+    // that case so browser writes (attendance, approvals, edits) stay same-origin.
+    if (shouldUseHostedWebPageOrigin(host, configuredWebBaseUrl)) {
+      return `${protocol}//${host}`;
     }
 
     if (configuredWebBaseUrl && configuredWebBaseUrl.trim().length > 0) {
