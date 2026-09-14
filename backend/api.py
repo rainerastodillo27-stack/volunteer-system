@@ -1940,10 +1940,10 @@ def _cascade_delete_project_references(connection: Any, related_project_ids: set
             cursor.execute(
                 """
                 select coalesce(events_id, '') from events
-                where lower(trim(coalesce(parent_project_id, ''))) = any(%s)
-                   or lower(trim(coalesce(events_id, ''))) = any(%s)
+                where parent_project_id = any(%s)
+                   or events_id = any(%s)
                 """,
-                ([pid.lower() for pid in related_ids], [pid.lower() for pid in related_ids]),
+                (related_ids, related_ids),
             )
             child_ids = [str(r[0]) for r in cursor.fetchall() if r[0]]
         except Exception:
@@ -1954,8 +1954,6 @@ def _cascade_delete_project_references(connection: Any, related_project_ids: set
             child_ids = []
 
         all_ids_to_purge = list(dict.fromkeys([*related_ids, *child_ids]))
-        lower_ids = [pid.lower() for pid in all_ids_to_purge]
-
         for table, col, key in [
             ("events", "events_id", "events"),
             ("events", "parent_project_id", "events"),
@@ -1970,8 +1968,8 @@ def _cascade_delete_project_references(connection: Any, related_project_ids: set
         ]:
             try:
                 cursor.execute(
-                    f"delete from {table} where lower(trim(coalesce({col}::text, ''))) = any(%s)",
-                    (lower_ids,),
+                    f"delete from {table} where {col} = any(%s)",
+                    (all_ids_to_purge,),
                 )
                 if cursor.rowcount:
                     changed_keys.append(key)
@@ -2072,6 +2070,91 @@ def _remove_volunteer_assignments_from_project(
     if tasks_changed:
         updated_project["internalTasks"] = next_internal_tasks
     return updated_project, True
+
+
+def _update_project_assignments_after_volunteer_delete(
+    connection: Any,
+    removed_volunteer_ids: set[str],
+    removed_volunteer_user_ids: set[str],
+) -> list[str]:
+    """Remove deleted volunteer references without replacing media-bearing rows."""
+    from psycopg.rows import dict_row
+
+    changed_keys: list[str] = []
+    for table_name, id_column, storage_key in (
+        ("projects", "projects_id", "projects"),
+        ("events", "events_id", "events"),
+    ):
+        # Only fetch assignment fields. In particular, image_url and
+        # attachments never cross this update path.
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                f"""
+                select {id_column}, volunteers, joined_user_ids, internal_tasks
+                from public.{table_name}
+                """
+            )
+            rows = cursor.fetchall()
+
+            updates: list[tuple[Any, Any, Any, str]] = []
+            for row in rows:
+                raw_tasks = row.get("internal_tasks")
+                parsed_tasks = raw_tasks
+                tasks_are_serialized = isinstance(raw_tasks, str)
+                if tasks_are_serialized:
+                    try:
+                        parsed_tasks = json.loads(raw_tasks or "[]")
+                    except (TypeError, ValueError):
+                        parsed_tasks = None
+
+                assignment_item = {
+                    "id": row.get(id_column),
+                    "volunteers": row.get("volunteers") or [],
+                    "joinedUserIds": row.get("joined_user_ids") or [],
+                    "internalTasks": parsed_tasks if isinstance(parsed_tasks, list) else [],
+                }
+                updated_item, item_changed = _remove_volunteer_assignments_from_project(
+                    assignment_item,
+                    removed_volunteer_ids,
+                    removed_volunteer_user_ids,
+                )
+                if not item_changed:
+                    continue
+
+                # If legacy task JSON is malformed, preserve it while still
+                # clearing the safe array references.
+                updated_tasks = (
+                    json.dumps(updated_item.get("internalTasks") or [])
+                    if isinstance(parsed_tasks, list)
+                    else raw_tasks
+                )
+                updates.append(
+                    (
+                        updated_item.get("volunteers") or [],
+                        updated_item.get("joinedUserIds") or [],
+                        updated_tasks,
+                        datetime.now(timezone.utc).isoformat(),
+                        str(row.get(id_column) or ""),
+                    )
+                )
+
+            for volunteers, joined_user_ids, internal_tasks, updated_at, item_id in updates:
+                cursor.execute(
+                    f"""
+                    update public.{table_name}
+                    set volunteers = %s,
+                        joined_user_ids = %s,
+                        internal_tasks = %s,
+                        updated_at = %s
+                    where {id_column} = %s
+                    """,
+                    (volunteers, joined_user_ids, internal_tasks, updated_at, item_id),
+                )
+
+        if updates:
+            changed_keys.append(storage_key)
+
+    return changed_keys
 
 
 # Returns the user ids that should have access to a project's group chat.
@@ -3812,17 +3895,33 @@ def startup() -> None:
                 )
                 print("[OK] Warmed projects snapshot cache.")
 
-                # Pre-warm admin dashboard collections in memory
-                items: dict[str, Any] = {}
-                for key in _ADMIN_DASHBOARD_KEYS:
+                # Pre-warm admin dashboard collections in parallel. Each
+                # worker gets its own connection so the first dashboard load
+                # does not wait for eleven sequential collection queries.
+                def _warm_dashboard_key(key: str) -> tuple[str, Any]:
                     try:
-                        items[key] = _get_admin_dashboard_collection(
-                            connection,
-                            key,
-                            include_images=False,
-                        )
+                        with get_connection() as dashboard_connection:
+                            return key, _get_admin_dashboard_collection(
+                                dashboard_connection,
+                                key,
+                                include_images=False,
+                            )
                     except Exception:
-                        items[key] = []
+                        return key, []
+
+                items: dict[str, Any] = {}
+                with ThreadPoolExecutor(
+                    # The project snapshot above still owns the warm-up
+                    # connection, so leave one pool slot available.
+                    max_workers=min(len(_ADMIN_DASHBOARD_KEYS), 9)
+                ) as executor:
+                    futures = {
+                        executor.submit(_warm_dashboard_key, key): key
+                        for key in _ADMIN_DASHBOARD_KEYS
+                    }
+                    for future in as_completed(futures):
+                        key, value = future.result()
+                        items[key] = value
                 _admin_dashboard_cache.set(_ADMIN_DASHBOARD_CACHE_KEY, {"items": items})
                 print("[OK] Warmed admin dashboard snapshot cache.")
         except Exception as error:
@@ -5308,135 +5407,144 @@ def get_pending_users(request: FastAPIRequest) -> dict[str, Any]:
 
 
 def _delete_user_account_records(connection: Any, user_id: str) -> list[str]:
-    users = get_postgres_hot_storage_collection(connection, "users")
-    user = next((candidate for candidate in users if str(candidate.get("id") or "") == user_id), None)
-    if user is None:
-        raise HTTPException(status_code=404, detail="User not found.")
+    # Account deletion used to read and replace every media-bearing collection.
+    # Keep this path relational and targeted: only rows that reference the
+    # account are read or changed, and project/event media columns are never
+    # included in the assignment cleanup updates below.
+    from psycopg.rows import dict_row
 
-    normalized_deleted_email = str(user.get("email") or "").strip().lower()
-    normalized_deleted_phone = _normalize_comparable_phone(user.get("phone"))
-
-    volunteers = get_postgres_hot_storage_collection(connection, "volunteers")
-    removed_volunteer_ids = {
-        str(volunteer.get("id") or "")
-        for volunteer in volunteers
-        if (
-            str(volunteer.get("id") or "") == user_id
-            or str(volunteer.get("userId") or "") == user_id
-            or (
-                normalized_deleted_email
-                and str(volunteer.get("email") or "").strip().lower() == normalized_deleted_email
-            )
-            or (
-                normalized_deleted_phone
-                and _normalize_comparable_phone(volunteer.get("phone")) == normalized_deleted_phone
-            )
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            select users_id, email, phone
+            from public.users
+            where users_id = %s
+            for update
+            """,
+            (user_id,),
         )
-    }
+        user = cursor.fetchone()
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found.")
 
-    partners = get_postgres_hot_storage_collection(connection, "partners")
-    removed_partner_ids = {
-        str(partner.get("id") or "")
-        for partner in partners
-        if (
-            str(partner.get("ownerUserId") or "") == user_id
-            or (
-                normalized_deleted_email
-                and str(partner.get("contactEmail") or "").strip().lower() == normalized_deleted_email
+        normalized_deleted_email = str(user.get("email") or "").strip().lower()
+        raw_deleted_phone = str(user.get("phone") or "").strip()
+        normalized_deleted_phone = _normalize_comparable_phone(raw_deleted_phone)
+        phone_values = {
+            value
+            for value in (
+                raw_deleted_phone,
+                normalized_deleted_phone,
+                (
+                    f"0{normalized_deleted_phone[2:]}"
+                    if normalized_deleted_phone.startswith("63")
+                    else ""
+                ),
             )
-            or (
-                normalized_deleted_phone
-                and _normalize_comparable_phone(partner.get("contactPhone")) == normalized_deleted_phone
-            )
+            if value
+        }
+
+        cursor.execute(
+            """
+            select volunteers_id, user_id, email, phone
+            from public.volunteers
+            where volunteers_id = %s
+               or user_id = %s
+               or lower(coalesce(email, '')) = %s
+               or phone = any(%s)
+            """,
+            (user_id, user_id, normalized_deleted_email, list(phone_values)),
         )
-    }
+        volunteer_rows = cursor.fetchall()
 
-    filtered_users = [
-        candidate for candidate in users if str(candidate.get("id") or "") != user_id
-    ]
-    filtered_volunteers = [
-        volunteer
-        for volunteer in volunteers
-        if str(volunteer.get("id") or "") not in removed_volunteer_ids
-    ]
-    filtered_partners = [
-        partner
-        for partner in partners
-        if str(partner.get("id") or "") not in removed_partner_ids
-    ]
+        cursor.execute(
+            """
+            select partners_id, owner_user_id, contact_email, contact_phone
+            from public.partners
+            where owner_user_id = %s
+               or lower(coalesce(contact_email, '')) = %s
+               or contact_phone = any(%s)
+            """,
+            (user_id, normalized_deleted_email, list(phone_values)),
+        )
+        partner_rows = cursor.fetchall()
 
-    removed_volunteer_user_ids = {user_id}
-    removed_volunteer_emails = {normalized_deleted_email} if normalized_deleted_email else set()
-    for volunteer in volunteers:
-        if str(volunteer.get("id") or "") not in removed_volunteer_ids:
-            continue
-        volunteer_user_id = str(volunteer.get("userId") or "").strip()
-        volunteer_email = str(volunteer.get("email") or "").strip().lower()
-        if volunteer_user_id:
-            removed_volunteer_user_ids.add(volunteer_user_id)
-        if volunteer_email:
-            removed_volunteer_emails.add(volunteer_email)
+        removed_volunteer_ids = {
+            str(row.get("volunteers_id") or "").strip()
+            for row in volunteer_rows
+            if str(row.get("volunteers_id") or "").strip()
+        }
+        removed_volunteer_user_ids = {user_id}
+        removed_volunteer_emails = {
+            normalized_deleted_email
+        } if normalized_deleted_email else set()
+        for row in volunteer_rows:
+            linked_user_id = str(row.get("user_id") or "").strip()
+            linked_email = str(row.get("email") or "").strip().lower()
+            if linked_user_id:
+                removed_volunteer_user_ids.add(linked_user_id)
+            if linked_email:
+                removed_volunteer_emails.add(linked_email)
+
+        removed_partner_ids = {
+            str(row.get("partners_id") or "").strip()
+            for row in partner_rows
+            if str(row.get("partners_id") or "").strip()
+        }
+
+        if removed_volunteer_ids:
+            cursor.execute(
+                "delete from public.volunteers where volunteers_id = any(%s)",
+                (list(removed_volunteer_ids),),
+            )
+        if removed_partner_ids:
+            cursor.execute(
+                "delete from public.partners where partners_id = any(%s)",
+                (list(removed_partner_ids),),
+            )
+
+        cursor.execute(
+            "delete from public.users where users_id = %s",
+            (user_id,),
+        )
+
+        if removed_volunteer_ids or removed_volunteer_user_ids:
+            cursor.execute(
+                """
+                delete from public.volunteer_event_joins
+                where volunteer_id = any(%s)
+                   or volunteer_user_id = any(%s)
+                   or lower(coalesce(volunteer_email, '')) = any(%s)
+                """,
+                (
+                    list(removed_volunteer_ids),
+                    list(removed_volunteer_user_ids),
+                    list(removed_volunteer_emails),
+                ),
+            )
+            cursor.execute(
+                "delete from public.volunteer_matches where volunteer_id = any(%s)",
+                (list(removed_volunteer_ids),),
+            )
+            cursor.execute(
+                "delete from public.volunteer_time_logs where volunteer_id = any(%s)",
+                (list(removed_volunteer_ids),),
+            )
 
     changed_keys = ["users", "volunteers", "partners"]
-
-    replace_postgres_hot_storage_collection(connection, "users", filtered_users)
-    replace_postgres_hot_storage_collection(connection, "volunteers", filtered_volunteers)
-    replace_postgres_hot_storage_collection(connection, "partners", filtered_partners)
-
     if removed_volunteer_ids or removed_volunteer_user_ids:
-        for project_key in ["projects", "events"]:
-            project_items = get_postgres_hot_storage_collection(connection, project_key)
-            next_project_items: list[dict[str, Any]] = []
-            projects_changed = False
-            for project_item in project_items:
-                if not isinstance(project_item, dict):
-                    next_project_items.append(project_item)
-                    continue
-                updated_project, project_changed = _remove_volunteer_assignments_from_project(
-                    project_item,
-                    removed_volunteer_ids,
-                    removed_volunteer_user_ids,
-                )
-                next_project_items.append(updated_project)
-                projects_changed = projects_changed or project_changed
-            if projects_changed:
-                replace_postgres_hot_storage_collection(connection, project_key, next_project_items)
-                changed_keys.append(project_key)
-
-        volunteer_join_records = get_postgres_hot_storage_collection(connection, "volunteerProjectJoins")
-        filtered_join_records = [
-            record
-            for record in volunteer_join_records
-            if not (
-                str(record.get("volunteerId") or "").strip() in removed_volunteer_ids
-                or str(record.get("volunteerUserId") or "").strip() in removed_volunteer_user_ids
-                or str(record.get("volunteerEmail") or "").strip().lower() in removed_volunteer_emails
+        changed_keys.extend(
+            _update_project_assignments_after_volunteer_delete(
+                connection,
+                removed_volunteer_ids,
+                removed_volunteer_user_ids,
             )
-        ]
-        if len(filtered_join_records) != len(volunteer_join_records):
-            replace_postgres_hot_storage_collection(connection, "volunteerProjectJoins", filtered_join_records)
-            changed_keys.append("volunteerProjectJoins")
-
-        volunteer_matches = get_postgres_hot_storage_collection(connection, "volunteerMatches")
-        filtered_matches = [
-            match
-            for match in volunteer_matches
-            if str(match.get("volunteerId") or "").strip() not in removed_volunteer_ids
-        ]
-        if len(filtered_matches) != len(volunteer_matches):
-            replace_postgres_hot_storage_collection(connection, "volunteerMatches", filtered_matches)
-            changed_keys.append("volunteerMatches")
-
-        volunteer_time_logs = get_postgres_hot_storage_collection(connection, "volunteerTimeLogs")
-        filtered_time_logs = [
-            log
-            for log in volunteer_time_logs
-            if str(log.get("volunteerId") or "").strip() not in removed_volunteer_ids
-        ]
-        if len(filtered_time_logs) != len(volunteer_time_logs):
-            replace_postgres_hot_storage_collection(connection, "volunteerTimeLogs", filtered_time_logs)
-            changed_keys.append("volunteerTimeLogs")
-
+        )
+        changed_keys.extend(
+            key
+            for key in ("volunteerProjectJoins", "volunteerMatches", "volunteerTimeLogs")
+            if key not in changed_keys
+        )
     return list(dict.fromkeys(changed_keys))
 
 
@@ -8064,6 +8172,37 @@ async def _put_storage_item_once(key: str, payload: StoragePayload) -> dict[str,
     raise HTTPException(status_code=400, detail=f"Unsupported storage key '{key}'.")
 
 
+def _resolve_existing_relational_id(
+    connection: Any,
+    table_name: str,
+    id_column: str,
+    requested_id: str,
+) -> str:
+    """Resolve legacy case/whitespace variants before indexed deletes."""
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"select {id_column} from public.{table_name} where {id_column} = %s limit 1",
+            (requested_id,),
+        )
+        row = cursor.fetchone()
+        if row and row[0]:
+            return str(row[0])
+
+        # This compatibility fallback runs only when the indexed exact lookup
+        # misses. The normal path uses the primary-key index.
+        cursor.execute(
+            f"""
+            select {id_column}
+            from public.{table_name}
+            where lower(trim(coalesce({id_column}::text, ''))) = %s
+            limit 1
+            """,
+            (requested_id.lower(),),
+        )
+        row = cursor.fetchone()
+    return str(row[0]) if row and row[0] else requested_id
+
+
 @app.delete("/projects/{project_id}")
 async def delete_project_record(project_id: str) -> dict[str, Any]:
     _require_postgres()
@@ -8072,12 +8211,18 @@ async def delete_project_record(project_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Project id is required.")
 
     with get_connection() as connection:
-        changed_keys = _cascade_delete_project_references(connection, {normalized_project_id})
+        resolved_project_id = _resolve_existing_relational_id(
+            connection,
+            "projects",
+            "projects_id",
+            normalized_project_id,
+        )
+        changed_keys = _cascade_delete_project_references(connection, {resolved_project_id})
         with connection.cursor() as cursor:
             try:
                 cursor.execute(
-                    "delete from projects where lower(trim(coalesce(projects_id, ''))) = %s",
-                    (normalized_project_id.lower(),),
+                    "delete from projects where projects_id = %s",
+                    (resolved_project_id,),
                 )
                 if cursor.rowcount:
                     if "projects" not in changed_keys:
@@ -8098,7 +8243,7 @@ async def delete_project_record(project_id: str) -> dict[str, Any]:
 
     return {
         "status": "ok",
-        "deletedProjectId": normalized_project_id,
+        "deletedProjectId": resolved_project_id,
         "alreadyDeleted": not changed_keys,
     }
 
@@ -8111,12 +8256,18 @@ async def delete_event_record(event_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Event id is required.")
 
     with get_connection() as connection:
-        changed_keys = _cascade_delete_project_references(connection, {normalized_event_id})
+        resolved_event_id = _resolve_existing_relational_id(
+            connection,
+            "events",
+            "events_id",
+            normalized_event_id,
+        )
+        changed_keys = _cascade_delete_project_references(connection, {resolved_event_id})
         with connection.cursor() as cursor:
             try:
                 cursor.execute(
-                    "delete from events where lower(trim(coalesce(events_id, ''))) = %s",
-                    (normalized_event_id.lower(),),
+                    "delete from events where events_id = %s",
+                    (resolved_event_id,),
                 )
                 if cursor.rowcount:
                     if "events" not in changed_keys:
@@ -8129,8 +8280,8 @@ async def delete_event_record(event_id: str) -> dict[str, Any]:
 
             try:
                 cursor.execute(
-                    "delete from projects where lower(trim(coalesce(projects_id, ''))) = %s and is_event = true",
-                    (normalized_event_id.lower(),),
+                    "delete from projects where projects_id = %s and is_event = true",
+                    (resolved_event_id,),
                 )
                 if cursor.rowcount:
                     if "projects" not in changed_keys:
@@ -8151,7 +8302,7 @@ async def delete_event_record(event_id: str) -> dict[str, Any]:
 
     return {
         "status": "ok",
-        "deletedEventId": normalized_event_id,
+        "deletedEventId": resolved_event_id,
         "alreadyDeleted": not changed_keys,
     }
 

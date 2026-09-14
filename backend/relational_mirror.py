@@ -120,6 +120,8 @@ RELATIONAL_TABLE_DDL = [
     )
     """,
     "create index if not exists partners_owner_user_id_idx on partners (owner_user_id)",
+    "create index if not exists partners_contact_email_idx on partners (lower(coalesce(contact_email, '')))",
+    "create index if not exists partners_contact_phone_idx on partners (coalesce(contact_phone, ''))",
     "create index if not exists partners_dswd_accreditation_no_idx on partners (dswd_accreditation_no)",
     "alter table partners add column if not exists stakeholder_name text",
     "alter table partners add column if not exists sec_registration_no text",
@@ -167,6 +169,8 @@ RELATIONAL_TABLE_DDL = [
     """,
     "create index if not exists volunteers_user_id_idx on volunteers (user_id)",
     "create unique index if not exists volunteers_user_id_unique_idx on volunteers (user_id) where user_id is not null",
+    "create index if not exists volunteers_email_idx on volunteers (lower(coalesce(email, '')))",
+    "create index if not exists volunteers_phone_idx on volunteers (coalesce(phone, ''))",
     "create index if not exists volunteers_registration_status_idx on volunteers (registration_status)",
     "create index if not exists volunteers_engagement_status_idx on volunteers (engagement_status)",
     "create index if not exists volunteers_created_at_idx on volunteers (created_at)",
@@ -568,6 +572,8 @@ RELATIONAL_TABLE_DDL = [
     """,
     "create index if not exists volunteer_event_joins_project_id_idx on volunteer_event_joins (project_id)",
     "create index if not exists volunteer_event_joins_volunteer_id_idx on volunteer_event_joins (volunteer_id)",
+    "create index if not exists volunteer_event_joins_volunteer_user_id_idx on volunteer_event_joins (volunteer_user_id)",
+    "create index if not exists volunteer_event_joins_volunteer_email_idx on volunteer_event_joins (lower(coalesce(volunteer_email, '')))",
     f"""
     create table if not exists partner_project_applications (
       id text primary key,

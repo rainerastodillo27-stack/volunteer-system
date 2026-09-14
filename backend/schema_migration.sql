@@ -403,6 +403,12 @@ CREATE TABLE public.admin_planning_calendars (
 CREATE INDEX IF NOT EXISTS idx_messages_recipient_id            ON public.messages(recipient_id);
 CREATE INDEX IF NOT EXISTS idx_messages_sender_id               ON public.messages(sender_id);
 CREATE INDEX IF NOT EXISTS idx_notification_reads_user_seen    ON public.notification_reads(user_id, seen_at DESC);
+CREATE INDEX IF NOT EXISTS idx_volunteers_user_id               ON public.volunteers(user_id);
+CREATE INDEX IF NOT EXISTS idx_volunteers_email                 ON public.volunteers(lower(coalesce(email, '')));
+CREATE INDEX IF NOT EXISTS idx_volunteers_phone                 ON public.volunteers(coalesce(phone, ''));
+CREATE INDEX IF NOT EXISTS idx_partners_owner_user_id            ON public.partners(owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_partners_contact_email            ON public.partners(lower(coalesce(contact_email, '')));
+CREATE INDEX IF NOT EXISTS idx_partners_contact_phone            ON public.partners(coalesce(contact_phone, ''));
 CREATE INDEX IF NOT EXISTS idx_projects_partner_id              ON public.projects(partner_id);
 CREATE INDEX IF NOT EXISTS idx_projects_program_id              ON public.projects(program_id);
 CREATE INDEX IF NOT EXISTS idx_events_partner_id                ON public.events(partner_id);
@@ -410,6 +416,8 @@ CREATE INDEX IF NOT EXISTS idx_volunteer_matches_volunteer      ON public.volunt
 CREATE INDEX IF NOT EXISTS idx_volunteer_matches_project        ON public.volunteer_matches(project_id);
 CREATE INDEX IF NOT EXISTS idx_volunteer_event_joins_project    ON public.volunteer_event_joins(project_id);
 CREATE INDEX IF NOT EXISTS idx_volunteer_event_joins_volunteer  ON public.volunteer_event_joins(volunteer_id);
+CREATE INDEX IF NOT EXISTS idx_volunteer_event_joins_user       ON public.volunteer_event_joins(volunteer_user_id);
+CREATE INDEX IF NOT EXISTS idx_volunteer_event_joins_email      ON public.volunteer_event_joins(lower(coalesce(volunteer_email, '')));
 CREATE INDEX IF NOT EXISTS idx_volunteer_time_logs_volunteer    ON public.volunteer_time_logs(volunteer_id);
 CREATE INDEX IF NOT EXISTS idx_volunteer_time_logs_project      ON public.volunteer_time_logs(project_id);
 CREATE INDEX IF NOT EXISTS idx_reports_project_id               ON public.reports(project_id);
