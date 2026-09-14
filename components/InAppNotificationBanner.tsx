@@ -12,6 +12,7 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../contexts/AuthContext';
+import { useAppTheme } from '../contexts/ThemeContext';
 import {
   getUnreadMessagesForUser,
   getVolunteerByUserId,
@@ -34,6 +35,7 @@ type ActiveBannerNotification = {
 
 export default function InAppNotificationBanner() {
   const { user } = useAuth();
+  const { settings } = useAppTheme();
   const insets = useSafeAreaInsets();
 
   const [volunteerProfileId, setVolunteerProfileId] = useState<string | null>(null);
@@ -126,7 +128,7 @@ export default function InAppNotificationBanner() {
 
   const handleIncomingMessage = useCallback(
     (message: Message) => {
-      if (!user?.id) return;
+      if (!user?.id || !settings.notificationsEnabled) return;
       const isForCurrentUser =
         message.recipientId === user.id ||
         (volunteerProfileId && message.recipientId === volunteerProfileId);
@@ -198,11 +200,11 @@ export default function InAppNotificationBanner() {
         timestamp: message.timestamp,
       });
     },
-    [showNotificationBanner, user?.id, volunteerProfileId]
+    [settings.notificationsEnabled, showNotificationBanner, user?.id, volunteerProfileId]
   );
 
   const checkRecentMessages = useCallback(async () => {
-    if (!user?.id) return;
+    if (!user?.id || !settings.notificationsEnabled) return;
     try {
       const [userMessages, volMessages] = await Promise.all([
         getUnreadMessagesForUser(user.id).catch(() => []),
@@ -226,10 +228,10 @@ export default function InAppNotificationBanner() {
     } catch (err) {
       console.warn('[InAppNotificationBanner] Error checking messages:', err);
     }
-  }, [handleIncomingMessage, user?.id, volunteerProfileId]);
+  }, [handleIncomingMessage, settings.notificationsEnabled, user?.id, volunteerProfileId]);
 
   useEffect(() => {
-    if (!user?.id) {
+    if (!user?.id || !settings.notificationsEnabled) {
       setActiveNotification(null);
       seenMessageIdsRef.current.clear();
       initialLoadDoneRef.current = false;
@@ -281,7 +283,7 @@ export default function InAppNotificationBanner() {
         clearTimeout(hideTimerRef.current);
       }
     };
-  }, [checkRecentMessages, handleIncomingMessage, user?.id]);
+  }, [checkRecentMessages, handleIncomingMessage, settings.notificationsEnabled, user?.id]);
 
   const handlePressBanner = () => {
     if (activeNotification?.id) {

@@ -5,6 +5,7 @@ import { NavigationContainer, type InitialState } from "@react-navigation/native
 import { Alert, Platform, View, ActivityIndicator } from "react-native";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { GlobalDataProvider, useGlobalData } from "./contexts/GlobalDataContext";
+import { AppThemeProvider } from "./contexts/ThemeContext";
 import StackNavigator from "./navigation/StackNavigator";
 import ErrorBoundary from './components/ErrorBoundary';
 import InAppNotificationBanner from './components/InAppNotificationBanner';
@@ -322,12 +323,14 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <AuthProvider>
-        <GlobalDataProvider>
-          <SystemAlertHost />
-          <ErrorBoundary>
-            <AppContent />
-          </ErrorBoundary>
-        </GlobalDataProvider>
+        <AppThemeProvider>
+          <GlobalDataProvider>
+            <SystemAlertHost />
+            <ErrorBoundary>
+              <AppContent />
+            </ErrorBoundary>
+          </GlobalDataProvider>
+        </AppThemeProvider>
       </AuthProvider>
     </SafeAreaProvider>
   );

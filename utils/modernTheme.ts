@@ -67,10 +67,10 @@ export const ModernTheme = {
     background: {
       primary: '#ffffff',
       secondary: '#f9fafb',
-      tertiary: '#f0fdf4',      // Light green tint
-      dark: '#14532d',          // Dark green
+      tertiary: '#f0fdf4',
+      dark: '#14532d',
       card: '#ffffff',
-      hover: '#f0fdf4',         // Light green on hover
+      hover: '#f0fdf4',
     },
 
     // Text colors
@@ -80,7 +80,7 @@ export const ModernTheme = {
       tertiary: '#78716c',
       disabled: '#a8a29e',
       inverse: '#ffffff',
-      success: '#15803d',       // Dark green for success text
+      success: '#15803d',
     },
 
     // Border colors
@@ -88,7 +88,7 @@ export const ModernTheme = {
       light: '#f5f5f4',
       medium: '#e7e5e4',
       strong: '#d6d3d1',
-      primary: '#bbf7d0',       // Light green border
+      primary: '#bbf7d0',
     },
   },
 

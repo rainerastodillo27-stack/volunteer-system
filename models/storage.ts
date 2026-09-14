@@ -72,7 +72,6 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   compactDashboard: false,
   approvalConfirmations: true,
   showProgramContext: true,
-  themeMode: 'light',
   startupScreen: 'Dashboard',
   customBackendUrl: '',
 };

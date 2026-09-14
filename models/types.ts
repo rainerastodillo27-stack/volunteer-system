@@ -22,7 +22,6 @@ export interface AppSettings {
   compactDashboard: boolean;
   approvalConfirmations: boolean;
   showProgramContext: boolean;
-  themeMode: 'light' | 'dark';
   startupScreen: 'Dashboard' | 'Projects' | 'Reports' | 'Messages';
   // Optional override — paste an ngrok URL or custom IP here instead of rebuilding the APK.
   customBackendUrl?: string;
