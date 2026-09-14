@@ -705,6 +705,12 @@ export default function MappingScreen({ navigation }: any) {
     ? getEventScheduleState(featuredProject, scheduleReferenceDate)
     : null;
   const featuredDateRange = featuredProject ? getEventDateRange(featuredProject) : null;
+  const featuredDate = featuredEventState === 'today'
+    ? scheduleReferenceDate
+    : featuredDateRange?.start || scheduleReferenceDate;
+  const additionalScheduleEvents = featuredEvent
+    ? (eventSchedule.today.length > 0 ? eventSchedule.today : eventSchedule.upcoming).slice(1)
+    : [];
   const statusLegend = [
     { label: 'In Progress', color: '#5B9B57' },
     { label: 'Planned', color: '#5F8FDC' },
@@ -1618,15 +1624,12 @@ export default function MappingScreen({ navigation }: any) {
           </View>
 
           {featuredProject ? (
+            <>
             <TouchableOpacity style={styles.featuredProjectCard} activeOpacity={0.88} onPress={() => { setSelectedProject(featuredProject); setShowDetails(true); }}>
               <View style={styles.featuredDateTile}>
                 <Text style={styles.featuredDateTileLabel}>{featuredEventState === 'today' ? 'TODAY' : 'NEXT'}</Text>
-                {featuredDateRange ? (
-                  <>
-                    <Text style={styles.featuredDateTileDay}>{formatDayNumber(featuredDateRange.start)}</Text>
-                    <Text style={styles.featuredDateTileMonth}>{formatMonthShort(featuredDateRange.start)}</Text>
-                  </>
-                ) : <MaterialIcons name="event" size={27} color="#15803d" />}
+                <Text style={styles.featuredDateTileDay}>{formatDayNumber(featuredDate)}</Text>
+                <Text style={styles.featuredDateTileMonth}>{formatMonthShort(featuredDate)}</Text>
               </View>
               <View style={styles.featuredIconShell}><MaterialIcons name="event" size={42} color="#4C8249" /></View>
               <View style={styles.featuredCopy}>
@@ -1658,6 +1661,48 @@ export default function MappingScreen({ navigation }: any) {
               </TouchableOpacity>
               <View style={styles.detailsButton}><Text style={styles.detailsButtonText}>View Details</Text><MaterialIcons name="arrow-forward" size={24} color="#4C8249" /></View>
             </TouchableOpacity>
+          {additionalScheduleEvents.length > 0 ? (
+            <View style={styles.additionalEventsBlock}>
+              <View style={styles.additionalEventsHeader}>
+                <Text style={styles.additionalEventsTitle}>
+                  {eventSchedule.today.length > 0 ? 'Also happening today' : 'More upcoming events'}
+                </Text>
+                <Text style={styles.additionalEventsCount}>{additionalScheduleEvents.length} more</Text>
+              </View>
+              <View style={styles.additionalEventsList}>
+                {additionalScheduleEvents.map(event => {
+                  const eventRange = getEventDateRange(event);
+                  const eventState = getEventScheduleState(event, scheduleReferenceDate);
+                  return (
+                    <TouchableOpacity
+                      key={event.id}
+                      style={styles.additionalEventRow}
+                      activeOpacity={0.82}
+                      onPress={() => { setSelectedProject(event); setShowDetails(true); }}
+                    >
+                      <View style={styles.additionalEventIcon}>
+                        <MaterialIcons name="event" size={20} color="#4C8249" />
+                      </View>
+                      <View style={styles.additionalEventCopy}>
+                        <Text style={styles.additionalEventTitle} numberOfLines={1}>{event.title}</Text>
+                        <Text style={styles.additionalEventMeta} numberOfLines={1}>
+                          {eventState === 'today' ? 'Today' : eventRange ? formatEventDateRange(event) : 'Date to be announced'}
+                          {'  /  '}
+                          {event.location?.address || 'Philippines'}
+                        </Text>
+                      </View>
+                      <View style={styles.additionalEventVolunteers}>
+                        <Text style={styles.additionalEventVolunteerNumber}>{(markerVolunteerEntriesByProjectId.get(event.id) || []).length} / {getProjectVolunteersNeeded(event, projects)}</Text>
+                        <Text style={styles.additionalEventVolunteerLabel}>volunteers</Text>
+                      </View>
+                      <MaterialIcons name="chevron-right" size={22} color="#94A3B8" />
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+          ) : null}
+            </>
           ) : (
             <View style={styles.eventScheduleEmpty}>
               <View style={styles.eventScheduleEmptyIcon}><MaterialIcons name="event-busy" size={28} color="#94a3b8" /></View>
@@ -2383,6 +2428,81 @@ const styles = StyleSheet.create({
     color: '#64748B',
     fontSize: 13,
     lineHeight: 19,
+  },
+  additionalEventsBlock: {
+    marginTop: 16,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#DDEDDD',
+  },
+  additionalEventsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 9,
+  },
+  additionalEventsTitle: {
+    color: '#334155',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  additionalEventsCount: {
+    color: '#15803D',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  additionalEventsList: {
+    gap: 8,
+  },
+  additionalEventRow: {
+    minHeight: 64,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 13,
+    paddingVertical: 10,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  additionalEventIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F0F8EF',
+  },
+  additionalEventCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  additionalEventTitle: {
+    color: '#172238',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  additionalEventMeta: {
+    marginTop: 3,
+    color: '#64748B',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  additionalEventVolunteers: {
+    minWidth: 92,
+    alignItems: 'flex-end',
+  },
+  additionalEventVolunteerNumber: {
+    color: '#334155',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  additionalEventVolunteerLabel: {
+    marginTop: 2,
+    color: '#64748B',
+    fontSize: 11,
+    fontWeight: '600',
   },
   featuredProjectCard: {
     minHeight: 160,
