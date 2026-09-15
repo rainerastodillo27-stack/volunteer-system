@@ -678,23 +678,6 @@ export default function DashboardScreen({ navigation }: any) {
       );
     }, [loadDashboardDataCoalesced])
   );
-  const openProjects = React.useCallback(
-    (projectId?: string) => {
-      navigateToAvailableRoute(
-        navigation,
-        'Projects',
-        projectId
-          ? { projectId }
-          : {
-              programSuiteView: 'projects',
-              createProject: true,
-              navTimestamp: Date.now(),
-            }
-      );
-    },
-    [navigation]
-  );
-
   const openPartners = React.useCallback(() => {
     navigateToAvailableRoute(navigation, 'Partners', undefined, { routeName: 'Dashboard' });
   }, [navigation]);
@@ -1097,10 +1080,6 @@ export default function DashboardScreen({ navigation }: any) {
           <Text style={styles.welcomeTitle}>Welcome back, Admin! 👋</Text>
           <Text style={styles.welcomeSubtitle}>Here's what's happening with your community impact today.</Text>
         </View>
-        <TouchableOpacity style={styles.addProjectBtn} onPress={() => openProjects()} activeOpacity={0.85}>
-          <MaterialIcons name="add" size={18} color="#ffffff" />
-          <Text style={styles.addProjectBtnText}>Add Project</Text>
-        </TouchableOpacity>
       </View>
 
 
@@ -1864,20 +1843,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#64748b',
     marginTop: 4,
-  },
-  addProjectBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#16a34a',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 8,
-    gap: 6,
-  },
-  addProjectBtnText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '700',
   },
   metricsRow: {
     flexDirection: 'row',

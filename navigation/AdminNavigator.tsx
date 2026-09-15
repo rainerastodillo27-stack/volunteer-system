@@ -55,8 +55,6 @@ export type AdminTabParamList = {
     projectId?: string;
     programSuiteView?: 'programs' | 'projects' | 'events';
     programSuiteNavKey?: number;
-    createProject?: boolean;
-    navTimestamp?: number;
   } | undefined;
   Volunteers: { volunteerId?: string } | undefined;
   Map: undefined;
