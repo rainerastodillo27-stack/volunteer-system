@@ -374,7 +374,10 @@ export default function DashboardScreen({ navigation }: any) {
   const { user, isAdmin } = useAuth();
   const { width } = useWindowDimensions();
   const isCompact = width < 420;
-  const isDesktop = Platform.OS === 'web' || width >= 1100;
+  // Web can also be opened in a phone browser. Use the viewport width for
+  // layout decisions so the admin dashboard stacks its cards on narrow web
+  // screens instead of treating every browser as desktop.
+  const isDesktop = width >= 1100;
   const perfNow = () =>
     typeof performance !== 'undefined' && typeof performance.now === 'function'
       ? performance.now()
