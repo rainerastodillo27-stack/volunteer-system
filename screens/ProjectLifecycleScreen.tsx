@@ -4266,6 +4266,20 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     if (programSections.length > 0) {
 
+      // React Native Web cannot present Alert button callbacks reliably. Open
+      // the form with the first program selected; the form still lets admins
+      // change the program before saving.
+
+      if (Platform.OS === 'web') {
+
+        const defaultSection = programSections[0];
+
+        openCreateProjectInProgramModal(defaultSection.module, defaultSection.title);
+
+        return;
+
+      }
+
       Alert.alert(
 
         'Select Program',
@@ -17147,6 +17161,50 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
+  // The dashboard can route here with a create intent. Wait for the program
+  // tracks to load, then reuse the existing program-selection flow so the
+  // new project is grouped under the selected program.
+
+  const createProjectRequestKey = route?.params?.createProject
+
+    ? String((route?.params as any)?.navTimestamp || 'create-project')
+
+    : null;
+
+  const lastCreateProjectRequestRef = React.useRef<string | null>(null);
+
+
+
+  useEffect(() => {
+
+    if (!createProjectRequestKey) {
+
+      lastCreateProjectRequestRef.current = null;
+
+      return;
+
+    }
+
+
+
+    if (programSections.length === 0 || lastCreateProjectRequestRef.current === createProjectRequestKey) {
+
+      return;
+
+    }
+
+
+
+    lastCreateProjectRequestRef.current = createProjectRequestKey;
+
+    navigation?.setParams?.({ createProject: undefined });
+
+    handleCreateProjectFromCalendar();
+
+  }, [createProjectRequestKey, navigation, programSections]);
+
+
+
   const eventProjectSections = useMemo(
 
     () =>
@@ -24382,7 +24440,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                                     style={[styles.projectsAccordionAddButton, { borderColor: '#0284c7', backgroundColor: '#f0f9ff' }]}
 
-                                    onPress={() => openCreateEventInProgramModal(section.module, section.title)}
+                                    onPress={() => openCreateProjectInProgramModal(section.module, section.title)}
 
                                   >
 

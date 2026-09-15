@@ -680,7 +680,17 @@ export default function DashboardScreen({ navigation }: any) {
   );
   const openProjects = React.useCallback(
     (projectId?: string) => {
-      navigateToAvailableRoute(navigation, 'Projects', projectId ? { projectId } : undefined);
+      navigateToAvailableRoute(
+        navigation,
+        'Projects',
+        projectId
+          ? { projectId }
+          : {
+              programSuiteView: 'projects',
+              createProject: true,
+              navTimestamp: Date.now(),
+            }
+      );
     },
     [navigation]
   );
