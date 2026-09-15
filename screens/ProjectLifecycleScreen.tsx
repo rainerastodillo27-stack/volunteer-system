@@ -1791,6 +1791,60 @@ function compareProjectsForSort(left: Project, right: Project, sortKey: Projects
 
 }
 
+type ProgramSectionSortRecord = {
+  module: string;
+  title: string;
+  projects: Project[];
+  events: Project[];
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+function compareProgramSectionsForSort(
+  left: ProgramSectionSortRecord,
+  right: ProgramSectionSortRecord,
+  sortKey: ProjectsSortKey
+): number {
+  const leftItems = [...left.projects, ...left.events];
+  const rightItems = [...right.projects, ...right.events];
+  const getTimestamp = (project: Project) =>
+    getProjectSortTimestamp(project.updatedAt || project.createdAt || project.startDate);
+  const getScheduleTimestamp = (project: Project) => getProjectSortTimestamp(project.startDate);
+  const getAggregateTimestamp = (
+    section: ProgramSectionSortRecord,
+    items: Project[],
+    selector: (project: Project) => number
+  ) => {
+    const itemTimestamps = items.map(selector).filter(timestamp => timestamp > 0);
+    const sectionTimestamp = getProjectSortTimestamp(section.updatedAt || section.createdAt);
+    return itemTimestamps.length > 0
+      ? Math.max(sectionTimestamp, ...itemTimestamps)
+      : sectionTimestamp;
+  };
+
+  if (sortKey === 'projectName') {
+    return left.title.localeCompare(right.title) || left.module.localeCompare(right.module);
+  }
+
+  const leftScheduleTimestamps = leftItems.map(getScheduleTimestamp).filter(timestamp => timestamp > 0);
+  const rightScheduleTimestamps = rightItems.map(getScheduleTimestamp).filter(timestamp => timestamp > 0);
+  const leftTimestamp = sortKey === 'oldestSchedule'
+    ? Math.min(...leftScheduleTimestamps, Number.MAX_SAFE_INTEGER)
+    : sortKey === 'newestSchedule'
+      ? Math.max(...leftScheduleTimestamps, 0)
+      : getAggregateTimestamp(left, leftItems, getTimestamp);
+  const rightTimestamp = sortKey === 'oldestSchedule'
+    ? Math.min(...rightScheduleTimestamps, Number.MAX_SAFE_INTEGER)
+    : sortKey === 'newestSchedule'
+      ? Math.max(...rightScheduleTimestamps, 0)
+      : getAggregateTimestamp(right, rightItems, getTimestamp);
+
+  const timestampComparison = sortKey === 'oldestSchedule'
+    ? leftTimestamp - rightTimestamp
+    : rightTimestamp - leftTimestamp;
+  return timestampComparison || left.title.localeCompare(right.title) || left.module.localeCompare(right.module);
+}
+
 
 
 function getDateOnlyBoundary(value?: string, endOfDay = false): Date | undefined {
@@ -17043,6 +17097,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
           imageUrl: track.imageUrl,
 
+          createdAt: track.createdAt,
+
+          updatedAt: track.updatedAt,
+
           projects: sectionProjects,
 
           events: allSectionEvents,
@@ -23159,31 +23217,57 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   <View style={styles.programSectionControls}>
 
-                    <View style={styles.layoutToggleGroup}>
+                    <View style={[
+                      styles.projectsFilterMenuWrap,
+                      styles.projectsSortMenuWrap,
+                      activeProjectsFilterMenu === 'sort' && styles.projectsFilterMenuWrapActive
+                    ]}>
 
-                      <TouchableOpacity style={[styles.layoutToggleButton, styles.layoutToggleButtonActive]}>
+                      <TouchableOpacity
+                        style={styles.projectsSortDropdown}
+                        onPress={() => setActiveProjectsFilterMenu(current => current === 'sort' ? null : 'sort')}
+                        activeOpacity={0.85}
+                      >
 
-                        <MaterialIcons name="grid-on" size={16} color="#166534" />
+                        <Text style={styles.projectsSortDropdownText}>
+                          Sort by: {PROJECTS_SORT_OPTIONS.find(option => option.key === projectsSortKey)?.label || 'Recently Updated'}
+                        </Text>
+
+                        <MaterialIcons name={activeProjectsFilterMenu === 'sort' ? 'arrow-drop-up' : 'arrow-drop-down'} size={16} color="#475569" />
 
                       </TouchableOpacity>
 
-                      <TouchableOpacity style={styles.layoutToggleButton}>
+                      {activeProjectsFilterMenu === 'sort' ? (
 
-                        <MaterialIcons name="format-list-bulleted" size={16} color="#64748b" />
+                        <View style={[styles.projectsFilterMenu, styles.projectsSortMenu]}>
 
-                      </TouchableOpacity>
+                          {PROJECTS_SORT_OPTIONS.map(option => (
+
+                            <TouchableOpacity
+                              key={option.key}
+                              style={styles.projectsFilterMenuItem}
+                              onPress={() => {
+                                setProjectsSortKey(option.key);
+                                setActiveProjectsFilterMenu(null);
+                              }}
+                            >
+
+                              <Text style={[
+                                styles.projectsFilterMenuText,
+                                projectsSortKey === option.key && styles.projectsFilterMenuTextActive
+                              ]}>
+                                {option.label}
+                              </Text>
+
+                            </TouchableOpacity>
+
+                          ))}
+
+                        </View>
+
+                      ) : null}
 
                     </View>
-
-
-
-                    <TouchableOpacity style={styles.sortDropdownButton}>
-
-                      <Text style={styles.sortDropdownText}>Sort by: Recently Updated</Text>
-
-                      <MaterialIcons name="arrow-drop-down" size={16} color="#475569" />
-
-                    </TouchableOpacity>
 
                   </View>
 
@@ -23195,7 +23279,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 <View style={styles.programGrid}>
 
-                  {programSections.map(section => {
+                  {programSections
+                    .slice()
+                    .sort((left, right) => compareProgramSectionsForSort(left, right, projectsSortKey))
+                    .map(section => {
 
                     const track = activeProgramTracks.find(t => t.id === section.module);
 
@@ -23361,7 +23448,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                     );
 
-                  })}
+                    })}
 
 
 

@@ -614,7 +614,10 @@ class ReportSubmitPayload(BaseModel):
 REPORT_MEDIA_FILE_MAX_LENGTH = 500
 APP_TIMEZONE = ZoneInfo("Asia/Manila")
 REMINDER_LEAD_DAYS = 3
-REMINDER_CHECK_INTERVAL_SECONDS = 3600
+# Check frequently enough that minute/hour reminders are not missed between
+# hourly scheduler runs. The database idempotency record still guarantees that
+# each event/volunteer/setting reminder is sent at most once.
+REMINDER_CHECK_INTERVAL_SECONDS = 60
 _reminder_scheduler_started = False
 _reminder_scheduler_lock = threading.Lock()
 
@@ -943,6 +946,106 @@ def _get_reminder_email_for_volunteer(volunteer: dict[str, Any], users_by_id: di
     return ""
 
 
+def _get_event_reminder_recipients(
+    event: dict[str, Any],
+    join_records: list[dict[str, Any]],
+    volunteers_by_id: dict[str, dict[str, Any]],
+    volunteers_by_user_id: dict[str, dict[str, Any]],
+    users_by_id: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Resolve the active volunteers who joined an event to email recipients.
+
+    Newer records are stored in volunteerProjectJoins, while older events may
+    only have volunteers[]/joinedUserIds[]. Use the join records first so a
+    completed/removed membership is not emailed, then retain the arrays as a
+    backwards-compatible fallback for legacy event data.
+    """
+    event_id = str(event.get("id") or "").strip()
+    event_records = [
+        record
+        for record in join_records
+        if isinstance(record, dict) and str(record.get("projectId") or "").strip() == event_id
+    ]
+    active_records = [
+        record
+        for record in event_records
+        if str(record.get("participationStatus") or "Active").strip() == "Active"
+    ]
+    inactive_identifiers = {
+        str(record.get(field) or "").strip()
+        for record in event_records
+        if str(record.get("participationStatus") or "Active").strip() != "Active"
+        for field in ("volunteerId", "volunteerUserId", "volunteerEmail")
+        if str(record.get(field) or "").strip()
+    }
+
+    recipients: dict[str, dict[str, Any]] = {}
+
+    def add_recipient(candidate: dict[str, Any], fallback_identifier: str = "") -> None:
+        volunteer_id = str(candidate.get("id") or candidate.get("volunteerId") or "").strip()
+        user_id = str(candidate.get("userId") or candidate.get("volunteerUserId") or "").strip()
+        email = str(candidate.get("email") or candidate.get("volunteerEmail") or "").strip().lower()
+
+        if not email and user_id:
+            email = str(users_by_id.get(user_id, {}).get("email") or "").strip().lower()
+        if not email:
+            return
+
+        identifier = volunteer_id or user_id or email or fallback_identifier
+        if not identifier:
+            return
+
+        key = volunteer_id or user_id or email
+        existing = recipients.get(key)
+        next_recipient = {
+            "id": volunteer_id or user_id or email,
+            "userId": user_id,
+            "name": str(candidate.get("name") or candidate.get("volunteerName") or "Volunteer").strip() or "Volunteer",
+            "email": email,
+        }
+        if existing:
+            if not existing.get("email") and email:
+                existing["email"] = email
+            if existing.get("name") == "Volunteer" and next_recipient["name"] != "Volunteer":
+                existing["name"] = next_recipient["name"]
+        else:
+            recipients[key] = next_recipient
+
+    # Join records are authoritative for current memberships and also carry
+    # an email snapshot, which keeps delivery working if a profile is stale.
+    for record in active_records:
+        volunteer_id = str(record.get("volunteerId") or "").strip()
+        user_id = str(record.get("volunteerUserId") or "").strip()
+        profile = (
+            volunteers_by_id.get(volunteer_id)
+            or volunteers_by_user_id.get(user_id)
+            or users_by_id.get(user_id)
+            or {}
+        )
+        add_recipient({**record, **profile}, volunteer_id or user_id)
+
+    # Legacy fallback: some events were saved before join records became the
+    # canonical membership store.
+    array_identifiers = [
+        *(str(value or "").strip() for value in (event.get("volunteers") or [])),
+        *(str(value or "").strip() for value in (event.get("joinedUserIds") or [])),
+    ]
+    for identifier in array_identifiers:
+        if not identifier or identifier in inactive_identifiers or identifier.lower() in {
+            value.lower() for value in inactive_identifiers
+        }:
+            continue
+        profile = (
+            volunteers_by_id.get(identifier)
+            or volunteers_by_user_id.get(identifier)
+            or users_by_id.get(identifier)
+        )
+        if profile:
+            add_recipient(profile, identifier)
+
+    return list(recipients.values())
+
+
 def _event_starts_in_reminder_window(event: dict[str, Any], now: datetime) -> bool:
     start_date = _parse_iso_datetime(event.get("startDate"))
     if start_date is None:
@@ -1073,41 +1176,25 @@ def run_event_reminder_check() -> dict[str, Any]:
         with connection.cursor() as cursor:
             for event in upcoming_items:
                 event_id = str(event.get("id") or "").strip()
-                joined_volunteer_ids = {str(value or "").strip() for value in (event.get("volunteers") or []) if str(value or "").strip()}
-                joined_user_ids = {str(value or "").strip() for value in (event.get("joinedUserIds") or []) if str(value or "").strip()}
-                for record in join_records:
-                    if not isinstance(record, dict) or str(record.get("projectId") or "").strip() != event_id:
-                        continue
-                    volunteer_id = str(record.get("volunteerId") or "").strip()
-                    volunteer_user_id = str(record.get("volunteerUserId") or "").strip()
-                    if volunteer_id:
-                        joined_volunteer_ids.add(volunteer_id)
-                    if volunteer_user_id:
-                        joined_user_ids.add(volunteer_user_id)
-
-                event_volunteers = [
-                    volunteers_by_id[volunteer_id]
-                    for volunteer_id in joined_volunteer_ids
-                    if volunteer_id in volunteers_by_id
-                ]
-                event_volunteers.extend(
-                    volunteers_by_user_id[user_id]
-                    for user_id in joined_user_ids
-                    if user_id in volunteers_by_user_id
-                    and volunteers_by_user_id[user_id] not in event_volunteers
+                event_recipients = _get_event_reminder_recipients(
+                    event,
+                    join_records,
+                    volunteers_by_id,
+                    volunteers_by_user_id,
+                    users_by_id,
                 )
 
                 for setting in _get_event_email_reminder_settings(event):
                     if not _event_reminder_setting_is_due(event, setting, now):
-                        skipped_count += len(event_volunteers)
+                        skipped_count += len(event_recipients)
                         continue
 
                     reminder_type = _get_reminder_type(setting)
                     reminder_label = _get_reminder_label(setting)
 
-                    for volunteer in event_volunteers:
-                        volunteer_id = str(volunteer.get("id") or "").strip()
-                        recipient_email = _get_reminder_email_for_volunteer(volunteer, users_by_id)
+                    for volunteer in event_recipients:
+                        volunteer_id = str(volunteer.get("id") or volunteer.get("userId") or volunteer.get("email") or "").strip()
+                        recipient_email = str(volunteer.get("email") or "").strip().lower()
                         if not volunteer_id or not recipient_email:
                             skipped_count += 1
                             continue
