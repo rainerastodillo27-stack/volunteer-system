@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { createBottomTabNavigator, BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { MaterialIcons } from '@expo/vector-icons';
-import { Modal, Pressable, ScrollView, StyleSheet, TextInput, TouchableOpacity, View, Text, useWindowDimensions } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, TextInput, TouchableOpacity, View, Text } from 'react-native';
 
 // Safe Platform accessor for web environments
 function getPlatformOS(): string {
@@ -285,7 +285,6 @@ export default function AdminNavigator() {
   const [collapsed, setCollapsed] = useState(false);
   const [tabBarProps, setTabBarProps] = useState<BottomTabBarProps | null>(null);
   const [tabBarSignature, setTabBarSignature] = useState('');
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const isMobileModeOnWeb = React.useMemo(() => {
     if (getPlatformOS() !== 'web') return false;
     try {
@@ -296,14 +295,6 @@ export default function AdminNavigator() {
     return false;
   }, []);
   const isWeb = getPlatformOS() === 'web' && !isMobileModeOnWeb;
-  const { width: viewportWidth } = useWindowDimensions();
-  const isNarrowWeb = isWeb && viewportWidth < 768;
-
-  useEffect(() => {
-    if (!isNarrowWeb) {
-      setIsMobileMenuOpen(false);
-    }
-  }, [isNarrowWeb]);
 
   useEffect(() => {
     let cancelled = false;
@@ -779,27 +770,8 @@ export default function AdminNavigator() {
 
   return (
     <View style={styles.webFrame}>
-      <View style={[styles.adminTopBar, isNarrowWeb && styles.adminTopBarMobile]}>
-        {isNarrowWeb ? (
-          <View style={styles.mobileTopBarBrand}>
-            <TouchableOpacity
-              accessibilityLabel={isMobileMenuOpen ? 'Close admin menu' : 'Open admin menu'}
-              style={styles.mobileMenuButton}
-              onPress={() => setIsMobileMenuOpen(current => !current)}
-              activeOpacity={0.8}
-            >
-              <MaterialIcons name={isMobileMenuOpen ? 'close' : 'menu'} size={24} color="#166534" />
-            </TouchableOpacity>
-            <View style={styles.mobileTopBarTitleWrap}>
-              <Text style={styles.mobileTopBarTitle}>NVC Admin</Text>
-              <Text style={styles.mobileTopBarSubtitle} numberOfLines={1}>
-                {tabBarProps?.state.routes[tabBarProps.state.index]?.name || 'Dashboard'}
-              </Text>
-            </View>
-          </View>
-        ) : null}
-
-        <View style={[styles.adminTopActions, isNarrowWeb && styles.adminTopActionsMobile]}>
+      <View style={styles.adminTopBar}>
+        <View style={styles.adminTopActions}>
           <TouchableOpacity
             style={styles.adminTopIconButton}
             activeOpacity={0.8}
@@ -829,19 +801,17 @@ export default function AdminNavigator() {
           
           <View style={{ position: 'relative', zIndex: 1000 }}>
             <TouchableOpacity
-              style={[styles.adminUserTrigger, isNarrowWeb && styles.adminUserTriggerMobile]}
+              style={styles.adminUserTrigger}
               onPress={() => setIsUserMenuOpen(prev => !prev)}
               activeOpacity={0.8}
             >
               <View style={styles.adminTopAvatar}>
                 <Text style={styles.adminTopAvatarText}>{getAdminInitials(user?.name)}</Text>
               </View>
-              {!isNarrowWeb ? (
-                <View>
-                  <Text style={styles.adminTopUserName}>{user?.name || 'Admin Account'}</Text>
-                  <Text style={styles.adminTopUserOrg}>Negrense Volunteers for Change (NVC)</Text>
-                </View>
-              ) : null}
+              <View>
+                <Text style={styles.adminTopUserName}>{user?.name || 'Admin Account'}</Text>
+                <Text style={styles.adminTopUserOrg}>Negrense Volunteers for Change (NVC)</Text>
+              </View>
               <MaterialIcons
                 name={isUserMenuOpen ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
                 size={22}
@@ -893,8 +863,8 @@ export default function AdminNavigator() {
         visible={isSearchOpen}
         onRequestClose={() => setIsSearchOpen(false)}
       >
-        <Pressable style={[styles.topOverlayBackdrop, isNarrowWeb && styles.topOverlayBackdropMobile]} onPress={() => setIsSearchOpen(false)}>
-          <Pressable style={[styles.topPanel, isNarrowWeb && styles.topPanelMobile]} onPress={(event) => event.stopPropagation()}>
+        <Pressable style={styles.topOverlayBackdrop} onPress={() => setIsSearchOpen(false)}>
+          <Pressable style={styles.topPanel} onPress={(event) => event.stopPropagation()}>
             <View style={styles.topPanelHeader}>
               <View style={styles.searchInputWrap}>
                 <MaterialIcons name="search" size={20} color="#64748b" />
@@ -948,8 +918,8 @@ export default function AdminNavigator() {
         visible={isNotificationPanelOpen}
         onRequestClose={() => setIsNotificationPanelOpen(false)}
       >
-        <Pressable style={[styles.topOverlayBackdrop, isNarrowWeb && styles.topOverlayBackdropMobile]} onPress={() => setIsNotificationPanelOpen(false)}>
-          <Pressable style={[styles.topPanel, isNarrowWeb && styles.topPanelMobile]} onPress={(event) => event.stopPropagation()}>
+        <Pressable style={styles.topOverlayBackdrop} onPress={() => setIsNotificationPanelOpen(false)}>
+          <Pressable style={styles.topPanel} onPress={(event) => event.stopPropagation()}>
             <View style={styles.notificationPanelHeader}>
               <View>
                 <Text style={styles.topPanelTitle}>Notifications</Text>
@@ -998,43 +968,24 @@ export default function AdminNavigator() {
       </Modal>
 
       <View style={styles.webLayout}>
-        {!isNarrowWeb ? (
-          <View style={[styles.sidebarWrapper, collapsed ? styles.sidebarWrapperCollapsed : styles.sidebarWrapperExpanded]}>
-            {tabBarProps ? (
-              <SidebarTabBar
-                {...tabBarProps}
-                collapsed={collapsed}
-                onToggle={() => setCollapsed(!collapsed)}
-                onNavigateWithBadge={markRouteNotificationsSeen}
-              />
-            ) : (
-              <View style={styles.fallbackSidebar} />
-            )}
-          </View>
-        ) : null}
+        <View style={[styles.sidebarWrapper, collapsed ? styles.sidebarWrapperCollapsed : styles.sidebarWrapperExpanded]}>
+          {tabBarProps ? (
+            <SidebarTabBar
+              {...tabBarProps}
+              collapsed={collapsed}
+              onToggle={() => setCollapsed(!collapsed)}
+              onNavigateWithBadge={markRouteNotificationsSeen}
+            />
+          ) : (
+            <View style={styles.fallbackSidebar} />
+          )}
+        </View>
         <View style={styles.webMainPane}>
-          <View style={[styles.webContent, isNarrowWeb ? styles.webContentMobile : { paddingHorizontal: collapsed ? CONTENT_GUTTER_COLLAPSED : CONTENT_GUTTER }]}>
+          <View style={[styles.webContent, { paddingHorizontal: collapsed ? CONTENT_GUTTER_COLLAPSED : CONTENT_GUTTER }]}>
             {navigator}
           </View>
         </View>
       </View>
-
-      {isNarrowWeb && isMobileMenuOpen && tabBarProps ? (
-        <View style={styles.mobileMenuOverlay}>
-          <Pressable style={styles.mobileMenuBackdrop} onPress={() => setIsMobileMenuOpen(false)} />
-          <View style={styles.mobileDrawer}>
-            <SidebarTabBar
-              {...tabBarProps}
-              collapsed={false}
-              onToggle={() => setIsMobileMenuOpen(false)}
-              onNavigateWithBadge={route => {
-                markRouteNotificationsSeen(route);
-                setIsMobileMenuOpen(false);
-              }}
-            />
-          </View>
-        </View>
-      ) : null}
     </View>
   );
 }
@@ -1057,46 +1008,8 @@ const styles = StyleSheet.create({
     elevation: 2,
     zIndex: 1000,
   },
-  adminTopBarMobile: {
-    height: 64,
-    paddingHorizontal: 10,
-    paddingRight: 10,
-  },
-  mobileTopBarBrand: {
-    flex: 1,
-    minWidth: 0,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  mobileMenuButton: {
-    width: 42,
-    height: 42,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#f0fdf4',
-    borderWidth: 1,
-    borderColor: '#d5edd9',
-  },
-  mobileTopBarTitleWrap: {
-    flex: 1,
-    minWidth: 0,
-  },
-  mobileTopBarTitle: {
-    fontSize: 16,
-    fontWeight: '900',
-    color: '#166534',
-  },
-  mobileTopBarSubtitle: {
-    marginTop: 1,
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#64748b',
-  },
   adminTopBrandSlot: { width: SIDEBAR_WIDTH, height: 56, borderRightWidth: 1, borderRightColor: '#dfe5ea', alignItems: 'center', justifyContent: 'center' },
   adminTopActions: { marginLeft: 'auto' as any, flexDirection: 'row', alignItems: 'center', gap: 18, zIndex: 1000 },
-  adminTopActionsMobile: { gap: 2, marginLeft: 6 },
   adminTopIconButton: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', position: 'relative' },
   adminTopBadge: { position: 'absolute', top: 2, right: 2, minWidth: 18, height: 18, borderRadius: 9, backgroundColor: '#157a34', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
   adminTopBadgeText: { color: '#ffffff', fontSize: 10, fontWeight: '900' },
@@ -1112,11 +1025,6 @@ const styles = StyleSheet.create({
     paddingTop: 86,
     paddingRight: 32,
   },
-  topOverlayBackdropMobile: {
-    alignItems: 'stretch',
-    paddingTop: 74,
-    paddingHorizontal: 8,
-  },
   topPanel: {
     width: 430,
     maxHeight: 520,
@@ -1130,11 +1038,6 @@ const styles = StyleSheet.create({
     shadowRadius: 24,
     elevation: 24,
     overflow: 'hidden',
-  },
-  topPanelMobile: {
-    width: '100%',
-    maxWidth: 430,
-    alignSelf: 'center',
   },
   topPanelHeader: {
     flexDirection: 'row',
@@ -1243,10 +1146,6 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     cursor: 'pointer' as any,
   },
-  adminUserTriggerMobile: {
-    gap: 2,
-    paddingHorizontal: 2,
-  },
   dropdownBackdrop: {
     position: 'fixed' as any,
     top: 0,
@@ -1291,31 +1190,6 @@ const styles = StyleSheet.create({
   sidebarWrapperExpanded: { width: SIDEBAR_WIDTH, minWidth: SIDEBAR_WIDTH },
   sidebarWrapperCollapsed: { width: SIDEBAR_WIDTH_COLLAPSED, minWidth: SIDEBAR_WIDTH_COLLAPSED },
   webContent: { flex: 1, paddingVertical: 24, backgroundColor: '#f6f8fa', overflow: 'auto' as any },
-  webContentMobile: { paddingHorizontal: 10, paddingVertical: 12 },
-  mobileMenuOverlay: {
-    position: 'absolute' as any,
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    flexDirection: 'row',
-    zIndex: 2000,
-  },
-  mobileMenuBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.38)',
-  },
-  mobileDrawer: {
-    width: 284,
-    maxWidth: '86%',
-    height: '100%',
-    backgroundColor: '#ffffff',
-    shadowColor: '#0f172a',
-    shadowOffset: { width: 8, height: 0 },
-    shadowOpacity: 0.18,
-    shadowRadius: 20,
-    elevation: 24,
-  },
   sidebarContainer: { position: 'relative', flex: 1, width: SIDEBAR_WIDTH, backgroundColor: '#ffffff', paddingTop: 16, borderRightWidth: 0, borderRightColor: '#ffffff' },
   sidebarHeader: { width: '100%', height: 60, alignItems: 'flex-start', paddingLeft: 18, justifyContent: 'center', marginBottom: 16 },
   sidebarHeaderCollapsed: { alignItems: 'center', paddingLeft: 0 },

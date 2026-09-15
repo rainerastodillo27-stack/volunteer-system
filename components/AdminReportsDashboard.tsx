@@ -348,9 +348,7 @@ export default function AdminReportsDashboard({
   refreshing,
 }: AdminReportsDashboardProps) {
   const { width } = useWindowDimensions();
-  // A phone browser is still Platform.OS === 'web', so the viewport width
-  // must drive the responsive layout here.
-  const isDesktop = width >= 1100;
+  const isDesktop = Platform.OS === 'web' || width >= 1100;
   const [selectedEventId, setSelectedEventId] = useState('all');
   const [drilldownState, setDrilldownState] = useState<ColumnDrilldownState>({});
   const [columnViewMode, setColumnViewMode] = useState<ColumnViewModeState>({});
