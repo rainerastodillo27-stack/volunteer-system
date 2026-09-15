@@ -97,7 +97,7 @@ const HARDCODED_LAN_IP = '192.168.0.106';
 // The hosted web app is served through this hostname. Keeping the web API on
 // the same origin avoids browser CORS failures for writes such as attendance
 // marking while native builds continue to use the VPS IP below.
-const DEFAULT_HOSTED_WEB_API_URL = 'http://129.121.73.76.nip.io';
+const DEFAULT_HOSTED_WEB_API_URL = 'https://nvcfoundationconnect.online';
 // OAuth client IDs are public identifiers and are safe to bundle in the app.
 // Never place an OAuth client secret here.
 const DEFAULT_GOOGLE_WEB_CLIENT_ID =

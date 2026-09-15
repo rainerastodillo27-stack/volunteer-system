@@ -980,6 +980,7 @@ function getExpoExtraValue(key: string): string | undefined {
 }
 
 const DEFAULT_PRODUCTION_TUNNEL_URL = 'http://129.121.73.76:8001';
+const HOSTED_WEB_APP_HOST = 'nvcfoundationconnect.online';
 
 function isPrivateOrLocalHost(hostname: string): boolean {
   const h = (hostname || '').toLowerCase().trim();
@@ -995,6 +996,10 @@ function isPrivateOrLocalHost(hostname: string): boolean {
 
 function shouldUseHostedWebPageOrigin(hostname: string, configuredBaseUrl?: string): boolean {
   const pageHost = (hostname || '').toLowerCase().trim();
+  if (pageHost === HOSTED_WEB_APP_HOST) {
+    return true;
+  }
+
   if (!pageHost.endsWith('.nip.io') || !configuredBaseUrl) {
     return false;
   }
