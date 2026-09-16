@@ -29,6 +29,7 @@ import type { Partner, PartnerProjectApplication, PartnerReport, ProgramTrack, P
 import ModernTheme from '../utils/modernTheme';
 import { navigateToAvailableRoute } from '../utils/navigation';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
+import { buildTablePdf, downloadPdfFile, type PdfTable } from '../utils/pdfDownload';
 
 type MonthPoint = {
   key: string;
@@ -809,6 +810,150 @@ function generatePDFReportHTML(
   return html;
 }
 
+type AnalyticsReportPdfData = {
+  volunteers: Volunteer[];
+  projects: Project[];
+  partners: Partner[];
+  timeLogs: VolunteerTimeLog[];
+  joinRecords: VolunteerProjectJoinRecord[];
+  trackedProjects: Project[];
+};
+
+type AnalyticsReportPdfMetrics = {
+  partnerFilter: string | 'all';
+  programFilter: string | 'all';
+  partnerName: string;
+  programName: string;
+  volunteerGrowthData: MonthPoint[];
+  skillAnalytics: { slices: SkillSlice[] };
+  quarterlyPartnerData: PartnerSectorData[];
+};
+
+function buildAnalyticsPdf(
+  sections: string[],
+  data: AnalyticsReportPdfData,
+  metrics: AnalyticsReportPdfMetrics,
+): string {
+  const tables: PdfTable[] = [];
+  const volunteersById = new Map(data.volunteers.map(volunteer => [volunteer.id, volunteer]));
+  const volunteersByUserId = new Map(
+    data.volunteers
+      .map(volunteer => [String(volunteer.userId || '').trim(), volunteer] as const)
+      .filter(([userId]) => Boolean(userId)),
+  );
+
+  if (sections.includes('volunteers')) {
+    tables.push({
+      title: `Volunteer Growth (${data.volunteers.length} registered, ${data.volunteers.filter(v => v.registrationStatus === 'Approved').length} active)`,
+      columns: [
+        { key: 'month', label: 'Month' },
+        { key: 'value', label: 'Cumulative Volunteers' },
+      ],
+      rows: metrics.volunteerGrowthData.slice(-12).map(point => ({ month: point.label, value: point.value })),
+      emptyMessage: 'No volunteer registration dates available.',
+    });
+  }
+
+  if (sections.includes('events')) {
+    const events = data.projects.filter(project => project.isEvent);
+    tables.push({
+      title: 'Volunteers Per Event',
+      columns: [
+        { key: 'title', label: 'Event Title', width: 2 },
+        { key: 'date', label: 'Date' },
+        { key: 'volunteers', label: 'Volunteer Count' },
+        { key: 'status', label: 'Status' },
+      ],
+      rows: events.map(event => ({
+        title: event.title || 'Untitled Event',
+        date: event.startDate ? new Date(event.startDate).toLocaleDateString() : 'TBD',
+        volunteers: getEventVolunteerIds(
+          event,
+          data.timeLogs,
+          data.joinRecords,
+          volunteersById,
+          volunteersByUserId,
+        ).size,
+        status: getProjectDisplayStatus(event),
+      })),
+      emptyMessage: 'No events found for the selected filters.',
+    });
+  }
+
+  if (sections.includes('skills')) {
+    tables.push({
+      title: 'Skills Contributed',
+      columns: [
+        { key: 'skill', label: 'Skill' },
+        { key: 'count', label: 'Volunteer Count' },
+        { key: 'percent', label: 'Percentage' },
+      ],
+      rows: metrics.skillAnalytics.slices.map(skill => ({
+        skill: skill.name,
+        count: skill.count,
+        percent: `${skill.percent}%`,
+      })),
+      emptyMessage: 'No contributed skills found for the selected filters.',
+    });
+  }
+
+  if (sections.includes('partners')) {
+    tables.push({
+      title: 'Partner Sectors by Quarter',
+      columns: [
+        { key: 'quarter', label: 'Quarter' },
+        { key: 'NGO', label: 'NGO' },
+        { key: 'Hospital', label: 'Hospital' },
+        { key: 'Institution', label: 'Institution' },
+        { key: 'Private', label: 'Private' },
+        { key: 'total', label: 'Total' },
+      ],
+      rows: metrics.quarterlyPartnerData.map(quarter => ({
+        ...quarter,
+        total: quarter.NGO + quarter.Hospital + quarter.Institution + quarter.Private,
+      })),
+      emptyMessage: 'No partner records found for the selected filters.',
+    });
+    tables.push({
+      title: 'Partner Directory',
+      columns: [
+        { key: 'organization', label: 'Organization', width: 2 },
+        { key: 'sector', label: 'Sector' },
+        { key: 'status', label: 'Status' },
+      ],
+      rows: data.partners.map(partner => ({
+        organization: partner.name,
+        sector: partner.sectorType || 'N/A',
+        status: partner.status || 'N/A',
+      })),
+      emptyMessage: 'No partners found for the selected filters.',
+    });
+  }
+
+  if (sections.includes('projects')) {
+    const statusCounts = new Map<string, number>();
+    data.trackedProjects.forEach(project => {
+      const status = getProjectDisplayStatus(project);
+      statusCounts.set(status, (statusCounts.get(status) || 0) + 1);
+    });
+    tables.push({
+      title: 'Project Status Overview',
+      columns: [
+        { key: 'status', label: 'Status' },
+        { key: 'count', label: 'Count' },
+      ],
+      rows: Array.from(statusCounts.entries()).map(([status, count]) => ({ status, count })),
+      emptyMessage: 'No tracked projects found for the selected filters.',
+    });
+  }
+
+  return buildTablePdf('NVC Foundation Executive Analytics Report', {
+    subtitle: `Generated ${new Date().toLocaleString()} | Partner: ${metrics.partnerName} | Program: ${metrics.programName}`,
+    orientation: 'landscape',
+    tables,
+  });
+}
+
 export default function AdminAnalyticsScreen() {
   const navigation = useNavigation<any>();
   const { width } = useWindowDimensions();
@@ -827,6 +972,7 @@ export default function AdminAnalyticsScreen() {
   const [selectedProgramId, setSelectedProgramId] = useState<string | 'all'>('all');
   const [showProgramDropdown, setShowProgramDropdown] = useState(false);
   const [showReportModal, setShowReportModal] = useState(false);
+  const [showReportPreview, setShowReportPreview] = useState(false);
   const [selectedReportSections, setSelectedReportSections] = useState<string[]>(['full']);
 
   const loadAnalytics = useCallback(async (showLoader = false) => {
@@ -1011,135 +1157,50 @@ export default function AdminAnalyticsScreen() {
     return programTracks.find(p => p.id === selectedProgramId)?.title || 'Unknown Program';
   }, [selectedProgramId, programTracks]);
 
-  // CSV Export Function
-  const exportToCSV = () => {
+  const reportSectionIds = useMemo(
+    () => selectedReportSections.includes('full')
+      ? ['volunteers', 'events', 'skills', 'partners', 'projects']
+      : selectedReportSections.filter(section => section !== 'full'),
+    [selectedReportSections],
+  );
+
+  const downloadAnalyticsPdf = async () => {
+    if (reportSectionIds.length === 0) {
+      Alert.alert('No Sections Selected', 'Please select at least one section to include in the report.');
+      return;
+    }
+
     try {
-      const timestamp = new Date().toISOString().split('T')[0];
-      const filterInfo = `${selectedPartnerName} - ${selectedProgramName}`;
-
-      // Prepare CSV data for different sections
-      let csvContent = 'data:text/csv;charset=utf-8,';
-
-      // Header
-      csvContent += `Negros Volunteer for Change Analytics Report\n`;
-      csvContent += `Generated: ${new Date().toLocaleString()}\n`;
-      csvContent += `Filters: ${filterInfo}\n\n`;
-
-      // 1. Volunteer Growth (Last 12 Months)
-      csvContent += `VOLUNTEER GROWTH - LAST 12 MONTHS\n`;
-      csvContent += `Month,Cumulative Volunteers\n`;
-      monthPoints.slice(-12).forEach(point => {
-        csvContent += `${point.label},${point.value}\n`;
-      });
-      csvContent += `\n`;
-
-      // 2. Skills Distribution (Top 20)
-      csvContent += `TOP 20 SKILLS CONTRIBUTED\n`;
-      csvContent += `Skill,Volunteer Count,Percentage\n`;
-      skillAnalytics.slices.slice(0, 20).forEach(skill => {
-        csvContent += `"${skill.name}",${skill.count},${skill.percent}%\n`;
-      });
-      csvContent += `\n`;
-
-      // 3. Events Summary
-      const events = filteredProjects.filter(p => p.isEvent);
-      const volunteersById = new Map(filteredVolunteers.map(volunteer => [volunteer.id, volunteer]));
-      const volunteersByUserId = new Map(
-        filteredVolunteers
-          .map(volunteer => [String(volunteer.userId || '').trim(), volunteer] as const)
-          .filter(([userId]) => Boolean(userId))
+      const pdfContent = buildAnalyticsPdf(
+        reportSectionIds,
+        {
+          volunteers: filteredVolunteers,
+          projects: filteredProjects,
+          partners: filteredPartners,
+          timeLogs: filteredTimeLogs,
+          joinRecords: filteredJoinRecords,
+          trackedProjects,
+        },
+        {
+          partnerFilter: selectedPartnerId,
+          programFilter: selectedProgramId,
+          partnerName: selectedPartnerName,
+          programName: selectedProgramName,
+          volunteerGrowthData: monthPoints,
+          skillAnalytics,
+          quarterlyPartnerData: partnerSectorsByQuarter,
+        },
       );
-      csvContent += `EVENTS SUMMARY\n`;
-      csvContent += `Event Title,Start Date,End Date,Volunteer Count,Status\n`;
-      events.forEach(event => {
-        const title = (event.title || 'Untitled Event').replace(/"/g, '""');
-        const startDate = event.startDate ? new Date(event.startDate).toLocaleDateString() : 'TBD';
-        const endDate = event.endDate ? new Date(event.endDate).toLocaleDateString() : 'TBD';
-        const volunteerCount = getEventVolunteerIds(
-          event,
-          filteredTimeLogs,
-          filteredJoinRecords,
-          volunteersById,
-          volunteersByUserId
-        ).size;
-        csvContent += `"${title}",${startDate},${endDate},${volunteerCount},${getProjectDisplayStatus(event)}\n`;
-      });
-      csvContent += `\n`;
-
-      // 4. Partner Sectors by Quarter
-      csvContent += `PARTNER SECTORS BY QUARTER\n`;
-      csvContent += `Quarter,NGO,Hospital,Institution,Private,Total\n`;
-      partnerSectorsByQuarter.forEach(q => {
-        const total = q.NGO + q.Hospital + q.Institution + q.Private;
-        csvContent += `${q.quarter},${q.NGO},${q.Hospital},${q.Institution},${q.Private},${total}\n`;
-      });
-      csvContent += `\n`;
-
-      // 5. All Projects
-      csvContent += `ALL PROJECTS\n`;
-      csvContent += `Title,Status,Start Date,End Date,Hours Logged,Volunteers,Is Event\n`;
-      filteredProjects.forEach(project => {
-        const title = (project.title || 'Untitled').replace(/"/g, '""');
-        const startDate = project.startDate ? new Date(project.startDate).toLocaleDateString() : 'N/A';
-        const endDate = project.endDate ? new Date(project.endDate).toLocaleDateString() : 'N/A';
-        const hoursLogged = filteredTimeLogs.filter(log => log.projectId === project.id)
-          .reduce((sum, log) => sum + getCompletedVolunteerHours(log), 0);
-        const volunteerCount = getProjectVolunteerIdsIncludingEvents(
-          project,
-          filteredProjects,
-          filteredTimeLogs,
-          filteredJoinRecords,
-          filteredVolunteers
-        ).size;
-        const isEvent = project.isEvent ? 'Yes' : 'No';
-        csvContent += `"${title}",${getProjectDisplayStatus(project)},${startDate},${endDate},${hoursLogged},${volunteerCount},${isEvent}\n`;
-      });
-      csvContent += `\n`;
-
-      // 6. All Volunteers
-      csvContent += `ALL VOLUNTEERS\n`;
-      csvContent += `Name,Email,Phone,Status,Skills,Joined Date\n`;
-      filteredVolunteers.forEach(volunteer => {
-        const name = (volunteer.name || 'N/A').replace(/"/g, '""');
-        const email = (volunteer.email || 'N/A').replace(/"/g, '""');
-        const phone = volunteer.phone || 'N/A';
-        const status = volunteer.registrationStatus || 'N/A';
-        const skills = (volunteer.skills || []).join('; ').replace(/"/g, '""');
-        const joinedDate = volunteer.createdAt ? new Date(volunteer.createdAt).toLocaleDateString() : 'N/A';
-        csvContent += `"${name}","${email}",${phone},${status},"${skills}",${joinedDate}\n`;
-      });
-      csvContent += `\n`;
-
-      // 7. All Partners
-      csvContent += `ALL PARTNERS\n`;
-      csvContent += `Organization Name,Sector,Contact Name,Email,Phone,Status\n`;
-      filteredPartners.forEach(partner => {
-        const orgName = (partner.name || 'N/A').replace(/"/g, '""');
-        const sector = partner.sectorType || 'N/A';
-        const contactName = (partner.stakeholderName || 'N/A').replace(/"/g, '""');
-        const email = (partner.contactEmail || 'N/A').replace(/"/g, '""');
-        const phone = partner.contactPhone || 'N/A';
-        const status = partner.status || 'N/A';
-        csvContent += `"${orgName}",${sector},"${contactName}","${email}",${phone},${status}\n`;
-      });
-
-      // Create download
-      if (Platform.OS === 'web') {
-        const encodedUri = encodeURI(csvContent);
-        const link = document.createElement('a');
-        link.setAttribute('href', encodedUri);
-        link.setAttribute('download', `NVC_Analytics_Export_${timestamp}.csv`);
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        
-        Alert.alert('Success', 'CSV file downloaded successfully!');
-      } else {
-        Alert.alert('Export Complete', 'CSV export is currently optimized for web. Please use the web version for downloads.');
-      }
+      setShowReportModal(false);
+      setShowReportPreview(false);
+      await downloadPdfFile(
+        `NVC_Foundation_Executive_Report_${new Date().toISOString().slice(0, 10)}.pdf`,
+        pdfContent,
+        'Unable to save the Analytics PDF on this device.',
+      );
     } catch (error) {
-      console.error('CSV export error:', error);
-      Alert.alert('Error', 'Failed to export CSV. Please try again.');
+      console.error('Analytics PDF generation error:', error);
+      Alert.alert('Download Failed', 'Unable to generate the Analytics PDF. Please try again.');
     }
   };
 
@@ -1349,16 +1410,8 @@ export default function AdminAnalyticsScreen() {
         </View>
 
         <View style={styles.analyticsActionsRow}>
-          <Text style={styles.analyticsActionsHint}>Use the filters above to prepare an analytics export.</Text>
+          <Text style={styles.analyticsActionsHint}>Use the filters above to prepare an executive report.</Text>
           <View style={styles.exportButtonsContainer}>
-            <TouchableOpacity
-              style={styles.exportCSVButton}
-              onPress={() => exportToCSV()}
-              activeOpacity={0.8}
-            >
-              <MaterialIcons name="table-chart" size={20} color="#16a34a" />
-              <Text style={styles.exportCSVButtonText}>Export CSV</Text>
-            </TouchableOpacity>
             <TouchableOpacity
               style={styles.generateReportButton}
               onPress={() => setShowReportModal(true)}
@@ -1970,8 +2023,25 @@ export default function AdminAnalyticsScreen() {
                 <Text style={styles.reportCancelButtonText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
+                style={styles.reportPreviewButton}
+                onPress={() => {
+                  if (reportSectionIds.length === 0) {
+                    Alert.alert('No Sections Selected', 'Please select at least one section to preview.');
+                    return;
+                  }
+                  setShowReportPreview(true);
+                  setShowReportModal(false);
+                }}
+                activeOpacity={0.8}
+              >
+                <MaterialIcons name="visibility" size={20} color={ModernTheme.colors.primary[700]} />
+                <Text style={styles.reportPreviewButtonText}>Live Preview</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
                 style={styles.reportGenerateButton}
                 onPress={async () => {
+                  await downloadAnalyticsPdf();
+                  return;
                   try {
                     const sections = selectedReportSections.includes('full') 
                       ? ['volunteers', 'events', 'skills', 'partners', 'projects']
@@ -2050,6 +2120,120 @@ export default function AdminAnalyticsScreen() {
             </View>
           </TouchableOpacity>
         </TouchableOpacity>
+      </Modal>
+
+      {/* Live Executive Report Preview */}
+      <Modal
+        visible={showReportPreview}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowReportPreview(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.executivePreviewModalContent}>
+            <ScrollView
+              style={styles.executivePreviewScroll}
+              contentContainerStyle={styles.executivePreviewScrollContent}
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={styles.executiveReportCard}>
+                <View style={styles.executiveReportHeader}>
+                  <View style={styles.executiveReportBrandMark}>
+                    <Text style={styles.executiveReportBrandMarkText}>NVC</Text>
+                  </View>
+                  <View style={styles.executiveReportBrandCopy}>
+                    <Text style={styles.executiveReportBrandName}>NVC FOUNDATION</Text>
+                    <Text style={styles.executiveReportTitle}>Executive Analytics Report</Text>
+                  </View>
+                  <View style={styles.executiveReportLiveBadge}>
+                    <View style={styles.executiveReportLiveDot} />
+                    <Text style={styles.executiveReportLiveText}>LIVE</Text>
+                  </View>
+                </View>
+
+                <Text style={styles.executiveReportPreviewLabel}>Live preview from the current Analytics filters</Text>
+                <Text style={styles.executiveReportFilterText}>
+                  {selectedPartnerName} • {selectedProgramName}
+                </Text>
+
+                <View style={styles.executiveReportMetricGrid}>
+                  <View style={styles.executiveReportMetricCard}>
+                    <Text style={styles.executiveReportMetricValue}>{currentTotal}</Text>
+                    <Text style={styles.executiveReportMetricLabel}>Volunteers</Text>
+                  </View>
+                  <View style={styles.executiveReportMetricCard}>
+                    <Text style={styles.executiveReportMetricValue}>{filteredProjects.filter(project => project.isEvent).length}</Text>
+                    <Text style={styles.executiveReportMetricLabel}>Events</Text>
+                  </View>
+                  <View style={styles.executiveReportMetricCard}>
+                    <Text style={styles.executiveReportMetricValue}>{filteredPartners.length}</Text>
+                    <Text style={styles.executiveReportMetricLabel}>Partners</Text>
+                  </View>
+                  <View style={styles.executiveReportMetricCard}>
+                    <Text style={styles.executiveReportMetricValue}>{completedHours}</Text>
+                    <Text style={styles.executiveReportMetricLabel}>Hours</Text>
+                  </View>
+                </View>
+
+                <Text style={styles.executiveReportSectionHeading}>Included report sections</Text>
+                {reportSectionIds.map(section => (
+                  <View key={section} style={styles.executiveReportSectionRow}>
+                    <View style={styles.executiveReportSectionIcon}>
+                      <MaterialIcons
+                        name={section === 'volunteers' ? 'groups' : section === 'events' ? 'event' : section === 'skills' ? 'star' : section === 'partners' ? 'business' : 'folder'}
+                        size={18}
+                        color="#166534"
+                      />
+                    </View>
+                    <View style={styles.executiveReportSectionCopy}>
+                      <Text style={styles.executiveReportSectionTitle}>
+                        {section === 'volunteers'
+                          ? 'Total Volunteers Growth'
+                          : section === 'events'
+                            ? 'Volunteers Per Event'
+                            : section === 'skills'
+                              ? 'Skills Contributed'
+                              : section === 'partners'
+                                ? 'Partner Sectors by Quarter'
+                                : 'Project Status Overview'}
+                      </Text>
+                      <Text style={styles.executiveReportSectionSummary}>
+                        {section === 'volunteers'
+                          ? `${currentTotal} live volunteer records`
+                          : section === 'events'
+                            ? `${filteredProjects.filter(project => project.isEvent).length} live events`
+                            : section === 'skills'
+                              ? `${skillAnalytics.slices.length} skill groups`
+                              : section === 'partners'
+                                ? `${filteredPartners.length} live partner records`
+                                : `${trackedProjects.length} tracked projects`}
+                      </Text>
+                    </View>
+                    <MaterialIcons name="check-circle" size={20} color="#16a34a" />
+                  </View>
+                ))}
+              </View>
+            </ScrollView>
+
+            <View style={styles.executivePreviewFooter}>
+              <TouchableOpacity
+                style={styles.reportCancelButton}
+                onPress={() => setShowReportPreview(false)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.reportCancelButtonText}>Close Preview</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.reportGenerateButton}
+                onPress={() => void downloadAnalyticsPdf()}
+                activeOpacity={0.8}
+              >
+                <MaterialIcons name="download" size={20} color="#fff" />
+                <Text style={styles.reportGenerateButtonText}>Download PDF</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
       </Modal>
     </View>
   );
@@ -2844,22 +3028,6 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: ModernTheme.spacing[2],
   },
-  exportCSVButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    borderWidth: 2,
-    borderColor: ModernTheme.colors.primary[700],
-    paddingHorizontal: ModernTheme.spacing[4],
-    paddingVertical: ModernTheme.spacing[2.5],
-    borderRadius: ModernTheme.borderRadius.md,
-    gap: ModernTheme.spacing[2],
-  },
-  exportCSVButtonText: {
-    color: ModernTheme.colors.primary[700],
-    fontSize: ModernTheme.typography.fontSize.sm,
-    fontWeight: ModernTheme.typography.fontWeight.bold,
-  },
   generateReportButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -3023,6 +3191,181 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: ModernTheme.typography.fontSize.base,
     fontWeight: ModernTheme.typography.fontWeight.bold,
+  },
+  reportPreviewButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: ModernTheme.spacing[2],
+    paddingHorizontal: ModernTheme.spacing[5],
+    paddingVertical: ModernTheme.spacing[3],
+    borderRadius: ModernTheme.borderRadius.md,
+    backgroundColor: ModernTheme.colors.primary[50],
+    borderWidth: 1,
+    borderColor: ModernTheme.colors.primary[200],
+  },
+  reportPreviewButtonText: {
+    color: ModernTheme.colors.primary[700],
+    fontSize: ModernTheme.typography.fontSize.base,
+    fontWeight: ModernTheme.typography.fontWeight.bold,
+  },
+  executivePreviewModalContent: {
+    width: '100%',
+    maxWidth: 760,
+    maxHeight: '92%',
+    borderRadius: ModernTheme.borderRadius.xl,
+    backgroundColor: ModernTheme.colors.background.card,
+    overflow: 'hidden',
+    ...ModernTheme.shadows.xl,
+  },
+  executivePreviewScroll: {
+    flexGrow: 0,
+  },
+  executivePreviewScrollContent: {
+    padding: ModernTheme.spacing[5],
+  },
+  executiveReportCard: {
+    borderRadius: ModernTheme.borderRadius.lg,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#d9ead3',
+    overflow: 'hidden',
+    ...ModernTheme.shadows.base,
+  },
+  executiveReportHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: ModernTheme.spacing[5],
+    backgroundColor: '#166534',
+  },
+  executiveReportBrandMark: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#dcfce7',
+  },
+  executiveReportBrandMarkText: {
+    color: '#166534',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  executiveReportBrandCopy: {
+    flex: 1,
+    marginLeft: ModernTheme.spacing[3],
+  },
+  executiveReportBrandName: {
+    color: '#bbf7d0',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 1.2,
+  },
+  executiveReportTitle: {
+    marginTop: 3,
+    color: '#ffffff',
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  executiveReportLiveBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+  },
+  executiveReportLiveDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: '#86efac',
+  },
+  executiveReportLiveText: {
+    color: '#dcfce7',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  executiveReportPreviewLabel: {
+    marginTop: ModernTheme.spacing[4],
+    color: '#166534',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  executiveReportFilterText: {
+    marginTop: 4,
+    color: ModernTheme.colors.text.secondary,
+    fontSize: 12,
+  },
+  executiveReportMetricGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: ModernTheme.spacing[2],
+    marginTop: ModernTheme.spacing[4],
+  },
+  executiveReportMetricCard: {
+    flex: 1,
+    minWidth: 120,
+    padding: ModernTheme.spacing[3],
+    borderRadius: ModernTheme.borderRadius.md,
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1,
+    borderColor: '#dcfce7',
+  },
+  executiveReportMetricValue: {
+    color: '#166534',
+    fontSize: 23,
+    fontWeight: '900',
+  },
+  executiveReportMetricLabel: {
+    marginTop: 3,
+    color: '#64748b',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  executiveReportSectionHeading: {
+    marginTop: ModernTheme.spacing[5],
+    marginBottom: ModernTheme.spacing[2],
+    color: ModernTheme.colors.text.primary,
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  executiveReportSectionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: ModernTheme.spacing[2.5],
+    borderTopWidth: 1,
+    borderTopColor: '#f1f5f9',
+  },
+  executiveReportSectionIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f0fdf4',
+  },
+  executiveReportSectionCopy: {
+    flex: 1,
+    marginLeft: ModernTheme.spacing[3],
+  },
+  executiveReportSectionTitle: {
+    color: ModernTheme.colors.text.primary,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  executiveReportSectionSummary: {
+    marginTop: 2,
+    color: ModernTheme.colors.text.secondary,
+    fontSize: 11,
+  },
+  executivePreviewFooter: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: ModernTheme.spacing[3],
+    padding: ModernTheme.spacing[5],
+    borderTopWidth: 1,
+    borderTopColor: ModernTheme.colors.border.medium,
   },
 });
 

@@ -144,6 +144,7 @@ interface VolunteerReportsDashboardProps {
   isAdminView?: boolean;
   isPartnerView?: boolean;
   volunteers?: Volunteer[];
+  joinedEventIds?: string[];
 }
 
 type PartnerQuarterlyDocument = {
@@ -167,20 +168,30 @@ export function VolunteerReportsDashboard({
   isAdminView = false,
   isPartnerView = false,
   volunteers = [],
+  joinedEventIds,
 }: VolunteerReportsDashboardProps) {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const { width: viewportWidth } = useWindowDimensions();
   const isCompactLayout = viewportWidth < 700;
+  const joinedEventIdSet = useMemo(
+    () => (joinedEventIds ? new Set(joinedEventIds) : null),
+    [joinedEventIds]
+  );
 
   const visibleReports = useMemo(
     () =>
       [...reports]
         .filter(report => report.status !== 'Rejected')
+        .filter(
+          report =>
+            !joinedEventIdSet ||
+            Boolean(report.projectId && joinedEventIdSet.has(report.projectId))
+        )
         .sort(
           (left, right) =>
             new Date(right.submittedAt).getTime() - new Date(left.submittedAt).getTime()
         ),
-    [reports]
+    [joinedEventIdSet, reports]
   );
   const eventCount = useMemo(
     () =>
@@ -263,17 +274,21 @@ export function VolunteerReportsDashboard({
   }, [volunteers, volunteerJoinRecords, volunteerTimeLogs, visibleReports]);
 
   const eventFolders = useMemo(() => {
-    const eventIds = new Set<string>([
-      ...volunteerJoinRecords.map(record => record.projectId),
-      ...volunteerTimeLogs.map(log => log.projectId),
-      ...visibleReports.map(report => report.projectId).filter((id): id is string => Boolean(id)),
-    ]);
+    const scopedProjects = joinedEventIdSet
+      ? projects.filter(project => joinedEventIdSet.has(project.id))
+      : projects;
+    const scopedReports = joinedEventIdSet
+      ? visibleReports.filter(report => Boolean(report.projectId && joinedEventIdSet.has(report.projectId)))
+      : visibleReports;
+    const scopedTimeLogs = joinedEventIdSet
+      ? volunteerTimeLogs.filter(log => joinedEventIdSet.has(log.projectId))
+      : volunteerTimeLogs;
 
-    return projects
+    return scopedProjects
       .filter(project => project.isEvent)
       .map(event => {
-        const eventReports = visibleReports.filter(report => report.projectId === event.id);
-        const eventLogs = volunteerTimeLogs.filter(log => log.projectId === event.id && isImageMediaUri(log.attendancePhoto || ''));
+        const eventReports = scopedReports.filter(report => report.projectId === event.id);
+        const eventLogs = scopedTimeLogs.filter(log => log.projectId === event.id && isImageMediaUri(log.attendancePhoto || ''));
 
         const photoObjects: { uri: string; date: string; submittedBy: string; reportId?: string }[] = [];
 
@@ -299,7 +314,7 @@ export function VolunteerReportsDashboard({
         };
       })
       .sort((left, right) => new Date(right.event.startDate || '').getTime() - new Date(left.event.startDate || '').getTime());
-  }, [projects, volunteerJoinRecords, volunteerTimeLogs, visibleReports]);
+  }, [joinedEventIdSet, projects, volunteerTimeLogs, visibleReports]);
 
   const selectedEvent = useMemo(() => eventFolders.find(f => f.event.id === selectedEventId)?.event || null, [eventFolders, selectedEventId]);
 

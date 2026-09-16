@@ -33,6 +33,7 @@ import VolunteerReportsDashboard, {
 } from '../components/VolunteerReportsDashboard';
 import AllReportsView from '../components/AllReportsView';
 import { mergeProjectRecordsPreservingMedia } from '../utils/projectMap';
+import { getVolunteerJoinedEventIds } from '../utils/volunteerEventParticipation';
 
 export interface SubmittedReport {
   id: string;
@@ -1008,14 +1009,45 @@ export default function ReportsScreen({ navigation, route }: any) {
     setShowUploadModal(true);
   }, []);
 
-  const userReports = useMemo(
-    () => (user?.role === 'admin' ? reports : reports.filter(report => report.submittedBy === user?.id)),
-    [reports, user?.id, user?.role]
+  const volunteerJoinedEventIds = useMemo(
+    () =>
+      user?.role === 'volunteer'
+        ? getVolunteerJoinedEventIds({
+            projects,
+            volunteer: volunteerProfileId
+              ? { id: volunteerProfileId, userId: user.id, pastProjects: [] }
+              : null,
+            volunteerUserId: user.id,
+            joinRecords: volunteerJoinRecords,
+          })
+        : new Set<string>(),
+    [projects, user?.id, user?.role, volunteerProfileId, volunteerJoinRecords]
   );
 
+  const volunteerEventTimeLogs = useMemo(
+    () =>
+      user?.role === 'volunteer'
+        ? volunteerTimeLogs.filter(log => volunteerJoinedEventIds.has(log.projectId))
+        : volunteerTimeLogs,
+    [user?.role, volunteerJoinedEventIds, volunteerTimeLogs]
+  );
+
+  const userReports = useMemo(() => {
+    const ownReports =
+      user?.role === 'admin'
+        ? reports
+        : reports.filter(report => report.submittedBy === user?.id);
+
+    return user?.role === 'volunteer'
+      ? ownReports.filter(report => Boolean(report.projectId && volunteerJoinedEventIds.has(report.projectId)))
+      : ownReports;
+  }, [reports, user?.id, user?.role, volunteerJoinedEventIds]);
+
   const volunteerEventProjects = useMemo(() => {
-    return projects.filter(project => Boolean(project.isEvent));
-  }, [projects]);
+    return projects.filter(
+      project => Boolean(project.isEvent) && volunteerJoinedEventIds.has(project.id)
+    );
+  }, [projects, volunteerJoinedEventIds]);
 
   const handleOpenUploadModal = useCallback(() => {
     if (user?.role === 'partner') {
@@ -1049,8 +1081,20 @@ export default function ReportsScreen({ navigation, route }: any) {
       return (
         <AllReportsView
           reports={user?.role === 'partner' ? partnerVisibleReports : reports}
-          projects={user?.role === 'partner' ? partnerVisibleProjects : projects}
-          volunteerTimeLogs={user?.role === 'partner' ? partnerVolunteerTimeLogs : volunteerTimeLogs}
+          projects={
+            user?.role === 'partner'
+              ? partnerVisibleProjects
+              : user?.role === 'volunteer'
+              ? volunteerEventProjects
+              : projects
+          }
+          volunteerTimeLogs={
+            user?.role === 'partner'
+              ? partnerVolunteerTimeLogs
+              : user?.role === 'volunteer'
+              ? volunteerEventTimeLogs
+              : volunteerTimeLogs
+          }
           volunteers={user?.role === 'partner' ? partnerVisibleVolunteers : volunteers}
           onViewReport={handleViewReport}
           onUploadReport={user?.role === 'partner' ? undefined : handleOpenUploadModal}
@@ -1072,6 +1116,8 @@ export default function ReportsScreen({ navigation, route }: any) {
         : volunteerEventProjects;
       const scopedVolunteerTimeLogs = user?.role === 'partner'
         ? partnerVolunteerTimeLogs
+        : user?.role === 'volunteer'
+        ? volunteerEventTimeLogs
         : volunteerTimeLogs;
       const scopedVolunteerJoinRecords = user?.role === 'partner'
         ? partnerVolunteerJoinRecords
@@ -1090,6 +1136,7 @@ export default function ReportsScreen({ navigation, route }: any) {
           isAdminView={user?.role === 'admin'}
           isPartnerView={user?.role === 'partner'}
           volunteers={user?.role === 'partner' ? partnerVisibleVolunteers : volunteers}
+          joinedEventIds={user?.role === 'volunteer' ? Array.from(volunteerJoinedEventIds) : undefined}
         />
       );
     }
@@ -1178,7 +1225,7 @@ export default function ReportsScreen({ navigation, route }: any) {
             : projects
         }
         userRole={user?.role}
-        volunteerTimeLogs={user?.role === 'volunteer' ? volunteerTimeLogs : undefined}
+        volunteerTimeLogs={user?.role === 'volunteer' ? volunteerEventTimeLogs : undefined}
         volunteerJoinRecords={user?.role === 'volunteer' ? volunteerJoinRecords : undefined}
         fieldOfficerProjectIds={user?.role === 'volunteer' ? fieldOfficerProjectIds : undefined}
         volunteerProfileId={user?.role === 'volunteer' ? volunteerProfileId : undefined}

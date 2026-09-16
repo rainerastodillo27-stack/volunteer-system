@@ -41,6 +41,7 @@ import { getPartnerForMappedProject, getProjectIdsForPartnerUser } from '../util
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 import { getProjectVolunteerMapEntries } from '../utils/projectVolunteers';
+import { getVolunteerJoinedEventIds } from '../utils/volunteerEventParticipation';
 
 // Displays the native project map with a detail sheet for the selected marker.
 export default function MappingScreen({ navigation }: any) {
@@ -97,12 +98,12 @@ export default function MappingScreen({ navigation }: any) {
             )
           : []
       );
-      const joinedVolunteerProjectIds = new Set([
-        ...snapshot.volunteerJoinRecords.map(record => record.projectId),
-        ...(snapshot.volunteerMatches || [])
-          .filter(match => match.status === 'Matched' || match.status === 'Requested')
-          .map(match => match.projectId),
-      ]);
+      const joinedVolunteerProjectIds = getVolunteerJoinedEventIds({
+        projects: mapSourceProjects,
+        volunteer: snapshot.volunteerProfile,
+        volunteerUserId: user?.id,
+        joinRecords: snapshot.volunteerJoinRecords,
+      });
 
 
       const visibleProjects =
@@ -110,21 +111,9 @@ export default function MappingScreen({ navigation }: any) {
           ? // Partner: only projects from APPROVED proposals
             mapSourceProjects.filter(project => partnerProjectIds.has(project.id))
           : user?.role === 'volunteer'
-          ? // Volunteer: only EVENTS (isEvent=true) that the volunteer has joined or requested/matched
+          ? // Volunteer: only events with an active or completed membership
             mapSourceProjects.filter(
-              project =>
-                project.isEvent &&
-                (
-                  joinedVolunteerProjectIds.has(project.id) ||
-                  (snapshot.volunteerProfile && (project.joinedUserIds || []).includes(snapshot.volunteerProfile.userId)) ||
-                  (snapshot.volunteerProfile && (project.volunteers || []).includes(snapshot.volunteerProfile.id)) ||
-                  (user?.id && (project.joinedUserIds || []).includes(user.id)) ||
-                  (project.internalTasks || []).some(task =>
-                    snapshot.volunteerProfile &&
-                    (task.assignedVolunteerId === snapshot.volunteerProfile.id ||
-                      (task.assignedVolunteerIds || []).includes(snapshot.volunteerProfile.id))
-                  )
-                )
+              project => project.isEvent && joinedVolunteerProjectIds.has(project.id)
             )
           : mapSourceProjects;
 

@@ -52,6 +52,63 @@ function hasVerifiedAttendance(log: VolunteerTimeLog): boolean {
 }
 
 /**
+ * Returns the event ids that represent real membership for one volunteer.
+ * Requests and matches are intentionally excluded: they are not joined
+ * events until an Active or Completed join record exists. The participant
+ * arrays are retained for older event records created before join records
+ * were introduced.
+ */
+export function getVolunteerJoinedEventIds({
+  projects,
+  volunteer,
+  volunteerUserId,
+  joinRecords = [],
+}: {
+  projects: Project[];
+  volunteer?: VolunteerReference;
+  volunteerUserId?: string | null;
+  joinRecords?: VolunteerProjectJoinRecord[];
+}): Set<string> {
+  const volunteerIds = new Set(
+    [volunteer?.id, volunteer?.userId, volunteerUserId]
+      .map(normalizedId)
+      .filter(Boolean),
+  );
+
+  if (volunteerIds.size === 0) {
+    return new Set();
+  }
+
+  const eventIds = new Set(projects.filter(isEvent).map(project => project.id));
+  const joinedEventIds = new Set<string>(
+    joinRecords
+      .filter(record => {
+        const status = String(record.participationStatus || 'Active').trim();
+        return (
+          (status === 'Active' || status === 'Completed') &&
+          (volunteerIds.has(normalizedId(record.volunteerId)) ||
+            volunteerIds.has(normalizedId(record.volunteerUserId)))
+        );
+      })
+      .map(record => normalizedId(record.projectId))
+      .filter(projectId => eventIds.has(projectId)),
+  );
+
+  // Legacy event records may contain the participant directly rather than a
+  // normalized volunteerProjectJoins row.
+  projects.filter(isEvent).forEach(project => {
+    if (
+      includesVolunteerId(project.volunteers, volunteerIds) ||
+      includesVolunteerId(project.joinedUserIds, volunteerIds)
+    ) {
+      joinedEventIds.add(project.id);
+    }
+  });
+
+  return new Set(Array.from(joinedEventIds).filter(projectId => eventIds.has(projectId)));
+}
+
+/**
  * Keeps volunteer event counters consistent across the admin and volunteer
  * views. A match request is not treated as a joined event; actual membership
  * comes from a join record, participant list, task assignment, time log, or

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import {
 
@@ -293,6 +294,12 @@ function upsertProjectChatLatestMessage(
 }
 
 const PROPOSAL_PREFIX = '___PROPOSAL_CARD___:';
+const LOCAL_HIDDEN_MESSAGES_KEY_PREFIX = 'nvc:hidden-message-ids:';
+
+function getLocalHiddenMessagesKey(userId: string): string {
+  return `${LOCAL_HIDDEN_MESSAGES_KEY_PREFIX}${encodeURIComponent(userId)}`;
+}
+
 // WebSocket delivery is immediate. This is only a low-frequency fallback when
 // a device briefly loses its socket, not a second-by-second database poll.
 const DIRECT_BACKEND_MESSAGE_POLL_MS = 20000;
@@ -312,6 +319,62 @@ type ProposalChatItem = {
 
 
 type ChatMessage = Message | ProjectGroupMessage;
+
+type MessageUnsendScope = 'self' | 'everyone';
+
+type MessageMenuProps = {
+  isOwn: boolean;
+  isOpen: boolean;
+  isLoading: boolean;
+  onToggle: () => void;
+  onSelect: (scope: MessageUnsendScope) => void;
+};
+
+function MessageMenu({ isOwn, isOpen, isLoading, onToggle, onSelect }: MessageMenuProps) {
+  return (
+    <View style={styles.msgMenuWrap}>
+      <TouchableOpacity
+        style={styles.msgMenuDotBtn}
+        onPress={onToggle}
+        activeOpacity={0.7}
+        disabled={isLoading}
+        accessibilityRole="button"
+        accessibilityLabel="Message options"
+        accessibilityState={{ expanded: isOpen, disabled: isLoading }}
+      >
+        {isLoading ? (
+          <ActivityIndicator size="small" color="#94a3b8" />
+        ) : (
+          <MaterialIcons name="more-horiz" size={18} color="#64748b" />
+        )}
+      </TouchableOpacity>
+      {isOpen ? (
+        <View style={[styles.msgMenuDropdown, isOwn && styles.msgMenuDropdownOwn]}>
+          <TouchableOpacity
+            style={styles.msgMenuDropdownItem}
+            onPress={() => onSelect('self')}
+            disabled={isLoading}
+            activeOpacity={0.8}
+          >
+            <MaterialIcons name="person-outline" size={16} color="#475569" />
+            <Text style={styles.msgMenuDropdownItemText}>Unsend for self</Text>
+          </TouchableOpacity>
+          {isOwn ? (
+            <TouchableOpacity
+              style={[styles.msgMenuDropdownItem, styles.msgMenuDropdownItemDanger]}
+              onPress={() => onSelect('everyone')}
+              disabled={isLoading}
+              activeOpacity={0.8}
+            >
+              <MaterialIcons name="public" size={16} color="#dc2626" />
+              <Text style={styles.msgMenuDropdownItemDangerText}>Unsend for everyone</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      ) : null}
+    </View>
+  );
+}
 
 type ChatSender = Pick<User, 'id' | 'name' | 'profilePhoto'>;
 
@@ -851,6 +914,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   const [conversationMenuAction, setConversationMenuAction] = useState<string | null>(null);
 
+  const [activeMessageMenu, setActiveMessageMenu] = useState<string | null>(null);
+
+  const [locallyHiddenMessageIds, setLocallyHiddenMessageIds] = useState<Set<string>>(new Set());
+
 
 
   const scrollRef = useRef<ScrollView>(null);
@@ -864,6 +931,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   const selectedProjectChatRef = useRef<ProjectChatItem | null>(null);
 
   const directMessagesRef = useRef<Message[]>([]);
+
+  const locallyHiddenMessageIdsRef = useRef<Set<string>>(new Set());
 
   const allUsersRef = useRef<User[]>([]);
 
@@ -1043,6 +1112,45 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       navigation.setOptions({ headerShown: true });
     }
   }, [view, isWide, navigation]);
+
+  // Keep "Unsend for self" local to this signed-in account/device. The
+  // shared message remains available to the other participant.
+  useEffect(() => {
+    const userId = messageUserId.trim();
+    let cancelled = false;
+    locallyHiddenMessageIdsRef.current = new Set();
+    setLocallyHiddenMessageIds(new Set());
+
+    if (!userId) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void AsyncStorage.getItem(getLocalHiddenMessagesKey(userId))
+      .then(raw => {
+        if (cancelled) return;
+        try {
+          const parsed = raw ? JSON.parse(raw) : [];
+          const hiddenIds = new Set<string>(
+            Array.isArray(parsed)
+              ? parsed.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+              : [],
+          );
+          locallyHiddenMessageIdsRef.current = hiddenIds;
+          setLocallyHiddenMessageIds(hiddenIds);
+        } catch {
+          // Ignore malformed local preferences and keep the shared messages.
+        }
+      })
+      .catch(() => {
+        // Local-only hiding is best effort.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [messageUserId]);
 
   // The backend emits this for every direct-message write, including proposal
   // review cards. Update the active conversation as soon as the event arrives.
@@ -2677,9 +2785,9 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     });
   };
 
-  const handleRequestUnsend = (message: ChatMessage) => {
+  const handleRequestUnsend = (message: ChatMessage, scope: MessageUnsendScope = 'everyone') => {
 
-    if (!messageUserId || message.senderId !== messageUserId) {
+    if (!messageUserId || (scope === 'everyone' && message.senderId !== messageUserId)) {
 
       return;
 
@@ -2688,6 +2796,38 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     const isGroupMessage = !('recipientId' in message);
     const targetProjectId = isGroupMessage ? message.projectId : '';
     const targetConversationUser = selectedUser;
+
+    if (scope === 'self') {
+      showConfirm({
+        title: 'Unsend for self',
+        message: 'Remove this message from your view only? Other people will still see it.',
+        confirmText: 'Unsend for self',
+        loadingText: 'Removing...',
+        cancelText: 'Cancel',
+        icon: 'person-outline',
+        iconColor: '#64748B',
+        confirmColor: '#166534',
+        onConfirm: async () => {
+          setConversationMenuAction(`unsend-self-${message.id}`);
+          const nextHiddenIds = new Set(locallyHiddenMessageIdsRef.current);
+          nextHiddenIds.add(message.id);
+          locallyHiddenMessageIdsRef.current = nextHiddenIds;
+          setLocallyHiddenMessageIds(nextHiddenIds);
+          try {
+            await AsyncStorage.setItem(
+              getLocalHiddenMessagesKey(messageUserId),
+              JSON.stringify(Array.from(nextHiddenIds)),
+            );
+            Alert.alert('Message Removed', 'The message was removed from your view.');
+          } catch {
+            Alert.alert('Message Removed for This Session', 'The message was hidden here but could not be saved on this device.');
+          } finally {
+            setConversationMenuAction(null);
+          }
+        },
+      });
+      return;
+    }
 
     showConfirm({
       title: 'Unsend Message',
@@ -5129,7 +5269,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
         >
 
-          {messages.length === 0 ? (
+          {messages.filter(message => !locallyHiddenMessageIds.has(message.id)).length === 0 ? (
 
             <View style={styles.emptyChat}>
 
@@ -5143,7 +5283,9 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
               // Deduplicate proposal cards with same status/timestamp (prevents duplicates)
               // Each status change (Pending → Rejected → Approved) is a separate card
-              const filteredMessages = dedupeProposalReviewCards(messages);
+              const filteredMessages = dedupeProposalReviewCards(
+                messages.filter(message => !locallyHiddenMessageIds.has(message.id)),
+              );
               const latestReviewStatusByApplicationId = new Map<string, PartnerProjectApplication['status']>();
               const latestReviewTimestampByApplicationId = new Map<string, number>();
               filteredMessages.forEach(reviewMessage => {
@@ -5301,32 +5443,44 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                 return (
 
-                  <View key={`proposal-${m.id}-${i}`} style={[styles.messageRow, isOwn ? styles.messageRowOwn : styles.messageRowOther, styles.proposalMessageRow]}>
+                  <View key={`proposal-${m.id}-${i}`} style={[styles.messageRow, isOwn ? styles.messageRowOwn : styles.messageRowOther, styles.proposalMessageRow, activeMessageMenu === m.id && styles.messageRowMenuOpen]}>
 
                     {senderIdentity}
 
-                    <ProposalMessageTemplate
-                      application={templateApplication}
-                      isAdmin={user?.role === 'admin'}
-                      isOwner={isOwn}
-                      isSubmitting={isReviewing && reviewingApplicationId === templateApplication.id}
-                      reviewAction={
-                        reviewingApplicationId === templateApplication.id
-                          ? reviewingStatus === 'Approved' ? 'approve' : reviewingStatus === 'Rejected' ? 'reject' : null
-                          : null
-                      }
-                      statusOverride={liveStatusOverride}
-                      reviewActionsDisabled={Boolean(user?.role === 'admin' && liveStatusOverride)}
-                      onEdit={app => openProposalRevision({ ...app, ...(app.proposalDetails || {}) })}
-                      onApprove={app => void handleReview(app, 'Approved')}
-                      onReject={app => handleRejectWithNotes(app)}
-                      onViewProjects={app => navigateToAvailableRoute(navigation, 'Projects', { projectId: app.projectId })}
-                      onOpenAttachment={(url, type) => {
-                        void handleOpenProposalAttachment(url, 0, type).catch(() => {
-                          Alert.alert('Attachment', 'Unable to preview this attachment on this device.');
-                        });
-                      }}
-                    />
+                    <View style={styles.messageBodyRow}>
+                      <MessageMenu
+                        isOwn={isOwn}
+                        isOpen={activeMessageMenu === m.id}
+                        isLoading={conversationMenuAction === `unsend-self-${m.id}` || conversationMenuAction === `unsend-${m.id}`}
+                        onToggle={() => setActiveMessageMenu(current => current === m.id ? null : m.id)}
+                        onSelect={scope => {
+                          setActiveMessageMenu(null);
+                          handleRequestUnsend(m, scope);
+                        }}
+                      />
+                      <ProposalMessageTemplate
+                        application={templateApplication}
+                        isAdmin={user?.role === 'admin'}
+                        isOwner={isOwn}
+                        isSubmitting={isReviewing && reviewingApplicationId === templateApplication.id}
+                        reviewAction={
+                          reviewingApplicationId === templateApplication.id
+                            ? reviewingStatus === 'Approved' ? 'approve' : reviewingStatus === 'Rejected' ? 'reject' : null
+                            : null
+                        }
+                        statusOverride={liveStatusOverride}
+                        reviewActionsDisabled={Boolean(user?.role === 'admin' && liveStatusOverride)}
+                        onEdit={app => openProposalRevision({ ...app, ...(app.proposalDetails || {}) })}
+                        onApprove={app => void handleReview(app, 'Approved')}
+                        onReject={app => handleRejectWithNotes(app)}
+                        onViewProjects={app => navigateToAvailableRoute(navigation, 'Projects', { projectId: app.projectId })}
+                        onOpenAttachment={(url, type) => {
+                          void handleOpenProposalAttachment(url, 0, type).catch(() => {
+                            Alert.alert('Attachment', 'Unable to preview this attachment on this device.');
+                          });
+                        }}
+                      />
+                    </View>
 
                     <TouchableOpacity 
 
@@ -5401,22 +5555,6 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                     </TouchableOpacity>
 
                     <View style={styles.messageFooter}>
-                      {isOwn ? (
-                        <TouchableOpacity
-                          style={styles.unsendButton}
-                          onPress={() => handleRequestUnsend(m)}
-                          activeOpacity={0.8}
-                          disabled={conversationMenuAction === `unsend-${m.id}`}
-                          accessibilityLabel="Unsend message"
-                        >
-                          {conversationMenuAction === `unsend-${m.id}` ? (
-                            <ActivityIndicator size="small" color="#dc2626" />
-                          ) : (
-                            <MaterialIcons name="undo" size={14} color="#dc2626" />
-                          )}
-                          <Text style={styles.unsendButtonText}>Unsend</Text>
-                        </TouchableOpacity>
-                      ) : null}
                       <Text style={styles.messageTime}>
                         {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </Text>
@@ -5441,127 +5579,120 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
               return (
 
-                <View key={`msg-${m.id}-${i}`} style={[styles.messageRow, isOwn ? styles.messageRowOwn : styles.messageRowOther]}>
+                <View key={`msg-${m.id}-${i}`} style={[styles.messageRow, isOwn ? styles.messageRowOwn : styles.messageRowOther, activeMessageMenu === m.id && styles.messageRowMenuOpen]}>
 
                   {senderIdentity}
 
-                  <View style={[styles.bubble, isOwn ? styles.bubbleOwn : styles.bubbleOther]}>
+                  <View style={styles.messageBodyRow}>
+                    <MessageMenu
+                      isOwn={isOwn}
+                      isOpen={activeMessageMenu === m.id}
+                      isLoading={conversationMenuAction === `unsend-self-${m.id}` || conversationMenuAction === `unsend-${m.id}`}
+                      onToggle={() => setActiveMessageMenu(current => current === m.id ? null : m.id)}
+                      onSelect={scope => {
+                        setActiveMessageMenu(null);
+                        handleRequestUnsend(m, scope);
+                      }}
+                    />
+                    <View style={[styles.bubble, isOwn ? styles.bubbleOwn : styles.bubbleOther]}>
 
-                    {m.content && !isAttachmentPlaceholder ? (
+                      {m.content && !isAttachmentPlaceholder ? (
 
-                      <Text style={[styles.bubbleText, isOwn && styles.bubbleTextOwn]}>{m.content}</Text>
+                        <Text style={[styles.bubbleText, isOwn && styles.bubbleTextOwn]}>{m.content}</Text>
 
-                    ) : null}
+                      ) : null}
 
-                    {messageAttachments.length > 0 ? (
+                      {messageAttachments.length > 0 ? (
 
-                      <View style={styles.messageAttachmentList}>
+                        <View style={styles.messageAttachmentList}>
 
-                        {messageAttachments.map((attachmentUri, attachmentIndex) => {
+                          {messageAttachments.map((attachmentUri, attachmentIndex) => {
 
-                          const attachmentName = getAttachmentName(attachmentUri, attachmentIndex);
+                            const attachmentName = getAttachmentName(attachmentUri, attachmentIndex);
 
-                          const resolvedAttachmentUri = resolveMessageAttachmentUri(attachmentUri);
-                          const isImageAttachment = isImageMediaUri(resolvedAttachmentUri);
-                          const isVideoAttachment = !isImageAttachment && isVideoMediaUri(resolvedAttachmentUri);
+                            const resolvedAttachmentUri = resolveMessageAttachmentUri(attachmentUri);
+                            const isImageAttachment = isImageMediaUri(resolvedAttachmentUri);
+                            const isVideoAttachment = !isImageAttachment && isVideoMediaUri(resolvedAttachmentUri);
 
 
 
-                          return (
+                            return (
 
-                            <TouchableOpacity
+                              <TouchableOpacity
 
-                              key={`${m.id}-attachment-${attachmentIndex}`}
-
-                              style={[
-
-                                styles.messageAttachmentCard,
-
-                                isOwn && styles.messageAttachmentCardOwn,
-
-                              ]}
-
-                              onPress={() => void handleOpenProposalAttachment(resolvedAttachmentUri, attachmentIndex)}
-
-                              activeOpacity={0.85}
-
-                            >
-
-                              {isImageAttachment ? (
-
-                                <Image source={{ uri: resolvedAttachmentUri }} style={styles.messageAttachmentImage} />
-
-                              ) : isVideoAttachment ? (
-
-                                <View style={[styles.messageAttachmentFileIcon, styles.messageAttachmentVideoIcon, isOwn && styles.messageAttachmentFileIconOwn]}>
-
-                                  <MaterialIcons name="play-circle-filled" size={34} color={isOwn ? '#dcfce7' : '#166534'} />
-
-                                  <Text style={[styles.messageAttachmentVideoLabel, isOwn && styles.messageAttachmentNameOwn]}>Video</Text>
-
-                                </View>
-
-                              ) : (
-
-                                <View style={[styles.messageAttachmentFileIcon, isOwn && styles.messageAttachmentFileIconOwn]}>
-
-                                  <MaterialIcons name="insert-drive-file" size={22} color={isOwn ? '#dcfce7' : '#166534'} />
-
-                                </View>
-
-                              )}
-
-                              <Text
+                                key={`${m.id}-attachment-${attachmentIndex}`}
 
                                 style={[
 
-                                  styles.messageAttachmentName,
+                                  styles.messageAttachmentCard,
 
-                                  isOwn && styles.messageAttachmentNameOwn,
+                                  isOwn && styles.messageAttachmentCardOwn,
 
                                 ]}
 
-                                numberOfLines={1}
+                                onPress={() => void handleOpenProposalAttachment(resolvedAttachmentUri, attachmentIndex)}
+
+                                activeOpacity={0.85}
 
                               >
 
-                                {attachmentName}
+                                {isImageAttachment ? (
 
-                              </Text>
+                                  <Image source={{ uri: resolvedAttachmentUri }} style={styles.messageAttachmentImage} />
 
-                            </TouchableOpacity>
+                                ) : isVideoAttachment ? (
 
-                          );
+                                  <View style={[styles.messageAttachmentFileIcon, styles.messageAttachmentVideoIcon, isOwn && styles.messageAttachmentFileIconOwn]}>
 
-                        })}
+                                    <MaterialIcons name="play-circle-filled" size={34} color={isOwn ? '#dcfce7' : '#166534'} />
 
-                      </View>
+                                    <Text style={[styles.messageAttachmentVideoLabel, isOwn && styles.messageAttachmentNameOwn]}>Video</Text>
 
-                    ) : null}
+                                  </View>
 
+                                ) : (
+
+                                  <View style={[styles.messageAttachmentFileIcon, isOwn && styles.messageAttachmentFileIconOwn]}>
+
+                                    <MaterialIcons name="insert-drive-file" size={22} color={isOwn ? '#dcfce7' : '#166534'} />
+
+                                  </View>
+
+                                )}
+
+                                <Text
+
+                                  style={[
+
+                                    styles.messageAttachmentName,
+
+                                    isOwn && styles.messageAttachmentNameOwn,
+
+                                  ]}
+
+                                  numberOfLines={1}
+
+                                >
+
+                                  {attachmentName}
+
+                                </Text>
+
+                              </TouchableOpacity>
+
+                            );
+
+                          })}
+
+                        </View>
+
+                      ) : null}
+
+                    </View>
                   </View>
 
-                  {isOwn ? (
-                    <TouchableOpacity
-                      style={styles.unsendButton}
-                      onPress={() => handleRequestUnsend(m)}
-                      activeOpacity={0.8}
-                      disabled={conversationMenuAction === `unsend-${m.id}`}
-                      accessibilityLabel="Unsend message"
-                    >
-                      {conversationMenuAction === `unsend-${m.id}` ? (
-                        <ActivityIndicator size="small" color="#dc2626" />
-                      ) : (
-                        <MaterialIcons name="undo" size={14} color="#dc2626" />
-                      )}
-                      <Text style={styles.unsendButtonText}>Unsend</Text>
-                    </TouchableOpacity>
-                  ) : null}
-
                   <Text style={styles.messageTime}>
-
                     {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-
                   </Text>
 
                 </View>
@@ -7609,6 +7740,10 @@ const styles = StyleSheet.create({
 
   proposalMessageRow: { maxWidth: '100%', width: '100%', alignSelf: 'stretch' },
 
+  messageRowMenuOpen: { zIndex: 20 },
+
+  messageBodyRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 4, maxWidth: '100%' },
+
   messageRowOwn: { alignSelf: 'flex-end', alignItems: 'flex-end' },
 
   messageRowOther: { alignSelf: 'flex-start' },
@@ -7638,6 +7773,38 @@ const styles = StyleSheet.create({
   unsendButton: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingVertical: 2, paddingHorizontal: 4 },
 
   unsendButtonText: { color: '#dc2626', fontSize: 10, fontWeight: '800' },
+
+  msgMenuWrap: { position: 'relative', zIndex: 30, alignSelf: 'flex-end' },
+
+  msgMenuDotBtn: { padding: 4, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+
+  msgMenuDropdown: {
+    position: 'absolute',
+    bottom: 26,
+    left: 0,
+    backgroundColor: '#ffffff',
+    borderRadius: 10,
+    paddingVertical: 4,
+    minWidth: 150,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    elevation: 12,
+    zIndex: 999,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
+  },
+
+  msgMenuDropdownOwn: { left: 'auto', right: 0 },
+
+  msgMenuDropdownItem: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 9, paddingHorizontal: 14 },
+
+  msgMenuDropdownItemText: { color: '#475569', fontSize: 13, fontWeight: '700' },
+
+  msgMenuDropdownItemDanger: { borderTopWidth: 1, borderTopColor: '#f1f5f9' },
+
+  msgMenuDropdownItemDangerText: { color: '#dc2626', fontSize: 13, fontWeight: '700' },
 
   messageAttachmentList: { gap: 6, marginTop: 8 },
 

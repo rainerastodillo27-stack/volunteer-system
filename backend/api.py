@@ -3294,6 +3294,146 @@ def _postgres_get_volunteer_by_user_id(
     return volunteers[0] if volunteers else None
 
 
+def _get_volunteer_joined_event_scope(
+    connection: Any,
+    user_id: str,
+) -> tuple[set[str], set[str]]:
+    """Return the identifiers and event ids a volunteer actually joined.
+
+    Requested/matched records are intentionally excluded. Active and
+    Completed join records represent membership, while the participant arrays
+    preserve compatibility with older event rows created before join records
+    existed.
+    """
+    normalized_user_id = str(user_id or "").strip()
+    volunteer = _postgres_get_volunteer_by_user_id(
+        connection,
+        normalized_user_id,
+        include_media=False,
+    )
+    volunteer_identifiers = {
+        value
+        for value in (
+            normalized_user_id,
+            str((volunteer or {}).get("id") or "").strip(),
+            str((volunteer or {}).get("userId") or "").strip(),
+        )
+        if value
+    }
+    if not volunteer_identifiers:
+        return set(), set()
+
+    joined_event_ids: set[str] = set()
+    join_records = get_postgres_hot_storage_collection(connection, "volunteerProjectJoins")
+    for record in join_records:
+        status = str(record.get("participationStatus") or "Active").strip()
+        record_identifiers = {
+            str(record.get(field) or "").strip()
+            for field in ("volunteerId", "volunteerUserId")
+            if str(record.get(field) or "").strip()
+        }
+        project_id = str(record.get("projectId") or "").strip()
+        if status in {"Active", "Completed"} and project_id and record_identifiers & volunteer_identifiers:
+            joined_event_ids.add(project_id)
+
+    event_records = (
+        get_postgres_hot_storage_collection(connection, "events")
+        + get_postgres_hot_storage_collection(connection, "projects")
+    )
+    known_event_ids = {
+        str(event.get("id") or "").strip()
+        for event in event_records
+        if bool(event.get("isEvent")) and str(event.get("id") or "").strip()
+    }
+    for event in event_records:
+        if not bool(event.get("isEvent")):
+            continue
+        event_id = str(event.get("id") or "").strip()
+        if not event_id:
+            continue
+        participant_ids = {
+            str(value or "").strip()
+            for field in ("volunteers", "joinedUserIds")
+            for value in (event.get(field) or [])
+            if str(value or "").strip()
+        }
+        if participant_ids & volunteer_identifiers:
+            joined_event_ids.add(event_id)
+
+    # A legacy history entry is accepted only when it points to an event; a
+    # parent program must never become a report/photo access grant.
+    joined_event_ids.update(
+        str(project_id or "").strip()
+        for project_id in (volunteer or {}).get("pastProjects") or []
+        if str(project_id or "").strip() in known_event_ids
+    )
+
+    return volunteer_identifiers, joined_event_ids & known_event_ids
+
+
+def _scope_volunteer_storage_collection(
+    connection: Any,
+    key: str,
+    value: Any,
+    session: dict[str, Any],
+) -> Any:
+    """Prevent volunteer sessions from receiving unrelated report media."""
+    if str(session.get("role") or "").strip().lower() != "volunteer":
+        return value
+
+    scoped_keys = {
+        "partnerReports",
+        "publishedImpactReports",
+        "volunteerTimeLogs",
+        "volunteerProjectJoins",
+    }
+    if key not in scoped_keys:
+        return value
+
+    volunteer_identifiers, joined_event_ids = _get_volunteer_joined_event_scope(
+        connection,
+        str(session.get("sub") or "").strip(),
+    )
+    session_user_id = str(session.get("sub") or "").strip()
+    items = value if isinstance(value, list) else []
+
+    if key in {"partnerReports", "publishedImpactReports"}:
+        return [
+            item
+            for item in items
+            if isinstance(item, dict)
+            and str(item.get("projectId") or "").strip() in joined_event_ids
+            and session_user_id
+            in {
+                str(item.get("submitterUserId") or "").strip(),
+                str(item.get("submittedBy") or "").strip(),
+                str(item.get("partnerUserId") or "").strip(),
+            }
+        ]
+
+    if key == "volunteerTimeLogs":
+        return [
+            item
+            for item in items
+            if isinstance(item, dict)
+            and str(item.get("projectId") or "").strip() in joined_event_ids
+            and str(item.get("volunteerId") or "").strip() in volunteer_identifiers
+        ]
+
+    return [
+        item
+        for item in items
+        if isinstance(item, dict)
+        and str(item.get("projectId") or "").strip() in joined_event_ids
+        and (
+            str(item.get("volunteerId") or "").strip() in volunteer_identifiers
+            or str(item.get("volunteerUserId") or "").strip() in volunteer_identifiers
+        )
+        and str(item.get("participationStatus") or "Active").strip()
+        in {"Active", "Completed"}
+    ]
+
+
 def _volunteer_has_time_in_for_project(connection: Any, volunteer_id: str, project_id: str) -> bool:
     time_logs = _postgres_get_volunteer_time_logs(connection, volunteer_id)
     return any(
@@ -6468,6 +6608,16 @@ def get_volunteer_logs(request: FastAPIRequest, volunteer_id: str) -> dict[str, 
         if session.get("role") != "admin" and owner_user_id != str(session.get("sub") or ""):
             raise HTTPException(status_code=403, detail="You are not allowed to access these attendance logs.")
         logs = _postgres_reset_stale_daily_time_logs(connection, volunteer_id)
+        if session.get("role") == "volunteer":
+            _, joined_event_ids = _get_volunteer_joined_event_scope(
+                connection,
+                str(session.get("sub") or "").strip(),
+            )
+            logs = [
+                log
+                for log in logs
+                if str(log.get("projectId") or "").strip() in joined_event_ids
+            ]
     return {"logs": logs}
 
 
@@ -6492,6 +6642,17 @@ async def start_volunteer_log(
             raise HTTPException(status_code=404, detail="Project not found.")
 
         now = datetime.now(timezone.utc)
+
+        if bool(project.get("isEvent")):
+            _, joined_event_ids = _get_volunteer_joined_event_scope(
+                connection,
+                str(session.get("sub") or "").strip(),
+            )
+            if payload.projectId not in joined_event_ids:
+                raise HTTPException(
+                    status_code=403,
+                    detail="You must join this event before uploading attendance photos.",
+                )
 
         if bool(project.get("isEvent")) and not _volunteer_is_assigned_to_event_task(
             connection,
@@ -6638,6 +6799,19 @@ async def end_volunteer_log(
             raise HTTPException(status_code=404, detail="Volunteer not found.")
         if session.get("role") != "admin" and str(volunteer.get("userId") or "").strip() != str(session.get("sub") or ""):
             raise HTTPException(status_code=403, detail="You can only end your own attendance log.")
+        project, _ = _postgres_get_project_like_item_by_id(connection, payload.projectId)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found.")
+        if session.get("role") == "volunteer" and bool(project.get("isEvent")):
+            _, joined_event_ids = _get_volunteer_joined_event_scope(
+                connection,
+                str(session.get("sub") or "").strip(),
+            )
+            if payload.projectId not in joined_event_ids:
+                raise HTTPException(
+                    status_code=403,
+                    detail="You must join this event before accessing its attendance record.",
+                )
         existing_logs = _postgres_reset_stale_daily_time_logs(connection, volunteer_id)
         active_log = next(
             (
@@ -8421,8 +8595,13 @@ def mark_admin_notification_read(
 
 @app.get("/storage/{key}")
 # API endpoint that reads one storage key from app storage or hot storage.
-def get_storage_item(key: str, include_images: bool = False) -> dict[str, Any]:
+def get_storage_item(
+    request: FastAPIRequest,
+    key: str,
+    include_images: bool = False,
+) -> dict[str, Any]:
     _require_postgres()
+    session = _get_session_user(request)
     if not is_hot_storage_key(key) and key not in SPECIAL_STORAGE_KEYS:
         return {"key": key, "value": None}
     try:
@@ -8433,6 +8612,7 @@ def get_storage_item(key: str, include_images: bool = False) -> dict[str, Any]:
                 )
             else:
                 value = _get_cached_collection(connection, key, include_images=include_images)
+            value = _scope_volunteer_storage_collection(connection, key, value, session)
             return {"key": key, "value": value}
     except Exception as error:
         print(f"[ERROR] Failed to get storage key '{key}': {type(error).__name__}: {error}")
@@ -8618,9 +8798,13 @@ async def delete_program_track(track_id: str) -> dict[str, Any]:
 @app.post("/storage/batch")
 # API endpoint that reads multiple storage keys in a single request.
 # OPTIMIZED: Fetch keys in parallel using separate connections to avoid sequential DB queries.
-def get_storage_items_batch(payload: StorageBatchPayload) -> dict[str, dict[str, Any]]:
+def get_storage_items_batch(
+    request: FastAPIRequest,
+    payload: StorageBatchPayload,
+) -> dict[str, dict[str, Any]]:
     import time
     request_start = time.time()
+    session = _get_session_user(request)
     try:
         keys = [key for key in payload.keys if key]
         items: dict[str, Any] = {key: None for key in keys}
@@ -8644,6 +8828,7 @@ def get_storage_items_batch(payload: StorageBatchPayload) -> dict[str, dict[str,
                             key,
                             include_images=payload.include_images,
                         )
+                    value = _scope_volunteer_storage_collection(connection, key, value, session)
                     query_time = time.time() - fetch_start - conn_time
                     if conn_time > 1.0 or query_time > 1.0:
                         print(f"[PERF] Key '{key}': connection={conn_time:.1f}s, query={query_time:.1f}s")
@@ -8808,9 +8993,14 @@ def get_project_record_by_id(item_id: str) -> dict[str, Any]:
 
 
 @app.get("/storage/{key}/items/{item_id}")
-def get_storage_item_by_id(key: str, item_id: str) -> dict[str, Any]:
+def get_storage_item_by_id(
+    request: FastAPIRequest,
+    key: str,
+    item_id: str,
+) -> dict[str, Any]:
     """Read one full relational record for an explicit detail/preview view."""
     _require_postgres()
+    session = _get_session_user(request)
     if not is_hot_storage_key(key):
         raise HTTPException(status_code=400, detail=f"Unsupported storage key '{key}'.")
 
@@ -8821,7 +9011,13 @@ def get_storage_item_by_id(key: str, item_id: str) -> dict[str, Any]:
     try:
         with get_connection() as connection:
             item = _postgres_get_hot_item_by_id(connection, key, normalized_item_id)
+            if item is not None:
+                scoped_items = _scope_volunteer_storage_collection(connection, key, [item], session)
+            else:
+                scoped_items = []
         if item is None:
+            raise HTTPException(status_code=404, detail="Storage item not found.")
+        if not scoped_items:
             raise HTTPException(status_code=404, detail="Storage item not found.")
         return {"key": key, "item": item}
     except HTTPException:
@@ -9309,6 +9505,17 @@ async def submit_report(request: FastAPIRequest, payload: ReportSubmitPayload) -
                         status_code=400,
                         detail="Volunteer profile not found. You must complete your volunteer profile first.",
                     )
+
+                if bool(project.get("isEvent")):
+                    _, joined_event_ids = _get_volunteer_joined_event_scope(
+                        connection,
+                        submitter_user_id,
+                    )
+                    if project_id not in joined_event_ids:
+                        raise HTTPException(
+                            status_code=403,
+                            detail="You must join this event before submitting a report.",
+                        )
 
                 if not _volunteer_has_time_in_for_project(connection, str(volunteer.get("id") or ""), project_id):
                     raise HTTPException(
