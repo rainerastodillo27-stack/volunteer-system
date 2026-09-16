@@ -42,7 +42,6 @@ import { getAttachmentLabel } from '../utils/media';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 
 const roleOptions: UserRole[] = ['admin', 'partner', 'volunteer'];
-const USER_LIST_REFRESH_INTERVAL_MS = 10000;
 
 export default function UserManagementScreen() {
   const { user, isAdmin } = useAuth();
@@ -160,16 +159,8 @@ export default function UserManagementScreen() {
         void loadUsers(true);
       });
 
-      // Realtime notifications are best-effort across devices. Poll while the
-      // screen is visible so a registration made on mobile appears without a
-      // manual browser refresh even if the WebSocket event was missed.
-      const refreshTimer = setInterval(() => {
-        void loadUsers(true);
-      }, USER_LIST_REFRESH_INTERVAL_MS);
-
       return () => {
         unsubscribe();
-        clearInterval(refreshTimer);
       };
     }, [isAdmin, loadUsers])
   );

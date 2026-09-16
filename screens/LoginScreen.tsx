@@ -385,6 +385,7 @@ export default function LoginScreen() {
   const yearPickerListRef = useRef<ScrollView | null>(null);
   const { login } = useAuth();
   const mountedRef = useRef(true);
+  const emailCheckVersionRef = useRef(0);
 
   useEffect(() => {
     setInitialized(true);
@@ -392,6 +393,11 @@ export default function LoginScreen() {
 
     return () => {
       mountedRef.current = false;
+      emailCheckVersionRef.current += 1;
+      if (emailCheckTimerRef.current) {
+        clearTimeout(emailCheckTimerRef.current);
+        emailCheckTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -846,6 +852,11 @@ export default function LoginScreen() {
 
   // Clears all signup fields after registration or when the modal is closed.
   const resetSignupForm = () => {
+    emailCheckVersionRef.current += 1;
+    if (emailCheckTimerRef.current) {
+      clearTimeout(emailCheckTimerRef.current);
+      emailCheckTimerRef.current = null;
+    }
     setSignupName("");
     setSignupEmail("");
     setSignupEmailForOtp("");
@@ -913,6 +924,12 @@ export default function LoginScreen() {
   };
 
   const updateSignupEmail = (value: string) => {
+    const emailCheckVersion = emailCheckVersionRef.current + 1;
+    emailCheckVersionRef.current = emailCheckVersion;
+    if (emailCheckTimerRef.current) {
+      clearTimeout(emailCheckTimerRef.current);
+      emailCheckTimerRef.current = null;
+    }
     setSignupEmail(value);
     setSignupValidationError(null);
     setEmailExistsError(null);
@@ -926,10 +943,8 @@ export default function LoginScreen() {
       setSignupOtpPhase("idle");
       setOtpSecondsLeft(0);
     }
-    // Debounce email duplicate check
-    if (emailCheckTimerRef.current) {
-      clearTimeout(emailCheckTimerRef.current);
-    }
+    // Debounce email duplicate check. Its response is ignored if the form has
+    // moved on to OTP verification or registration since this request began.
     if (normalizedEmail && normalizedEmail.includes("@")) {
       emailCheckTimerRef.current = setTimeout(async () => {
         try {
@@ -945,6 +960,13 @@ export default function LoginScreen() {
           );
           if (response.ok) {
             const data = (await response.json()) as { exists?: boolean; message?: string };
+            if (
+              emailCheckVersionRef.current !== emailCheckVersion ||
+              normalizeEmailInput(signupEmail) !== normalizedEmail ||
+              signupOtpPhase !== "idle"
+            ) {
+              return;
+            }
             if (data.exists) {
               setEmailExistsError(data.message || "An account with this email already exists.");
             } else {
@@ -1162,6 +1184,14 @@ export default function LoginScreen() {
       setSignupValidationError(errorMsg);
       Alert.alert("Validation Error", errorMsg);
       return;
+    }
+
+    // Do not let the availability check that ran while the user was typing
+    // overwrite the OTP state after this flow has started.
+    emailCheckVersionRef.current += 1;
+    if (emailCheckTimerRef.current) {
+      clearTimeout(emailCheckTimerRef.current);
+      emailCheckTimerRef.current = null;
     }
 
     try {
@@ -1487,6 +1517,11 @@ export default function LoginScreen() {
       return;
     }
     signupSubmitInFlightRef.current = true;
+    emailCheckVersionRef.current += 1;
+    if (emailCheckTimerRef.current) {
+      clearTimeout(emailCheckTimerRef.current);
+      emailCheckTimerRef.current = null;
+    }
 
     try {
       setSignupLoading(true);
@@ -1558,6 +1593,9 @@ export default function LoginScreen() {
             }
             : undefined,
       });
+
+      setEmailExistsError(null);
+      setSignupValidationError(null);
 
       setIdentifier(createdUser.email || createdUser.phone || "");
       setPassword(createdUser.password || "");

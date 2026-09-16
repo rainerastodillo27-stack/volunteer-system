@@ -245,8 +245,11 @@ let nextStorageSubscriberId = 1;
 let sharedStorageSocket: WebSocket | null = null;
 let sharedStorageHeartbeat: ReturnType<typeof setInterval> | null = null;
 let sharedStorageReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let sharedStoragePollTimer: ReturnType<typeof setInterval> | null = null;
+let sharedStoragePollInFlight = false;
 let sharedStoragePendingChangeTimer: ReturnType<typeof setTimeout> | null = null;
 const sharedStoragePendingChangedKeys = new Set<string>();
+const sharedStoragePollFingerprints = new Map<string, string>();
 const CROSS_TAB_STORAGE_CHANNEL_NAME = 'volcre:storage-changes';
 const CROSS_TAB_STORAGE_EVENT_KEY = 'volcre:storage-change-event';
 const CROSS_TAB_SOURCE_ID = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -377,6 +380,78 @@ function handleCrossTabStoragePayload(payload: unknown) {
     ? event.keys.filter((key): key is string => typeof key === 'string')
     : [];
   handleExternalStorageChange(changedKeys);
+}
+
+function getSubscribedRemoteStorageKeys(): string[] {
+  const keys = new Set<string>();
+  for (const subscriber of storageChangeSubscribers.values()) {
+    for (const key of subscriber.watchedKeys) {
+      if (!LOCAL_ONLY_STORAGE_KEYS.has(key)) {
+        keys.add(key);
+      }
+    }
+  }
+  return Array.from(keys).sort();
+}
+
+async function pollSharedStorageChanges(): Promise<void> {
+  if (
+    sharedStoragePollInFlight ||
+    !hasStorageChangeSubscribers() ||
+    sharedStorageSocket?.readyState === WebSocket.OPEN
+  ) {
+    return;
+  }
+
+  if (!(await getApiAuthToken())) {
+    return;
+  }
+
+  const keys = getSubscribedRemoteStorageKeys();
+  if (keys.length === 0) {
+    return;
+  }
+
+  sharedStoragePollInFlight = true;
+  try {
+    const remoteValues = await fetchRemoteStorageItems(keys);
+    const changedKeys: string[] = [];
+    for (const key of keys) {
+      const fingerprint = JSON.stringify(remoteValues[key] ?? null) ?? 'null';
+      const previousFingerprint = sharedStoragePollFingerprints.get(key);
+      if (previousFingerprint !== undefined && previousFingerprint !== fingerprint) {
+        changedKeys.push(key);
+      }
+      sharedStoragePollFingerprints.set(key, fingerprint);
+    }
+
+    if (changedKeys.length > 0) {
+      handleExternalStorageChange(changedKeys);
+    }
+  } catch {
+    // WebSocket reconnect and the next poll will recover transient failures.
+  } finally {
+    sharedStoragePollInFlight = false;
+  }
+}
+
+function startSharedStoragePoller(): void {
+  if (sharedStoragePollTimer || getSubscribedRemoteStorageKeys().length === 0) {
+    return;
+  }
+
+  void pollSharedStorageChanges();
+  sharedStoragePollTimer = setInterval(() => {
+    void pollSharedStorageChanges();
+  }, STORAGE_CHANGE_POLL_INTERVAL_MS);
+}
+
+function stopSharedStoragePoller(): void {
+  if (sharedStoragePollTimer) {
+    clearInterval(sharedStoragePollTimer);
+    sharedStoragePollTimer = null;
+  }
+  sharedStoragePollFingerprints.clear();
 }
 
 function ensureCrossTabStorageListeners() {
@@ -518,6 +593,12 @@ async function connectSharedStorageSocket() {
         sharedStorageSocket.send('ping');
       }
     }, 25000);
+
+    // Reconcile changes that happened while this client was disconnected.
+    const subscribedKeys = getSubscribedRemoteStorageKeys();
+    if (subscribedKeys.length > 0) {
+      handleExternalStorageChange(subscribedKeys);
+    }
   };
 
   sharedStorageSocket.onmessage = event => {
@@ -5431,6 +5512,7 @@ export function subscribeToStorageChanges(
 
   ensureCrossTabStorageListeners();
   connectSharedStorageSocket();
+  startSharedStoragePoller();
 
   return () => {
     const subscriber = storageChangeSubscribers.get(subscriberId);
@@ -5442,6 +5524,9 @@ export function subscribeToStorageChanges(
     if (!hasStorageChangeSubscribers()) {
       clearSharedStorageSocketResources(true);
       sharedStoragePendingChangedKeys.clear();
+      stopSharedStoragePoller();
+    } else if (getSubscribedRemoteStorageKeys().length === 0) {
+      stopSharedStoragePoller();
     }
   };
 }

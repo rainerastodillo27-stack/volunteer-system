@@ -5703,8 +5703,38 @@ def auth_register(payload: RegistrationPayload) -> dict[str, Any]:
             raise HTTPException(status_code=400, detail="Select a valid partner sector.")
 
     with get_connection() as connection:
-        if _is_email_already_registered(email, connection):
-            raise HTTPException(status_code=409, detail="An account with this email already exists.")
+        # A mobile client can lose the response after the database commit and
+        # retry the same registration. Treat that exact, verified replay as a
+        # successful submission so the user sees confirmation instead of a
+        # misleading duplicate-email error. A different password or role is
+        # still rejected normally.
+        existing_user = _get_user_by_identifier(email, connection)
+        if existing_user is not None:
+            is_same_verified_submission = (
+                _get_demo_account(email) is None
+                and str(existing_user.get("role") or "").strip().lower() == role
+                and verify_password(password, existing_user.get("password"))
+            )
+            if not is_same_verified_submission:
+                raise HTTPException(status_code=409, detail="An account with this email already exists.")
+
+            saved_user = dict(existing_user)
+            # Keep the response shape used by the original successful
+            # registration so the mobile client can finish its confirmation
+            # flow without exposing the stored bcrypt hash.
+            saved_user["password"] = password
+            saved_user["hasPassword"] = True
+            replay_source = {
+                **saved_user,
+                "volunteerMembershipSheet": volunteer_membership,
+            }
+            if role == "volunteer" and _ensure_volunteer_profile_for_user(connection, replay_source):
+                connection.commit()
+                _invalidate_collection_cache(["users", "volunteers"])
+            return {
+                "user": saved_user,
+                "message": "Registration was already submitted successfully. An administrator must approve the account before login is unlocked.",
+            }
         if phone and _is_phone_already_registered(phone, connection):
             raise HTTPException(status_code=409, detail="An account with this phone number already exists.")
 
