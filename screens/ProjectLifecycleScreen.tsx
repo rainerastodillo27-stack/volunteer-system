@@ -50,6 +50,9 @@ import CalendarDatePicker from '../components/CalendarDatePicker';
 import { loadGoogleMaps } from '../utils/webGoogleMaps';
 
 import ProjectTimelineCalendarCard from '../components/ProjectTimelineCalendarCard';
+import ProjectUpcomingEventsCard from '../components/ProjectUpcomingEventsCard';
+import ProjectDetailsSidebar, { projectDetailsLayout } from '../components/ProjectDetailsSidebar';
+import EventNotificationFields, { EventNotificationSetting } from '../components/EventNotificationFields';
 
 import { useFocusEffect } from '@react-navigation/native';
 
@@ -241,12 +244,6 @@ type ProgramSuiteModule = string;
 type ProgramSuiteView = 'programs' | 'projects' | 'events';
 
 type ProjectsSortKey = 'recentlyUpdated' | 'projectName' | 'newestSchedule' | 'oldestSchedule';
-
-type EventNotificationSetting = {
-  type: 'Notification' | 'Email';
-  value: string;
-  unit: 'minutes' | 'hours' | 'days';
-};
 
 const PROJECTS_SORT_OPTIONS: Array<{ key: ProjectsSortKey; label: string }> = [
   { key: 'recentlyUpdated', label: 'Recently Updated' },
@@ -14253,91 +14250,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   {eventNotifications.map((notif, index) => (
 
-                    <View key={index} style={{ flexDirection: isMobile ? 'column' : 'row', alignItems: isMobile ? 'stretch' : 'center', gap: 8 }}>
-
-                      <View style={{ flex: isMobile ? undefined : 1, minWidth: isMobile ? undefined : 140, height: 40, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, backgroundColor: '#fff', justifyContent: 'center', overflow: 'hidden' }}>
-
-                        <Picker
-
-                          selectedValue={notif.type}
-
-                          onValueChange={(val) => {
-
-                            updateEventNotification(index, { type: val as EventNotificationSetting['type'] });
-
-                          }}
-
-                          style={{ width: '100%', height: '100%', color: '#0f172a' }}
-
-                        >
-
-                          <Picker.Item label="Notification" value="Notification" />
-
-                          <Picker.Item label="Email" value="Email" />
-
-                        </Picker>
-
-                      </View>
-
-                      <TextInput
-
-                        style={[styles.formInput, { flex: isMobile ? undefined : 0.65, width: isMobile ? '100%' : undefined, minWidth: isMobile ? undefined : 64, height: 40, marginBottom: 0, textAlign: 'center' }]}
-
-                        keyboardType="numeric"
-
-                        value={notif.value}
-
-                        onChangeText={(val) => {
-
-                          updateEventNotification(index, { value: val.replace(/\D/g, '') });
-
-                        }}
-
-                      />
-
-                      <View style={{ flex: isMobile ? undefined : 0.85, minWidth: isMobile ? undefined : 100, height: 40, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, backgroundColor: '#fff', justifyContent: 'center', overflow: 'hidden' }}>
-
-                        <Picker
-
-                          selectedValue={notif.unit}
-
-                          onValueChange={(val) => {
-
-                            updateEventNotification(index, { unit: val as EventNotificationSetting['unit'] });
-
-                          }}
-
-                          style={{ width: '100%', height: '100%', color: '#0f172a' }}
-
-                        >
-
-                          <Picker.Item label="minutes" value="minutes" />
-
-                          <Picker.Item label="hours" value="hours" />
-
-                          <Picker.Item label="days" value="days" />
-
-                        </Picker>
-
-                      </View>
-
-                      <TouchableOpacity
-
-                        onPress={() => {
-
-                          removeEventNotification(index);
-
-                        }}
-
-                        style={{ padding: 4 }}
-
-                      >
-
-                        <MaterialIcons name="close" size={18} color="#ef4444" />
-
-                      </TouchableOpacity>
-
-                    </View>
+                    <EventNotificationFields
+                      key={index}
+                      index={index}
+                      value={notif}
+                      onChange={changes => updateEventNotification(index, changes)}
+                      onRemove={() => removeEventNotification(index)}
+                    />
 
                   ))}
 
@@ -22087,13 +22006,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
           {/* Main Grid */}
 
-          <View style={[premiumDetailsStyles.mainGrid, { flexDirection: isDesktop ? 'row' : 'column' }, !isDesktop && premiumDetailsStyles.mainGridMobile]}>
+          <View style={[projectDetailsLayout.grid, { flexDirection: isDesktop ? 'row' : 'column' }, !isDesktop && projectDetailsLayout.gridMobile]}>
 
 
 
             {/* Left Column */}
 
-            <View style={[{ flex: isDesktop ? 2.2 : 0 }, !isDesktop && premiumDetailsStyles.mobileDetailsColumn]}>
+            <View style={[projectDetailsLayout.column, isDesktop ? { flex: 2.2 } : projectDetailsLayout.columnMobile]}>
 
 
 
@@ -22313,6 +22232,26 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
+              {!activeSelectedProject.isEvent && (
+                <ProjectUpcomingEventsCard
+                  key={activeSelectedProject.id}
+                  events={linkedEvents.map(event => ({
+                    id: event.id,
+                    title: event.title,
+                    schedule: `${formatProjectDateLabel(event.startDate)} – ${formatProjectDateLabel(event.endDate)}`,
+                    location: formatProjectLocation(event) || 'Location to be confirmed',
+                    ...getEventDateParts(event.startDate),
+                    imageSource: getPrimaryProjectImageSource(event, activeSelectedProject),
+                    volunteerCount: getProjectVolunteerEntries(event).length,
+                    volunteersNeeded: event.volunteersNeeded,
+                  }))}
+                  onViewEvent={id => {
+                    const event = linkedEvents.find(entry => entry.id === id);
+                    if (event) handleSelectProject(event);
+                  }}
+                />
+              )}
+
               {/* Recent Reports Card */}
 
               <View style={premiumDetailsStyles.card}>
@@ -22415,261 +22354,43 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-            {/* Right Column */}
-
-            <View style={{ flex: isDesktop ? 1 : 1 }}>
-
-
-
-              {/* Project/Event Summary Card */}
-
-              <View style={premiumDetailsStyles.card}>
-
-                <Text style={[premiumDetailsStyles.cardTitle, { marginBottom: 16 }]}>
-
-                  {activeSelectedProject.isEvent ? 'Event Summary' : 'Project Summary'}
-
-                </Text>
-
-
-
-                <View style={premiumDetailsStyles.summaryRow}>
-
-                  <MaterialIcons name="check-circle" size={16} color="#166534" />
-
-                  <Text style={premiumDetailsStyles.summaryLabel}>Status</Text>
-
-                  <Text style={premiumDetailsStyles.summaryValue}>
-
-                    {getProjectDisplayStatus(activeSelectedProject)}
-
-                  </Text>
-
-                </View>
-
-
-
-                <View style={premiumDetailsStyles.summaryRow}>
-
-                  <MaterialIcons name="folder" size={16} color="#3b82f6" />
-
-                  <Text style={premiumDetailsStyles.summaryLabel}>Program</Text>
-
-                  <Text style={premiumDetailsStyles.summaryValue} numberOfLines={1}>
-
-                    {getProjectProgramTitle(activeSelectedProject)}
-
-                  </Text>
-
-                </View>
-
-
-
-                <View style={premiumDetailsStyles.summaryRow}>
-
-                  <MaterialIcons name="calendar-month" size={16} color="#64748b" />
-
-                  <Text style={premiumDetailsStyles.summaryLabel}>{formattedScheduleRange}</Text>
-
-                  <Text style={premiumDetailsStyles.summaryValue}>
-
-                    ({Math.max(1, Math.round((new Date(activeSelectedProject.endDate).getTime() - new Date(activeSelectedProject.startDate).getTime()) / (1000 * 60 * 60 * 24)))} days)
-
-                  </Text>
-
-                </View>
-
-
-
-                {activeSelectedProject.isEvent && (
-
-                  <View style={premiumDetailsStyles.summaryRow}>
-
-                    <MaterialIcons name="group" size={16} color="#64748b" />
-
-                    <Text style={premiumDetailsStyles.summaryLabel}>Volunteer Slots</Text>
-
-                    <Text style={premiumDetailsStyles.summaryValue}>
-
-                      {volunteersCount} / {activeSelectedProject.volunteersNeeded || 0}
-
-                    </Text>
-
-                  </View>
-
-                )}
-
-
-
-
-
-                <View style={premiumDetailsStyles.summaryRow}>
-
-                  <MaterialIcons name="location-on" size={16} color="#64748b" />
-
-                  <Text style={premiumDetailsStyles.summaryLabel}>Location</Text>
-
-                  <Text style={premiumDetailsStyles.summaryValue} numberOfLines={2}>
-
-                    {formattedProjectLocation}
-
-                  </Text>
-
-                </View>
-
-
-
-                <TouchableOpacity
-
-                  style={premiumDetailsStyles.summaryRow}
-
-                  onPress={() => {
-
-                    if (projectDocumentAttachment?.url) {
-
-                      // Open/download the document
-
-                      void openAttachmentUri(projectDocumentAttachment.url).catch((error: any) => {
-                        Alert.alert(
-                          'Document View Failed',
-                          error?.message || 'Unable to open document.',
-                        );
-                      });
-
-                    } else if (!isProjectReadOnly) {
-
-                      // Open edit modal to upload document
-
-                      openEditProjectModal(activeSelectedProject);
-
-                    }
-
-                  }}
-
-                >
-
-                  <MaterialIcons
-
-                    name={projectDocumentAttachment?.url ? 'attach-file' : 'upload-file'}
-
-                    size={16}
-
-                    color="#2563eb"
-
-                  />
-
-                  <Text style={premiumDetailsStyles.summaryLabel}>Document Attachment</Text>
-
-                  <Text style={premiumDetailsStyles.summaryValue} numberOfLines={1}>
-
-                    {projectDocumentAttachment?.url
-
-                      ? getAttachmentLabel(projectDocumentAttachment.url)
-
-                      : isProjectReadOnly ? 'No document attached' : 'Upload document'}
-
-                  </Text>
-
-                </TouchableOpacity>
-
-
-
-                <TouchableOpacity
-
-                  style={premiumDetailsStyles.summaryLink}
-
-                  onPress={() => setShowProjectFullDetailsModal(true)}
-                  accessibilityRole="button"
-                  accessibilityLabel={`View full details for ${activeSelectedProject.title}`}
-
-                >
-
-                  <Text style={premiumDetailsStyles.summaryLinkText}>View full details</Text>
-
-                  <MaterialIcons name="arrow-forward" size={14} color="#166534" />
-
-                </TouchableOpacity>
-
-              </View>
-
-
-
-              {/* Quick Actions Card */}
-
-              <View style={premiumDetailsStyles.card}>
-
-                <Text style={[premiumDetailsStyles.cardTitle, { marginBottom: 16 }]}>Quick Actions</Text>
-
-
-
-                {!activeSelectedProject.isEvent && canCreateEventForProject(activeSelectedProject) && !isProjectReadOnly && (
-
-                  <TouchableOpacity
-
-                    style={premiumDetailsStyles.actionBtnGreen}
-
-                    onPress={() => openCreateEventModal(activeSelectedProject)}
-
-                  >
-
-                    <MaterialIcons name="event" size={16} color="#ffffff" />
-
-                    <Text style={premiumDetailsStyles.actionBtnGreenText}>Create Event</Text>
-
-                  </TouchableOpacity>
-
-                )}
-
-
-
-                {activeSelectedProject.isEvent && (
-
-                  <TouchableOpacity
-
-                    style={premiumDetailsStyles.actionBtnGreen}
-
-                    onPress={() => setShowAttendanceTasks(true)}
-
-                  >
-
-                    <MaterialIcons name="assignment-turned-in" size={16} color="#ffffff" />
-
-                    <Text style={premiumDetailsStyles.actionBtnGreenText}>Attendance & Tasks</Text>
-
-                  </TouchableOpacity>
-
-                )}
-
-
-
-                <TouchableOpacity
-
-                  style={premiumDetailsStyles.actionBtnOutline}
-
-                  onPress={() => {
-                    if (navigation) {
-                      navigation.navigate('Reports' as any, { projectId: activeSelectedProject.id });
-                    } else {
-                      Alert.alert('View Reports', 'Navigate to the Reports section to view submitted reports for this project.');
-                    }
-                  }}
-
-                >
-
-                  <MaterialIcons name="description" size={16} color="#475569" />
-
-                  <Text style={premiumDetailsStyles.actionBtnOutlineText}>View Reports</Text>
-
-                </TouchableOpacity>
-
-              </View>
-
-
-
+            {/* Summary and actions fill the column and grow only with their content. */}
+            <View style={[projectDetailsLayout.column, isDesktop ? { flex: 1 } : projectDetailsLayout.columnMobile]}>
+              <ProjectDetailsSidebar
+                isEvent={Boolean(activeSelectedProject.isEvent)}
+                status={getProjectDisplayStatus(activeSelectedProject)}
+                program={getProjectProgramTitle(activeSelectedProject)}
+                schedule={formattedScheduleRange}
+                durationDays={Math.max(1, Math.round((new Date(activeSelectedProject.endDate).getTime() - new Date(activeSelectedProject.startDate).getTime()) / (1000 * 60 * 60 * 24)))}
+                volunteerSlots={`${volunteersCount} / ${activeSelectedProject.volunteersNeeded || 0}`}
+                location={formattedProjectLocation}
+                hasDocument={Boolean(projectDocumentAttachment?.url)}
+                documentLabel={projectDocumentAttachment?.url
+                  ? getAttachmentLabel(projectDocumentAttachment.url)
+                  : isProjectReadOnly ? 'No document attached' : 'Upload document'}
+                onDocumentPress={projectDocumentAttachment?.url || !isProjectReadOnly ? () => {
+                  if (projectDocumentAttachment?.url) {
+                    void openAttachmentUri(projectDocumentAttachment.url).catch((error: any) => {
+                      Alert.alert('Document View Failed', error?.message || 'Unable to open document.');
+                    });
+                  } else {
+                    openEditProjectModal(activeSelectedProject);
+                  }
+                } : undefined}
+                onDetailsPress={() => setShowProjectFullDetailsModal(true)}
+                onCreateEvent={!activeSelectedProject.isEvent && canCreateEventForProject(activeSelectedProject) && !isProjectReadOnly
+                  ? () => openCreateEventModal(activeSelectedProject)
+                  : undefined}
+                onAttendance={() => setShowAttendanceTasks(true)}
+                onReports={() => {
+                  if (navigation) {
+                    navigation.navigate('Reports' as any, { projectId: activeSelectedProject.id });
+                  } else {
+                    Alert.alert('View Reports', 'Navigate to the Reports section to view submitted reports for this project.');
+                  }
+                }}
+              />
             </View>
-
-
-
           </View>
 
 
