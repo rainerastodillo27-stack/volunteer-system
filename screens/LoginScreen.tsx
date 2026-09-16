@@ -803,6 +803,12 @@ export default function LoginScreen() {
       setBackendStatus("online");
       setBackendMessage(`Backend connected to Postgres: ${getApiBaseUrl()}`);
       setLoginError(null);
+      if (user.hasPassword === false) {
+        Alert.alert(
+          "Set a manual password",
+          "Google sign-in succeeded, but this NVC account does not have a manual-login password yet. Open Profile, choose Change Password, and create an NVC password. Your Google password is never used by NVC.",
+        );
+      }
       setIdentifier("");
       setPassword("");
     } catch (error: any) {
@@ -2044,7 +2050,7 @@ export default function LoginScreen() {
                   {/* Password field */}
                   <View style={styles.inputFieldGroup}>
                     <View style={styles.passwordFieldHeaderRow}>
-                      <Text style={styles.inputFieldLabel}>Password</Text>
+                      <Text style={styles.inputFieldLabel}>NVC Password</Text>
                       <TouchableOpacity
                         onPress={openPasswordResetModal}
                       >
@@ -2135,7 +2141,7 @@ export default function LoginScreen() {
 
                 <TextInput
                   style={[styles.input, isCompactLayout && styles.compactInput]}
-                  placeholder="Password"
+                  placeholder="NVC Password (not Google password)"
                   placeholderTextColor="#999"
                   value={password}
                   onChangeText={(value) => {

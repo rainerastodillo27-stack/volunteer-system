@@ -5494,6 +5494,7 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
             print(f"[WARN] Error during approval check: {type(error).__name__}")
 
     public_user = dict(user)
+    public_user["hasPassword"] = bool(str(user.get("password") or "").strip())
     public_user.pop("password", None)
     return {
         "user": public_user,
@@ -5533,6 +5534,7 @@ def auth_google(payload: GoogleAuthPayload) -> dict[str, Any]:
         ) from error
 
     public_user = dict(user)
+    public_user["hasPassword"] = bool(str(user.get("password") or "").strip())
     public_user.pop("password", None)
     return {
         "user": public_user,

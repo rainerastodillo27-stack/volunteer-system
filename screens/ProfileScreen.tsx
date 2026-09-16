@@ -470,8 +470,20 @@ export default function ProfileScreen() {
         Alert.alert('Validation Error', 'New passwords do not match.');
         return;
       }
-      if (newPasswordDraft.trim().length < 6) {
-        Alert.alert('Validation Error', 'Password must be at least 6 characters long.');
+      if (newPasswordDraft.trim().length < 8) {
+        Alert.alert('Validation Error', 'Password must be at least 8 characters long.');
+        return;
+      }
+      if (!/[A-Z]/.test(newPasswordDraft.trim())) {
+        Alert.alert('Validation Error', 'Password must include at least one uppercase letter.');
+        return;
+      }
+      if (!/[a-z]/.test(newPasswordDraft.trim())) {
+        Alert.alert('Validation Error', 'Password must include at least one lowercase letter.');
+        return;
+      }
+      if (!/\d/.test(newPasswordDraft.trim())) {
+        Alert.alert('Validation Error', 'Password must include at least one number.');
         return;
       }
       normalizedPassword = newPasswordDraft.trim();
@@ -696,8 +708,23 @@ export default function ProfileScreen() {
       return;
     }
 
-    if (newPasswordDraft.trim().length > 0 && newPasswordDraft.trim().length < 6) {
-      Alert.alert('Validation Error', 'Password must be at least 6 characters long.');
+    if (newPasswordDraft.trim().length > 0 && newPasswordDraft.trim().length < 8) {
+      Alert.alert('Validation Error', 'Password must be at least 8 characters long.');
+      return;
+    }
+
+    if (newPasswordDraft.trim() && !/[A-Z]/.test(newPasswordDraft.trim())) {
+      Alert.alert('Validation Error', 'Password must include at least one uppercase letter.');
+      return;
+    }
+
+    if (newPasswordDraft.trim() && !/[a-z]/.test(newPasswordDraft.trim())) {
+      Alert.alert('Validation Error', 'Password must include at least one lowercase letter.');
+      return;
+    }
+
+    if (newPasswordDraft.trim() && !/\d/.test(newPasswordDraft.trim())) {
+      Alert.alert('Validation Error', 'Password must include at least one number.');
       return;
     }
 
@@ -1959,7 +1986,7 @@ export default function ProfileScreen() {
               style={styles.input}
               value={newPasswordDraft}
               onChangeText={setNewPasswordDraft}
-              placeholder="Enter new password (min 6 characters)"
+              placeholder="Enter new password (min 8 characters, upper/lowercase and number)"
               secureTextEntry
               editable={!saveLoading}
               autoCapitalize="none"

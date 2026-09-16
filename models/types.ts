@@ -33,6 +33,8 @@ export interface User {
   email?: string;
   /** Write-only credential. Never returned by the API or persisted in app storage. */
   password?: string;
+  /** Whether an NVC manual-login password is configured for this account. */
+  hasPassword?: boolean;
   role: UserRole;
   name: string;
   phone?: string;
