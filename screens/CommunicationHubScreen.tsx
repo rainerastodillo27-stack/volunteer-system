@@ -60,6 +60,7 @@ import {
 import {
 
   deleteProjectGroupChat,
+  deleteConversation,
 
   getAllPartnerProjectApplications,
 
@@ -94,6 +95,8 @@ import {
   uploadMessageAttachment,
 
   saveProjectGroupMessage,
+  unsendMessage,
+  unsendProjectGroupMessage,
 
   saveProject,
 
@@ -117,6 +120,14 @@ import {
   subscribeToGroupMessages,
 
   markDirectMessageReadFirestore,
+
+  deleteDirectMessageFirestore,
+
+  deleteDirectConversationFirestore,
+
+  deleteGroupMessageFirestore,
+
+  deleteGroupChatFirestore,
 
 } from '../utils/firestoreMessaging';
 
@@ -1046,12 +1057,54 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         return;
       }
 
+      if (event.type === 'project-group-message.deleted') {
+        const deletedIds = new Set(event.messageIds);
+        invalidateMessageCache(undefined, undefined, event.projectId);
+        setMessages(current => current.filter(message => (
+          'recipientId' in message ||
+          message.projectId !== event.projectId ||
+          !deletedIds.has(message.id)
+        )));
+        setProjectChats(current => current.map(chat => (
+          chat.project.id === event.projectId && chat.lastMessage && deletedIds.has(chat.lastMessage.id)
+            ? { ...chat, lastMessage: undefined }
+            : chat
+        )));
+        setMessageRealtimeVersion(current => current + 1);
+        return;
+      }
+
       if (event.type === 'project-group-message.changed') {
         invalidateMessageCache(undefined, undefined, event.message.projectId);
         setProjectChats(current => upsertProjectChatLatestMessage(current, event.message));
         if (selectedProjectChatRef.current?.project.id === event.message.projectId) {
           setMessages(current => mergeChatMessageLists(current as ProjectGroupMessage[], [event.message]));
         }
+        return;
+      }
+
+      if (event.type === 'message.deleted') {
+        const deletedIds = new Set(event.messageIds);
+        const otherUserId = event.senderId === messageUserId ? event.recipientId : event.senderId;
+        invalidateMessageCache(messageUserId, otherUserId);
+        const remainingDirectMessages = directMessagesRef.current.filter(message => !deletedIds.has(message.id));
+        directMessagesRef.current = remainingDirectMessages;
+        setDirectMessages(remainingDirectMessages);
+        setMessages(current => current.filter(message => !deletedIds.has(message.id)));
+        const remainingConversation = getDirectMessagesBetween(
+          remainingDirectMessages,
+          messageUserId,
+          otherUserId,
+        );
+        const nextLastMessage = remainingConversation[remainingConversation.length - 1];
+        setConversations(current => current.flatMap(conversation => (
+          conversation.user.id === otherUserId
+            ? nextLastMessage
+              ? [{ ...conversation, lastMessage: nextLastMessage }]
+              : []
+            : [conversation]
+        )));
+        setMessageRealtimeVersion(current => current + 1);
         return;
       }
 
@@ -2557,9 +2610,153 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
 
 
+  const handleDeleteDirectChat = () => {
+
+    if (!user?.id || !selectedUser) {
+
+      return;
+
+    }
+
+    const targetUser = selectedUser;
+    const requesterId = messageUserId || user.id;
+    setShowConversationMenu(false);
+
+    const executeDelete = async () => {
+      const previousConversations = conversations;
+      const previousDirectMessages = directMessages;
+      const previousMessages = messages;
+      const previousSelectedUser = selectedUser;
+
+      setConversationMenuAction('delete-chat');
+      setConversations(current => current.filter(item => item.user.id !== targetUser.id));
+      const remainingDirectMessages = directMessagesRef.current.filter(message => (
+        !(
+          (message.senderId === requesterId && message.recipientId === targetUser.id) ||
+          (message.senderId === targetUser.id && message.recipientId === requesterId)
+        )
+      ));
+      directMessagesRef.current = remainingDirectMessages;
+      setDirectMessages(remainingDirectMessages);
+      setSelectedUser(null);
+      setMessages([]);
+      setMessageText('');
+      setPendingAttachments([]);
+      setView(isWide ? 'detail' : 'sidebar');
+
+      try {
+        await deleteConversation(requesterId, targetUser.id);
+        await deleteDirectConversationFirestore(requesterId, targetUser.id).catch(() => undefined);
+        Alert.alert('Chat Deleted', `Your conversation with ${targetUser.name || 'this account'} has been deleted.`);
+        void loadData();
+      } catch (error) {
+        setConversations(previousConversations);
+        setDirectMessages(previousDirectMessages);
+        directMessagesRef.current = previousDirectMessages;
+        setSelectedUser(previousSelectedUser);
+        setMessages(previousMessages);
+        Alert.alert(
+          'Unable to Delete Chat',
+          getRequestErrorMessage(error, 'Failed to delete this conversation. Please try again.'),
+        );
+      } finally {
+        setConversationMenuAction(null);
+      }
+    };
+
+    showConfirm({
+      title: 'Delete Chat',
+      message: `Delete your conversation with ${targetUser.name || 'this account'}? This removes the messages for both participants.`,
+      confirmText: 'Delete',
+      loadingText: 'Deleting...',
+      cancelText: 'Cancel',
+      icon: 'delete-outline',
+      iconColor: '#DC2626',
+      confirmColor: '#DC2626',
+      onConfirm: executeDelete,
+    });
+  };
+
+  const handleRequestUnsend = (message: ChatMessage) => {
+
+    if (!messageUserId || message.senderId !== messageUserId) {
+
+      return;
+
+    }
+
+    const isGroupMessage = !('recipientId' in message);
+    const targetProjectId = isGroupMessage ? message.projectId : '';
+    const targetConversationUser = selectedUser;
+
+    showConfirm({
+      title: 'Unsend Message',
+      message: 'Unsend this message? It will be removed for everyone in the conversation.',
+      confirmText: 'Unsend',
+      loadingText: 'Unsending...',
+      cancelText: 'Cancel',
+      icon: 'undo',
+      iconColor: '#DC2626',
+      confirmColor: '#DC2626',
+      onConfirm: async () => {
+        setConversationMenuAction(`unsend-${message.id}`);
+        try {
+          if (targetProjectId) {
+            await unsendProjectGroupMessage(targetProjectId, message.id, messageUserId);
+            await deleteGroupMessageFirestore(message as ProjectGroupMessage).catch(() => undefined);
+          } else {
+            await unsendMessage(message.id, messageUserId);
+            await deleteDirectMessageFirestore(message as Message).catch(() => undefined);
+          }
+
+          const nextMessages = messages.filter(candidate => candidate.id !== message.id);
+          setMessages(nextMessages);
+
+          if (isGroupMessage && targetProjectId) {
+            const remainingGroupMessages = nextMessages.filter((candidate): candidate is ProjectGroupMessage => (
+              !('recipientId' in candidate) && candidate.projectId === targetProjectId
+            ));
+            const nextLastMessage = remainingGroupMessages[remainingGroupMessages.length - 1];
+            setProjectChats(current => current.map(chat => (
+              chat.project.id === targetProjectId
+                ? { ...chat, lastMessage: nextLastMessage }
+                : chat
+            )));
+          } else if (targetConversationUser) {
+            const nextDirectMessages = directMessagesRef.current.filter(candidate => candidate.id !== message.id);
+            directMessagesRef.current = nextDirectMessages;
+            setDirectMessages(nextDirectMessages);
+            const remainingConversation = getDirectMessagesBetween(
+              nextDirectMessages,
+              messageUserId,
+              targetConversationUser.id,
+            );
+            const nextLastMessage = remainingConversation[remainingConversation.length - 1];
+            setConversations(current => current.flatMap(conversation => (
+              conversation.user.id === targetConversationUser.id
+                ? nextLastMessage
+                  ? [{ ...conversation, lastMessage: nextLastMessage }]
+                  : []
+                : [conversation]
+            )));
+          }
+
+          Alert.alert('Message Unsent', 'The message was removed for everyone.');
+        } catch (error) {
+          Alert.alert(
+            'Unable to Unsend Message',
+            getRequestErrorMessage(error, 'Failed to unsend this message. Please try again.'),
+          );
+        } finally {
+          setConversationMenuAction(null);
+        }
+      },
+    });
+  };
+
   const handleDeleteEventGc = () => {
 
-    if (!user || user.role !== 'admin' || !selectedProjectChat) {
+    if (!user?.id || !selectedProjectChat) {
 
       return;
 
@@ -2607,42 +2804,40 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       try {
 
-        const latestProject = await getProject(targetProject.id);
+        // The backend verifies that this account is an eligible participant
+        // before deleting the shared group history.
+        await deleteProjectGroupChat(targetProject.id, messageUserId || user.id);
+        await deleteGroupChatFirestore(targetProject.id).catch(() => undefined);
 
-        if (!latestProject) {
+        // Keep the existing administrator behavior: admins can remove the
+        // event workspace chat entirely. Other eligible accounts can delete
+        // the shared chat history while the event remains available.
+        if (user.role === 'admin') {
+          const latestProject = await getProject(targetProject.id);
 
-          throw new Error('Project not found.');
+          if (!latestProject) {
+            throw new Error('Project not found.');
+          }
 
+          const nextProject = {
+            ...latestProject,
+            groupChatDisabled: true,
+            updatedAt: new Date().toISOString(),
+          };
+
+          if (latestProject.isEvent) {
+            await saveEvent(nextProject);
+          } else {
+            await saveProject(nextProject);
+          }
         }
 
-
-
-        const nextProject = {
-
-          ...latestProject,
-
-          groupChatDisabled: true,
-
-          updatedAt: new Date().toISOString(),
-
-        };
-
-
-
-        if (latestProject.isEvent) {
-
-          await saveEvent(nextProject);
-
-        } else {
-
-          await saveProject(nextProject);
-
-        }
-
-
-
-        await deleteProjectGroupChat(latestProject.id);
-        Alert.alert('Group Chat Deleted', `The group chat for "${targetProject.title}" has been removed.`);
+        Alert.alert(
+          'Chat Deleted',
+          user.role === 'admin'
+            ? `The group chat for "${targetProject.title}" has been removed.`
+            : `The messages in "${targetProject.title}" have been deleted.`,
+        );
 
         void loadData();
 
@@ -2674,7 +2869,9 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
     showConfirm({
       title: 'Delete Group Chat',
-      message: `Delete the group chat for "${targetProject.title}"? This removes the chat messages and disables the group chat.`,
+      message: user.role === 'admin'
+        ? `Delete the group chat for "${targetProject.title}"? This removes all messages and disables the group chat.`
+        : `Delete all messages in "${targetProject.title}"? This removes the shared group history for everyone.`,
       confirmText: 'Delete',
       loadingText: 'Deleting...',
       cancelText: 'Cancel',
@@ -4800,35 +4997,31 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                     </TouchableOpacity>
 
-                    {user?.role === 'admin' ? (
+                    <TouchableOpacity
 
-                      <TouchableOpacity
+                      style={[styles.conversationMenuItem, styles.conversationMenuItemDanger]}
 
-                        style={[styles.conversationMenuItem, styles.conversationMenuItemDanger]}
+                      onPress={handleDeleteEventGc}
 
-                        onPress={handleDeleteEventGc}
+                      activeOpacity={0.85}
 
-                        activeOpacity={0.85}
+                      disabled={conversationMenuAction === 'delete-gc'}
 
-                        disabled={conversationMenuAction === 'delete-gc'}
+                    >
 
-                      >
+                      {conversationMenuAction === 'delete-gc' ? (
 
-                        {conversationMenuAction === 'delete-gc' ? (
+                        <ActivityIndicator size="small" color="#dc2626" />
 
-                          <ActivityIndicator size="small" color="#dc2626" />
+                      ) : (
 
-                        ) : (
+                        <MaterialIcons name="delete-forever" size={18} color="#dc2626" />
 
-                          <MaterialIcons name="delete-forever" size={18} color="#dc2626" />
+                      )}
 
-                        )}
+                      <Text style={styles.conversationMenuDangerText}>Delete Chat</Text>
 
-                        <Text style={styles.conversationMenuDangerText}>Delete GC</Text>
-
-                      </TouchableOpacity>
-
-                    ) : null}
+                    </TouchableOpacity>
 
                     {user?.role === 'volunteer' ? (
 
@@ -4849,6 +5042,62 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                     </TouchableOpacity>
 
                     ) : null}
+
+                  </View>
+
+                ) : null}
+
+              </View>
+
+            ) : null}
+
+            {selectedUser ? (
+
+              <View style={styles.conversationMenuWrap}>
+
+                <TouchableOpacity
+
+                  style={styles.headerAction}
+
+                  onPress={() => setShowConversationMenu(current => !current)}
+
+                  activeOpacity={0.8}
+
+                >
+
+                  <Ionicons name="ellipsis-vertical" size={22} color="#64748b" />
+
+                </TouchableOpacity>
+
+                {showConversationMenu ? (
+
+                  <View style={styles.conversationMenu}>
+
+                    <TouchableOpacity
+
+                      style={[styles.conversationMenuItem, styles.conversationMenuItemDanger]}
+
+                      onPress={handleDeleteDirectChat}
+
+                      activeOpacity={0.85}
+
+                      disabled={conversationMenuAction === 'delete-chat'}
+
+                    >
+
+                      {conversationMenuAction === 'delete-chat' ? (
+
+                        <ActivityIndicator size="small" color="#dc2626" />
+
+                      ) : (
+
+                        <MaterialIcons name="delete-outline" size={18} color="#dc2626" />
+
+                      )}
+
+                      <Text style={styles.conversationMenuDangerText}>Delete Chat</Text>
+
+                    </TouchableOpacity>
 
                   </View>
 
@@ -5151,9 +5400,27 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                     </TouchableOpacity>
 
-                    <Text style={styles.messageTime}>
-                      {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </Text>
+                    <View style={styles.messageFooter}>
+                      {isOwn ? (
+                        <TouchableOpacity
+                          style={styles.unsendButton}
+                          onPress={() => handleRequestUnsend(m)}
+                          activeOpacity={0.8}
+                          disabled={conversationMenuAction === `unsend-${m.id}`}
+                          accessibilityLabel="Unsend message"
+                        >
+                          {conversationMenuAction === `unsend-${m.id}` ? (
+                            <ActivityIndicator size="small" color="#dc2626" />
+                          ) : (
+                            <MaterialIcons name="undo" size={14} color="#dc2626" />
+                          )}
+                          <Text style={styles.unsendButtonText}>Unsend</Text>
+                        </TouchableOpacity>
+                      ) : null}
+                      <Text style={styles.messageTime}>
+                        {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </Text>
+                    </View>
 
                   </View>
 
@@ -5273,6 +5540,23 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                     ) : null}
 
                   </View>
+
+                  {isOwn ? (
+                    <TouchableOpacity
+                      style={styles.unsendButton}
+                      onPress={() => handleRequestUnsend(m)}
+                      activeOpacity={0.8}
+                      disabled={conversationMenuAction === `unsend-${m.id}`}
+                      accessibilityLabel="Unsend message"
+                    >
+                      {conversationMenuAction === `unsend-${m.id}` ? (
+                        <ActivityIndicator size="small" color="#dc2626" />
+                      ) : (
+                        <MaterialIcons name="undo" size={14} color="#dc2626" />
+                      )}
+                      <Text style={styles.unsendButtonText}>Unsend</Text>
+                    </TouchableOpacity>
+                  ) : null}
 
                   <Text style={styles.messageTime}>
 
@@ -7348,6 +7632,12 @@ const styles = StyleSheet.create({
   bubbleText: { fontSize: 12, lineHeight: 16, color: '#334155' },
 
   bubbleTextOwn: { color: '#fff' },
+
+  messageFooter: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+
+  unsendButton: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingVertical: 2, paddingHorizontal: 4 },
+
+  unsendButtonText: { color: '#dc2626', fontSize: 10, fontWeight: '800' },
 
   messageAttachmentList: { gap: 6, marginTop: 8 },
 

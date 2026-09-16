@@ -19,6 +19,7 @@ from typing import Any
 
 
 SESSION_TTL_SECONDS = 12 * 60 * 60
+REGISTRATION_VERIFICATION_TTL_SECONDS = 10 * 60
 _EPHEMERAL_SECRET: str | None = None
 
 
@@ -46,6 +47,72 @@ def _encode(value: bytes) -> str:
 def _decode(value: str) -> bytes:
     padding = "=" * (-len(value) % 4)
     return base64.urlsafe_b64decode((value + padding).encode("ascii"))
+
+
+def _create_signed_payload(payload: dict[str, Any]) -> str:
+    encoded_payload = _encode(
+        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    )
+    signature = hmac.new(
+        _session_secret(),
+        encoded_payload.encode("ascii"),
+        hashlib.sha256,
+    ).digest()
+    return f"{encoded_payload}.{_encode(signature)}"
+
+
+def _verify_signed_payload(token: str | None) -> dict[str, Any] | None:
+    normalized = str(token or "").strip()
+    if not normalized or normalized.count(".") != 1:
+        return None
+
+    encoded_payload, encoded_signature = normalized.split(".", 1)
+    try:
+        supplied_signature = _decode(encoded_signature)
+        expected_signature = hmac.new(
+            _session_secret(),
+            encoded_payload.encode("ascii"),
+            hashlib.sha256,
+        ).digest()
+        if not hmac.compare_digest(supplied_signature, expected_signature):
+            return None
+        payload = json.loads(_decode(encoded_payload).decode("utf-8"))
+    except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+
+    return payload if isinstance(payload, dict) else None
+
+
+def create_registration_verification_token(email: str) -> str:
+    """Create a short-lived proof that a registration email was verified."""
+    now = int(time.time())
+    return _create_signed_payload(
+        {
+            "purpose": "registration-email",
+            "email": str(email).strip().lower(),
+            "iat": now,
+            "exp": now + REGISTRATION_VERIFICATION_TTL_SECONDS,
+            "nonce": secrets.token_urlsafe(16),
+        }
+    )
+
+
+def verify_registration_verification_token(token: str | None, email: str) -> bool:
+    """Validate the email-bound registration proof without accepting a session token."""
+    payload = _verify_signed_payload(token)
+    if payload is None:
+        return False
+
+    try:
+        expires_at = int(payload.get("exp") or 0)
+    except (TypeError, ValueError):
+        return False
+
+    return (
+        payload.get("purpose") == "registration-email"
+        and str(payload.get("email") or "").strip().lower() == str(email).strip().lower()
+        and expires_at > int(time.time())
+    )
 
 
 def create_session_token(user_id: str, role: str) -> str:
@@ -111,4 +178,3 @@ def extract_bearer_token(authorization_header: str | None) -> str | None:
     if not separator or scheme.lower() != "bearer":
         return None
     return token.strip() or None
-

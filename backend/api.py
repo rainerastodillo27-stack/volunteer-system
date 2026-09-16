@@ -49,7 +49,13 @@ from .app_storage_seed import (
     is_hot_storage_key,
     replace_postgres_hot_storage_collection,
 )
-from .auth import create_session_token, extract_bearer_token, verify_session_token
+from .auth import (
+    create_registration_verification_token,
+    create_session_token,
+    extract_bearer_token,
+    verify_registration_verification_token,
+    verify_session_token,
+)
 from .db import (
     get_configured_db_mode,
     get_db_mode,
@@ -59,7 +65,7 @@ from .db import (
     init_postgres_pool,
     _is_retryable_connection_error,
 )
-from .field_rules import is_valid_email, normalize_comparable_phone
+from .field_rules import is_valid_email, normalize_comparable_phone, normalize_ph_mobile_phone
 from .image_compression import compress_base64_image, get_image_size_kb
 from .password_utils import hash_password, is_bcrypt_hash, verify_password
 from .relational_mirror import (
@@ -101,6 +107,7 @@ PUBLIC_API_PATHS = {
     "/auth/check-email",
     "/auth/registration-otp/send",
     "/auth/registration-otp/verify",
+    "/auth/register",
     "/auth/password-reset/send",
     "/auth/password-reset/confirm",
 }
@@ -201,6 +208,13 @@ def _require_same_user_or_admin(request: FastAPIRequest, target_user_id: str) ->
     session = _get_session_user(request)
     if session.get("role") != "admin" and str(session.get("sub")) != str(target_user_id).strip():
         raise HTTPException(status_code=403, detail="You are not allowed to access this account.")
+    return session
+
+
+def _require_session_user(request: FastAPIRequest, target_user_id: str) -> dict[str, Any]:
+    session = _get_session_user(request)
+    if str(session.get("sub") or "").strip() != str(target_user_id or "").strip():
+        raise HTTPException(status_code=403, detail="You can only change your own messages.")
     return session
 
 # Add CORS middleware to allow frontend requests. A wildcard origin cannot be
@@ -407,6 +421,21 @@ class RegistrationOtpSendPayload(BaseModel):
 class RegistrationOtpVerifyPayload(BaseModel):
     email: str
     otp: str
+
+
+# Public account-registration payload. The endpoint creates the user and its
+# linked profile in one authenticated-by-email, transactional operation.
+class RegistrationPayload(BaseModel):
+    name: str
+    email: str
+    password: str
+    phone: str | None = None
+    role: str
+    userType: str = "Student"
+    pillarsOfInterest: list[str] = []
+    partnerRegistration: dict[str, Any] | None = None
+    volunteerMembershipSheet: dict[str, Any] | None = None
+    emailVerificationToken: str
 
 
 # Request payload to start or complete an account password reset.
@@ -1456,6 +1485,24 @@ class ConnectionManager:
         recipients = {message["senderId"], message["recipientId"]}
         await asyncio.gather(*(self.send_user_event(user_id, payload) for user_id in recipients))
 
+    # Broadcasts a direct-message deletion to both participants.
+    async def broadcast_message_deleted_event(
+        self,
+        message_ids: list[str],
+        sender_id: str,
+        recipient_id: str,
+    ) -> None:
+        if not message_ids:
+            return
+        payload = {
+            "type": "message.deleted",
+            "messageIds": message_ids,
+            "senderId": sender_id,
+            "recipientId": recipient_id,
+        }
+        recipients = {sender_id, recipient_id}
+        await asyncio.gather(*(self.send_user_event(user_id, payload) for user_id in recipients))
+
     # Relays a transient typing state without writing it to message storage.
     async def broadcast_typing_event(
         self,
@@ -1505,6 +1552,23 @@ class ConnectionManager:
         with get_connection() as connection:
             recipients = _get_project_chat_participant_user_ids(connection, project_id)
         recipients.add(message["senderId"])
+        await asyncio.gather(*(self.send_user_event(user_id, payload) for user_id in recipients))
+
+    # Broadcasts a project-group message deletion to every eligible participant.
+    async def broadcast_project_group_message_deleted_event(
+        self,
+        project_id: str,
+        message_ids: list[str],
+    ) -> None:
+        if not message_ids:
+            return
+        payload = {
+            "type": "project-group-message.deleted",
+            "projectId": project_id,
+            "messageIds": message_ids,
+        }
+        with get_connection() as connection:
+            recipients = _get_project_chat_participant_user_ids(connection, project_id)
         await asyncio.gather(*(self.send_user_event(user_id, payload) for user_id in recipients))
 
     # Broadcasts a shared-storage change notification to all listeners.
@@ -2925,6 +2989,83 @@ def _require_terminal_admin_provisioning(connection: Any, key: str, item: dict[s
 
     if existing_role != "admin":
         raise ValueError("Admin accounts can only be created from the backend terminal.")
+
+
+def _normalize_event_duplicate_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
+
+
+def _event_duplicate_date(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        match = re.match(r"^(\d{4}-\d{2}-\d{2})", text)
+        return match.group(1) if match else _normalize_event_duplicate_text(text)
+
+
+def _event_duplicate_signature(item: dict[str, Any]) -> tuple[str, str, str] | None:
+    title = _normalize_event_duplicate_text(item.get("title"))
+    start_date = _event_duplicate_date(item.get("startDate"))
+    location_value = item.get("location")
+    if isinstance(location_value, dict):
+        location_value = (
+            location_value.get("address")
+            or location_value.get("venue")
+            or item.get("locationVenue")
+        )
+    location = _normalize_event_duplicate_text(location_value)
+    if not title or not start_date or not location:
+        return None
+    return title, start_date, location
+
+
+def _raise_duplicate_event_error(item: dict[str, Any], existing: dict[str, Any]) -> None:
+    title = str(item.get("title") or existing.get("title") or "Untitled event").strip()
+    date = _event_duplicate_date(item.get("startDate")) or "the same date"
+    location_value = item.get("location")
+    if isinstance(location_value, dict):
+        location_value = location_value.get("address") or location_value.get("venue")
+    location = str(location_value or "the same location").strip()
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            f'A matching event already exists: "{title}" on {date} at {location}. '
+            "Edit the existing event instead of creating another one."
+        ),
+    )
+
+
+def _reject_duplicate_event_writes(
+    connection: Any,
+    items: list[Any],
+) -> None:
+    """Reject semantic event duplicates while allowing updates to the same id."""
+    existing_by_signature: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for existing in get_postgres_hot_storage_collection(connection, "events"):
+        if not isinstance(existing, dict):
+            continue
+        signature = _event_duplicate_signature(existing)
+        if signature:
+            existing_by_signature.setdefault(signature, existing)
+
+    incoming_by_signature: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        signature = _event_duplicate_signature(item)
+        if not signature:
+            continue
+        item_id = str(item.get("id") or "").strip()
+        existing = existing_by_signature.get(signature)
+        if existing and str(existing.get("id") or "").strip() != item_id:
+            _raise_duplicate_event_error(item, existing)
+        previous = incoming_by_signature.get(signature)
+        if previous and str(previous.get("id") or "").strip() != item_id:
+            _raise_duplicate_event_error(item, previous)
+        incoming_by_signature[signature] = item
 
 
 _MAX_MEDIA_SCAN_BYTES = 15 * 1024 * 1024
@@ -5223,7 +5364,192 @@ def auth_registration_otp_verify(payload: RegistrationOtpVerifyPayload) -> dict[
     if verification_error is not None:
         raise verification_error
 
-    return {"verified": True, "email": email, "message": "Email verified."}
+    return {
+        "verified": True,
+        "email": email,
+        "message": "Email verified.",
+        "verificationToken": create_registration_verification_token(email),
+    }
+
+
+def _is_phone_already_registered(phone: str, connection: Any) -> bool:
+    normalized_phone = _normalize_comparable_phone(phone)
+    if not normalized_phone:
+        return False
+
+    for key, field_name in (
+        ("users", "phone"),
+        ("volunteers", "phone"),
+        ("partners", "contactPhone"),
+    ):
+        for item in get_postgres_hot_storage_collection(connection, key):
+            if _normalize_comparable_phone(item.get(field_name)) == normalized_phone:
+                return True
+    return False
+
+
+def _registration_partner_category(advocacy_focus: list[str]) -> str:
+    for category in ("Disaster", "Education", "Livelihood", "Nutrition"):
+        if category in advocacy_focus:
+            return category
+    return "Disaster"
+
+
+@app.post("/auth/register")
+def auth_register(payload: RegistrationPayload) -> dict[str, Any]:
+    """Create a volunteer or partner account without opening storage writes publicly."""
+    email = str(payload.email or "").strip().lower()
+    name = str(payload.name or "").strip()
+    password = str(payload.password or "").strip()
+    role = str(payload.role or "").strip().lower()
+    raw_phone = str(payload.phone or "").strip()
+    phone = normalize_ph_mobile_phone(raw_phone) if raw_phone else None
+
+    if role not in {"volunteer", "partner"}:
+        raise HTTPException(status_code=400, detail="Only volunteer and partner registration is available.")
+    if not name or len(name) < 2:
+        raise HTTPException(status_code=400, detail="Full name must be at least 2 characters long.")
+    if not is_valid_email(email):
+        raise HTTPException(status_code=400, detail="A valid email address is required.")
+    if raw_phone and not phone:
+        raise HTTPException(
+            status_code=400,
+            detail="Use a valid 11-digit Philippine mobile number (for example, 09171234567).",
+        )
+    if len(password) < 8 or not any(character.isupper() for character in password):
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters and include an uppercase letter.")
+    if not any(character.islower() for character in password):
+        raise HTTPException(status_code=400, detail="Password must include at least one lowercase letter.")
+    if not any(character.isdigit() for character in password):
+        raise HTTPException(status_code=400, detail="Password must include at least one number.")
+    if not verify_registration_verification_token(payload.emailVerificationToken, email):
+        raise HTTPException(
+            status_code=401,
+            detail="Your email verification has expired. Please verify your email again before registering.",
+        )
+
+    volunteer_membership = dict(payload.volunteerMembershipSheet or {})
+    partner_registration = dict(payload.partnerRegistration or {})
+    if role == "volunteer":
+        required_membership_fields = (
+            "gender",
+            "dateOfBirth",
+            "civilStatus",
+            "homeAddress",
+            "homeAddressRegion",
+            "homeAddressCityMunicipality",
+            "homeAddressBarangay",
+            "occupation",
+            "workplaceOrSchool",
+        )
+        if any(not str(volunteer_membership.get(field) or "").strip() for field in required_membership_fields):
+            raise HTTPException(
+                status_code=400,
+                detail="Complete the volunteer membership information sheet before creating the account.",
+            )
+    else:
+        organization_name = str(partner_registration.get("organizationName") or "").strip()
+        registration_documents = [
+            str(document).strip()
+            for document in (partner_registration.get("registrationDocuments") or [])
+            if str(document).strip()
+        ]
+        advocacy_focus = [
+            str(focus).strip()
+            for focus in (partner_registration.get("advocacyFocus") or [])
+            if str(focus).strip()
+        ]
+        sector_type = str(partner_registration.get("sectorType") or "").strip()
+        if not organization_name or not registration_documents or not advocacy_focus:
+            raise HTTPException(status_code=400, detail="Complete the organization application details before submitting.")
+        if sector_type not in {"NGO", "Hospital", "Institution", "Private"}:
+            raise HTTPException(status_code=400, detail="Select a valid partner sector.")
+
+    with get_connection() as connection:
+        if _is_email_already_registered(email, connection):
+            raise HTTPException(status_code=409, detail="An account with this email already exists.")
+        if phone and _is_phone_already_registered(phone, connection):
+            raise HTTPException(status_code=409, detail="An account with this phone number already exists.")
+
+        created_at = datetime.now(timezone.utc).isoformat()
+        user_id = f"user-{secrets.token_hex(16)}"
+        user = {
+            "id": user_id,
+            "name": name,
+            "email": email,
+            "password": password,
+            "phone": phone,
+            "role": role,
+            "userType": str(payload.userType or "Student").strip() or "Student",
+            "pillarsOfInterest": [
+                str(pillar).strip()
+                for pillar in (payload.pillarsOfInterest or [])
+                if str(pillar).strip()
+            ],
+            "approvalStatus": "pending",
+            "createdAt": created_at,
+        }
+        if role == "volunteer":
+            user["volunteerMembershipSheet"] = volunteer_membership
+
+        try:
+            saved_user = _postgres_upsert_hot_item(connection, "users", user)
+            changed_keys = ["users"]
+            if role == "volunteer":
+                if _ensure_volunteer_profile_for_user(connection, user):
+                    changed_keys.append("volunteers")
+            else:
+                advocacy_focus = [
+                    str(focus).strip()
+                    for focus in (partner_registration.get("advocacyFocus") or [])
+                    if str(focus).strip()
+                ]
+                partner = {
+                    "id": f"partner-{user_id}",
+                    "ownerUserId": user_id,
+                    "name": str(partner_registration.get("organizationName") or "").strip(),
+                    "stakeholderName": name,
+                    "description": f"{', '.join(advocacy_focus)} partnership application",
+                    "category": _registration_partner_category(advocacy_focus),
+                    "sectorType": str(partner_registration.get("sectorType") or "").strip(),
+                    "dswdAccreditationNo": str(partner_registration.get("dswdAccreditationNo") or "").strip().upper(),
+                    "secRegistrationNo": str(partner_registration.get("secRegistrationNo") or "").strip().upper(),
+                    "registrationDocuments": [
+                        str(document).strip()
+                        for document in (partner_registration.get("registrationDocuments") or [])
+                        if str(document).strip()
+                    ],
+                    "advocacyFocus": advocacy_focus,
+                    "contactEmail": email,
+                    "contactPhone": phone,
+                    "status": "Pending",
+                    "verificationStatus": "Pending",
+                    "createdAt": created_at,
+                }
+                _postgres_upsert_hot_item(connection, "partners", partner)
+                changed_keys.append("partners")
+            connection.commit()
+        except HTTPException:
+            connection.rollback()
+            raise
+        except ValueError as error:
+            connection.rollback()
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except Exception as error:
+            connection.rollback()
+            print(f"[REGISTRATION] Account creation failed: {type(error).__name__}")
+            raise HTTPException(
+                status_code=500,
+                detail="The account could not be created. Please try again.",
+            ) from error
+
+    _invalidate_collection_cache(changed_keys)
+    asyncio.create_task(connection_manager.broadcast_storage_event(changed_keys))
+    saved_user["hasPassword"] = True
+    return {
+        "user": saved_user,
+        "message": "Registration submitted successfully. An administrator must approve the account before login is unlocked.",
+    }
 
 
 @app.post("/auth/password-reset/send")
@@ -7475,6 +7801,47 @@ def get_conversation(user1: str, user2: str, limit: int = 120) -> dict[str, list
         _message_query_cache.set(cache_key, result)
         return result
 
+
+@app.delete("/messages/conversation")
+# API endpoint that deletes the direct-message history for both participants.
+async def delete_conversation(
+    user1: str,
+    user2: str,
+    requester_id: str,
+    request: FastAPIRequest,
+) -> dict[str, Any]:
+    ensure_message_storage_once()
+    requester_id = str(requester_id or "").strip()
+    _require_session_user(request, requester_id)
+    if requester_id not in {user1, user2}:
+        raise HTTPException(status_code=403, detail="You cannot delete this conversation.")
+
+    with get_connection() as connection:
+        _assert_direct_message_access(connection, user1, user2)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                delete from public.messages
+                where (sender_id = %s and recipient_id = %s)
+                   or (sender_id = %s and recipient_id = %s)
+                returning messages_id
+                """,
+                (user1, user2, user2, user1),
+            )
+            deleted_ids = [str(row[0]) for row in cursor.fetchall()]
+        connection.commit()
+
+    if deleted_ids:
+        _invalidate_collection_cache(["messages"])
+        await connection_manager.broadcast_message_deleted_event(
+            deleted_ids,
+            user1,
+            user2,
+        )
+        await connection_manager.broadcast_storage_event(["messages"])
+
+    return {"deletedCount": len(deleted_ids), "deletedIds": deleted_ids}
+
 @app.get("/projects/{project_id}/group-messages")
 # API endpoint that returns project group chat messages for an authorized user.
 def get_project_group_messages(
@@ -7633,6 +8000,69 @@ async def create_message(payload: MessagePayload) -> dict[str, Any]:
     return message
 
 
+@app.delete("/messages/{message_id}")
+# API endpoint that unsends one direct message from its original sender.
+async def delete_message(
+    message_id: str,
+    sender_id: str,
+    request: FastAPIRequest,
+) -> dict[str, Any]:
+    ensure_message_storage_once()
+    from psycopg.rows import dict_row
+
+    sender_id = str(sender_id or "").strip()
+    _require_session_user(request, sender_id)
+    with get_connection() as connection:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                select messages_id, sender_id, recipient_id, project_id,
+                       content, timestamp, read, attachments
+                from public.messages
+                where messages_id = %s
+                """,
+                (message_id,),
+            )
+            existing_row = cursor.fetchone()
+            if existing_row is None:
+                raise HTTPException(status_code=404, detail="Message not found.")
+            if str(existing_row["sender_id"] or "") != sender_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail="You can only unsend your own messages.",
+                )
+
+            _assert_direct_message_access(
+                connection,
+                sender_id,
+                str(existing_row["recipient_id"] or ""),
+            )
+            cursor.execute(
+                """
+                delete from public.messages
+                where messages_id = %s and sender_id = %s
+                returning messages_id, sender_id, recipient_id, project_id,
+                          content, timestamp, read, attachments
+                """,
+                (message_id, sender_id),
+            )
+            deleted_row = cursor.fetchone()
+        connection.commit()
+
+    if deleted_row is None:
+        raise HTTPException(status_code=404, detail="Message not found.")
+
+    _invalidate_collection_cache(["messages"])
+    deleted_message = serialize_message_row(deleted_row)
+    await connection_manager.broadcast_message_deleted_event(
+        [str(deleted_message["id"])],
+        str(deleted_message["senderId"]),
+        str(deleted_message["recipientId"]),
+    )
+    await connection_manager.broadcast_storage_event(["messages"])
+    return {"deleted": deleted_message}
+
+
 @app.post("/projects/{project_id}/group-messages")
 # API endpoint that creates a project group chat message.
 async def create_project_group_message(
@@ -7754,25 +8184,92 @@ async def create_project_group_message(
 
 @app.delete("/projects/{project_id}/group-messages")
 # API endpoint that removes all messages for one project group chat.
-async def delete_project_group_messages(project_id: str) -> dict[str, Any]:
+async def delete_project_group_messages(
+    project_id: str,
+    user_id: str,
+    request: FastAPIRequest,
+) -> dict[str, Any]:
     ensure_project_group_message_storage()
+    _require_session_user(request, user_id)
 
     with get_connection() as connection:
-        project, _ = _postgres_get_project_like_item_by_id(connection, project_id)
-        if project is None:
-            raise HTTPException(status_code=404, detail="Project not found.")
+        _assert_project_group_chat_access(connection, project_id, user_id)
 
         with connection.cursor() as cursor:
+            cursor.execute(
+                "select project_group_messages_id from project_group_messages where project_id = %s",
+                (project_id,),
+            )
+            deleted_ids = [str(row[0]) for row in cursor.fetchall()]
             cursor.execute(
                 "delete from project_group_messages where project_id = %s",
                 (project_id,),
             )
-            deleted_count = cursor.rowcount or 0
         connection.commit()
 
     _invalidate_collection_cache(["projectGroupMessages"])
+    await connection_manager.broadcast_project_group_message_deleted_event(
+        project_id,
+        deleted_ids,
+    )
     await connection_manager.broadcast_storage_event(["projectGroupMessages", "projects", "events"])
-    return {"deletedCount": deleted_count}
+    return {"deletedCount": len(deleted_ids), "deletedIds": deleted_ids}
+
+
+@app.delete("/projects/{project_id}/group-messages/{message_id}")
+# API endpoint that unsends one project-group message from its original sender.
+async def delete_project_group_message(
+    project_id: str,
+    message_id: str,
+    sender_id: str,
+    request: FastAPIRequest,
+) -> dict[str, Any]:
+    ensure_project_group_message_storage()
+    from psycopg.rows import dict_row
+
+    _require_session_user(request, sender_id)
+    with get_connection() as connection:
+        _assert_project_group_chat_access(connection, project_id, sender_id)
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                delete from project_group_messages
+                where project_group_messages_id = %s
+                  and project_id = %s
+                  and sender_id = %s
+                returning
+                  project_group_messages_id,
+                  project_id,
+                  sender_id,
+                  content,
+                  timestamp,
+                  kind,
+                  need_post,
+                  scope_proposal,
+                  response_to_message_id,
+                  response_action,
+                  response_to_title,
+                  attachments
+                """,
+                (message_id, project_id, sender_id),
+            )
+            deleted_row = cursor.fetchone()
+        connection.commit()
+
+    if deleted_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Message not found or it was not sent by this account.",
+        )
+
+    _invalidate_collection_cache(["projectGroupMessages"])
+    deleted_message = serialize_project_group_message_row(deleted_row)
+    await connection_manager.broadcast_project_group_message_deleted_event(
+        project_id,
+        [str(deleted_message["id"])],
+    )
+    await connection_manager.broadcast_storage_event(["projectGroupMessages"])
+    return {"deleted": deleted_message}
 
 
 @app.patch("/messages/{message_id}/read")
@@ -8365,6 +8862,8 @@ async def put_storage_item_by_id(
 
     try:
         with get_connection() as connection:
+            if key == "events":
+                _reject_duplicate_event_writes(connection, [item])
             saved_item = _postgres_upsert_hot_item(connection, key, item)
             changed_keys = [key]
             if key == "users" and _ensure_volunteer_profile_for_user(connection, item):
@@ -8462,6 +8961,9 @@ async def _put_storage_item_once(key: str, payload: StoragePayload) -> dict[str,
                         if isinstance(item, dict) and str(item.get("id") or "").strip()
                     }
                     removed_project_ids = current_ids - next_ids
+
+                if key == "events":
+                    _reject_duplicate_event_writes(connection, payload.value)
 
                 volunteer_identifiers_to_sync: set[str] = set()
                 if key == "volunteerProjectJoins":

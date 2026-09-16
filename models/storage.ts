@@ -3351,6 +3351,7 @@ export async function createUserAccount(input: {
   name: string;
   email?: string;
   password?: string; // Write-only raw password; backend stores only its bcrypt hash.
+  emailVerificationToken?: string;
   phone?: string;
   role: UserRole;
   userType: UserType;
@@ -3433,123 +3434,44 @@ export async function createUserAccount(input: {
     throw new Error('Complete the organization application details before submitting.');
   }
 
-  const users = await getStorageItem<User[]>(STORAGE_KEYS.USERS) || [];
-  const existingEmailUser = normalizedEmail
-    ? users.find(user => user.email?.trim().toLowerCase() === normalizedEmail)
-    : null;
-  if (existingEmailUser) {
-    throw new Error('An account with this email already exists.');
+  if (!normalizedEmail) {
+    throw new Error('Email verification is required for registration.');
+  }
+  if (!input.emailVerificationToken) {
+    throw new Error('Verify your email address before creating the account.');
   }
 
-  const existingPhoneUser = normalizedPhone
-    ? users.find(user => user.phone?.trim() === normalizedPhone)
-    : null;
-  if (existingPhoneUser) {
-    throw new Error('An account with this phone number already exists.');
-  }
-
-  const createdAt = new Date().toISOString();
-  const createdUser: User = {
-    id: `user-${Date.now()}`,
-    name: normalizedName,
-    email: normalizedEmail,
-    ...(normalizedPassword ? { password: normalizedPassword } : {}),
-    phone: normalizedPhone || undefined,
-    role: input.role,
-    userType: input.userType,
-    pillarsOfInterest: input.pillarsOfInterest,
-    approvalStatus: input.role === 'admin' ? 'approved' : 'pending',
-    createdAt,
-    volunteerMembershipSheet: input.volunteerMembershipSheet,
-  };
-
-  await saveUser(createdUser);
-
-  if (input.role === 'volunteer') {
-    try {
-      await saveVolunteer({
-        id: `volunteer-${createdUser.id}`,
-        userId: createdUser.id,
-        name: createdUser.name,
-        email: createdUser.email || '',
-        phone: createdUser.phone || '',
-        skills: input.volunteerMembershipSheet?.skills || [],
-        skillsDescription: input.pillarsOfInterest.join(', '),
-        availability: {
-          daysPerWeek: 0,
-          hoursPerWeek: 0,
-          availableDays: [],
-        },
-        pastProjects: [],
-        totalHoursContributed: 0,
-        rating: 0,
-        engagementStatus: 'Open to Volunteer',
-        background: '',
-        gender: input.volunteerMembershipSheet?.gender || '',
-        dateOfBirth: input.volunteerMembershipSheet?.dateOfBirth || '',
-        civilStatus: input.volunteerMembershipSheet?.civilStatus || '',
-        homeAddress: input.volunteerMembershipSheet?.homeAddress || '',
-        homeAddressRegion: input.volunteerMembershipSheet?.homeAddressRegion || '',
-        homeAddressCityMunicipality: input.volunteerMembershipSheet?.homeAddressCityMunicipality || '',
-        homeAddressBarangay: input.volunteerMembershipSheet?.homeAddressBarangay || '',
-        occupation: input.volunteerMembershipSheet?.occupation || '',
-        workplaceOrSchool: input.volunteerMembershipSheet?.workplaceOrSchool || '',
-        collegeCourse: input.volunteerMembershipSheet?.collegeCourse || '',
-        certificationsOrTrainings:
-          input.volunteerMembershipSheet?.certificationsOrTrainings || '',
-        validIdPhoto: input.volunteerMembershipSheet?.validIdPhoto || '',
-        hobbiesAndInterests: input.volunteerMembershipSheet?.hobbiesAndInterests || '',
-        specialSkills: input.volunteerMembershipSheet?.specialSkills || '',
-        videoBriefingUrl: input.volunteerMembershipSheet?.videoBriefingUrl || '',
-        affiliations: input.volunteerMembershipSheet?.affiliations || [],
-        registrationStatus: 'Pending',
-        createdAt,
-      });
-    } catch (error) {
-      console.error('Error saving volunteer profile:', error);
-      throw new Error(`Failed to create volunteer profile: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-  if (input.role === 'partner' && input.partnerRegistration) {
-    try {
-      await savePartner({
-        id: `partner-${createdUser.id}`,
-        ownerUserId: createdUser.id,
-        name: input.partnerRegistration.organizationName.trim(),
-        description: `${input.partnerRegistration.advocacyFocus.join(', ')} partnership application`,
-        category: getCategoryFromAdvocacyFocus(input.partnerRegistration.advocacyFocus),
-        sectorType: input.partnerRegistration.sectorType,
-        dswdAccreditationNo:
-          input.partnerRegistration.sectorType === 'NGO'
-            ? input.partnerRegistration.dswdAccreditationNo?.trim().toUpperCase() || ''
-            : '',
-        secRegistrationNo: input.partnerRegistration.secRegistrationNo?.trim().toUpperCase() || '',
-        registrationDocuments: (input.partnerRegistration.registrationDocuments || [])
-          .map(document => document.trim())
-          .filter(Boolean),
-        advocacyFocus: input.partnerRegistration.advocacyFocus,
-        region: input.partnerRegistration.region,
-        province: input.partnerRegistration.province,
-        cityMunicipality: input.partnerRegistration.cityMunicipality,
-        contactEmail: createdUser.email,
-        contactPhone: createdUser.phone,
-        status: 'Pending',
-        verificationStatus: 'Pending',
-        createdAt,
-      });
-    } catch (error) {
-      console.error('Error saving partner profile:', error);
-      throw new Error(`Failed to create partner profile: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-  const savedUser = await getUser(createdUser.id);
-  if (!savedUser) {
+  const payload = await requestApiJson<{ user?: User }>(
+    '/auth/register',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        name: normalizedName,
+        email: normalizedEmail,
+        password: normalizedPassword,
+        emailVerificationToken: input.emailVerificationToken,
+        phone: normalizedPhone || undefined,
+        role: input.role,
+        userType: input.userType,
+        pillarsOfInterest: input.pillarsOfInterest,
+        partnerRegistration: input.partnerRegistration,
+        volunteerMembershipSheet: input.volunteerMembershipSheet,
+      }),
+    },
+  );
+  if (!payload.user) {
     throw new Error('Account creation did not sync correctly. Please try again.');
   }
 
-  return createdUser;
+  // Keep the raw password only in this in-memory return value so the mobile
+  // screen can preserve the credentials for its post-registration sign-in.
+  return {
+    ...payload.user,
+    password: normalizedPassword,
+  };
 }
 
 // Looks up a single user by id.
@@ -5182,12 +5104,48 @@ export async function saveProjectGroupMessage(message: ProjectGroupMessage): Pro
   }
 }
 
-export async function deleteProjectGroupChat(projectId: string): Promise<void> {
-  const messages =
-    (await getStorageItem<ProjectGroupMessage[]>(STORAGE_KEYS.PROJECT_GROUP_MESSAGES)) || [];
-  await setStorageItem(
-    STORAGE_KEYS.PROJECT_GROUP_MESSAGES,
-    messages.filter(message => message.projectId !== projectId)
+export async function deleteConversation(userId1: string, userId2: string): Promise<string[]> {
+  const payload = await requestApiJson<{ deletedIds?: string[] }>(
+    `/messages/conversation?user1=${encodeURIComponent(userId1)}&user2=${encodeURIComponent(userId2)}&requester_id=${encodeURIComponent(userId1)}`,
+    { method: 'DELETE' },
+  );
+  invalidateMessageCache(userId1, userId2);
+  invalidateMessageCache(userId2, userId1);
+  notifyWebMessageUpdate();
+  return Array.isArray(payload.deletedIds)
+    ? payload.deletedIds.filter((id): id is string => typeof id === 'string')
+    : [];
+}
+
+export async function unsendMessage(messageId: string, senderId: string): Promise<void> {
+  await requestApiJson(
+    `/messages/${encodeURIComponent(messageId)}?sender_id=${encodeURIComponent(senderId)}`,
+    { method: 'DELETE' },
+  );
+  invalidateMessageCache(senderId);
+  notifyWebMessageUpdate();
+}
+
+export async function deleteProjectGroupChat(projectId: string, userId: string): Promise<string[]> {
+  const payload = await requestApiJson<{ deletedIds?: string[] }>(
+    `/projects/${encodeURIComponent(projectId)}/group-messages?user_id=${encodeURIComponent(userId)}`,
+    { method: 'DELETE' },
+  );
+  invalidateMessageCache(undefined, undefined, projectId);
+  notifyWebMessageUpdate();
+  return Array.isArray(payload.deletedIds)
+    ? payload.deletedIds.filter((id): id is string => typeof id === 'string')
+    : [];
+}
+
+export async function unsendProjectGroupMessage(
+  projectId: string,
+  messageId: string,
+  senderId: string,
+): Promise<void> {
+  await requestApiJson(
+    `/projects/${encodeURIComponent(projectId)}/group-messages/${encodeURIComponent(messageId)}?sender_id=${encodeURIComponent(senderId)}`,
+    { method: 'DELETE' },
   );
   invalidateMessageCache(undefined, undefined, projectId);
   notifyWebMessageUpdate();
@@ -5326,7 +5284,9 @@ export async function markAdminNotificationRead(notificationId: string): Promise
 
 export type MessageSubscriptionEvent =
   | { type: 'message.changed'; message: Message }
+  | { type: 'message.deleted'; messageIds: string[]; senderId: string; recipientId: string }
   | { type: 'project-group-message.changed'; message: ProjectGroupMessage }
+  | { type: 'project-group-message.deleted'; projectId: string; messageIds: string[] }
   | MessageTypingEvent;
 
 export type MessageTypingPayload = {

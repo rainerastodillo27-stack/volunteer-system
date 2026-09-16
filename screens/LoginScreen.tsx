@@ -325,6 +325,7 @@ export default function LoginScreen() {
   const [signupEmail, setSignupEmail] = useState("");
   const [signupEmailForOtp, setSignupEmailForOtp] = useState("");
   const [signupOtpCode, setSignupOtpCode] = useState("");
+  const [signupOtpVerificationToken, setSignupOtpVerificationToken] = useState("");
   const [signupOtpPhase, setSignupOtpPhase] =
     useState<RegistrationOtpPhase>("idle");
   const [otpSecondsLeft, setOtpSecondsLeft] = useState<number>(0);
@@ -848,6 +849,7 @@ export default function LoginScreen() {
     setSignupEmail("");
     setSignupEmailForOtp("");
     setSignupOtpCode("");
+    setSignupOtpVerificationToken("");
     setSignupOtpPhase("idle");
     setOtpSecondsLeft(0);
     setSignupOtpLoading(false);
@@ -919,6 +921,7 @@ export default function LoginScreen() {
       normalizedEmail !== normalizeEmailInput(signupEmailForOtp)
     ) {
       setSignupOtpCode("");
+      setSignupOtpVerificationToken("");
       setSignupOtpPhase("idle");
       setOtpSecondsLeft(0);
     }
@@ -1233,6 +1236,7 @@ export default function LoginScreen() {
       // Never copy the OTP into the form or expose it in an alert. The code
       // must be read from the user's email inbox and entered manually.
       setSignupOtpCode("");
+      setSignupOtpVerificationToken("");
       setOtpSecondsLeft(payload.expires_in || 300);
       setSignupOtpPhase("sent");
       Alert.alert(
@@ -1314,12 +1318,18 @@ export default function LoginScreen() {
       const payload = (await response.json().catch(() => ({}))) as {
         detail?: string;
         message?: string;
+        verificationToken?: string;
       };
 
       if (!response.ok) {
         throw new Error(payload.detail || "Unable to verify email code.");
       }
 
+      if (!payload.verificationToken) {
+        throw new Error("Email verification completed, but the registration session could not be created. Please request a new code.");
+      }
+
+      setSignupOtpVerificationToken(payload.verificationToken);
       setSignupOtpPhase("verified");
       setOtpSecondsLeft(0);
       Alert.alert("Email Verified", payload.message || "Your email address has been verified.");
@@ -1482,6 +1492,7 @@ export default function LoginScreen() {
         name: signupName,
         email: signupEmail,
         password: signupPassword,
+        emailVerificationToken: signupOtpVerificationToken,
         phone: normalizePhoneInput(signupAccountPhone),
         role: signupRole,
         userType: signupUserType,

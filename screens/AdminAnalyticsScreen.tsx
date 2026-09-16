@@ -898,6 +898,22 @@ export default function AdminAnalyticsScreen() {
     return result;
   }, [projects, selectedPartnerId, selectedProgramId]);
 
+  const filteredPartners = useMemo(() => {
+    let result = partners;
+    if (selectedPartnerId !== 'all') {
+      result = result.filter(partner => partner.id === selectedPartnerId);
+    }
+    if (selectedProgramId !== 'all') {
+      const relatedPartnerIds = new Set(
+        filteredProjects
+          .map(project => String(project.partnerId || '').trim())
+          .filter(Boolean),
+      );
+      result = result.filter(partner => relatedPartnerIds.has(partner.id));
+    }
+    return result;
+  }, [partners, filteredProjects, selectedPartnerId, selectedProgramId]);
+
   const filteredReports = useMemo(() => {
     const activeReports = reports.filter(report => report.status !== 'Rejected');
     if (selectedPartnerId === 'all' && selectedProgramId === 'all') return activeReports;
@@ -946,7 +962,10 @@ export default function AdminAnalyticsScreen() {
     [filteredProjects, programTracks]
   );
 
-  const partnerSectorsByQuarter = useMemo(() => buildPartnerSectorsByQuarter(partners), [partners]);
+  const partnerSectorsByQuarter = useMemo(
+    () => buildPartnerSectorsByQuarter(filteredPartners),
+    [filteredPartners],
+  );
 
   const completedHours = useMemo(
     () => Math.round(filteredTimeLogs.reduce((sum, log) => sum + getCompletedVolunteerHours(log), 0)),
@@ -1094,7 +1113,7 @@ export default function AdminAnalyticsScreen() {
       // 7. All Partners
       csvContent += `ALL PARTNERS\n`;
       csvContent += `Organization Name,Sector,Contact Name,Email,Phone,Status\n`;
-      partners.forEach(partner => {
+      filteredPartners.forEach(partner => {
         const orgName = (partner.name || 'N/A').replace(/"/g, '""');
         const sector = partner.sectorType || 'N/A';
         const contactName = (partner.stakeholderName || 'N/A').replace(/"/g, '""');
@@ -1971,7 +1990,7 @@ export default function AdminAnalyticsScreen() {
                       {
                         volunteers: filteredVolunteers,
                         projects: filteredProjects,
-                        partners: partners,
+                        partners: filteredPartners,
                         reports: filteredReports,
                         timeLogs: filteredTimeLogs,
                         joinRecords: filteredJoinRecords,

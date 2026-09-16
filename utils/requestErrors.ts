@@ -97,6 +97,12 @@ export function getRequestErrorTitle(error: unknown, fallback = 'Error'): string
   if (rawMessage) {
     const normalizedMessage = rawMessage.toLowerCase();
     if (
+      normalizedMessage.includes('matching event already exists') ||
+      normalizedMessage.includes('duplicate event')
+    ) {
+      return 'Duplicate Event';
+    }
+    if (
       normalizedMessage.includes('timed out') ||
       normalizedMessage.includes('timeout') ||
       normalizedMessage.includes('aborted') ||

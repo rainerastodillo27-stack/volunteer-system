@@ -21,6 +21,7 @@ import {
   limitToLast,
   where,
   updateDoc,
+  deleteDoc,
   doc,
   Unsubscribe,
   Timestamp,
@@ -151,6 +152,45 @@ export async function markDirectMessageReadFirestore(
   await updateDoc(messageRef, { read: true }).catch(() => {});
 }
 
+function firestoreTimestampToMillis(value: unknown): number {
+  if (value instanceof Timestamp) {
+    return value.toMillis();
+  }
+  const parsed = new Date(String(value || '')).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/** Deletes legacy Firestore copies of one direct message, when present. */
+export async function deleteDirectMessageFirestore(message: Message): Promise<void> {
+  const convId = dmConversationId(message.senderId, message.recipientId);
+  const messagesRef = collection(db, 'direct_messages', convId, 'messages');
+  const snapshot = await getDocs(messagesRef);
+  const targetTimestamp = new Date(message.timestamp).getTime();
+  const matchingDocs = snapshot.docs.filter(documentSnapshot => {
+    const data = documentSnapshot.data();
+    const sameId = documentSnapshot.id === message.id;
+    const sameMessage = (
+      data.senderId === message.senderId &&
+      data.recipientId === message.recipientId &&
+      data.content === message.content &&
+      Math.abs(firestoreTimestampToMillis(data.timestamp) - targetTimestamp) <= 5000
+    );
+    return sameId || sameMessage;
+  });
+  await Promise.all(matchingDocs.map(documentSnapshot => deleteDoc(documentSnapshot.ref)));
+}
+
+/** Deletes all legacy Firestore copies for a direct conversation. */
+export async function deleteDirectConversationFirestore(
+  userId1: string,
+  userId2: string,
+): Promise<void> {
+  const convId = dmConversationId(userId1, userId2);
+  const messagesRef = collection(db, 'direct_messages', convId, 'messages');
+  const snapshot = await getDocs(messagesRef);
+  await Promise.all(snapshot.docs.map(documentSnapshot => deleteDoc(documentSnapshot.ref)));
+}
+
 // ─── Group Chat ───────────────────────────────────────────────────────────────
 
 /**
@@ -193,4 +233,30 @@ export async function sendGroupMessage(
     12000,
     'Failed to deliver group message within 12 seconds. Please check your internet connection.'
   );
+}
+
+/** Deletes one legacy Firestore copy of a project-group message, when present. */
+export async function deleteGroupMessageFirestore(message: ProjectGroupMessage): Promise<void> {
+  const messagesRef = collection(db, 'group_messages', message.projectId, 'messages');
+  const snapshot = await getDocs(messagesRef);
+  const targetTimestamp = new Date(message.timestamp).getTime();
+  const matchingDocs = snapshot.docs.filter(documentSnapshot => {
+    const data = documentSnapshot.data();
+    return (
+      documentSnapshot.id === message.id ||
+      (
+        data.senderId === message.senderId &&
+        data.content === message.content &&
+        Math.abs(firestoreTimestampToMillis(data.timestamp) - targetTimestamp) <= 5000
+      )
+    );
+  });
+  await Promise.all(matchingDocs.map(documentSnapshot => deleteDoc(documentSnapshot.ref)));
+}
+
+/** Deletes all legacy Firestore copies for a project-group chat. */
+export async function deleteGroupChatFirestore(projectId: string): Promise<void> {
+  const messagesRef = collection(db, 'group_messages', projectId, 'messages');
+  const snapshot = await getDocs(messagesRef);
+  await Promise.all(snapshot.docs.map(documentSnapshot => deleteDoc(documentSnapshot.ref)));
 }
