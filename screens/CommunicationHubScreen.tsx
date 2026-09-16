@@ -345,7 +345,7 @@ function MessageMenu({ isOwn, isOpen, isLoading, onToggle, onSelect }: MessageMe
         {isLoading ? (
           <ActivityIndicator size="small" color="#94a3b8" />
         ) : (
-          <MaterialIcons name="more-horiz" size={18} color="#64748b" />
+          <MaterialIcons name="more-vert" size={18} color="#64748b" />
         )}
       </TouchableOpacity>
       {isOpen ? (
@@ -356,8 +356,8 @@ function MessageMenu({ isOwn, isOpen, isLoading, onToggle, onSelect }: MessageMe
             disabled={isLoading}
             activeOpacity={0.8}
           >
-            <MaterialIcons name="person-outline" size={16} color="#475569" />
-            <Text style={styles.msgMenuDropdownItemText}>Unsend for self</Text>
+            <MaterialIcons name={isOwn ? 'person-outline' : 'delete-outline'} size={16} color="#475569" />
+            <Text style={styles.msgMenuDropdownItemText}>{isOwn ? 'Unsend for self' : 'Delete for me'}</Text>
           </TouchableOpacity>
           {isOwn ? (
             <TouchableOpacity
@@ -2796,15 +2796,18 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     const isGroupMessage = !('recipientId' in message);
     const targetProjectId = isGroupMessage ? message.projectId : '';
     const targetConversationUser = selectedUser;
+    const isOwnMessage = message.senderId === messageUserId;
 
     if (scope === 'self') {
       showConfirm({
-        title: 'Unsend for self',
-        message: 'Remove this message from your view only? Other people will still see it.',
-        confirmText: 'Unsend for self',
+        title: isOwnMessage ? 'Unsend for self' : 'Delete for me',
+        message: isOwnMessage
+          ? 'Remove this message from your view only? Other people will still see it.'
+          : 'Delete this message from your view only? The other person will still see it.',
+        confirmText: isOwnMessage ? 'Unsend for self' : 'Delete for me',
         loadingText: 'Removing...',
         cancelText: 'Cancel',
-        icon: 'person-outline',
+        icon: isOwnMessage ? 'person-outline' : 'delete-outline',
         iconColor: '#64748B',
         confirmColor: '#166534',
         onConfirm: async () => {
@@ -5447,7 +5450,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                     {senderIdentity}
 
-                    <View style={styles.messageBodyRow}>
+                    <View style={[styles.messageBodyRow, !isOwn && styles.messageBodyRowOther]}>
                       <MessageMenu
                         isOwn={isOwn}
                         isOpen={activeMessageMenu === m.id}
@@ -5583,7 +5586,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                   {senderIdentity}
 
-                  <View style={styles.messageBodyRow}>
+                  <View style={[styles.messageBodyRow, !isOwn && styles.messageBodyRowOther]}>
                     <MessageMenu
                       isOwn={isOwn}
                       isOpen={activeMessageMenu === m.id}
@@ -7743,6 +7746,8 @@ const styles = StyleSheet.create({
   messageRowMenuOpen: { zIndex: 20 },
 
   messageBodyRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 4, maxWidth: '100%' },
+
+  messageBodyRowOther: { flexDirection: 'row-reverse' },
 
   messageRowOwn: { alignSelf: 'flex-end', alignItems: 'flex-end' },
 

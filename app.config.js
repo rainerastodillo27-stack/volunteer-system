@@ -138,7 +138,7 @@ module.exports = () => {
     expo: {
       name: 'NVC',
       slug: 'volcre',
-      owner: '11doom11',
+      owner: 'nvc-foundation',
       icon: './assets/nvc-app-icon.png',
       version: '1.0.0',
       orientation: 'portrait',
