@@ -44,6 +44,11 @@ Write-Host ""
 Write-Host "[4/4] Extracting web files and restarting web server..." -ForegroundColor Yellow
 $remoteCmd = "cd $RemoteDir && tar -xzf dist.tar.gz && rm -f dist.tar.gz && pm2 restart all"
 ssh "$User@$Server" $remoteCmd
+if ($LASTEXITCODE -ne 0) {
+    Remove-Item dist.tar.gz -Force -ErrorAction SilentlyContinue
+    Write-Host "  [!] VPS web restart failed." -ForegroundColor Red
+    exit 1
+}
 
 Remove-Item dist.tar.gz -Force -ErrorAction SilentlyContinue
 

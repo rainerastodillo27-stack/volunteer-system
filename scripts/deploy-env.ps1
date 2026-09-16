@@ -2,7 +2,8 @@
 param(
     [string]$Server = "129.121.73.76",
     [string]$User = "root",
-    [string]$RemoteDir = "/var/www/volunteer-system"
+    [string]$RemoteDir = "/var/www/volunteer-system",
+    [string]$HealthUrl = "https://nvcfoundationconnect.online/db-health"
 )
 
 Write-Host ""
@@ -31,22 +32,34 @@ Write-Host "  [+] .env uploaded successfully." -ForegroundColor Green
 # 2. Restart backend to load new environment
 Write-Host ""
 Write-Host "[2/3] Restarting backend to reload .env..." -ForegroundColor Yellow
-$remoteCmd = "pkill -9 -f 'backend.api:app' ; sleep 1 ; nohup $RemoteDir/.venv/bin/python -m uvicorn backend.api:app --host 0.0.0.0 --port 8001 --ws websockets > backend.log 2>&1 &"
+$remoteCmd = "set -e; cd $RemoteDir; pkill -TERM -f '[u]vicorn backend.api:app' || true; sleep 1; nohup $RemoteDir/.venv/bin/python -m uvicorn backend.api:app --host 0.0.0.0 --port 8001 --ws websockets > backend.log 2>&1 < /dev/null &"
 ssh "$User@$Server" $remoteCmd
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  [!] Backend restart failed." -ForegroundColor Red
+    exit 1
+}
 
 # 3. Check health
 Write-Host ""
 Write-Host "[3/3] Verifying backend health..." -ForegroundColor Yellow
 Start-Sleep -Seconds 3
 try {
-    $resp = Invoke-RestMethod -Uri "http://${Server}/db-health" -TimeoutSec 6 -ErrorAction Stop
+    $resp = Invoke-RestMethod -Uri $HealthUrl -TimeoutSec 10 -ErrorAction Stop
     if ($resp.status -eq "ok" -and $resp.available) {
         Write-Host "  [+] Backend is LIVE and connected to the database!" -ForegroundColor Green
+        $healthOk = $true
     } else {
         Write-Host "  [!] Backend responded with status: $($resp.status)" -ForegroundColor Yellow
+        $healthOk = $false
     }
 } catch {
-    Write-Host "  [!] Backend is still initializing, check in 5 seconds." -ForegroundColor Yellow
+    Write-Host "  [!] Health check failed at $HealthUrl : $($_.Exception.Message)" -ForegroundColor Red
+    $healthOk = $false
+}
+
+if (-not $healthOk) {
+    Write-Host "Environment deployment did not pass the health check." -ForegroundColor Red
+    exit 1
 }
 
 Write-Host ""

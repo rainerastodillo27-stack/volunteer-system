@@ -3945,10 +3945,11 @@ def startup() -> None:
             with get_connection() as connection:
                 _ensure_notification_reads_table(connection)
                 _ensure_registration_otp_table(connection)
+                _ensure_password_reset_otp_table(connection)
                 ensure_volunteer_time_logs_table_shape(connection)
                 _ensure_reminder_tables(connection)
                 connection.commit()
-            print("[OK] Notification read-state, registration OTP, volunteer time logs, and integration schemas ensured.")
+            print("[OK] Notification read-state, email OTP, volunteer time logs, and integration schemas ensured.")
         except Exception as error:
             print(f"[WARN] Schema ensure skipped: {error}")
 
@@ -4861,8 +4862,8 @@ def _get_demo_account(identifier: str) -> dict[str, Any] | None:
 REGISTRATION_OTP_TTL_SECONDS = 300
 _registration_otp_schema_lock = threading.Lock()
 _registration_otp_schema_ready = False
-_password_reset_otp_store: dict[str, dict[str, Any]] = {}
-_password_reset_otp_store_lock = threading.Lock()
+_password_reset_otp_schema_lock = threading.Lock()
+_password_reset_otp_schema_ready = False
 PASSWORD_RESET_OTP_TTL_SECONDS = 300
 
 
@@ -4909,6 +4910,50 @@ def _registration_otp_digest(email: str, otp: str, salt: bytes) -> str:
     ).hex()
 
 
+def _ensure_password_reset_otp_table(connection: Any) -> None:
+    """Ensure password-reset OTPs are shared across workers and restarts."""
+    global _password_reset_otp_schema_ready
+
+    if _password_reset_otp_schema_ready:
+        return
+
+    with _password_reset_otp_schema_lock:
+        if _password_reset_otp_schema_ready:
+            return
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                create table if not exists public.password_reset_email_otps (
+                  email text primary key,
+                  otp_digest text not null,
+                  otp_salt text not null,
+                  issued_at timestamptz not null,
+                  expires_at timestamptz not null,
+                  attempts integer not null default 0
+                )
+                """
+            )
+            cursor.execute(
+                """
+                create index if not exists password_reset_email_otps_expires_idx
+                on public.password_reset_email_otps (expires_at)
+                """
+            )
+        connection.commit()
+        _password_reset_otp_schema_ready = True
+
+
+def _password_reset_otp_digest(email: str, otp: str, salt: bytes) -> str:
+    """Derive a reset-code digest without storing the six-digit code."""
+    return hashlib.pbkdf2_hmac(
+        "sha256",
+        f"{email}:{otp}".encode("utf-8"),
+        salt,
+        100_000,
+    ).hex()
+
+
 def _purge_expired_registration_otps(connection: Any) -> None:
     with connection.cursor() as cursor:
         cursor.execute(
@@ -4942,16 +4987,11 @@ def _send_password_reset_otp_email(recipient_email: str, otp: str) -> None:
     _send_email_message(recipient_email, "Your NVC Connect Password Reset Code", text_body, html_body)
 
 
-def _purge_expired_password_reset_otps() -> None:
-    now = datetime.now(timezone.utc)
-    with _password_reset_otp_store_lock:
-        expired_keys = [
-            key
-            for key, value in _password_reset_otp_store.items()
-            if value["expires_at"] < now
-        ]
-        for key in expired_keys:
-            del _password_reset_otp_store[key]
+def _purge_expired_password_reset_otps(connection: Any) -> None:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "delete from public.password_reset_email_otps where expires_at <= now()"
+        )
 
 
 def _is_email_already_registered(email: str, connection: Any | None = None) -> bool:
@@ -5194,25 +5234,38 @@ def auth_password_reset_send(payload: PasswordResetRequestPayload) -> dict[str, 
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="A valid email address is required.")
 
-    _purge_expired_password_reset_otps()
-
-    with _password_reset_otp_store_lock:
-        existing = _password_reset_otp_store.get(email)
-        if existing:
-            time_since = (datetime.now(timezone.utc) - existing["issued_at"]).total_seconds()
-            if time_since < 60:
-                wait = int(60 - time_since)
-                raise HTTPException(
-                    status_code=429,
-                    detail=f"Please wait {wait} seconds before requesting a new code.",
-                )
-
     # Keep the response generic for unknown emails so this endpoint cannot be
     # used to enumerate registered accounts.
     try:
         with get_connection() as connection:
+            _ensure_password_reset_otp_table(connection)
+            _purge_expired_password_reset_otps(connection)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    select issued_at
+                    from public.password_reset_email_otps
+                    where email = %s
+                    for update
+                    """,
+                    (email,),
+                )
+                existing = cursor.fetchone()
+                if existing:
+                    issued_at = existing[0]
+                    if issued_at.tzinfo is None:
+                        issued_at = issued_at.replace(tzinfo=timezone.utc)
+                    time_since = (datetime.now(timezone.utc) - issued_at).total_seconds()
+                    if time_since < 60:
+                        wait = max(1, int(60 - time_since))
+                        raise HTTPException(
+                            status_code=429,
+                            detail=f"Please wait {wait} seconds before requesting a new code.",
+                        )
             user = _get_user_by_identifier(email, connection)
     except Exception as database_error:
+        if isinstance(database_error, HTTPException):
+            raise
         print(f"[PASSWORD-RESET] Account lookup failed: {type(database_error).__name__}: {database_error}")
         raise HTTPException(
             status_code=503,
@@ -5228,21 +5281,51 @@ def auth_password_reset_send(payload: PasswordResetRequestPayload) -> dict[str, 
 
     otp = "".join(str(secrets.randbelow(10)) for _ in range(6))
     now = datetime.now(timezone.utc)
-    with _password_reset_otp_store_lock:
-        _password_reset_otp_store[email] = {
-            "otp": otp,
-            "issued_at": now,
-            "expires_at": now + timedelta(seconds=PASSWORD_RESET_OTP_TTL_SECONDS),
-            "attempts": 0,
-        }
+    salt = secrets.token_bytes(16)
+    otp_digest = _password_reset_otp_digest(email, otp, salt)
+
+    with get_connection() as connection:
+        _ensure_password_reset_otp_table(connection)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                insert into public.password_reset_email_otps
+                  (email, otp_digest, otp_salt, issued_at, expires_at, attempts)
+                values (%s, %s, %s, %s, %s, 0)
+                on conflict (email) do update set
+                  otp_digest = excluded.otp_digest,
+                  otp_salt = excluded.otp_salt,
+                  issued_at = excluded.issued_at,
+                  expires_at = excluded.expires_at,
+                  attempts = 0
+                """,
+                (
+                    email,
+                    otp_digest,
+                    salt.hex(),
+                    now,
+                    now + timedelta(seconds=PASSWORD_RESET_OTP_TTL_SECONDS),
+                ),
+            )
+        connection.commit()
 
     try:
         _send_password_reset_otp_email(email, otp)
     except Exception as smtp_error:
-        with _password_reset_otp_store_lock:
-            stored = _password_reset_otp_store.get(email)
-            if stored and stored.get("otp") == otp:
-                del _password_reset_otp_store[email]
+        try:
+            with get_connection() as connection:
+                _ensure_password_reset_otp_table(connection)
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        delete from public.password_reset_email_otps
+                        where email = %s and otp_digest = %s
+                        """,
+                        (email, otp_digest),
+                    )
+                connection.commit()
+        except Exception as cleanup_error:
+            print(f"[PASSWORD-RESET] Failed to clean up undelivered code: {cleanup_error}")
         print(f"[PASSWORD-RESET] SMTP unavailable ({smtp_error}).")
         raise HTTPException(
             status_code=503,
@@ -5277,30 +5360,73 @@ def auth_password_reset_confirm(payload: PasswordResetConfirmPayload) -> dict[st
     if not any(character.isdigit() for character in new_password):
         raise HTTPException(status_code=400, detail="Password must include at least one number.")
 
-    _purge_expired_password_reset_otps()
-    with _password_reset_otp_store_lock:
-        stored = _password_reset_otp_store.get(email)
-        if stored is None:
-            raise HTTPException(status_code=401, detail="No reset code found. Please request a new one.")
-        if datetime.now(timezone.utc) > stored["expires_at"]:
-            del _password_reset_otp_store[email]
-            raise HTTPException(status_code=401, detail="Your reset code has expired. Please request a new one.")
-        if stored["otp"] != otp:
-            stored["attempts"] = int(stored.get("attempts") or 0) + 1
-            if stored["attempts"] >= 5:
-                del _password_reset_otp_store[email]
-                raise HTTPException(status_code=429, detail="Too many incorrect codes. Please request a new one.")
-            raise HTTPException(status_code=401, detail="Incorrect code. Please try again.")
-        del _password_reset_otp_store[email]
-
     with get_connection() as connection:
-        user = _get_user_by_identifier(email, connection)
-        if user is None:
-            raise HTTPException(status_code=404, detail="Account not found.")
+        _ensure_password_reset_otp_table(connection)
+        _purge_expired_password_reset_otps(connection)
         with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                select otp_digest, otp_salt, expires_at, attempts
+                from public.password_reset_email_otps
+                where email = %s
+                for update
+                """,
+                (email,),
+            )
+            stored = cursor.fetchone()
+            if stored is None:
+                raise HTTPException(status_code=401, detail="No reset code found. Please request a new one.")
+
+            stored_digest, stored_salt, expires_at, attempts = stored
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) >= expires_at:
+                cursor.execute(
+                    "delete from public.password_reset_email_otps where email = %s",
+                    (email,),
+                )
+                connection.commit()
+                raise HTTPException(status_code=401, detail="Your reset code has expired. Please request a new one.")
+
+            try:
+                salt = bytes.fromhex(str(stored_salt))
+                supplied_digest = _password_reset_otp_digest(email, otp, salt)
+            except (TypeError, ValueError):
+                supplied_digest = ""
+
+            if not secrets.compare_digest(str(stored_digest), supplied_digest):
+                next_attempts = int(attempts or 0) + 1
+                if next_attempts >= 5:
+                    cursor.execute(
+                        "delete from public.password_reset_email_otps where email = %s",
+                        (email,),
+                    )
+                    connection.commit()
+                    raise HTTPException(status_code=429, detail="Too many incorrect codes. Please request a new one.")
+
+                cursor.execute(
+                    "update public.password_reset_email_otps set attempts = %s where email = %s",
+                    (next_attempts, email),
+                )
+                connection.commit()
+                raise HTTPException(status_code=401, detail="Incorrect code. Please try again.")
+
+            user = _get_user_by_identifier(email, connection)
+            if user is None:
+                cursor.execute(
+                    "delete from public.password_reset_email_otps where email = %s",
+                    (email,),
+                )
+                connection.commit()
+                raise HTTPException(status_code=404, detail="Account not found.")
+
             cursor.execute(
                 "update users set password = %s where users_id = %s",
                 (hash_password(new_password), user.get("id")),
+            )
+            cursor.execute(
+                "delete from public.password_reset_email_otps where email = %s",
+                (email,),
             )
         connection.commit()
 

@@ -56,7 +56,6 @@ import { Picker } from "@react-native-picker/picker";
 import {
   createUserAccount,
   getAllProjects,
-  getAllUsers,
   getApiBaseUrl,
   loginWithCredentials,
   loginWithGoogle,
@@ -1158,16 +1157,9 @@ export default function LoginScreen() {
     try {
       setSignupOtpLoading(true);
       setSignupOtpAction("send");
-      const existingUsers = await getAllUsers();
-      const emailAlreadyRegistered = existingUsers.some(
-        (user) => normalizeEmailInput(user.email || "") === email,
-      );
-      if (emailAlreadyRegistered) {
-        setEmailExistsError("An account with this email already exists.");
-        throw new Error("An account with this email already exists.");
-      }
-
-      // Check backend email availability
+      // Email availability is checked by the public backend endpoint below.
+      // Do not read the protected users collection before authentication: a
+      // fresh device would receive 401 and never get a verification code.
       try {
         const checkRes = await fetch(
           `${getApiBaseUrl()}/auth/check-email?email=${encodeURIComponent(email)}`,
