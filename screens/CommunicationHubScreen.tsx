@@ -7754,7 +7754,7 @@ const styles = StyleSheet.create({
 
   messageRowMenuOpen: { zIndex: 20 },
 
-  messageBodyRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 4, width: '100%', maxWidth: '100%', minWidth: 0, flexShrink: 1 },
+  messageBodyRow: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'flex-end', gap: 4, width: '100%', maxWidth: '100%', minWidth: 0, flexShrink: 1 },
 
   messageBodyRowOther: { flexDirection: 'row-reverse' },
 
