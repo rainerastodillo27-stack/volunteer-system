@@ -24389,7 +24389,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   setStatusFilter={setStatusFilter}
 
-                  onAddEvent={handleAddEventFromCalendar}
+                  hideSecondCalendar
 
                   onOpenProject={projectId => {
 
