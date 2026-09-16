@@ -146,7 +146,9 @@ const CONVERSATION_CACHE_TTL_MS = 30000;
 // The directory changes much less often than messages. Reusing it avoids a
 // full user/profile read every time Messages regains focus on web or mobile.
 const MESSAGE_USERS_CACHE_TTL_MS = 60000;
-const STORAGE_CHANGE_POLL_INTERVAL_MS = 5000; // Increased from 3s to 5s
+// WebSocket notifications are the primary path. This is a fast fallback for
+// hosted/mobile sessions where a proxy or network temporarily blocks WS.
+const STORAGE_CHANGE_POLL_INTERVAL_MS = 2000;
 const STORAGE_CHANGE_DEBOUNCE_MS = 200;
 const STORAGE_CHANGE_CALLBACK_COOLDOWN_MS = 0;
 const LOCAL_ONLY_STORAGE_KEYS = new Set([STORAGE_KEYS.CURRENT_USER, STORAGE_KEYS.APP_SETTINGS]);

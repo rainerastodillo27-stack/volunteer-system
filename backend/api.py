@@ -30,7 +30,7 @@ from zoneinfo import ZoneInfo
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request as FastAPIRequest, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request as FastAPIRequest, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -5633,7 +5633,10 @@ def _registration_partner_category(advocacy_focus: list[str]) -> str:
 
 
 @app.post("/auth/register")
-def auth_register(payload: RegistrationPayload) -> dict[str, Any]:
+def auth_register(
+    payload: RegistrationPayload,
+    background_tasks: BackgroundTasks,
+) -> dict[str, Any]:
     """Create a volunteer or partner account without opening storage writes publicly."""
     email = str(payload.email or "").strip().lower()
     name = str(payload.name or "").strip()
@@ -5731,6 +5734,10 @@ def auth_register(payload: RegistrationPayload) -> dict[str, Any]:
             if role == "volunteer" and _ensure_volunteer_profile_for_user(connection, replay_source):
                 connection.commit()
                 _invalidate_collection_cache(["users", "volunteers"])
+                background_tasks.add_task(
+                    connection_manager.broadcast_storage_event,
+                    ["users", "volunteers"],
+                )
             return {
                 "user": saved_user,
                 "message": "Registration was already submitted successfully. An administrator must approve the account before login is unlocked.",
@@ -5811,7 +5818,14 @@ def auth_register(payload: RegistrationPayload) -> dict[str, Any]:
             ) from error
 
     _invalidate_collection_cache(changed_keys)
-    asyncio.create_task(connection_manager.broadcast_storage_event(changed_keys))
+    # FastAPI runs this synchronous endpoint in a worker thread. Use its
+    # background-task runner instead of asyncio.create_task(), which has no
+    # running event loop in that worker thread and could silently skip the
+    # realtime notification after the database commit.
+    background_tasks.add_task(
+        connection_manager.broadcast_storage_event,
+        changed_keys,
+    )
     saved_user["hasPassword"] = True
     return {
         "user": saved_user,
