@@ -108,16 +108,32 @@ export default function ProposalMessageTemplate({ application, cardKind, revisio
   // original partner submission would incorrectly become a rejection card.
   const isSubmissionCard = cardKind === 'submission';
   const rawStatus = isSubmissionCard ? 'pending' : (application.status || 'Pending').toLowerCase();
+  const normalizedStatusOverride = String(statusOverride || '').toLowerCase();
+  const submissionReviewStatus = isSubmissionCard && (
+    normalizedStatusOverride === 'approved' || normalizedStatusOverride === 'rejected'
+  )
+    ? normalizedStatusOverride
+    : '';
   const visibleStatus = isSubmissionCard
-    ? 'pending'
+    ? submissionReviewStatus || 'pending'
     : String(statusOverride || application.status || 'Pending').toLowerCase();
   let badgeText = 'DRAFT';
   let badgeBg = '#EDE9FE';
   let badgeColor = '#7C3AED';
   if (isSubmissionCard) {
-    badgeText = revisionNumber > 0 ? 'RESUBMITTED' : 'SUBMITTED';
-    badgeBg = revisionNumber > 0 ? '#EDE9FE' : '#DBEAFE';
-    badgeColor = revisionNumber > 0 ? '#7C3AED' : '#1D4ED8';
+    if (submissionReviewStatus === 'approved') {
+      badgeText = 'APPROVED';
+      badgeBg = '#DCFCE7';
+      badgeColor = '#166534';
+    } else if (submissionReviewStatus === 'rejected') {
+      badgeText = 'REJECTED';
+      badgeBg = '#FEE2E2';
+      badgeColor = '#DC2626';
+    } else {
+      badgeText = revisionNumber > 0 ? 'RESUBMITTED' : 'SUBMITTED';
+      badgeBg = revisionNumber > 0 ? '#EDE9FE' : '#DBEAFE';
+      badgeColor = revisionNumber > 0 ? '#7C3AED' : '#1D4ED8';
+    }
   } else if (visibleStatus === 'approved') {
     badgeText = 'Approved';
     badgeBg = '#DCFCE7';
@@ -206,6 +222,7 @@ export default function ProposalMessageTemplate({ application, cardKind, revisio
 
   const isRevisionRequested = rawStatus === 'revision requested' || rawStatus === 'needs revision' || rawStatus === 'revision';
   const isResubmitted = !isSubmissionCard && rawStatus === 'resubmitted';
+  const isResolvedSubmission = isSubmissionCard && Boolean(submissionReviewStatus);
   const canEdit = Boolean(onEdit) && (
     !reviewActionsDisabled && (
       (isAdmin && rawStatus === 'pending') ||
@@ -541,10 +558,21 @@ export default function ProposalMessageTemplate({ application, cardKind, revisio
               {visibleStatus === 'rejected' && !isAdmin ? 'Edit & Resubmit' : 'Edit'}
             </Text>
           </TouchableOpacity>
-        ) : !isAdmin && rawStatus === 'pending' ? (
+        ) : !isAdmin && rawStatus === 'pending' && !isResolvedSubmission ? (
           <View style={styles.waitingStatus}>
             <MaterialIcons name="schedule" size={15} color="#B45309" />
             <Text style={styles.waitingStatusText}>Waiting for admin review</Text>
+          </View>
+        ) : !isAdmin && isResolvedSubmission ? (
+          <View style={[styles.waitingStatus, submissionReviewStatus === 'approved' ? styles.resolvedApprovedStatus : styles.resolvedRejectedStatus]}>
+            <MaterialIcons
+              name={submissionReviewStatus === 'approved' ? 'check-circle' : 'cancel'}
+              size={15}
+              color={submissionReviewStatus === 'approved' ? '#166534' : '#DC2626'}
+            />
+            <Text style={[styles.waitingStatusText, { color: submissionReviewStatus === 'approved' ? '#166534' : '#DC2626' }]}>
+              {submissionReviewStatus === 'approved' ? 'Approved by admin' : 'Rejected by admin'}
+            </Text>
           </View>
         ) : <View />}
 
@@ -776,6 +804,12 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 8,
     backgroundColor: '#FEF3C7',
+  },
+  resolvedApprovedStatus: {
+    backgroundColor: '#DCFCE7',
+  },
+  resolvedRejectedStatus: {
+    backgroundColor: '#FEE2E2',
   },
   waitingStatusText: {
     fontSize: 11,

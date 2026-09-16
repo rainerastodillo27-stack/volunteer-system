@@ -5342,6 +5342,24 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                 const isSubmissionCard = !isReviewCard;
                 const cardApplication = application;
                 const applicationId = messageApplicationId;
+                let submissionReviewStatus: PartnerProjectApplication['status'] | undefined;
+                if (isSubmissionCard) {
+                  for (const laterMessage of filteredMessages.slice(i + 1)) {
+                    if (!laterMessage.content?.startsWith(PROPOSAL_PREFIX)) continue;
+                    const laterApplication = parseProposalCardContent(laterMessage.content);
+                    if (!laterApplication) continue;
+                    const laterApplicationId = String(
+                      laterApplication.applicationId || laterApplication.id || ''
+                    ).trim();
+                    if (laterApplicationId !== applicationId) continue;
+                    if (laterMessage.id.startsWith('review-card-')) {
+                      if (laterApplication.status === 'Approved' || laterApplication.status === 'Rejected') {
+                        submissionReviewStatus = laterApplication.status;
+                      }
+                    }
+                    break;
+                  }
+                }
                 const hasLaterCardInChat = filteredMessages.slice(i + 1).some(laterMessage => {
                   if (!laterMessage.content?.startsWith(PROPOSAL_PREFIX)) return false;
                   const laterApplication = parseProposalCardContent(laterMessage.content);
@@ -5481,6 +5499,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                         }
                         cardKind={isReviewCard ? 'review' : 'submission'}
                         revisionNumber={revisionNumber}
+                        statusOverride={submissionReviewStatus}
                         reviewActionsDisabled={Boolean(user?.role === 'admin' && !isCurrentSubmission)}
                         onEdit={app => openProposalRevision({ ...app, ...(app.proposalDetails || {}) })}
                         onApprove={app => void handleReview(app, 'Approved')}
