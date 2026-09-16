@@ -28,6 +28,10 @@ export interface LocationMapPickerProps {
 }
 
 const MapHost = 'div' as any;
+const NativeMapsModule: any = Platform.OS === 'web' ? null : require('react-native-maps');
+const NativeMapView: any = NativeMapsModule?.default || NativeMapsModule;
+const NativeMarker: any = NativeMapsModule?.Marker;
+const NativeGoogleProvider: any = NativeMapsModule?.PROVIDER_GOOGLE;
 
 function getWebGoogleMapsApiKey(): string {
   return (
@@ -56,6 +60,7 @@ export default function LocationMapPicker({
   const mapElementRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<any>(null);
   const markerRef = useRef<any>(null);
+  const nativeMapRef = useRef<any>(null);
 
   const [searchQuery, setSearchQuery] = useState(address || '');
   const [isSearching, setIsSearching] = useState(false);
@@ -68,6 +73,12 @@ export default function LocationMapPicker({
 
   const currentLat = hasValidCoords ? parsedLat : DEFAULT_LAT;
   const currentLng = hasValidCoords ? parsedLng : DEFAULT_LNG;
+  const nativeRegion = {
+    latitude: currentLat,
+    longitude: currentLng,
+    latitudeDelta: hasValidCoords ? 0.04 : 0.3,
+    longitudeDelta: hasValidCoords ? 0.04 : 0.3,
+  };
 
   // Sync searchQuery when external address changes (and input is not focused)
   useEffect(() => {
@@ -217,6 +228,26 @@ export default function LocationMapPicker({
     };
   }, [currentLat, currentLng, hasValidCoords]);
 
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    nativeMapRef.current?.animateToRegion?.(nativeRegion, 300);
+  }, [currentLat, currentLng, hasValidCoords]);
+
+  const handleNativeCoordinateChange = useCallback(
+    async (coordinate: { latitude: number; longitude: number }) => {
+      const resolvedAddr = await reverseGeocode(coordinate.latitude, coordinate.longitude);
+      if (resolvedAddr) {
+        setSearchQuery(resolvedAddr);
+      }
+      onLocationChange({
+        latitude: coordinate.latitude,
+        longitude: coordinate.longitude,
+        address: resolvedAddr || undefined,
+      });
+    },
+    [onLocationChange, reverseGeocode]
+  );
+
   // Handle address search
   const handleSearch = async () => {
     const rawQuery = searchQuery.trim();
@@ -360,6 +391,12 @@ export default function LocationMapPicker({
           mapInstanceRef.current.setCenter(newPos);
           mapInstanceRef.current.setZoom(15);
         }
+        nativeMapRef.current?.animateToRegion?.({
+          latitude: foundLat,
+          longitude: foundLng,
+          latitudeDelta: 0.04,
+          longitudeDelta: 0.04,
+        }, 300);
         onLocationChange({
           latitude: foundLat,
           longitude: foundLng,
@@ -429,10 +466,35 @@ export default function LocationMapPicker({
               backgroundColor: '#f1f5f9',
             }}
           />
+        ) : NativeMapView && NativeMarker ? (
+          <NativeMapView
+            ref={(map: any) => {
+              nativeMapRef.current = map;
+            }}
+            style={styles.nativeMap}
+            initialRegion={nativeRegion}
+            provider={Platform.OS === 'android' ? NativeGoogleProvider : undefined}
+            mapType="standard"
+            showsCompass
+            showsScale
+            toolbarEnabled
+            onPress={(event: any) => {
+              void handleNativeCoordinateChange(event.nativeEvent.coordinate);
+            }}
+          >
+            <NativeMarker
+              coordinate={{ latitude: currentLat, longitude: currentLng }}
+              draggable
+              title="Drag pin to set exact location"
+              onDragEnd={(event: any) => {
+                void handleNativeCoordinateChange(event.nativeEvent.coordinate);
+              }}
+            />
+          </NativeMapView>
         ) : (
           <View style={styles.nativeFallback}>
-            <MaterialIcons name="map" size={40} color="#94a3b8" />
-            <Text style={styles.nativeFallbackText}>Map view available on Web</Text>
+            <MaterialIcons name="warning" size={40} color="#dc2626" />
+            <Text style={styles.nativeFallbackText}>Interactive map is unavailable on this device.</Text>
           </View>
         )}
 
@@ -544,6 +606,10 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     position: 'relative',
     backgroundColor: '#e2e8f0',
+  },
+  nativeMap: {
+    flex: 1,
+    width: '100%',
   },
   mapLoadingOverlay: {
     ...(StyleSheet.absoluteFill as any),

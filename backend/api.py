@@ -6884,6 +6884,12 @@ async def set_volunteer_attendance_check(
         if log is None:
             raise HTTPException(status_code=404, detail="Attendance record not found.")
 
+        if payload.checked and not str(log.get("attendanceConfirmedAt") or "").strip():
+            raise HTTPException(
+                status_code=400,
+                detail="The volunteer must confirm attendance before it can be verified.",
+            )
+
         checked_by_user_id = str(payload.checkedByUserId or "").strip()
         if session.get("role") != "admin":
             if checked_by_user_id and checked_by_user_id != str(session.get("sub") or ""):

@@ -143,8 +143,6 @@ import {
 
   saveProject,
 
-  saveVolunteerTimeLog,
-
   saveStatusUpdate,
 
   subscribeToStorageChanges,
@@ -13404,7 +13402,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
           <View style={{ flexDirection: isMobile ? 'column' : 'row', alignItems: isMobile ? 'stretch' : 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: '#e2e8f0', paddingBottom: 20, marginBottom: 20, gap: 16 }}>
 
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: isMobile ? undefined : 1, minWidth: 0 }}>
 
               <View style={{ width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center', backgroundColor: '#eef7ef' }}>
 
@@ -13412,7 +13410,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
               </View>
 
-              <View>
+              <View style={{ flex: 1, minWidth: 0 }}>
 
                 <Text style={{ fontSize: 24, fontWeight: '800', color: '#0f172a' }}>
 
@@ -13420,7 +13418,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 </Text>
 
-                <Text style={{ fontSize: 13, color: '#64748b', marginTop: 3 }} numberOfLines={1}>
+                <Text style={{ fontSize: 13, color: '#64748b', marginTop: 3, lineHeight: 18 }} numberOfLines={isMobile ? 2 : 1} ellipsizeMode="tail">
 
                   Create an event under {activeParentProject?.title || 'selected parent project'}{activeParentProject?.location?.barangay ? `, Brgy. ${activeParentProject.location.barangay}` : ''}.
 
@@ -13573,7 +13571,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                     <Text style={{ fontSize: 13, fontWeight: '700', color: '#334155', marginBottom: 6 }}>Parent Project <Text style={{ color: '#ef4444' }}>*</Text></Text>
 
-                    <View style={[styles.formPickerContainer, errBorder('parentProject')]}>
+                    <View style={[styles.formPickerContainer, { minWidth: 0 }, errBorder('parentProject')]}>
 
                       <Picker
 
@@ -13701,19 +13699,19 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
               <View style={{ borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 16, padding: 20, backgroundColor: '#ffffff' }}>
 
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                <View style={{ flexDirection: isMobile ? 'column' : 'row', alignItems: isMobile ? 'stretch' : 'center', gap: isMobile ? 12 : 12 }}>
 
                   {/* Start Date & Time */}
 
-                  <View style={{ flex: 1, minWidth: 240 }}>
+                  <View style={{ flex: 1, minWidth: isMobile ? 0 : 240, width: isMobile ? '100%' : undefined }}>
 
                     <Text style={{ fontSize: 13, fontWeight: '700', color: '#334155', marginBottom: 6 }}>Start Date & Time <Text style={{ color: '#ef4444' }}>*</Text></Text>
 
-                    <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                    <View style={{ flexDirection: isMobile ? 'column' : 'row', gap: 8, alignItems: isMobile ? 'stretch' : 'center' }}>
 
                       <TouchableOpacity
 
-                        style={{ flex: 1.2, height: 42, borderWidth: fieldErrors.startDate ? 1.5 : 1, borderColor: fieldErrors.startDate ? '#ef4444' : '#cbd5e1', borderRadius: 8, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 8, backgroundColor: '#fff' }}
+                        style={{ flex: isMobile ? undefined : 1.2, width: isMobile ? '100%' : undefined, minWidth: 0, height: 42, borderWidth: fieldErrors.startDate ? 1.5 : 1, borderColor: fieldErrors.startDate ? '#ef4444' : '#cbd5e1', borderRadius: 8, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 8, backgroundColor: '#fff' }}
 
                         onPress={() => {
 
@@ -13743,7 +13741,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       {!eventAllDay && (
 
-                        <View style={{ flex: 1, height: 42, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, backgroundColor: '#fff', justifyContent: 'center' }}>
+                        <View style={{ flex: isMobile ? undefined : 1, width: isMobile ? '100%' : undefined, minWidth: 0, height: 42, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, backgroundColor: '#fff', justifyContent: 'center' }}>
 
                           <Picker
 
@@ -13774,21 +13772,21 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-                  <Text style={{ fontSize: 14, color: '#64748b', alignSelf: 'flex-end', marginBottom: 12, marginHorizontal: 4 }}>to</Text>
+                  <Text style={{ fontSize: 14, color: '#64748b', alignSelf: isMobile ? 'flex-start' : 'flex-end', marginBottom: isMobile ? 0 : 12, marginHorizontal: 4 }}>to</Text>
 
 
 
                   {/* End Date & Time */}
 
-                  <View style={{ flex: 1, minWidth: 240 }}>
+                  <View style={{ flex: 1, minWidth: isMobile ? 0 : 240, width: isMobile ? '100%' : undefined }}>
 
                     <Text style={{ fontSize: 13, fontWeight: '700', color: '#334155', marginBottom: 6 }}>End Date & Time <Text style={{ color: '#ef4444' }}>*</Text></Text>
 
-                    <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                    <View style={{ flexDirection: isMobile ? 'column' : 'row', gap: 8, alignItems: isMobile ? 'stretch' : 'center' }}>
 
                       <TouchableOpacity
 
-                        style={{ flex: 1.2, height: 42, borderWidth: fieldErrors.endDate ? 1.5 : 1, borderColor: fieldErrors.endDate ? '#ef4444' : '#cbd5e1', borderRadius: 8, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 8, backgroundColor: '#fff' }}
+                        style={{ flex: isMobile ? undefined : 1.2, width: isMobile ? '100%' : undefined, minWidth: 0, height: 42, borderWidth: fieldErrors.endDate ? 1.5 : 1, borderColor: fieldErrors.endDate ? '#ef4444' : '#cbd5e1', borderRadius: 8, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 8, backgroundColor: '#fff' }}
 
                         onPress={() => {
 
@@ -13818,7 +13816,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       {!eventAllDay && (
 
-                        <View style={{ flex: 1, height: 42, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, backgroundColor: '#fff', justifyContent: 'center' }}>
+                        <View style={{ flex: isMobile ? undefined : 1, width: isMobile ? '100%' : undefined, minWidth: 0, height: 42, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, backgroundColor: '#fff', justifyContent: 'center' }}>
 
                           <Picker
 
@@ -13853,7 +13851,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 {/* All day & Repeat Row */}
 
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 24, marginTop: 16 }}>
+                <View style={{ flexDirection: isMobile ? 'column' : 'row', alignItems: isMobile ? 'stretch' : 'center', gap: isMobile ? 12 : 24, marginTop: 16 }}>
 
                   <TouchableOpacity
 
@@ -13873,11 +13871,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   </TouchableOpacity>
 
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, width: isMobile ? '100%' : undefined }}>
 
                     <Text style={{ fontSize: 13, color: '#334155', fontWeight: '500' }}>Repeat</Text>
 
-                    <View style={{ width: 160, height: 38, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, backgroundColor: '#fff', justifyContent: 'center' }}>
+                    <View style={{ flex: isMobile ? 1 : undefined, width: isMobile ? undefined : 160, minWidth: 0, height: 38, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, backgroundColor: '#fff', justifyContent: 'center' }}>
 
                       <Picker
 
@@ -13935,11 +13933,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                     <View style={{ gap: 6 }}>
 
-                      <Text style={{ fontSize: 13, fontWeight: '700', color: '#334155' }}>Location (Address/Venue) <Text style={{ color: '#ef4444' }}>*</Text></Text>
+                      <Text style={{ fontSize: 13, fontWeight: '700', color: '#334155', flexShrink: 1 }}>Location (Address/Venue) <Text style={{ color: '#ef4444' }}>*</Text></Text>
 
                       <TextInput
 
-                        style={[styles.formInput, errBorder('location')]}
+                        style={[styles.formInput, { width: '100%', minWidth: 0 }, errBorder('location')]}
 
                         placeholder="Enter location"
 
@@ -13972,7 +13970,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                           enabled={projectCityCode !== ''}
 
-                          style={styles.formPicker}
+                          style={[styles.formPicker, { minWidth: 0 }]}
 
                         >
 
@@ -19129,6 +19127,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       if (!user) return;
       if (attendanceCheckInFlightLogId === log.id) return;
 
+      if (checked && !log.attendanceConfirmedAt) {
+        Alert.alert(
+          'Volunteer confirmation required',
+          'The volunteer must confirm attendance from the volunteer app before an admin can verify it.'
+        );
+        return;
+      }
+
       try {
         setAttendanceCheckInFlightLogId(log.id);
         const updatedLog = await setVolunteerAttendanceChecked(log.id, checked, user.id);
@@ -19141,61 +19147,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         setAttendanceCheckInFlightLogId(null);
       }
     };
-
-    const handleAdminMarkAttendance = async (
-      volunteer: ProjectVolunteerEntry,
-      project: Project,
-      attendanceDateKey: string,
-      existingLog: VolunteerTimeLog | null,
-    ) => {
-      if (!isAdmin || !user) return;
-
-      const actionKey = `admin-attendance-${project.id}-${volunteer.id}-${attendanceDateKey}`;
-      if (attendanceCheckInFlightLogId === actionKey) return;
-
-      try {
-        setAttendanceCheckInFlightLogId(actionKey);
-
-        if (existingLog) {
-          await setVolunteerAttendanceChecked(existingLog.id, true, user.id);
-        } else {
-          const selectedDateParts = attendanceDateKey.split('-').map(Number);
-          const projectStart = new Date(project.startDate);
-          const selectedDate = new Date(
-            selectedDateParts[0] || new Date().getFullYear(),
-            (selectedDateParts[1] || new Date().getMonth() + 1) - 1,
-            selectedDateParts[2] || new Date().getDate(),
-            Number.isNaN(projectStart.getTime()) ? 9 : projectStart.getHours(),
-            Number.isNaN(projectStart.getTime()) ? 0 : projectStart.getMinutes(),
-            0,
-            0,
-          );
-          const timestamp = selectedDate.toISOString();
-          const markedAt = new Date().toISOString();
-
-          await saveVolunteerTimeLog({
-            id: `admin-attendance-${project.id}-${volunteer.id}-${attendanceDateKey}`,
-            volunteerId: volunteer.id,
-            projectId: project.id,
-            timeIn: timestamp,
-            timeOut: timestamp,
-            attendanceConfirmedAt: timestamp,
-            attendanceCheckedAt: markedAt,
-            attendanceCheckedBy: user.id,
-            attendanceCheckedByName: user.name || 'Admin',
-          });
-        }
-
-        await loadVolunteerTimeLogs();
-        Alert.alert('Attendance marked', `${volunteer.name}'s attendance is marked for ${attendanceDateKey}.`);
-      } catch (error: any) {
-        Alert.alert('Error', error?.message || 'Failed to mark attendance.');
-      } finally {
-        setAttendanceCheckInFlightLogId(null);
-      }
-    };
-
-
 
     const handleExportAttendancePdf = () => {
       const exportDateKey = resolvedAttendanceDateKey;
@@ -21187,14 +21138,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-                      const isChecked = activeLog && Boolean(activeLog.attendanceCheckedAt);
+                      const isChecked = Boolean(activeLog?.attendanceCheckedAt);
                       const isCheckingAttendance =
-                        activeLog && attendanceCheckInFlightLogId === activeLog.id;
-                      const adminAttendanceActionKey =
-                        `admin-attendance-${activeSelectedProject.id}-${volunteer.id}-${resolvedAttendanceDateKey}`;
-                      const isAdminMarkingAttendance =
-                        attendanceCheckInFlightLogId === adminAttendanceActionKey;
-                      const attendanceMarkStatus = isChecked ? 'Marked' : 'Not marked';
+                        Boolean(activeLog && attendanceCheckInFlightLogId === activeLog.id);
+                      const attendanceMarkStatus = isChecked
+                        ? 'Marked'
+                        : activeLog
+                        ? 'Pending review'
+                        : 'Not submitted';
                       const attendanceMarkBadgeColor = isChecked ? '#dcfce7' : '#fef3c7';
                       const attendanceMarkTextColor = isChecked ? '#166534' : '#92400e';
 
@@ -21270,29 +21221,22 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                             </View>
 
-                            {isAdmin && !isChecked ? (
+                            {isAdmin && activeLog && !isChecked ? (
                               <TouchableOpacity
                                 accessibilityRole="button"
                                 accessibilityLabel={`Mark attendance for ${volunteer.name}`}
-                                onPress={() => activeLog
-                                  ? void handleToggleAttendanceCheck(activeLog, true)
-                                  : void handleAdminMarkAttendance(
-                                    volunteer,
-                                    activeSelectedProject,
-                                    resolvedAttendanceDateKey,
-                                    null,
-                                  )}
-                                disabled={Boolean(isCheckingAttendance) || isAdminMarkingAttendance}
+                                onPress={() => void handleToggleAttendanceCheck(activeLog, true)}
+                                disabled={Boolean(isCheckingAttendance)}
                                 style={{
                                   marginTop: 6,
                                   paddingHorizontal: 8,
                                   paddingVertical: 5,
                                   borderRadius: 7,
                                   backgroundColor: '#166534',
-                                  opacity: isCheckingAttendance || isAdminMarkingAttendance ? 0.65 : 1,
+                                  opacity: isCheckingAttendance ? 0.65 : 1,
                                 }}
                               >
-                                {isAdminMarkingAttendance ? (
+                                {isCheckingAttendance ? (
                                   <ActivityIndicator size="small" color="#ffffff" />
                                 ) : (
                                   <MaterialIcons name="event-available" size={16} color="#ffffff" />
@@ -21838,29 +21782,28 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
           {/* Hero Banner */}
 
-          <View style={premiumDetailsStyles.heroBanner}>
+          <View style={[premiumDetailsStyles.heroBanner, !isDesktop && premiumDetailsStyles.heroBannerMobile]}>
 
-            <View style={premiumDetailsStyles.heroBackground}>
+            <View style={[premiumDetailsStyles.heroBackground, !isDesktop && premiumDetailsStyles.heroBackgroundMobile]}>
 
-              {activeProjectImageSource ? (
-                <Image
-                  source={activeProjectImageSource}
-                  style={[
-                    StyleSheet.absoluteFill,
-                    { borderRadius: 16 },
-                  ]}
-                  resizeMode="cover"
-                />
-              ) : (
-                <View
-                  style={[
-                    StyleSheet.absoluteFill,
-                    { borderRadius: 16, backgroundColor: '#dfe8e1' },
-                  ]}
-                />
-              )}
+              <View style={premiumDetailsStyles.heroMediaLayer}>
+                {activeProjectImageSource ? (
+                  <Image
+                    source={activeProjectImageSource}
+                    style={StyleSheet.absoluteFill}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <View
+                    style={[
+                      StyleSheet.absoluteFill,
+                      { backgroundColor: '#dfe8e1' },
+                    ]}
+                  />
+                )}
 
-              <View style={[premiumDetailsStyles.heroOverlay, { borderRadius: 16 }]} />
+                <View style={premiumDetailsStyles.heroOverlay} />
+              </View>
 
 
 
@@ -21876,17 +21819,17 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 </View>
 
-                <Text style={premiumDetailsStyles.heroTitle}>{activeSelectedProject.title}</Text>
+                <Text style={[premiumDetailsStyles.heroTitle, !isDesktop && premiumDetailsStyles.heroTitleMobile]} numberOfLines={2} ellipsizeMode="tail">{activeSelectedProject.title}</Text>
 
 
 
-                <View style={premiumDetailsStyles.heroMetaRow}>
+                <View style={[premiumDetailsStyles.heroMetaRow, !isDesktop && premiumDetailsStyles.heroMetaRowMobile]}>
 
                   <View style={premiumDetailsStyles.heroMetaItem}>
 
                     <MaterialIcons name="folder" size={16} color="#ffffff" />
 
-                    <Text style={premiumDetailsStyles.heroMetaText}>
+                    <Text style={[premiumDetailsStyles.heroMetaText, !isDesktop && premiumDetailsStyles.heroMetaTextMobile]} numberOfLines={2}>
 
                       {getProjectProgramTitle(activeSelectedProject)}
 
@@ -21898,7 +21841,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                     <MaterialIcons name="location-on" size={16} color="#ffffff" />
 
-                    <Text style={premiumDetailsStyles.heroMetaText}>
+                    <Text style={[premiumDetailsStyles.heroMetaText, !isDesktop && premiumDetailsStyles.heroMetaTextMobile]} numberOfLines={3}>
 
                       {formattedProjectLocation}
 
@@ -21910,7 +21853,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                     <MaterialIcons name="calendar-today" size={16} color="#ffffff" />
 
-                    <Text style={premiumDetailsStyles.heroMetaText}>{formattedScheduleRange}</Text>
+                    <Text style={[premiumDetailsStyles.heroMetaText, !isDesktop && premiumDetailsStyles.heroMetaTextMobile]} numberOfLines={2}>{formattedScheduleRange}</Text>
 
                   </View>
 
@@ -21920,7 +21863,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-              <View style={premiumDetailsStyles.heroActionsRow}>
+              <View style={[premiumDetailsStyles.heroActionsRow, !isDesktop && premiumDetailsStyles.heroActionsRowMobile]}>
 
                 {/* Non-event: Create Event button */}
 
@@ -37312,11 +37255,17 @@ const premiumDetailsStyles = StyleSheet.create({
 
   },
 
+  heroBannerMobile: {
+
+    minHeight: 0,
+
+    overflow: 'visible',
+
+  },
+
   heroBackground: {
 
     width: '100%',
-
-    height: '100%',
 
     padding: 24,
 
@@ -37325,6 +37274,24 @@ const premiumDetailsStyles = StyleSheet.create({
     borderRadius: 16,
 
     overflow: 'visible',
+
+  },
+
+  heroBackgroundMobile: {
+
+    minHeight: 300,
+
+    padding: 16,
+
+  },
+
+  heroMediaLayer: {
+
+    ...(StyleSheet.absoluteFill as any),
+
+    borderRadius: 16,
+
+    overflow: 'hidden',
 
   },
 
@@ -37347,6 +37314,8 @@ const premiumDetailsStyles = StyleSheet.create({
   heroTop: {
 
     alignItems: 'flex-start',
+
+    minWidth: 0,
 
   },
 
@@ -37392,6 +37361,18 @@ const premiumDetailsStyles = StyleSheet.create({
 
   },
 
+  heroTitleMobile: {
+
+    fontSize: 22,
+
+    lineHeight: 28,
+
+    maxWidth: '100%',
+
+    marginBottom: 12,
+
+  },
+
   heroMetaRow: {
 
     flexDirection: 'row',
@@ -37401,6 +37382,18 @@ const premiumDetailsStyles = StyleSheet.create({
     alignItems: 'center',
 
     gap: 16,
+
+  },
+
+  heroMetaRowMobile: {
+
+    width: '100%',
+
+    flexDirection: 'column',
+
+    alignItems: 'stretch',
+
+    gap: 8,
 
   },
 
@@ -37424,6 +37417,18 @@ const premiumDetailsStyles = StyleSheet.create({
 
   },
 
+  heroMetaTextMobile: {
+
+    flex: 1,
+
+    fontSize: 12,
+
+    lineHeight: 18,
+
+    minWidth: 0,
+
+  },
+
   heroActionsRow: {
 
     flexDirection: 'row',
@@ -37435,6 +37440,14 @@ const premiumDetailsStyles = StyleSheet.create({
     gap: 12,
 
     marginTop: 20,
+
+  },
+
+  heroActionsRowMobile: {
+
+    marginTop: 16,
+
+    width: '100%',
 
   },
 

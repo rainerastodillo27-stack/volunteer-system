@@ -479,6 +479,28 @@ export function VolunteerReportsDashboard({
     </TouchableOpacity>
   );
 
+  const renderVolunteerPhotoStrip = (row: (typeof selectedEventVolunteerRows)[number]) => (
+    <View style={styles.photoStripSmall}>
+      {row.photos.slice(0, 3).map(uri => (
+        <TouchableOpacity
+          key={uri}
+          style={styles.photoThumbButton}
+          onPress={() => setSelectedEventPhoto({ uri, name: row.name, date: row.submittedDate })}
+          activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel={`Open photo submitted by ${row.name}`}
+        >
+          <StableVolunteerReportPhoto uri={uri} variant="thumbnail" />
+        </TouchableOpacity>
+      ))}
+      {row.photos.length > 3 ? (
+        <View style={styles.photoMoreBadge}>
+          <Text style={styles.photoMoreText}>+{row.photos.length - 3}</Text>
+        </View>
+      ) : null}
+    </View>
+  );
+
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
@@ -592,20 +614,27 @@ export function VolunteerReportsDashboard({
                   <Text style={styles.eventDetailSub}>{selectedEvent.startDate ? new Date(selectedEvent.startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Date unavailable'}</Text>
                 </View>
               </TouchableOpacity>
-              <View style={styles.volunteerTableHeader}>
-                <Text style={[styles.volunteerTh, { flex: 1.2 }]}>Volunteer</Text>
-                <Text style={[styles.volunteerTh, { flex: 1 }]}>Submitted Date</Text>
-                <Text style={[styles.volunteerTh, { flex: 1.5 }]}></Text>
-                <Text style={[styles.volunteerTh, { flex: 1.2, textAlign: 'right', paddingRight: 28 }]}>Photos Submitted</Text>
-              </View>
+              {isCompactLayout ? (
+                <View style={styles.volunteerTableHeaderCompact}>
+                  <Text style={styles.volunteerTableHeaderCompactTitle}>Volunteer submissions</Text>
+                  <Text style={styles.volunteerTableHeaderCompactHint}>Attendance and report photos</Text>
+                </View>
+              ) : (
+                <View style={styles.volunteerTableHeader}>
+                  <Text style={[styles.volunteerTh, { flex: 1.2 }]} numberOfLines={1}>Volunteer</Text>
+                  <Text style={[styles.volunteerTh, { flex: 1 }]} numberOfLines={2}>Submitted Date</Text>
+                  <Text style={[styles.volunteerTh, { flex: 1.5 }]} numberOfLines={1}></Text>
+                  <Text style={[styles.volunteerTh, { flex: 1.2, textAlign: 'right', paddingRight: 28 }]} numberOfLines={2}>Photos Submitted</Text>
+                </View>
+              )}
               {selectedEventVolunteerRows.length === 0 ? (
                 <View style={styles.emptyTableRow}>
                   <Text style={styles.emptyTableText}>No volunteer submissions yet for this event.</Text>
                 </View>
               ) : (
                 selectedEventVolunteerRows.map(row => (
-                  <View key={row.key} style={styles.volunteerRow}>
-                    <View style={[styles.volunteerTd, { flex: 1.2, flexDirection: 'row', alignItems: 'center', gap: 10 }]}>
+                  <View key={row.key} style={[styles.volunteerRow, isCompactLayout && styles.volunteerRowCompact]}>
+                    <View style={[styles.volunteerTd, styles.volunteerIdentityCell, isCompactLayout && styles.volunteerIdentityCellCompact, { flex: isCompactLayout ? 0 : 1.2 }]}>
                       <View style={styles.volunteerAvatar}>
                         {row.avatarUri ? (
                           <Image source={{ uri: row.avatarUri }} style={{ width: '100%', height: '100%', borderRadius: 16 }} />
@@ -613,38 +642,41 @@ export function VolunteerReportsDashboard({
                           <Text style={styles.volunteerAvatarText}>{row.name.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase()}</Text>
                         )}
                       </View>
-                      <Text style={styles.volunteerName}>{row.name}</Text>
+                      <Text style={styles.volunteerName} numberOfLines={isCompactLayout ? 2 : 1} ellipsizeMode="tail">{row.name}</Text>
                     </View>
-                    <View style={[styles.volunteerTd, { flex: 1 }]}>
-                      <Text style={styles.volunteerDate}>{row.submittedDate}</Text>
-                    </View>
-                    <View style={[styles.volunteerTd, { flex: 1.5, flexDirection: 'row', alignItems: 'center', gap: 6 }]}>
-                      <View style={styles.photoStripSmall}>
-                        {row.photos.slice(0,3).map((uri, idx) => (
-                          <TouchableOpacity
-                            key={uri}
-                            style={styles.photoThumbButton}
-                            onPress={() => setSelectedEventPhoto({ uri, name: row.name, date: row.submittedDate })}
-                            activeOpacity={0.8}
-                            accessibilityRole="button"
-                            accessibilityLabel={`Open photo submitted by ${row.name}`}
-                          >
-                            <StableVolunteerReportPhoto uri={uri} variant="thumbnail" />
-                          </TouchableOpacity>
-                        ))}
-                        {row.photos.length > 3 ? (
-                          <View style={styles.photoMoreBadge}>
-                            <Text style={styles.photoMoreText}>+{row.photos.length - 3}</Text>
+                    {isCompactLayout ? (
+                      <>
+                        <View style={styles.volunteerMobileMetaRow}>
+                          <Text style={styles.volunteerMobileLabel}>Submitted date</Text>
+                          <Text style={styles.volunteerDate} numberOfLines={2} ellipsizeMode="tail">{row.submittedDate}</Text>
+                        </View>
+                        <View style={styles.volunteerMobilePhotosRow}>
+                          <Text style={styles.volunteerMobileLabel}>Photos submitted</Text>
+                          <View style={styles.volunteerMobilePhotosContent}>
+                            <View style={styles.volunteerMobilePhotoStrip}>{renderVolunteerPhotoStrip(row)}</View>
+                            <Text style={styles.photoCountText}>{row.photos.length} photo{row.photos.length===1?'':'s'}</Text>
+                            <TouchableOpacity accessibilityRole="button" accessibilityLabel={`More actions for ${row.name}`}>
+                              <MaterialIcons name="more-vert" size={18} color="#9ca3af" />
+                            </TouchableOpacity>
                           </View>
-                        ) : null}
-                      </View>
-                    </View>
-                    <View style={[styles.volunteerTd, { flex: 1.2, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 10 }]}>
-                      <Text style={styles.photoCountText}>{row.photos.length} photo{row.photos.length===1?'':'s'}</Text>
-                      <TouchableOpacity>
-                        <MaterialIcons name="more-vert" size={18} color="#9ca3af" />
-                      </TouchableOpacity>
-                    </View>
+                        </View>
+                      </>
+                    ) : (
+                      <>
+                        <View style={[styles.volunteerTd, { flex: 1 }]}>
+                          <Text style={styles.volunteerDate} numberOfLines={2} ellipsizeMode="tail">{row.submittedDate}</Text>
+                        </View>
+                        <View style={[styles.volunteerTd, { flex: 1.5, flexDirection: 'row', alignItems: 'center', gap: 6 }]}>
+                          {renderVolunteerPhotoStrip(row)}
+                        </View>
+                        <View style={[styles.volunteerTd, { flex: 1.2, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 10 }]}>
+                          <Text style={styles.photoCountText}>{row.photos.length} photo{row.photos.length===1?'':'s'}</Text>
+                          <TouchableOpacity accessibilityRole="button" accessibilityLabel={`More actions for ${row.name}`}>
+                            <MaterialIcons name="more-vert" size={18} color="#9ca3af" />
+                          </TouchableOpacity>
+                        </View>
+                      </>
+                    )}
                   </View>
                 ))
               )}
@@ -2893,10 +2925,29 @@ const styles = StyleSheet.create({
     borderBottomColor: '#E7E5E4',
     gap: 8,
   },
+  volunteerTableHeaderCompact: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E7E5E4',
+    backgroundColor: '#F9FAFB',
+  },
+  volunteerTableHeaderCompactTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#374151',
+  },
+  volunteerTableHeaderCompactHint: {
+    fontSize: 11,
+    color: '#6B7280',
+    marginTop: 2,
+  },
   volunteerTh: {
     fontSize: 11,
     fontWeight: '700',
     color: '#6B7280',
+    minWidth: 0,
+    flexShrink: 1,
   },
   volunteerRow: {
     flexDirection: 'row',
@@ -2906,7 +2957,23 @@ const styles = StyleSheet.create({
     borderBottomColor: '#F3F4F6',
     gap: 8,
   },
+  volunteerRowCompact: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    paddingHorizontal: 12,
+    gap: 10,
+  },
   volunteerTd: {},
+  volunteerIdentityCell: {
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  volunteerIdentityCellCompact: {
+    width: '100%',
+    flex: 0,
+  },
   volunteerAvatar: {
     width: 32,
     height: 32,
@@ -2925,10 +2992,40 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#1F2937',
     flex: 1,
+    minWidth: 0,
+    flexShrink: 1,
   },
   volunteerDate: {
     fontSize: 12,
     color: '#6B7280',
+    minWidth: 0,
+    flexShrink: 1,
+  },
+  volunteerMobileMetaRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  volunteerMobileLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#6B7280',
+  },
+  volunteerMobilePhotosRow: {
+    width: '100%',
+    gap: 6,
+  },
+  volunteerMobilePhotosContent: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  volunteerMobilePhotoStrip: {
+    flex: 1,
+    minWidth: 0,
   },
   photoStripSmall: {
     flexDirection: 'row',
