@@ -6,6 +6,7 @@ import {
   StyleSheet,
   Platform,
   Alert,
+  Modal,
   TouchableOpacity,
   ScrollView,
   FlatList,
@@ -171,28 +172,50 @@ export function VolunteerReportsDashboard({
   joinedEventIds,
 }: VolunteerReportsDashboardProps) {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [selectedEventPhoto, setSelectedEventPhoto] = useState<{
+    uri: string;
+    name: string;
+    date: string;
+  } | null>(null);
   const { width: viewportWidth } = useWindowDimensions();
   const isCompactLayout = viewportWidth < 700;
   const joinedEventIdSet = useMemo(
-    () => (joinedEventIds ? new Set(joinedEventIds) : null),
+    () => (joinedEventIds ? new Set(joinedEventIds.map(id => String(id).trim())) : null),
     [joinedEventIds]
   );
 
-  const visibleReports = useMemo(
+  const scopedEventIds = useMemo(
     () =>
-      [...reports]
-        .filter(report => report.status !== 'Rejected')
-        .filter(
-          report =>
-            !joinedEventIdSet ||
-            Boolean(report.projectId && joinedEventIdSet.has(report.projectId))
-        )
-        .sort(
-          (left, right) =>
-            new Date(right.submittedAt).getTime() - new Date(left.submittedAt).getTime()
-        ),
-    [joinedEventIdSet, reports]
+      new Set(
+        projects
+          .filter(project => project.isEvent)
+          .filter(project => !joinedEventIdSet || joinedEventIdSet.has(String(project.id).trim()))
+          .map(project => String(project.id).trim())
+          .filter(Boolean)
+      ),
+    [joinedEventIdSet, projects]
   );
+
+  const visibleReports = useMemo(() => {
+    const uniqueReports = new Map<string, SubmittedReport>();
+    reports
+      .filter(report => report.status !== 'Rejected')
+      .filter(
+        report =>
+          !joinedEventIdSet ||
+          Boolean(report.projectId && joinedEventIdSet.has(String(report.projectId).trim()))
+      )
+      .forEach(report => {
+        const key = String(report.id || '').trim() || `${report.projectId || 'report'}:${report.submittedAt}`;
+        if (!uniqueReports.has(key)) uniqueReports.set(key, report);
+      });
+
+    return Array.from(uniqueReports.values()).sort(
+      (left, right) =>
+        new Date(right.submittedAt).getTime() - new Date(left.submittedAt).getTime()
+    );
+  }, [joinedEventIdSet, reports]);
+
   const eventCount = useMemo(
     () =>
       new Set(
@@ -200,9 +223,12 @@ export function VolunteerReportsDashboard({
           ...visibleReports.map(report => report.projectId),
           ...volunteerJoinRecords.map(record => record.projectId),
           ...volunteerTimeLogs.map(log => log.projectId),
-        ].filter((projectId): projectId is string => Boolean(projectId))
+        ]
+          .filter((projectId): projectId is string => Boolean(projectId))
+          .map(projectId => String(projectId).trim())
+          .filter(projectId => scopedEventIds.has(projectId))
       ).size,
-    [visibleReports, volunteerJoinRecords, volunteerTimeLogs]
+    [scopedEventIds, visibleReports, volunteerJoinRecords, volunteerTimeLogs]
   );
   const stats = useMemo(() => {
     const submitted = visibleReports.filter(r => r.status === 'Submitted').length;
@@ -210,14 +236,22 @@ export function VolunteerReportsDashboard({
       (sum, r) => sum + (r.metrics.volunteerEventJoins ?? r.metrics.volunteerHours ?? 0),
       0
     );
-    const linkedProjects = new Set(visibleReports.map(report => report.projectId).filter(Boolean)).size;
+    const linkedProjects = new Set(
+      visibleReports
+        .map(report => String(report.projectId || '').trim())
+        .filter(projectId => scopedEventIds.has(projectId))
+    ).size;
 
     return { submitted, volunteerEventJoins, linkedProjects };
-  }, [visibleReports]);
+  }, [scopedEventIds, visibleReports]);
 
   const { user: authUser } = useAuth() as any;
   const realVolunteerName = (volunteerJoinRecords[0] as any)?.volunteerName || visibleReports[0]?.submitterName || authUser?.name || 'My Volunteer Account';
-  const realEventJoins = new Set([...volunteerJoinRecords.map(r => (r as any).projectId), ...volunteerTimeLogs.map(l => (l as any).projectId).filter(Boolean)]).size;
+  const realEventJoins = new Set(
+    [...volunteerJoinRecords.map(r => (r as any).projectId), ...volunteerTimeLogs.map(l => (l as any).projectId)]
+      .map(projectId => String(projectId || '').trim())
+      .filter(projectId => scopedEventIds.has(projectId))
+  ).size;
   const realReportsSubmitted = visibleReports.length;
   const allVolunteerAccountsForAdmin = useMemo(() => {
     const normalizeIdentifier = (value: unknown) => String(value || '').trim();
@@ -275,20 +309,25 @@ export function VolunteerReportsDashboard({
 
   const eventFolders = useMemo(() => {
     const scopedProjects = joinedEventIdSet
-      ? projects.filter(project => joinedEventIdSet.has(project.id))
+      ? projects.filter(project => joinedEventIdSet.has(String(project.id).trim()))
       : projects;
     const scopedReports = joinedEventIdSet
-      ? visibleReports.filter(report => Boolean(report.projectId && joinedEventIdSet.has(report.projectId)))
+      ? visibleReports.filter(report => Boolean(report.projectId && joinedEventIdSet.has(String(report.projectId).trim())))
       : visibleReports;
     const scopedTimeLogs = joinedEventIdSet
-      ? volunteerTimeLogs.filter(log => joinedEventIdSet.has(log.projectId))
+      ? volunteerTimeLogs.filter(log => joinedEventIdSet.has(String(log.projectId).trim()))
       : volunteerTimeLogs;
 
     return scopedProjects
       .filter(project => project.isEvent)
       .map(event => {
-        const eventReports = scopedReports.filter(report => report.projectId === event.id);
-        const eventLogs = scopedTimeLogs.filter(log => log.projectId === event.id && isImageMediaUri(log.attendancePhoto || ''));
+        const eventId = String(event.id).trim();
+        const eventReports = scopedReports.filter(report => String(report.projectId || '').trim() === eventId);
+        const eventLogs = scopedTimeLogs.filter(
+          log =>
+            String(log.projectId || '').trim() === eventId &&
+            [log.attendancePhoto, log.completionPhoto].some(photo => isImageMediaUri(photo || ''))
+        );
 
         const photoObjects: { uri: string; date: string; submittedBy: string; reportId?: string }[] = [];
 
@@ -302,9 +341,13 @@ export function VolunteerReportsDashboard({
          });
 
         eventLogs.forEach(log => {
-           if (log.attendancePhoto && !photoObjects.some(p => p.uri === log.attendancePhoto)) {
-              photoObjects.push({ uri: log.attendancePhoto, date: new Date(log.timeIn).toLocaleDateString(), submittedBy: 'Me (Attendance)' });
-           }
+          [log.attendancePhoto, log.completionPhoto]
+            .filter(photo => isImageMediaUri(photo || ''))
+            .forEach(photo => {
+              if (photo && !photoObjects.some(p => p.uri === photo)) {
+                photoObjects.push({ uri: photo, date: new Date(log.timeIn).toLocaleDateString(), submittedBy: 'Volunteer' });
+              }
+            });
         });
 
         return {
@@ -316,18 +359,30 @@ export function VolunteerReportsDashboard({
       .sort((left, right) => new Date(right.event.startDate || '').getTime() - new Date(left.event.startDate || '').getTime());
   }, [joinedEventIdSet, projects, volunteerTimeLogs, visibleReports]);
 
-  const selectedEvent = useMemo(() => eventFolders.find(f => f.event.id === selectedEventId)?.event || null, [eventFolders, selectedEventId]);
+  const selectedEvent = useMemo(
+    () => eventFolders.find(f => String(f.event.id).trim() === selectedEventId)?.event || null,
+    [eventFolders, selectedEventId]
+  );
+
+  const selectedEventReports = useMemo(
+    () =>
+      selectedEvent
+        ? visibleReports.filter(report => String(report.projectId || '').trim() === selectedEventId)
+        : visibleReports,
+    [selectedEvent, selectedEventId, visibleReports]
+  );
 
   const selectedEventVolunteerRows = useMemo(() => {
     if (!selectedEventId) return [];
     const eventId = selectedEventId;
-    const map = new Map<string, { key: string; name: string; submittedDate: string; photos: string[]; avatarUri?: string }>();
+    const map = new Map<string, { key: string; name: string; submittedDate: string; submittedAt: number; photos: string[]; avatarUri?: string }>();
     const volunteerById = new Map(volunteers.map(v => [v.id, v]));
     const volunteerByUserId = new Map(volunteers.map(v => [v.userId, v]));
 
-    volunteerTimeLogs.filter(log => (log as any).projectId === eventId).forEach(log => {
-      const photo = (log as any).attendancePhoto || (log as any).completionPhoto;
-      if (!photo || !isImageMediaUri(photo)) return;
+    volunteerTimeLogs.filter(log => String((log as any).projectId || '').trim() === eventId).forEach(log => {
+      const photos = [(log as any).attendancePhoto, (log as any).completionPhoto]
+        .filter(photo => isImageMediaUri(photo || '')) as string[];
+      if (photos.length === 0) return;
       const join = volunteerJoinRecords.find(r => r.projectId === eventId && ((r as any).volunteerId === (log as any).volunteerId || (r as any).volunteerUserId === (log as any).volunteerId));
       const name = (join as any)?.volunteerName || 'Volunteer';
       const vDetails = volunteerById.get((log as any).volunteerId) || volunteerByUserId.get((log as any).volunteerId);
@@ -335,11 +390,12 @@ export function VolunteerReportsDashboard({
       const avatarUri = (vDetails as any)?.validIdPhoto || (vDetails as any)?.avatarUri || undefined;
       const volunteerName = vDetails?.name || name;
 
-      if (!map.has(key)) map.set(key, { key, name: volunteerName, submittedDate: new Date((log as any).timeIn || '').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }), photos: [], avatarUri });
+      const submittedAt = new Date((log as any).timeIn || (log as any).timeOut || '').getTime();
+      if (!map.has(key)) map.set(key, { key, name: volunteerName, submittedDate: new Date(submittedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }), submittedAt, photos: [], avatarUri });
       const entry = map.get(key)!;
-      if (!entry.photos.includes(photo)) entry.photos.push(photo);
+      photos.forEach(photo => { if (!entry.photos.includes(photo)) entry.photos.push(photo); });
     });
-    visibleReports.filter(r => r.projectId === eventId).forEach(rep => {
+    visibleReports.filter(r => String(r.projectId || '').trim() === eventId).forEach(rep => {
       const uris = getAttachmentUris([rep.mediaFile || '', ...(rep.attachments || [])]).filter(isImageMediaUri);
       const join = volunteerJoinRecords.find(r =>
         r.projectId === eventId &&
@@ -354,22 +410,25 @@ export function VolunteerReportsDashboard({
       const avatarUri = (vDetails as any)?.validIdPhoto || (vDetails as any)?.avatarUri || undefined;
       const volunteerName = vDetails?.name || rep.submitterName || 'Volunteer';
 
-      if (!map.has(key)) map.set(key, { key, name: volunteerName, submittedDate: new Date(rep.submittedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }), photos: [], avatarUri });
+      const submittedAt = new Date(rep.submittedAt).getTime();
+      if (!map.has(key)) map.set(key, { key, name: volunteerName, submittedDate: new Date(submittedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }), submittedAt, photos: [], avatarUri });
       const entry = map.get(key)!;
-      if (new Date(rep.submittedAt).getTime() > new Date(entry.submittedDate).getTime()) {
+      if (submittedAt > entry.submittedAt) {
         entry.submittedDate = new Date(rep.submittedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        entry.submittedAt = submittedAt;
       }
       uris.forEach(uri => { if (!entry.photos.includes(uri)) entry.photos.push(uri); });
     });
     // Include join records even without photo so volunteer still appears
-    volunteerJoinRecords.filter(r => r.projectId === eventId).forEach(rec => {
+    volunteerJoinRecords.filter(r => String(r.projectId || '').trim() === eventId).forEach(rec => {
       const key = (rec as any).volunteerId || (rec as any).volunteerUserId || (rec as any).volunteerName;
 
       const vDetails = volunteerById.get((rec as any).volunteerId) || volunteerByUserId.get((rec as any).volunteerId) || volunteerById.get((rec as any).volunteerUserId) || volunteerByUserId.get((rec as any).volunteerUserId);
       const avatarUri = (vDetails as any)?.validIdPhoto || (vDetails as any)?.avatarUri || undefined;
       const volunteerName = vDetails?.name || (rec as any).volunteerName || 'Volunteer';
 
-      if (!map.has(key)) map.set(key, { key, name: volunteerName, submittedDate: new Date((rec as any).joinedAt || '').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }), photos: [], avatarUri });
+      const submittedAt = new Date((rec as any).joinedAt || '').getTime();
+      if (!map.has(key)) map.set(key, { key, name: volunteerName, submittedDate: new Date(submittedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }), submittedAt, photos: [], avatarUri });
     });
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
   }, [selectedEventId, volunteerTimeLogs, volunteerJoinRecords, visibleReports, volunteers]);
@@ -501,14 +560,14 @@ export function VolunteerReportsDashboard({
           </View>
           <View style={[styles.eventFolderGrid, isCompactLayout && styles.eventFolderGridCompact]}>
             {eventFolders.map(folder => {
-              const isSelected = selectedEventId === folder.event.id;
+              const isSelected = selectedEventId === String(folder.event.id).trim();
               const updated = folder.event.startDate ? new Date(folder.event.startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Date unavailable';
               const reportCount = folder.reports.length;
               return (
                 <TouchableOpacity
                   key={folder.event.id}
                   style={[styles.folderCard, isCompactLayout && styles.folderCardCompact, isSelected && styles.folderCardSelected]}
-                  onPress={() => setSelectedEventId(isSelected ? null : folder.event.id)}
+                  onPress={() => setSelectedEventId(isSelected ? null : String(folder.event.id).trim())}
                   activeOpacity={0.85}
                 >
                   <View style={styles.folderCardTop}>
@@ -562,11 +621,22 @@ export function VolunteerReportsDashboard({
                     <View style={[styles.volunteerTd, { flex: 1.5, flexDirection: 'row', alignItems: 'center', gap: 6 }]}>
                       <View style={styles.photoStripSmall}>
                         {row.photos.slice(0,3).map((uri, idx) => (
-                          <Image key={idx} source={{ uri }} style={styles.photoThumbSmall} />
+                          <TouchableOpacity
+                            key={uri}
+                            style={styles.photoThumbButton}
+                            onPress={() => setSelectedEventPhoto({ uri, name: row.name, date: row.submittedDate })}
+                            activeOpacity={0.8}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Open photo submitted by ${row.name}`}
+                          >
+                            <StableVolunteerReportPhoto uri={uri} variant="thumbnail" />
+                          </TouchableOpacity>
                         ))}
-                        <View style={styles.photoMoreBadge}>
-                          <Text style={styles.photoMoreText}>+{Math.max(0, row.photos.length - 3)}</Text>
-                        </View>
+                        {row.photos.length > 3 ? (
+                          <View style={styles.photoMoreBadge}>
+                            <Text style={styles.photoMoreText}>+{row.photos.length - 3}</Text>
+                          </View>
+                        ) : null}
                       </View>
                     </View>
                     <View style={[styles.volunteerTd, { flex: 1.2, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 10 }]}>
@@ -640,13 +710,13 @@ export function VolunteerReportsDashboard({
           <View style={styles.sectionHeader}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <MaterialIcons name="description" size={18} color="#166534" style={{ marginRight: 6 }} />
-              <Text style={styles.sectionTitle}>Event Reports</Text>
-              <Text style={styles.sectionBadge}>{visibleReports.length}</Text>
+              <Text style={styles.sectionTitle}>{selectedEvent ? `${selectedEvent.title} Reports` : 'Event Reports'}</Text>
+              <Text style={styles.sectionBadge}>{selectedEventReports.length}</Text>
             </View>
           </View>
-          {visibleReports.length > 0 ? (
+          {selectedEventReports.length > 0 ? (
             <FlatList
-              data={visibleReports}
+              data={selectedEventReports}
               renderItem={renderReportItem}
               keyExtractor={item => item.id}
               scrollEnabled={false}
@@ -658,7 +728,9 @@ export function VolunteerReportsDashboard({
               <Text style={styles.emptyTitle}>No reports</Text>
               <Text style={styles.emptyText}>
                 {isAdminView || isPartnerView
-                  ? 'Volunteer reports will appear here after an event submission.'
+                  ? selectedEvent
+                    ? 'No volunteer reports were submitted for this event.'
+                    : 'Volunteer reports will appear here after an event submission.'
                   : "You haven't submitted any reports yet."}
               </Text>
             </View>
@@ -680,6 +752,42 @@ export function VolunteerReportsDashboard({
           </View>
         </View>
       </ScrollView>
+
+      <Modal
+        visible={Boolean(selectedEventPhoto)}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSelectedEventPhoto(null)}
+      >
+        <View style={styles.eventPhotoModalOverlay}>
+          <View style={styles.eventPhotoModalCard}>
+            <View style={styles.eventPhotoModalHeader}>
+              <Text style={styles.eventPhotoModalTitle}>Submitted Photo</Text>
+              <TouchableOpacity
+                onPress={() => setSelectedEventPhoto(null)}
+                accessibilityRole="button"
+                accessibilityLabel="Close photo"
+              >
+                <MaterialIcons name="close" size={22} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.eventPhotoModalImage}>
+              {selectedEventPhoto ? (
+                <StableVolunteerReportPhoto uri={selectedEventPhoto.uri} variant="gallery" />
+              ) : null}
+            </View>
+            <Text style={styles.eventPhotoModalMeta}>
+              Photo by {selectedEventPhoto?.name || 'Volunteer'} on {selectedEventPhoto?.date || 'Unknown date'}
+            </Text>
+            <TouchableOpacity
+              style={styles.eventPhotoModalCloseButton}
+              onPress={() => setSelectedEventPhoto(null)}
+            >
+              <Text style={styles.eventPhotoModalCloseText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -2833,6 +2941,13 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     backgroundColor: '#E5E7EB',
   },
+  photoThumbButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 6,
+    overflow: 'hidden',
+    backgroundColor: '#E5E7EB',
+  },
   photoMoreBadge: {
     width: 32,
     height: 32,
@@ -2852,6 +2967,54 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#6B7280',
     marginLeft: 4,
+  },
+  eventPhotoModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.82)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  eventPhotoModalCard: {
+    width: '100%',
+    maxWidth: 640,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    gap: 12,
+  },
+  eventPhotoModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  eventPhotoModalTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#1F2937',
+  },
+  eventPhotoModalImage: {
+    width: '100%',
+    height: 360,
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: '#E2E8F0',
+  },
+  eventPhotoModalMeta: {
+    fontSize: 12,
+    color: '#64748B',
+  },
+  eventPhotoModalCloseButton: {
+    alignSelf: 'flex-end',
+    backgroundColor: '#166534',
+    borderRadius: 8,
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+  },
+  eventPhotoModalCloseText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
   emptyTableRow: {
     paddingVertical: 24,

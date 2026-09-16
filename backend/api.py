@@ -767,6 +767,9 @@ def _send_email_message(
         os.getenv("NOTIFICATION_GMAIL_APP_PASSWORD", "").strip()
         or os.getenv("OTP_GMAIL_APP_PASSWORD", "").strip()
     )
+    # Google displays app passwords in groups separated by spaces. Those
+    # separators are presentation-only and must not be sent to SMTP.
+    app_password = "".join(app_password.split())
 
     if not sender_email or not app_password:
         allow_dev_fallback = os.getenv("EMAIL_ALLOW_DEV_FALLBACK", "false").strip().lower() in {
