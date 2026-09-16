@@ -3068,6 +3068,111 @@ def _reject_duplicate_event_writes(
         incoming_by_signature[signature] = item
 
 
+def _normalize_named_duplicate_text(value: Any) -> str:
+    """Normalize names for case-insensitive, whitespace-insensitive checks."""
+    return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
+
+
+def _named_duplicate_signature(
+    key: str,
+    item: dict[str, Any],
+) -> tuple[str, str] | None:
+    """Return the duplicate-check scope and normalized title for a record."""
+    title = _normalize_named_duplicate_text(item.get("title"))
+    if not title:
+        return None
+
+    if key == "programs":
+        # Programs are top-level records. Ignore compatibility rows that may
+        # have been copied into this collection as projects or events.
+        if item.get("isEvent") or item.get("parentProjectId"):
+            return None
+        return "program", title
+
+    if key == "projects":
+        # A project name is unique within its parent program. An empty parent
+        # is one shared top-level scope for projects without a program.
+        if item.get("isEvent"):
+            return None
+        parent_id = _normalize_named_duplicate_text(item.get("parentProjectId"))
+        return f"project:{parent_id}", title
+
+    return None
+
+
+def _raise_duplicate_named_item_error(
+    key: str,
+    item: dict[str, Any],
+    existing: dict[str, Any],
+) -> None:
+    title = str(item.get("title") or existing.get("title") or "Untitled").strip()
+    if key == "programs":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f'A program named "{title}" already exists. '
+                "Choose a different program name or edit the existing program."
+            ),
+        )
+
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            f'A project named "{title}" already exists in this program. '
+            "Choose a different project name or edit the existing project."
+        ),
+    )
+
+
+def _reject_duplicate_named_writes(
+    connection: Any,
+    key: str,
+    items: list[Any],
+    *,
+    replacing_collection: bool = False,
+) -> None:
+    """Reject duplicate program/project names while allowing same-ID updates."""
+    if key not in {"programs", "projects"}:
+        return
+
+    incoming_records = [item for item in items if isinstance(item, dict)]
+    incoming_ids = {
+        str(item.get("id") or "").strip()
+        for item in incoming_records
+        if str(item.get("id") or "").strip()
+    }
+    existing_by_signature: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for existing in get_postgres_hot_storage_collection(connection, key):
+        if not isinstance(existing, dict):
+            continue
+        existing_id = str(existing.get("id") or "").strip()
+        # A full collection replacement removes IDs omitted from the payload,
+        # so those records must not block a valid replacement record.
+        if replacing_collection and existing_id not in incoming_ids:
+            continue
+        signature = _named_duplicate_signature(key, existing)
+        if signature:
+            existing_by_signature.setdefault(signature, []).append(existing)
+
+    incoming_by_signature: dict[tuple[str, str], dict[str, Any]] = {}
+    for item in incoming_records:
+        signature = _named_duplicate_signature(key, item)
+        if not signature:
+            continue
+        item_id = str(item.get("id") or "").strip()
+        existing_matches = existing_by_signature.get(signature, [])
+        if existing_matches and not any(
+            str(existing.get("id") or "").strip() == item_id
+            for existing in existing_matches
+        ):
+            _raise_duplicate_named_item_error(key, item, existing_matches[0])
+
+        previous = incoming_by_signature.get(signature)
+        if previous and str(previous.get("id") or "").strip() != item_id:
+            _raise_duplicate_named_item_error(key, item, previous)
+        incoming_by_signature[signature] = item
+
+
 _MAX_MEDIA_SCAN_BYTES = 15 * 1024 * 1024
 _CLAMAV_SCAN_TIMEOUT_SECONDS = 20
 _EXECUTABLE_MEDIA_SIGNATURES = (
@@ -9060,6 +9165,8 @@ async def put_storage_item_by_id(
         with get_connection() as connection:
             if key == "events":
                 _reject_duplicate_event_writes(connection, [item])
+            elif key in {"programs", "projects"}:
+                _reject_duplicate_named_writes(connection, key, [item])
             saved_item = _postgres_upsert_hot_item(connection, key, item)
             changed_keys = [key]
             if key == "users" and _ensure_volunteer_profile_for_user(connection, item):
@@ -9160,6 +9267,13 @@ async def _put_storage_item_once(key: str, payload: StoragePayload) -> dict[str,
 
                 if key == "events":
                     _reject_duplicate_event_writes(connection, payload.value)
+                elif key in {"programs", "projects"}:
+                    _reject_duplicate_named_writes(
+                        connection,
+                        key,
+                        payload.value,
+                        replacing_collection=True,
+                    )
 
                 volunteer_identifiers_to_sync: set[str] = set()
                 if key == "volunteerProjectJoins":

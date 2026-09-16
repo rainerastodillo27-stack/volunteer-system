@@ -103,6 +103,18 @@ export function getRequestErrorTitle(error: unknown, fallback = 'Error'): string
       return 'Duplicate Event';
     }
     if (
+      normalizedMessage.includes('a program named') &&
+      normalizedMessage.includes('already exists')
+    ) {
+      return 'Duplicate Program';
+    }
+    if (
+      normalizedMessage.includes('a project named') &&
+      normalizedMessage.includes('already exists')
+    ) {
+      return 'Duplicate Project';
+    }
+    if (
       normalizedMessage.includes('timed out') ||
       normalizedMessage.includes('timeout') ||
       normalizedMessage.includes('aborted') ||

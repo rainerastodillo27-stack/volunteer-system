@@ -4978,7 +4978,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       // Rollback optimistic update on error
 
-      await loadProjects();
+      await Promise.all([loadProjects(), loadProgramTracks()]);
 
       Alert.alert('Error', getRequestErrorMessage(error, 'Failed to save program. Please try again.'));
 
