@@ -122,6 +122,7 @@ type SignupVolunteerSheetState = {
 
 type SignupPartnerApplicationState = {
   organizationName: string;
+  address: string;
   sectorType: PartnerSectorType;
   dswdAccreditationNo: string;
   secRegistrationNo: string;
@@ -187,6 +188,7 @@ function createEmptySignupVolunteerSheet(): SignupVolunteerSheetState {
 function createEmptySignupPartnerApplication(): SignupPartnerApplicationState {
   return {
     organizationName: "",
+    address: "",
     sectorType: "NGO",
     dswdAccreditationNo: "",
     secRegistrationNo: "",
@@ -1472,6 +1474,13 @@ export default function LoginScreen() {
         return;
       }
 
+      if (!signupPartnerApplication.address.trim()) {
+        const errorMsg = "Organization location is required.";
+        setSignupValidationError(errorMsg);
+        Alert.alert("Validation Error", errorMsg);
+        return;
+      }
+
       if (!signupPartnerApplication.validIdDocument.trim()) {
         const errorMsg = "Upload a valid government-issued ID.";
         setSignupValidationError(errorMsg);
@@ -1548,6 +1557,7 @@ export default function LoginScreen() {
             ? {
               organizationName:
                 signupPartnerApplication.organizationName.trim(),
+              address: signupPartnerApplication.address.trim(),
               stakeholderName: signupName.trim(),
               sectorType: signupPartnerApplication.sectorType,
               dswdAccreditationNo:
@@ -2591,6 +2601,18 @@ export default function LoginScreen() {
                             }
                             editable={!signupLoading}
                             autoCapitalize="words"
+                          />
+                          <TextInput
+                            style={styles.input}
+                            placeholder="Organization Address / Location"
+                            placeholderTextColor="#999"
+                            value={signupPartnerApplication.address}
+                            onChangeText={(value) =>
+                              updateSignupPartnerApplication("address", value)
+                            }
+                            editable={!signupLoading}
+                            autoCapitalize="words"
+                            multiline
                           />
                           <Text style={styles.modalSectionSubLabel}>Sector Type</Text>
                           <View style={styles.pillarGrid}>

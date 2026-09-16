@@ -5699,8 +5699,9 @@ def auth_register(
             for focus in (partner_registration.get("advocacyFocus") or [])
             if str(focus).strip()
         ]
+        organization_address = str(partner_registration.get("address") or "").strip()
         sector_type = str(partner_registration.get("sectorType") or "").strip()
-        if not organization_name or not registration_documents or not advocacy_focus:
+        if not organization_name or not organization_address or not registration_documents or not advocacy_focus:
             raise HTTPException(status_code=400, detail="Complete the organization application details before submitting.")
         if sector_type not in {"NGO", "Hospital", "Institution", "Private"}:
             raise HTTPException(status_code=400, detail="Select a valid partner sector.")
@@ -5782,6 +5783,7 @@ def auth_register(
                     "id": f"partner-{user_id}",
                     "ownerUserId": user_id,
                     "name": str(partner_registration.get("organizationName") or "").strip(),
+                    "address": str(partner_registration.get("address") or "").strip(),
                     "stakeholderName": name,
                     "description": f"{', '.join(advocacy_focus)} partnership application",
                     "category": _registration_partner_category(advocacy_focus),

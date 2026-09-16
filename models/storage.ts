@@ -3446,6 +3446,7 @@ export async function createUserAccount(input: {
   pillarsOfInterest: NVCSector[];
   partnerRegistration?: {
     organizationName: string;
+    address?: string;
     stakeholderName?: string;
     sectorType: PartnerSectorType;
     dswdAccreditationNo?: string;
@@ -3516,6 +3517,7 @@ export async function createUserAccount(input: {
     input.role === 'partner' &&
     (!input.partnerRegistration ||
       !input.partnerRegistration.organizationName.trim() ||
+      !input.partnerRegistration.address?.trim() ||
       !input.partnerRegistration.registrationDocuments?.some(document => document.trim()) ||
       input.partnerRegistration.advocacyFocus.length === 0)
   ) {

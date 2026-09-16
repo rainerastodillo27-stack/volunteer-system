@@ -22054,7 +22054,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
             {/* Left Column */}
 
-            <View style={{ flex: isDesktop ? 2.2 : 1 }}>
+            <View style={[{ flex: isDesktop ? 2.2 : 0 }, !isDesktop && premiumDetailsStyles.mobileDetailsColumn]}>
 
 
 
@@ -22278,9 +22278,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
               {!activeSelectedProject.isEvent && (
 
-                <View style={premiumDetailsStyles.card}>
+                <View style={[premiumDetailsStyles.card, !isDesktop && premiumDetailsStyles.upcomingEventsCardMobile]}>
 
-                  <View style={premiumDetailsStyles.cardHeader}>
+                  <View style={[premiumDetailsStyles.cardHeader, !isDesktop && premiumDetailsStyles.upcomingEventsHeaderMobile]}>
 
                     <Text style={premiumDetailsStyles.cardTitle}>Upcoming Events</Text>
 
@@ -37576,6 +37576,18 @@ const premiumDetailsStyles = StyleSheet.create({
 
   },
 
+  mobileDetailsColumn: {
+
+    flexGrow: 0,
+
+    flexShrink: 1,
+
+    width: '100%',
+
+    minHeight: 0,
+
+  },
+
   card: {
 
     backgroundColor: '#ffffff',
@@ -37602,6 +37614,24 @@ const premiumDetailsStyles = StyleSheet.create({
 
   },
 
+  upcomingEventsCardMobile: {
+
+    flexGrow: 0,
+
+    flexShrink: 1,
+
+    width: '100%',
+
+    minHeight: 0,
+
+    alignSelf: 'stretch',
+
+    padding: 16,
+
+    marginBottom: 16,
+
+  },
+
   cardHeader: {
 
     flexDirection: 'row',
@@ -37611,6 +37641,12 @@ const premiumDetailsStyles = StyleSheet.create({
     justifyContent: 'space-between',
 
     marginBottom: 20,
+
+  },
+
+  upcomingEventsHeaderMobile: {
+
+    marginBottom: 12,
 
   },
 

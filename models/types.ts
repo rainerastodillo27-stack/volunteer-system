@@ -53,6 +53,7 @@ export interface User {
     dswdAccreditationNo: string;
     secRegistrationNo?: string;
     registrationDocuments?: string[];
+    address?: string;
     region: string;
     province: string;
     cityMunicipality: string;
