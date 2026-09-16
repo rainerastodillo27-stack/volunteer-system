@@ -1125,7 +1125,7 @@ export default function UserManagementScreen() {
                       ['Stakeholder Name', partnerProfile.stakeholderName],
                       ['DSWD Accreditation No', partnerProfile.dswdAccreditationNo],
                       ['SEC Registration No', partnerProfile.secRegistrationNo],
-                      ['Address / Location', [partnerProfile.address, partnerProfile.cityMunicipality, partnerProfile.province, partnerProfile.region].filter(Boolean).join(', ')],
+                      ['Address / Location', partnerProfile.address || [partnerProfile.cityMunicipality, partnerProfile.province, partnerProfile.region].filter(Boolean).join(', ')],
                     ].map(([label, value]) => (
                       <View key={label} style={styles.reviewDetailRow}>
                         <Text style={styles.reviewDetailLabel}>{label}</Text>

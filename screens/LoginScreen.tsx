@@ -123,6 +123,10 @@ type SignupVolunteerSheetState = {
 type SignupPartnerApplicationState = {
   organizationName: string;
   address: string;
+  addressRegion: string;
+  addressProvince: string;
+  addressCityMunicipality: string;
+  addressBarangay: string;
   sectorType: PartnerSectorType;
   dswdAccreditationNo: string;
   secRegistrationNo: string;
@@ -189,6 +193,10 @@ function createEmptySignupPartnerApplication(): SignupPartnerApplicationState {
   return {
     organizationName: "",
     address: "",
+    addressRegion: "",
+    addressProvince: "",
+    addressCityMunicipality: "",
+    addressBarangay: "",
     sectorType: "NGO",
     dswdAccreditationNo: "",
     secRegistrationNo: "",
@@ -907,6 +915,10 @@ export default function LoginScreen() {
 
   const handleSelectSignupRole = (role: MobileEntryRole) => {
     setSignupRole(role);
+    setSelectedRegionCode("");
+    setSelectedCityCode("");
+    setFilteredCities([]);
+    setFilteredBarangays([]);
     if (role === "partner") {
       setSignupUserType("Adult");
     }
@@ -1143,9 +1155,16 @@ export default function LoginScreen() {
     const selectedRegion = PHRegions.find(
       (region) => region.code === regionCode,
     );
-    updateSignupVolunteerSheet("homeAddressRegion", selectedRegion?.name || "");
-    updateSignupVolunteerSheet("homeAddressCityMunicipality", "");
-    updateSignupVolunteerSheet("homeAddressBarangay", "");
+    if (signupRole === "partner") {
+      updateSignupPartnerApplication("addressRegion", selectedRegion?.name || "");
+      updateSignupPartnerApplication("addressProvince", "");
+      updateSignupPartnerApplication("addressCityMunicipality", "");
+      updateSignupPartnerApplication("addressBarangay", "");
+    } else {
+      updateSignupVolunteerSheet("homeAddressRegion", selectedRegion?.name || "");
+      updateSignupVolunteerSheet("homeAddressCityMunicipality", "");
+      updateSignupVolunteerSheet("homeAddressBarangay", "");
+    }
     setSelectedRegionCode(regionCode);
     setSelectedCityCode("");
     setFilteredCities(regionCode ? getCitiesByRegion(regionCode) : []);
@@ -1154,17 +1173,33 @@ export default function LoginScreen() {
 
   const handleSelectCity = (cityCode: string) => {
     const selectedCity = filteredCities.find((city) => city.code === cityCode);
-    updateSignupVolunteerSheet(
-      "homeAddressCityMunicipality",
-      selectedCity?.displayName || "",
-    );
-    updateSignupVolunteerSheet("homeAddressBarangay", "");
+    if (signupRole === "partner") {
+      updateSignupPartnerApplication(
+        "addressCityMunicipality",
+        selectedCity?.displayName || "",
+      );
+      updateSignupPartnerApplication(
+        "addressProvince",
+        selectedCity?.provinceName || "",
+      );
+      updateSignupPartnerApplication("addressBarangay", "");
+    } else {
+      updateSignupVolunteerSheet(
+        "homeAddressCityMunicipality",
+        selectedCity?.displayName || "",
+      );
+      updateSignupVolunteerSheet("homeAddressBarangay", "");
+    }
     setSelectedCityCode(cityCode);
     setFilteredBarangays(cityCode ? getBarangaysByCity(cityCode) : []);
   };
 
   const handleSelectBarangay = (barangayName: string) => {
-    updateSignupVolunteerSheet("homeAddressBarangay", barangayName);
+    if (signupRole === "partner") {
+      updateSignupPartnerApplication("addressBarangay", barangayName);
+    } else {
+      updateSignupVolunteerSheet("homeAddressBarangay", barangayName);
+    }
   };
 
   // Updates one field in the partner application form.
@@ -1474,8 +1509,13 @@ export default function LoginScreen() {
         return;
       }
 
-      if (!signupPartnerApplication.address.trim()) {
-        const errorMsg = "Organization location is required.";
+      if (
+        !signupPartnerApplication.addressRegion.trim() ||
+        !signupPartnerApplication.addressCityMunicipality.trim() ||
+        !signupPartnerApplication.addressBarangay.trim() ||
+        !signupPartnerApplication.address.trim()
+      ) {
+        const errorMsg = "Complete the organization address before submitting.";
         setSignupValidationError(errorMsg);
         Alert.alert("Validation Error", errorMsg);
         return;
@@ -1538,6 +1578,16 @@ export default function LoginScreen() {
       // Allow visual loading modal to be clearly seen
       await new Promise((resolve) => setTimeout(resolve, 1400));
 
+      const partnerAddress = [
+        signupPartnerApplication.address.trim(),
+        signupPartnerApplication.addressBarangay.trim(),
+        signupPartnerApplication.addressCityMunicipality.trim(),
+        signupPartnerApplication.addressProvince.trim(),
+        signupPartnerApplication.addressRegion.trim(),
+      ]
+        .filter(Boolean)
+        .join(", ");
+
       const createdUser = await createUserAccount({
         name: signupName,
         email: signupEmail,
@@ -1557,7 +1607,11 @@ export default function LoginScreen() {
             ? {
               organizationName:
                 signupPartnerApplication.organizationName.trim(),
-              address: signupPartnerApplication.address.trim(),
+              address: partnerAddress,
+              region: signupPartnerApplication.addressRegion.trim(),
+              province: signupPartnerApplication.addressProvince.trim(),
+              cityMunicipality:
+                signupPartnerApplication.addressCityMunicipality.trim(),
               stakeholderName: signupName.trim(),
               sectorType: signupPartnerApplication.sectorType,
               dswdAccreditationNo:
@@ -2602,9 +2656,81 @@ export default function LoginScreen() {
                             editable={!signupLoading}
                             autoCapitalize="words"
                           />
+                          <Text style={styles.modalSectionLabel}>
+                            Organization Address
+                          </Text>
+                          <View style={styles.locationField}>
+                            <Text style={styles.modalSectionSubLabel}>Region</Text>
+                            <View style={styles.pickerContainer}>
+                              <Picker
+                                selectedValue={selectedRegionCode}
+                                onValueChange={(itemValue: string) =>
+                                  handleSelectRegion(itemValue)
+                                }
+                                enabled={!signupLoading}
+                                style={styles.picker}
+                              >
+                                <Picker.Item label="Select Region..." value="" />
+                                {PHRegions.map((region) => (
+                                  <Picker.Item
+                                    key={region.code}
+                                    label={region.name}
+                                    value={region.code}
+                                  />
+                                ))}
+                              </Picker>
+                            </View>
+
+                            <Text style={styles.modalSectionSubLabel}>
+                              City / Municipality
+                            </Text>
+                            <View style={styles.pickerContainer}>
+                              <Picker
+                                selectedValue={selectedCityCode}
+                                onValueChange={(itemValue: string) =>
+                                  handleSelectCity(itemValue)
+                                }
+                                enabled={!signupLoading && selectedRegionCode !== ""}
+                                style={styles.picker}
+                              >
+                                <Picker.Item
+                                  label="Select City / Municipality..."
+                                  value=""
+                                />
+                                {filteredCities.map((city) => (
+                                  <Picker.Item
+                                    key={city.code}
+                                    label={city.displayName}
+                                    value={city.code}
+                                  />
+                                ))}
+                              </Picker>
+                            </View>
+
+                            <Text style={styles.modalSectionSubLabel}>Barangay</Text>
+                            <View style={styles.pickerContainer}>
+                              <Picker
+                                selectedValue={signupPartnerApplication.addressBarangay}
+                                onValueChange={(itemValue: string) =>
+                                  handleSelectBarangay(itemValue)
+                                }
+                                enabled={!signupLoading && selectedCityCode !== ""}
+                                style={styles.picker}
+                              >
+                                <Picker.Item label="Select Barangay..." value="" />
+                                {filteredBarangays.map((barangay) => (
+                                  <Picker.Item
+                                    key={barangay.code}
+                                    label={barangay.displayName}
+                                    value={barangay.name}
+                                  />
+                                ))}
+                              </Picker>
+                            </View>
+                          </View>
                           <TextInput
                             style={styles.input}
-                            placeholder="Organization Address / Location"
+                            placeholder="House No., Street Name, Subdivision..."
                             placeholderTextColor="#999"
                             value={signupPartnerApplication.address}
                             onChangeText={(value) =>

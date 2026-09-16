@@ -1789,6 +1789,37 @@ function compareProjectsForSort(left: Project, right: Project, sortKey: Projects
 
 }
 
+function normalizeProjectReference(value: unknown): string {
+  return String(value || '').trim().toLowerCase();
+}
+
+function isEventLinkedToProject(
+  event: Project,
+  project: Project,
+  availableProjects: Project[],
+): boolean {
+  const parentReference = normalizeProjectReference(event.parentProjectId);
+  if (!parentReference) {
+    return false;
+  }
+
+  const parentProjects = availableProjects.filter(candidate => !candidate.isEvent);
+  const idMatch = parentProjects.find(
+    candidate => normalizeProjectReference(candidate.id) === parentReference,
+  );
+  if (idMatch) {
+    return normalizeProjectReference(idMatch.id) === normalizeProjectReference(project.id);
+  }
+
+  const titleMatches = parentProjects.filter(
+    candidate => normalizeProjectReference(candidate.title) === parentReference,
+  );
+  return (
+    titleMatches.length === 1 &&
+    normalizeProjectReference(titleMatches[0].id) === normalizeProjectReference(project.id)
+  );
+}
+
 // New records must not use their display name as the storage ID. Reusing a
 // typed name would make a duplicate program PUT look like an edit, bypassing
 // the backend duplicate-name check.
@@ -18589,7 +18620,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       : projects
 
-        .filter(entry => entry.isEvent && entry.parentProjectId === activeSelectedProject.id)
+        .filter(entry => isEventLinkedToProject(entry, activeSelectedProject, projects))
 
         .sort((left, right) => new Date(left.startDate).getTime() - new Date(right.startDate).getTime());
 
@@ -22056,7 +22087,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
           {/* Main Grid */}
 
-          <View style={[premiumDetailsStyles.mainGrid, { flexDirection: isDesktop ? 'row' : 'column' }]}>
+          <View style={[premiumDetailsStyles.mainGrid, { flexDirection: isDesktop ? 'row' : 'column' }, !isDesktop && premiumDetailsStyles.mainGridMobile]}>
 
 
 
@@ -22318,7 +22349,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       return (
 
-                        <View key={event.id} style={premiumDetailsStyles.eventItem}>
+                        <View
+                          key={event.id}
+                          style={[
+                            premiumDetailsStyles.eventItem,
+                            !isDesktop && premiumDetailsStyles.eventItemMobile,
+                          ]}
+                        >
 
                           {/* Photo thumbnail or plain date badge */}
                           {eventImgSource ? (
@@ -37634,6 +37671,14 @@ const premiumDetailsStyles = StyleSheet.create({
 
   },
 
+  mainGridMobile: {
+
+    width: '100%',
+
+    alignItems: 'flex-start',
+
+  },
+
   mobileDetailsColumn: {
 
     flexGrow: 0,
@@ -37674,9 +37719,11 @@ const premiumDetailsStyles = StyleSheet.create({
 
   upcomingEventsCardMobile: {
 
+    flex: 0,
+
     flexGrow: 0,
 
-    flexShrink: 1,
+    flexShrink: 0,
 
     width: '100%',
 
@@ -37839,6 +37886,20 @@ const premiumDetailsStyles = StyleSheet.create({
     paddingVertical: 16,
 
     gap: 16,
+
+  },
+
+  eventItemMobile: {
+
+    width: '100%',
+
+    alignItems: 'flex-start',
+
+    flexWrap: 'wrap',
+
+    paddingVertical: 12,
+
+    gap: 10,
 
   },
 
