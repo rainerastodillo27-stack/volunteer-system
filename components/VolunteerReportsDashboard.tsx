@@ -1836,32 +1836,8 @@ export function PartnerReportsDashboard({
             gap: 16,
           }}
         >
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             <Text style={{ fontSize: 15, fontWeight: '800', color: '#0f172a' }}>Photos from Volunteers Report</Text>
-            <TouchableOpacity
-              activeOpacity={0.7}
-              onPress={() => setShowAllPhotosModal(true)}
-              disabled={volunteerPhotos.length === 0}
-              style={[
-                {
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: 6,
-                  backgroundColor: '#ffffff',
-                  borderWidth: 1,
-                  borderColor: '#cbd5e1',
-                  borderRadius: 8,
-                  paddingHorizontal: 12,
-                  paddingVertical: 6,
-                },
-                volunteerPhotos.length === 0 && { opacity: 0.5 },
-              ]}
-            >
-              <MaterialIcons name="photo-camera" size={15} color="#475569" />
-              <Text style={{ fontSize: 12, fontWeight: '700', color: '#475569' }}>
-                View All Photos ({volunteerPhotos.length})
-              </Text>
-            </TouchableOpacity>
           </View>
 
           {/* Photos Cards Row */}
