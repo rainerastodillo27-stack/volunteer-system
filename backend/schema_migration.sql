@@ -26,6 +26,19 @@ DROP TABLE IF EXISTS public.skills CASCADE;
 DROP TABLE IF EXISTS public.tasks CASCADE;
 DROP TABLE IF EXISTS public.program_tracks CASCADE;
 
+-- Temporary registration email verification codes. Codes are stored as
+-- salted digests so verification works across API workers and restarts.
+CREATE TABLE IF NOT EXISTS public.registration_email_otps (
+  email text PRIMARY KEY,
+  otp_digest text NOT NULL,
+  otp_salt text NOT NULL,
+  issued_at timestamptz NOT NULL,
+  expires_at timestamptz NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS registration_email_otps_expires_idx
+  ON public.registration_email_otps (expires_at);
+
 -- ── users ────────────────────────────────────────────────────
 CREATE TABLE public.users (
   users_id text NOT NULL,

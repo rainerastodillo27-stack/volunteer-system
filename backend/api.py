@@ -16,6 +16,7 @@ import tempfile
 import traceback
 import re
 import mimetypes
+import hashlib
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, unquote_to_bytes
@@ -3943,10 +3944,11 @@ def startup() -> None:
         try:
             with get_connection() as connection:
                 _ensure_notification_reads_table(connection)
+                _ensure_registration_otp_table(connection)
                 ensure_volunteer_time_logs_table_shape(connection)
                 _ensure_reminder_tables(connection)
                 connection.commit()
-            print("[OK] Notification read-state, volunteer time logs, and integration schemas ensured.")
+            print("[OK] Notification read-state, registration OTP, volunteer time logs, and integration schemas ensured.")
         except Exception as error:
             print(f"[WARN] Schema ensure skipped: {error}")
 
@@ -4856,24 +4858,62 @@ def _get_demo_account(identifier: str) -> dict[str, Any] | None:
     return None
 
 
-_registration_otp_store: dict[str, dict[str, Any]] = {}
-_registration_otp_store_lock = threading.Lock()
 REGISTRATION_OTP_TTL_SECONDS = 300
+_registration_otp_schema_lock = threading.Lock()
+_registration_otp_schema_ready = False
 _password_reset_otp_store: dict[str, dict[str, Any]] = {}
 _password_reset_otp_store_lock = threading.Lock()
 PASSWORD_RESET_OTP_TTL_SECONDS = 300
 
 
-def _purge_expired_registration_otps() -> None:
-    now = datetime.now(timezone.utc)
-    with _registration_otp_store_lock:
-        expired_keys = [
-            key
-            for key, value in _registration_otp_store.items()
-            if value["expires_at"] < now
-        ]
-        for key in expired_keys:
-            del _registration_otp_store[key]
+def _ensure_registration_otp_table(connection: Any) -> None:
+    """Ensure registration OTPs are shared across workers and restarts."""
+    global _registration_otp_schema_ready
+
+    if _registration_otp_schema_ready:
+        return
+
+    with _registration_otp_schema_lock:
+        if _registration_otp_schema_ready:
+            return
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                create table if not exists public.registration_email_otps (
+                  email text primary key,
+                  otp_digest text not null,
+                  otp_salt text not null,
+                  issued_at timestamptz not null,
+                  expires_at timestamptz not null
+                )
+                """
+            )
+            cursor.execute(
+                """
+                create index if not exists registration_email_otps_expires_idx
+                on public.registration_email_otps (expires_at)
+                """
+            )
+        connection.commit()
+        _registration_otp_schema_ready = True
+
+
+def _registration_otp_digest(email: str, otp: str, salt: bytes) -> str:
+    """Derive a verification digest without storing the six-digit code."""
+    return hashlib.pbkdf2_hmac(
+        "sha256",
+        f"{email}:{otp}".encode("utf-8"),
+        salt,
+        100_000,
+    ).hex()
+
+
+def _purge_expired_registration_otps(connection: Any) -> None:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "delete from public.registration_email_otps where expires_at <= now()"
+        )
 
 
 def _send_registration_otp_email(recipient_email: str, otp: str) -> None:
@@ -4997,36 +5037,75 @@ def auth_registration_otp_send(payload: RegistrationOtpSendPayload) -> dict[str,
             detail="An account with this email already exists.",
         )
 
-    _purge_expired_registration_otps()
-
-    with _registration_otp_store_lock:
-        existing = _registration_otp_store.get(email)
-        if existing:
-            time_since = (datetime.now(timezone.utc) - existing["issued_at"]).total_seconds()
-            if time_since < 60:
-                wait = int(60 - time_since)
-                raise HTTPException(
-                    status_code=429,
-                    detail=f"Please wait {wait} seconds before requesting a new code.",
-                )
-
     otp = "".join(str(secrets.randbelow(10)) for _ in range(6))
     now = datetime.now(timezone.utc)
+    salt = secrets.token_bytes(16)
+    otp_digest = _registration_otp_digest(email, otp, salt)
 
-    with _registration_otp_store_lock:
-        _registration_otp_store[email] = {
-            "otp": otp,
-            "issued_at": now,
-            "expires_at": now + timedelta(seconds=REGISTRATION_OTP_TTL_SECONDS),
-        }
+    with get_connection() as connection:
+        _ensure_registration_otp_table(connection)
+        _purge_expired_registration_otps(connection)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                select issued_at
+                from public.registration_email_otps
+                where email = %s
+                for update
+                """,
+                (email,),
+            )
+            existing = cursor.fetchone()
+            if existing:
+                issued_at = existing[0]
+                if issued_at.tzinfo is None:
+                    issued_at = issued_at.replace(tzinfo=timezone.utc)
+                time_since = (now - issued_at).total_seconds()
+                if time_since < 60:
+                    wait = max(1, int(60 - time_since))
+                    raise HTTPException(
+                        status_code=429,
+                        detail=f"Please wait {wait} seconds before requesting a new code.",
+                    )
+
+            cursor.execute(
+                """
+                insert into public.registration_email_otps
+                  (email, otp_digest, otp_salt, issued_at, expires_at)
+                values (%s, %s, %s, %s, %s)
+                on conflict (email) do update set
+                  otp_digest = excluded.otp_digest,
+                  otp_salt = excluded.otp_salt,
+                  issued_at = excluded.issued_at,
+                  expires_at = excluded.expires_at
+                """,
+                (
+                    email,
+                    otp_digest,
+                    salt.hex(),
+                    now,
+                    now + timedelta(seconds=REGISTRATION_OTP_TTL_SECONDS),
+                ),
+            )
+        connection.commit()
 
     try:
         _send_registration_otp_email(email, otp)
     except Exception as smtp_error:
-        with _registration_otp_store_lock:
-            stored = _registration_otp_store.get(email)
-            if stored and stored.get("otp") == otp:
-                del _registration_otp_store[email]
+        try:
+            with get_connection() as connection:
+                _ensure_registration_otp_table(connection)
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        delete from public.registration_email_otps
+                        where email = %s and otp_digest = %s
+                        """,
+                        (email, otp_digest),
+                    )
+                connection.commit()
+        except Exception as cleanup_error:
+            print(f"[REGISTRATION-OTP] Failed to clean up undelivered code: {cleanup_error}")
         print(f"[REGISTRATION-OTP] SMTP unavailable ({smtp_error}).")
         raise HTTPException(
             status_code=503,
@@ -5050,24 +5129,59 @@ def auth_registration_otp_verify(payload: RegistrationOtpVerifyPayload) -> dict[
     if not otp or len(otp) != 6 or not otp.isdigit():
         raise HTTPException(status_code=400, detail="Please enter the 6-digit code sent to your email.")
 
-    _purge_expired_registration_otps()
+    verification_error: HTTPException | None = None
+    with get_connection() as connection:
+        _ensure_registration_otp_table(connection)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                select otp_digest, otp_salt, expires_at
+                from public.registration_email_otps
+                where email = %s
+                for update
+                """,
+                (email,),
+            )
+            stored = cursor.fetchone()
+            if stored is None:
+                verification_error = HTTPException(
+                    status_code=401,
+                    detail="No verification code found. Please request a new one.",
+                )
+            else:
+                stored_digest, stored_salt, expires_at = stored
+                if expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) >= expires_at:
+                    cursor.execute(
+                        "delete from public.registration_email_otps where email = %s",
+                        (email,),
+                    )
+                    verification_error = HTTPException(
+                        status_code=401,
+                        detail="Your verification code has expired. Please request a new one.",
+                    )
+                else:
+                    try:
+                        salt = bytes.fromhex(str(stored_salt))
+                        supplied_digest = _registration_otp_digest(email, otp, salt)
+                    except (TypeError, ValueError):
+                        supplied_digest = ""
 
-    with _registration_otp_store_lock:
-        stored = _registration_otp_store.get(email)
-        if stored is None:
-            raise HTTPException(
-                status_code=401,
-                detail="No verification code found. Please request a new one.",
-            )
-        if datetime.now(timezone.utc) > stored["expires_at"]:
-            del _registration_otp_store[email]
-            raise HTTPException(
-                status_code=401,
-                detail="Your verification code has expired. Please request a new one.",
-            )
-        if stored["otp"] != otp:
-            raise HTTPException(status_code=401, detail="Incorrect code. Please try again.")
-        del _registration_otp_store[email]
+                    if not secrets.compare_digest(str(stored_digest), supplied_digest):
+                        verification_error = HTTPException(
+                            status_code=401,
+                            detail="Incorrect code. Please try again.",
+                        )
+                    else:
+                        cursor.execute(
+                            "delete from public.registration_email_otps where email = %s",
+                            (email,),
+                        )
+        connection.commit()
+
+    if verification_error is not None:
+        raise verification_error
 
     return {"verified": True, "email": email, "message": "Email verified."}
 
