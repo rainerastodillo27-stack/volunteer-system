@@ -608,11 +608,14 @@ const styles = StyleSheet.create({
     maxWidth: '100%',
     width: '100%',
     alignSelf: 'stretch',
+    minWidth: 0,
+    flexShrink: 1,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 10,
+    minWidth: 0,
   },
   iconBox: {
     width: 36,
@@ -622,7 +625,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerTexts: { flex: 1 },
+  headerTexts: { flex: 1, minWidth: 0 },
   headerTitle: {
     fontSize: 14,
     fontWeight: '700',
@@ -648,6 +651,7 @@ const styles = StyleSheet.create({
   grid: {
     flexDirection: 'row',
     gap: 16,
+    minWidth: 0,
   },
   gridMobile: {
     flexDirection: 'column',
@@ -656,6 +660,7 @@ const styles = StyleSheet.create({
   col: {
     flex: 1,
     gap: 14,
+    minWidth: 0,
   },
   colMobile: {
     flex: undefined,
@@ -694,6 +699,7 @@ const styles = StyleSheet.create({
   attachRow: {
     flexDirection: 'row',
     gap: 12,
+    minWidth: 0,
   },
   attachRowMobile: {
     flexDirection: 'column',
@@ -702,6 +708,7 @@ const styles = StyleSheet.create({
   attachCard: {
     flex: 1,
     gap: 6,
+    minWidth: 0,
   },
   attachCardMobile: {
     flex: undefined,
@@ -721,6 +728,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 8,
     gap: 8,
+    minWidth: 0,
   },
   thumb: {
     width: 36,
@@ -815,6 +823,8 @@ const styles = StyleSheet.create({
     gap: 12,
     maxWidth: 420,
     width: '100%',
+    minWidth: 0,
+    flexShrink: 1,
   },
   compactIconBox: {
     width: 36,
@@ -827,6 +837,7 @@ const styles = StyleSheet.create({
   compactContent: {
     flex: 1,
     gap: 2,
+    minWidth: 0,
   },
   compactHeaderRow: {
     flexDirection: 'row',
@@ -855,6 +866,8 @@ const styles = StyleSheet.create({
     gap: 12,
     maxWidth: 480,
     width: '100%',
+    minWidth: 0,
+    flexShrink: 1,
     shadowColor: '#166534',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.06,
@@ -865,6 +878,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 10,
+    minWidth: 0,
   },
   approvedIconCircle: {
     width: 36,

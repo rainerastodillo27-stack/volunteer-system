@@ -7748,13 +7748,13 @@ const styles = StyleSheet.create({
 
   messagesListContent: { padding: 10, gap: 8 },
 
-  messageRow: { maxWidth: '85%', gap: 4 },
+  messageRow: { maxWidth: '85%', gap: 4, minWidth: 0 },
 
-  proposalMessageRow: { maxWidth: '100%', width: '100%', alignSelf: 'stretch' },
+  proposalMessageRow: { maxWidth: '100%', width: '100%', alignSelf: 'stretch', minWidth: 0 },
 
   messageRowMenuOpen: { zIndex: 20 },
 
-  messageBodyRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 4, maxWidth: '100%' },
+  messageBodyRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 4, width: '100%', maxWidth: '100%', minWidth: 0, flexShrink: 1 },
 
   messageBodyRowOther: { flexDirection: 'row-reverse' },
 
