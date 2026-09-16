@@ -1371,6 +1371,11 @@ async function fetchApiResponse(
   let lastError: unknown = null;
   const pathShort = path.slice(0, 50);
   const actualTimeoutMs = timeoutMs ?? getRequestTimeoutMs();
+  const requestMethod = String(init?.method || 'GET').toUpperCase();
+  // Retrying a non-idempotent request can duplicate side effects. This is
+  // especially important for registration: the first POST may commit while
+  // the response is lost, and a retry would then look like a duplicate email.
+  const canRetryRequest = !['POST', 'PATCH'].includes(requestMethod);
 
   for (let attempt = 0; attempt < API_REQUEST_MAX_ATTEMPTS; attempt += 1) {
     const controller = new AbortController();
@@ -1400,7 +1405,7 @@ async function fetchApiResponse(
           `API request failed: ${response.status}`
         );
 
-        if (isRetryableApiStatus(response.status) && attempt < API_REQUEST_MAX_ATTEMPTS - 1) {
+        if (canRetryRequest && isRetryableApiStatus(response.status) && attempt < API_REQUEST_MAX_ATTEMPTS - 1) {
           invalidateApiReady();
           lastError = new Error(message);
           const delay_ms = getApiRetryDelayMs(attempt);
@@ -1419,7 +1424,7 @@ async function fetchApiResponse(
     } catch (error) {
       clearTimeout(timeout);
       const isAbort = error instanceof Error && (error.name === 'AbortError' || error.message.includes('aborted'));
-      if (isExpectedRemoteStorageError(error) && attempt < API_REQUEST_MAX_ATTEMPTS - 1) {
+      if (canRetryRequest && isExpectedRemoteStorageError(error) && attempt < API_REQUEST_MAX_ATTEMPTS - 1) {
         invalidateApiReady();
         if (isAbort) {
           console.warn(`[Network] Request aborted for ${pathShort} (attempt ${attempt + 1}/${API_REQUEST_MAX_ATTEMPTS})`);

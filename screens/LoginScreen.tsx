@@ -311,6 +311,7 @@ export default function LoginScreen() {
   const [showSignupModal, setShowSignupModal] = useState(false);
   const [signupStep, setSignupStep] = useState<SignupStep>("role");
   const [signupLoading, setSignupLoading] = useState(false);
+  const signupSubmitInFlightRef = useRef(false);
   const [signupValidationError, setSignupValidationError] = useState<string | null>(null);
   const [signupSuccessData, setSignupSuccessData] = useState<{
     title: string;
@@ -1482,6 +1483,11 @@ export default function LoginScreen() {
       }
     }
 
+    if (signupSubmitInFlightRef.current) {
+      return;
+    }
+    signupSubmitInFlightRef.current = true;
+
     try {
       setSignupLoading(true);
 
@@ -1603,6 +1609,7 @@ export default function LoginScreen() {
         errMsg,
       );
     } finally {
+      signupSubmitInFlightRef.current = false;
       setSignupLoading(false);
     }
   };
