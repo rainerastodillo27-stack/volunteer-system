@@ -152,9 +152,11 @@ export default function UserManagementScreen() {
   useFocusEffect(
     React.useCallback(() => {
       if (!isAdmin) return undefined;
-      void loadUsers();
+      // User Management must show the authoritative account list when opened;
+      // a stale device cache can otherwise hide a newly registered pending user.
+      void loadUsers(true);
       return subscribeToStorageChanges(['users', 'partners', 'volunteers'], () => {
-        void loadUsers();
+        void loadUsers(true);
       });
     }, [isAdmin, loadUsers])
   );
@@ -258,7 +260,7 @@ export default function UserManagementScreen() {
         } catch (syncErr) {
           console.warn('Profile sync notice:', syncErr);
         }
-        void loadUsers();
+        void loadUsers(true);
       })();
     } catch (error) {
       Alert.alert(getRequestErrorTitle(error), getRequestErrorMessage(error, 'Failed to update user.'));
@@ -440,7 +442,7 @@ export default function UserManagementScreen() {
 
         {loadError ? (
           <View style={styles.bannerWrap}>
-            <InlineLoadError title={loadError.title} message={loadError.message} onRetry={() => void loadUsers()} />
+            <InlineLoadError title={loadError.title} message={loadError.message} onRetry={() => void loadUsers(true)} />
           </View>
         ) : null}
 

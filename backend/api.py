@@ -5384,7 +5384,7 @@ def _purge_expired_password_reset_otps(connection: Any) -> None:
 
 
 def _is_email_already_registered(email: str, connection: Any | None = None) -> bool:
-    """Checks if email belongs to any registered user (demo accounts + database + hot storage)."""
+    """Checks whether an email belongs to a canonical account."""
     normalized = str(email or "").strip().lower()
     if not normalized or "@" not in normalized:
         return False
@@ -5393,24 +5393,14 @@ def _is_email_already_registered(email: str, connection: Any | None = None) -> b
         return True
 
     def _check_db(conn: Any) -> bool:
-        for table, col in [("users", "email"), ("volunteers", "email")]:
-            try:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        f"select 1 from {table} where lower(trim(coalesce({col}, ''))) = %s limit 1",
-                        (normalized,),
-                    )
-                    if cur.fetchone() is not None:
-                        return True
-            except Exception:
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
+        # Only the users table represents a login account. Volunteer profiles
+        # and partner contact rows can remain after a failed/removed account;
+        # treating those profile rows as registered accounts traps the email
+        # without giving the person a usable login.
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "select 1 from partners where lower(trim(coalesce(contact_email, ''))) = %s limit 1",
+                    "select 1 from users where lower(trim(coalesce(email, ''))) = %s limit 1",
                     (normalized,),
                 )
                 if cur.fetchone() is not None:
@@ -5420,14 +5410,13 @@ def _is_email_already_registered(email: str, connection: Any | None = None) -> b
                 conn.rollback()
             except Exception:
                 pass
-        # Fallback: scan hot storage collections
-        for key, email_field in [("users", "email"), ("volunteers", "email"), ("partners", "contactEmail")]:
-            try:
-                for item in get_postgres_hot_storage_collection(conn, key):
-                    if str(item.get(email_field) or item.get("email") or "").strip().lower() == normalized:
-                        return True
-            except Exception:
-                pass
+        # Fallback: scan the canonical users collection only.
+        try:
+            for item in get_postgres_hot_storage_collection(conn, "users"):
+                if str(item.get("email") or "").strip().lower() == normalized:
+                    return True
+        except Exception:
+            pass
         return False
 
     if connection is not None:

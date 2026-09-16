@@ -1791,6 +1791,13 @@ function compareProjectsForSort(left: Project, right: Project, sortKey: Projects
 
 }
 
+// New records must not use their display name as the storage ID. Reusing a
+// typed name would make a duplicate program PUT look like an edit, bypassing
+// the backend duplicate-name check.
+function createNewProjectLikeRecordId(prefix: 'program' | 'project' | 'event'): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 type ProgramSectionSortRecord = {
   module: string;
   title: string;
@@ -4771,7 +4778,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       const newProgram: ProgramTrack = {
 
-        id: newProgramName.trim(),
+        id: createNewProjectLikeRecordId('program'),
 
         title: newProgramName.trim(),
 
@@ -4807,7 +4814,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     } catch (error) {
 
-      Alert.alert('Error', getRequestErrorMessage(error, 'Failed to create program.'));
+      Alert.alert(getRequestErrorTitle(error), getRequestErrorMessage(error, 'Failed to create program.'));
 
     } finally {
 
@@ -4905,7 +4912,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       const now = new Date().toISOString();
 
-      const id = editingProgramId || programDraft.title.trim();
+      const id = editingProgramId || createNewProjectLikeRecordId('program');
 
       const program: ProgramTrack = {
 
@@ -4935,28 +4942,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-      // Optimistic update: show card immediately before server confirms
-
-      setProgramTracks(current => {
-
-        const existing = current.findIndex(t => t.id === id);
-
-        if (existing >= 0) {
-
-          const updated = [...current];
-
-          updated[existing] = program;
-
-          return updated;
-
-        }
-
-        return [...current, program];
-
-      });
-
-
-
       // Persist to the canonical programs table.
 
       await saveProgram(program);
@@ -4966,7 +4951,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       setIsAddProgramSuccess(true);
       setIsAddProgramSuccess(false);
       setShowProgramCrudModal(false);
-      void loadProgramTracks();
+      await loadProgramTracks();
       Alert.alert(
         editingProgramId ? 'Program Updated' : 'Program Created',
         editingProgramId
@@ -4976,11 +4961,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     } catch (error) {
 
-      // Rollback optimistic update on error
+      // The list is only updated after the server confirms the write, so a
+      // duplicate response cannot leave a phantom program card behind.
+      await loadProgramTracks();
 
-      await Promise.all([loadProjects(), loadProgramTracks()]);
-
-      Alert.alert('Error', getRequestErrorMessage(error, 'Failed to save program. Please try again.'));
+      Alert.alert(getRequestErrorTitle(error), getRequestErrorMessage(error, 'Failed to save program. Please try again.'));
 
     } finally {
 
@@ -7519,7 +7504,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       id:
 
-        existingProject?.id || `${projectDraft.isEvent ? 'event' : 'project'}-${Date.now()}`,
+        existingProject?.id || createNewProjectLikeRecordId(projectDraft.isEvent ? 'event' : 'project'),
 
       title: projectDraft.title.trim(),
 

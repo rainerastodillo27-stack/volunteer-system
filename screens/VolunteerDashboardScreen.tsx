@@ -672,7 +672,7 @@ export default function VolunteerDashboardScreen() {
         {/* CALENDAR */}
         <View style={styles.section}>
           <View style={styles.sectionHead}>
-            <View>
+            <View style={styles.sectionHeadCopy}>
               <Text style={styles.sectionTitle}>Volunteer calendar</Text>
               <Text style={styles.sectionSub}>Shared project schedule and admin timeline</Text>
             </View>
@@ -715,7 +715,7 @@ export default function VolunteerDashboardScreen() {
           <View style={styles.calCard}>
             <View style={styles.calBadge}>
               <MaterialIcons name="done" size={10} color="#2C4C3B" style={{ marginRight: 4 }} />
-              <Text style={styles.calBadgeText}>Admin calendar synced</Text>
+              <Text style={styles.calBadgeText}>Volunteer calendar synced</Text>
             </View>
             <View style={styles.calHeader}>
               <Text style={styles.calMonth}>{monthLabel}</Text>
@@ -1091,13 +1091,20 @@ const styles = StyleSheet.create({
   },
   sectionHead: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
+    gap: 10,
     marginBottom: 14,
   },
+  sectionHeadCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
   syncButton: {
+    minHeight: 36,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 5,
     backgroundColor: '#f0fdf4',
     borderWidth: 1,
@@ -1105,6 +1112,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     paddingVertical: 6,
     paddingHorizontal: 12,
+    flexShrink: 0,
   },
   syncButtonDisabled: {
     opacity: 0.65,
