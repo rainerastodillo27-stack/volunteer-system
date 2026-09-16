@@ -22212,7 +22212,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-                  {activeSelectedProject.isEvent && activeSelectedProject.volunteerRequirements && activeSelectedProject.volunteerRequirements.length > 0 && (
+                </View>
+
+                {activeSelectedProject.isEvent && activeSelectedProject.volunteerRequirements && activeSelectedProject.volunteerRequirements.length > 0 && (
 
                     <View style={{ marginTop: 20, borderTopWidth: 1, borderTopColor: '#f1f5f9', paddingTop: 16 }}>
 
@@ -22267,8 +22269,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                   )}
 
 
-
-                </View>
 
               </View>
 
