@@ -13571,7 +13571,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                     <Text style={{ fontSize: 13, fontWeight: '700', color: '#334155', marginBottom: 6 }}>Parent Project <Text style={{ color: '#ef4444' }}>*</Text></Text>
 
-                    <View style={[styles.formPickerContainer, { minWidth: 0 }, errBorder('parentProject')]}>
+                    <View style={[styles.formPickerContainer, isMobile && styles.eventFormPickerContainerMobile, { minWidth: 0 }, errBorder('parentProject')]}>
 
                       <Picker
 
@@ -13647,7 +13647,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                         }}
 
-                        style={styles.formPicker}
+                        style={[styles.formPicker, isMobile && styles.eventFormPickerMobile]}
 
                       >
 
@@ -13674,7 +13674,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                     <TextInput
 
-                      style={[styles.formInput, { height: 38 }, errBorder('title')]}
+                      style={[styles.formInput, isMobile && styles.eventFormInputMobile, { height: isMobile ? 48 : 38 }, errBorder('title')]}
 
                       placeholder="Add title"
 
@@ -13683,6 +13683,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                       value={projectDraft.title}
 
                       onChangeText={value => handleProjectDraftChange('title', value)}
+
+                      multiline={isMobile}
+
+                      numberOfLines={isMobile ? 2 : 1}
 
                     />
                     <FieldError field="title" />
@@ -13711,7 +13715,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       <TouchableOpacity
 
-                        style={{ flex: isMobile ? undefined : 1.2, width: isMobile ? '100%' : undefined, minWidth: 0, height: 42, borderWidth: fieldErrors.startDate ? 1.5 : 1, borderColor: fieldErrors.startDate ? '#ef4444' : '#cbd5e1', borderRadius: 8, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 8, backgroundColor: '#fff' }}
+                        style={{ flex: isMobile ? undefined : 1.2, width: isMobile ? '100%' : undefined, minWidth: 0, height: isMobile ? 48 : 42, borderWidth: fieldErrors.startDate ? 1.5 : 1, borderColor: fieldErrors.startDate ? '#ef4444' : '#cbd5e1', borderRadius: 8, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 8, backgroundColor: '#fff' }}
 
                         onPress={() => {
 
@@ -13729,7 +13733,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                         <MaterialIcons name="calendar-today" size={16} color="#64748b" />
 
-                        <Text style={{ fontSize: 13, color: '#0f172a', fontWeight: '600' }}>
+                        <Text style={[styles.eventFormValueText, { fontWeight: '600' }]} numberOfLines={1}>
 
                           {getFormattedDateText(projectDraft.startDate, 'Select Date')}
 
@@ -13741,7 +13745,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       {!eventAllDay && (
 
-                        <View style={{ flex: isMobile ? undefined : 1, width: isMobile ? '100%' : undefined, minWidth: 0, height: 42, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, backgroundColor: '#fff', justifyContent: 'center' }}>
+                        <View style={[{ flex: isMobile ? undefined : 1, width: isMobile ? '100%' : undefined, minWidth: 0, height: isMobile ? 48 : 42, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, backgroundColor: '#fff', justifyContent: 'center', overflow: 'hidden' }, isMobile && styles.eventFormPickerContainerMobile]}>
 
                           <Picker
 
@@ -13749,7 +13753,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                             onValueChange={(val: string) => setEventTimeStart(val)}
 
-                            style={{ width: '100%', height: '100%', color: '#0f172a' }}
+                            style={[{ width: '100%', height: '100%', color: '#0f172a' }, isMobile && styles.eventFormPickerMobile]}
 
                           >
 
@@ -13786,7 +13790,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       <TouchableOpacity
 
-                        style={{ flex: isMobile ? undefined : 1.2, width: isMobile ? '100%' : undefined, minWidth: 0, height: 42, borderWidth: fieldErrors.endDate ? 1.5 : 1, borderColor: fieldErrors.endDate ? '#ef4444' : '#cbd5e1', borderRadius: 8, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 8, backgroundColor: '#fff' }}
+                        style={{ flex: isMobile ? undefined : 1.2, width: isMobile ? '100%' : undefined, minWidth: 0, height: isMobile ? 48 : 42, borderWidth: fieldErrors.endDate ? 1.5 : 1, borderColor: fieldErrors.endDate ? '#ef4444' : '#cbd5e1', borderRadius: 8, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 8, backgroundColor: '#fff' }}
 
                         onPress={() => {
 
@@ -13804,7 +13808,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                         <MaterialIcons name="calendar-today" size={16} color="#64748b" />
 
-                        <Text style={{ fontSize: 13, color: '#0f172a', fontWeight: '600' }}>
+                        <Text style={[styles.eventFormValueText, { fontWeight: '600' }]} numberOfLines={1}>
 
                           {getFormattedDateText(projectDraft.endDate, 'Select Date')}
 
@@ -13816,7 +13820,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       {!eventAllDay && (
 
-                        <View style={{ flex: isMobile ? undefined : 1, width: isMobile ? '100%' : undefined, minWidth: 0, height: 42, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, backgroundColor: '#fff', justifyContent: 'center' }}>
+                        <View style={[{ flex: isMobile ? undefined : 1, width: isMobile ? '100%' : undefined, minWidth: 0, height: isMobile ? 48 : 42, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, backgroundColor: '#fff', justifyContent: 'center', overflow: 'hidden' }, isMobile && styles.eventFormPickerContainerMobile]}>
 
                           <Picker
 
@@ -13824,7 +13828,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                             onValueChange={(val: string) => setEventTimeEnd(val)}
 
-                            style={{ width: '100%', height: '100%', color: '#0f172a' }}
+                            style={[{ width: '100%', height: '100%', color: '#0f172a' }, isMobile && styles.eventFormPickerMobile]}
 
                           >
 
@@ -13875,7 +13879,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                     <Text style={{ fontSize: 13, color: '#334155', fontWeight: '500' }}>Repeat</Text>
 
-                    <View style={{ flex: isMobile ? 1 : undefined, width: isMobile ? undefined : 160, minWidth: 0, height: 38, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, backgroundColor: '#fff', justifyContent: 'center' }}>
+                    <View style={[{ flex: isMobile ? 1 : undefined, width: isMobile ? undefined : 160, minWidth: 0, height: isMobile ? 48 : 38, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, backgroundColor: '#fff', justifyContent: 'center', overflow: 'hidden' }, isMobile && styles.eventFormPickerContainerMobile]}>
 
                       <Picker
 
@@ -13883,7 +13887,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                         onValueChange={(val: string) => setEventRepeat(val)}
 
-                        style={{ width: '100%', height: '100%', color: '#0f172a' }}
+                        style={[{ width: '100%', height: '100%', color: '#0f172a' }, isMobile && styles.eventFormPickerMobile]}
 
                       >
 
@@ -13937,7 +13941,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       <TextInput
 
-                        style={[styles.formInput, { width: '100%', minWidth: 0 }, errBorder('location')]}
+                        style={[styles.formInput, isMobile && styles.eventFormInputMobile, { width: '100%', minWidth: 0, height: isMobile ? 58 : undefined }, errBorder('location')]}
 
                         placeholder="Enter location"
 
@@ -13946,6 +13950,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                         value={projectPlaceVenue}
 
                         onChangeText={setProjectPlaceVenue}
+
+                        multiline={isMobile}
+
+                        numberOfLines={isMobile ? 2 : 1}
 
                       />
                       <FieldError field="location" />
@@ -13960,7 +13968,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       <Text style={{ fontSize: 13, fontWeight: '700', color: '#334155' }}>Barangay <Text style={{ color: '#ef4444' }}>*</Text></Text>
 
-                      <View style={[styles.formPickerContainer, { marginBottom: 0 }, errBorder('barangay')]}>
+                      <View style={[styles.formPickerContainer, isMobile && styles.eventFormPickerContainerMobile, { marginBottom: 0 }, errBorder('barangay')]}>
 
                         <Picker
 
@@ -13970,7 +13978,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                           enabled={projectCityCode !== ''}
 
-                          style={[styles.formPicker, { minWidth: 0 }]}
+                          style={[styles.formPicker, isMobile && styles.eventFormPickerMobile, { minWidth: 0 }]}
 
                         >
 
@@ -24948,6 +24956,56 @@ const styles = StyleSheet.create({
     color: '#0f172a',
 
     fontWeight: '600'
+
+  },
+
+  eventFormInputMobile: {
+
+    paddingVertical: 0,
+
+    lineHeight: 20,
+
+    textAlignVertical: 'center',
+
+    includeFontPadding: false,
+
+  },
+
+  eventFormPickerContainerMobile: {
+
+    height: 48,
+
+    minHeight: 48,
+
+  },
+
+  eventFormPickerMobile: {
+
+    height: 48,
+
+    minHeight: 48,
+
+    fontSize: 14,
+
+    color: '#0f172a',
+
+  },
+
+  eventFormValueText: {
+
+    flex: 1,
+
+    minWidth: 0,
+
+    fontSize: 13,
+
+    lineHeight: 20,
+
+    color: '#0f172a',
+
+    includeFontPadding: false,
+
+    textAlignVertical: 'center',
 
   },
 

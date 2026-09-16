@@ -426,20 +426,22 @@ export default function LocationMapPicker({
       </View>
 
       {/* Search Bar */}
-      <View style={styles.searchRow}>
+      <View style={[styles.searchRow, !isDesktop && styles.searchRowMobile]}>
         <TextInput
-          style={styles.searchInput}
+          style={[styles.searchInput, !isDesktop && styles.searchInputMobile]}
           placeholder="Search location or address on map"
           placeholderTextColor="#94a3b8"
           value={searchQuery}
           onChangeText={setSearchQuery}
           onSubmitEditing={handleSearch}
           returnKeyType="search"
+          multiline={!isDesktop}
+          numberOfLines={!isDesktop ? 2 : 1}
         />
         <TouchableOpacity
           onPress={handleSearch}
           disabled={isSearching}
-          style={[styles.searchButton, isSearching && styles.searchButtonDisabled]}
+          style={[styles.searchButton, !isDesktop && styles.searchButtonMobile, isSearching && styles.searchButtonDisabled]}
           activeOpacity={0.8}
         >
           {isSearching ? (
@@ -568,6 +570,9 @@ const styles = StyleSheet.create({
     gap: 8,
     alignItems: 'center',
   },
+  searchRowMobile: {
+    alignItems: 'stretch',
+  },
   searchInput: {
     flex: 1,
     borderWidth: 1,
@@ -579,6 +584,14 @@ const styles = StyleSheet.create({
     color: '#1e293b',
     backgroundColor: '#ffffff',
   },
+  searchInputMobile: {
+    height: 48,
+    minHeight: 48,
+    paddingVertical: 0,
+    lineHeight: 20,
+    textAlignVertical: 'center',
+    includeFontPadding: false,
+  },
   searchButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -589,6 +602,10 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 8,
     minWidth: 85,
+  },
+  searchButtonMobile: {
+    minHeight: 48,
+    paddingVertical: 0,
   },
   searchButtonDisabled: {
     opacity: 0.6,
