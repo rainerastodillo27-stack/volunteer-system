@@ -1448,8 +1448,8 @@ export function PartnerReportsDashboard({
           </View>
         </View>
 
-        {/* 3. Report KPI Stat Cards */}
-        <View style={{ flexDirection: 'row', gap: 12, flexWrap: 'wrap' }}>
+        {/* 3. Report KPI Stat Cards are intentionally omitted from Partner Reports. */}
+        {false && <View style={{ flexDirection: 'row', gap: 12, flexWrap: 'wrap' }}>
           {/* Card 1: Skills Contributed */}
           <View
             style={{
@@ -1622,7 +1622,7 @@ export function PartnerReportsDashboard({
               {volunteerTrend}
             </Text>
           </View>
-        </View>
+        </View>}
 
         {/* 4. Middle Section: Report Documents */}
         <View style={{ flexDirection: isCompactLayout ? 'column' : 'row', gap: 16, flexWrap: 'wrap' }}>
