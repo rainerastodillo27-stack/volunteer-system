@@ -2446,7 +2446,7 @@ export default function LoginScreen() {
                         <Text style={styles.confirmationStatusPillText}>
                           {signupSuccessData.role === "admin"
                             ? "Active"
-                            : "Sent to Volunteer Management"}
+                            : "Pending Review"}
                         </Text>
                       </View>
                     </View>
