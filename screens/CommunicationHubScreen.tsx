@@ -5334,20 +5334,29 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                   item => item.application.id === messageApplicationId
                 )?.application;
                 const isReviewCard = m.id.startsWith('review-card-');
-                const isSubmissionCard = m.id.startsWith('msg-proposal-');
-                const liveStatus = !isReviewCard
-                  ? liveApplication?.status || latestReviewStatusByApplicationId.get(messageApplicationId)
-                  : undefined;
-                const liveStatusOverride =
-                  !isReviewCard && liveStatus && liveStatus !== application.status
-                    ? liveStatus
-                    : undefined;
-                const cardApplication =
-                  !isReviewCard && liveApplication && liveApplication.status === 'Pending'
-                    ? liveApplication
-                    : liveStatus && liveStatus !== application.status
-                      ? { ...application, status: liveStatus }
-                      : application;
+                // Every stored proposal message is either a partner submission
+                // snapshot or an administrator review response. Keep the
+                // message snapshot for rendering; replacing it with the live
+                // application made old submissions turn into rejection cards
+                // after the application was reviewed.
+                const isSubmissionCard = !isReviewCard;
+                const cardApplication = application;
+                const applicationId = messageApplicationId;
+                const hasLaterCardInChat = filteredMessages.slice(i + 1).some(laterMessage => {
+                  if (!laterMessage.content?.startsWith(PROPOSAL_PREFIX)) return false;
+                  const laterApplication = parseProposalCardContent(laterMessage.content);
+                  if (!laterApplication) return false;
+                  const laterApplicationId = String(
+                    laterApplication.applicationId || laterApplication.id || ''
+                  ).trim();
+                  return laterApplicationId === applicationId;
+                });
+                const isCurrentSubmission =
+                  isSubmissionCard &&
+                  !hasLaterCardInChat &&
+                  (liveApplication
+                    ? liveApplication.status === 'Pending'
+                    : String(application.status || 'Pending').toLowerCase() === 'pending');
                 
                 // Handle both nested (proposalDetails) and flat (legacy) formats
                 const proposalDetails = cardApplication.proposalDetails || {};
@@ -5365,7 +5374,6 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                 const isApproved = cardApplication.status === 'Approved';
                 const isRejected = cardApplication.status === 'Rejected';
                 const revisionNumber = Number(cardApplication.revisionNumber || 0);
-                const applicationId = messageApplicationId;
                 
                 // Determine if this is a review card (from admin) or submission card (from partner)
                 const followsRejection = filteredMessages.slice(0, i).some(previousMessage => {
@@ -5471,8 +5479,9 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                             ? reviewingStatus === 'Approved' ? 'approve' : reviewingStatus === 'Rejected' ? 'reject' : null
                             : null
                         }
-                        statusOverride={liveStatusOverride}
-                        reviewActionsDisabled={Boolean(user?.role === 'admin' && liveStatusOverride)}
+                        cardKind={isReviewCard ? 'review' : 'submission'}
+                        revisionNumber={revisionNumber}
+                        reviewActionsDisabled={Boolean(user?.role === 'admin' && !isCurrentSubmission)}
                         onEdit={app => openProposalRevision({ ...app, ...(app.proposalDetails || {}) })}
                         onApprove={app => void handleReview(app, 'Approved')}
                         onReject={app => handleRejectWithNotes(app)}

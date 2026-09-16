@@ -5,6 +5,8 @@ import type { PartnerProjectApplication } from '../models/types';
 
 interface Props {
   application: PartnerProjectApplication;
+  cardKind?: 'submission' | 'review';
+  revisionNumber?: number;
   onEdit?: (app: PartnerProjectApplication) => void;
   onSubmit?: (app: PartnerProjectApplication) => void;
   onApprove?: (app: PartnerProjectApplication) => void;
@@ -71,7 +73,7 @@ function truncateFileName(fileName: string, maxLength: number = 22): string {
   return `${fileName.slice(0, maxLength - 3)}...`;
 }
 
-export default function ProposalMessageTemplate({ application, onEdit, onSubmit, onApprove, onReject, onOpenAttachment, onViewProjects, isAdmin, isOwner, isSubmitting, reviewAction, statusOverride, reviewActionsDisabled }: Props) {
+export default function ProposalMessageTemplate({ application, cardKind, revisionNumber = 0, onEdit, onSubmit, onApprove, onReject, onOpenAttachment, onViewProjects, isAdmin, isOwner, isSubmitting, reviewAction, statusOverride, reviewActionsDisabled }: Props) {
   const { width } = useWindowDimensions();
   const isMobile = width < 520;
   const d: any = (application as any).proposalDetails || {};
@@ -101,15 +103,22 @@ export default function ProposalMessageTemplate({ application, onEdit, onSubmit,
   const photoSize = getAttachmentSize(photoUrl);
   const docSize = getAttachmentSize(docUrl);
 
-  // The card can be an older submission snapshot while the live application has
-  // already been reviewed. Use the live status for the badge without replacing
-  // the snapshot's project details.
-  const rawStatus = (application.status || 'Pending').toLowerCase();
-  const visibleStatus = String(statusOverride || application.status || 'Pending').toLowerCase();
+  // Submission cards are historical snapshots. Their status must not be
+  // replaced with the live application's status after an admin review, or an
+  // original partner submission would incorrectly become a rejection card.
+  const isSubmissionCard = cardKind === 'submission';
+  const rawStatus = isSubmissionCard ? 'pending' : (application.status || 'Pending').toLowerCase();
+  const visibleStatus = isSubmissionCard
+    ? 'pending'
+    : String(statusOverride || application.status || 'Pending').toLowerCase();
   let badgeText = 'DRAFT';
   let badgeBg = '#EDE9FE';
   let badgeColor = '#7C3AED';
-  if (visibleStatus === 'approved') {
+  if (isSubmissionCard) {
+    badgeText = revisionNumber > 0 ? 'RESUBMITTED' : 'SUBMITTED';
+    badgeBg = revisionNumber > 0 ? '#EDE9FE' : '#DBEAFE';
+    badgeColor = revisionNumber > 0 ? '#7C3AED' : '#1D4ED8';
+  } else if (visibleStatus === 'approved') {
     badgeText = 'Approved';
     badgeBg = '#DCFCE7';
     badgeColor = '#166534';
@@ -196,7 +205,7 @@ export default function ProposalMessageTemplate({ application, onEdit, onSubmit,
   }
 
   const isRevisionRequested = rawStatus === 'revision requested' || rawStatus === 'needs revision' || rawStatus === 'revision';
-  const isResubmitted = rawStatus === 'resubmitted';
+  const isResubmitted = !isSubmissionCard && rawStatus === 'resubmitted';
   const canEdit = Boolean(onEdit) && (
     !reviewActionsDisabled && (
       (isAdmin && rawStatus === 'pending') ||
@@ -415,8 +424,16 @@ export default function ProposalMessageTemplate({ application, onEdit, onSubmit,
           <MaterialIcons name="assignment" size={20} color="#16A34A" />
         </View>
         <View style={styles.headerTexts}>
-          <Text style={styles.headerTitle}>Project Specifications</Text>
-          <Text style={styles.headerSub}>Provide details for the {requestedModule} program.</Text>
+          <Text style={styles.headerTitle}>
+            {isSubmissionCard
+              ? revisionNumber > 0 ? 'Revised Project Proposal' : 'Project Proposal'
+              : 'Project Specifications'}
+          </Text>
+          <Text style={styles.headerSub}>
+            {isSubmissionCard
+              ? 'Submitted by the partner for admin review.'
+              : `Provide details for the ${requestedModule} program.`}
+          </Text>
         </View>
         <View style={[styles.badge, { backgroundColor: badgeBg }]}>
           <Text style={[styles.badgeText, { color: badgeColor }]}>{badgeText}</Text>
