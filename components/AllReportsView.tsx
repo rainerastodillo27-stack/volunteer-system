@@ -6,6 +6,7 @@ import type { Project, VolunteerTimeLog, Volunteer } from '../models/types';
 import { isImageMediaUri } from '../utils/media';
 import { buildTablePdf, downloadPdfFile } from '../utils/pdfDownload';
 import { getAttendanceReportMetrics } from '../utils/attendanceReportMetrics';
+import DownloadPreviewModal from './DownloadPreviewModal';
 
 interface Props {
   reports: SubmittedReport[];
@@ -55,6 +56,17 @@ function photoFolderKey(report: SubmittedReport): string {
 }
 
 type AttachmentFilter = 'all' | 'photos' | 'videos' | 'documents' | 'other' | 'none';
+
+type ReportDownloadPreview = {
+  title: string;
+  subtitle: string;
+  totalRows: number;
+  previewRows: Array<Record<string, string>>;
+  columns: string[];
+  fileName: string;
+  pdf: string;
+  errorMessage: string;
+};
 
 const DOCUMENT_FILE_PATTERN = /\.(pdf|doc|docx|xls|xlsx|csv)(?:$|[?#])/i;
 const VIDEO_FILE_PATTERN = /\.(mp4|mov|m4v|avi|webm|3gp|mkv)(?:$|[?#])/i;
@@ -140,10 +152,12 @@ function buildSingleReportPdf(
   report: SubmittedReport,
   projectById: Map<string, Project>,
 ): string {
-  const metricRows = Object.entries(report.metrics || {}).map(([metric, value]) => ({
-    metric: formatMetricLabel(metric),
-    value,
-  }));
+  const metricRows = Object.entries(report.metrics || {})
+    .filter(([metric]) => metric !== 'volunteerHours' && metric !== 'beneficiariesServed')
+    .map(([metric, value]) => ({
+      metric: formatMetricLabel(metric),
+      value,
+    }));
   const feedbackRows = [
     ['Collaboration feedback', report.collaborationFeedback],
     ['Volunteer praise', report.volunteerPraise],
@@ -167,8 +181,6 @@ function buildSingleReportPdf(
           { field: 'Title', value: report.title || 'Untitled report' },
           { field: 'Event / Project', value: getReportActivityTitle(report, projectById) },
           { field: 'Submitted by', value: report.submitterName || 'Unknown user' },
-          { field: 'Role', value: report.submitterRole || 'Unknown' },
-          { field: 'Report type', value: report.reportType || 'Unknown' },
           { field: 'Status', value: report.status || 'Unknown' },
           { field: 'Submitted', value: formatReportDateTime(report.submittedAt) },
           { field: 'Attachments', value: getReportAttachmentSummary(report) },
@@ -211,8 +223,6 @@ function buildBatchReportPdf(
     title: report.title || 'Untitled report',
     activity: getReportActivityTitle(report, projectById),
     submitter: report.submitterName || 'Unknown user',
-    role: report.submitterRole || 'Unknown',
-    type: report.reportType || 'Unknown',
     status: report.status || 'Unknown',
     submitted: formatReportDateTime(report.submittedAt),
     attachments: getReportAttachmentSummary(report),
@@ -223,12 +233,14 @@ function buildBatchReportPdf(
     description: report.description || 'No description provided.',
   }));
   const metricRows = reports.flatMap((report, index) =>
-    Object.entries(report.metrics || {}).map(([metric, value]) => ({
+    Object.entries(report.metrics || {})
+      .filter(([metric]) => metric !== 'volunteerHours' && metric !== 'beneficiariesServed')
+      .map(([metric, value]) => ({
       number: index + 1,
       report: report.title || 'Untitled report',
       metric: formatMetricLabel(metric),
       value,
-    }))
+      }))
   );
 
   return buildTablePdf(title, {
@@ -241,8 +253,6 @@ function buildBatchReportPdf(
           { key: 'title', label: 'Report', width: 1.35 },
           { key: 'activity', label: 'Event / Project', width: 1.35 },
           { key: 'submitter', label: 'Submitted By', width: 1.05 },
-          { key: 'role', label: 'Role', width: 0.72 },
-          { key: 'type', label: 'Type', width: 0.82 },
           { key: 'status', label: 'Status', width: 0.7 },
           { key: 'submitted', label: 'Submitted', width: 1.05 },
           { key: 'attachments', label: 'Attachments', width: 0.85 },
@@ -282,6 +292,7 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
   const [attachmentFilter, setAttachmentFilter] = useState<AttachmentFilter>('all');
   const [selectedEventFolderKey, setSelectedEventFolderKey] = useState<string | null>(null);
   const [selectedPhotoFolderKey, setSelectedPhotoFolderKey] = useState<string | null>(null);
+  const [downloadPreview, setDownloadPreview] = useState<ReportDownloadPreview | null>(null);
 
   const projectById = useMemo(() => {
     const m = new Map<string, Project>();
@@ -513,11 +524,24 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
     }
 
     const dateKey = new Date().toISOString().slice(0, 10);
-    void downloadPdfFile(
-      `${filenamePrefix}-${dateKey}`,
-      buildBatchReportPdf(items, projectById, title),
-      'Unable to save the batch report on this device.',
-    );
+    const pdf = buildBatchReportPdf(items, projectById, title);
+    setDownloadPreview({
+      title: `Preview: ${title}`,
+      subtitle: `${items.length} report${items.length === 1 ? '' : 's'} ready to download`,
+      totalRows: items.length,
+      columns: ['#', 'Report', 'Event / Project', 'Submitted By', 'Status', 'Submitted'],
+      previewRows: items.slice(0, 5).map((report, index) => ({
+        '#': String(index + 1),
+        Report: report.title || 'Untitled report',
+        'Event / Project': getReportActivityTitle(report, projectById),
+        'Submitted By': report.submitterName || 'Unknown user',
+        Status: report.status || 'Unknown',
+        Submitted: formatReportDateTime(report.submittedAt),
+      })),
+      fileName: `${filenamePrefix}-${dateKey}`,
+      pdf,
+      errorMessage: 'Unable to save the batch report on this device.',
+    });
   };
 
   const handleReportDownload = (report: SubmittedReport) => {
@@ -525,11 +549,20 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
     const dateKey = (Number.isNaN(submittedDate.getTime()) ? new Date() : submittedDate)
       .toISOString()
       .slice(0, 10);
-    void downloadPdfFile(
-      `${report.title || 'report'}-${dateKey}`,
-      buildSingleReportPdf(report, projectById),
-      'Unable to save this report on this device.',
-    );
+    const pdf = buildSingleReportPdf(report, projectById);
+    setDownloadPreview({
+      title: `Preview: ${report.title || 'Report'}`,
+      subtitle: 'Review the report summary before downloading the PDF',
+      totalRows: 1,
+      columns: ['Field', 'Value'],
+      previewRows: [{
+        Field: 'Report summary',
+        Value: `${getReportActivityTitle(report, projectById)} • ${report.submitterName || 'Unknown user'} • ${report.status || 'Unknown'}`,
+      }],
+      fileName: `${report.title || 'report'}-${dateKey}`,
+      pdf,
+      errorMessage: 'Unable to save this report on this device.',
+    });
   };
 
   const selectAttachmentFilter = (nextFilter: typeof attachmentFilter) => {
@@ -985,6 +1018,27 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
           <MaterialIcons name="file-upload" size={28} color="#fff" />
         </TouchableOpacity>
       </View>
+      <DownloadPreviewModal
+        visible={Boolean(downloadPreview)}
+        title={downloadPreview?.title || 'Download preview'}
+        subtitle={downloadPreview?.subtitle || ''}
+        totalRows={downloadPreview?.totalRows || 0}
+        previewRows={downloadPreview?.previewRows || []}
+        columns={downloadPreview?.columns || []}
+        stats={downloadPreview ? [
+          { label: 'File format', value: 'PDF', icon: 'picture-as-pdf' },
+          { label: 'Included records', value: String(downloadPreview.totalRows), icon: 'description' },
+        ] : undefined}
+        onConfirm={() => {
+          if (!downloadPreview) return;
+          const pending = downloadPreview;
+          setDownloadPreview(null);
+          void downloadPdfFile(pending.fileName, pending.pdf, pending.errorMessage);
+        }}
+        onCancel={() => setDownloadPreview(null)}
+        confirmText="Download PDF"
+        confirmColor="#166534"
+      />
     </View>
   );
 }

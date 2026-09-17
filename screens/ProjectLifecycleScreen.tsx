@@ -172,6 +172,7 @@ import { format } from 'date-fns';
 
 import { navigateToAvailableRoute } from '../utils/navigation';
 import { buildTablePdf, downloadPdfFile } from '../utils/pdfDownload';
+import DownloadPreviewModal from '../components/DownloadPreviewModal';
 
 import {
 
@@ -3432,6 +3433,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [previewImageModalVisible, setPreviewImageModalVisible] = useState(false);
 
   const [documentPreview, setDocumentPreview] = useState<{ title: string; uri: string } | null>(null);
+
+  const [attendanceDownloadPreview, setAttendanceDownloadPreview] = useState<{
+    fileName: string;
+    pdf: string;
+    title: string;
+    subtitle: string;
+    rows: Array<Record<string, string>>;
+  } | null>(null);
 
   const [previewAttendanceLog, setPreviewAttendanceLog] = useState<VolunteerTimeLog | null>(null);
 
@@ -19192,11 +19201,21 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           },
         ],
       });
-      void downloadPdfFile(
-        `${fileTitle}.pdf`,
+      setAttendanceDownloadPreview({
+        fileName: `${fileTitle}.pdf`,
         pdf,
-        'Unable to save the attendance PDF on this device.'
-      );
+        title: `Preview: Attendance Report`,
+        subtitle: `${exportDateKey} • ${rows.length} volunteer${rows.length === 1 ? '' : 's'}`,
+        rows: rows.map(row => ({
+          Volunteer: row.volunteer,
+          Attendance: row.attendance,
+          Marked: row.marked,
+          Time: row.time,
+          'Assigned Tasks': row.assignedTasks,
+          'Task Completed': row.completedTask,
+          Photo: row.photo,
+        })),
+      });
     };
 
     const renderInitialsAvatar = (name: string, size = 40) => {
@@ -24056,6 +24075,32 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         title={documentPreview?.title}
         uri={documentPreview?.uri}
         onClose={() => setDocumentPreview(null)}
+      />
+
+      <DownloadPreviewModal
+        visible={Boolean(attendanceDownloadPreview)}
+        title={attendanceDownloadPreview?.title || 'Attendance download preview'}
+        subtitle={attendanceDownloadPreview?.subtitle || ''}
+        totalRows={attendanceDownloadPreview?.rows.length || 0}
+        previewRows={attendanceDownloadPreview?.rows || []}
+        columns={['Volunteer', 'Attendance', 'Marked', 'Time', 'Assigned Tasks', 'Task Completed', 'Photo']}
+        stats={attendanceDownloadPreview ? [
+          { label: 'File format', value: 'PDF', icon: 'picture-as-pdf' },
+          { label: 'Included volunteers', value: String(attendanceDownloadPreview.rows.length), icon: 'groups' },
+        ] : undefined}
+        onConfirm={() => {
+          if (!attendanceDownloadPreview) return;
+          const pending = attendanceDownloadPreview;
+          setAttendanceDownloadPreview(null);
+          void downloadPdfFile(
+            pending.fileName,
+            pending.pdf,
+            'Unable to save the attendance PDF on this device.'
+          );
+        }}
+        onCancel={() => setAttendanceDownloadPreview(null)}
+        confirmText="Download PDF"
+        confirmColor="#166534"
       />
 
       <ConfirmDialogHost ref={confirmDialogRef} />

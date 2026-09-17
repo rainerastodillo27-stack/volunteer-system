@@ -1635,9 +1635,9 @@ export default function VolunteerTasksScreen({ navigation }: any) {
               {joinedVolunteerCount} volunteer{joinedVolunteerCount === 1 ? '' : 's'}
             </Text>
           </View>
-          <View style={styles.taskGroupMetaChip}>
+          <View style={[styles.taskGroupMetaChip, styles.taskGroupLocationChip]}>
             <MaterialIcons name="location-on" size={14} color="#166534" />
-            <Text style={styles.taskGroupMetaChipText} numberOfLines={1}>
+            <Text style={[styles.taskGroupMetaChipText, styles.taskGroupLocationChipText]} numberOfLines={2} ellipsizeMode="tail">
               {eventAddress}
             </Text>
           </View>
@@ -3333,10 +3333,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
   },
+  taskGroupLocationChip: {
+    flex: 1,
+    minWidth: 0,
+    maxWidth: '100%',
+  },
   taskGroupMetaChipText: {
+    flexShrink: 1,
+    minWidth: 0,
     fontSize: 9,
     fontWeight: '700',
     color: '#334155',
+  },
+  taskGroupLocationChipText: {
+    flex: 1,
   },
   taskGroupStatRow: {
     flexDirection: 'row',

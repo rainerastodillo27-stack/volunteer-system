@@ -50,6 +50,13 @@ function isVolunteerOpportunityOpen(project: Project): boolean {
   return status !== 'Completed' && status !== 'Cancelled';
 }
 
+function isDisplayableProgramCandidate(candidate: any): boolean {
+  const id = String(candidate?.id || '').trim().toLowerCase();
+  const parentProjectId = String(candidate?.parentProjectId || '').trim();
+  return Boolean(id) && !candidate?.isEvent && !parentProjectId &&
+    !id.startsWith('project-') && !id.startsWith('event-');
+}
+
 function getGoogleEventsForDay(
   day: number,
   month: number,
@@ -343,25 +350,25 @@ export default function VolunteerDashboardScreen() {
       // Gather ONLY real programs from database
       const rawProgramTracks = projectSnapshot.programTracks || [];
       const rawPrograms = projectSnapshot.programs || [];
-      const rawParentProjects = (projectSnapshot.projects || []).filter(p => !p.isEvent);
+      const rawParentProjects = (projectSnapshot.projects || []).filter(isDisplayableProgramCandidate);
 
       const seenIds = new Set<string>();
       const combinedPrograms: any[] = [];
 
       for (const pt of rawProgramTracks) {
-        if (pt.id && !seenIds.has(pt.id)) {
+        if (isDisplayableProgramCandidate(pt) && !seenIds.has(pt.id)) {
           seenIds.add(pt.id);
           combinedPrograms.push(pt);
         }
       }
       for (const pr of rawPrograms) {
-        if (pr.id && !seenIds.has(pr.id) && !seenIds.has(pr.title)) {
+        if (isDisplayableProgramCandidate(pr) && pr.id && !seenIds.has(pr.id) && !seenIds.has(pr.title)) {
           seenIds.add(pr.id);
           combinedPrograms.push(pr);
         }
       }
       for (const proj of rawParentProjects) {
-        if (proj.id && !seenIds.has(proj.id) && !seenIds.has(proj.title)) {
+        if (isDisplayableProgramCandidate(proj) && proj.id && !seenIds.has(proj.id) && !seenIds.has(proj.title)) {
           seenIds.add(proj.id);
           combinedPrograms.push(proj);
         }

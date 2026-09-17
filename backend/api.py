@@ -3551,6 +3551,35 @@ def _volunteer_has_time_in_for_project(connection: Any, volunteer_id: str, proje
     )
 
 
+def _get_volunteer_assignment_identifiers(connection: Any, volunteer_id: str) -> set[str]:
+    """Return the profile and linked user identifiers accepted for assignment checks."""
+    normalized_id = str(volunteer_id or "").strip()
+    identifiers = {normalized_id} if normalized_id else set()
+    if not normalized_id:
+        return identifiers
+
+    volunteer = _postgres_get_hot_item_by_id(connection, "volunteers", normalized_id)
+    if volunteer is None:
+        volunteer = _postgres_get_volunteer_by_user_id(connection, normalized_id)
+    if isinstance(volunteer, dict):
+        profile_id = str(volunteer.get("id") or "").strip()
+        user_id = str(volunteer.get("userId") or "").strip()
+        identifiers.update(value for value in (profile_id, user_id) if value)
+    return identifiers
+
+
+def _task_has_volunteer_assignment(task: dict[str, Any], identifiers: set[str]) -> bool:
+    assigned_ids = {
+        str(task.get("assignedVolunteerId") or "").strip(),
+        *[
+            str(value or "").strip()
+            for value in (task.get("assignedVolunteerIds") or [])
+        ],
+    }
+    assigned_ids.discard("")
+    return bool(assigned_ids.intersection(identifiers))
+
+
 def _volunteer_is_assigned_to_event_task(
     connection: Any,
     volunteer_id: str,
@@ -3560,15 +3589,10 @@ def _volunteer_is_assigned_to_event_task(
     if not project or not bool(project.get("isEvent")):
         return True
 
-    tasks = project.get("internalTasks") or []
+    identifiers = _get_volunteer_assignment_identifiers(connection, volunteer_id)
     return any(
-        str(task.get("assignedVolunteerId") or "").strip() == volunteer_id
-        or volunteer_id in [
-            str(value or "").strip()
-            for value in (task.get("assignedVolunteerIds") or [])
-            if str(value or "").strip()
-        ]
-        for task in tasks
+        isinstance(task, dict) and _task_has_volunteer_assignment(task, identifiers)
+        for task in (project.get("internalTasks") or [])
     )
 
 
@@ -3581,16 +3605,11 @@ def _volunteer_is_field_officer_for_event(
     if not project or not bool(project.get("isEvent")):
         return False
 
+    identifiers = _get_volunteer_assignment_identifiers(connection, volunteer_id)
     tasks = project.get("internalTasks") or []
     return any(
-        (
-            str(task.get("assignedVolunteerId") or "").strip() == volunteer_id
-            or volunteer_id in [
-                str(value or "").strip()
-                for value in (task.get("assignedVolunteerIds") or [])
-                if str(value or "").strip()
-            ]
-        )
+        isinstance(task, dict)
+        and _task_has_volunteer_assignment(task, identifiers)
         and bool(task.get("isFieldOfficer"))
         for task in tasks
     )
@@ -9125,6 +9144,50 @@ def _validate_internal_task_assignment_limits(items: list[Any]) -> None:
                 )
 
 
+def _normalize_internal_task_assignment_ids(connection: Any, items: list[Any]) -> None:
+    """Persist task assignments using volunteer profile IDs, not user IDs."""
+    volunteer_profile_by_identifier: dict[str, str] = {}
+    for volunteer in get_postgres_hot_storage_collection(connection, "volunteers"):
+        if not isinstance(volunteer, dict):
+            continue
+        profile_id = str(volunteer.get("id") or "").strip()
+        if not profile_id:
+            continue
+        volunteer_profile_by_identifier[profile_id] = profile_id
+        user_id = str(volunteer.get("userId") or "").strip()
+        if user_id:
+            volunteer_profile_by_identifier[user_id] = profile_id
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for task in item.get("internalTasks") or []:
+            if not isinstance(task, dict):
+                continue
+
+            has_primary_id = "assignedVolunteerId" in task
+            has_multiple_ids = "assignedVolunteerIds" in task
+            raw_ids = [
+                str(task.get("assignedVolunteerId") or "").strip(),
+                *[
+                    str(value or "").strip()
+                    for value in (task.get("assignedVolunteerIds") or [])
+                ],
+            ]
+            canonical_ids: list[str] = []
+            for raw_id in raw_ids:
+                if not raw_id:
+                    continue
+                canonical_id = volunteer_profile_by_identifier.get(raw_id, raw_id)
+                if canonical_id not in canonical_ids:
+                    canonical_ids.append(canonical_id)
+
+            if has_primary_id:
+                task["assignedVolunteerId"] = canonical_ids[0] if canonical_ids else None
+            if has_multiple_ids:
+                task["assignedVolunteerIds"] = canonical_ids
+
+
 # Updates one relational storage record without reading and replacing the full collection.
 # This is used by high-frequency actions such as approvals, task assignment, and
 # project/event edits. The existing collection endpoint remains available for
@@ -9202,14 +9265,14 @@ async def put_storage_item_by_id(
         raise HTTPException(status_code=400, detail="Item id does not match the route.")
     item["id"] = normalized_item_id
 
-    if key in {"projects", "events"}:
-        try:
-            _validate_internal_task_assignment_limits([item])
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-
     try:
         with get_connection() as connection:
+            if key in {"projects", "events"}:
+                try:
+                    _normalize_internal_task_assignment_ids(connection, [item])
+                    _validate_internal_task_assignment_limits([item])
+                except ValueError as error:
+                    raise HTTPException(status_code=400, detail=str(error)) from error
             if key == "events":
                 _reject_duplicate_event_writes(connection, [item])
             elif key in {"programs", "projects"}:
@@ -9283,15 +9346,12 @@ async def _put_storage_item_once(key: str, payload: StoragePayload) -> dict[str,
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
-        if key in {"projects", "events"}:
-            try:
-                _validate_internal_task_assignment_limits(payload.value)
-            except ValueError as error:
-                raise HTTPException(status_code=400, detail=str(error)) from error
-
         changed_keys = [key]
         with get_connection() as connection:
             try:
+                if key in {"projects", "events"}:
+                    _normalize_internal_task_assignment_ids(connection, payload.value)
+                    _validate_internal_task_assignment_limits(payload.value)
                 if key == "users":
                     for item in payload.value:
                         if isinstance(item, dict):

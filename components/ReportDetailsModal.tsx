@@ -20,6 +20,7 @@ import {
   openAttachmentUri,
 } from '../utils/media';
 import { buildTablePdf, downloadPdfFile } from '../utils/pdfDownload';
+import DownloadPreviewModal from './DownloadPreviewModal';
 
 interface ReportDetailsModalProps {
   visible: boolean;
@@ -35,6 +36,7 @@ export default function ReportDetailsModal({
   onRevise,
 }: ReportDetailsModalProps) {
   const [previewAttachmentUri, setPreviewAttachmentUri] = useState<string | null>(null);
+  const [downloadPreview, setDownloadPreview] = useState<{ fileName: string; pdf: string } | null>(null);
   const { width } = useWindowDimensions();
 
   if (!report) return null;
@@ -69,14 +71,15 @@ export default function ReportDetailsModal({
   };
   const closeAttachmentPreview = () => setPreviewAttachmentUri(null);
   const handleDownloadReport = () => {
-    void downloadPdfFile(
-      `${report.title}-${formatDateForFilename(report.submittedAt)}.pdf`,
-      buildReportDownloadPdf(report)
-    );
+    setDownloadPreview({
+      fileName: `${report.title}-${formatDateForFilename(report.submittedAt)}.pdf`,
+      pdf: buildReportDownloadPdf(report),
+    });
   };
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={handleClose}>
+    <>
+      <Modal visible={visible} transparent animationType="slide" onRequestClose={handleClose}>
       <View style={styles.backdrop}>
         <View style={[styles.container, isWideLayout && styles.containerWide]}>
           {/* Header */}
@@ -299,7 +302,34 @@ export default function ReportDetailsModal({
           </View>
         </View>
       </Modal>
-    </Modal>
+      </Modal>
+      <DownloadPreviewModal
+        visible={Boolean(downloadPreview)}
+        title={`Preview: ${report.title || 'Report'}`}
+        subtitle="Review the report summary before downloading the PDF"
+        totalRows={1}
+        previewRows={[{
+          Report: report.title || 'Untitled report',
+          'Event / Project': report.projectTitle || 'No linked activity',
+          'Submitted By': report.submitterName || 'Unknown user',
+          Status: report.status || 'Unknown',
+        }]}
+        columns={['Report', 'Event / Project', 'Submitted By', 'Status']}
+        stats={[
+          { label: 'File format', value: 'PDF', icon: 'picture-as-pdf' },
+          { label: 'Included records', value: '1', icon: 'description' },
+        ]}
+        onConfirm={() => {
+          if (!downloadPreview) return;
+          const pending = downloadPreview;
+          setDownloadPreview(null);
+          void downloadPdfFile(pending.fileName, pending.pdf);
+        }}
+        onCancel={() => setDownloadPreview(null)}
+        confirmText="Download PDF"
+        confirmColor="#166534"
+      />
+    </>
   );
 }
 
@@ -334,13 +364,12 @@ function buildReportDownloadPdf(report: SubmittedReport): string {
         rows: [
           { field: 'Title', value: report.title || 'Untitled report' },
           { field: 'Submitted by', value: report.submitterName || 'Unknown user' },
-          { field: 'Role', value: report.submitterRole || 'Unknown' },
           { field: 'Status', value: report.status || 'Unknown' },
-          { field: 'Report type', value: formatReportType(report.reportType) },
           {
             field: report.projectKind === 'event' ? 'Event' : 'Project',
             value: report.projectTitle || 'No linked activity',
           },
+          { field: 'Submitted', value: formatDisplayDateTime(report.submittedAt, 'Unknown date') },
           { field: 'Attachments', value: (report.attachments || []).length + (report.mediaFile ? 1 : 0) },
         ],
       },

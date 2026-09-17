@@ -68,6 +68,13 @@ function inferProgramTrackFocus(track: ProgramTrack): Project['category'] | null
   return null;
 }
 
+function isDisplayableProgramTrack(track: ProgramTrack | null | undefined): track is ProgramTrack {
+  const id = String(track?.id || '').trim().toLowerCase();
+  const parentProjectId = String((track as any)?.parentProjectId || '').trim();
+  return Boolean(id) && !parentProjectId && !(track as any)?.isEvent &&
+    !id.startsWith('project-') && !id.startsWith('event-');
+}
+
 function getProjectProgramId(project: Project, programTracks: ProgramTrack[] = []): string {
   if (project.parentProjectId) {
     const parentIdStr = String(project.parentProjectId).trim();
@@ -195,7 +202,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
         const rawProgramTracks = snapshot.programTracks || [];
         const rawPrograms = snapshot.programs || [];
         const snapshotPrograms: ProgramTrack[] =
-          rawProgramTracks.length > 0
+          (rawProgramTracks.length > 0
             ? rawProgramTracks
             : rawPrograms.map(p => ({
                 id: p.id,
@@ -208,7 +215,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
                 isActive: true,
                 createdAt: p.createdAt,
                 updatedAt: p.updatedAt,
-              }));
+              }))).filter(isDisplayableProgramTrack);
         const eventCount = snapshotRecords.filter(project => project.isEvent).length;
         console.log('[VolunteerProjectsScreen] Snapshot received:', {
           recordCount: snapshotRecords.length,
@@ -249,7 +256,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
             const imageTracks = imageSnapshot.programTracks || [];
             const imagePrograms = imageSnapshot.programs || [];
             setPrograms(
-              imageTracks.length > 0
+              (imageTracks.length > 0
                 ? imageTracks
                 : imagePrograms.map(program => ({
                     id: program.id,
@@ -262,7 +269,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
                     isActive: true,
                     createdAt: program.createdAt,
                     updatedAt: program.updatedAt,
-                  }))
+                  }))).filter(isDisplayableProgramTrack)
             );
           })
           .catch(error => console.warn('[VolunteerProjectsScreen] Project images skipped:', error));

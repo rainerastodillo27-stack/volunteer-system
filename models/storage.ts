@@ -112,6 +112,10 @@ const MEDIA_STORAGE_KEYS = new Set([
 // Shared reads should fail fast enough to keep the UI responsive when the
 // backend is slow or unavailable.
 const REMOTE_STORAGE_TIMEOUT_MS = 15000;
+// Attendance writes may include a photo and perform several server-side
+// validation/upsert steps. Give the native client enough time for the
+// authoritative write to finish instead of showing a false timeout at 15–20s.
+const ATTENDANCE_START_TIMEOUT_MS = 60000;
 const API_HEALTH_TIMEOUT_MS = 5000;
 
 // Detect mobile at runtime (not module load time) to avoid errors
@@ -4992,7 +4996,8 @@ export async function startVolunteerTimeLog(
         note,
         attendancePhoto,
       }),
-    }
+    },
+    ATTENDANCE_START_TIMEOUT_MS,
   );
 
   if (!payload.log) {

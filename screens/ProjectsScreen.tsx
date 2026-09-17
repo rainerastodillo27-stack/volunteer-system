@@ -4562,6 +4562,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   assignmentChip: {
+    maxWidth: '100%',
     borderRadius: 999,
     borderWidth: 1,
     borderColor: '#cbd5e1',
@@ -4574,6 +4575,8 @@ const styles = StyleSheet.create({
     borderColor: '#166534',
   },
   assignmentChipText: {
+    flexShrink: 1,
+    maxWidth: '100%',
     fontSize: 12,
     fontWeight: '700',
     color: '#334155',
