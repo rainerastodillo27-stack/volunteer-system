@@ -2343,6 +2343,8 @@ interface InlineProjectFormProps {
 
   handleSaveProjectRecord: () => void;
 
+  isSavingProject: boolean;
+
   closeProjectModal: () => void;
 
   editingProjectId: string | null;
@@ -2406,6 +2408,8 @@ const InlineProjectForm = React.memo(({
   setShowDatePicker,
 
   handleSaveProjectRecord,
+
+  isSavingProject,
 
   closeProjectModal,
 
@@ -3262,37 +3266,29 @@ const InlineProjectForm = React.memo(({
 
 
             <TouchableOpacity
-
               style={{
-
                 backgroundColor: '#166534',
-
                 borderRadius: 8,
-
                 height: 40,
-
                 alignItems: 'center',
-
                 justifyContent: 'center',
-
                 flexDirection: 'row',
-
                 gap: 6,
-
+                opacity: isSavingProject ? 0.7 : 1,
               }}
-
               onPress={handleSaveProjectRecord}
-
+              disabled={isSavingProject}
             >
-
-              <MaterialIcons name="add-circle-outline" size={16} color="#fff" />
-
+              {isSavingProject ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <MaterialIcons name="add-circle-outline" size={16} color="#fff" />
+              )}
               <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>
-
-                {editingProjectId ? 'Update Project' : 'Create Project'}
-
+                {isSavingProject
+                  ? (editingProjectId ? 'Saving Project...' : 'Creating Project...')
+                  : (editingProjectId ? 'Update Project' : 'Create Project')}
               </Text>
-
             </TouchableOpacity>
 
 
@@ -9999,6 +9995,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         setShowDatePicker={setShowDatePicker}
 
         handleSaveProjectRecord={handleSaveProjectRecord}
+
+        isSavingProject={isSavingEvent}
 
         closeProjectModal={closeProjectModal}
 
