@@ -23928,30 +23928,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-                              {/* Add Project button */}
-
-                              {isAdmin && (
-
-                                <View style={{ flexDirection: 'row', gap: 12, marginTop: 12 }}>
-
-                                  <TouchableOpacity
-
-                                    style={[styles.projectsAccordionAddButton, { borderColor: '#0284c7', backgroundColor: '#f0f9ff' }]}
-
-                                    onPress={() => openCreateProjectInProgramModal(section.module, section.title)}
-
-                                  >
-
-                                    <MaterialIcons name="add-circle-outline" size={16} color="#0284c7" style={{ marginRight: 6 }} />
-
-                                    <Text style={[styles.projectsAccordionAddButtonText, { color: '#0284c7' }]}>Add Project</Text>
-
-                                  </TouchableOpacity>
-
-                                </View>
-
-                              )}
-
                             </View>
 
                           )}
