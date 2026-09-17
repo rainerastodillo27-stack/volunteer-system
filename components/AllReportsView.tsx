@@ -1005,19 +1005,22 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
       )}
 
       </ScrollView>
-      {/* Floating upload button like image bottom right */}
-      <View style={styles.fabWrap} pointerEvents="box-none">
-        <TouchableOpacity
-          style={[styles.fab, !onUploadReport && styles.fabDisabled]}
-          activeOpacity={0.85}
-          onPress={onUploadReport}
-          disabled={!onUploadReport}
-          accessibilityRole="button"
-          accessibilityLabel="Upload report"
-        >
-          <MaterialIcons name="file-upload" size={28} color="#fff" />
-        </TouchableOpacity>
-      </View>
+      {/* Keep report upload in the page header on web; the floating button
+          obscures the Actions column. It remains available on native screens. */}
+      {Platform.OS !== 'web' ? (
+        <View style={styles.fabWrap} pointerEvents="box-none">
+          <TouchableOpacity
+            style={[styles.fab, !onUploadReport && styles.fabDisabled]}
+            activeOpacity={0.85}
+            onPress={onUploadReport}
+            disabled={!onUploadReport}
+            accessibilityRole="button"
+            accessibilityLabel="Upload report"
+          >
+            <MaterialIcons name="file-upload" size={28} color="#fff" />
+          </TouchableOpacity>
+        </View>
+      ) : null}
       <DownloadPreviewModal
         visible={Boolean(downloadPreview)}
         title={downloadPreview?.title || 'Download preview'}

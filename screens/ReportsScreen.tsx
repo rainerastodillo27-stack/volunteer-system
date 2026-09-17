@@ -902,13 +902,6 @@ export default function ReportsScreen({ navigation, route }: any) {
           }
         }
 
-        const hadActiveVolunteerLog =
-          user.role === 'volunteer'
-            ? volunteerTimeLogs.some(
-                log => log.projectId === targetProjectId && Boolean(log.timeIn) && !log.timeOut
-              )
-            : false;
-
         if (reportType === 'field_report') {
           await submitFieldReport({
             projectId: targetProjectId,
@@ -941,10 +934,8 @@ export default function ReportsScreen({ navigation, route }: any) {
 
         setShowUploadModal(false);
         const successMessage = user.role === 'volunteer'
-          ? hadActiveVolunteerLog
-            ? 'Report submitted! Your attendance has been confirmed.'
-            : 'Report submitted successfully to the event reports.'
-          : 'Report submitted to the impact hub.';
+          ? 'Report submitted successfully to the event reports.'
+          : 'Report submitted successfully to the impact hub.';
         showToast(successMessage, 'success');
         // Reload reports in background without blocking
         void loadReportsCoalesced();
@@ -967,7 +958,6 @@ export default function ReportsScreen({ navigation, route }: any) {
       user?.id,
       user?.name,
       user?.role,
-      volunteerTimeLogs,
     ]
   );
 
