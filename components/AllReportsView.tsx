@@ -37,7 +37,14 @@ function fileIcon(report: SubmittedReport) {
   const title = (report.title || '').toLowerCase();
   const hasPdf = title.endsWith('.pdf') || report.attachments?.some(a => a.url.toLowerCase().endsWith('.pdf'));
   const hasDocx = title.endsWith('.docx') || title.endsWith('.doc');
-  const hasJpg = title.endsWith('.jpg') || title.endsWith('.jpeg') || title.endsWith('.png') || report.attachments?.some(a => a.type === 'image') || isImageMediaUri(report.mediaFile || '');
+  const hasJpg = Boolean(
+    title.endsWith('.jpg') ||
+      title.endsWith('.jpeg') ||
+      title.endsWith('.png') ||
+      report.hasMediaFile ||
+      report.attachments?.some(a => a.type === 'image') ||
+      isImageMediaUri(report.mediaFile || '')
+  );
   if (hasPdf) return { bg: '#FEE2E2', icon: 'picture-as-pdf' as const, color: '#DC2626', label: 'Pdf' };
   if (hasDocx) return { bg: '#DBEAFE', icon: 'description' as const, color: '#1D4ED8', label: 'W' };
   if (hasJpg) return { bg: '#DCFCE7', icon: 'image' as const, color: '#16A34A', label: 'Img' };
@@ -79,7 +86,8 @@ function reportAttachments(report: SubmittedReport) {
 
 function reportHasPhoto(report: SubmittedReport): boolean {
   return Boolean(
-    isImageMediaUri(report.mediaFile || '') ||
+    report.hasMediaFile ||
+      isImageMediaUri(report.mediaFile || '') ||
       reportAttachments(report).some(
         attachment => attachment.type === 'image' ||
           (attachment.type === 'media' && isImageMediaUri(attachment.url))
@@ -107,7 +115,12 @@ function reportHasDocument(report: SubmittedReport): boolean {
 }
 
 function reportHasAttachment(report: SubmittedReport): boolean {
-  return Boolean((report.mediaFile || '').trim() || reportAttachments(report).length);
+  return Boolean(
+    report.hasMediaFile ||
+      report.hasAttachments ||
+      (report.mediaFile || '').trim() ||
+      reportAttachments(report).length
+  );
 }
 
 function reportHasOtherAttachment(report: SubmittedReport): boolean {

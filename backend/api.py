@@ -2570,6 +2570,19 @@ def _decode_json_object(value: Any) -> dict[str, Any]:
     return {}
 
 
+def _decode_json_list(value: Any) -> list[Any]:
+    """Decode a JSON-backed list column returned by PostgreSQL."""
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except (TypeError, ValueError):
+            return []
+        return decoded if isinstance(decoded, list) else []
+    return []
+
+
 def _extract_beneficiaries_from_description(description: Any) -> int | None:
     """Recover beneficiary totals from legacy volunteer report narratives."""
     match = re.search(
@@ -2786,6 +2799,12 @@ def _get_admin_dashboard_collection(
                 select {pk_column} as id, project_id, partner_id, partner_user_id, partner_name,
                        submitter_user_id, submitter_name, submitter_role, title,
                        report_type, description, impact_count, metrics, created_at, status,
+                       {"attachments" if include_images else "null::text as attachments"},
+                       {"media_file" if include_images else "null::text as media_file"},
+                       case when coalesce(btrim(attachments), '') not in ('', '[]', 'null')
+                            then true else false end as has_attachments,
+                       case when coalesce(btrim(media_file), '') <> ''
+                            then true else false end as has_media_file,
                        reviewed_at, reviewed_by, source_report_ids
                 from reports
                 order by {pk_column} asc
@@ -2806,6 +2825,10 @@ def _get_admin_dashboard_collection(
                     "description": row["description"],
                     "impactCount": row["impact_count"],
                     "metrics": _decode_json_object(row["metrics"]),
+                    "attachments": _decode_json_list(row["attachments"]),
+                    "mediaFile": row["media_file"],
+                    "hasAttachments": bool(row["has_attachments"]),
+                    "hasMediaFile": bool(row["has_media_file"]),
                     "createdAt": row["created_at"],
                     "status": row["status"],
                     "reviewedAt": row["reviewed_at"],

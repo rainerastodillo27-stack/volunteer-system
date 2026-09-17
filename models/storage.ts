@@ -4945,10 +4945,11 @@ export async function getVolunteerTimeLogs(volunteerId: string): Promise<Volunte
 }
 
 // Returns every volunteer time log stored in the system.
-export async function getAllVolunteerTimeLogs(): Promise<VolunteerTimeLog[]> {
-  // Attendance and completion photos are used by reports, volunteer history,
-  // and admin attendance views. Do not return the lightweight photo-less list.
-  const logs = (await getStorageItemFast<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS, true)) || [];
+export async function getAllVolunteerTimeLogs(options?: {
+  includeImages?: boolean;
+}): Promise<VolunteerTimeLog[]> {
+  const includeImages = options?.includeImages !== false;
+  const logs = (await getStorageItemFast<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS, includeImages)) || [];
   return logs.sort((a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime());
 }
 
@@ -6356,18 +6357,31 @@ export async function getPartnerReportsByUser(partnerUserId: string): Promise<Pa
 
 // Returns every partner report stored in the system.
 // OPTIMIZED: Use cached getStorageItemFast instead of slow getStorageItem
-export async function getAllPartnerReports(): Promise<PartnerReport[]> {
-  const reports = await getStorageItemFast<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS, true) || [];
+export async function getAllPartnerReports(options?: {
+  includeImages?: boolean;
+}): Promise<PartnerReport[]> {
+  const includeImages = options?.includeImages !== false;
+  const reports = await getStorageItemFast<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS, includeImages) || [];
   return dedupeReports(reports).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 
 // Returns every impact-hub report submitted by one user regardless of role.
 // OPTIMIZED: Use cached getStorageItemFast instead of slow getStorageItem
-export async function getImpactHubReportsByUser(userId: string): Promise<PartnerReport[]> {
-  const reports = await getStorageItemFast<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS, true) || [];
+export async function getImpactHubReportsByUser(
+  userId: string,
+  options?: { includeImages?: boolean },
+): Promise<PartnerReport[]> {
+  const includeImages = options?.includeImages !== false;
+  const reports = await getStorageItemFast<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS, includeImages) || [];
   return dedupeReports(reports)
     .filter(report => report.submitterUserId === userId || report.partnerUserId === userId)
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+// Retrieves one complete report, including attachments and the uploaded photo.
+// List screens can omit these fields and fetch them only when a report opens.
+export async function getPartnerReportById(reportId: string): Promise<PartnerReport | null> {
+  return getRemoteStorageRecord<PartnerReport>(STORAGE_KEYS.PARTNER_REPORTS, reportId);
 }
 
 // Returns only field reports stored in the dedicated field report collection.

@@ -5,6 +5,7 @@ import { Alert, Modal, StyleSheet, FlatList, View, Text, ScrollView, TouchableOp
 import { useAuth } from '../contexts/AuthContext';
 import {
   getAllPartnerReports,
+  getPartnerReportById,
   getAllProjects,
   getProjectsScreenSnapshot,
   getAllVolunteers,
@@ -67,6 +68,8 @@ export interface SubmittedReport {
     description?: string;
   }[];
   mediaFile?: string;
+  hasAttachments?: boolean;
+  hasMediaFile?: boolean;
   status: 'Draft' | 'Submitted' | 'Approved' | 'Rejected';
   submittedAt: string;
   approvalNotes?: string;
@@ -205,6 +208,8 @@ function normalizeImpactHubReport(
     metrics,
     attachments: report.attachments || [],
     mediaFile: report.mediaFile,
+    hasAttachments: report.hasAttachments ?? Boolean(report.attachments?.length),
+    hasMediaFile: report.hasMediaFile ?? Boolean(report.mediaFile),
     status: report.status === 'Rejected' ? 'Rejected' : 'Submitted',
     submittedAt: report.createdAt,
     approvalNotes: report.reviewNotes,
@@ -606,7 +611,9 @@ export default function ReportsScreen({ navigation, route }: any) {
   }, [projects, volunteerProfileId]);
 
   const loadVolunteers = useCallback(async () => {
-    const allVolunteers = await getAllVolunteers({ includeImages: true });
+    // The report list only needs volunteer names. Profile documents/photos are
+    // not needed to render the web report tables and can be very large.
+    const allVolunteers = await getAllVolunteers({ includeImages: Platform.OS !== 'web' });
     setVolunteers(allVolunteers);
   }, []);
 
@@ -622,10 +629,11 @@ export default function ReportsScreen({ navigation, route }: any) {
 
     try {
       const allProjects = await loadProjects();
+      const includeReportImages = Platform.OS !== 'web';
       const rawReports =
         user.role === 'admin' || user.role === 'partner'
-          ? await getAllPartnerReports()
-          : await getImpactHubReportsByUser(user.id);
+          ? await getAllPartnerReports({ includeImages: includeReportImages })
+          : await getImpactHubReportsByUser(user.id, { includeImages: includeReportImages });
 
       const normalizedReports =
         rawReports
@@ -637,10 +645,21 @@ export default function ReportsScreen({ navigation, route }: any) {
       // Attendance logs include uploaded photos and can be much larger than
       // the report list. Load those metrics after the report screen is usable.
       if (user.role === 'admin' || user.role === 'partner') {
-        void Promise.all([getAllVolunteerTimeLogs(), getAllVolunteerProjectJoinRecords()])
+        void Promise.all([
+          getAllVolunteerTimeLogs({ includeImages: false }),
+          getAllVolunteerProjectJoinRecords(),
+        ])
           .then(([allTimeLogs, allJoinRecords]) => {
             setVolunteerTimeLogs(allTimeLogs || []);
             setVolunteerJoinRecords(allJoinRecords || []);
+
+            // Keep attendance photos available for the existing attendance
+            // report/photo views, but transfer them after the list is usable.
+            if (Platform.OS === 'web') {
+              void getAllVolunteerTimeLogs({ includeImages: true })
+                .then(mediaTimeLogs => setVolunteerTimeLogs(mediaTimeLogs || []))
+                .catch(error => console.warn('[ReportsScreen] Attendance photos skipped:', error));
+            }
           })
           .catch(error => {
             console.warn('[ReportsScreen] Attendance metrics load skipped:', error);
@@ -675,7 +694,9 @@ export default function ReportsScreen({ navigation, route }: any) {
   }, [loadReports]);
 
   useEffect(() => {
-    void loadReportsCoalesced();
+    if (!hasLoadedReportsRef.current) {
+      void loadReportsCoalesced();
+    }
     setTimeout(() => {
       void loadVolunteers();
     }, 50);
@@ -685,7 +706,12 @@ export default function ReportsScreen({ navigation, route }: any) {
   // sees the latest submissions without needing a manual pull-to-refresh.
   useFocusEffect(
     useCallback(() => {
-      void loadReportsCoalesced();
+      // The mount effect owns the first load. Focus changes after that should
+      // refresh the report list, but the initial focus event must not queue a
+      // duplicate cold request.
+      if (hasLoadedReportsRef.current) {
+        void loadReportsCoalesced();
+      }
     }, [loadReportsCoalesced])
   );
 
@@ -965,11 +991,25 @@ export default function ReportsScreen({ navigation, route }: any) {
     setSelectedReport(report);
     setShowDetailsModal(true);
 
+    let fullReport: PartnerReport | null = null;
+
+    // Web report rows are intentionally lightweight. Fetch the complete
+    // record only when the user opens it so its photo/attachments still work.
+    if (Platform.OS === 'web' && !report.id.startsWith('timelog-')) {
+      try {
+        fullReport = await getPartnerReportById(report.id);
+        if (fullReport) {
+          setSelectedReport(normalizeImpactHubReport(fullReport, projects));
+        }
+      } catch (error) {
+        console.warn('[ReportsScreen] Report attachments skipped:', error);
+      }
+    }
+
     if (user?.role === 'admin' && !report.viewedBy?.includes(user.id)) {
       try {
         const updatedViewedBy = [...(report.viewedBy || []), user.id];
-        const rawReports = await getAllPartnerReports();
-        const rawReport = rawReports.find(r => r.id === report.id);
+        const rawReport = fullReport || await getPartnerReportById(report.id);
         if (rawReport) {
           rawReport.viewedBy = updatedViewedBy;
           await savePartnerReport(rawReport);
@@ -978,7 +1018,7 @@ export default function ReportsScreen({ navigation, route }: any) {
         console.error('Error marking report as viewed:', err);
       }
     }
-  }, [user]);
+  }, [projects, user]);
 
   const handleCloseDetails = useCallback(() => {
     setShowDetailsModal(false);

@@ -459,6 +459,8 @@ export interface PartnerReport {
     description?: string;
   }[];
   mediaFile?: string;
+  hasAttachments?: boolean;
+  hasMediaFile?: boolean;
   createdAt: string;
   status: 'Submitted' | 'Reviewed' | 'Rejected';
   reviewedAt?: string;
