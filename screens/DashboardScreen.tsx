@@ -192,6 +192,9 @@ function getProjectsForDay(
   const target = new Date(year, month, day);
   target.setHours(0, 0, 0, 0);
   return projects.filter(project => {
+    // Programs are containers, not calendar events. Only event records should
+    // appear in the dashboard's selected-day Events panel.
+    if (!project.isEvent) return false;
     const start = new Date(project.startDate);
     if (Number.isNaN(start.getTime())) return false;
     start.setHours(0, 0, 0, 0);
