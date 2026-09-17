@@ -2886,6 +2886,35 @@ def _compress_image_data_uri(value: Any) -> Any:
     return f"{prefix}{compressed}" if compressed else value
 
 
+def _compress_attendance_photo(value: Any) -> Any:
+    """Keep attendance uploads small without re-encoding already-small photos."""
+    if not isinstance(value, str) or not value.strip():
+        return value
+
+    normalized = value.strip()
+    prefix = ""
+    body = normalized
+    if "," in normalized and normalized[:50].lower().startswith("data:"):
+        prefix, body = normalized.split(",", 1)
+
+    try:
+        payload_size = len(base64.b64decode(body, validate=True))
+    except (binascii.Error, ValueError, TypeError):
+        return value
+
+    if payload_size <= 60_000:
+        return value
+
+    compressed = compress_base64_image(body, max_size_bytes=60_000, max_width=640)
+    if not compressed:
+        return value
+
+    if prefix:
+        # compress_base64_image always emits JPEG data.
+        return f"data:image/jpeg;base64,{compressed}"
+    return compressed
+
+
 def _get_media_light_collection(connection: Any, key: str, include_images: bool = True) -> list[dict[str, Any]]:
     from psycopg.rows import dict_row
 
@@ -2937,6 +2966,7 @@ def _postgres_get_hot_item_by_id(
     item_id: str,
     *,
     include_password: bool = False,
+    include_media: bool = True,
     for_update: bool = False,
 ) -> dict[str, Any] | None:
     try:
@@ -2945,6 +2975,7 @@ def _postgres_get_hot_item_by_id(
             key,
             item_id,
             include_password=include_password,
+            include_media=include_media,
             for_update=for_update,
         )
     except KeyError as error:
@@ -3368,17 +3399,20 @@ def _postgres_upsert_hot_item(connection: Any, key: str, item: dict[str, Any]) -
 
 
 def _postgres_get_project_like_item_by_id(
-    connection: Any, item_id: str
+    connection: Any,
+    item_id: str,
+    *,
+    include_media: bool = True,
 ) -> tuple[dict[str, Any] | None, str | None]:
-    project = _postgres_get_hot_item_by_id(connection, "projects", item_id)
+    project = _postgres_get_hot_item_by_id(connection, "projects", item_id, include_media=include_media)
     if project is not None:
         return project, "projects"
 
-    event = _postgres_get_hot_item_by_id(connection, "events", item_id)
+    event = _postgres_get_hot_item_by_id(connection, "events", item_id, include_media=include_media)
     if event is not None:
         return event, "events"
 
-    program = _postgres_get_hot_item_by_id(connection, "programs", item_id)
+    program = _postgres_get_hot_item_by_id(connection, "programs", item_id, include_media=include_media)
     if program is not None:
         return program, "programs"
 
@@ -3432,7 +3466,11 @@ def _get_volunteer_joined_event_scope(
         return set(), set()
 
     joined_event_ids: set[str] = set()
-    join_records = get_postgres_hot_storage_collection(connection, "volunteerProjectJoins")
+    join_records = get_postgres_hot_storage_collection(
+        connection,
+        "volunteerProjectJoins",
+        include_images=False,
+    )
     for record in join_records:
         status = str(record.get("participationStatus") or "Active").strip()
         record_identifiers = {
@@ -3445,8 +3483,8 @@ def _get_volunteer_joined_event_scope(
             joined_event_ids.add(project_id)
 
     event_records = (
-        get_postgres_hot_storage_collection(connection, "events")
-        + get_postgres_hot_storage_collection(connection, "projects")
+        get_postgres_hot_storage_collection(connection, "events", include_images=False)
+        + get_postgres_hot_storage_collection(connection, "projects", include_images=False)
     )
     known_event_ids = {
         str(event.get("id") or "").strip()
@@ -3558,7 +3596,12 @@ def _get_volunteer_assignment_identifiers(connection: Any, volunteer_id: str) ->
     if not normalized_id:
         return identifiers
 
-    volunteer = _postgres_get_hot_item_by_id(connection, "volunteers", normalized_id)
+    volunteer = _postgres_get_hot_item_by_id(
+        connection,
+        "volunteers",
+        normalized_id,
+        include_media=False,
+    )
     if volunteer is None:
         volunteer = _postgres_get_volunteer_by_user_id(connection, normalized_id)
     if isinstance(volunteer, dict):
@@ -3585,7 +3628,11 @@ def _volunteer_is_assigned_to_event_task(
     volunteer_id: str,
     project_id: str,
 ) -> bool:
-    project, _ = _postgres_get_project_like_item_by_id(connection, project_id)
+    project, _ = _postgres_get_project_like_item_by_id(
+        connection,
+        project_id,
+        include_media=False,
+    )
     if not project or not bool(project.get("isEvent")):
         return True
 
@@ -3601,7 +3648,11 @@ def _volunteer_is_field_officer_for_event(
     volunteer_id: str,
     project_id: str,
 ) -> bool:
-    project, _ = _postgres_get_project_like_item_by_id(connection, project_id)
+    project, _ = _postgres_get_project_like_item_by_id(
+        connection,
+        project_id,
+        include_media=False,
+    )
     if not project or not bool(project.get("isEvent")):
         return False
 
@@ -6750,7 +6801,12 @@ def get_volunteer_recognition_status(request: FastAPIRequest, volunteer_id: str)
     session = _get_session_user(request)
     _require_postgres()
     with get_connection() as connection:
-        volunteer = _postgres_get_hot_item_by_id(connection, "volunteers", volunteer_id)
+        volunteer = _postgres_get_hot_item_by_id(
+            connection,
+            "volunteers",
+            volunteer_id,
+            include_media=False,
+        )
         if volunteer is None:
             raise HTTPException(status_code=404, detail="Volunteer not found.")
         owner_user_id = str(volunteer.get("userId") or "").strip()
@@ -6796,13 +6852,22 @@ async def start_volunteer_log(
     session = _get_session_user(request)
     _require_postgres()
     with get_connection() as connection:
-        volunteer = _postgres_get_hot_item_by_id(connection, "volunteers", volunteer_id)
+        volunteer = _postgres_get_hot_item_by_id(
+            connection,
+            "volunteers",
+            volunteer_id,
+            include_media=False,
+        )
         if volunteer is None:
             raise HTTPException(status_code=404, detail="Volunteer not found.")
         if session.get("role") != "admin" and str(volunteer.get("userId") or "").strip() != str(session.get("sub") or ""):
             raise HTTPException(status_code=403, detail="You can only start your own attendance log.")
 
-        project, _ = _postgres_get_project_like_item_by_id(connection, payload.projectId)
+        project, _ = _postgres_get_project_like_item_by_id(
+            connection,
+            payload.projectId,
+            include_media=False,
+        )
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found.")
 
@@ -6848,19 +6913,18 @@ async def start_volunteer_log(
                 detail="Upload an attendance photo to confirm you are on site.",
             )
         try:
-            if "," in attendance_photo:
-                header, b64_body = attendance_photo.split(",", 1)
-                compressed = compress_base64_image(b64_body, max_size_bytes=60_000, max_width=640)
-                if compressed:
-                    attendance_photo = f"{header},{compressed}"
-            else:
-                compressed = compress_base64_image(attendance_photo, max_size_bytes=60_000, max_width=640)
-                if compressed:
-                    attendance_photo = compressed
+            attendance_photo = _compress_attendance_photo(attendance_photo)
         except Exception:
             pass
 
-        existing_logs = _postgres_reset_stale_daily_time_logs(connection, volunteer_id, now)
+        # The duplicate check only needs timestamps and project ids. Avoid
+        # loading/compressing every historical attendance photo on each check-in.
+        existing_logs = _postgres_reset_stale_daily_time_logs(
+            connection,
+            volunteer_id,
+            now,
+            include_media=False,
+        )
         today_log = next(
             (
                 log
@@ -6884,7 +6948,10 @@ async def start_volunteer_log(
             "timeIn": now.isoformat(),
             "attendanceConfirmedAt": now.isoformat(),
             "attendancePhoto": attendance_photo,
-            "completionPhoto": attendance_photo,
+            # Completion photos are uploaded only when the volunteer finishes
+            # the task. Duplicating the attendance image here doubled payload
+            # size and media scanning time during check-in.
+            "completionPhoto": None,
             "note": payload.note,
         }
         _postgres_upsert_hot_item(connection, "volunteerTimeLogs", new_log)
@@ -6970,7 +7037,11 @@ async def end_volunteer_log(
             raise HTTPException(status_code=404, detail="Volunteer not found.")
         if session.get("role") != "admin" and str(volunteer.get("userId") or "").strip() != str(session.get("sub") or ""):
             raise HTTPException(status_code=403, detail="You can only end your own attendance log.")
-        project, _ = _postgres_get_project_like_item_by_id(connection, payload.projectId)
+        project, _ = _postgres_get_project_like_item_by_id(
+            connection,
+            payload.projectId,
+            include_media=False,
+        )
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found.")
         if session.get("role") == "volunteer" and bool(project.get("isEvent")):

@@ -432,7 +432,7 @@ export async function pickAttendancePhotoFromDevice(): Promise<string | null> {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       base64: true,
-      quality: 0.4,
+      quality: 0.25,
     });
 
     if (result.canceled || !result.assets || result.assets.length === 0) {
@@ -450,7 +450,7 @@ export async function pickAttendancePhotoFromDevice(): Promise<string | null> {
 
     if (asset.base64) {
       const imageDataUri = `data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}`;
-      const optimizedImage = await compressImage(imageDataUri);
+      const optimizedImage = await compressImage(imageDataUri, 60);
       return optimizedImage || imageDataUri;
     }
 

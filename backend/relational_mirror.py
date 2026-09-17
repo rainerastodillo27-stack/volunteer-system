@@ -2604,6 +2604,7 @@ def get_relational_item_by_id(
     item_id: str,
     *,
     include_password: bool = False,
+    include_media: bool = True,
     for_update: bool = False,
 ) -> dict[str, Any] | None:
     spec = TABLE_SPECS.get(key)
@@ -2614,9 +2615,18 @@ def get_relational_item_by_id(
     from psycopg.errors import UndefinedColumn, UndefinedTable
 
     column_names = [column_name for column_name, _ in spec["columns"]]
+    media_columns = LIGHTWEIGHT_MEDIA_COLUMNS.get(key, set())
+    select_columns = [
+        (
+            f"null::text as {column_name}"
+            if not include_media and column_name in media_columns
+            else column_name
+        )
+        for column_name in column_names
+    ]
     filter_clause = _row_filter_clause(key)
     with connection.cursor(row_factory=dict_row) as cursor:
-        query = f"select {', '.join(column_names)} from {spec['table']} where {_primary_key_column(key)} = %s"
+        query = f"select {', '.join(select_columns)} from {spec['table']} where {_primary_key_column(key)} = %s"
         if filter_clause:
             query += f" and {filter_clause}"
         if for_update:
@@ -2638,7 +2648,7 @@ def get_relational_item_by_id(
                 except Exception:
                     pass
                 alt_pk = 'id'
-                alt_column_names = list(column_names)
+                alt_column_names = list(select_columns)
                 pk_col = _primary_key_column(key)
                 if alt_column_names and alt_column_names[0] == pk_col:
                     alt_column_names[0] = alt_pk
