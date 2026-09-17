@@ -1103,20 +1103,32 @@ def _notification_lead_delta(setting: dict[str, Any]) -> timedelta | None:
     return timedelta(minutes=value)
 
 
-def _get_event_email_reminder_settings(event: dict[str, Any]) -> list[dict[str, Any]]:
+def _get_event_reminder_settings(
+    event: dict[str, Any],
+    delivery_type: str,
+) -> list[dict[str, Any]]:
     raw_settings = event.get("notificationSettings")
     if not isinstance(raw_settings, list):
         raw_settings = []
-    settings = [
+    normalized_delivery_type = str(delivery_type or "").strip().lower()
+    return [
         setting
         for setting in raw_settings
         if isinstance(setting, dict)
-        and str(setting.get("type") or "").strip().lower() == "email"
+        and str(setting.get("type") or "").strip().lower() == normalized_delivery_type
         and _notification_lead_delta(setting) is not None
     ]
+
+
+def _get_event_email_reminder_settings(event: dict[str, Any]) -> list[dict[str, Any]]:
+    settings = _get_event_reminder_settings(event, "email")
     if settings:
         return settings
     return [{"type": "Email", "value": str(REMINDER_LEAD_DAYS), "unit": "days"}]
+
+
+def _get_event_notification_reminder_settings(event: dict[str, Any]) -> list[dict[str, Any]]:
+    return _get_event_reminder_settings(event, "notification")
 
 
 def _event_reminder_setting_is_due(event: dict[str, Any], setting: dict[str, Any], now: datetime) -> bool:
@@ -1133,13 +1145,58 @@ def _event_reminder_setting_is_due(event: dict[str, Any], setting: dict[str, Any
 def _get_reminder_type(setting: dict[str, Any]) -> str:
     value = str(setting.get("value") or "").strip()
     unit = str(setting.get("unit") or "minutes").strip().lower()
-    return f"event-email:{value}{unit}"
+    delivery_type = str(setting.get("type") or "email").strip().lower()
+    prefix = "event-notification" if delivery_type == "notification" else "event-email"
+    return f"{prefix}:{value}{unit}"
 
 
 def _get_reminder_label(setting: dict[str, Any]) -> str:
     value = str(setting.get("value") or "").strip()
     unit = str(setting.get("unit") or "minutes").strip().lower()
     return f"{value} {unit}"
+
+
+def _create_event_in_app_reminder_message(
+    connection: Any,
+    event: dict[str, Any],
+    volunteer: dict[str, Any],
+    reminder_type: str,
+    reminder_label: str,
+) -> bool:
+    recipient_id = str(volunteer.get("userId") or volunteer.get("id") or "").strip()
+    event_id = str(event.get("id") or "").strip()
+    volunteer_id = str(volunteer.get("id") or volunteer.get("userId") or "").strip()
+    if not recipient_id or not event_id or not volunteer_id:
+        return False
+
+    sender_id = _resolve_admin_message_user_id(connection)
+    activity_type = "event" if bool(event.get("isEvent")) else "project"
+    event_title = str(event.get("title") or f"your joined {activity_type}").strip()
+    message_id = f"event-reminder:{event_id}:{reminder_type}:{volunteer_id}"
+    content = (
+        f"Reminder: you joined the {activity_type} \"{event_title}\". "
+        f"It starts in {reminder_label}. Check NVC Connect for the latest details."
+    )
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            insert into public.messages (
+              messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+            )
+            values (%s, %s, %s, %s, %s, %s, false, '[]')
+            on conflict (messages_id) do nothing
+            """,
+            (
+                message_id,
+                sender_id,
+                recipient_id,
+                event_id,
+                content,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        return cursor.rowcount > 0
 
 
 def _send_event_reminder_email(
@@ -1266,6 +1323,75 @@ def run_event_reminder_check() -> dict[str, Any]:
                         )
                         sent_count += 1
 
+                # In-app reminders use the same due-window and idempotency
+                # rules as email reminders, but are persisted as unread
+                # messages so the app banner can receive them by polling or
+                # the existing message websocket.
+                for setting in _get_event_notification_reminder_settings(event):
+                    if not _event_reminder_setting_is_due(event, setting, now):
+                        skipped_count += len(event_recipients)
+                        continue
+
+                    reminder_type = _get_reminder_type(setting)
+                    reminder_label = _get_reminder_label(setting)
+
+                    for volunteer in event_recipients:
+                        volunteer_id = str(
+                            volunteer.get("id")
+                            or volunteer.get("userId")
+                            or volunteer.get("email")
+                            or ""
+                        ).strip()
+                        recipient_id = str(
+                            volunteer.get("userId") or volunteer.get("id") or ""
+                        ).strip()
+                        recipient_email = str(volunteer.get("email") or "").strip().lower()
+                        if not volunteer_id or not recipient_id:
+                            skipped_count += 1
+                            continue
+
+                        reminder_id = f"{reminder_type}:{event_id}:{volunteer_id}"
+                        cursor.execute(
+                            "select reminder_id from public.event_email_reminders where reminder_id = %s",
+                            (reminder_id,),
+                        )
+                        if cursor.fetchone():
+                            skipped_count += 1
+                            continue
+
+                        try:
+                            _create_event_in_app_reminder_message(
+                                connection,
+                                event,
+                                volunteer,
+                                reminder_type,
+                                reminder_label,
+                            )
+                        except Exception as error:
+                            print(
+                                f"[REMINDER] Failed to create in-app reminder for {recipient_id}: {error}"
+                            )
+                            skipped_count += 1
+                            continue
+
+                        cursor.execute(
+                            """
+                            insert into public.event_email_reminders (
+                              reminder_id, event_id, volunteer_id, volunteer_email, reminder_type, sent_at
+                            )
+                            values (%s, %s, %s, %s, %s, %s)
+                            """,
+                            (
+                                reminder_id,
+                                event_id,
+                                volunteer_id,
+                                recipient_email or recipient_id,
+                                reminder_type,
+                                datetime.now(timezone.utc).isoformat(),
+                            ),
+                        )
+                        sent_count += 1
+
         connection.commit()
 
     return {"sent": sent_count, "skipped": skipped_count}
@@ -1276,7 +1402,7 @@ def _event_reminder_scheduler_loop() -> None:
         try:
             result = run_event_reminder_check()
             if result.get("sent"):
-                print(f"[REMINDER] Sent {result['sent']} event reminder email(s).")
+                print(f"[REMINDER] Delivered {result['sent']} event reminder(s).")
         except Exception as error:
             print(f"[REMINDER] Reminder check skipped: {error}")
         time.sleep(REMINDER_CHECK_INTERVAL_SECONDS)

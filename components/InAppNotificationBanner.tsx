@@ -213,9 +213,31 @@ export default function InAppNotificationBanner() {
       const messages = [...userMessages, ...volMessages];
 
       if (!initialLoadDoneRef.current) {
-        // Record all existing message IDs initially so old historical ones don't trigger banners on boot
+        // Keep historical messages quiet on boot, but surface a recent unread
+        // event reminder in case the app was backgrounded when the scheduler
+        // created it. Older unread reminders remain available in Messages.
+        const recentReminder = messages
+          .filter(message => {
+            const content = String(message.content || '').trim();
+            const ageMs = Date.now() - new Date(message.timestamp).getTime();
+            return (
+              !message.read &&
+              content.startsWith('Reminder: you joined') &&
+              Number.isFinite(ageMs) &&
+              ageMs >= -60 * 1000 &&
+              ageMs <= 15 * 60 * 1000
+            );
+          })
+          .sort((left, right) => (
+            new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime()
+          ))[0];
+
         messages.forEach(m => seenMessageIdsRef.current.add(m.id));
         initialLoadDoneRef.current = true;
+        if (recentReminder) {
+          seenMessageIdsRef.current.delete(recentReminder.id);
+          handleIncomingMessage(recentReminder);
+        }
         return;
       }
 
