@@ -983,11 +983,11 @@ export default function AdminAnalyticsScreen() {
     try {
       const [nextProjects, nextProgramTracks, nextVolunteers, nextTimeLogs, nextJoinRecords, nextReports, nextPartners, nextApplications] = await Promise.all([
         getAllProjects(),
-        getAllProgramTracks(),
+        getAllProgramTracks({ includeImages: false }),
         getAllVolunteers(),
-        getAllVolunteerTimeLogs(),
+        getAllVolunteerTimeLogs({ includeImages: false }),
         getAllVolunteerProjectJoinRecords(),
-        getAllPartnerReports(),
+        getAllPartnerReports({ includeImages: false }),
         getAllPartners(),
         getAllPartnerProjectApplications(),
       ]);

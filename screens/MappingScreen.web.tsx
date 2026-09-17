@@ -1288,7 +1288,7 @@ export default function MappingScreen({ navigation }: any) {
           <>
           <View style={styles.adminFiltersRow}>
             <View style={styles.adminFilterItem}>
-              <MaterialIcons name="calendar-today" size={15} color="#ea580c" style={{ marginRight: 5 }} />
+              <MaterialIcons name="calendar-today" size={15} color="#64748B" style={{ marginRight: 5 }} />
               <Text style={styles.adminFilterLabel}>Date</Text>
               <input
                 type="date"
@@ -1298,7 +1298,7 @@ export default function MappingScreen({ navigation }: any) {
                   setFilterDate(/^\d{4}-\d{2}-\d{2}$/.test(nextValue) ? nextValue : '');
                 }}
                 style={{
-                  border: '1px solid #fed7aa',
+                  border: '1px solid #CBD5E1',
                   borderRadius: '6px',
                   padding: '4px 8px',
                   outline: 'none',
@@ -1320,7 +1320,7 @@ export default function MappingScreen({ navigation }: any) {
             <View style={styles.adminFilterDivider} />
 
             <View style={styles.adminFilterItem}>
-              <MaterialIcons name="category" size={15} color="#ea580c" style={{ marginRight: 5 }} />
+              <MaterialIcons name="category" size={15} color="#64748B" style={{ marginRight: 5 }} />
               <Text style={styles.adminFilterLabel}>Program</Text>
               <View style={styles.programChipsRow}>
                 <TouchableOpacity
@@ -1378,20 +1378,11 @@ export default function MappingScreen({ navigation }: any) {
               </View>
             </View>
 
-            {(filterDate || filterProgram) ? (
-              <TouchableOpacity
-                style={styles.clearAllFiltersBtn}
-                onPress={() => { setFilterDate(''); setFilterProgram(''); }}
-              >
-                <MaterialIcons name="filter-alt-off" size={15} color="#ef4444" />
-                <Text style={styles.clearAllFiltersText}>Clear filters</Text>
-              </TouchableOpacity>
-            ) : null}
           </View>
 
           {/* Location Filter Row */}
           <View style={styles.locationFiltersRow}>
-            <MaterialIcons name="place" size={16} color="#16a34a" style={{ marginRight: 8 }} />
+            <MaterialIcons name="place" size={16} color="#64748B" style={{ marginRight: 8 }} />
             <Text style={styles.locationFilterLabel}>Filter by Location:</Text>
             
             <View style={styles.locationDropdownGroup}>
@@ -1624,7 +1615,6 @@ export default function MappingScreen({ navigation }: any) {
               <View style={styles.featuredCopy}>
                 <Text style={styles.featuredTitle} numberOfLines={1}>{featuredProject.title}</Text>
                 <View style={styles.featuredBadges}>
-                  <View style={styles.categoryBadge}><Text style={styles.categoryBadgeText}>{featuredProject.category}</Text></View>
                   <View style={styles.scheduleBadge}>
                     <View style={styles.scheduleBadgeDot} />
                     <Text style={styles.scheduleBadgeText}>{featuredEventState === 'today' ? 'Today' : 'Upcoming'}</Text>
@@ -1708,7 +1698,6 @@ export default function MappingScreen({ navigation }: any) {
           <View style={styles.featuredCopy}>
             <Text style={styles.featuredTitle} numberOfLines={1}>{featuredProject.title}</Text>
             <View style={styles.featuredBadges}>
-              <View style={styles.categoryBadge}><Text style={styles.categoryBadgeText}>{featuredProject.category}</Text></View>
               <View style={styles.progressBadge}><View style={styles.progressDot} /><Text style={styles.progressBadgeText}>{getProjectDisplayStatus(featuredProject)}</Text></View>
             </View>
             <View style={styles.featuredMeta}>
@@ -1762,12 +1751,6 @@ export default function MappingScreen({ navigation }: any) {
                     <Text style={styles.infoLabel}>Type</Text>
                     <Text style={styles.infoValue}>
                       {selectedProject.isEvent ? 'Event' : 'Project'}
-                    </Text>
-                  </View>
-                  <View style={styles.infoItem}>
-                    <Text style={styles.infoLabel}>Category</Text>
-                    <Text style={styles.infoValue}>
-                      {selectedProject.programModule || selectedProject.category}
                     </Text>
                   </View>
                   <View style={styles.infoItem}>
@@ -2131,32 +2114,31 @@ const styles = StyleSheet.create({
   },
   header: {
     backgroundColor: ModernTheme.colors.background.card,
-    paddingHorizontal: 31,
-    paddingTop: 15,
-    paddingBottom: 32,
-    borderBottomWidth: 0,
-    borderBottomColor: 'transparent',
-    ...ModernTheme.shadows.sm,
+    paddingHorizontal: 30,
+    paddingTop: 24,
+    paddingBottom: 26,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E8EDF2',
   },
   headerTopRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
-    gap: 22,
+    gap: 16,
   },
   headerTextBlock: {
     flex: 1,
   },
   headerTitle: {
-    fontSize: 25,
-    fontWeight: '700' as const,
+    fontSize: 24,
+    fontWeight: '800' as const,
     color: ModernTheme.colors.text.primary,
   },
   headerSubtitle: {
-    fontSize: 17,
-    lineHeight: 25,
+    fontSize: 14,
+    lineHeight: 20,
     color: '#68758A',
-    marginTop: 3,
+    marginTop: 5,
   },
   mapStyleButton: {
     flexDirection: 'row',
@@ -2224,53 +2206,53 @@ const styles = StyleSheet.create({
   },
   mapTitleGroup: {
     flex: 1,
-    minWidth: 360,
+    minWidth: 300,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 20,
+    gap: 14,
   },
   titleIconShell: {
-    width: 78,
-    height: 78,
-    borderRadius: 39,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#F2F8F1',
   },
   workspaceButton: {
-    width: 460,
-    height: 70,
-    borderRadius: 16,
+    width: 320,
+    height: 52,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: '#E2E8F0',
     backgroundColor: '#FFFFFF',
-    paddingHorizontal: 23,
+    paddingHorizontal: 16,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 16,
+    gap: 10,
   },
   workspaceButtonText: {
     flex: 1,
     color: '#263244',
-    fontSize: 17,
+    fontSize: 14,
     fontWeight: '800',
   },
   viewButton: {
-    width: 296,
-    height: 70,
-    borderRadius: 16,
+    width: 214,
+    height: 52,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: '#E2E8F0',
     backgroundColor: '#FFFFFF',
-    paddingHorizontal: 22,
+    paddingHorizontal: 16,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 16,
+    gap: 10,
   },
   viewButtonText: {
     flex: 1,
     color: '#263244',
-    fontSize: 17,
+    fontSize: 14,
     fontWeight: '800',
     textTransform: 'capitalize',
   },
@@ -2721,8 +2703,8 @@ const styles = StyleSheet.create({
   statusFiltersRow: {
     alignItems: 'center',
     gap: 8,
-    paddingTop: 12,
-    paddingBottom: 2,
+    paddingTop: 20,
+    paddingBottom: 4,
   },
   statusFilterChip: {
     flexDirection: 'row',
@@ -2771,14 +2753,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
-    gap: 12,
-    marginTop: 14,
-    paddingHorizontal: 4,
-    paddingVertical: 10,
-    backgroundColor: '#fff7ed',
-    borderRadius: 14,
+    gap: 16,
+    marginTop: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#fed7aa',
+    borderColor: '#E2E8F0',
   },
   adminFilterItem: {
     flexDirection: 'row',
@@ -2789,7 +2771,7 @@ const styles = StyleSheet.create({
   adminFilterLabel: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#7c3aed',
+    color: '#475569',
     marginRight: 4,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
@@ -2797,7 +2779,7 @@ const styles = StyleSheet.create({
   adminFilterDivider: {
     width: 1,
     height: 24,
-    backgroundColor: '#fed7aa',
+    backgroundColor: '#CBD5E1',
     marginHorizontal: 4,
   },
   filterClearBtn: {
@@ -2820,8 +2802,8 @@ const styles = StyleSheet.create({
     borderColor: '#e2e8f0',
   },
   programChipActive: {
-    backgroundColor: '#ea580c',
-    borderColor: '#ea580c',
+    backgroundColor: '#166534',
+    borderColor: '#166534',
   },
   programChipText: {
     fontSize: 12,
@@ -2854,18 +2836,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexWrap: 'wrap',
     gap: 10,
-    marginTop: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    backgroundColor: '#f0fdf4',
+    marginTop: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    backgroundColor: '#F8FAFC',
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#bbf7d0',
+    borderColor: '#E2E8F0',
   },
   locationFilterLabel: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#15803d',
+    color: '#475569',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
@@ -2893,7 +2875,7 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: '#fecaca',
     marginTop: 10,
-    alignSelf: 'flex-start',
+    alignSelf: 'flex-end',
   },
   clearAllFiltersMainText: {
     fontSize: 13,
@@ -2902,24 +2884,22 @@ const styles = StyleSheet.create({
   },
   // Impact Statistics styles
   impactStatsContainer: {
-    marginTop: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 18,
+    marginTop: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
     backgroundColor: '#ffffff',
     borderRadius: 16,
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    shadowColor: '#334155',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-    elevation: 1,
+    shadowColor: 'transparent',
+    shadowOpacity: 0,
+    elevation: 0,
   },
   impactStatsHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    marginBottom: 16,
+    marginBottom: 12,
   },
   impactStatsTitle: {
     fontSize: 16,
@@ -2961,7 +2941,7 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 140,
     alignItems: 'center',
-    paddingVertical: 16,
+    paddingVertical: 13,
     paddingHorizontal: 12,
     backgroundColor: '#f8fafc',
     borderRadius: 12,

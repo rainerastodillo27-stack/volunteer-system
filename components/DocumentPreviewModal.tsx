@@ -2,12 +2,15 @@ import React, { useEffect, useState } from 'react';
 import {
   Image,
   Modal,
+  Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { WebView } from 'react-native-webview';
 import { getAttachmentLabel, isImageMediaUri } from '../utils/media';
 
 type DocumentPreviewModalProps = {
@@ -15,24 +18,86 @@ type DocumentPreviewModalProps = {
   uri?: string | null;
   title?: string;
   onClose: () => void;
+  allowExternalOpen?: boolean;
+  onOpenExternal?: () => void;
 };
 
-// Keeps identity documents inside the app. It intentionally exposes no download
-// or external-open action: administrators can inspect the submitted image only.
+const TEXT_FILE_PATTERN = /\.(csv|txt|json|xml|log|md)(?:[?#]|$)/i;
+
+function isTextDocumentUri(uri: string): boolean {
+  const dataMime = uri.match(/^data:([^;,]+)/i)?.[1]?.toLowerCase();
+  if (dataMime) {
+    return dataMime.startsWith('text/') || dataMime.includes('csv') || dataMime.includes('json') || dataMime.includes('xml');
+  }
+  return TEXT_FILE_PATTERN.test(uri);
+}
+
+function decodeDataUri(uri: string): string {
+  const separatorIndex = uri.indexOf(',');
+  if (separatorIndex < 0) return '';
+  const metadata = uri.slice(0, separatorIndex);
+  const payload = uri.slice(separatorIndex + 1);
+  if (/;base64/i.test(metadata)) {
+    return typeof atob === 'function' ? atob(payload) : payload;
+  }
+  return decodeURIComponent(payload);
+}
+
 export default function DocumentPreviewModal({
   visible,
   uri,
   title = 'Document Preview',
   onClose,
+  allowExternalOpen = false,
+  onOpenExternal,
 }: DocumentPreviewModalProps) {
   const normalizedUri = typeof uri === 'string' ? uri.trim() : '';
   const [imageFailed, setImageFailed] = useState(false);
+  const [textContent, setTextContent] = useState<string | null>(null);
+  const [textLoading, setTextLoading] = useState(false);
+  const [textError, setTextError] = useState(false);
 
   useEffect(() => {
     setImageFailed(false);
+    setTextContent(null);
+    setTextError(false);
+
+    if (!visible || !normalizedUri || !isTextDocumentUri(normalizedUri)) {
+      setTextLoading(false);
+      return;
+    }
+
+    let active = true;
+    setTextLoading(true);
+
+    const loadText = async () => {
+      try {
+        const content = normalizedUri.startsWith('data:')
+          ? decodeDataUri(normalizedUri)
+          : Platform.OS === 'web' && typeof fetch === 'function'
+            ? await (await fetch(normalizedUri)).text()
+            : '';
+
+        if (active) {
+          setTextContent(content);
+          setTextError(!content);
+        }
+      } catch {
+        if (active) setTextError(true);
+      } finally {
+        if (active) setTextLoading(false);
+      }
+    };
+
+    void loadText();
+    return () => {
+      active = false;
+    };
   }, [normalizedUri, visible]);
 
   const canPreviewImage = Boolean(normalizedUri) && isImageMediaUri(normalizedUri) && !imageFailed;
+  const isTextDocument = Boolean(normalizedUri) && isTextDocumentUri(normalizedUri);
+  const canEmbedDocument = Boolean(normalizedUri) && !canPreviewImage && !isTextDocument;
 
   return (
     <Modal
@@ -70,20 +135,53 @@ export default function DocumentPreviewModal({
                 onError={() => setImageFailed(true)}
                 accessibilityLabel={title}
               />
+            ) : isTextDocument && textLoading ? (
+              <View style={styles.unavailableState}>
+                <MaterialIcons name="hourglass-empty" size={42} color="#166534" />
+                <Text style={styles.unavailableTitle}>Loading preview…</Text>
+              </View>
+            ) : isTextDocument && textContent !== null && !textError ? (
+              <ScrollView style={styles.textPreview} contentContainerStyle={styles.textPreviewContent}>
+                <Text style={styles.textPreviewValue}>{textContent}</Text>
+              </ScrollView>
+            ) : canEmbedDocument && Platform.OS === 'web' ? (
+              <View style={styles.embeddedPreview}>
+                {React.createElement('iframe', {
+                  src: normalizedUri,
+                  title,
+                  style: { width: '100%', height: '100%', border: '0' },
+                })}
+              </View>
+            ) : canEmbedDocument && Platform.OS !== 'web' ? (
+              <WebView
+                source={{ uri: normalizedUri }}
+                style={styles.previewWebView}
+                originWhitelist={['*']}
+                javaScriptEnabled
+                domStorageEnabled
+              />
             ) : (
               <View style={styles.unavailableState}>
-                <MaterialIcons name="broken-image" size={42} color="#94a3b8" />
+                <MaterialIcons name="description" size={42} color="#94a3b8" />
                 <Text style={styles.unavailableTitle}>Preview unavailable</Text>
                 <Text style={styles.unavailableText}>
-                  This submitted document is not an image that can be previewed in the app.
+                  This attachment could not be rendered in the preview.
                 </Text>
               </View>
             )}
           </View>
 
-          <View style={styles.footer}>
-            <MaterialIcons name="visibility" size={16} color="#166534" />
-            <Text style={styles.footerText}>Preview only</Text>
+          <View style={[styles.footer, allowExternalOpen && styles.footerWithAction]}>
+            <View style={styles.footerLabel}>
+              <MaterialIcons name="visibility" size={16} color="#166534" />
+              <Text style={styles.footerText}>Preview first</Text>
+            </View>
+            {allowExternalOpen && onOpenExternal ? (
+              <TouchableOpacity style={styles.openButton} onPress={onOpenExternal} activeOpacity={0.85}>
+                <MaterialIcons name="open-in-new" size={15} color="#ffffff" />
+                <Text style={styles.openButtonText}>Open original</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
         </View>
       </View>
@@ -150,6 +248,28 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
+  embeddedPreview: {
+    width: '100%',
+    height: '100%',
+  },
+  previewWebView: {
+    flex: 1,
+    width: '100%',
+    backgroundColor: '#ffffff',
+  },
+  textPreview: {
+    width: '100%',
+    height: '100%',
+  },
+  textPreviewContent: {
+    padding: 18,
+  },
+  textPreviewValue: {
+    color: '#1e293b',
+    fontFamily: Platform.OS === 'web' ? 'monospace' : undefined,
+    fontSize: 12,
+    lineHeight: 18,
+  },
   unavailableState: {
     maxWidth: 360,
     alignItems: 'center',
@@ -179,9 +299,31 @@ const styles = StyleSheet.create({
     borderTopColor: '#e2e8f0',
     backgroundColor: '#f0fdf4',
   },
+  footerWithAction: {
+    justifyContent: 'space-between',
+  },
+  footerLabel: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
   footerText: {
     color: '#166534',
     fontSize: 12,
     fontWeight: '700',
+  },
+  openButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    borderRadius: 8,
+    backgroundColor: '#166534',
+  },
+  openButtonText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '800',
   },
 });

@@ -1674,9 +1674,7 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
                   <Text style={styles.cardTitle}>{project.title}</Text>
 
-                  <Text style={styles.cardMeta}>
-                    {(project.programModule || project.category)} - {getDisplayProjectStatus(project)}
-                  </Text>
+                  <Text style={styles.cardMeta}>{getDisplayProjectStatus(project)}</Text>
                 </View>
 
                 <View

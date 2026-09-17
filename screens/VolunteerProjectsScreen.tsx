@@ -36,6 +36,7 @@ type ProgramGroup = {
   title: string;
   description?: string;
   context?: string;
+  icon?: string;
   projectCount: number;
   eventCount: number;
 };
@@ -135,6 +136,14 @@ function getProgramVisual(programId?: string): ProgramVisual {
   if (normalized.includes('nutrition')) return PROGRAM_VISUALS.Nutrition;
   if (normalized.includes('disaster')) return PROGRAM_VISUALS.Disaster;
   return DEFAULT_PROGRAM_VISUAL;
+}
+
+function getProgramIcon(programId?: string, iconValue?: string): keyof typeof MaterialIcons.glyphMap {
+  const icon = String(iconValue || '').trim();
+  if (icon && Object.prototype.hasOwnProperty.call(MaterialIcons.glyphMap, icon)) {
+    return icon as keyof typeof MaterialIcons.glyphMap;
+  }
+  return getProgramVisual(programId).icon;
 }
 
 function getEventStatusLabel(match?: VolunteerProjectMatch, joinedByUser?: boolean): string {
@@ -325,6 +334,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
         title: program.title,
         description: program.description,
         context: '', // Programs from database don't have context field
+        icon: program.icon,
         projectCount: 0,
         eventCount: 0,
       });
@@ -832,7 +842,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
           </View>
           {programGroups.length ? (
             programGroups.map(program => {
-              const visual = getProgramVisual(program.id);
+              const visual = getProgramVisual(`${program.id} ${program.title}`);
               return (
                 <TouchableOpacity
                   key={program.id}
@@ -841,7 +851,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
                   activeOpacity={0.88}
                 >
                   <View style={[styles.programIcon, { backgroundColor: visual.softColor }]}>
-                    <MaterialIcons name={visual.icon} size={28} color={visual.color} />
+                    <MaterialIcons name={getProgramIcon(program.id, program.icon)} size={28} color={visual.color} />
                   </View>
                   <View style={styles.selectionBody}>
                     <Text style={[styles.cardLabel, { color: visual.color }]}>Program</Text>
@@ -973,13 +983,13 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
                   <View
                     style={[
                       styles.programModalIcon,
-                      { backgroundColor: getProgramVisual(selectedProgramDetails.id).softColor },
+                      { backgroundColor: getProgramVisual(`${selectedProgramDetails.id} ${selectedProgramDetails.title}`).softColor },
                     ]}
                   >
                     <MaterialIcons
-                      name={getProgramVisual(selectedProgramDetails.id).icon}
+                      name={getProgramIcon(selectedProgramDetails.id, selectedProgramDetails.icon)}
                       size={28}
-                      color={getProgramVisual(selectedProgramDetails.id).color}
+                      color={getProgramVisual(`${selectedProgramDetails.id} ${selectedProgramDetails.title}`).color}
                     />
                   </View>
                   <TouchableOpacity style={styles.programModalClose} onPress={closeProgramDetails}>

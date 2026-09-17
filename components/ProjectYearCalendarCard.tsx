@@ -60,7 +60,7 @@ export default function ProjectYearCalendarCard({
 
       <View style={styles.summaryRow}>
         <View style={styles.summaryChip}>
-          <Text style={styles.summaryValue}>{program.programModule || program.category}</Text>
+          <Text style={styles.summaryValue}>{program.programModule || 'Program'}</Text>
           <Text style={styles.summaryLabel}>module</Text>
         </View>
         <View style={styles.summaryChip}>

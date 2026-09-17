@@ -9686,7 +9686,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       : undefined;
     const projectImageSource = getPrimaryProjectImageSource(project, projectParent);
 
-    const projectCategoryLabel = `${project.isEvent ? 'Event' : 'Project'} | ${project.programModule || project.category}`;
+    const projectCategoryLabel = project.isEvent ? 'Event' : 'Project';
 
     const projectDateLabel = `${format(new Date(project.startDate), 'EEE, dd MMM yyyy')} - ${format(
 
@@ -18504,7 +18504,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     const detailWorkspaceLabel = activeSelectedProject.isEvent ? 'Event Workspace' : 'Project Workspace';
 
-    const detailModuleLabel = activeSelectedProject.programModule || activeSelectedProject.category;
+    const detailModuleLabel = activeSelectedProject.programModule || 'Not specified';
 
     const formattedStartDate = formatProjectDateLabel(activeSelectedProject.startDate);
 
@@ -22396,8 +22396,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                   : isProjectReadOnly ? 'No document attached' : 'Upload document'}
                 onDocumentPress={projectDocumentAttachment?.url || !isProjectReadOnly ? () => {
                   if (projectDocumentAttachment?.url) {
-                    void openAttachmentUri(projectDocumentAttachment.url).catch((error: any) => {
-                      Alert.alert('Document View Failed', error?.message || 'Unable to open document.');
+                    setDocumentPreview({
+                      title: `${activeSelectedProject.isEvent ? 'Event' : 'Project'} attachment preview`,
+                      uri: projectDocumentAttachment.url,
                     });
                   } else {
                     openEditProjectModal(activeSelectedProject);
@@ -22712,7 +22713,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                     <View style={{ marginLeft: 12 }}>
 
-                      <Text style={styles.programSummaryValue}>{projects.filter(p => !p.isEvent).length}</Text>
+                      <Text style={styles.programSummaryValue}>
+                        {programSections.reduce((total, section) => total + section.projects.length, 0)}
+                      </Text>
 
                       <Text style={styles.programSummaryLabel}>Active Projects</Text>
 
@@ -24058,6 +24061,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         title={documentPreview?.title}
         uri={documentPreview?.uri}
         onClose={() => setDocumentPreview(null)}
+        allowExternalOpen={Boolean(documentPreview?.uri)}
+        onOpenExternal={() => {
+          if (!documentPreview?.uri) return;
+          void openAttachmentUri(documentPreview.uri).catch((error: any) => {
+            Alert.alert('Document Open Failed', error?.message || 'Unable to open document.');
+          });
+        }}
       />
 
       <DownloadPreviewModal

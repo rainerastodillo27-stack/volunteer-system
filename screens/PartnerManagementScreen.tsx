@@ -861,7 +861,6 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
                 <View key={project.id} style={styles.projectItem}>
                   <View style={styles.projectInfo}>
                     <Text style={styles.projectName}>{project.title}</Text>
-                    <Text style={styles.projectCategory}>{project.category}</Text>
                     <Text style={styles.projectMeta}>
                       {getProjectVolunteerCount(project)} volunteer{getProjectVolunteerCount(project) === 1 ? '' : 's'} • {getProjectDisplayStatus(project)}
                     </Text>

@@ -737,7 +737,9 @@ export default function ProjectTimelineCalendarCard({
               <Text style={[styles.tableHeaderCell, { flex: 2 }]}>Location</Text>
               <Text style={[styles.tableHeaderCell, { flex: 1.5, textAlign: 'center' }]}>Attendees</Text>
               <Text style={[styles.tableHeaderCell, { flex: 1, textAlign: 'center' }]}>Status</Text>
-              <Text style={[styles.tableHeaderCell, { flex: 1.5, textAlign: 'center' }]}>Actions</Text>
+              {Platform.OS !== 'web' && (
+                <Text style={[styles.tableHeaderCell, { flex: 1.5, textAlign: 'center' }]}>Actions</Text>
+              )}
             </View>
 
             {selectedDayEvents.length > 0 ? (
@@ -748,7 +750,15 @@ export default function ProjectTimelineCalendarCard({
                 const displayStatus = project ? getProjectDisplayStatus(project) : 'Open';
 
                 return (
-                  <View key={entry.id} style={styles.tableRow}>
+                  <TouchableOpacity
+                    key={entry.id}
+                    style={styles.tableRow}
+                    activeOpacity={Platform.OS === 'web' ? 0.75 : 1}
+                    onPress={Platform.OS === 'web' && project?.id ? () => onOpenProject?.(project.id) : undefined}
+                    disabled={Platform.OS === 'web' && !project?.id}
+                    accessibilityRole={Platform.OS === 'web' ? 'button' : undefined}
+                    accessibilityLabel={Platform.OS === 'web' ? `Open ${entry.title}` : undefined}
+                  >
                     <Text style={[styles.tableCell, { flex: 1.5 }]}>
                       {new Date(entry.startDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - {new Date(entry.endDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </Text>
@@ -766,33 +776,35 @@ export default function ProjectTimelineCalendarCard({
                         </Text>
                       </View>
                     </View>
-                    <View style={{ flex: 1.5, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-                      <TouchableOpacity
-                        style={styles.actionButton}
-                        disabled={!project?.id}
-                        onPress={() => project?.id && onOpenProject?.(project.id)}
-                        accessibilityLabel={`View ${entry.title}`}
-                      >
-                        <MaterialIcons name="visibility" size={17} color={project?.id ? '#166534' : '#94a3b8'} />
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={styles.actionButton}
-                        disabled={!project?.id || !onEditProject}
-                        onPress={() => project?.id && onEditProject?.(project.id)}
-                        accessibilityLabel={`Edit ${entry.title}`}
-                      >
-                        <MaterialIcons name="edit" size={17} color={project?.id && onEditProject ? '#2563eb' : '#94a3b8'} />
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={styles.actionButton}
-                        disabled={!project?.id || !onDeleteProject}
-                        onPress={() => project?.id && onDeleteProject?.(project.id)}
-                        accessibilityLabel={`Delete ${entry.title}`}
-                      >
-                        <MaterialIcons name="delete-outline" size={17} color={project?.id && onDeleteProject ? '#dc2626' : '#94a3b8'} />
-                      </TouchableOpacity>
-                    </View>
-                  </View>
+                    {Platform.OS !== 'web' && (
+                      <View style={{ flex: 1.5, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                        <TouchableOpacity
+                          style={styles.actionButton}
+                          disabled={!project?.id}
+                          onPress={() => project?.id && onOpenProject?.(project.id)}
+                          accessibilityLabel={`View ${entry.title}`}
+                        >
+                          <MaterialIcons name="visibility" size={17} color={project?.id ? '#166534' : '#94a3b8'} />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.actionButton}
+                          disabled={!project?.id || !onEditProject}
+                          onPress={() => project?.id && onEditProject?.(project.id)}
+                          accessibilityLabel={`Edit ${entry.title}`}
+                        >
+                          <MaterialIcons name="edit" size={17} color={project?.id && onEditProject ? '#2563eb' : '#94a3b8'} />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.actionButton}
+                          disabled={!project?.id || !onDeleteProject}
+                          onPress={() => project?.id && onDeleteProject?.(project.id)}
+                          accessibilityLabel={`Delete ${entry.title}`}
+                        >
+                          <MaterialIcons name="delete-outline" size={17} color={project?.id && onDeleteProject ? '#dc2626' : '#94a3b8'} />
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                  </TouchableOpacity>
                 );
               })
             ) : (

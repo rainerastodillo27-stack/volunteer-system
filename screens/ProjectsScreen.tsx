@@ -518,7 +518,6 @@ function ProjectCardImage({
       />
       <View style={styles.programImageTitleBadge}>
         <Text style={styles.programImageTitle}>{project.title}</Text>
-        {project.category ? <Text style={styles.programImageCategory}>{project.category}</Text> : null}
       </View>
       <View style={styles.programImageOverlay}>
         <Text style={styles.programImageOverlayText}>Click image to open</Text>
@@ -527,7 +526,7 @@ function ProjectCardImage({
   );
 }
 
-// Category header component for collapsible categories
+// Program header component for collapsible program groups.
 function CategoryHeader({
   category,
   eventCount,
@@ -1729,7 +1728,6 @@ export default function ProjectsScreen({ navigation, route }: any) {
                 <View style={{ flex: 1 }}>
                   <Text style={styles.title}>{item.title}</Text>
                   <View style={styles.metaRow}>
-                    <Text style={styles.category}>{item.category}</Text>
                     <View style={styles.typeBadge}>
                       <Text style={styles.typeBadgeText}>
                         {item.isEvent ? 'Event' : 'Program'}
@@ -1811,13 +1809,6 @@ export default function ProjectsScreen({ navigation, route }: any) {
                 <View style={styles.expandedSection}>
                   {item.isEvent ? (
                     <>
-                      <View style={styles.expandedRow}>
-                        <MaterialIcons name="campaign" size={18} color="#7c3aed" />
-                        <View style={styles.expandedTextWrap}>
-                          <Text style={styles.expandedLabel}>Event type</Text>
-                          <Text style={styles.expandedValue}>{item.programModule || item.category}</Text>
-                        </View>
-                      </View>
                       <View style={styles.expandedRow}>
                         <MaterialIcons name="place" size={18} color="#f97316" />
                         <View style={styles.expandedTextWrap}>
@@ -2564,9 +2555,9 @@ export default function ProjectsScreen({ navigation, route }: any) {
                 <Text style={styles.heroEyebrowText}>Projects Workspace</Text>
               </View>
               <Text style={styles.heading}>Programs and Projects</Text>
-              <Text style={styles.subheading}>
-                {user?.role === 'volunteer'
-                  ? 'Browse by category, open a program, then choose the event you want to join.'
+                <Text style={styles.subheading}>
+                  {user?.role === 'volunteer'
+                  ? 'Browse programs, open one, then choose the event you want to join.'
                   : user?.role === 'partner'
                   ? 'Review active programs, narrow the list quickly, and open the right workspace with less scrolling.'
                   : 'Track programs, events, and participation with a clearer operations view.'}
@@ -2590,7 +2581,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                     {user?.role === 'volunteer' ? openVolunteerEventCount : categoryCount}
                   </Text>
                   <Text style={styles.overviewLabel}>
-                    {user?.role === 'volunteer' ? 'open events' : 'categories'}
+                    {user?.role === 'volunteer' ? 'open events' : 'program groups'}
                   </Text>
                 </View>
               </View>
@@ -2601,7 +2592,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                   <View style={styles.volunteerGuideSteps}>
                     <View style={styles.volunteerGuideStep}>
                       <Text style={styles.volunteerGuideStepNumber}>1</Text>
-                      <Text style={styles.volunteerGuideStepText}>Pick a program category</Text>
+                      <Text style={styles.volunteerGuideStepText}>Pick a program</Text>
                     </View>
                     <View style={styles.volunteerGuideStep}>
                       <Text style={styles.volunteerGuideStepNumber}>2</Text>
@@ -2676,7 +2667,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
 
               <View style={styles.controlsFooter}>
                 <Text style={styles.controlsSummary}>
-                  {totalVisibleGroupItems} result{totalVisibleGroupItems === 1 ? '' : 's'} across {categoryCount} categor{categoryCount === 1 ? 'y' : 'ies'}
+                  {totalVisibleGroupItems} result{totalVisibleGroupItems === 1 ? '' : 's'} across {categoryCount} program group{categoryCount === 1 ? '' : 's'}
                 </Text>
                 <View style={styles.controlsFooterActions}>
                   <TouchableOpacity style={styles.controlsFooterButton} onPress={expandAllCategories}>
@@ -2829,7 +2820,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                 <View style={styles.mobileGuideCard}>
                   <Text style={styles.mobileGuideTitle}>How to browse programs</Text>
                   <Text style={styles.mobileGuideText}>
-                    Start with a category, open the program you like, then choose the event where you want to help.
+                    Start with a program, then choose the event where you want to help.
                   </Text>
                 </View>
               ) : null}
@@ -2849,7 +2840,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                     style={styles.mobileCategoryCard}
                     onPress={() => handleOpenCategory(group.category)}
                   >
-                    <Text style={styles.mobileCardLabel}>Category</Text>
+                    <Text style={styles.mobileCardLabel}>Program</Text>
                     <View style={styles.mobileCategoryHeader}>
                       <Text style={styles.mobileCategoryTitle}>{group.category}</Text>
                       <MaterialIcons name="chevron-right" size={22} color="#166534" />
@@ -2891,7 +2882,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
             ) : (
               <View style={styles.emptyState}>
                 <MaterialIcons name="folder-open" size={44} color="#94a3b8" />
-                <Text style={styles.emptyStateTitle}>No projects in this category</Text>
+                  <Text style={styles.emptyStateTitle}>No projects in this program</Text>
                 <Text style={styles.emptyStateText}>Try changing the active filters.</Text>
               </View>
             )
@@ -2921,12 +2912,6 @@ export default function ProjectsScreen({ navigation, route }: any) {
                 </View>
 
                 <View style={styles.mobileProgramStatRow}>
-                  <View style={styles.mobileProgramStatChip}>
-                    <Text style={styles.mobileProgramStatValue}>
-                      {selectedProgram.programModule || selectedProgram.category}
-                    </Text>
-                    <Text style={styles.mobileProgramStatLabel}>module</Text>
-                  </View>
                   <View style={styles.mobileProgramStatChip}>
                     <Text style={styles.mobileProgramStatValue}>{selectedProgramEvents.length}</Text>
                     <Text style={styles.mobileProgramStatLabel}>linked events</Text>

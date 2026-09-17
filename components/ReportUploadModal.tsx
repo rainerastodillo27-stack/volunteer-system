@@ -427,17 +427,19 @@ export default function ReportUploadModal({
       return;
     }
 
-    // Check if volunteer has timed in for this project
+    // A report may only be submitted after the volunteer explicitly confirms
+    // attendance. Having a time-in record alone is not enough because the
+    // volunteer can still be waiting for the confirmation step.
     if (isVolunteer && selectedProject && volunteerTimeLogs) {
-      const hasTimeIn = volunteerTimeLogs.some(log =>
-        log.projectId === selectedProject && Boolean(log.timeIn)
+      const hasConfirmedAttendance = volunteerTimeLogs.some(log =>
+        log.projectId === selectedProject && Boolean(log.attendanceConfirmedAt)
       );
 
-      if (!hasTimeIn) {
+      if (!hasConfirmedAttendance) {
         const errorMsg =
-          'You must time-in to this event before you can submit a report. If you timed into a different event, please select it from the Event selector above.';
+          'You must confirm attendance first before you can submit a report. Please confirm attendance for this event, then try again.';
         setSubmissionError(errorMsg);
-        Alert.alert('Time-in Required', errorMsg);
+        Alert.alert('Attendance Confirmation Required', errorMsg);
         return;
       }
     }
@@ -640,9 +642,7 @@ export default function ReportUploadModal({
               }}
             >
               <Text style={styles.projectOptionText}>{project.title}</Text>
-              <Text style={styles.projectOptionCategory}>
-                {project.programModule || project.category}
-              </Text>
+              <Text style={styles.projectOptionCategory}>{project.isEvent ? 'Event' : 'Project'}</Text>
             </TouchableOpacity>
           ))}
         </View>
@@ -819,7 +819,7 @@ export default function ReportUploadModal({
                 <View style={{ flex: 1 }}>
                   <Text style={styles.projectOptionText}>{project.title}</Text>
                   <Text style={styles.projectOptionCategory}>
-                    {hasConfirmedTimeIn ? 'Attendance Confirmed' : project.isEvent ? 'Event' : project.category}
+                    {hasConfirmedTimeIn ? 'Attendance Confirmed' : project.isEvent ? 'Event' : 'Project'}
                   </Text>
                 </View>
                 {hasConfirmedTimeIn ? (
@@ -1038,9 +1038,7 @@ export default function ReportUploadModal({
               }}
             >
               <Text style={styles.projectOptionText}>{project.title}</Text>
-              <Text style={styles.projectOptionCategory}>
-                {project.isEvent ? 'Event' : project.category}
-              </Text>
+              <Text style={styles.projectOptionCategory}>{project.isEvent ? 'Event' : 'Project'}</Text>
             </TouchableOpacity>
           ))}
         </View>

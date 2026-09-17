@@ -2820,10 +2820,11 @@ export async function saveAppSettings(settings: Partial<AppSettings>): Promise<v
   });
 }
 
-export async function getAllProgramTracks(): Promise<ProgramTrack[]> {
+export async function getAllProgramTracks(options?: { includeImages?: boolean }): Promise<ProgramTrack[]> {
   // Programs are now stored ONLY in the programs table.
   // Use the shared cache for the first paint and let the realtime listener refresh it.
-  const allPrograms = (await getStorageItemFast<Project[]>(STORAGE_KEYS.PROGRAMS, true)) || [];
+  const includeImages = options?.includeImages !== false;
+  const allPrograms = (await getStorageItemFast<Project[]>(STORAGE_KEYS.PROGRAMS, includeImages)) || [];
 
   // Convert top-level programs to ProgramTrack format
   const programTracks: ProgramTrack[] = allPrograms
@@ -6520,17 +6521,20 @@ async function validateVolunteerReportEligibility(input: {
 
   const volunteerId = volunteer?.id || input.submitterUserId;
   const timeLogs = (await getStorageItemFast<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS)) || [];
-  const hasTimedIn = timeLogs.some(
-    log => log.projectId === input.projectId && (log.volunteerId === volunteerId || log.volunteerId === input.submitterUserId) && Boolean(log.timeIn?.trim())
+  const hasConfirmedAttendance = timeLogs.some(
+    log =>
+      log.projectId === input.projectId &&
+      (log.volunteerId === volunteerId || log.volunteerId === input.submitterUserId) &&
+      Boolean(log.attendanceConfirmedAt?.trim())
   );
 
-  if (!hasTimedIn) {
+  if (!hasConfirmedAttendance) {
     const fetchedLogs = await getVolunteerTimeLogsWithFallback(volunteerId);
-    const hasFetchedTimeIn = fetchedLogs.some(
-      log => log.projectId === input.projectId && Boolean(log.timeIn?.trim())
+    const hasFetchedConfirmedAttendance = fetchedLogs.some(
+      log => log.projectId === input.projectId && Boolean(log.attendanceConfirmedAt?.trim())
     );
-    if (!hasFetchedTimeIn) {
-      throw new Error('You must time in to this event before submitting a report.');
+    if (!hasFetchedConfirmedAttendance) {
+      throw new Error('You must confirm attendance first before submitting a report.');
     }
   }
 }

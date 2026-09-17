@@ -127,7 +127,7 @@ const SIDEBAR_GROUPS = [
     items: [
       { label: 'Dashboard', icon: 'dashboard', route: 'Dashboard', params: undefined },
       { label: 'Programs', icon: 'work', route: 'Projects', params: { programSuiteView: 'programs', programSuiteNavKey: 1 } },
-      { label: 'All Projects', icon: 'folder', route: 'Projects', params: { programSuiteView: 'projects', programSuiteNavKey: 2 } },
+      { label: 'All Projects/Events', icon: 'folder', route: 'Projects', params: { programSuiteView: 'projects', programSuiteNavKey: 2 } },
       { label: 'Calendar', icon: 'event', route: 'Projects', params: { programSuiteView: 'events', programSuiteNavKey: 3 } },
     ]
   },
@@ -174,7 +174,10 @@ function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle, on
     }
     
     const routeObj = state.routes.find(r => r.name === item.route);
-    const badgeValue = routeObj ? (descriptors[routeObj.key]?.options?.tabBarBadge as number || 0) : 0;
+    const isAggregateProjectsItem = item.route === 'Projects' && item.params?.programSuiteView === 'projects';
+    const badgeValue = routeObj && (item.route !== 'Projects' || isAggregateProjectsItem)
+      ? (descriptors[routeObj.key]?.options?.tabBarBadge as number || 0)
+      : 0;
 
     return (
       <TouchableOpacity

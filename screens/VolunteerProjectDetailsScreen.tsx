@@ -324,11 +324,6 @@ export default function VolunteerProjectDetailsScreen({
                 <View style={styles.overlayBadgeGreen} {...({} as any)}>
                   <Text style={styles.overlayBadgeText}>EVENT</Text>
                 </View>
-                <View style={styles.overlayBadgeLightGreen} {...({} as any)}>
-                  <Text style={styles.overlayBadgeTextLight}>
-                    {project.category ? project.category.toUpperCase() : 'NUTRITION'}
-                  </Text>
-                </View>
               </View>
             </View>
           )}
@@ -510,9 +505,6 @@ export default function VolunteerProjectDetailsScreen({
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.organizerName}>{partnerInfo?.name || 'NVC Foundation'}</Text>
-            <Text style={styles.organizerSub}>
-              {partnerInfo?.category || 'Nutrition Program'}
-            </Text>
           </View>
         </View>
         <TouchableOpacity

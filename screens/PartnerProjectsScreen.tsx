@@ -433,9 +433,6 @@ export default function PartnerProjectsScreen({ route }: any) {
                       <Text style={styles.projectBoxTitle} numberOfLines={1}>
                         {project.title}
                       </Text>
-                      <Text style={styles.projectBoxMeta} numberOfLines={1}>
-                        {project.programModule || project.category}
-                      </Text>
                     </View>
                     <View
                       style={[
@@ -503,9 +500,6 @@ export default function PartnerProjectsScreen({ route }: any) {
                 <View style={styles.modalHeader}>
                   <View style={styles.modalHeaderCopy}>
                     <Text style={styles.modalTitle}>{selectedProjectMetrics.project.title}</Text>
-                    <Text style={styles.modalSubtitle}>
-                      {selectedProjectMetrics.project.programModule || selectedProjectMetrics.project.category}
-                    </Text>
                   </View>
                   <TouchableOpacity
                     style={styles.modalCloseButton}

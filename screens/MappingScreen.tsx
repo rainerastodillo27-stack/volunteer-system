@@ -516,12 +516,6 @@ export default function MappingScreen({ navigation }: any) {
                     </Text>
                   </View>
                   <View style={styles.infoItem}>
-                    <Text style={styles.infoLabel}>Category</Text>
-                    <Text style={styles.infoValue}>
-                      {selectedProject.programModule || selectedProject.category}
-                    </Text>
-                  </View>
-                  <View style={styles.infoItem}>
                     <Text style={styles.infoLabel}>Volunteers Needed</Text>
                     <Text style={styles.infoValue}>{selectedProject.volunteersNeeded}</Text>
                   </View>
@@ -547,17 +541,6 @@ export default function MappingScreen({ navigation }: any) {
                     <Text style={styles.infoLabel}>End Date</Text>
                     <Text style={styles.infoValue}>
                       {new Date(selectedProject.endDate).toLocaleDateString()}
-                    </Text>
-                  </View>
-                </View>
-
-                <View style={styles.infoGrid}>
-                  <View style={styles.infoItem}>
-                    <Text style={styles.infoLabel}>Impact Uploads</Text>
-                    <Text style={styles.infoValue}>
-                      {partnerReports
-                        .filter(report => report.projectId === selectedProject.id)
-                        .reduce((sum, report) => sum + report.impactCount, 0)}
                     </Text>
                   </View>
                 </View>

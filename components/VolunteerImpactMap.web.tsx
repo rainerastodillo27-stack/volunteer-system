@@ -942,7 +942,7 @@ export default function VolunteerImpactMap({
         <View style={styles.detailCard}>
           <Text style={styles.detailTitle}>{selectedProject.title}</Text>
           <Text style={styles.detailMeta}>
-            {`${selectedProject.isEvent ? 'Event' : 'Project'} | ${selectedProject.category} | ${getProjectDisplayStatus(selectedProject)}`}
+            {`${selectedProject.isEvent ? 'Event' : 'Project'} | ${getProjectDisplayStatus(selectedProject)}`}
           </Text>
           <Text style={styles.detailAddress}>{selectedProject.location.address}</Text>
         </View>
