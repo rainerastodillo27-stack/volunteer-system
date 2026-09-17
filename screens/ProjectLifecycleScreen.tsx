@@ -7512,13 +7512,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     const now = new Date().toISOString();
 
-    const inheritedStatusMode: Project['statusMode'] =
-
-      projectDraft.isEvent
-
-        ? 'Manual'
-
-        : existingProject?.statusMode === 'Manual' ? 'Manual' : 'System';
+    // Lifecycle progress is date-driven for both projects and events. Keep
+    // only explicit operational exceptions as manual overrides so an event
+    // cannot remain stuck on an old "open"/in-progress value before it starts.
+    const requestedManualStatus = projectDraft.status === 'On Hold' || projectDraft.status === 'Cancelled';
+    const inheritedStatusMode: Project['statusMode'] = requestedManualStatus
+      ? 'Manual'
+      : 'System';
 
     const inheritedManualStatus: Project['manualStatus'] =
 
@@ -13547,8 +13547,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                     const isSelected = projectDraft.status === statusOption;
 
-                    const isOpenStatus = statusOption === 'In Progress';
-
                     return (
 
                       <TouchableOpacity
@@ -13587,7 +13585,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                         <Text style={{ fontSize: 12, fontWeight: '800', color: isSelected ? '#166534' : '#334155' }}>
 
-                          {isOpenStatus ? 'Open - Spots available' : statusOption}
+                          {statusOption}
 
                         </Text>
 
@@ -13601,7 +13599,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-                <Text style={{ fontSize: 12, color: '#64748b', marginTop: 10 }}>Event will automatically close when the open slots are filled.</Text>
+                <Text style={{ fontSize: 12, color: '#64748b', marginTop: 10 }}>Planning, In Progress, and Completed follow the event dates. On Hold and Cancelled are manual overrides.</Text>
 
               </View>
 
