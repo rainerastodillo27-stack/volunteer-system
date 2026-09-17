@@ -4125,6 +4125,15 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     const parsedSelection = parsePhilippineAddressSelection(address);
 
+    // Map providers often return a valid address in a different format, for
+    // example "Cadiz, Negros Occidental, Philippines" instead of ending with
+    // the exact region label used by our address data. Do not clear the
+    // dropdowns when that happens; map searches should update the pin/address
+    // without destroying the user's existing Region and City selection.
+    if (!parsedSelection.regionCode || !parsedSelection.cityCode) {
+      return;
+    }
+
     setProjectRegionCode(parsedSelection.regionCode);
 
 
@@ -6330,7 +6339,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         const parsed = parsePhilippineAddressSelection(resolvedAddress);
 
-        if (parsed.regionCode) {
+        // Only replace the dropdown selections when both values are
+        // recognized; otherwise preserve the user's current selections.
+        if (parsed.regionCode && parsed.cityCode) {
 
           setProjectRegionCode(parsed.regionCode);
 
