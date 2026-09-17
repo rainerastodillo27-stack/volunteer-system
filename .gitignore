@@ -1,5 +1,6 @@
 node_modules/
 .npm-cache/
+.npm-cache-eas/
 .expo/
 dist/
 .run-logs/
